@@ -91,3 +91,15 @@ export function randomSalt(bytes = 32): string {
 }
 
 export { bytesToHex, hexToBytes, utf8ToBytes };
+
+/**
+ * zk public input layout v0 (A-REP-2), shared by the device prover, the report verifier, the services and the
+ * simulator: [termsCommitment, incomeCommitment, unitsOutstanding, paymentStable, fxAvgWad, periodIndex].
+ * periodIndex = year × 4 + (quarter − 1). Stage 1's circuit wins if it differs (recorded in INTERFACE_DRIFT.md).
+ */
+export function reportPublicInputs(p: { termsCommitment: string; incomeCommitment: string; unitsOutstanding: bigint | string; paymentStable: bigint | string; fxAvgWad: bigint | string; periodId: string }): string[] {
+  const m = /^(\d{4})Q([1-4])$/.exec(p.periodId);
+  if (!m) throw new RangeError(`bad period id ${p.periodId}`);
+  const idx = Number(m[1]) * 4 + Number(m[2]) - 1;
+  return [p.termsCommitment, p.incomeCommitment, p.unitsOutstanding.toString(), p.paymentStable.toString(), p.fxAvgWad.toString(), String(idx)];
+}

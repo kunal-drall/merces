@@ -36,7 +36,7 @@ export interface PrivateTerms {
 
 export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & { privateTerms?: PrivateTerms } = {}): { terms: SeriesTerms; privateTerms: PrivateTerms } {
   const stablecoin: Stablecoin = over.stablecoin ?? 'USDC';
-  const unitsOffered = over.unitsOffered ?? '1000';
+  const unitsOffered = over.unitsOffered ?? '500';
   const privateTerms: PrivateTerms = over.privateTerms ?? { threshold: 60_000_000_000n, shareRateWad: wadFromDecimal('0.10'), reportingCurrency: 'USD', indexingRule: 'cpi-annual', salt: '0x' + '11'.repeat(32) };
   const r = ratePerUnit(privateTerms.shareRateWad, BigInt(unitsOffered));
   const commitment = termsCommitment({ threshold: privateTerms.threshold, ratePerUnitWad: r, reportingCurrency: privateTerms.reportingCurrency, indexingRule: privateTerms.indexingRule, salt: privateTerms.salt });
@@ -53,7 +53,8 @@ export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & {
     payoutFeeBps: DEFAULTS.payoutFeeBps,
     hurdleWad: DEFAULTS.hurdleWad.toString(),
     payoutMultipleK: DEFAULTS.payoutMultipleK,
-    walletCapBps: DEFAULTS.walletCapBps,
+    /** 20% in the harness so five backers can sell out a 500-unit series; the protocol default is 10% (parameter) */
+    walletCapBps: 2000,
     dueDays: DEFAULTS.dueDays,
     graceDays: DEFAULTS.graceDays,
     formalNoticeDays: DEFAULTS.formalNoticeDays,
@@ -125,6 +126,8 @@ export class SimHarness {
     seriesId: string;
     periodId: string;
     unitsOutstanding: bigint;
+    /** N offered at creation: r = s / N (C1). Defaults to unitsOutstanding, which is exact when the raise sold out. */
+    unitsOffered?: bigint;
     privateTerms: PrivateTerms;
     incomeYtdPrev: bigint;
     incomeYtdNow: bigint;
@@ -140,7 +143,7 @@ export class SimHarness {
     incomeSalt?: string;
   }): { command: Extract<UserCommand, { kind: 'submitReport' }>; paymentStable: bigint } {
     const fx = params.fxAvgWad ?? WAD;
-    const rate = ratePerUnit(params.privateTerms.shareRateWad, params.unitsOutstanding); // r = s / N with N = units outstanding at settlement
+    const rate = ratePerUnit(params.privateTerms.shareRateWad, params.unitsOffered ?? params.unitsOutstanding); // r = s / N, N = units offered (C1)
     const q = quarterPayment({ ratePerUnitWad: rate, unitsOutstanding: params.unitsOutstanding, incomeYtdPrev: params.incomeYtdPrev, incomeYtdNow: params.incomeYtdNow, threshold: params.privateTerms.threshold, fxAvgWad: fx });
     const salt = params.incomeSalt ?? '0x' + '22'.repeat(32);
     const ic = incomeCommitment({ seriesId: params.seriesId, periodId: params.periodId, incomeYtd: params.incomeYtdNow, salt });
@@ -201,7 +204,7 @@ export class SimHarness {
   async reportAndPay(seriesId: string, periodId: string, privateTerms: PrivateTerms, termsCommitment: string, incomeYtdPrev: bigint, incomeYtdNow: bigint, extra: Partial<Parameters<SimHarness['buildReport']>[0]> = {}): Promise<{ paymentStable: bigint; due: bigint; events: TxResult['events'] }> {
     const series = (await this.sim.getSeries(seriesId))!;
     const units = BigInt(series.redemption ? series.redemption.unitsAtRedemption : series.unitsOutstanding);
-    const { command, paymentStable } = this.buildReport({ seriesId, periodId, unitsOutstanding: units, privateTerms, incomeYtdPrev, incomeYtdNow, termsCommitment, ...extra });
+    const { command, paymentStable } = this.buildReport({ seriesId, periodId, unitsOutstanding: units, unitsOffered: BigInt(series.terms.unitsOffered), privateTerms, incomeYtdPrev, incomeYtdNow, termsCommitment, ...extra });
     const coSigners = [command.attestor, command.attestorRate?.attestor].filter((a): a is string => !!a).map((a) => this.attestors.find((w) => w.address === a)!);
     const r1 = await this.exec(this.issuer, command, coSigners);
     const accepted = r1.events.find((e) => e.type === 'ReportAccepted')!.payload as { paymentDue: string };

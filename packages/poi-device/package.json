@@ -1,0 +1,14 @@
+{
+  "name": "@merces/poi-device",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "What runs on the issuer's device for a quarterly ProofOfIncome report: zkTLS session, income commitment, proof generation, attestation request, report assembly. Income never leaves the device except as a zkTLS proof sent straight to the report verifier.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/domain": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@merces/ports": "workspace:*",
+    "@merces/report-verifier": "workspace:*"
+  }
+}

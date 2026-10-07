@@ -34,3 +34,6 @@ much are flagged **ASK** and were not decided silently: the default is implement
 | A-ADM-1 | Admin commands | Admin actions are built as unsigned transactions for the multisig; the simulator uses a single admin address as the multisig stand-in. | simulator | default |
 | A-PRIV-1 | Report verifier | The verifier sees the attested figure in memory only; it keeps no database and logs no payloads. If Reclaim's `responseRedactions[].hash` option is used, it can be made to never see the figure (Part J.3). | E5 | default |
 | A-DATA-1 | Threshold table | Seeded with clearly marked placeholder rows; no figure is a real statistic until Kunal supplies sources. | E9 | placeholder |
+| A-REP-5 | Rate per unit | r = s / N uses N = units offered at creation (C1), not units sold; payment uses units outstanding. A half-sold raise owes half the share rate. | `@merces/poi-device`, harness | spec (clarified) |
+| A-REP-6 | Tier 1 attestation | Tier-1 reports carry the proof and, when available, a verifier attestation; the chain requires only the proof since the income is onchain. | simulator `submitReport` | default |
+| A-PRIV-2 | Verifier reachability | Devices POST zkTLS proofs directly to the report verifier; the API never receives a proof or a salt. In mock mode the verifier runs in-process with the same dev key. | E5, `@merces/server` | default |

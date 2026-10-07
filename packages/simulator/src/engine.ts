@@ -1,6 +1,6 @@
 import { createPublicKey, verify as edVerify } from 'node:crypto';
 import {
-  ChainError, DEFAULTS, attestationMessage, bidCommitment, mockVerify, orderCommitment, parseSeriesId,
+  ChainError, DEFAULTS, attestationMessage, bidCommitment, mockVerify, orderCommitment, parseSeriesId, reportPublicInputs,
   type Command, type DomainEvent, type EventPayload, type EventType, type LifecycleStatus, type ServiceRole, type TxResult,
 } from '@merces/domain';
 import {
@@ -532,10 +532,9 @@ export class SimEngine {
     }
     if (!ok) throw new ChainError('InvalidAttestation', 'bad verifier signature');
   }
-  /** Public input layout v0: [termsCommitment, incomeCommitment, unitsOutstanding, paymentStable, fxAvgWad, periodIndex]. */
+  /** Public input layout v0 — see reportPublicInputs() in @merces/domain. */
   static publicInputs(p: { termsCommitment: string; incomeCommitment: string; unitsOutstanding: bigint; paymentStable: bigint; fxAvgWad: bigint; periodId: string }): string[] {
-    const per = parsePeriod(p.periodId);
-    return [p.termsCommitment, p.incomeCommitment, str(p.unitsOutstanding), str(p.paymentStable), str(p.fxAvgWad), String(per.year * 4 + per.quarter - 1)];
+    return reportPublicInputs(p);
   }
   private verifyProof(cmd: Extract<Command, { kind: 'submitReport' }>, s: SimSeries): void {
     const units = s.redemption ? s.redemption.unitsAtRedemption : s.unitsOutstanding;

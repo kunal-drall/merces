@@ -1,5 +1,6 @@
 import type { AppContext } from '@merces/api';
-import type { ESignPort, IdentityCheckPort, KmsPort, VaultCrypto } from '@merces/ports';
+import type { ESignPort, IdentityCheckPort, KmsPort, ProofVerifierPort, VaultCrypto, ZkTlsPort } from '@merces/ports';
+import type { ReportVerifierPort } from '@merces/report-verifier';
 
 /** Everything a service needs. Built once per process (main, dev:mock, tests). */
 export interface ServiceContext extends AppContext {
@@ -7,6 +8,11 @@ export interface ServiceContext extends AppContext {
   vault: VaultCrypto;
   identity: IdentityCheckPort;
   esign: ESignPort;
+  zktls: ZkTlsPort;
+  proofVerifier: ProofVerifierPort;
+  /** client for the isolated report verifier (used only to read its public key; devices call it directly) */
+  verifier: ReportVerifierPort;
+  reportVerifierUrl: string;
   /** domain shown in sign-in messages */
   signInDomain: string;
   /** wall-clock seconds; chain time is used for mechanism deadlines */

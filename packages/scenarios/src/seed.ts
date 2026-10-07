@@ -106,7 +106,7 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
       const rate = fxBasis === 'unity' ? undefined : wadFromDecimal(FX_PLACEHOLDER[s.issuer.reportingCurrency] ?? '1');
       const series = (await h.sim.getSeries(s.seriesId))!;
       const { command } = h.buildReport({
-        seriesId: s.seriesId, periodId, unitsOutstanding: BigInt(series.unitsOutstanding), privateTerms: s.privateTerms, incomeYtdPrev: ytdPrev, incomeYtdNow: ytdNow, termsCommitment: s.terms.termsCommitment,
+        seriesId: s.seriesId, periodId, unitsOutstanding: BigInt(series.unitsOutstanding), unitsOffered: s.issuer.unitsOffered, privateTerms: s.privateTerms, incomeYtdPrev: ytdPrev, incomeYtdNow: ytdNow, termsCommitment: s.terms.termsCommitment,
         tier: s.issuer.tier, source: s.issuer.source, attestor: s.issuer.tier === 3 ? h.attestors[0]!.address : null,
         fxBasis, pair, fxAvgWad: rate, attestorRate: rate ? { attestor: h.attestors[1]!.address, rateWad: rate, pair: pair! } : null,
         liquidityEvent: s.issuer.handle === 'mesh-mika' && q === 3,

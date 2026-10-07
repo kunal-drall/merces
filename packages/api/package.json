@@ -23,6 +23,9 @@
   "devDependencies": {
     "@merces/indexer": "workspace:*",
     "@merces/services": "workspace:*",
-    "@merces/ports": "workspace:*"
+    "@merces/ports": "workspace:*",
+    "@merces/poi-device": "workspace:*",
+    "@merces/report-verifier": "workspace:*",
+    "@merces/fixtures": "workspace:*"
   }
 }

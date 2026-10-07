@@ -1,0 +1,13 @@
+{
+  "name": "@merces/report-verifier",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The report verifier: an isolated service that checks a zkTLS proof, recomputes the income commitment and signs an attestation. No database, no payload logs, key behind the KMS port. The most sensitive component in the system.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/domain": "workspace:*",
+    "@merces/ports": "workspace:*",
+    "zod": "4.6.5"
+  }
+}

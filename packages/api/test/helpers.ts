@@ -4,7 +4,8 @@ import { Indexer } from '@merces/indexer';
 import { SimHarness, SimulatorChain, type Personality } from '@merces/simulator';
 import { buildApp, issueSession, makeContext, type Session } from '../src/index.ts';
 import { createServiceContext, serviceRoutes } from '@merces/services';
-import { MockESign, MockIdentityCheck } from '@merces/ports';
+import { LocalKms, MockESign, MockIdentityCheck, MockZkTls } from '@merces/ports';
+import { ReportVerifier } from '@merces/report-verifier';
 
 const GENESIS = Date.UTC(2026, 0, 1) / 1000;
 export const SECRET = 'test-secret';
@@ -28,7 +29,12 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string } = {
   const indexer = new Indexer(t.pool, [sol.sim, mon.sim], { logger: silent });
   const esign = new MockESign();
   const identity = new MockIdentityCheck();
-  const ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: SECRET, devMode: true }), { esign, identity });
+  const zktls = new MockZkTls();
+  const kms = new LocalKms('test-seed');
+  const verifier = new ReportVerifier(zktls, kms, 'report-verifier-test');
+  const spki = await kms.spkiHex('report-verifier-test');
+  for (const h of [sol, mon]) await h.exec(h.admin, { kind: 'registerVerifierKey', keyId: 'report-verifier-test', publicKey: spki, active: true });
+  const ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: SECRET, devMode: true }), { esign, identity, zktls, kms, verifier, reportVerifierUrl: 'http://verifier.test' });
   const app = await buildApp(ctx, serviceRoutes);
   await app.ready();
   const token = (s: Partial<Session> & { wallets?: Session['wallets'] }) =>
@@ -37,7 +43,7 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string } = {
   const post = (url: string, body: unknown, tok?: string, extra: Record<string, string> = {}) => app.inject({ method: 'POST', url, payload: body as Record<string, unknown>, headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), ...extra } });
   const put = (url: string, body: unknown, tok?: string) => app.inject({ method: 'PUT', url, payload: body as Record<string, unknown>, headers: tok ? { authorization: `Bearer ${tok}` } : {} });
   return {
-    t, sol, mon, ctx, app, indexer, token, get, post, put, esign, identity,
+    t, sol, mon, ctx, app, indexer, token, get, post, put, esign, identity, zktls, verifier, kms,
     harness: (p: Personality) => (p === 'solana' ? sol : mon),
     async sync() {
       await indexer.catchUp();

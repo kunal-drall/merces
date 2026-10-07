@@ -17,7 +17,7 @@ for (const personality of ['solana', 'monad'] as Personality[]) {
       const h = await SimHarness.create(personality, { genesis: GENESIS });
       const { seriesId, terms, privateTerms } = await h.runRaise();
       const series = (await h.sim.getSeries(seriesId))!;
-      // 5 bids of 100 units at 12,11,10,10,9 for 1000 units offered (wallet cap 10% = 100): all fill, clearing at 9
+      // 5 bids of 100 units at 12,11,10,10,9 for 500 units offered (harness wallet cap 20% = 100): all fill, clearing at 9
       expect(series.phase).toBe('Settled');
       expect(series.issuePrice).toBe(USDC(9).toString());
       expect(series.unitsOutstanding).toBe('500');
@@ -133,7 +133,7 @@ describe('auction edge cases', () => {
     await expectChainError(h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper'), 'TooEarly');
     await h.sim.setTime(now + 200);
     await h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper');
-    // wallet cap: 10% of 1000 = 100 units; 100 × 10 = 1000 < min raise 5000 → fails
+    // wallet cap: 20% of 500 = 100 units; 100 × 10 = 1000 < min raise 4000 → fails
     expect((await h.sim.getSeries(seriesId))!.phase).toBe('Failed');
   });
   it('the issuer can cancel before bids and cannot open while new raises are paused', async () => {
@@ -317,7 +317,7 @@ describe('amendments and extinguishment', () => {
   it('allows only issuer-favourable amendments with an attestor, and extinguishes with two attestors', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const { seriesId, terms, privateTerms } = await h.runRaise();
-    const r = ratePerUnit(privateTerms.shareRateWad, 1000n);
+    const r = ratePerUnit(privateTerms.shareRateWad, 500n);
     const newCommitment = termsCommitment({ threshold: privateTerms.threshold * 103n / 100n, ratePerUnitWad: r, reportingCurrency: 'USD', indexingRule: 'cpi-annual', salt: privateTerms.salt });
     await expectChainError(h.exec(h.issuer, { kind: 'amendTerms', seriesId, termsCommitment: newCommitment, capMultipleWad: wadFromDecimal('2.5').toString(), attestor: h.attestors[0]!.address }), 'Unauthorized');
     await expectChainError(h.exec(h.issuer, { kind: 'amendTerms', seriesId, termsCommitment: newCommitment, capMultipleWad: wadFromDecimal('2.6').toString(), attestor: h.attestors[0]!.address }, [h.attestors[0]!]), 'InvalidTerms');

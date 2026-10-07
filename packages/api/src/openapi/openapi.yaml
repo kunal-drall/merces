@@ -17,6 +17,7 @@ tags:
   - { name: drafts, description: Series drafts, terms vault and contract signing (E3, E4) }
   - { name: terms, description: Terms validation, disclosure and amendments (E4) }
   - { name: tx, description: Relay of user-signed transactions }
+  - { name: reporting, description: ProofOfIncome (E5) }
   - { name: admin }
   - { name: attestor }
   - { name: dev, description: Mock-mode only (simulator) }
@@ -660,3 +661,114 @@ paths:
       security: [{ session: [] }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [tx, signatures], properties: { tx: { type: object }, signatures: { type: object } } } } } }
       responses: { '200': { description: Transaction result with the canonical events it emitted, content: { application/json: { schema: { type: object } } } }, '403': { $ref: '#/components/responses/Forbidden' }, '422': { description: Chain rejected the transaction } }
+
+  # ---- E5 ProofOfIncome
+  /prover/artifacts:
+    get:
+      operationId: getProverArtifacts
+      x-access: public
+      tags: [reporting]
+      responses: { '200': { description: Circuit id, public input layout, artifact URLs and verifying key (placeholder until Stage 1 publishes the circuit), content: { application/json: { schema: { type: object } } } } }
+  /income-sources:
+    get:
+      operationId: listIncomeSources
+      x-access: public
+      tags: [reporting]
+      responses: { '200': { description: Supported tier-2 sources and their zkTLS provider definitions (Stripe, Deel, DistroKid), content: { application/json: { schema: { type: object } } } } }
+  /reporting/verifier:
+    get:
+      operationId: getReportVerifier
+      x-access: public
+      tags: [reporting]
+      responses: { '200': { description: Where devices send zkTLS proofs, and the verifier's public key, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/reporting/schedule:
+    get:
+      operationId: getReportingSchedule
+      x-access: issuer
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Reportable quarters with deadlines, standings and next steps, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/reporting/fx/{periodId}:
+    get:
+      operationId: getReportingFx
+      x-access: issuer
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: periodId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: FX basis for the quarter (unity, accumulator average, or attestor fallback), content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/reporting/zktls-session:
+    post:
+      operationId: createZkTlsSession
+      x-access: issuer
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [periodId, source], properties: { periodId: { type: string }, source: { type: string, enum: [stripe, deel, distrokid] } } } } } }
+      responses: { '200': { description: zkTLS request URL; the proof goes straight to the report verifier, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/reports:
+    post:
+      operationId: assembleReport
+      x-access: issuer
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: Idempotency-Key, in: header, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [periodId, tier, source, paymentStable, incomeCommitment, proof], properties: { periodId: { type: string }, tier: { type: integer }, source: { type: string }, paymentStable: { $ref: '#/components/schemas/Money' }, incomeCommitment: { type: string }, proof: { type: object }, attestation: { type: [object, 'null'] }, attestorRate: { type: [object, 'null'] }, attestor: { type: [string, 'null'] }, liquidityEvent: { type: boolean } } } } } }
+      responses: { '201': { description: Report verified offchain and stored (commitments, amounts, proof), with the unsigned submitReport transaction, content: { application/json: { schema: { type: object } } } }, '422': { description: Proof, attestation, public inputs or FX basis rejected } }
+    get:
+      operationId: listReports
+      x-access: holder-or-issuer
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Reports (commitments, amounts, statuses), content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/reporting/splits/{periodId}:
+    get:
+      operationId: getSplitReceipts
+      x-access: issuer
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: periodId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Tier-1 router receipts indexed for the period, content: { application/json: { schema: { type: object } } } } }
+  /reports/{reportId}:
+    get:
+      operationId: getReport
+      x-access: account
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ name: reportId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Report, content: { application/json: { schema: { type: object } } } }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /reports/{reportId}/build-submit:
+    post:
+      operationId: buildSubmitReport
+      x-access: account
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ name: reportId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Unsigned submitReport transaction (attestor co-signs for tier 3 or a fallback rate), content: { application/json: { schema: { type: object } } } } }
+  /reports/{reportId}/submitted:
+    post:
+      operationId: markReportSubmitted
+      x-access: account
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ name: reportId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [txId], properties: { txId: { type: string } } } } } }
+      responses: { '200': { description: Report state refreshed from the chain, content: { application/json: { schema: { type: object } } } } }
+  /reports/{reportId}/build-payin:
+    post:
+      operationId: buildPayIn
+      x-access: account
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ name: reportId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Unsigned payIn for exactly the remaining amount the chain reports (including accrual), content: { application/json: { schema: { type: object } } } }, '409': { description: Not accepted onchain yet, or already paid } }
+  /reports/{reportId}/paid:
+    post:
+      operationId: markReportPaid
+      x-access: account
+      tags: [reporting]
+      security: [{ session: [] }]
+      parameters: [{ name: reportId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [txId], properties: { txId: { type: string } } } } } }
+      responses: { '200': { description: Report marked paid once the chain shows the period settled, content: { application/json: { schema: { type: object } } } } }

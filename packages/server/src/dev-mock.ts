@@ -25,6 +25,18 @@ if ((await solana.listSeries()).length === 0 && process.env.MERCES_SEED !== 'fal
 const indexer = new Indexer(pool, [solana, monad], { logger: log });
 await indexer.catchUp();
 const ctx = createServiceContext(makeContext({ pool, chains, log, sessionSecret: process.env.MERCES_SESSION_SECRET ?? 'dev-session-secret-not-for-production', devMode: true }));
+// Register the dev report-verifier key on both simulators (the standalone verifier derives the same key from the dev seed).
+{
+  const spki = await ctx.kms.spkiHex(process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1');
+  for (const sim of [solana, monad]) {
+    const keys = await sim.listVerifierKeys();
+    if (!keys.some((k) => k.keyId === (process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1'))) {
+      const admin = simAdminWallet(sim.family);
+      const tx = await sim.build({ kind: 'registerVerifierKey', keyId: process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1', publicKey: spki, active: true }, admin.address);
+      await sim.send(await admin.sign(tx));
+    }
+  }
+}
 // Accounts for the seeded wallets so Stage 3 can sign in as any persona (simulator signatures are accepted in mock mode).
 const ids = new IdentityService(ctx);
 for (const i of PILOT_COHORT) {
