@@ -1,0 +1,22 @@
+{
+  "name": "@merces/evm",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Merces EVM contracts (Foundry). Solidity dependencies are pinned here and resolved through foundry.toml remappings.",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test -vv",
+    "test:ci": "FOUNDRY_PROFILE=ci forge test -vv",
+    "fmt": "forge fmt",
+    "lint": "forge fmt --check"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "5.6.1",
+    "@openzeppelin/contracts-upgradeable": "5.6.1",
+    "@tokenysolutions/t-rex": "4.1.6",
+    "@onchain-id/solidity": "2.2.1",
+    "oz4": "npm:@openzeppelin/contracts@4.9.6",
+    "oz4-upgradeable": "npm:@openzeppelin/contracts-upgradeable@4.9.6"
+  }
+}

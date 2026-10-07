@@ -1,0 +1,51 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+# Compilers are resolved from ~/.svm (0.8.17 for the T-REX unit, 0.8.30 for Merces). Offline: no downloads.
+auto_detect_solc = true
+offline = true
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+via_ir = false
+bytecode_hash = "none"
+cbor_metadata = false
+fs_permissions = [{ access = "read", path = "../packages/vectors" }, { access = "read", path = "./out" }, { access = "read-write", path = "./deployments" }]
+ffi = false
+gas_reports = ["MercesRegistry", "MercesAuction", "MercesTreasury", "MercesIncome", "MercesVault", "MercesWindow", "Groth16Verifier"]
+remappings = [
+  "forge-std/=lib/forge-std/src/",
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/",
+  "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/",
+  # T-REX, ONCHAINID and Merces' own 0.8.17 compliance module use OpenZeppelin 4.9.6 under an explicit prefix.
+  "@oz4/=lib/oz4/",
+  "@oz4-upgradeable/=lib/oz4-upgradeable/",
+  "@tokenysolutions/t-rex/=lib/t-rex/",
+  "@onchain-id/solidity/=lib/onchain-id/",
+]
+
+[profile.default.fuzz]
+runs = 512
+max_test_rejects = 131072
+
+[profile.default.invariant]
+runs = 128
+depth = 64
+fail_on_revert = false
+
+[profile.ci]
+fuzz = { runs = 4096 }
+invariant = { runs = 512, depth = 128 }
+
+[fmt]
+line_length = 120
+tab_width = 4
+bracket_spacing = false
+int_types = "long"
+
+[rpc_endpoints]
+monad_testnet = "${MONAD_TESTNET_RPC_URL}"
+anvil = "http://127.0.0.1:8545"

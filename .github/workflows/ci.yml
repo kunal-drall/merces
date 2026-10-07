@@ -1,0 +1,81 @@
+name: ci
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reference:
+    name: reference math, sdk, vectors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.28.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --filter './packages/*' lint
+      - run: pnpm -r --filter './packages/*' test
+      - name: vectors are up to date
+        run: pnpm vectors && git diff --exit-code -- packages/vectors
+
+  evm:
+    name: evm (foundry)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.28.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: foundry-rs/foundry-toolchain@v1
+        with: { version: v1.7.1 }
+      - name: install pinned solc versions
+        run: |
+          mkdir -p ~/.svm/0.8.17 ~/.svm/0.8.30
+          curl -fsSL -o ~/.svm/0.8.17/solc-0.8.17 https://binaries.soliditylang.org/linux-amd64/solc-linux-amd64-v0.8.17+commit.8df45f5f
+          curl -fsSL -o ~/.svm/0.8.30/solc-0.8.30 https://binaries.soliditylang.org/linux-amd64/solc-linux-amd64-v0.8.30+commit.73712a01
+          chmod +x ~/.svm/*/solc-*
+      - run: cd evm && forge fmt --check
+      - run: cd evm && forge build --sizes
+      - run: cd evm && FOUNDRY_PROFILE=ci forge test -vv
+
+  solana:
+    name: solana (anchor + litesvm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: solana }
+      - name: install agave 3.1.10 and anchor 1.2.1
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.10/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          cargo install anchor-cli --version 1.2.1 --locked
+      - run: cd solana && cargo fmt --all -- --check
+      - run: cd solana && cargo clippy --all-targets -- -D warnings
+      - run: bash solana/scripts/build.sh
+      - run: cd solana && cargo test --release
+
+  circuits:
+    name: circuits (circom + snarkjs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.28.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: install circom 2.2.3
+        run: |
+          curl -fsSL -o circom https://github.com/iden3/circom/releases/download/v2.2.3/circom-linux-amd64 && chmod +x circom && sudo mv circom /usr/local/bin/
+      - run: pnpm circuits:build
+      - run: cd circuits && pnpm test

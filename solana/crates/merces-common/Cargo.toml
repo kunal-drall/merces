@@ -1,0 +1,12 @@
+[package]
+name = "merces-common"
+version = "0.1.0"
+description = "Chain-neutral Merces math and encodings shared by the Solana programs and their tests (no Solana dependencies)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1"

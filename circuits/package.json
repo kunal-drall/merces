@@ -1,0 +1,17 @@
+{
+  "name": "@merces/circuits",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Merces ProofOfIncome reference circuit (circom, Groth16 over BN254) and development-only trusted setup.",
+  "type": "module",
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "snarkjs": "0.7.6",
+    "circomlib": "2.0.5",
+    "circomlibjs": "0.1.7",
+    "ffjavascript": "0.3.1"
+  }
+}

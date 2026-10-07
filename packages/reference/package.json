@@ -1,0 +1,21 @@
+{
+  "name": "@merces/reference",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Merces reference implementation: bigint math, protocol simulator and parity-vector generator.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "vectors": "tsx src/vectors/generate.ts"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "poseidon-lite": "0.3.0",
+    "snarkjs": "0.7.6"
+  }
+}

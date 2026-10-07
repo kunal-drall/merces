@@ -1,0 +1,21 @@
+[package]
+name = "merces-tests"
+version = "0.1.0"
+description = "Integration and parity tests for the Merces Solana programs, run against LiteSVM with the compiled .so files."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anchor-lang = { workspace = true }
+litesvm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+merces_registry = { path = "../programs/merces_registry", features = ["no-entrypoint"] }
+merces_hook = { path = "../programs/merces_hook", features = ["no-entrypoint"] }
+merces_protocol = { path = "../programs/merces_protocol", features = ["no-entrypoint"] }
+mock_usdg_hook = { path = "../programs/mock_usdg_hook", features = ["no-entrypoint"] }

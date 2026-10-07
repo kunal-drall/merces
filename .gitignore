@@ -1,0 +1,33 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.pnpm-store/
+
+# Foundry
+evm/out/
+evm/cache/
+evm/broadcast/**/dry-run/
+evm/lcov.info
+
+# Solana / Rust
+target/
+solana/.anchor/
+solana/test-ledger/
+**/*.so.d
+.anchor/
+
+# circuits (large intermediates; the dev zkey and vk are checked in deliberately)
+circuits/build/*.ptau
+circuits/build/*_js/
+circuits/build/*.sym
+circuits/build/*.wtns
+circuits/build/*_0000.zkey
+
+# local
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+keys/*.json
+!keys/README.md

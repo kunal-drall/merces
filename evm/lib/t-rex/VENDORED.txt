@@ -1,0 +1,2 @@
+vendored from npm @tokenysolutions/t-rex@4.1.6 on 2026-10-07 (tests, docs and build artifacts omitted)
+import paths rewritten: @openzeppelin/contracts(-upgradeable)/ -> @oz4(-upgradeable)/ (OpenZeppelin 4.9.6 vendored in lib/oz4*)

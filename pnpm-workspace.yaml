@@ -1,0 +1,6 @@
+packages:
+  - "packages/*"
+  - "evm"
+  - "circuits"
+  - "solana/scripts"
+  - "solana/meteora"

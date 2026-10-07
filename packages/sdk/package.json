@@ -1,0 +1,19 @@
+{
+  "name": "@merces/sdk",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Merces client helpers: commitments, signed-message encodings, PDA derivations, ABI and IDL re-exports.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "poseidon-lite": "0.3.0"
+  }
+}

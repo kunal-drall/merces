@@ -1,0 +1,7 @@
+{
+  "name": "@merces/vectors",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Generated parity vectors shared by the Solana and EVM test harnesses. Regenerate with `pnpm vectors` at the repo root; never edit by hand.",
+  "scripts": { "build": "true", "test": "true", "lint": "true" }
+}
