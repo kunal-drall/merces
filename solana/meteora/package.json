@@ -1,0 +1,26 @@
+{
+  "name": "@merces/meteora",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Merces curve-mode raise style: Meteora DBC config generator, devnet graduation script and pool state reader.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:local-validator": "MERCES_LOCAL_VALIDATOR=1 vitest run test/local-validator.e2e.test.ts",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "graduate": "tsx src/graduate.ts",
+    "state": "tsx src/state.ts",
+    "config": "tsx src/cli-config.ts"
+  },
+  "dependencies": {
+    "@meteora-ag/dynamic-bonding-curve-sdk": "1.5.13",
+    "@meteora-ag/cp-amm-sdk": "1.5.1",
+    "@solana/web3.js": "1.99.0",
+    "@solana/spl-token": "0.4.15",
+    "bn.js": "5.2.3"
+  },
+  "devDependencies": {
+    "@types/bn.js": "5.2.0"
+  }
+}
