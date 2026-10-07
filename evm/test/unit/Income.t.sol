@@ -176,13 +176,13 @@ contract IncomeTest is FullFixture {
 
         // attestation: tier 2 signed by an attestor key is not a verifier key
         r = reportInput(sid, Q1_2026, p, 2, false);
-        r.attestationSignature = sign(attestorKey, MercesMessages.reportDigest(registry.domain(), sid, Q1_2026, p.incomeCommitment, 2));
+        r.attestationSignature = sign(attestorKey, MercesMessages.reportDigest(domain, sid, Q1_2026, p.incomeCommitment, 2));
         vm.prank(issuer);
         vm.expectRevert(abi.encodeWithSelector(VerifierKeyNotRegistered.selector, attestor));
         income.submitReport(r);
         // tier 3 signed by the verifier key
         r = reportInput(sid, Q1_2026, p, 3, false);
-        r.attestationSignature = sign(verifierKey, MercesMessages.reportDigest(registry.domain(), sid, Q1_2026, p.incomeCommitment, 3));
+        r.attestationSignature = sign(verifierKey, MercesMessages.reportDigest(domain, sid, Q1_2026, p.incomeCommitment, 3));
         vm.prank(issuer);
         vm.expectRevert(abi.encodeWithSelector(AttestorNotRegistered.selector, verifier));
         income.submitReport(r);
@@ -194,7 +194,7 @@ contract IncomeTest is FullFixture {
         income.submitReport(r);
         // signature over the wrong tier is rejected as a wrong signer
         r = reportInput(sid, Q1_2026, p, 2, false);
-        r.attestationSignature = sign(verifierKey, MercesMessages.reportDigest(registry.domain(), sid, Q1_2026, p.incomeCommitment, 3));
+        r.attestationSignature = sign(verifierKey, MercesMessages.reportDigest(domain, sid, Q1_2026, p.incomeCommitment, 3));
         vm.prank(issuer);
         vm.expectRevert();
         income.submitReport(r);
@@ -325,7 +325,7 @@ contract IncomeTest is FullFixture {
         vm.expectRevert(PauseEndInPast.selector);
         income.approvePause(sid, uint64(block.timestamp), pauseSig(sid, 0, uint64(block.timestamp)));
         vm.expectRevert(abi.encodeWithSelector(AttestorNotRegistered.selector, vm.addr(0xDEAD)));
-        income.approvePause(sid, pauseEnd, sign(0xDEAD, MercesMessages.pauseDigest(registry.domain(), sid, 0, pauseEnd)));
+        income.approvePause(sid, pauseEnd, sign(0xDEAD, MercesMessages.pauseDigest(domain, sid, 0, pauseEnd)));
         vm.prank(keeper);
         vm.expectEmit(true, true, false, true);
         emit IMercesIncome.PauseApproved(sid, uint64(block.timestamp), pauseEnd, attestor);
@@ -383,7 +383,7 @@ contract IncomeTest is FullFixture {
     function test_trueUpPositiveAndNegative() public {
         reportAndPay(sid, Q1_2026, Proofs.q1());
         uint64 attestationTs = uint64(block.timestamp);
-        bytes memory sigPos = sign(attestorKey, MercesMessages.trueupDigest(registry.domain(), sid, 2026, 2_000e6, attestationTs));
+        bytes memory sigPos = sign(attestorKey, MercesMessages.trueupDigest(domain, sid, 2026, 2_000e6, attestationTs));
         vm.prank(stranger);
         vm.expectRevert(NotIssuer.selector);
         income.submitTrueUp(sid, 2026, 2_000e6, attestationTs, sigPos);
@@ -414,7 +414,7 @@ contract IncomeTest is FullFixture {
         income.payTrueUp(sid);
 
         // positive true-up paid late accrues from the deadline
-        bytes memory sigPos2 = sign(attestorKey, MercesMessages.trueupDigest(registry.domain(), sid, 2026, 1_000e6, attestationTs + 1));
+        bytes memory sigPos2 = sign(attestorKey, MercesMessages.trueupDigest(domain, sid, 2026, 1_000e6, attestationTs + 1));
         vm.prank(issuer);
         income.submitTrueUp(sid, 2026, 1_000e6, attestationTs + 1, sigPos2);
         vm.warp(attestationTs + 1 + 60 * DAY + 10 * DAY);
@@ -428,7 +428,7 @@ contract IncomeTest is FullFixture {
         vm.stopPrank();
 
         // negative true-up credits forward and reduces the next due
-        bytes memory sigNeg = sign(attestorKey, MercesMessages.trueupDigest(registry.domain(), sid, 2026, -5_000e6, attestationTs + 2));
+        bytes memory sigNeg = sign(attestorKey, MercesMessages.trueupDigest(domain, sid, 2026, -5_000e6, attestationTs + 2));
         vm.prank(issuer);
         income.submitTrueUp(sid, 2026, -5_000e6, attestationTs + 2, sigNeg);
         assertEq(income.getLedger(sid).routerCredit, 5_000e6);
@@ -441,7 +441,7 @@ contract IncomeTest is FullFixture {
 
     function test_trueUpRequiresTier3() public {
         uint256 s = runStandardRaise(TierFlags.TIER2_ZKTLS, bytes32(0));
-        bytes memory sig = sign(attestorKey, MercesMessages.trueupDigest(registry.domain(), s, 2026, 1, 1));
+        bytes memory sig = sign(attestorKey, MercesMessages.trueupDigest(domain, s, 2026, 1, 1));
         vm.prank(issuer);
         vm.expectRevert(abi.encodeWithSelector(TierNotEnabled.selector, 3));
         income.submitTrueUp(s, 2026, 1, 1, sig);

@@ -49,6 +49,8 @@ abstract contract MercesFixture is Test {
     TrexDeploy.Stack internal trex;
     FeeCollector internal feeCollector;
     MercesRegistry internal registry;
+    /// @dev Cached so test helpers can build digests without an external call (which would consume a prank).
+    bytes32 internal domain;
     address internal complianceModule;
     IMercesTokenFactory internal tokenFactory;
 
@@ -81,6 +83,8 @@ abstract contract MercesFixture is Test {
             trex.identityRegistry,
             trex.idFactory
         );
+
+        domain = registry.domain();
 
         // identity wiring: the registry is an identity-registry agent and owns the IdFactory (SPEC §4.2)
         IAgentRole(trex.identityRegistry).addAgent(address(registry));

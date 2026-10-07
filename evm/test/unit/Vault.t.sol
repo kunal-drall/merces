@@ -162,7 +162,7 @@ contract VaultTest is FullFixture {
     function test_amendedCapLowersCapRemaining() public {
         reportAndPay(sid, Q1_2026, Proofs.q1()); // paid 40/unit
         bytes32 newTc = keccak256("new");
-        bytes memory sig = sign(attestorKey, MercesMessagesLib.amend(registry.domain(), sid, 0, newTc, 2.0e18));
+        bytes memory sig = sign(attestorKey, MercesMessagesLib.amend(domain, sid, 0, newTc, 2.0e18));
         vm.prank(issuer);
         registry.amendTerms(sid, newTc, 2.0e18, sig);
         assertEq(vault.capPerUnit(sid), 200e6);

@@ -171,7 +171,7 @@ abstract contract FullFixture is MercesFixture {
         r.tier = tier;
         r.liquidityEvent = liquidityEvent;
         r.proof = IMercesIncome.Groth16Proof({a: p.a, b: p.b, c: p.c});
-        bytes32 digest = MercesMessages.reportDigest(registry.domain(), sid, period, p.incomeCommitment, tier);
+        bytes32 digest = MercesMessages.reportDigest(domain, sid, period, p.incomeCommitment, tier);
         if (tier == 2) r.attestationSignature = sign(verifierKey, digest);
         else if (tier == 3) r.attestationSignature = sign(attestorKey, digest);
     }
@@ -200,11 +200,11 @@ abstract contract FullFixture is MercesFixture {
     }
 
     function pauseSig(uint256 sid, uint64 nonce, uint64 pauseEnd) internal view returns (bytes memory) {
-        return sign(attestorKey, MercesMessages.pauseDigest(registry.domain(), sid, nonce, pauseEnd));
+        return sign(attestorKey, MercesMessages.pauseDigest(domain, sid, nonce, pauseEnd));
     }
 
     function extinguishSigs(uint256 sid, uint64 nonce) internal view returns (bytes memory a, bytes memory b) {
-        bytes32 d = MercesMessages.extinguishDigest(registry.domain(), sid, nonce);
+        bytes32 d = MercesMessages.extinguishDigest(domain, sid, nonce);
         return (sign(attestorKey, d), sign(attestor2Key, d));
     }
 }
