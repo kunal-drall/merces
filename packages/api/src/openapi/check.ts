@@ -1,0 +1,65 @@
+/**
+ * Contract check: every registered route (method + path) must exist in openapi.yaml with an x-access tier equal
+ * to the route's declared tier, and every operation in the spec must be served. Run by CI (`pnpm openapi:check`).
+ */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { parse } from 'yaml';
+import { buildApp, routeTable } from '../app.ts';
+import { makeContext } from '../context.ts';
+import { registerAllRoutes } from '../routes/all.ts';
+
+export const OPENAPI_PATH = fileURLToPath(new URL('./openapi.yaml', import.meta.url));
+
+export interface SpecOp {
+  method: string;
+  path: string;
+  access: string;
+  devOnly: boolean;
+  operationId: string;
+}
+
+export function loadSpecOps(path: string = OPENAPI_PATH): { spec: Record<string, unknown>; ops: SpecOp[] } {
+  const spec = parse(readFileSync(path, 'utf8')) as { paths: Record<string, Record<string, Record<string, unknown>>> };
+  const ops: SpecOp[] = [];
+  for (const [p, methods] of Object.entries(spec.paths)) {
+    for (const [m, op] of Object.entries(methods)) {
+      if (!['get', 'post', 'put', 'patch', 'delete'].includes(m)) continue;
+      ops.push({ method: m.toUpperCase(), path: p, access: String(op['x-access'] ?? ''), devOnly: op['x-dev-only'] === true, operationId: String(op.operationId ?? '') });
+    }
+  }
+  return { spec: spec as unknown as Record<string, unknown>, ops };
+}
+
+export async function checkContract(): Promise<string[]> {
+  const problems: string[] = [];
+  const ctx = makeContext({ pool: null as never, chains: { chains: new Map(), decisions: [], stage1: null, get: () => { throw new Error('x'); }, byFamily: () => { throw new Error('x'); }, close: async () => undefined }, log: { error() {}, info() {}, warn() {}, debug() {} } as never, sessionSecret: 'x', devMode: true });
+  const app = await buildApp(ctx, [registerAllRoutes]);
+  await app.ready();
+  const routes = routeTable(app).map((r) => ({ ...r, path: r.url.replace(/:([A-Za-z0-9_]+)/g, '{$1}') }));
+  const { ops } = loadSpecOps();
+  const key = (m: string, p: string) => `${m} ${p}`;
+  const specByKey = new Map(ops.map((o) => [key(o.method, o.path), o]));
+  const routeByKey = new Map(routes.map((r) => [key(r.method, r.path), r]));
+  for (const r of routes) {
+    const op = specByKey.get(key(r.method, r.path));
+    if (!op) problems.push(`route ${r.method} ${r.path} is not in openapi.yaml`);
+    else {
+      if (op.access !== r.access) problems.push(`${r.method} ${r.path}: x-access ${op.access} ≠ route tier ${r.access}`);
+      if (op.devOnly !== r.devOnly) problems.push(`${r.method} ${r.path}: x-dev-only mismatch`);
+      if (!op.operationId) problems.push(`${r.method} ${r.path}: missing operationId`);
+    }
+  }
+  for (const o of ops) if (!routeByKey.has(key(o.method, o.path))) problems.push(`spec operation ${o.method} ${o.path} has no route`);
+  await app.close();
+  return problems;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const problems = await checkContract();
+  if (problems.length) {
+    console.error('openapi.yaml does not match the routes:\n' + problems.map((p) => '  - ' + p).join('\n'));
+    process.exit(1);
+  }
+  console.log(`openapi.yaml matches ${loadSpecOps().ops.length} operations`);
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@merces/scenarios",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic end-to-end scenarios on the simulator: cohort seeding for dev:mock and the raise-to-payout demo.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/domain": "workspace:*",
+    "@merces/fixtures": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@merces/simulator": "workspace:*"
+  }
+}

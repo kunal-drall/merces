@@ -1,0 +1,20 @@
+{
+  "name": "@merces/indexer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "E1: consumes canonical events from every chain into one Postgres read model. Idempotent, resumable, finality-aware.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@merces/core": "workspace:*",
+    "@merces/db": "workspace:*",
+    "@merces/domain": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@merces/chains": "workspace:*"
+  },
+  "devDependencies": {
+    "@merces/simulator": "workspace:*"
+  }
+}

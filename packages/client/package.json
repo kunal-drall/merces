@@ -1,0 +1,11 @@
+{
+  "name": "@merces/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed client generated from openapi.yaml (openapi-typescript) with a thin fetch wrapper. Stage 3 builds against this.",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "generate": "tsx src/generate.ts" },
+  "dependencies": {},
+  "devDependencies": { "openapi-typescript": "7.13.0" }
+}

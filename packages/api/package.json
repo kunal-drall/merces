@@ -1,0 +1,23 @@
+{
+  "name": "@merces/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Merces API gateway: one chain-neutral API over both chains (Fastify, OpenAPI 3.1).",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@fastify/cors": "11.3.0",
+    "@merces/chains": "workspace:*",
+    "@merces/core": "workspace:*",
+    "@merces/db": "workspace:*",
+    "@merces/domain": "workspace:*",
+    "@merces/indexer": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@merces/scenarios": "workspace:*",
+    "@merces/simulator": "workspace:*",
+    "@noble/hashes": "2.4.0",
+    "fastify": "5.12.5",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  }
+}

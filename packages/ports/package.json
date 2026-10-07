@@ -1,0 +1,20 @@
+{
+  "name": "@merces/ports",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Ports for every external provider (identity check, e-signature, KMS, zkTLS, price feeds, DEX, email) with mock implementations, plus wallet signature verification and vault crypto.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@merces/domain": "workspace:*",
+    "@noble/hashes": "2.4.0",
+    "bs58": "6.0.0",
+    "viem": "2.57.3",
+    "@noble/curves": "2.4.0"
+  },
+  "devDependencies": {
+    "@merces/simulator": "workspace:*"
+  }
+}

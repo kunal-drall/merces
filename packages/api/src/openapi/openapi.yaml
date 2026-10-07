@@ -1,0 +1,347 @@
+openapi: 3.1.0
+info:
+  title: Merces API
+  version: 0.1.0
+  description: |
+    One chain-neutral API over every chain Merces runs on. Money is always a decimal string in stablecoin base
+    units; ratios are decimal strings in 1e18 fixed point (WAD); timestamps are unix seconds.
+    Every operation carries `x-access`: public | account | backer | holder | issuer | attestor | admin |
+    holder-or-issuer | issuer-or-attestor. Writes accept an `Idempotency-Key` header.
+servers:
+  - url: http://localhost:3000
+tags:
+  - { name: public }
+  - { name: me }
+  - { name: dev, description: Mock-mode only (simulator) }
+components:
+  securitySchemes:
+    session: { type: http, scheme: bearer }
+  parameters:
+    seriesId: { name: seriesId, in: path, required: true, schema: { type: string }, description: "<chain>:<address>" }
+    issuerId: { name: issuerId, in: path, required: true, schema: { type: string }, description: "<chain>:<address>" }
+    limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    offset: { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+    chainQuery: { name: chain, in: query, schema: { type: string } }
+  schemas:
+    Money: { type: string, pattern: '^\d+$', description: base units }
+    Wad: { type: string, pattern: '^\d+$', description: 1e18 fixed point }
+    Error:
+      type: object
+      required: [error, message]
+      properties: { error: { type: string }, message: { type: string }, detail: { nullable: true } }
+    ChainHealth:
+      type: object
+      properties:
+        chain: { type: string }
+        family: { type: string, enum: [solana, evm] }
+        mode: { type: string, enum: [mock, live] }
+        ok: { type: boolean }
+        detail: { type: string }
+        cursor: { type: [string, 'null'] }
+        lastSeq: { type: integer }
+    Health:
+      type: object
+      properties:
+        ok: { type: boolean }
+        chains: { type: array, items: { $ref: '#/components/schemas/ChainHealth' } }
+        stage1: { type: [object, 'null'] }
+    ChainCatalogue:
+      type: object
+      properties:
+        chains:
+          type: array
+          items:
+            type: object
+            properties:
+              chain: { type: string }
+              family: { type: string }
+              mode: { type: string }
+              network: { type: string }
+              stablecoins: { type: array, items: { type: object, properties: { symbol: { type: string }, mint: { type: string }, decimals: { type: integer } } } }
+              raiseStyles: { type: array, items: { type: string, enum: [sealed, curve] } }
+    ReleaseTranche:
+      type: object
+      properties: { afterSeconds: { type: integer }, bps: { type: integer } }
+    SeriesTerms:
+      type: object
+      properties:
+        unitsOffered: { type: string }
+        reservePrice: { $ref: '#/components/schemas/Money' }
+        minimumRaise: { $ref: '#/components/schemas/Money' }
+        capMultipleWad: { $ref: '#/components/schemas/Wad' }
+        lockupSeconds: { type: integer }
+        releaseSchedule: { type: array, items: { $ref: '#/components/schemas/ReleaseTranche' } }
+        auctionFeeBps: { type: integer }
+        payoutFeeBps: { type: integer }
+        hurdleWad: { $ref: '#/components/schemas/Wad' }
+        payoutMultipleK: { type: integer }
+        walletCapBps: { type: integer }
+        dueDays: { type: integer }
+        graceDays: { type: integer }
+        formalNoticeDays: { type: integer }
+        contractHash: { type: string }
+        termsCommitment: { type: string }
+        tierFlags: { type: object, properties: { tier1: { type: boolean }, tier2: { type: boolean }, tier3: { type: boolean }, tier4: { type: boolean } } }
+        reportingCurrency: { type: string }
+    Series:
+      type: object
+      properties:
+        seriesId: { type: string }
+        chain: { type: string }
+        issuer: { type: string }
+        stablecoin: { type: string, enum: [USDC, USDG] }
+        raiseStyle: { type: string, enum: [sealed, curve] }
+        phase: { type: string, enum: [Draft, Open, Reveal, Settled, Failed, Cancelled] }
+        status: { type: string, enum: [OnTime, InGrace, Late, Paused, Retired, Redeemed, Extinguished] }
+        terms: { $ref: '#/components/schemas/SeriesTerms' }
+        createdAt: { type: integer }
+        openedAt: { type: [integer, 'null'] }
+        commitEndsAt: { type: [integer, 'null'] }
+        revealEndsAt: { type: [integer, 'null'] }
+        settledAt: { type: [integer, 'null'] }
+        lockupEndsAt: { type: [integer, 'null'] }
+        issuePrice: { type: [string, 'null'] }
+        unitsSold: { type: string }
+        unitsOutstanding: { type: string }
+        capPerUnit: { type: [string, 'null'] }
+        paidPerUnitWad: { type: string }
+        releasesPaused: { type: boolean }
+        redeemedAt: { type: [integer, 'null'] }
+        extinguishedAt: { type: [integer, 'null'] }
+    SeriesDetail:
+      allOf:
+        - $ref: '#/components/schemas/Series'
+        - type: object
+          properties:
+            holderCount: { type: integer }
+            curve: { type: [object, 'null'] }
+    Activity:
+      type: object
+      description: Public activity never carries an amount.
+      properties:
+        chain: { type: string }
+        seq: { type: integer }
+        seriesId: { type: [string, 'null'] }
+        kind: { type: string }
+        summary: { type: string }
+        at: { type: integer }
+    Period:
+      type: object
+      properties:
+        seriesId: { type: string }
+        periodId: { type: string }
+        dueAt: { type: integer }
+        graceEndsAt: { type: integer }
+        formalNoticeAt: { type: integer }
+        reportAccepted: { type: boolean }
+        tier: { type: [integer, 'null'] }
+        paymentDue: { $ref: '#/components/schemas/Money' }
+        accrual: { $ref: '#/components/schemas/Money' }
+        paid: { $ref: '#/components/schemas/Money' }
+        splitReceived: { $ref: '#/components/schemas/Money' }
+        settled: { type: boolean }
+        standing: { type: string, enum: [NotDue, OnTime, InGrace, Late, FormalNoticeDue, Deferred] }
+        incomeCommitment: { type: [string, 'null'] }
+        liquidityEvent: { type: boolean }
+        fxBasis: { type: [string, 'null'] }
+        fxAvgWad: { type: [string, 'null'] }
+        formalNoticeIssued: { type: boolean }
+    Holding:
+      type: object
+      properties:
+        seriesId: { type: string }
+        chain: { type: string }
+        wallet: { type: string }
+        stablecoin: { type: string }
+        phase: { type: string }
+        status: { type: string }
+        units: { type: string }
+        redeemedUnits: { type: string }
+        burnedUnits: { type: string }
+        issuePrice: { type: [string, 'null'] }
+        capPerUnit: { type: [string, 'null'] }
+        grossPaidPerUnit: { type: string }
+        claimedTotal: { $ref: '#/components/schemas/Money' }
+        claimable: { $ref: '#/components/schemas/Money' }
+        tailClaimable: { $ref: '#/components/schemas/Money' }
+        realisedYieldBps: { type: integer }
+        lockupEndsAt: { type: [integer, 'null'] }
+        redemptionPrice: { type: [string, 'null'] }
+  responses:
+    Unauthorized: { description: No or invalid session, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: Session lacks the required tier, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      x-access: public
+      tags: [public]
+      responses: { '200': { description: Health, content: { application/json: { schema: { $ref: '#/components/schemas/Health' } } } } }
+  /chains:
+    get:
+      operationId: listChains
+      x-access: public
+      tags: [public]
+      responses: { '200': { description: Chain catalogue, content: { application/json: { schema: { $ref: '#/components/schemas/ChainCatalogue' } } } } }
+  /issuers:
+    get:
+      operationId: listIssuers
+      x-access: public
+      tags: [public]
+      parameters: [{ $ref: '#/components/parameters/chainQuery' }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/offset' }]
+      responses: { '200': { description: Issuers, content: { application/json: { schema: { type: object, properties: { issuers: { type: array, items: { type: object } } } } } } } }
+  /issuers/{issuerId}:
+    get:
+      operationId: getIssuer
+      x-access: public
+      tags: [public]
+      parameters: [{ $ref: '#/components/parameters/issuerId' }]
+      responses: { '200': { description: Issuer with series, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /series:
+    get:
+      operationId: listSeries
+      x-access: public
+      tags: [public]
+      parameters: [{ $ref: '#/components/parameters/chainQuery' }, { name: status, in: query, schema: { type: string } }, { name: issuer, in: query, schema: { type: string } }, { $ref: '#/components/parameters/limit' }, { $ref: '#/components/parameters/offset' }]
+      responses: { '200': { description: Series list, content: { application/json: { schema: { type: object, properties: { series: { type: array, items: { $ref: '#/components/schemas/Series' } } } } } } } }
+  /series/{seriesId}:
+    get:
+      operationId: getSeries
+      x-access: public
+      tags: [public]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Series, content: { application/json: { schema: { $ref: '#/components/schemas/SeriesDetail' } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /series/{seriesId}/auction:
+    get:
+      operationId: getAuction
+      x-access: public
+      tags: [public]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Auction state (phase, counts, clearing price once settled), content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /series/{seriesId}/status:
+    get:
+      operationId: getSeriesStatus
+      x-access: public
+      tags: [public]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Status, period standings and history without amounts, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /series/{seriesId}/activity:
+    get:
+      operationId: getSeriesActivity
+      x-access: public
+      tags: [public]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }, { $ref: '#/components/parameters/limit' }, { name: before, in: query, schema: { type: integer } }]
+      responses: { '200': { description: Activity without amounts, content: { application/json: { schema: { type: object, properties: { activity: { type: array, items: { $ref: '#/components/schemas/Activity' } } } } } } } }
+  /activity:
+    get:
+      operationId: getActivity
+      x-access: public
+      tags: [public]
+      parameters: [{ $ref: '#/components/parameters/chainQuery' }, { $ref: '#/components/parameters/limit' }]
+      responses: { '200': { description: Global activity without amounts, content: { application/json: { schema: { type: object, properties: { activity: { type: array, items: { $ref: '#/components/schemas/Activity' } } } } } } } }
+  /arena:
+    get:
+      operationId: getArena
+      x-access: public
+      tags: [public]
+      responses: { '200': { description: Live series ranked for the landing page, no amounts, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/periods:
+    get:
+      operationId: getSeriesPeriods
+      x-access: holder-or-issuer
+      tags: [public]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Periods with amounts, content: { application/json: { schema: { type: object, properties: { periods: { type: array, items: { $ref: '#/components/schemas/Period' } } } } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /series/{seriesId}/treasury:
+    get:
+      operationId: getTreasury
+      x-access: issuer
+      tags: [public]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Treasury schedule and balances, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /series/{seriesId}/vault:
+    get:
+      operationId: getVault
+      x-access: holder-or-issuer
+      tags: [public]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Vault balances, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /series/{seriesId}/holders:
+    get:
+      operationId: getHolders
+      x-access: holder-or-issuer
+      tags: [public]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Holder positions, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /series/{seriesId}/payouts:
+    get:
+      operationId: getSeriesPayouts
+      x-access: holder
+      tags: [public]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Payout history for the caller's wallets plus series-level payments, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /series/{seriesId}/position:
+    get:
+      operationId: getPosition
+      x-access: holder
+      tags: [public]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Live position (claimable read from the chain), content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /me:
+    get:
+      operationId: getMe
+      x-access: account
+      tags: [me]
+      security: [{ session: [] }]
+      responses: { '200': { description: The signed-in account, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /me/holdings:
+    get:
+      operationId: getMyHoldings
+      x-access: account
+      tags: [me]
+      security: [{ session: [] }]
+      responses: { '200': { description: Holdings with payout history and yield only (R20), content: { application/json: { schema: { type: object, properties: { holdings: { type: array, items: { $ref: '#/components/schemas/Holding' } } } } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /me/payouts:
+    get:
+      operationId: getMyPayouts
+      x-access: account
+      tags: [me]
+      security: [{ session: [] }]
+      responses: { '200': { description: Payouts to the caller's wallets, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /me/bids:
+    get:
+      operationId: getMyBids
+      x-access: account
+      tags: [me]
+      security: [{ session: [] }]
+      responses: { '200': { description: The caller's bids and refund status, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /dev/time:
+    get:
+      operationId: devGetTime
+      x-access: public
+      x-dev-only: true
+      tags: [dev]
+      responses: { '200': { description: Simulator clocks, content: { application/json: { schema: { type: object } } } } }
+  /dev/advance-time:
+    post:
+      operationId: devAdvanceTime
+      x-access: public
+      x-dev-only: true
+      tags: [dev]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [seconds], properties: { seconds: { type: integer } } } } } }
+      responses: { '200': { description: New simulator clocks, content: { application/json: { schema: { type: object } } } } }
+  /dev/faucet:
+    post:
+      operationId: devFaucet
+      x-access: public
+      x-dev-only: true
+      tags: [dev]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, wallet, stablecoin, amount], properties: { chain: { type: string }, wallet: { type: string }, stablecoin: { type: string, enum: [USDC, USDG] }, amount: { $ref: '#/components/schemas/Money' } } } } } }
+      responses: { '200': { description: New balance, content: { application/json: { schema: { type: object } } } } }

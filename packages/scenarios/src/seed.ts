@@ -1,0 +1,138 @@
+import { bidCommitment, type SeriesTerms } from '@merces/domain';
+import { PILOT_COHORT, stripeFixtureFor, stripeGrossUntil, type SyntheticIssuer } from '@merces/fixtures';
+import { parsePeriod, periodsBetween, ratePerUnit, wadFromDecimal } from '@merces/math';
+import { SimHarness, SimWallet, SimulatorChain, defaultTerms, type PrivateTerms } from '@merces/simulator';
+import { termsCommitment } from '@merces/domain';
+
+export interface SeededIssuer {
+  issuer: SyntheticIssuer;
+  wallet: SimWallet;
+  seriesId: string;
+  terms: SeriesTerms;
+  privateTerms: PrivateTerms;
+  clearingPrice: bigint;
+}
+
+export interface SeedResult {
+  chains: Record<string, SimulatorChain>;
+  harnesses: Record<string, SimHarness>;
+  issuers: SeededIssuer[];
+}
+
+export interface SeedOptions {
+  /** how many quarters of 2026 to report (0–4) */
+  quarters?: number;
+  /** restrict to a subset of handles */
+  handles?: string[];
+  log?: (m: string) => void;
+}
+
+/**
+ * Seeds the 12-issuer pilot cohort on both simulator personalities: registers issuers, runs sealed-bid raises
+ * with five synthetic backers each, then reports and pays the requested quarters from Stripe-shaped fixture
+ * income. Income figures exist only inside this function and the device-side proof builder; nothing is
+ * persisted anywhere.
+ */
+export async function seedCohort(sims: { solana: SimulatorChain; monad: SimulatorChain }, opts: SeedOptions = {}): Promise<SeedResult> {
+  const log = opts.log ?? (() => undefined);
+  const harnesses: Record<string, SimHarness> = {
+    solana: await SimHarness.create('solana', { sim: sims.solana }),
+    monad: await SimHarness.create('monad', { sim: sims.monad }),
+  };
+  const out: SeededIssuer[] = [];
+  const cohort = PILOT_COHORT.filter((i) => !opts.handles || opts.handles.includes(i.handle));
+  for (const [i, issuer] of cohort.entries()) {
+    const h = harnesses[issuer.chain]!;
+    const sim = h.sim;
+    const wallet = new SimWallet(sim.family, `issuer:${issuer.handle}`);
+    await sim.submit({ kind: 'setAllowlist', wallet: wallet.address, allowed: true }, 'allowlistManager');
+    await sim.fund(wallet.address, issuer.stablecoin, 10_000_000_000_000n);
+    const privateTerms: PrivateTerms = { threshold: issuer.threshold, shareRateWad: issuer.shareRateWad, reportingCurrency: issuer.reportingCurrency, indexingRule: 'cpi-annual', salt: '0x' + (0x40 + i).toString(16).padStart(2, '0').repeat(32) };
+    const r = ratePerUnit(issuer.shareRateWad, issuer.unitsOffered);
+    const commitment = termsCommitment({ threshold: privateTerms.threshold, ratePerUnitWad: r, reportingCurrency: issuer.reportingCurrency, indexingRule: 'cpi-annual', salt: privateTerms.salt });
+    const { terms } = defaultTerms(sim, {
+      stablecoin: issuer.stablecoin, stablecoinMint: sim.mintOf(issuer.stablecoin), unitsOffered: issuer.unitsOffered.toString(), reservePrice: issuer.reservePrice.toString(), minimumRaise: issuer.minimumRaise.toString(),
+      reportingCurrency: issuer.reportingCurrency, termsCommitment: commitment, contractHash: '0x' + (0x80 + i).toString(16).padStart(2, '0').repeat(32),
+      tierFlags: { tier1: issuer.tier === 1, tier2: issuer.tier === 2, tier3: issuer.tier === 3, tier4: false },
+    });
+    // the issuer wallet signs (not the harness default issuer)
+    const exec = (cmd: Parameters<SimHarness['exec']>[1], co: SimWallet[] = []) => h.exec(wallet, cmd, co);
+    await exec({ kind: 'registerIssuer' });
+    const created = await exec({ kind: 'createSeries', terms });
+    const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
+    const now = await sim.now();
+    const commitEndsAt = now + 2 * 86_400;
+    const revealEndsAt = commitEndsAt + 86_400;
+    await exec({ kind: 'openRaise', seriesId, commitEndsAt, revealEndsAt });
+    // five backers bid around the reserve; the wallet cap is 10% so each takes ≤ 10% of N
+    const qty = issuer.unitsOffered / 10n;
+    const prices = [issuer.reservePrice + 3_000_000n, issuer.reservePrice + 2_000_000n, issuer.reservePrice + 1_000_000n, issuer.reservePrice + 1_000_000n, issuer.reservePrice];
+    const salts: string[] = [];
+    for (const [b, price] of prices.entries()) {
+      const w = h.backers[b]!;
+      const salt = '0x' + (0x10 + b).toString(16).padStart(2, '0').repeat(32);
+      salts.push(salt);
+      const c = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: price, quantity: qty, salt });
+      const deposit = price * qty + (price * qty) / 100n;
+      await h.exec(w, { kind: 'commitBid', seriesId, commitment: c, deposit: deposit.toString() });
+    }
+    await sim.setTime(commitEndsAt);
+    for (const [b, price] of prices.entries()) await h.exec(h.backers[b]!, { kind: 'revealBid', seriesId, pricePerUnit: price.toString(), quantity: qty.toString(), salt: salts[b]! });
+    await sim.setTime(revealEndsAt);
+    const settled = await sim.submit({ kind: 'settleAuction', seriesId }, 'keeper');
+    const settledEv = settled.events.find((e) => e.type === 'AuctionSettled');
+    if (!settledEv) throw new Error(`seed: auction for ${issuer.handle} failed (${JSON.stringify(settled.events.map((e) => e.payload))}); fixture minimumRaise must be ≤ unitsOffered/2 × reservePrice`);
+    const clearing = BigInt((settledEv.payload as { clearingPrice: string }).clearingPrice);
+    for (const b of prices.keys()) await h.exec(h.backers[b]!, { kind: 'claimRefund', seriesId }).catch(() => undefined);
+    await exec({ kind: 'drawRelease', seriesId });
+    if (issuer.tier === 1) await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId, router: h.router });
+    log(`${issuer.chain}:${issuer.handle} raised ${clearing * BigInt(qty) * 5n} at ${clearing}/unit`);
+    out.push({ issuer, wallet, seriesId, terms, privateTerms, clearingPrice: clearing });
+  }
+
+  // report the requested quarters
+  const quarters = Math.min(4, Math.max(0, opts.quarters ?? 0));
+  for (let q = 1; q <= quarters; q++) {
+    const periodId = `2026Q${q}`;
+    const period = parsePeriod(periodId);
+    for (const chain of ['solana', 'monad'] as const) if ((await sims[chain].now()) < period.end + 86_400) await sims[chain].setTime(period.end + 86_400);
+    for (const s of out) {
+      const h = harnesses[s.issuer.chain]!;
+      const fixture = stripeFixtureFor(s.issuer.handle, 2026, s.issuer.incomeYtdByQuarter);
+      const ytdNow = stripeGrossUntil(fixture, period.end) * 10_000n; // cents → 1e6 base units
+      const ytdPrev = q === 1 ? 0n : stripeGrossUntil(fixture, parsePeriod(`2026Q${q - 1}`).end) * 10_000n;
+      const fxBasis = s.issuer.reportingCurrency === 'USD' ? 'unity' : 'attestor';
+      const pair = fxBasis === 'unity' ? null : `${s.issuer.reportingCurrency}/USD`;
+      const rate = fxBasis === 'unity' ? undefined : wadFromDecimal(FX_PLACEHOLDER[s.issuer.reportingCurrency] ?? '1');
+      const series = (await h.sim.getSeries(s.seriesId))!;
+      const { command } = h.buildReport({
+        seriesId: s.seriesId, periodId, unitsOutstanding: BigInt(series.unitsOutstanding), privateTerms: s.privateTerms, incomeYtdPrev: ytdPrev, incomeYtdNow: ytdNow, termsCommitment: s.terms.termsCommitment,
+        tier: s.issuer.tier, source: s.issuer.source, attestor: s.issuer.tier === 3 ? h.attestors[0]!.address : null,
+        fxBasis, pair, fxAvgWad: rate, attestorRate: rate ? { attestor: h.attestors[1]!.address, rateWad: rate, pair: pair! } : null,
+        liquidityEvent: s.issuer.handle === 'mesh-mika' && q === 3,
+      });
+      if (fxBasis === 'attestor') await h.sim.submit({ kind: 'flagFxFallback', pair: pair!, periodId, reason: 'coverage' }, 'keeper').catch(() => undefined);
+      const co = [command.attestor, command.attestorRate?.attestor].filter((a): a is string => !!a).map((a) => h.attestors.find((w) => w.address === a)!);
+      const accepted = await h.exec(s.wallet, command, co);
+      const due = BigInt((accepted.events.find((e) => e.type === 'ReportAccepted')!.payload as { paymentDue: string }).paymentDue);
+      if (due > 0n) await h.exec(s.wallet, { kind: 'payIn', seriesId: s.seriesId, periodId, amount: due.toString() });
+      log(`${s.issuer.chain}:${s.issuer.handle} ${periodId} due=${due}`);
+    }
+  }
+  // a few backers claim so payout history is not empty
+  for (const s of out) {
+    const h = harnesses[s.issuer.chain]!;
+    for (const b of h.backers.slice(0, 2)) await h.exec(b, { kind: 'claimPayout', seriesId: s.seriesId }).catch(() => undefined);
+  }
+  // one Solana curve-mode series to exercise E14
+  const sol = harnesses.solana!;
+  const curveIssuer = new SimWallet(sol.sim.family, 'issuer:curve-cam');
+  await sol.sim.submit({ kind: 'setAllowlist', wallet: curveIssuer.address, allowed: true }, 'allowlistManager');
+  await sol.exec(curveIssuer, { kind: 'registerIssuer' });
+  const curveTerms = defaultTerms(sol.sim, { raiseStyle: 'curve', minimumRaise: '2000000000', reservePrice: '5000000' }).terms;
+  await sol.exec(curveIssuer, { kind: 'createSeries', terms: curveTerms });
+  return { chains: sims, harnesses, issuers: out };
+}
+
+/** Placeholder quarter-average rates used only for the synthetic cohort (attestor-signed in the simulator). Not market data. */
+export const FX_PLACEHOLDER: Record<string, string> = { GBP: '1.27', EUR: '1.08', INR: '0.012', CAD: '0.73', SGD: '0.74' };

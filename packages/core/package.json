@@ -1,0 +1,13 @@
+{
+  "name": "@merces/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared service infrastructure: privacy-safe logger, idempotency, outbox, job queue, audit log, errors, feature flags.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/db": "workspace:*",
+    "@noble/hashes": "2.4.0",
+    "pino": "10.4.0"
+  }
+}
