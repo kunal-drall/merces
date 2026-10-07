@@ -23,6 +23,7 @@ custom-panic = []
 
 [dependencies]
 anchor-lang = { workspace = true }
+merces-common = { path = "../../crates/merces-common" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

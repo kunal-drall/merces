@@ -13,9 +13,12 @@
     "vectors": "tsx src/vectors/generate.ts"
   },
   "dependencies": {
-    "@noble/hashes": "2.4.0",
     "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
     "poseidon-lite": "0.3.0",
     "snarkjs": "0.7.6"
+  },
+  "devDependencies": {
+    "fast-check": "4.10.2"
   }
 }

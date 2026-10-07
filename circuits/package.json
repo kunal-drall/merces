@@ -9,9 +9,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "snarkjs": "0.7.6",
     "circomlib": "2.0.5",
     "circomlibjs": "0.1.7",
-    "ffjavascript": "0.3.1"
+    "ffjavascript": "0.3.1",
+    "snarkjs": "0.7.6"
+  },
+  "devDependencies": {
+    "@types/snarkjs": "0.7.9"
   }
 }
