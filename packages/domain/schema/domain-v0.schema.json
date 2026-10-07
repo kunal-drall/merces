@@ -1,0 +1,6287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://merces.dev/schema/domain-v0.json",
+  "title": "Merces canonical domain model v0",
+  "version": "0.1.0",
+  "envelope": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "IssuerRegistered"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "issuer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "issuer"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "IssuanceStopped"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "issuer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "issuer"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "SeriesCreated"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "issuer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "terms": {
+                "type": "object",
+                "properties": {
+                  "stablecoin": {
+                    "type": "string",
+                    "enum": [
+                      "USDC",
+                      "USDG"
+                    ]
+                  },
+                  "stablecoinMint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "unitsOffered": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "reservePrice": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "minimumRaise": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "capMultipleWad": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "lockupSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "releaseSchedule": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "afterSeconds": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "bps": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 10000
+                        }
+                      },
+                      "required": [
+                        "afterSeconds",
+                        "bps"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "auctionFeeBps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "payoutFeeBps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "hurdleWad": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "payoutMultipleK": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "walletCapBps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 10000
+                  },
+                  "dueDays": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "graceDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "formalNoticeDays": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "contractHash": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-f]{64}$"
+                  },
+                  "termsCommitment": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-f]{64}$"
+                  },
+                  "tierFlags": {
+                    "type": "object",
+                    "properties": {
+                      "tier1": {
+                        "type": "boolean"
+                      },
+                      "tier2": {
+                        "type": "boolean"
+                      },
+                      "tier3": {
+                        "type": "boolean"
+                      },
+                      "tier4": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "tier1",
+                      "tier2",
+                      "tier3",
+                      "tier4"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "reportingCurrency": {
+                    "type": "string",
+                    "pattern": "^[A-Z]{3}$"
+                  },
+                  "raiseStyle": {
+                    "type": "string",
+                    "enum": [
+                      "sealed",
+                      "curve"
+                    ]
+                  }
+                },
+                "required": [
+                  "stablecoin",
+                  "stablecoinMint",
+                  "unitsOffered",
+                  "reservePrice",
+                  "minimumRaise",
+                  "capMultipleWad",
+                  "lockupSeconds",
+                  "releaseSchedule",
+                  "auctionFeeBps",
+                  "payoutFeeBps",
+                  "hurdleWad",
+                  "payoutMultipleK",
+                  "walletCapBps",
+                  "dueDays",
+                  "graceDays",
+                  "formalNoticeDays",
+                  "contractHash",
+                  "termsCommitment",
+                  "tierFlags",
+                  "reportingCurrency",
+                  "raiseStyle"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "seriesId",
+              "issuer",
+              "terms"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "RaiseOpened"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "commitEndsAt": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "revealEndsAt": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "commitEndsAt",
+              "revealEndsAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "RaiseCancelled"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              }
+            },
+            "required": [
+              "seriesId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "BidCommitted"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "bidder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "commitment": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
+              "deposit": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "order": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "bidder",
+              "commitment",
+              "deposit",
+              "order"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "BidRevealed"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "bidder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "pricePerUnit": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "quantity": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "bidder",
+              "pricePerUnit",
+              "quantity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "AuctionSettled"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "clearingPrice": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "unitsSold": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "proceeds": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "totalFees": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "settledAt": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "clearingPrice",
+              "unitsSold",
+              "proceeds",
+              "totalFees",
+              "settledAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "AuctionFailed"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "no-bids",
+                  "below-minimum-raise"
+                ]
+              }
+            },
+            "required": [
+              "seriesId",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "BidRefunded"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "bidder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "bidder",
+              "amount"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "UnitsMinted"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "holder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "units": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "holder",
+              "units"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "TreasuryFunded"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "amount"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "FundsReleased"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "trancheIndex": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "amount",
+              "trancheIndex"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "ReleasesPaused"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "Late",
+                  "IssuerRequest"
+                ]
+              }
+            },
+            "required": [
+              "seriesId",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "ReleasesResumed"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              }
+            },
+            "required": [
+              "seriesId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "SplitReceipt"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "periodId": {
+                "type": "string",
+                "pattern": "^\\d{4}Q[1-4]$"
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "router": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "seriesId",
+              "periodId",
+              "amount",
+              "router"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "ReportAccepted"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "periodId": {
+                "type": "string",
+                "pattern": "^\\d{4}Q[1-4]$"
+              },
+              "tier": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 2
+                  },
+                  {
+                    "type": "number",
+                    "const": 3
+                  },
+                  {
+                    "type": "number",
+                    "const": 4
+                  }
+                ]
+              },
+              "paymentDue": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "accrual": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "incomeCommitment": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
+              "termsCommitment": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
+              "fxBasis": {
+                "type": "string",
+                "enum": [
+                  "accumulator",
+                  "attestor",
+                  "unity"
+                ]
+              },
+              "fxAvgWad": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "liquidityEvent": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "seriesId",
+              "periodId",
+              "tier",
+              "paymentDue",
+              "accrual",
+              "incomeCommitment",
+              "termsCommitment",
+              "fxBasis",
+              "fxAvgWad",
+              "liquidityEvent"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "PaymentReceived"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "periodId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^\\d{4}Q[1-4]$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "gross": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "fee": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "net": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "payIn",
+                  "split",
+                  "redemption",
+                  "tail",
+                  "extinguishment"
+                ]
+              },
+              "paidPerUnitWad": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "periodId",
+              "gross",
+              "fee",
+              "net",
+              "source",
+              "paidPerUnitWad"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "PaymentRefunded"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "periodId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^\\d{4}Q[1-4]$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "cap",
+                  "overpayment"
+                ]
+              }
+            },
+            "required": [
+              "seriesId",
+              "periodId",
+              "amount",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "FeeTaken"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "auction",
+                  "payout"
+                ]
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "payer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "seriesId",
+              "kind",
+              "amount",
+              "payer"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "PayoutClaimed"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "holder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "holder",
+              "amount"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "SeriesRetired"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "paidPerUnitWad": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "paidPerUnitWad"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "UnitsBurned"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "holder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "units": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "cap",
+                  "redemption",
+                  "extinguishment"
+                ]
+              }
+            },
+            "required": [
+              "seriesId",
+              "holder",
+              "units",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "RedemptionOpened"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "pricePerUnit": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "unitsOutstanding": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "deposit": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "tailCapPerUnit": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "tailEndsAt": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "pricePerUnit",
+              "unitsOutstanding",
+              "deposit",
+              "tailCapPerUnit",
+              "tailEndsAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "RedemptionClaimed"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "holder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "units": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "holder",
+              "units",
+              "amount"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "TailPayout"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "periodId": {
+                "type": "string",
+                "pattern": "^\\d{4}Q[1-4]$"
+              },
+              "perUnit": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "total": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "periodId",
+              "perUnit",
+              "total"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "PauseRequested"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "until": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "until"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "PauseApproved"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "attestor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "until": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "attestor",
+              "until"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "PauseEnded"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "pausedSeconds": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "pausedSeconds"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "StatusChanged"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "from": {
+                "type": "string",
+                "enum": [
+                  "OnTime",
+                  "InGrace",
+                  "Late",
+                  "Paused",
+                  "Retired",
+                  "Redeemed",
+                  "Extinguished"
+                ]
+              },
+              "to": {
+                "type": "string",
+                "enum": [
+                  "OnTime",
+                  "InGrace",
+                  "Late",
+                  "Paused",
+                  "Retired",
+                  "Redeemed",
+                  "Extinguished"
+                ]
+              }
+            },
+            "required": [
+              "seriesId",
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "FormalNoticeDue"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "periodId": {
+                "type": "string",
+                "pattern": "^\\d{4}Q[1-4]$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "periodId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "TermsAmended"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "termsCommitment": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
+              "previousCommitment": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
+              "capMultipleWad": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "attestor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "seriesId",
+              "termsCommitment",
+              "previousCommitment",
+              "capMultipleWad",
+              "attestor"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "SeriesExtinguished"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "attestors": {
+                "minItems": 2,
+                "maxItems": 2,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              },
+              "returnedToHolders": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "attestors",
+              "returnedToHolders"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "RateSnapshot"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "pair": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+              },
+              "rateWad": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "confWad": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "publishTime": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "dayIndex": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "sumWad": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "pair",
+              "rateWad",
+              "confWad",
+              "publishTime",
+              "dayIndex",
+              "sumWad",
+              "count"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "FxFallbackFlagged"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "pair": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+              },
+              "periodId": {
+                "type": "string",
+                "pattern": "^\\d{4}Q[1-4]$"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "coverage",
+                  "deviation"
+                ]
+              }
+            },
+            "required": [
+              "pair",
+              "periodId",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "TransferWindowOpened"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "windowId": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "commitEndsAt": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "revealEndsAt": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "windowId",
+              "commitEndsAt",
+              "revealEndsAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "TransferWindowCleared"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "windowId": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "clearingPrice": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "unitsTransferred": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "windowId",
+              "clearingPrice",
+              "unitsTransferred"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "UnitsTransferred"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "from": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "to": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "units": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "windowId": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "from",
+              "to",
+              "units",
+              "windowId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "AllowlistUpdated"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "wallet": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "allowed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "wallet",
+              "allowed"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "AttestorRegistered"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "attestor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "active": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "attestor",
+              "active"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "VerifierKeyRegistered"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "keyId": {
+                "type": "string"
+              },
+              "publicKey": {
+                "type": "string"
+              },
+              "active": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "keyId",
+              "publicKey",
+              "active"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "CurveSeriesCreated"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "issuer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "quoteStablecoin": {
+                "type": "string",
+                "enum": [
+                  "USDC",
+                  "USDG"
+                ]
+              },
+              "graduationThreshold": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "issuer",
+              "quoteStablecoin",
+              "graduationThreshold"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "CurveGraduated"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "raised": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "unitsOutstanding": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "raised",
+              "unitsOutstanding"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "events": {
+    "IssuerRegistered": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "issuer"
+      ],
+      "additionalProperties": false
+    },
+    "IssuanceStopped": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "issuer"
+      ],
+      "additionalProperties": false
+    },
+    "SeriesCreated": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "terms": {
+          "type": "object",
+          "properties": {
+            "stablecoin": {
+              "type": "string",
+              "enum": [
+                "USDC",
+                "USDG"
+              ]
+            },
+            "stablecoinMint": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "unitsOffered": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "reservePrice": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "minimumRaise": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "capMultipleWad": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "lockupSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "releaseSchedule": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "afterSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "bps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "afterSeconds",
+                  "bps"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "auctionFeeBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "payoutFeeBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "hurdleWad": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "payoutMultipleK": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "walletCapBps": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 10000
+            },
+            "dueDays": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "graceDays": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "formalNoticeDays": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "contractHash": {
+              "type": "string",
+              "pattern": "^0x[0-9a-f]{64}$"
+            },
+            "termsCommitment": {
+              "type": "string",
+              "pattern": "^0x[0-9a-f]{64}$"
+            },
+            "tierFlags": {
+              "type": "object",
+              "properties": {
+                "tier1": {
+                  "type": "boolean"
+                },
+                "tier2": {
+                  "type": "boolean"
+                },
+                "tier3": {
+                  "type": "boolean"
+                },
+                "tier4": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "tier1",
+                "tier2",
+                "tier3",
+                "tier4"
+              ],
+              "additionalProperties": false
+            },
+            "reportingCurrency": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            },
+            "raiseStyle": {
+              "type": "string",
+              "enum": [
+                "sealed",
+                "curve"
+              ]
+            }
+          },
+          "required": [
+            "stablecoin",
+            "stablecoinMint",
+            "unitsOffered",
+            "reservePrice",
+            "minimumRaise",
+            "capMultipleWad",
+            "lockupSeconds",
+            "releaseSchedule",
+            "auctionFeeBps",
+            "payoutFeeBps",
+            "hurdleWad",
+            "payoutMultipleK",
+            "walletCapBps",
+            "dueDays",
+            "graceDays",
+            "formalNoticeDays",
+            "contractHash",
+            "termsCommitment",
+            "tierFlags",
+            "reportingCurrency",
+            "raiseStyle"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "seriesId",
+        "issuer",
+        "terms"
+      ],
+      "additionalProperties": false
+    },
+    "RaiseOpened": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "commitEndsAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "revealEndsAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "commitEndsAt",
+        "revealEndsAt"
+      ],
+      "additionalProperties": false
+    },
+    "RaiseCancelled": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "BidCommitted": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "bidder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "commitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "deposit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "order": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "bidder",
+        "commitment",
+        "deposit",
+        "order"
+      ],
+      "additionalProperties": false
+    },
+    "BidRevealed": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "bidder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "pricePerUnit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "quantity": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "bidder",
+        "pricePerUnit",
+        "quantity"
+      ],
+      "additionalProperties": false
+    },
+    "AuctionSettled": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "clearingPrice": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "unitsSold": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "proceeds": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "totalFees": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "settledAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "clearingPrice",
+        "unitsSold",
+        "proceeds",
+        "totalFees",
+        "settledAt"
+      ],
+      "additionalProperties": false
+    },
+    "AuctionFailed": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "no-bids",
+            "below-minimum-raise"
+          ]
+        }
+      },
+      "required": [
+        "seriesId",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "BidRefunded": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "bidder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "bidder",
+        "amount"
+      ],
+      "additionalProperties": false
+    },
+    "UnitsMinted": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "holder",
+        "units"
+      ],
+      "additionalProperties": false
+    },
+    "TreasuryFunded": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "amount"
+      ],
+      "additionalProperties": false
+    },
+    "FundsReleased": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "trancheIndex": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "amount",
+        "trancheIndex"
+      ],
+      "additionalProperties": false
+    },
+    "ReleasesPaused": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "Late",
+            "IssuerRequest"
+          ]
+        }
+      },
+      "required": [
+        "seriesId",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "ReleasesResumed": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "SplitReceipt": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "periodId": {
+          "type": "string",
+          "pattern": "^\\d{4}Q[1-4]$"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "router": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "seriesId",
+        "periodId",
+        "amount",
+        "router"
+      ],
+      "additionalProperties": false
+    },
+    "ReportAccepted": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "periodId": {
+          "type": "string",
+          "pattern": "^\\d{4}Q[1-4]$"
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "type": "number",
+              "const": 1
+            },
+            {
+              "type": "number",
+              "const": 2
+            },
+            {
+              "type": "number",
+              "const": 3
+            },
+            {
+              "type": "number",
+              "const": 4
+            }
+          ]
+        },
+        "paymentDue": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "accrual": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "incomeCommitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "termsCommitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "fxBasis": {
+          "type": "string",
+          "enum": [
+            "accumulator",
+            "attestor",
+            "unity"
+          ]
+        },
+        "fxAvgWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "liquidityEvent": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "seriesId",
+        "periodId",
+        "tier",
+        "paymentDue",
+        "accrual",
+        "incomeCommitment",
+        "termsCommitment",
+        "fxBasis",
+        "fxAvgWad",
+        "liquidityEvent"
+      ],
+      "additionalProperties": false
+    },
+    "PaymentReceived": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "periodId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}Q[1-4]$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gross": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "fee": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "net": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "payIn",
+            "split",
+            "redemption",
+            "tail",
+            "extinguishment"
+          ]
+        },
+        "paidPerUnitWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "periodId",
+        "gross",
+        "fee",
+        "net",
+        "source",
+        "paidPerUnitWad"
+      ],
+      "additionalProperties": false
+    },
+    "PaymentRefunded": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "periodId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}Q[1-4]$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "cap",
+            "overpayment"
+          ]
+        }
+      },
+      "required": [
+        "seriesId",
+        "periodId",
+        "amount",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "FeeTaken": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "auction",
+            "payout"
+          ]
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "payer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "seriesId",
+        "kind",
+        "amount",
+        "payer"
+      ],
+      "additionalProperties": false
+    },
+    "PayoutClaimed": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "holder",
+        "amount"
+      ],
+      "additionalProperties": false
+    },
+    "SeriesRetired": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "paidPerUnitWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "paidPerUnitWad"
+      ],
+      "additionalProperties": false
+    },
+    "UnitsBurned": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "cap",
+            "redemption",
+            "extinguishment"
+          ]
+        }
+      },
+      "required": [
+        "seriesId",
+        "holder",
+        "units",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "RedemptionOpened": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "pricePerUnit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "unitsOutstanding": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "deposit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "tailCapPerUnit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "tailEndsAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "pricePerUnit",
+        "unitsOutstanding",
+        "deposit",
+        "tailCapPerUnit",
+        "tailEndsAt"
+      ],
+      "additionalProperties": false
+    },
+    "RedemptionClaimed": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "holder",
+        "units",
+        "amount"
+      ],
+      "additionalProperties": false
+    },
+    "TailPayout": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "periodId": {
+          "type": "string",
+          "pattern": "^\\d{4}Q[1-4]$"
+        },
+        "perUnit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "total": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "periodId",
+        "perUnit",
+        "total"
+      ],
+      "additionalProperties": false
+    },
+    "PauseRequested": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "until": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "until"
+      ],
+      "additionalProperties": false
+    },
+    "PauseApproved": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "attestor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "until": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "attestor",
+        "until"
+      ],
+      "additionalProperties": false
+    },
+    "PauseEnded": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "pausedSeconds": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "pausedSeconds"
+      ],
+      "additionalProperties": false
+    },
+    "StatusChanged": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "from": {
+          "type": "string",
+          "enum": [
+            "OnTime",
+            "InGrace",
+            "Late",
+            "Paused",
+            "Retired",
+            "Redeemed",
+            "Extinguished"
+          ]
+        },
+        "to": {
+          "type": "string",
+          "enum": [
+            "OnTime",
+            "InGrace",
+            "Late",
+            "Paused",
+            "Retired",
+            "Redeemed",
+            "Extinguished"
+          ]
+        }
+      },
+      "required": [
+        "seriesId",
+        "from",
+        "to"
+      ],
+      "additionalProperties": false
+    },
+    "FormalNoticeDue": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "periodId": {
+          "type": "string",
+          "pattern": "^\\d{4}Q[1-4]$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "periodId"
+      ],
+      "additionalProperties": false
+    },
+    "TermsAmended": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "termsCommitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "previousCommitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "capMultipleWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "attestor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "seriesId",
+        "termsCommitment",
+        "previousCommitment",
+        "capMultipleWad",
+        "attestor"
+      ],
+      "additionalProperties": false
+    },
+    "SeriesExtinguished": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "attestors": {
+          "minItems": 2,
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "returnedToHolders": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "attestors",
+        "returnedToHolders"
+      ],
+      "additionalProperties": false
+    },
+    "RateSnapshot": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "pair": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+        },
+        "rateWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "confWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "publishTime": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "dayIndex": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "sumWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "pair",
+        "rateWad",
+        "confWad",
+        "publishTime",
+        "dayIndex",
+        "sumWad",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "FxFallbackFlagged": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "pair": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+        },
+        "periodId": {
+          "type": "string",
+          "pattern": "^\\d{4}Q[1-4]$"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "coverage",
+            "deviation"
+          ]
+        }
+      },
+      "required": [
+        "pair",
+        "periodId",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "TransferWindowOpened": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "windowId": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "commitEndsAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "revealEndsAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "windowId",
+        "commitEndsAt",
+        "revealEndsAt"
+      ],
+      "additionalProperties": false
+    },
+    "TransferWindowCleared": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "windowId": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "clearingPrice": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "unitsTransferred": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "windowId",
+        "clearingPrice",
+        "unitsTransferred"
+      ],
+      "additionalProperties": false
+    },
+    "UnitsTransferred": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "windowId": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "from",
+        "to",
+        "units",
+        "windowId"
+      ],
+      "additionalProperties": false
+    },
+    "AllowlistUpdated": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "wallet": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "allowed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "wallet",
+        "allowed"
+      ],
+      "additionalProperties": false
+    },
+    "AttestorRegistered": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "attestor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "attestor",
+        "active"
+      ],
+      "additionalProperties": false
+    },
+    "VerifierKeyRegistered": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "keyId": {
+          "type": "string"
+        },
+        "publicKey": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "keyId",
+        "publicKey",
+        "active"
+      ],
+      "additionalProperties": false
+    },
+    "CurveSeriesCreated": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "quoteStablecoin": {
+          "type": "string",
+          "enum": [
+            "USDC",
+            "USDG"
+          ]
+        },
+        "graduationThreshold": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "issuer",
+        "quoteStablecoin",
+        "graduationThreshold"
+      ],
+      "additionalProperties": false
+    },
+    "CurveGraduated": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "raised": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "unitsOutstanding": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "raised",
+        "unitsOutstanding"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "commands": {
+    "registerIssuer": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "registerIssuer"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "createSeries": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "createSeries"
+        },
+        "terms": {
+          "type": "object",
+          "properties": {
+            "stablecoin": {
+              "type": "string",
+              "enum": [
+                "USDC",
+                "USDG"
+              ]
+            },
+            "stablecoinMint": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "unitsOffered": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "reservePrice": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "minimumRaise": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "capMultipleWad": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "lockupSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "releaseSchedule": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "afterSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "bps": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "afterSeconds",
+                  "bps"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "auctionFeeBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "payoutFeeBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "hurdleWad": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "payoutMultipleK": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "walletCapBps": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 10000
+            },
+            "dueDays": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "graceDays": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "formalNoticeDays": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "contractHash": {
+              "type": "string",
+              "pattern": "^0x[0-9a-f]{64}$"
+            },
+            "termsCommitment": {
+              "type": "string",
+              "pattern": "^0x[0-9a-f]{64}$"
+            },
+            "tierFlags": {
+              "type": "object",
+              "properties": {
+                "tier1": {
+                  "type": "boolean"
+                },
+                "tier2": {
+                  "type": "boolean"
+                },
+                "tier3": {
+                  "type": "boolean"
+                },
+                "tier4": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "tier1",
+                "tier2",
+                "tier3",
+                "tier4"
+              ],
+              "additionalProperties": false
+            },
+            "reportingCurrency": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            },
+            "raiseStyle": {
+              "type": "string",
+              "enum": [
+                "sealed",
+                "curve"
+              ]
+            }
+          },
+          "required": [
+            "stablecoin",
+            "stablecoinMint",
+            "unitsOffered",
+            "reservePrice",
+            "minimumRaise",
+            "capMultipleWad",
+            "lockupSeconds",
+            "releaseSchedule",
+            "auctionFeeBps",
+            "payoutFeeBps",
+            "hurdleWad",
+            "payoutMultipleK",
+            "walletCapBps",
+            "dueDays",
+            "graceDays",
+            "formalNoticeDays",
+            "contractHash",
+            "termsCommitment",
+            "tierFlags",
+            "reportingCurrency",
+            "raiseStyle"
+          ],
+          "additionalProperties": false
+        },
+        "seriesAddressHint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "terms"
+      ],
+      "additionalProperties": false
+    },
+    "openRaise": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "openRaise"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "commitEndsAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "revealEndsAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "commitEndsAt",
+        "revealEndsAt"
+      ],
+      "additionalProperties": false
+    },
+    "cancelRaise": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "cancelRaise"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "commitBid": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "commitBid"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "commitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "deposit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "commitment",
+        "deposit"
+      ],
+      "additionalProperties": false
+    },
+    "revealBid": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "revealBid"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "pricePerUnit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "quantity": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "salt": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "pricePerUnit",
+        "quantity",
+        "salt"
+      ],
+      "additionalProperties": false
+    },
+    "claimRefund": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "claimRefund"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "drawRelease": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "drawRelease"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "pauseReleases": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "pauseReleases"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "paused": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "paused"
+      ],
+      "additionalProperties": false
+    },
+    "submitReport": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "submitReport"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "periodId": {
+          "type": "string",
+          "pattern": "^\\d{4}Q[1-4]$"
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "type": "number",
+              "const": 1
+            },
+            {
+              "type": "number",
+              "const": 2
+            },
+            {
+              "type": "number",
+              "const": 3
+            },
+            {
+              "type": "number",
+              "const": 4
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "paymentStable": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "incomeCommitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "termsCommitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "fxBasis": {
+          "type": "string",
+          "enum": [
+            "accumulator",
+            "attestor",
+            "unity"
+          ]
+        },
+        "fxAvgWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "pair": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attestorRate": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "attestor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "rateWad": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "pair": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+                }
+              },
+              "required": [
+                "attestor",
+                "rateWad",
+                "pair"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proof": {
+          "type": "object",
+          "properties": {
+            "system": {
+              "type": "string",
+              "enum": [
+                "groth16-bn254",
+                "mock"
+              ]
+            },
+            "proof": {
+              "type": "string"
+            },
+            "publicInputs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "system",
+            "proof",
+            "publicInputs"
+          ],
+          "additionalProperties": false
+        },
+        "attestation": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "keyId": {
+                  "type": "string"
+                },
+                "seriesId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+                },
+                "periodId": {
+                  "type": "string",
+                  "pattern": "^\\d{4}Q[1-4]$"
+                },
+                "incomeCommitment": {
+                  "type": "string",
+                  "pattern": "^0x[0-9a-f]{64}$"
+                },
+                "tier": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "const": 1
+                    },
+                    {
+                      "type": "number",
+                      "const": 2
+                    },
+                    {
+                      "type": "number",
+                      "const": 3
+                    },
+                    {
+                      "type": "number",
+                      "const": 4
+                    }
+                  ]
+                },
+                "source": {
+                  "type": "string"
+                },
+                "signature": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "keyId",
+                "seriesId",
+                "periodId",
+                "incomeCommitment",
+                "tier",
+                "source",
+                "signature"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attestor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "liquidityEvent": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "periodId",
+        "tier",
+        "source",
+        "paymentStable",
+        "incomeCommitment",
+        "termsCommitment",
+        "fxBasis",
+        "fxAvgWad",
+        "pair",
+        "attestorRate",
+        "proof",
+        "attestation",
+        "attestor",
+        "liquidityEvent"
+      ],
+      "additionalProperties": false
+    },
+    "payIn": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "payIn"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "periodId": {
+          "type": "string",
+          "pattern": "^\\d{4}Q[1-4]$"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "periodId",
+        "amount"
+      ],
+      "additionalProperties": false
+    },
+    "claimPayout": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "claimPayout"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "requestPause": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "requestPause"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "until": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "until"
+      ],
+      "additionalProperties": false
+    },
+    "approvePause": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "approvePause"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "until": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "until"
+      ],
+      "additionalProperties": false
+    },
+    "redeem": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "redeem"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "maxPricePerUnit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "maxPricePerUnit"
+      ],
+      "additionalProperties": false
+    },
+    "claimRedemption": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "claimRedemption"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "amendTerms": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "amendTerms"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "termsCommitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "capMultipleWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "attestor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "termsCommitment",
+        "capMultipleWad",
+        "attestor"
+      ],
+      "additionalProperties": false
+    },
+    "extinguish": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "extinguish"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "attestors": {
+          "minItems": 2,
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "attestors"
+      ],
+      "additionalProperties": false
+    },
+    "commitWindowOrder": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "commitWindowOrder"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "windowId": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "buy",
+            "sell"
+          ]
+        },
+        "commitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "deposit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "windowId",
+        "side",
+        "commitment",
+        "deposit",
+        "units"
+      ],
+      "additionalProperties": false
+    },
+    "revealWindowOrder": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "revealWindowOrder"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "windowId": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "buy",
+            "sell"
+          ]
+        },
+        "pricePerUnit": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "quantity": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "salt": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "windowId",
+        "side",
+        "pricePerUnit",
+        "quantity",
+        "salt"
+      ],
+      "additionalProperties": false
+    },
+    "buyCurve": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "buyCurve"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "amountIn": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "minUnitsOut": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "amountIn",
+        "minUnitsOut"
+      ],
+      "additionalProperties": false
+    },
+    "stopIssuance": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "stopIssuance"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "settleAuction": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "settleAuction"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "snapshotRate": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "snapshotRate"
+        },
+        "pair": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+        },
+        "rateWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "confWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "publishTime": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "update": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "pair",
+        "rateWad",
+        "confWad",
+        "publishTime",
+        "update"
+      ],
+      "additionalProperties": false
+    },
+    "crankStatus": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "crankStatus"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "crankBurn": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "crankBurn"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holders": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "holders"
+      ],
+      "additionalProperties": false
+    },
+    "crankPause": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "crankPause"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "openTransferWindow": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "openTransferWindow"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "commitEndsAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "revealEndsAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "commitEndsAt",
+        "revealEndsAt"
+      ],
+      "additionalProperties": false
+    },
+    "clearTransferWindow": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "clearTransferWindow"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "windowId": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "windowId"
+      ],
+      "additionalProperties": false
+    },
+    "flagFxFallback": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "flagFxFallback"
+        },
+        "pair": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+        },
+        "periodId": {
+          "type": "string",
+          "pattern": "^\\d{4}Q[1-4]$"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "coverage",
+            "deviation"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "pair",
+        "periodId",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "graduateCurve": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "graduateCurve"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "setAllowlist": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "setAllowlist"
+        },
+        "wallet": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "allowed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "wallet",
+        "allowed"
+      ],
+      "additionalProperties": false
+    },
+    "registerAttestor": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "registerAttestor"
+        },
+        "attestor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "attestor",
+        "active"
+      ],
+      "additionalProperties": false
+    },
+    "registerVerifierKey": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "registerVerifierKey"
+        },
+        "keyId": {
+          "type": "string"
+        },
+        "publicKey": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "keyId",
+        "publicKey",
+        "active"
+      ],
+      "additionalProperties": false
+    },
+    "pauseNewRaises": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "pauseNewRaises"
+        },
+        "paused": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "paused"
+      ],
+      "additionalProperties": false
+    },
+    "setFeeCollector": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "setFeeCollector"
+        },
+        "feeCollector": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "kind",
+        "feeCollector"
+      ],
+      "additionalProperties": false
+    },
+    "registerSplitRouter": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "registerSplitRouter"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "router": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "router"
+      ],
+      "additionalProperties": false
+    },
+    "postSplitReceipt": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "postSplitReceipt"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "amount"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

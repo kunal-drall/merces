@@ -1,0 +1,13 @@
+{
+  "name": "@merces/chain-solana",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SolanaChain: live ChainPort adapter for Solana devnet (anti-corruption layer over Stage 1's programs).",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/domain": "workspace:*",
+    "@solana/web3.js": "1.99.0",
+    "bs58": "6.0.0"
+  }
+}

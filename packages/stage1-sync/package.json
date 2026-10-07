@@ -1,0 +1,15 @@
+{
+  "name": "@merces/stage1-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "stage1:sync — detect Stage 1 artifacts, generate typed clients, diff interfaces, swap math, replay parity vectors, run conformance, print a verdict.",
+  "exports": { ".": "./src/index.ts" },
+  "bin": { "stage1-sync": "./src/cli.ts" },
+  "dependencies": {
+    "@merces/chains": "workspace:*",
+    "@merces/domain": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@merces/simulator": "workspace:*"
+  }
+}

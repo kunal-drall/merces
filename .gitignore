@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.local
+.DS_Store
+packages/stage1-sync/generated/
+packages/stage1-sync/out/
+packages/client/src/generated/openapi.d.ts
+pgdata/

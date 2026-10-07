@@ -1,0 +1,49 @@
+name: stage1-sync
+# Catches Stage 1 the moment it appears: on a schedule, on demand, and whenever STAGE1_PATH (a submodule or
+# vendored drop) changes. Set the STAGE1_REPO repository variable to the Stage 1 repo to check it out.
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+  push:
+    paths: ['stage1/**', 'stage1.map.json', '.gitmodules']
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: merces_test }
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/merces_test
+      STAGE1_PATH: ${{ github.workspace }}/stage1
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Check out Stage 1 (if STAGE1_REPO is configured)
+        if: ${{ vars.STAGE1_REPO != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.STAGE1_REPO }}
+          ref: ${{ vars.STAGE1_REF || 'main' }}
+          path: stage1
+          token: ${{ secrets.STAGE1_TOKEN || github.token }}
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.28.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm stage1:sync
+        env:
+          SOLANA_RPC_URL: ${{ vars.SOLANA_RPC_URL }}
+          EVM_RPC_URL: ${{ vars.EVM_RPC_URL }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stage1-sync-report
+          path: |
+            packages/stage1-sync/out/
+            INTERFACE_DRIFT.md
+          if-no-files-found: ignore

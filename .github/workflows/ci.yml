@@ -1,0 +1,35 @@
+name: ci
+on:
+  push:
+    branches: ['**']
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: merces_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/merces_test
+      MERCES_TEST_DB: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.28.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm openapi:check
+      - run: pnpm test
+      - run: pnpm test:conformance
+        env: { CONFORMANCE_CHAIN: simulator }
+      - run: pnpm test:canary
+      - name: stage1:sync (reports "Stage 1 not present" unless STAGE1_PATH is set)
+        run: pnpm stage1:sync --no-conformance

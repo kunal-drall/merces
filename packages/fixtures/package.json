@@ -1,0 +1,9 @@
+{
+  "name": "@merces/fixtures",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic fixtures: the 12-issuer pilot cohort, backers, attestors and Stripe-test-mode-shaped income data. No real personal data.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@merces/domain": "workspace:*", "@merces/math": "workspace:*" }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@merces/chain-evm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "EvmChain: live ChainPort adapter for EVM chains, configured for Monad testnet (nothing Monad-specific in code).",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/domain": "workspace:*",
+    "viem": "2.57.3"
+  }
+}

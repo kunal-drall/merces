@@ -1,0 +1,39 @@
+# Local development: Postgres plus the backend processes running on the simulator (dev:mock).
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: merces
+    ports: ['5432:5432']
+    volumes: ['pgdata:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    command: pnpm dev:mock
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/merces
+      PORT: 3000
+      MERCES_CHAIN_SOLANA_MODE: mock
+      MERCES_CHAIN_EVM_MODE: mock
+      REPORT_VERIFIER_URL: http://verifier:3100
+    ports: ['3000:3000']
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  verifier:
+    build: .
+    command: pnpm dev:verifier
+    environment:
+      REPORT_VERIFIER_PORT: 3100
+      MERCES_KMS_PROVIDER: local
+      MERCES_LOCAL_KEY_SEED: dev-seed-not-for-production
+    ports: ['3100:3100']
+
+volumes:
+  pgdata:

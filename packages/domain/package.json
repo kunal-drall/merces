@@ -1,0 +1,14 @@
+{
+  "name": "@merces/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Canonical chain-neutral domain model: events, commands, state, ChainPort (provisional interface v0).",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/math": "workspace:*",
+    "@noble/hashes": "2.4.0",
+    "bs58": "6.0.0",
+    "zod": "4.6.5"
+  }
+}

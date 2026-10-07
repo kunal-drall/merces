@@ -1,0 +1,17 @@
+{
+  "name": "@merces/chains",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chain registry: per-chain mode selection (mock | live | auto), Stage 1 manifest detection and health gating.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/chain-evm": "workspace:*",
+    "@merces/chain-solana": "workspace:*",
+    "@merces/domain": "workspace:*",
+    "@merces/simulator": "workspace:*",
+    "pg": "8.23.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": { "@types/pg": "8.23.1" }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@merces/math",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Interim pure-bigint implementation of the Mercery mechanism math (Part C). Swappable for Stage 1's reference library.",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run" }
+}

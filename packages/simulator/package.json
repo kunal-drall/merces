@@ -1,0 +1,16 @@
+{
+  "name": "@merces/simulator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SimulatorChain: deterministic TypeScript implementation of the Mercery mechanism behind ChainPort, with time travel, two personalities and a Postgres-backed persistent mode.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/domain": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@noble/hashes": "2.4.0",
+    "bs58": "6.0.0",
+    "pg": "8.23.1"
+  },
+  "devDependencies": { "@types/pg": "8.23.1" }
+}
