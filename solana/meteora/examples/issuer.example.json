@@ -1,0 +1,9 @@
+{
+  "seriesLabel": "devnet-pilot-1",
+  "trailingAnnualIncome": "400000000",
+  "targetRaise": "1000000000",
+  "unitsOnCurve": "100",
+  "issuerUnits": "10",
+  "issuerVesting": { "cliffSeconds": 60, "periods": 2, "periodSeconds": 60 },
+  "quoteMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+}

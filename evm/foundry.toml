@@ -10,11 +10,24 @@ offline = true
 evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
-via_ir = false
+# The Merces 0.8.30 contracts are compiled through the IR pipeline: MercesIncome and MercesVault exceed the
+# EIP-170 limit with legacy codegen. The 0.8.17 unit (vendored T-REX / ONCHAINID and the Merces compliance
+# module + token factory that import them) stays on the legacy pipeline Tokeny built and audited with.
+via_ir = true
+additional_compiler_profiles = [{ name = "legacy", via_ir = false }]
+compilation_restrictions = [
+  { paths = "lib/t-rex/**", via_ir = false },
+  { paths = "lib/onchain-id/**", via_ir = false },
+  { paths = "lib/oz4/**", via_ir = false },
+  { paths = "lib/oz4-upgradeable/**", via_ir = false },
+  { paths = "src/token/**", via_ir = false },
+]
 bytecode_hash = "none"
 cbor_metadata = false
 fs_permissions = [{ access = "read", path = "../packages/vectors" }, { access = "read", path = "./out" }, { access = "read-write", path = "./deployments" }]
 ffi = false
+# Tests that fill an auction to max_bids_per_auction (4096 wallets) need more than the default 2^30 gas.
+gas_limit = "18446744073709551615"
 gas_reports = ["MercesRegistry", "MercesAuction", "MercesTreasury", "MercesIncome", "MercesVault", "MercesWindow", "Groth16Verifier"]
 remappings = [
   "forge-std/=lib/forge-std/src/",
@@ -36,9 +49,23 @@ runs = 128
 depth = 64
 fail_on_revert = false
 
+# Fast iteration profile: legacy codegen (seconds instead of minutes) with the test EVM's code-size limit lifted,
+# because MercesIncome / MercesVault only fit under 24 KB through the IR pipeline. Never deploy from it.
+[profile.dev]
+via_ir = false
+code_size_limit = 4000000
+out = "out-dev"
+cache_path = "cache-dev"
+fs_permissions = [{ access = "read", path = "../packages/vectors" }, { access = "read", path = "./out-dev" }, { access = "read-write", path = "./deployments" }]
+
 [profile.ci]
 fuzz = { runs = 4096 }
 invariant = { runs = 512, depth = 128 }
+
+[lint]
+# Narrowing casts in the Merces libraries are deliberate and range-checked (uint64 money domain, period ids);
+# every phase boundary in SPEC is defined on block time, so block.timestamp comparisons are intended.
+exclude_lints = ["unsafe-typecast", "block-timestamp"]
 
 [fmt]
 line_length = 120

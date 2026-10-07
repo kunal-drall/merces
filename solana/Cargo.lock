@@ -2030,6 +2030,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "merces-onchain"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "merces-common",
+ "solana-keccak-hasher",
+ "solana-secp256k1-recover",
+ "spl-token-2022",
+]
+
+[[package]]
 name = "merces-tests"
 version = "0.1.0"
 dependencies = [
@@ -2050,9 +2062,10 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "merces-common",
- "spl-pod",
+ "merces-onchain",
+ "merces_registry",
+ "spl-discriminator",
  "spl-tlv-account-resolution",
- "spl-token-2022",
  "spl-transfer-hook-interface",
 ]
 
@@ -2064,12 +2077,12 @@ dependencies = [
  "anchor-spl",
  "groth16-solana",
  "merces-common",
+ "merces-onchain",
+ "merces_hook",
+ "merces_registry",
  "pyth-solana-receiver-sdk",
- "spl-pod",
- "spl-tlv-account-resolution",
  "spl-token-2022",
  "spl-token-metadata-interface 1.0.1",
- "spl-transfer-hook-interface",
 ]
 
 [[package]]
@@ -2077,7 +2090,9 @@ name = "merces_registry"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "anchor-spl",
  "merces-common",
+ "merces-onchain",
 ]
 
 [[package]]
@@ -2098,8 +2113,8 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
+ "spl-discriminator",
  "spl-tlv-account-resolution",
- "spl-token-2022",
  "spl-transfer-hook-interface",
 ]
 

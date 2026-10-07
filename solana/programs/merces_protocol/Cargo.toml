@@ -1,7 +1,7 @@
 [package]
 name = "merces_protocol"
 version = "0.1.0"
-description = "Merces program merces_protocol."
+description = "Merces protocol: sealed-bid auction, treasury, ProofOfIncome verifier, split router, rate accumulator, payout vault, redemption/tail/pause/extinguishment and transfer window (SPEC §5–§7)."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,7 +16,7 @@ cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build", "merces_registry/idl-build", "merces_hook/idl-build"]
 anchor-debug = []
 custom-heap = []
 custom-panic = []
@@ -24,14 +24,14 @@ custom-panic = []
 [dependencies]
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
-spl-token-2022 = { workspace = true }
-spl-transfer-hook-interface = { workspace = true }
-spl-tlv-account-resolution = { workspace = true }
-spl-pod = { workspace = true }
+spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 spl-token-metadata-interface = { workspace = true }
 groth16-solana = { workspace = true }
 pyth-solana-receiver-sdk = { workspace = true }
 merces-common = { path = "../../crates/merces-common" }
+merces-onchain = { path = "../../crates/merces-onchain" }
+merces_registry = { path = "../merces_registry", features = ["cpi"] }
+merces_hook = { path = "../merces_hook", features = ["cpi"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

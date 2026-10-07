@@ -108,6 +108,7 @@ pub fn sub_u128(a: u128, b: u128) -> MathResult<u128> {
 }
 
 #[cfg(test)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 

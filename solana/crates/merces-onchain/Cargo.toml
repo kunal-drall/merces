@@ -1,0 +1,18 @@
+[package]
+name = "merces-onchain"
+version = "0.1.0"
+description = "Solana-side helpers shared by the Merces programs: keccak, secp256k1 address recovery, Token-2022 transfer-fee assertion, hook-aware transfer_checked, shared PDA seeds."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
+solana-keccak-hasher = { workspace = true }
+solana-secp256k1-recover = { workspace = true }
+merces-common = { path = "../merces-common" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

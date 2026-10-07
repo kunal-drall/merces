@@ -2,18 +2,30 @@
   "name": "@merces/sdk",
   "private": true,
   "version": "0.1.0",
-  "description": "Merces client helpers: commitments, signed-message encodings, PDA derivations, ABI and IDL re-exports.",
+  "description": "Merces client helpers: Poseidon and keccak commitments, signed-message encodings, secp256k1 signatures, period math, fixed point, parameters and canonical error names.",
+  "license": "SEE LICENSE IN ../../LICENSE.md",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "known-answers": "tsx scripts/known-answers.ts"
   },
   "dependencies": {
-    "@noble/hashes": "2.4.0",
     "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
     "poseidon-lite": "0.3.0"
+  },
+  "devDependencies": {
+    "circomlibjs": "0.1.7"
   }
 }

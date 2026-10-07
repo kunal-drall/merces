@@ -1,7 +1,7 @@
 [package]
 name = "merces_hook"
 version = "0.1.0"
-description = "Merces program merces_hook."
+description = "Merces Token-2022 transfer hook: window-only transfers, allowlist and wallet cap for sealed-bid unit mints (SPEC §4.1)."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,7 +16,7 @@ cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build", "merces_registry/idl-build"]
 anchor-debug = []
 custom-heap = []
 custom-panic = []
@@ -24,11 +24,12 @@ custom-panic = []
 [dependencies]
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
-spl-token-2022 = { workspace = true }
+spl-discriminator = { workspace = true }
 spl-transfer-hook-interface = { workspace = true }
 spl-tlv-account-resolution = { workspace = true }
-spl-pod = { workspace = true }
 merces-common = { path = "../../crates/merces-common" }
+merces-onchain = { path = "../../crates/merces-onchain" }
+merces_registry = { path = "../merces_registry", features = ["no-entrypoint"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

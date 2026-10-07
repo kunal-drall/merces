@@ -2,19 +2,33 @@
   "name": "@merces/circuits",
   "private": true,
   "version": "0.1.0",
-  "description": "Merces ProofOfIncome reference circuit (circom, Groth16 over BN254) and development-only trusted setup.",
+  "description": "Merces ProofOfIncome reference circuit (circom, Groth16 over BN254), development-only trusted setup, prover and proof encoders.",
+  "license": "SEE LICENSE IN ../LICENSE.md",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "build/report.wasm", "build/report_final.zkey", "build/verification_key.json"],
   "scripts": {
-    "build": "bash scripts/build.sh",
+    "circuit": "bash scripts/build.sh",
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "circomlib": "2.0.5",
-    "circomlibjs": "0.1.7",
+    "@noble/hashes": "2.4.0",
     "ffjavascript": "0.3.1",
     "snarkjs": "0.7.6"
   },
   "devDependencies": {
-    "@types/snarkjs": "0.7.9"
+    "@types/snarkjs": "0.7.9",
+    "circomlib": "2.0.5",
+    "circomlibjs": "0.1.7",
+    "poseidon-lite": "0.3.0"
   }
 }

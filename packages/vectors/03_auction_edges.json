@@ -1,0 +1,956 @@
+{
+  "name": "03_auction_edges",
+  "description": "Oversubscribed raise of 300 units: tie at the margin filled pro rata with rounding dust left unsold, an over-collateralised bid, a bid above the wallet cap (invalid, refunded), a bid below reserve, a losing bid below p*, an unrevealed bid charged 1% of escrow, and the phase/commitment reverts.",
+  "schema": 1,
+  "generatedBy": "packages/reference/src/vectors/generate.ts (pnpm vectors)",
+  "config": {
+    "parameters": {
+      "cap_multiple_wad": "2500000000000000000",
+      "hurdle_rate_wad": "80000000000000000",
+      "payout_multiple_k": "5",
+      "lockup_seconds": "47336400",
+      "wallet_cap_bps": "1000",
+      "auction_fee_bps": "100",
+      "payout_fee_bps": "500",
+      "window_fee_bps": "100",
+      "non_reveal_charge_bps": "100",
+      "commit_duration": "604800",
+      "reveal_duration": "172800",
+      "window_commit_duration": "259200",
+      "window_reveal_duration": "86400",
+      "report_due_days": "30",
+      "grace_days": "15",
+      "formal_notice_days": "90",
+      "trueup_days": "60",
+      "tail_seconds": "31536000",
+      "fx_min_coverage_bps": "8000",
+      "fx_max_staleness_seconds": "3600",
+      "fx_max_conf_bps": "100",
+      "fx_deviation_band_bps": "200",
+      "max_release_tranches": "24"
+    },
+    "flags": {
+      "newRaisesPaused": false,
+      "windowsEnabled": false,
+      "tier4Enabled": false
+    },
+    "stablecoinDecimals": 6,
+    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
+  },
+  "actors": [
+    "attestor1",
+    "attestor2",
+    "b1",
+    "b2",
+    "b3",
+    "b4",
+    "b5",
+    "b6",
+    "b7",
+    "b8",
+    "b9",
+    "issuer",
+    "keeper",
+    "verifier1"
+  ],
+  "keys": {
+    "attestor1": {
+      "seed": "03_auction_edges:attestor1",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0xc7c1ed8393fd92d11cbb03b9f20531118134dd54442a100431b1014ab45d73ed",
+      "address": "0x42a255d68484be3f49e2ae4f4ef4f946f82260fc",
+      "role": "attestor"
+    },
+    "attestor2": {
+      "seed": "03_auction_edges:attestor2",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0x0a0b68c6de4c392084c67f26c1dfd30099405c86cfc2c84280dd3b9acedab4fc",
+      "address": "0xe3fbf471fc63fbf8eb36fc00048ac13d76693dca",
+      "role": "attestor"
+    },
+    "verifier1": {
+      "seed": "03_auction_edges:verifier1",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0x695483ab2216f95b1fa0910471fb8f18a5957e820185ed58d9c01f81eba86d2f",
+      "address": "0x15e930d560e8a304bfc68ea95b903319f1ec8208",
+      "role": "verifier"
+    }
+  },
+  "seriesPrivate": {
+    "S1": {
+      "termsPlain": {
+        "theta": "80000000000",
+        "rWad": "100000000000000",
+        "currencyCode": 840,
+        "indexingRule": 0,
+        "termsSalt": "17394275848571239190982258739753370546197677452213095095563002813224514618032"
+      },
+      "termsCommitment": "0x18ee2239f7375bbc7c5fdaa8d8958c3bf181dbffc8a33b3df2b94a9294467a71"
+    }
+  },
+  "steps": [
+    {
+      "t": "1767312000",
+      "op": "register_attestor",
+      "key": "attestor1"
+    },
+    {
+      "t": "1767312000",
+      "op": "register_attestor",
+      "key": "attestor2"
+    },
+    {
+      "t": "1767312000",
+      "op": "register_verifier_key",
+      "key": "verifier1"
+    },
+    {
+      "t": "1767312000",
+      "op": "allowlist",
+      "wallets": [
+        "issuer",
+        "b1",
+        "b2",
+        "b3",
+        "b4",
+        "b5",
+        "b6",
+        "b7",
+        "b8",
+        "b9"
+      ]
+    },
+    {
+      "t": "1767312000",
+      "op": "register_issuer",
+      "wallet": "issuer"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "issuer",
+      "amount": "200000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b1",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b2",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b3",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b4",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b5",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b6",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b7",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b8",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b9",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1767312000",
+      "note": "300 units offered; wallet cap 33.34% → floor(300 × 3334 / 10000) = 100 units",
+      "op": "create_series",
+      "actor": "issuer",
+      "series": "S1",
+      "terms": {
+        "unitsOffered": "300",
+        "reservePrice": "100000000",
+        "minRaise": "10000000000",
+        "capMultipleWad": "2500000000000000000",
+        "hurdleRateWad": "80000000000000000",
+        "payoutMultipleK": "5",
+        "lockupSeconds": "47336400",
+        "walletCapBps": "3334",
+        "auctionFeeBps": "100",
+        "payoutFeeBps": "500",
+        "windowFeeBps": "100",
+        "nonRevealChargeBps": "100",
+        "commitDuration": "604800",
+        "revealDuration": "172800",
+        "windowCommitDuration": "259200",
+        "windowRevealDuration": "86400"
+      },
+      "releaseSchedule": [
+        {
+          "atOffsetSeconds": "0",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "7776000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "15552000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "23328000",
+          "bps": "2500"
+        }
+      ],
+      "termsCommitment": "0x18ee2239f7375bbc7c5fdaa8d8958c3bf181dbffc8a33b3df2b94a9294467a71",
+      "contractHash": "0x91ecf0353a09041213be61e39faae4afb4f97e5eb416f65109ee5ff4a4079ac6",
+      "tierFlags": 2,
+      "fxPairId": null
+    },
+    {
+      "t": "1767571200",
+      "op": "expect_revert",
+      "call": {
+        "op": "commit_bid",
+        "actor": "b1",
+        "series": "S1",
+        "price": "1",
+        "quantity": "1",
+        "salt": "0xeafcc5f6cceedc389f749779cbb425425cf7d026f2a315f79141d5c869a179de",
+        "escrow": "1"
+      },
+      "error": "RaiseNotOpen"
+    },
+    {
+      "t": "1767571200",
+      "op": "open_raise",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1767574800",
+      "note": "over-collateralised (needs 13,130)",
+      "op": "commit_bid",
+      "actor": "b1",
+      "series": "S1",
+      "price": "130000000",
+      "quantity": "100",
+      "salt": "0x78fa597663816dcfae180ec840b5c5b58b3b49cfb941caddeef376bcd4059d71",
+      "escrow": "20000000000"
+    },
+    {
+      "t": "1767578400",
+      "op": "commit_bid",
+      "actor": "b2",
+      "series": "S1",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0x8c9e2c0261c7c0b28427758a4982c1043a7b8d49deb833444913330084f89d9d",
+      "escrow": "12120000000"
+    },
+    {
+      "t": "1767582000",
+      "note": "at the margin",
+      "op": "commit_bid",
+      "actor": "b3",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "60",
+      "salt": "0xb7d259c58ffb264ba738281a4c09e86e83a9a6118aabc78fe2369ca0094e09cc",
+      "escrow": "6666000000"
+    },
+    {
+      "t": "1767585600",
+      "note": "at the margin",
+      "op": "commit_bid",
+      "actor": "b4",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "60",
+      "salt": "0x2629a3832e9911df056c57db3c46e3e7f713851f168e3540c69f85f0dae4f744",
+      "escrow": "6666000000"
+    },
+    {
+      "t": "1767589200",
+      "note": "at the margin",
+      "op": "commit_bid",
+      "actor": "b5",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "35",
+      "salt": "0xd060871bea3c29f53fc14ba6f01aa6aa4d375cb2929672df42626bf62bce9faf",
+      "escrow": "3888500000"
+    },
+    {
+      "t": "1767592800",
+      "note": "valid but below p*",
+      "op": "commit_bid",
+      "actor": "b6",
+      "series": "S1",
+      "price": "105000000",
+      "quantity": "50",
+      "salt": "0x412e38c4268afa37f6d5a8aa7fdc837c3561cb0fe7f7a277a174ab1db79f2fd4",
+      "escrow": "5302500000"
+    },
+    {
+      "t": "1767596400",
+      "note": "101 units > wallet cap 100 → invalid",
+      "op": "commit_bid",
+      "actor": "b7",
+      "series": "S1",
+      "price": "150000000",
+      "quantity": "101",
+      "salt": "0xcc50c25fcdcb2272ecd947d868f5de035d7d2014f9cc351d350a3278bd7db0ed",
+      "escrow": "15301500000"
+    },
+    {
+      "t": "1767600000",
+      "note": "never revealed → 1% non-reveal charge",
+      "op": "commit_bid",
+      "actor": "b8",
+      "series": "S1",
+      "price": "200000000",
+      "quantity": "50",
+      "salt": "0xb5f7e88b955e2c9c1426f9a40d6d0a73e3264b1eb4ffe118f2789dd633df7f1f",
+      "escrow": "10100000000"
+    },
+    {
+      "t": "1767603600",
+      "note": "below reserve → invalid",
+      "op": "commit_bid",
+      "actor": "b9",
+      "series": "S1",
+      "price": "90000000",
+      "quantity": "100",
+      "salt": "0x2df2ccc9c2ed0ccd46fc9cafd0478e6502596c82c8e83d3da327d8ef11ce79b2",
+      "escrow": "9090000000"
+    },
+    {
+      "t": "1767603600",
+      "op": "expect_revert",
+      "call": {
+        "op": "commit_bid",
+        "actor": "b1",
+        "series": "S1",
+        "price": "100000000",
+        "quantity": "1",
+        "salt": "0xf348413a40a776ed55afd647afca8e85e771f4d023d23d5455d03d9c497194e1",
+        "escrow": "101000000"
+      },
+      "error": "BidExists"
+    },
+    {
+      "t": "1767603600",
+      "op": "expect_revert",
+      "call": {
+        "op": "reveal_bid",
+        "actor": "b1",
+        "series": "S1",
+        "price": "130000000",
+        "quantity": "100",
+        "salt": "0x78fa597663816dcfae180ec840b5c5b58b3b49cfb941caddeef376bcd4059d71"
+      },
+      "error": "RevealNotStarted"
+    },
+    {
+      "t": "1767603600",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "10000000000",
+          "units": "0"
+        },
+        "b2": {
+          "stable": "17880000000",
+          "units": "0"
+        },
+        "b3": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b4": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b5": {
+          "stable": "26111500000",
+          "units": "0"
+        },
+        "b6": {
+          "stable": "24697500000",
+          "units": "0"
+        },
+        "b7": {
+          "stable": "14698500000",
+          "units": "0"
+        },
+        "b8": {
+          "stable": "19900000000",
+          "units": "0"
+        },
+        "b9": {
+          "stable": "20910000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "0",
+      "treasury": "0",
+      "vault": "0",
+      "auctionEscrow": "89134500000",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Open",
+        "unitsOutstanding": "0",
+        "unitsSold": "0",
+        "clearingPrice": "0",
+        "proceeds": "0",
+        "releasedTotal": "0",
+        "capPerUnit": "0",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x18ee2239f7375bbc7c5fdaa8d8958c3bf181dbffc8a33b3df2b94a9294467a71",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupDue": "0",
+        "pausedTotal": "0",
+        "pauseNonce": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "finalAccWad": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "9",
+        "revealedCount": "0",
+        "escrowTotal": "89134500000",
+        "R": "0",
+        "qAt": "0",
+        "qAbove": "0",
+        "unitsSoldUpper": "0",
+        "bidsProcessed": "0"
+      },
+      "holders": {},
+      "note": "nine bids committed; escrow held"
+    },
+    {
+      "t": "1768176000",
+      "op": "expect_revert",
+      "call": {
+        "op": "commit_bid",
+        "actor": "keeper",
+        "series": "S1",
+        "price": "100000000",
+        "quantity": "1",
+        "salt": "0x1f4fb37d5a667eea182c0598fcaa1c135022479dd920b316a6a45820452117f5",
+        "escrow": "101000000"
+      },
+      "error": "NotAllowlisted"
+    },
+    {
+      "t": "1768176000",
+      "op": "allowlist",
+      "wallets": [
+        "keeper"
+      ]
+    },
+    {
+      "t": "1768176000",
+      "op": "expect_revert",
+      "call": {
+        "op": "commit_bid",
+        "actor": "keeper",
+        "series": "S1",
+        "price": "100000000",
+        "quantity": "1",
+        "salt": "0x1f4fb37d5a667eea182c0598fcaa1c135022479dd920b316a6a45820452117f5",
+        "escrow": "101000000"
+      },
+      "error": "CommitPhaseClosed"
+    },
+    {
+      "t": "1768176000",
+      "op": "expect_revert",
+      "call": {
+        "op": "reveal_bid",
+        "actor": "b1",
+        "series": "S1",
+        "price": "130000000",
+        "quantity": "100",
+        "salt": "0xfb9af6cca13f4b4645af26d7dbc1db438aee129be11c31c9a3cd78f2ffa6313e"
+      },
+      "error": "CommitmentMismatch"
+    },
+    {
+      "t": "1768176000",
+      "op": "expect_revert",
+      "call": {
+        "op": "reveal_bid",
+        "actor": "keeper",
+        "series": "S1",
+        "price": "130000000",
+        "quantity": "100",
+        "salt": "0xfb9af6cca13f4b4645af26d7dbc1db438aee129be11c31c9a3cd78f2ffa6313e"
+      },
+      "error": "BidNotFound"
+    },
+    {
+      "t": "1768176600",
+      "op": "reveal_bid",
+      "actor": "b1",
+      "series": "S1",
+      "price": "130000000",
+      "quantity": "100",
+      "salt": "0x78fa597663816dcfae180ec840b5c5b58b3b49cfb941caddeef376bcd4059d71"
+    },
+    {
+      "t": "1768177200",
+      "op": "reveal_bid",
+      "actor": "b2",
+      "series": "S1",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0x8c9e2c0261c7c0b28427758a4982c1043a7b8d49deb833444913330084f89d9d"
+    },
+    {
+      "t": "1768177800",
+      "op": "reveal_bid",
+      "actor": "b3",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "60",
+      "salt": "0xb7d259c58ffb264ba738281a4c09e86e83a9a6118aabc78fe2369ca0094e09cc"
+    },
+    {
+      "t": "1768178400",
+      "op": "reveal_bid",
+      "actor": "b4",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "60",
+      "salt": "0x2629a3832e9911df056c57db3c46e3e7f713851f168e3540c69f85f0dae4f744"
+    },
+    {
+      "t": "1768179000",
+      "op": "reveal_bid",
+      "actor": "b5",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "35",
+      "salt": "0xd060871bea3c29f53fc14ba6f01aa6aa4d375cb2929672df42626bf62bce9faf"
+    },
+    {
+      "t": "1768179600",
+      "op": "reveal_bid",
+      "actor": "b6",
+      "series": "S1",
+      "price": "105000000",
+      "quantity": "50",
+      "salt": "0x412e38c4268afa37f6d5a8aa7fdc837c3561cb0fe7f7a277a174ab1db79f2fd4"
+    },
+    {
+      "t": "1768180200",
+      "op": "reveal_bid",
+      "actor": "b7",
+      "series": "S1",
+      "price": "150000000",
+      "quantity": "101",
+      "salt": "0xcc50c25fcdcb2272ecd947d868f5de035d7d2014f9cc351d350a3278bd7db0ed"
+    },
+    {
+      "t": "1768180800",
+      "op": "reveal_bid",
+      "actor": "b9",
+      "series": "S1",
+      "price": "90000000",
+      "quantity": "100",
+      "salt": "0x2df2ccc9c2ed0ccd46fc9cafd0478e6502596c82c8e83d3da327d8ef11ce79b2"
+    },
+    {
+      "t": "1768180800",
+      "op": "expect_revert",
+      "call": {
+        "op": "reveal_bid",
+        "actor": "b1",
+        "series": "S1",
+        "price": "130000000",
+        "quantity": "100",
+        "salt": "0x78fa597663816dcfae180ec840b5c5b58b3b49cfb941caddeef376bcd4059d71"
+      },
+      "error": "AlreadyRevealed"
+    },
+    {
+      "t": "1768180800",
+      "op": "expect_revert",
+      "call": {
+        "op": "process_bid",
+        "series": "S1",
+        "bidder": "b8"
+      },
+      "error": "RaiseNotSettled"
+    },
+    {
+      "t": "1768348800",
+      "op": "expect_revert",
+      "call": {
+        "op": "reveal_bid",
+        "actor": "b8",
+        "series": "S1",
+        "price": "200000000",
+        "quantity": "50",
+        "salt": "0xb5f7e88b955e2c9c1426f9a40d6d0a73e3264b1eb4ffe118f2789dd633df7f1f"
+      },
+      "error": "RevealPhaseClosed"
+    },
+    {
+      "t": "1768348800",
+      "op": "expect_revert",
+      "call": {
+        "op": "settle",
+        "series": "S1",
+        "clearingPrice": "120000000"
+      },
+      "error": "InvalidClearingPrice",
+      "note": "q_above + q_at = 200 < 300 and 120 is not the lowest valid price"
+    },
+    {
+      "t": "1768348800",
+      "op": "expect_revert",
+      "call": {
+        "op": "settle",
+        "series": "S1",
+        "clearingPrice": "105000000"
+      },
+      "error": "InvalidClearingPrice",
+      "note": "q_above = 355 ≥ 300"
+    },
+    {
+      "t": "1768348800",
+      "op": "expect_revert",
+      "call": {
+        "op": "settle",
+        "series": "S1",
+        "clearingPrice": "115000000"
+      },
+      "error": "InvalidClearingPrice",
+      "note": "no bid at 115"
+    },
+    {
+      "t": "1768348800",
+      "note": "q_above = 200, q_at = 155, D = 355 ≥ 300 → R = 100",
+      "op": "settle",
+      "series": "S1",
+      "clearingPrice": "110000000"
+    },
+    {
+      "t": "1768348800",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "10000000000",
+          "units": "0"
+        },
+        "b2": {
+          "stable": "17880000000",
+          "units": "0"
+        },
+        "b3": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b4": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b5": {
+          "stable": "26111500000",
+          "units": "0"
+        },
+        "b6": {
+          "stable": "24697500000",
+          "units": "0"
+        },
+        "b7": {
+          "stable": "14698500000",
+          "units": "0"
+        },
+        "b8": {
+          "stable": "19900000000",
+          "units": "0"
+        },
+        "b9": {
+          "stable": "20910000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "0",
+      "treasury": "0",
+      "vault": "0",
+      "auctionEscrow": "89134500000",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "unitsOutstanding": "0",
+        "unitsSold": "0",
+        "clearingPrice": "110000000",
+        "proceeds": "0",
+        "releasedTotal": "0",
+        "capPerUnit": "275000000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x18ee2239f7375bbc7c5fdaa8d8958c3bf181dbffc8a33b3df2b94a9294467a71",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupDue": "0",
+        "pausedTotal": "0",
+        "pauseNonce": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "finalAccWad": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "9",
+        "revealedCount": "8",
+        "escrowTotal": "89134500000",
+        "R": "100",
+        "qAt": "155",
+        "qAbove": "200",
+        "unitsSoldUpper": "300",
+        "bidsProcessed": "0"
+      },
+      "holders": {},
+      "note": "Settled at 110: unitsSoldUpper 300, R = 100, q_at = 155"
+    },
+    {
+      "t": "1768348860",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768348920",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768348980",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768349040",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
+      "t": "1768349100",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b5"
+    },
+    {
+      "t": "1768349160",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b6"
+    },
+    {
+      "t": "1768349220",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b7"
+    },
+    {
+      "t": "1768349280",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b8"
+    },
+    {
+      "t": "1768349340",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b9"
+    },
+    {
+      "t": "1768349340",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "18890000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "18890000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "25778200000",
+          "units": "38"
+        },
+        "b4": {
+          "stable": "25778200000",
+          "units": "38"
+        },
+        "b5": {
+          "stable": "27555800000",
+          "units": "22"
+        },
+        "b6": {
+          "stable": "30000000000",
+          "units": "0"
+        },
+        "b7": {
+          "stable": "30000000000",
+          "units": "0"
+        },
+        "b8": {
+          "stable": "29899000000",
+          "units": "0"
+        },
+        "b9": {
+          "stable": "30000000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "428800000",
+      "treasury": "32780000000",
+      "vault": "0",
+      "auctionEscrow": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "unitsOutstanding": "298",
+        "unitsSold": "298",
+        "clearingPrice": "110000000",
+        "proceeds": "32780000000",
+        "releasedTotal": "0",
+        "capPerUnit": "275000000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x18ee2239f7375bbc7c5fdaa8d8958c3bf181dbffc8a33b3df2b94a9294467a71",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupDue": "0",
+        "pausedTotal": "0",
+        "pauseNonce": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "finalAccWad": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "9",
+        "revealedCount": "8",
+        "escrowTotal": "0",
+        "R": "100",
+        "qAt": "155",
+        "qAbove": "200",
+        "unitsSoldUpper": "300",
+        "bidsProcessed": "9"
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0"
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0"
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0"
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0"
+        },
+        "b5": {
+          "pending": "0",
+          "redeemedUnits": "0"
+        }
+      },
+      "note": "b1/b2 100 units each; marginal fills floor(100×60/155)=38, 38 and floor(100×35/155)=22 → 298 sold, 2 units of dust unminted; b6/b9/b7 refunded in full; b8 charged 101 USDC; fee = 1% × 110 × 298 = 327.8 → collector 428.8"
+    }
+  ]
+}
