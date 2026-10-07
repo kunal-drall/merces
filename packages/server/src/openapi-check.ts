@@ -5,11 +5,10 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import { buildApp, routeTable } from '../app.ts';
-import { makeContext } from '../context.ts';
-import { registerAllRoutes } from '../routes/all.ts';
+import { buildApp, makeContext, routeTable } from '@merces/api';
+import { createServiceContext, serviceRoutes } from '@merces/services';
 
-export const OPENAPI_PATH = fileURLToPath(new URL('./openapi.yaml', import.meta.url));
+export const OPENAPI_PATH = fileURLToPath(new URL('../../api/src/openapi/openapi.yaml', import.meta.url));
 
 export interface SpecOp {
   method: string;
@@ -33,8 +32,8 @@ export function loadSpecOps(path: string = OPENAPI_PATH): { spec: Record<string,
 
 export async function checkContract(): Promise<string[]> {
   const problems: string[] = [];
-  const ctx = makeContext({ pool: null as never, chains: { chains: new Map(), decisions: [], stage1: null, get: () => { throw new Error('x'); }, byFamily: () => { throw new Error('x'); }, close: async () => undefined }, log: { error() {}, info() {}, warn() {}, debug() {} } as never, sessionSecret: 'x', devMode: true });
-  const app = await buildApp(ctx, [registerAllRoutes]);
+  const ctx = createServiceContext(makeContext({ pool: null as never, chains: { chains: new Map(), decisions: [], stage1: null, get: () => { throw new Error('x'); }, byFamily: () => { throw new Error('x'); }, close: async () => undefined }, log: { error() {}, info() {}, warn() {}, debug() {} } as never, sessionSecret: 'x', devMode: true }));
+  const app = await buildApp(ctx, serviceRoutes);
   await app.ready();
   const routes = routeTable(app).map((r) => ({ ...r, path: r.url.replace(/:([A-Za-z0-9_]+)/g, '{$1}') }));
   const { ops } = loadSpecOps();

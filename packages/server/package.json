@@ -1,0 +1,22 @@
+{
+  "name": "@merces/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Process entry points: API gateway (live/auto), dev:mock, keepers, and the OpenAPI contract check. Composes @merces/api with @merces/services.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@merces/api": "workspace:*",
+    "@merces/chains": "workspace:*",
+    "@merces/core": "workspace:*",
+    "@merces/db": "workspace:*",
+    "@merces/indexer": "workspace:*",
+    "@merces/scenarios": "workspace:*",
+    "@merces/services": "workspace:*",
+    "@merces/simulator": "workspace:*",
+    "yaml": "2.9.1",
+    "@merces/fixtures": "workspace:*"
+  }
+}

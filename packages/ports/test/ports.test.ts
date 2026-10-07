@@ -35,7 +35,7 @@ describe('vault crypto', () => {
 
 describe('wallet signatures', () => {
   it('verifies EVM personal_sign and rejects the wrong address', async () => {
-    const acct = privateKeyToAccount('0x' + '11'.repeat(32));
+    const acct = privateKeyToAccount(('0x' + '11'.repeat(32)) as `0x${string}`);
     const message = signInMessage({ domain: 'merces.test', chain: 'monad', address: acct.address.toLowerCase(), nonce: 'n', issuedAt: 'now' });
     const signature = await acct.signMessage({ message });
     expect(await verifyWalletSignature({ family: 'evm', address: acct.address.toLowerCase(), message, signature })).toBe(true);

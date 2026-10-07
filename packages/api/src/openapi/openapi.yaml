@@ -12,6 +12,13 @@ servers:
 tags:
   - { name: public }
   - { name: me }
+  - { name: auth, description: Wallet sign-in (E2) }
+  - { name: applications, description: Issuer and backer onboarding (E2) }
+  - { name: drafts, description: Series drafts, terms vault and contract signing (E3, E4) }
+  - { name: terms, description: Terms validation, disclosure and amendments (E4) }
+  - { name: tx, description: Relay of user-signed transactions }
+  - { name: admin }
+  - { name: attestor }
   - { name: dev, description: Mock-mode only (simulator) }
 components:
   securitySchemes:
@@ -345,3 +352,311 @@ paths:
       tags: [dev]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, wallet, stablecoin, amount], properties: { chain: { type: string }, wallet: { type: string }, stablecoin: { type: string, enum: [USDC, USDG] }, amount: { $ref: '#/components/schemas/Money' } } } } } }
       responses: { '200': { description: New balance, content: { application/json: { schema: { type: object } } } } }
+
+  # ---- E2 identity, sign-in, onboarding
+  /auth/nonce:
+    post:
+      operationId: authNonce
+      x-access: public
+      tags: [auth]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, address], properties: { chain: { type: string }, address: { type: string } } } } } }
+      responses: { '200': { description: A nonce and the exact message to sign, content: { application/json: { schema: { type: object, properties: { nonce: { type: string }, message: { type: string }, expiresAt: { type: string } } } } } } }
+  /auth/verify:
+    post:
+      operationId: authVerify
+      x-access: public
+      tags: [auth]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, address, message, signature], properties: { chain: { type: string }, address: { type: string }, message: { type: string }, signature: { type: string } } } } } }
+      responses: { '200': { description: Session token, content: { application/json: { schema: { type: object, properties: { token: { type: string }, account: { type: object }, created: { type: boolean } } } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /me/wallets/link:
+    post:
+      operationId: linkWallet
+      x-access: account
+      tags: [auth]
+      security: [{ session: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, address, message, signature], properties: { chain: { type: string }, address: { type: string }, message: { type: string }, signature: { type: string } } } } } }
+      responses: { '200': { description: Updated session token, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '409': { description: Wallet belongs to another account } }
+  /me/session/refresh:
+    post:
+      operationId: refreshSession
+      x-access: account
+      tags: [auth]
+      security: [{ session: [] }]
+      responses: { '200': { description: Fresh token with current roles and eligibility, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /applications:
+    post:
+      operationId: createApplication
+      x-access: account
+      tags: [applications]
+      security: [{ session: [] }]
+      parameters: [{ name: Idempotency-Key, in: header, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kind, chain, wallet, country], properties: { kind: { type: string, enum: [issuer, backer] }, chain: { type: string }, wallet: { type: string }, stablecoin: { type: string, enum: [USDC, USDG] }, persona: { type: string }, country: { type: string }, incomeSourceKinds: { type: array, items: { type: string } }, notes: { type: string } } } } } }
+      responses: { '201': { description: Application, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /applications/mine:
+    get:
+      operationId: listMyApplications
+      x-access: account
+      tags: [applications]
+      security: [{ session: [] }]
+      responses: { '200': { description: Applications, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /applications/{applicationId}:
+    get:
+      operationId: getApplication
+      x-access: account
+      tags: [applications]
+      security: [{ session: [] }]
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Application (owner or admin), content: { application/json: { schema: { type: object } } } }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /applications/{applicationId}/submit:
+    post:
+      operationId: submitApplication
+      x-access: account
+      tags: [applications]
+      security: [{ session: [] }]
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Submitted, content: { application/json: { schema: { type: object } } } }, '409': { description: Not in draft state } }
+  /applications/{applicationId}/identity/start:
+    post:
+      operationId: startIdentityCheck
+      x-access: account
+      tags: [applications]
+      security: [{ session: [] }]
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Provider check id and redirect URL, content: { application/json: { schema: { type: object } } } } }
+  /applications/{applicationId}/identity/refresh:
+    post:
+      operationId: refreshIdentityCheck
+      x-access: account
+      tags: [applications]
+      security: [{ session: [] }]
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Current identity status, content: { application/json: { schema: { type: object } } } } }
+  /applications/{applicationId}/readiness:
+    get:
+      operationId: getReadiness
+      x-access: account
+      tags: [applications]
+      security: [{ session: [] }]
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Private readiness report (R27), content: { application/json: { schema: { type: object } } } } }
+  /admin/applications:
+    get:
+      operationId: adminListApplications
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      parameters: [{ name: state, in: query, schema: { type: string } }]
+      responses: { '200': { description: Review queue, content: { application/json: { schema: { type: object } } } }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /admin/applications/{applicationId}/decide:
+    post:
+      operationId: adminDecideApplication
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string } }, { name: Idempotency-Key, in: header, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [decision, reasonCode], properties: { decision: { type: string, enum: [approved, rejected, in_review] }, reasonCode: { type: string } } } } } }
+      responses: { '200': { description: Decided; approval adds the wallet to the chain allowlist, content: { application/json: { schema: { type: object } } } }, '403': { $ref: '#/components/responses/Forbidden' }, '422': { description: Identity check not passed } }
+  /admin/eligibility/{chain}/{wallet}/revoke:
+    post:
+      operationId: adminRevokeEligibility
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      parameters: [{ name: chain, in: path, required: true, schema: { type: string } }, { name: wallet, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [reasonCode], properties: { reasonCode: { type: string } } } } } }
+      responses: { '200': { description: Removed from the allowlist (claims, redemption and window sells stay open), content: { application/json: { schema: { type: object } } } }, '403': { $ref: '#/components/responses/Forbidden' } }
+  # ---- E3 contracts
+  /drafts/{draftId}/contract/prepare:
+    post:
+      operationId: prepareContract
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Signing session with the rendered documents and the provider signing URL, content: { application/json: { schema: { type: object } } } }, '409': { description: Terms not set } }
+  /drafts/{draftId}/contract:
+    get:
+      operationId: getContractStatus
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Signing state and hashes, content: { application/json: { schema: { type: object } } } } }
+  /drafts/{draftId}/contract/document:
+    get:
+      operationId: getSignedContract
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: The signed bundle (signer or admin only; access audited), content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /contracts/webhook/{provider}:
+    post:
+      operationId: contractWebhook
+      x-access: public
+      tags: [drafts]
+      parameters: [{ name: provider, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [sessionId], properties: { sessionId: { type: string } } } } } }
+      responses: { '200': { description: Re-polled provider state, content: { application/json: { schema: { type: object } } } } }
+  /admin/contracts/templates:
+    post:
+      operationId: adminAddContractTemplate
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kind, version, body], properties: { kind: { type: string, enum: [heu, charter] }, version: { type: string }, body: { type: string } } } } } }
+      responses: { '200': { description: Template stored, content: { application/json: { schema: { type: object } } } } }
+  /dev/esign/complete:
+    post:
+      operationId: devCompleteEsign
+      x-access: public
+      x-dev-only: true
+      tags: [dev]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [sessionId], properties: { sessionId: { type: string }, outcome: { type: string, enum: [signed, declined] } } } } } }
+      responses: { '200': { description: Signing state, content: { application/json: { schema: { type: object } } } } }
+  # ---- E4 terms
+  /terms/validate:
+    post:
+      operationId: validateTerms
+      x-access: account
+      tags: [terms]
+      security: [{ session: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, public], properties: { chain: { type: string }, public: { type: object }, private: { type: [object, 'null'] } } } } } }
+      responses: { '200': { description: Issues (empty when valid) and derived values, content: { application/json: { schema: { type: object, properties: { issues: { type: array, items: { type: object } }, derived: { type: object } } } } } } }
+  /terms/commitment:
+    post:
+      operationId: computeCommitment
+      x-access: public
+      tags: [terms]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [threshold, ratePerUnitWad, reportingCurrency, indexingRule, salt], properties: { threshold: { type: string }, ratePerUnitWad: { type: string }, reportingCurrency: { type: string }, indexingRule: { type: string }, salt: { type: string } } } } } }
+      responses: { '200': { description: The commitment, content: { application/json: { schema: { type: object, properties: { commitment: { type: string } } } } } } }
+  /thresholds/{country}:
+    get:
+      operationId: getThresholdData
+      x-access: public
+      tags: [terms]
+      parameters: [{ name: country, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Median income and inflation rows with sources (placeholders flagged), content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /drafts:
+    post:
+      operationId: createDraft
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      parameters: [{ name: Idempotency-Key, in: header, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, issuer], properties: { chain: { type: string }, issuer: { type: string } } } } } }
+      responses: { '201': { description: Draft, content: { application/json: { schema: { type: object } } } }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /drafts/mine:
+    get:
+      operationId: listMyDrafts
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      responses: { '200': { description: Drafts, content: { application/json: { schema: { type: object } } } } }
+  /drafts/{draftId}:
+    get:
+      operationId: getDraft
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Draft, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /drafts/{draftId}/terms:
+    put:
+      operationId: setDraftTerms
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [public, private], properties: { public: { type: object }, private: { type: object } } } } } }
+      responses: { '200': { description: Draft with commitment; private terms encrypted in the vault, content: { application/json: { schema: { type: object } } } }, '422': { description: Validation issues } }
+  /drafts/{draftId}/terms/private:
+    get:
+      operationId: getDraftPrivateTerms
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Plaintext private terms (issuer only; access logged), content: { application/json: { schema: { type: object } } } } }
+  /drafts/{draftId}/build-create-series:
+    post:
+      operationId: buildCreateSeries
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Unsigned createSeries transaction with the signed contract hash and the terms commitment, content: { application/json: { schema: { type: object } } } }, '409': { description: Contract not signed } }
+  /drafts/{draftId}/link-created:
+    post:
+      operationId: linkCreatedSeries
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Draft linked to the onchain series, content: { application/json: { schema: { type: object } } } }, '409': { description: Series not indexed yet } }
+  /series/{seriesId}/terms:
+    get:
+      operationId: getSeriesTerms
+      x-access: backer
+      tags: [terms]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Plaintext threshold and rate for eligible backers and the issuer; every access logged, content: { application/json: { schema: { type: object } } } }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /series/{seriesId}/terms/access-log:
+    get:
+      operationId: getTermsAccessLog
+      x-access: issuer
+      tags: [terms]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Who read the terms and when, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/amendments/inflation:
+    post:
+      operationId: prepareInflationAmendment
+      x-access: issuer
+      tags: [terms]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [year], properties: { year: { type: integer } } } } } }
+      responses: { '200': { description: Proposed amendment awaiting an attestor, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/amendments:
+    get:
+      operationId: listAmendments
+      x-access: issuer-or-attestor
+      tags: [terms]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Amendments, content: { application/json: { schema: { type: object } } } } }
+  /attestor/amendments/{amendmentId}/attest:
+    post:
+      operationId: attestAmendment
+      x-access: attestor
+      tags: [attestor]
+      security: [{ session: [] }]
+      parameters: [{ name: amendmentId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [attestorWallet, approve], properties: { attestorWallet: { type: string }, approve: { type: boolean } } } } } }
+      responses: { '200': { description: Attested or rejected (only issuer-favourable changes can be attested), content: { application/json: { schema: { type: object } } } }, '422': { description: Not issuer-favourable } }
+  /amendments/{amendmentId}/build:
+    post:
+      operationId: buildAmendTerms
+      x-access: issuer
+      tags: [terms]
+      security: [{ session: [] }]
+      parameters: [{ name: amendmentId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Unsigned amendTerms transaction (issuer signs, attestor co-signs), content: { application/json: { schema: { type: object } } } } }
+  /amendments/{amendmentId}/apply:
+    post:
+      operationId: applyAmendment
+      x-access: issuer
+      tags: [terms]
+      security: [{ session: [] }]
+      parameters: [{ name: amendmentId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Vault rotated to the new terms once the chain carries the new commitment, content: { application/json: { schema: { type: object } } } }, '409': { description: Chain does not carry the new commitment yet } }
+  /tx/send:
+    post:
+      operationId: sendSignedTx
+      x-access: account
+      tags: [tx]
+      security: [{ session: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [tx, signatures], properties: { tx: { type: object }, signatures: { type: object } } } } } }
+      responses: { '200': { description: Transaction result with the canonical events it emitted, content: { application/json: { schema: { type: object } } } }, '403': { $ref: '#/components/responses/Forbidden' }, '422': { description: Chain rejected the transaction } }

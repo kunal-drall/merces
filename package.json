@@ -5,7 +5,9 @@
   "description": "Merces Stage 2: integration and backend for the Mercery mechanism (Solana + Monad)",
   "type": "module",
   "packageManager": "pnpm@10.28.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -17,15 +19,15 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "db:migrate": "tsx packages/db/src/cli.ts migrate",
     "db:reset": "tsx packages/db/src/cli.ts reset",
-    "dev:mock": "tsx packages/api/src/dev-mock.ts",
-    "dev:api": "tsx packages/api/src/main.ts",
+    "dev:mock": "tsx packages/server/src/dev-mock.ts",
+    "dev:api": "tsx packages/server/src/main.ts",
     "dev:indexer": "tsx packages/indexer/src/main.ts",
     "dev:keepers": "tsx packages/keepers/src/main.ts",
     "dev:verifier": "tsx packages/report-verifier/src/main.ts",
     "demo:cycle": "tsx packages/scenarios/src/demo-cycle.ts",
     "stage1:sync": "tsx packages/stage1-sync/src/cli.ts",
     "openapi:client": "tsx packages/client/src/generate.ts",
-    "openapi:check": "tsx packages/api/src/openapi/check.ts"
+    "openapi:check": "tsx packages/server/src/openapi-check.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

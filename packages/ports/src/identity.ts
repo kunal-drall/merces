@@ -13,7 +13,7 @@ export class MockIdentityCheck implements IdentityCheckPort {
   readonly provider = 'mock';
   private readonly checks = new Map<string, 'pending' | 'passed' | 'failed'>();
   constructor(private readonly behaviour: 'auto-pass' | 'manual' = 'auto-pass') {}
-  async start(params: { applicationId: string }): Promise<{ checkId: string; redirectUrl: string }> {
+  async start(params: { applicationId: string; accountId: string; kind: 'issuer' | 'backer'; country: string | null }): Promise<{ checkId: string; redirectUrl: string }> {
     const checkId = `mockid_${params.applicationId}`;
     this.checks.set(checkId, this.behaviour === 'auto-pass' ? 'passed' : 'pending');
     return { checkId, redirectUrl: `https://identity.mock.invalid/verify/${checkId}` };
