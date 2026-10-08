@@ -26,6 +26,17 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
 
+  keepers:
+    build: .
+    command: pnpm dev:keepers
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/merces
+      MERCES_CHAIN_SOLANA_MODE: mock
+      MERCES_CHAIN_EVM_MODE: mock
+      MERCES_PRICE_FEED_PROVIDER: mock
+    depends_on:
+      postgres: { condition: service_healthy }
+
   verifier:
     build: .
     command: pnpm dev:verifier
