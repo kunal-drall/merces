@@ -1,0 +1,283 @@
+# E11 fees and accounting (R33). Fee ledger, per-series statements (admin and issuer), reconciliation of the read model
+# against the chain, and a CSV export of money events. Every amount is a decimal string in base units.
+tags:
+  - { name: accounting, description: Fee ledger, statements, reconciliation and exports (E11, R33) }
+components:
+  parameters:
+    accountingFrom: { name: from, in: query, schema: { type: string, pattern: '^\d{1,12}$' }, description: inclusive lower bound on block_time, unix seconds }
+    accountingTo: { name: to, in: query, schema: { type: string, pattern: '^\d{1,12}$' }, description: inclusive upper bound on block_time, unix seconds }
+    accountingSeriesQuery: { name: seriesId, in: query, schema: { type: string }, description: "<chain>:<address>" }
+    accountingLimit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1000 }, description: rows returned; totals always cover the whole filter }
+    accountingRunsLimit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+  schemas:
+    AccountingFeeRow:
+      type: object
+      required: [chain, seq, seriesId, stablecoin, kind, payer, amount, blockTime, txId]
+      properties:
+        chain: { type: string }
+        seq: { type: integer }
+        seriesId: { type: string }
+        stablecoin: { type: [string, 'null'], enum: [USDC, USDG, null] }
+        kind: { type: string, enum: [auction, payout], description: 1% auction fee on cleared bids or 5% payout fee at pay-in (C5) }
+        payer: { type: string, description: the bidder (auction) or the issuer's wallet the fee was taken from at pay-in (payout) }
+        amount: { $ref: '#/components/schemas/Money' }
+        blockTime: { type: integer, description: unix seconds }
+        txId: { type: string }
+    AccountingFeeSeriesTotal:
+      type: object
+      required: [seriesId, chain, stablecoin, auction, payout, total, count]
+      properties:
+        seriesId: { type: string }
+        chain: { type: string }
+        stablecoin: { type: [string, 'null'] }
+        auction: { $ref: '#/components/schemas/Money' }
+        payout: { $ref: '#/components/schemas/Money' }
+        total: { $ref: '#/components/schemas/Money' }
+        count: { type: integer }
+    AccountingFeesReport:
+      type: object
+      required: [filter, rows, rowCount, truncated, totals]
+      properties:
+        filter:
+          type: object
+          properties:
+            chain: { type: [string, 'null'] }
+            seriesId: { type: [string, 'null'] }
+            from: { type: [integer, 'null'] }
+            to: { type: [integer, 'null'] }
+            limit: { type: integer }
+        rows: { type: array, items: { $ref: '#/components/schemas/AccountingFeeRow' } }
+        rowCount: { type: integer, description: rows matching the filter (before the limit) }
+        truncated: { type: boolean }
+        totals:
+          type: object
+          required: [total, count, byKind, bySeries]
+          properties:
+            total: { $ref: '#/components/schemas/Money' }
+            count: { type: integer }
+            byKind:
+              type: object
+              required: [auction, payout]
+              properties:
+                auction: { $ref: '#/components/schemas/Money' }
+                payout: { $ref: '#/components/schemas/Money' }
+            bySeries: { type: array, items: { $ref: '#/components/schemas/AccountingFeeSeriesTotal' } }
+    AccountingPeriodLine:
+      type: object
+      required: [periodId, paymentDue, accrual, paid, splitReceived, reportAccepted, settled]
+      properties:
+        periodId: { type: string }
+        tier: { type: [integer, 'null'] }
+        paymentDue: { $ref: '#/components/schemas/Money' }
+        accrual: { $ref: '#/components/schemas/Money' }
+        paid: { $ref: '#/components/schemas/Money' }
+        splitReceived: { $ref: '#/components/schemas/Money' }
+        reportAccepted: { type: boolean }
+        settled: { type: boolean }
+        liquidityEvent: { type: boolean }
+    AccountingStatement:
+      type: object
+      description: Per-series statement from the read model. Amounts, kinds, counts and statuses only; never an income figure.
+      required: [seriesId, chain, issuer, stablecoin, phase, status, feeRates, cap, payments, fees, payouts, refunds, treasury, redemption, tail, extinguishment, burns, periods, moneyEventTotals]
+      properties:
+        seriesId: { type: string }
+        chain: { type: string }
+        issuer: { type: string }
+        stablecoin: { type: string, enum: [USDC, USDG] }
+        phase: { type: string, enum: [Draft, Open, Reveal, Settled, Failed, Cancelled] }
+        status: { type: string, enum: [OnTime, InGrace, Late, Paused, Retired, Redeemed, Extinguished] }
+        settledAt: { type: [integer, 'null'] }
+        feeRates:
+          type: object
+          properties: { auctionFeeBps: { type: integer }, payoutFeeBps: { type: integer } }
+        cap:
+          type: object
+          description: "C6: cap per unit = m × P0; remaining per unit = capPerUnit − paidPerUnitWad / 1e18"
+          properties:
+            capMultipleWad: { $ref: '#/components/schemas/Wad' }
+            issuePrice: { type: [string, 'null'] }
+            perUnit: { type: [string, 'null'], description: cap per unit, base units; null before settlement }
+            unitsSold: { type: string }
+            unitsOutstanding: { type: string }
+            total: { type: [string, 'null'], description: perUnit × unitsSold }
+            paidPerUnitWad: { $ref: '#/components/schemas/Wad' }
+            paidPerUnit: { $ref: '#/components/schemas/Money' }
+            remainingPerUnit: { type: [string, 'null'] }
+            remainingTotal: { type: [string, 'null'], description: remainingPerUnit × unitsOutstanding }
+            progressBps: { type: [integer, 'null'], description: paid / cap in basis points }
+        payments:
+          type: object
+          properties:
+            grossPaidTotal: { $ref: '#/components/schemas/Money', description: lifetime gross accepted into the vault }
+            netDistributed: { $ref: '#/components/schemas/Money', description: gross minus payout fees, distributable to holders }
+            feesTaken: { $ref: '#/components/schemas/Money' }
+            count: { type: integer }
+        fees:
+          type: object
+          properties:
+            auction: { $ref: '#/components/schemas/Money' }
+            payout: { $ref: '#/components/schemas/Money' }
+            total: { $ref: '#/components/schemas/Money' }
+            vaultFeesTotal: { $ref: '#/components/schemas/Money', description: payout fees as accumulated on the series row (should equal fees.payout) }
+        payouts:
+          type: object
+          properties:
+            claimed: { $ref: '#/components/schemas/Money' }
+            unclaimed: { $ref: '#/components/schemas/Money', description: netDistributed − claimed }
+            count: { type: integer }
+        refunds:
+          type: object
+          properties:
+            total: { $ref: '#/components/schemas/Money' }
+            bids: { $ref: '#/components/schemas/Money', description: bid deposit refunds claimed }
+            payments: { $ref: '#/components/schemas/Money', description: pay-in refunds (cap, overpayment) }
+        treasury:
+          type: object
+          properties:
+            total: { $ref: '#/components/schemas/Money' }
+            released: { $ref: '#/components/schemas/Money' }
+            balance: { $ref: '#/components/schemas/Money' }
+            releasesPaused: { type: boolean }
+        redemption:
+          type: object
+          properties:
+            price: { type: [string, 'null'] }
+            redeemedAt: { type: [integer, 'null'] }
+            deposit: { $ref: '#/components/schemas/Money' }
+            claimed: { $ref: '#/components/schemas/Money' }
+        tail:
+          type: object
+          properties: { total: { $ref: '#/components/schemas/Money' } }
+        extinguishment:
+          type: object
+          properties:
+            extinguishedAt: { type: [integer, 'null'] }
+            returnedToHolders: { $ref: '#/components/schemas/Money' }
+        burns:
+          type: object
+          properties: { units: { type: string } }
+        periods: { type: array, items: { $ref: '#/components/schemas/AccountingPeriodLine' } }
+        moneyEventTotals:
+          type: object
+          description: count and total per money_events kind (payment, fee, payout, refund, release, treasury, redemption, redemption_claim, tail, burn, extinguishment, split)
+          additionalProperties:
+            type: object
+            properties: { count: { type: integer }, total: { type: string } }
+    AccountingReconciliationCheck:
+      type: object
+      required: [check, chain, seriesId, stablecoin, indexed, onchain, delta, ok]
+      properties:
+        check: { type: string, enum: [fee-collector-balance, vault-gross, vault-fees, treasury-total, treasury-released] }
+        chain: { type: string }
+        seriesId: { type: [string, 'null'] }
+        stablecoin: { type: [string, 'null'] }
+        indexed: { type: [string, 'null'], description: read-model total, base units }
+        onchain: { type: [string, 'null'], description: onchain value, base units }
+        delta: { type: [string, 'null'], description: onchain − indexed, signed decimal string }
+        ok: { type: boolean }
+        note: { type: string }
+    AccountingReconciliationRun:
+      type: object
+      required: [runId, at, actor, ok, checksTotal, checksFailed, checks]
+      properties:
+        runId: { type: string }
+        at: { type: string, format: date-time }
+        actor: { type: string }
+        ok: { type: boolean }
+        checksTotal: { type: integer }
+        checksFailed: { type: integer }
+        checks: { type: array, items: { $ref: '#/components/schemas/AccountingReconciliationCheck' } }
+paths:
+  /admin/accounting/fees:
+    get:
+      operationId: adminAccountingFees
+      x-access: admin
+      tags: [admin, accounting]
+      security: [{ session: [] }]
+      summary: Fee ledger rows (1% auction, 5% payout) for a chain / series / block-time window, with totals by kind and by series
+      parameters:
+        - $ref: '#/components/parameters/chainQuery'
+        - $ref: '#/components/parameters/accountingSeriesQuery'
+        - $ref: '#/components/parameters/accountingFrom'
+        - $ref: '#/components/parameters/accountingTo'
+        - $ref: '#/components/parameters/accountingLimit'
+      responses:
+        '200': { description: Ledger rows and totals, content: { application/json: { schema: { $ref: '#/components/schemas/AccountingFeesReport' } } } }
+        '400': { description: Unknown chain, bad bounds or from after to, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/accounting/series/{seriesId}:
+    get:
+      operationId: adminAccountingSeriesStatement
+      x-access: admin
+      tags: [admin, accounting]
+      security: [{ session: [] }]
+      summary: Per-series statement — gross payments vs cap, fees by kind, payouts claimed, refunds, treasury released vs total, redemption and tail totals
+      parameters:
+        - $ref: '#/components/parameters/seriesId'
+      responses:
+        '200': { description: Statement, content: { application/json: { schema: { $ref: '#/components/schemas/AccountingStatement' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /series/{seriesId}/accounting:
+    get:
+      operationId: issuerAccountingStatement
+      x-access: issuer
+      tags: [accounting]
+      security: [{ session: [] }]
+      summary: The issuer's own statement for a series (the same numbers the admin sees)
+      parameters:
+        - $ref: '#/components/parameters/seriesId'
+      responses:
+        '200': { description: Statement, content: { application/json: { schema: { $ref: '#/components/schemas/AccountingStatement' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/accounting/reconcile:
+    get:
+      operationId: adminAccountingReconcile
+      x-access: admin
+      tags: [admin, accounting]
+      security: [{ session: [] }]
+      summary: Run a reconciliation of the read model against every chain (fee collector balance per stablecoin, vault gross and fee totals, treasury totals per settled series); the run is persisted and audited
+      parameters:
+        - { name: Idempotency-Key, in: header, schema: { type: string }, description: a retried call with the same key replays the same run instead of recording another }
+      responses:
+        '200': { description: The persisted run with every check, content: { application/json: { schema: { $ref: '#/components/schemas/AccountingReconciliationRun' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/accounting/reconcile/runs:
+    get:
+      operationId: adminAccountingReconcileRuns
+      x-access: admin
+      tags: [admin, accounting]
+      security: [{ session: [] }]
+      summary: Past reconciliation runs, newest first
+      parameters:
+        - $ref: '#/components/parameters/accountingRunsLimit'
+      responses:
+        '200': { description: Runs, content: { application/json: { schema: { type: object, required: [runs], properties: { runs: { type: array, items: { $ref: '#/components/schemas/AccountingReconciliationRun' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/accounting/export:
+    get:
+      operationId: adminAccountingExport
+      x-access: admin
+      tags: [admin, accounting]
+      security: [{ session: [] }]
+      summary: CSV of money events joined with series (chain, seq, block_time ISO, series_id, period_id, kind, wallet, amount, tx_id, stablecoin); every export is audited
+      parameters:
+        - $ref: '#/components/parameters/chainQuery'
+        - $ref: '#/components/parameters/accountingFrom'
+        - $ref: '#/components/parameters/accountingTo'
+      responses:
+        '200':
+          description: RFC 4180 CSV with a header row; Content-Disposition names the file
+          headers:
+            Content-Disposition: { schema: { type: string }, description: 'attachment; filename="merces-money-events_<chain>_<from>_<to>.csv"' }
+            X-Row-Count: { schema: { type: integer } }
+          content: { text/csv: { schema: { type: string } } }
+        '400': { description: Unknown chain, bad bounds or from after to, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }

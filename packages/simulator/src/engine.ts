@@ -642,6 +642,8 @@ export class SimEngine {
       r.accTailNetWad += mulDiv(net, WAD, r.unitsAtRedemption);
       r.tailPaidPerUnit += amount / r.unitsAtRedemption;
       s.vaultBalance += net;
+      s.vaultGrossTotal += amount;
+      s.vaultFeesTotal += fee;
       s.grossPaidTotal += amount;
       s.feesTotal += fee;
       emit('PaymentReceived', { seriesId: s.seriesId, periodId: cmd.periodId, gross: str(amount), fee: str(fee), net: str(net), source: 'tail', paidPerUnitWad: str(s.paidPerUnitWad) });
