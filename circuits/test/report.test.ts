@@ -190,12 +190,23 @@ describe("report circuit", () => {
     await expect(proveReport({ ...inp, payment_usd: inp.payment_usd + 1n })).rejects.toThrow();
   });
 
-  it("enforces the 64-bit range checks", async () => {
+  it("enforces the 64-bit range checks, including payment_usd (SPEC v1.1 §8)", async () => {
     const good = inputs(base);
     await expect(proveReport({ ...good, units_outstanding: 1n << 64n })).rejects.toThrow();
     await expect(proveReport({ ...good, fx_avg_wad: 1n << 64n })).rejects.toThrow();
     const hugeIncome = inputs({ ...base, incomeYtd: 1n << 64n, paymentUsd: 0n });
     await expect(proveReport(hugeIncome)).rejects.toThrow();
+    // an honest witness whose payment does not fit u64 is unprovable: r × units × excess / WAD = 2^80
+    const huge: Scenario = { theta: 0n, rWad: WAD, units: 1n << 40n, incomeYtd: 1n << 40n, priorIncomeYtd: 0n };
+    const hugeInputs = inputs(huge);
+    expect(hugeInputs.payment_usd).toBe(1n << 80n);
+    await expect(proveReport(hugeInputs)).rejects.toThrow();
+    // just under 2^64 proves
+    const edge: Scenario = { theta: 0n, rWad: WAD, units: 1n << 32n, incomeYtd: (1n << 32n) - 1n, priorIncomeYtd: 0n };
+    const edgeInputs = inputs(edge);
+    expect(edgeInputs.payment_usd).toBe((1n << 64n) - (1n << 32n));
+    const { proof, publicSignals } = await proveReport(edgeInputs);
+    expect(await verifyReport(proof, publicSignals)).toBe(true);
   });
 
   it("a verified proof fails with tampered public signals", async () => {

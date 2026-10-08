@@ -1,7 +1,7 @@
-//! Protocol account layouts (SPEC §5.1, §5.3, §6.1, §6.5, §6.6, §7).
+//! Protocol account layouts (SPEC v1.1 §5.1, §5.3, §6.1, §6.5, §6.6, §7).
 
 use anchor_lang::prelude::*;
-use merces_common::params::MAX_YEAR_BUCKETS;
+use merces_common::params::{MAX_PAUSES, ROUTER_RING, YEAR_RING};
 
 /// PDA seeds of `merces_protocol`. Every per-series PDA includes the registry `Series` key.
 pub mod seeds {
@@ -23,13 +23,12 @@ pub mod seeds {
     pub const ESCROW_AUTH: &[u8] = b"escrow_auth";
     pub const TREASURY_AUTH: &[u8] = b"treasury_auth";
     pub const ROUTER_AUTH: &[u8] = b"router_auth";
-    pub use merces_onchain::seeds::{REGISTRY_SIGNER, WINDOW_ESCROW};
-    // token accounts (PDAs owned by the authorities above)
+    pub use merces_onchain::seeds::{AUCTION_ESCROW, ESCROW_ARM, REGISTRY_AUTHORITY, WINDOW_ESCROW};
+    // stablecoin token accounts (PDAs owned by the authorities above)
     pub const ESCROW_TOKEN: &[u8] = b"escrow_token";
     pub const TREASURY_TOKEN: &[u8] = b"treasury_token";
     pub const VAULT_TOKEN: &[u8] = b"vault_token";
     pub const ROUTER_TOKEN: &[u8] = b"router_token";
-    pub const WINDOW_UNITS: &[u8] = b"window_units";
     pub const WINDOW_STABLE: &[u8] = b"window_stable";
 }
 
@@ -37,6 +36,7 @@ pub mod seeds {
 pub const TALLY_PAGE: usize = 24;
 
 /// `RaiseState` mirror (SPEC §1.7).
+pub const RAISE_DRAFT: u8 = 0;
 pub const RAISE_OPEN: u8 = 1;
 pub const RAISE_SETTLING: u8 = 3;
 pub const RAISE_SETTLED: u8 = 4;
@@ -85,22 +85,27 @@ pub struct Auction {
     pub bid_count: u32,
     pub revealed_count: u32,
     pub valid_count: u32,
-    // settlement proposal and tally
+    // settlement proposal and tally (one round at a time)
+    pub tally_round: u32,
+    pub round_rejected: bool,
     pub clearing_price: u64,
+    pub q_above_claim: u64,
+    pub q_at_claim: u64,
+    pub r_claim: u64,
     pub q_above: u64,
     pub q_at: u64,
+    pub alloc_sum: u64,
     pub min_valid_price: u64,
     pub tallied_count: u32,
-    pub tally_round: u32,
-    // results
+    // results (exact, written once at finalize)
     pub units_sold: u64,
     pub proceeds: u64,
-    pub remainder_at_margin: u64,
-    pub units_minted: u64,
-    pub bids_processed: u32,
     pub settlement_ts: u64,
-    pub mint_authority_revoked: bool,
+    // processing
+    pub bids_processed: u32,
+    pub units_minted: u64,
     pub mint_finalized: bool,
+    pub mint_authority_revoked: bool,
     pub bump: u8,
 }
 
@@ -120,6 +125,9 @@ pub struct Bid {
     pub tallied_round: u32,
     pub processed: bool,
     pub allocation: u64,
+    pub pending_units: u64,
+    pub pending_refund: u64,
+    pub delivered: bool,
     pub bump: u8,
 }
 
@@ -128,55 +136,75 @@ pub struct Bid {
 #[derive(InitSpace)]
 pub struct Treasury {
     pub series: Pubkey,
-    /// Exact proceeds (`p* × units_sold`), known once the mint is finalised.
+    /// Exact proceeds (`p* × units_sold`), written at finalize.
     pub proceeds: u64,
     pub proceeds_received: u64,
     pub released_total: u64,
     pub issuer_paused_releases: bool,
     pub early_draw_total: u64,
-    pub finalized: bool,
+    /// `now` of the extinguishment (0 while not extinguished); caps vesting for the estate.
+    pub extinguished_at: u64,
+    pub mint_finalized: bool,
     pub bump: u8,
 }
 
-/// Per-series repayment ledger (`[LEDGER, series]`). Zero-copy: the 64-entry `year_gross_wad`
-/// table would otherwise sit on the stack during account validation. Optional periods are encoded
-/// as `(value, has_*)` pairs; booleans as `u8`. Field order avoids padding (bytemuck `Pod`).
+/// Armed `commit_ask` deposit for the unit mint (`[ESCROW_ARM, unit_mint]`, SPEC §4.1). Read by
+/// the hook at bytes 8..40 (owner) and 40..48 (units).
+#[account]
+#[derive(InitSpace)]
+pub struct EscrowArm {
+    pub armed_owner: Pubkey,
+    pub armed_units: u64,
+    pub bump: u8,
+}
+
+/// Per-series repayment ledger (`[LEDGER, series]`). Zero-copy so account validation never puts it
+/// on the stack. Optional values are `(value, has_*)` pairs; booleans are `u8`; field order avoids
+/// padding (bytemuck `Pod`).
 #[account(zero_copy)]
 #[repr(C)]
 pub struct Ledger {
-    // u128
+    // u128 (9 × 16 = 144)
     pub paid_per_unit_wad: u128,
     pub net_acc_wad: u128,
     pub tail_acc_wad: u128,
     pub tail_paid_per_unit_wad: u128,
     pub final_acc_wad: u128,
-    pub year_gross_wad: [u128; MAX_YEAR_BUCKETS],
-    // u64
+    pub year_gross_wad: [u128; YEAR_RING],
+    // u64 (23 + 4 + 16 + 16 = 59 × 8 = 472)
     pub settlement_ts: u64,
     pub open_due_amount: u64,
     pub router_credit: u64,
+    pub trueup_nonce: u64,
     pub trueup_due: u64,
-    pub trueup_deadline: u64,
+    pub trueup_attested_at: u64,
     pub pause_nonce: u64,
-    pub pause_start: u64,
-    pub pause_end: u64,
+    pub pause_requested_at: u64,
     pub paused_total: u64,
-    pub cap_per_unit: u64,
-    pub carry: u64,
+    /// Exact WAD-scaled distribution remainder (`< units_outstanding`).
+    pub carry_wad: u64,
     pub fee_collected: u64,
     pub gross_received: u64,
     pub refunded_to_issuer: u64,
+    /// `units_sold` at mint finalisation, reduced only by burns.
+    pub units_outstanding: u64,
     pub redemption_ts: u64,
     pub redemption_price: u64,
     pub units_at_redemption: u64,
     pub tail_cap_per_unit: u64,
-    pub tail_carry: u64,
-    pub final_carry: u64,
+    pub tail_carry_wad: u64,
+    pub extinguished_at: u64,
+    pub final_carry_wad: u64,
+    pub final_units: u64,
     pub extinguish_nonce: u64,
-    // 32-byte
+    /// Σ `payment_usd` accepted per calendar year (tagged ring; bounds negative true-ups).
+    pub year_pay_sum: [u64; YEAR_RING],
+    pub pause_start: [u64; MAX_PAUSES],
+    pub pause_end: [u64; MAX_PAUSES],
+    // 32-byte (64)
     pub series: Pubkey,
     pub last_income_commitment: [u8; 32],
-    // u32 (optional values; see the `has_*` flags)
+    // u32 (7 + 4 + 4 + 2 = 17 × 4 = 68)
     pub first_period: u32,
     pub last_accepted_period_v: u32,
     pub last_paid_period_v: u32,
@@ -184,7 +212,11 @@ pub struct Ledger {
     pub formal_notice_emitted_for_v: u32,
     pub last_income_period_v: u32,
     pub active_window_v: u32,
-    // u8
+    pub year_gross_tag: [u32; YEAR_RING],
+    pub year_pay_tag: [u32; YEAR_RING],
+    pub trueup_year_v: u32,
+    pub last_trueup_year_v: u32,
+    // u8 (15 + 4 + 4 + 1 = 24) + padding 12 → 784 total
     pub status: u8,
     pub has_last_accepted_period: u8,
     pub has_last_paid_period: u8,
@@ -193,11 +225,17 @@ pub struct Ledger {
     pub has_last_income_period: u8,
     pub has_active_window: u8,
     pub open_due_tier: u8,
-    /// `true` when the open due belongs to a tail report (routes to the tail accumulators).
-    pub open_due_is_tail: u8,
     pub pause_requested: u8,
+    pub pause_count: u8,
+    pub trueup_notice_emitted: u8,
+    pub has_trueup_year: u8,
+    pub has_last_trueup_year: u8,
+    pub tail_exhausted: u8,
+    pub mint_finalized: u8,
+    pub year_gross_set: [u8; YEAR_RING],
+    pub year_pay_set: [u8; YEAR_RING],
     pub bump: u8,
-    pub _padding: [u8; 1],
+    pub _padding: [u8; 12],
 }
 
 impl Ledger {
@@ -246,21 +284,28 @@ impl Ledger {
         self.has_active_window = u8::from(v.is_some());
         self.active_window_v = v.unwrap_or(0);
     }
-    pub fn is_open_due_tail(&self) -> bool {
-        self.open_due_is_tail != 0
+    pub fn trueup_year(&self) -> Option<u32> {
+        (self.has_trueup_year != 0).then_some(self.trueup_year_v)
+    }
+    pub fn set_trueup_year(&mut self, v: Option<u32>) {
+        self.has_trueup_year = u8::from(v.is_some());
+        self.trueup_year_v = v.unwrap_or(0);
+    }
+    pub fn last_trueup_year(&self) -> Option<u32> {
+        (self.has_last_trueup_year != 0).then_some(self.last_trueup_year_v)
+    }
+    pub fn set_last_trueup_year(&mut self, v: Option<u32>) {
+        self.has_last_trueup_year = u8::from(v.is_some());
+        self.last_trueup_year_v = v.unwrap_or(0);
     }
     pub fn is_pause_requested(&self) -> bool {
         self.pause_requested != 0
     }
-}
-
-#[cfg(test)]
-mod ledger_layout {
-    #[test]
-    fn ledger_is_16_byte_aligned_without_padding() {
-        // 5 + 64 u128 (1104) + 21 u64 (168) + 2×32 (64) + 7 u32 (28) + 11 u8 + 1 pad = 1376
-        assert_eq!(core::mem::size_of::<super::Ledger>(), 1376);
-        assert_eq!(core::mem::size_of::<super::Ledger>() % 16, 0);
+    pub fn is_tail_exhausted(&self) -> bool {
+        self.tail_exhausted != 0
+    }
+    pub fn is_mint_finalized(&self) -> bool {
+        self.mint_finalized != 0
     }
 }
 
@@ -276,6 +321,10 @@ pub struct Holder {
     pub redeemed_units: u64,
     pub last_tail_acc_wad: u128,
     pub last_final_acc_wad: u128,
+    /// Units minted to the auction escrow for this wallet and not yet delivered (accrual weight).
+    pub undelivered_units: u64,
+    /// Units escrowed in an open or unprocessed window ask (accrual weight).
+    pub ask_escrow_units: u64,
     pub bump: u8,
 }
 
@@ -292,6 +341,7 @@ pub struct Report {
     pub tier: u8,
     pub liquidity_event: bool,
     pub income_commitment: [u8; 32],
+    pub prior_income_commitment: [u8; 32],
     pub due: u64,
     pub accrual_paid: u64,
     pub paid_at: u64,
@@ -307,7 +357,28 @@ pub struct Router {
     pub r_wad: u64,
     pub ytd_year: u32,
     pub ytd_received: u64,
+    /// Period of the latest receipt (0 = none yet).
+    pub last_receipt_period: u32,
+    /// Latest period with a recorded checkpoint (0 = none yet).
+    pub last_checkpoint_period: u32,
+    /// Ring of `ROUTER_RING` period checkpoints `{period, ytd_at_end}` (slot = period % ring).
+    pub cp_period: [u32; ROUTER_RING],
+    pub cp_ytd_at_end: [u64; ROUTER_RING],
+    pub cp_set: [bool; ROUTER_RING],
     pub bump: u8,
+}
+
+impl Router {
+    pub fn checkpoint(&self, period: u32) -> Option<u64> {
+        let i = (period as usize) % ROUTER_RING;
+        (self.cp_set[i] && self.cp_period[i] == period).then_some(self.cp_ytd_at_end[i])
+    }
+    pub fn set_checkpoint(&mut self, period: u32, ytd_at_end: u64) {
+        let i = (period as usize) % ROUTER_RING;
+        self.cp_period[i] = period;
+        self.cp_ytd_at_end[i] = ytd_at_end;
+        self.cp_set[i] = true;
+    }
 }
 
 /// Rate accumulator (`[FX_PAIR, pair_id]`).
@@ -343,13 +414,18 @@ pub struct Window {
     pub opens_at: u64,
     pub commit_end: u64,
     pub reveal_end: u64,
+    pub order_count: u32,
     pub bid_count: u32,
     pub ask_count: u32,
+    pub revealed_count: u32,
     pub revealed_bids: u32,
     pub revealed_asks: u32,
+    pub valid_count: u32,
     pub escrow_units: u64,
     pub escrow_stable: u64,
     // proposal and tally
+    pub tally_round: u32,
+    pub round_rejected: bool,
     pub clearing_price: u64,
     pub no_match_proposed: bool,
     pub d_above: u64,
@@ -358,24 +434,23 @@ pub struct Window {
     pub s_at: u64,
     pub max_bid: u64,
     pub min_ask: u64,
-    pub valid_orders: u32,
-    pub tallied: u32,
-    pub tally_round: u32,
+    pub tallied_count: u32,
     // results
+    pub branch: u8,
     pub matched_units: u64,
-    pub remainder_for_bids_at: u64,
+    pub marginal_remaining: u64,
+    /// Bids are processed in ascending per-side reveal index, then asks.
+    pub next_bid_index: u32,
+    pub next_ask_index: u32,
     pub bids_processed: u32,
     pub asks_processed: u32,
-    pub bid_fills_total: u64,
-    pub dust_assigned: u64,
-    /// Cursor for `return_dust` ordering: last (price, reveal_index) served.
-    pub dust_cursor_price: u64,
-    pub dust_cursor_index: u32,
-    pub dust_started: bool,
+    pub processed_count: u32,
+    /// Units still payable to asks (`matched − cancelled buyer fills`).
+    pub ask_budget: u64,
     pub bump: u8,
 }
 
-/// Window order, one per wallet per side per window (`[ORDER, series, period, owner, side]`).
+/// Window order, ONE per wallet per window (`[ORDER, series, period, owner]`).
 #[account]
 #[derive(InitSpace)]
 pub struct Order {
@@ -386,6 +461,7 @@ pub struct Order {
     pub commitment: [u8; 32],
     /// Stablecoin for bids, units for asks.
     pub escrow: u64,
+    /// Per-side reveal index.
     pub reveal_index: u32,
     pub revealed: bool,
     pub valid: bool,
@@ -394,9 +470,14 @@ pub struct Order {
     pub tallied_round: u32,
     pub processed: bool,
     pub fill: u64,
-    /// Asks: `net_acc_wad` when the units were escrowed, so escrow-period payouts reach the seller.
-    pub net_acc_snapshot: u128,
-    /// Asks at or below `p*`: units handed back by `return_dust`.
-    pub dust_received: u64,
     pub bump: u8,
+}
+
+#[cfg(test)]
+mod ledger_layout {
+    #[test]
+    fn ledger_is_16_byte_aligned_without_padding() {
+        assert_eq!(core::mem::size_of::<super::Ledger>(), 784);
+        assert_eq!(core::mem::size_of::<super::Ledger>() % 16, 0);
+    }
 }

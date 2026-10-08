@@ -34,7 +34,17 @@ describe("unpaused countdowns (SPEC §6.4)", () => {
     expect(unpaused(pauses, ts(2026, 10, 1), ts(2026, 12, 1), now)).toBe(61n * DAY);
   });
   it("property: 0 ≤ paused_within ≤ b − a, additive over adjacent intervals", () => {
-    const pauseArb = fc.array(fc.tuple(fc.bigInt({ min: 0n, max: 1000n }), fc.bigInt({ min: 1n, max: 300n })).map(([s, l]) => ({ start: s, end: s + l })), { maxLength: 6 });
+    // real pause lists never overlap (approve_pause requires !is_paused): build disjoint pauses
+    const pauseArb = fc.array(fc.tuple(fc.bigInt({ min: 0n, max: 200n }), fc.bigInt({ min: 1n, max: 300n })), { maxLength: 6 }).map((segs) => {
+      const out: Pause[] = [];
+      let cursor = 0n;
+      for (const [gap, len] of segs) {
+        const start = cursor + gap;
+        out.push({ start, end: start + len });
+        cursor = start + len;
+      }
+      return out;
+    });
     fc.assert(
       fc.property(pauseArb, fc.bigInt({ min: 0n, max: 1500n }), fc.bigInt({ min: 0n, max: 1500n }), fc.bigInt({ min: 0n, max: 1500n }), fc.bigInt({ min: 0n, max: 2000n }), (ps, a0, b0, c0, now) => {
         const [a, b, c] = [a0, b0, c0].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0)) as [bigint, bigint, bigint];

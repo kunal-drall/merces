@@ -15,7 +15,14 @@ pub fn required_escrow(price: u64, quantity: u64, auction_fee_bps: u16) -> MathR
 }
 
 /// Reveal validity (SPEC §5.2 `reveal_bid`); never errors — an unrepresentable bid is invalid.
-pub fn bid_is_valid(price: u64, quantity: u64, escrow: u64, reserve_price: u64, wallet_cap_units_at_auction: u64, auction_fee_bps: u16) -> bool {
+pub fn bid_is_valid(
+    price: u64,
+    quantity: u64,
+    escrow: u64,
+    reserve_price: u64,
+    wallet_cap_units_at_auction: u64,
+    auction_fee_bps: u16,
+) -> bool {
     if price < reserve_price || quantity == 0 || quantity > wallet_cap_units_at_auction {
         return false;
     }
@@ -35,7 +42,11 @@ pub fn marginal_alloc(r_claim: u64, quantity: u64, q_at_claim: u64) -> MathResul
     if q_at_claim == 0 {
         return Ok(0);
     }
-    to_u64(mul_div(u128::from(r_claim), u128::from(quantity), u128::from(q_at_claim))?)
+    to_u64(mul_div(
+        u128::from(r_claim),
+        u128::from(quantity),
+        u128::from(q_at_claim),
+    )?)
 }
 
 /// Why a proposal was rejected (`SettlementRejected.reason`).
@@ -48,7 +59,15 @@ pub enum RejectReason {
 
 /// `finalize_settlement` steps 2–3 (SPEC §5.2): the proposer's claims must match the tally and the
 /// price must be the unique uniform clearing price.
-pub fn check_proposal(units_offered: u64, clearing_price: u64, q_above_claim: u64, q_at_claim: u64, q_above: u64, q_at: u64, min_valid_price: u64) -> MathResult<Result<(), RejectReason>> {
+pub fn check_proposal(
+    units_offered: u64,
+    clearing_price: u64,
+    q_above_claim: u64,
+    q_at_claim: u64,
+    q_above: u64,
+    q_at: u64,
+    min_valid_price: u64,
+) -> MathResult<Result<(), RejectReason>> {
     if q_above != q_above_claim || q_at != q_at_claim {
         return Ok(Err(RejectReason::ClaimMismatch));
     }
@@ -64,7 +83,13 @@ pub fn check_proposal(units_offered: u64, clearing_price: u64, q_above_claim: u6
 }
 
 /// Allocation for one revealed valid bid after settlement.
-pub fn allocation(price: u64, quantity: u64, clearing_price: u64, r_claim: u64, q_at_claim: u64) -> MathResult<u64> {
+pub fn allocation(
+    price: u64,
+    quantity: u64,
+    clearing_price: u64,
+    r_claim: u64,
+    q_at_claim: u64,
+) -> MathResult<u64> {
     if price > clearing_price {
         Ok(quantity)
     } else if price == clearing_price {
@@ -75,8 +100,15 @@ pub fn allocation(price: u64, quantity: u64, clearing_price: u64, r_claim: u64, 
 }
 
 /// Money movement for a winning allocation: `(cost, fee, refund)`.
-pub fn settle_winner(clearing_price: u64, alloc: u64, escrow: u64, auction_fee_bps: u16) -> MathResult<(u64, u64, u64)> {
-    let cost = clearing_price.checked_mul(alloc).ok_or(MathError::Overflow)?;
+pub fn settle_winner(
+    clearing_price: u64,
+    alloc: u64,
+    escrow: u64,
+    auction_fee_bps: u16,
+) -> MathResult<(u64, u64, u64)> {
+    let cost = clearing_price
+        .checked_mul(alloc)
+        .ok_or(MathError::Overflow)?;
     let fee = bps_of(cost, auction_fee_bps)?;
     let spent = cost.checked_add(fee).ok_or(MathError::Overflow)?;
     let refund = escrow.checked_sub(spent).ok_or(MathError::Overflow)?;
@@ -102,8 +134,22 @@ mod tests {
     #[test]
     fn escrow_and_validity() {
         assert_eq!(required_escrow(1_000_000, 100, 100).unwrap(), 101_000_000);
-        assert!(bid_is_valid(1_000_000, 100, 101_000_000, 1_000_000, 100, 100));
-        assert!(!bid_is_valid(1_000_000, 100, 100_999_999, 1_000_000, 100, 100));
+        assert!(bid_is_valid(
+            1_000_000,
+            100,
+            101_000_000,
+            1_000_000,
+            100,
+            100
+        ));
+        assert!(!bid_is_valid(
+            1_000_000,
+            100,
+            100_999_999,
+            1_000_000,
+            100,
+            100
+        ));
         assert!(!bid_is_valid(999_999, 1, 1_010_000, 1_000_000, 100, 100));
         assert!(!bid_is_valid(1_000_000, 101, u64::MAX, 1_000_000, 100, 100));
         assert!(!bid_is_valid(1_000_000, 0, u64::MAX, 1_000_000, 100, 100));
@@ -114,9 +160,18 @@ mod tests {
     fn proposal_rules() {
         // 10 @ 5, 10 @ 4, N = 15
         assert_eq!(check_proposal(15, 4, 10, 10, 10, 10, 4).unwrap(), Ok(()));
-        assert_eq!(check_proposal(15, 5, 0, 10, 0, 10, 4).unwrap(), Err(RejectReason::InvalidClearingPrice));
-        assert_eq!(check_proposal(15, 3, 20, 0, 20, 0, 4).unwrap(), Err(RejectReason::InvalidClearingPrice));
-        assert_eq!(check_proposal(15, 4, 9, 10, 10, 10, 4).unwrap(), Err(RejectReason::ClaimMismatch));
+        assert_eq!(
+            check_proposal(15, 5, 0, 10, 0, 10, 4).unwrap(),
+            Err(RejectReason::InvalidClearingPrice)
+        );
+        assert_eq!(
+            check_proposal(15, 3, 20, 0, 20, 0, 4).unwrap(),
+            Err(RejectReason::InvalidClearingPrice)
+        );
+        assert_eq!(
+            check_proposal(15, 4, 9, 10, 10, 10, 4).unwrap(),
+            Err(RejectReason::ClaimMismatch)
+        );
         // undersubscribed: 10 @ 5, 2 @ 4 → p* = 4
         assert_eq!(check_proposal(15, 4, 10, 2, 10, 2, 4).unwrap(), Ok(()));
         assert_eq!(r_claim(15, 10, 2), 2);
@@ -131,8 +186,14 @@ mod tests {
         assert_eq!(allocation(3, 10, 4, 5, 10).unwrap(), 0);
         assert_eq!(marginal_alloc(5, 3, 0).unwrap(), 0);
         assert_eq!(settle_winner(4, 5, 100, 100).unwrap(), (20, 0, 80));
-        assert_eq!(settle_winner(1_000_000, 100, 101_000_000, 100).unwrap(), (100_000_000, 1_000_000, 0));
-        assert_eq!(non_reveal_split(101_000_000, 100).unwrap(), (1_010_000, 99_990_000));
+        assert_eq!(
+            settle_winner(1_000_000, 100, 101_000_000, 100).unwrap(),
+            (100_000_000, 1_000_000, 0)
+        );
+        assert_eq!(
+            non_reveal_split(101_000_000, 100).unwrap(),
+            (1_010_000, 99_990_000)
+        );
     }
 
     proptest! {

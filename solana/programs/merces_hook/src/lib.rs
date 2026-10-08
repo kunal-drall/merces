@@ -1,13 +1,13 @@
-//! Merces Token-2022 transfer hook (SPEC §4.1, brief C10/D2).
+//! Merces Token-2022 transfer hook (SPEC v1.1 §4.1, brief C10/D2).
 //!
 //! Rule, evaluated on every transfer of a sealed-bid unit mint:
 //! 1. both token accounts must carry Token-2022's "transferring" flag;
-//! 2. the series is resolved from the mint through the registry's `MintLink`; curve-mode mints
-//!    are rejected;
-//! 3. if the source **or** destination is the series' window escrow (owned by the protocol's
-//!    `window_escrow_authority` PDA) the transfer is a window movement: the destination owner
-//!    must be allowlisted and under the wallet cap unless the destination is the escrow itself;
-//! 4. anything else is a direct wallet-to-wallet transfer and is always rejected.
+//! 2. curve-mode series are rejected;
+//! 3. if the **source** is the series' auction escrow or window escrow → allow (deliveries, fills
+//!    and returns: the protocol has already applied allowlist and cap rules);
+//! 4. else if the **destination** is the window escrow → allow only if the protocol's `EscrowArm`
+//!    for the mint is armed for exactly `(source_owner, amount)` (an armed `commit_ask`);
+//! 5. otherwise (wallet-to-wallet, or into the auction escrow) → reject `DirectTransferForbidden`.
 //!
 //! Burns through the permanent delegate never invoke the hook, so retirement, redemption and
 //! extinguishment burns can never be blocked here.
@@ -15,30 +15,28 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::spl_token_2022::extension::transfer_hook::TransferHookAccount;
-use anchor_spl::token_interface::spl_token_2022::extension::{
-    BaseStateWithExtensions, StateWithExtensions,
-};
+use anchor_spl::token_interface::spl_token_2022::extension::{BaseStateWithExtensions, StateWithExtensions};
 use anchor_spl::token_interface::spl_token_2022::state::Account as TokenAccountState;
 use anchor_spl::token_interface::{Mint, Token2022, TokenAccount};
-use merces_common::bps_of;
-use merces_onchain::seeds::{ALLOW, CONFIG, MINT_LINK, WINDOW_ESCROW};
-use merces_registry::state::{AllowlistEntry, MintLink, ProtocolConfig, Series, MODE_SEALED_BID};
+use merces_onchain::seeds::{CONFIG, ESCROW_ARM};
+use merces_registry::state::{ProtocolConfig, Series, MODE_SEALED_BID};
 use spl_discriminator::SplDiscriminate;
-use spl_tlv_account_resolution::{
-    account::ExtraAccountMeta, pubkey_data::PubkeyData, seeds::Seed, state::ExtraAccountMetaList,
-};
-use spl_transfer_hook_interface::instruction::{
-    ExecuteInstruction, InitializeExtraAccountMetaListInstruction,
-};
+use spl_tlv_account_resolution::{account::ExtraAccountMeta, seeds::Seed, state::ExtraAccountMetaList};
+use spl_transfer_hook_interface::instruction::{ExecuteInstruction, InitializeExtraAccountMetaListInstruction};
 
 declare_id!("2PuKMkGkGLCwsDMLCmm2bcbzjxtabvt9LVJni154ezRt");
 
 /// Seed of the extra-account-metas PDA, fixed by the transfer-hook interface.
 pub const EXTRA_ACCOUNT_METAS_SEED: &[u8] = b"extra-account-metas";
 
-/// Number of extra accounts appended to every `Execute` (SPEC §4.1 list plus the registry program
-/// needed to resolve its PDAs).
-pub const EXTRA_ACCOUNT_COUNT: usize = 6;
+/// Extra accounts appended to every `Execute`: ProtocolConfig, Series, the protocol program (needed
+/// to resolve the external PDA) and the `EscrowArm` PDA of the protocol program for this mint.
+pub const EXTRA_ACCOUNT_COUNT: usize = 4;
+
+/// Byte offsets inside the protocol's `EscrowArm` account (8-byte Anchor discriminator first).
+const ARM_OWNER_OFFSET: usize = 8;
+const ARM_UNITS_OFFSET: usize = 40;
+const ARM_MIN_LEN: usize = 48;
 
 #[error_code]
 pub enum HookError {
@@ -46,82 +44,36 @@ pub enum HookError {
     DirectTransferForbidden,
     #[msg("The hook was called outside of a Token-2022 transfer")]
     ProgramCalledOutsideOfTransfer,
-    #[msg("Destination owner is not allowlisted")]
-    DestinationNotAllowlisted,
-    #[msg("Destination balance would exceed the per-wallet cap")]
-    WalletCapExceeded,
+    #[msg("Deposit into the window escrow is not armed for this owner and amount")]
+    UnarmedEscrowDeposit,
     #[msg("Curve-mode series units are not governed by this hook")]
     CurveModeNoHook,
     #[msg("Series does not belong to this mint")]
     SeriesMintMismatch,
-    #[msg("Allowlist entry account is not the expected PDA")]
-    AllowlistEntryMismatch,
+    #[msg("EscrowArm account is not the protocol's PDA for this mint")]
+    EscrowArmMismatch,
     #[msg("Mint authority must sign extra-account-metas initialisation")]
     MintAuthorityMismatch,
     #[msg("Token account could not be read")]
     InvalidTokenAccount,
-    #[msg("Arithmetic overflow")]
-    MathOverflow,
+    #[msg("Extra account list does not match the mint's ExtraAccountMetaList")]
+    ExtraAccountsMismatch,
 }
 
-/// The extra account metas appended to `Execute`, in order (indices 5..=10 of the instruction).
-pub fn extra_account_metas() -> Result<Vec<ExtraAccountMeta>> {
+/// The extra account metas for a mint, in order (indices 5..=8 of the `Execute` instruction).
+pub fn extra_account_metas(series: &Pubkey, protocol_program: &Pubkey) -> Result<Vec<ExtraAccountMeta>> {
     let (config, _) = Pubkey::find_program_address(&[CONFIG], &merces_registry::ID);
     Ok(vec![
-        // 5: registry program (needed as the program for the external PDAs below)
-        ExtraAccountMeta::new_with_pubkey(&merces_registry::ID, false, false)?,
-        // 6: ProtocolConfig
+        // 5: ProtocolConfig
         ExtraAccountMeta::new_with_pubkey(&config, false, false)?,
-        // 7: MintLink = PDA(registry, [MINT_LINK, mint]) — mint is account index 1
+        // 6: Series (literal; the series PDA exists before the mint)
+        ExtraAccountMeta::new_with_pubkey(series, false, false)?,
+        // 7: merces_protocol program (the program of the external PDA below)
+        ExtraAccountMeta::new_with_pubkey(protocol_program, false, false)?,
+        // 8: EscrowArm = PDA(protocol_program, [ESCROW_ARM, mint]) — mint is account index 1
         ExtraAccountMeta::new_external_pda_with_seeds(
-            5,
-            &[
-                Seed::Literal {
-                    bytes: MINT_LINK.to_vec(),
-                },
-                Seed::AccountKey { index: 1 },
-            ],
-            false,
-            false,
-        )?,
-        // 8: Series = the pubkey stored at offset 8 of MintLink (after the discriminator)
-        ExtraAccountMeta::new_with_pubkey_data(
-            &PubkeyData::AccountData {
-                account_index: 7,
-                data_index: 8,
-            },
-            false,
-            false,
-        )?,
-        // 9: AllowlistEntry(source owner) = PDA(registry, [ALLOW, source.owner]) — owner at bytes 32..64 of account 0
-        ExtraAccountMeta::new_external_pda_with_seeds(
-            5,
-            &[
-                Seed::Literal {
-                    bytes: ALLOW.to_vec(),
-                },
-                Seed::AccountData {
-                    account_index: 0,
-                    data_index: 32,
-                    length: 32,
-                },
-            ],
-            false,
-            false,
-        )?,
-        // 10: AllowlistEntry(destination owner)
-        ExtraAccountMeta::new_external_pda_with_seeds(
-            5,
-            &[
-                Seed::Literal {
-                    bytes: ALLOW.to_vec(),
-                },
-                Seed::AccountData {
-                    account_index: 2,
-                    data_index: 32,
-                    length: 32,
-                },
-            ],
+            7,
+            &[Seed::Literal { bytes: ESCROW_ARM.to_vec() }, Seed::AccountKey { index: 1 }],
             false,
             false,
         )?,
@@ -134,17 +86,13 @@ pub mod merces_hook {
 
     /// Creates the `ExtraAccountMetaList` for a unit mint. The mint authority (the protocol's
     /// `auction_authority` PDA) must sign, so only `merces_protocol::open_raise` can call this
-    /// for a Merces mint.
+    /// for a Merces mint, and the registry must already map the series to the mint.
     #[instruction(discriminator = InitializeExtraAccountMetaListInstruction::SPL_DISCRIMINATOR_SLICE)]
-    pub fn initialize_extra_account_meta_list(
-        ctx: Context<InitializeExtraAccountMetaList>,
-    ) -> Result<()> {
+    pub fn initialize_extra_account_meta_list(ctx: Context<InitializeExtraAccountMetaList>) -> Result<()> {
         let authority: Option<Pubkey> = ctx.accounts.mint.mint_authority.into();
-        require!(
-            authority == Some(ctx.accounts.mint_authority.key()),
-            HookError::MintAuthorityMismatch
-        );
-        let metas = extra_account_metas()?;
+        require!(authority == Some(ctx.accounts.mint_authority.key()), HookError::MintAuthorityMismatch);
+        require_keys_eq!(ctx.accounts.series.unit_mint, ctx.accounts.mint.key(), HookError::SeriesMintMismatch);
+        let metas = extra_account_metas(&ctx.accounts.series.key(), &ctx.accounts.config.protocol_program)?;
         let mut data = ctx.accounts.extra_account_meta_list.try_borrow_mut_data()?;
         ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &metas)?;
         Ok(())
@@ -152,75 +100,64 @@ pub mod merces_hook {
 
     /// Called by Token-2022 on every transfer of the mint.
     #[instruction(discriminator = ExecuteInstruction::SPL_DISCRIMINATOR_SLICE)]
-    pub fn execute(ctx: Context<Execute>, _amount: u64) -> Result<()> {
+    pub fn execute(ctx: Context<Execute>, amount: u64) -> Result<()> {
         // 1. transferring flags
-        require!(
-            is_transferring(&ctx.accounts.source_token.to_account_info())?,
-            HookError::ProgramCalledOutsideOfTransfer
-        );
-        require!(
-            is_transferring(&ctx.accounts.destination_token.to_account_info())?,
-            HookError::ProgramCalledOutsideOfTransfer
-        );
+        require!(is_transferring(&ctx.accounts.source_token.to_account_info())?, HookError::ProgramCalledOutsideOfTransfer);
+        require!(is_transferring(&ctx.accounts.destination_token.to_account_info())?, HookError::ProgramCalledOutsideOfTransfer);
+        // the resolved extra accounts must be exactly the mint's list
+        {
+            let list = ctx.accounts.extra_account_meta_list.try_borrow_data()?;
+            let infos: Vec<AccountInfo> = ctx.accounts.to_account_infos();
+            let mut ix_data = ExecuteInstruction::SPL_DISCRIMINATOR_SLICE.to_vec();
+            ix_data.extend_from_slice(&amount.to_le_bytes());
+            ExtraAccountMetaList::check_account_infos::<ExecuteInstruction>(&infos, &ix_data, &crate::ID, &list)
+                .map_err(|_| HookError::ExtraAccountsMismatch)?;
+        }
         // 2. series by mint
         let series = &ctx.accounts.series;
-        require_keys_eq!(
-            series.unit_mint,
-            ctx.accounts.mint.key(),
-            HookError::SeriesMintMismatch
-        );
+        require_keys_eq!(series.unit_mint, ctx.accounts.mint.key(), HookError::SeriesMintMismatch);
         require!(series.mode == MODE_SEALED_BID, HookError::CurveModeNoHook);
 
-        // 3. window escrow movement?
-        let (escrow_authority, _) = Pubkey::find_program_address(
-            &[WINDOW_ESCROW, series.key().as_ref()],
-            &ctx.accounts.config.protocol_program,
-        );
-        let source_owner = ctx.accounts.source_token.owner;
-        let destination_owner = ctx.accounts.destination_token.owner;
-        if source_owner != escrow_authority && destination_owner != escrow_authority {
-            // 4. wallet-to-wallet
-            return Err(HookError::DirectTransferForbidden.into());
+        let source = ctx.accounts.source_token.key();
+        let destination = ctx.accounts.destination_token.key();
+        // 3. protocol escrow as the source: deliveries, fills, returns
+        if source == series.auction_escrow_ata || source == series.window_escrow_ata {
+            return Ok(());
         }
-        if destination_owner != escrow_authority {
-            // escrow → wallet: destination must be allowlisted and under the cap
+        // 4. armed deposit into the window escrow
+        if destination == series.window_escrow_ata {
+            let (armed_owner, armed_units) = read_arm(&ctx.accounts.escrow_arm, &ctx.accounts.config.protocol_program, &ctx.accounts.mint.key())?;
             require!(
-                allowlisted(&ctx.accounts.destination_allowlist, &destination_owner)?,
-                HookError::DestinationNotAllowlisted
+                armed_owner == ctx.accounts.source_token.owner && armed_units == amount && amount > 0,
+                HookError::UnarmedEscrowDeposit
             );
-            let cap = bps_of(ctx.accounts.mint.supply, series.wallet_cap_bps)
-                .map_err(|_| HookError::MathOverflow)?;
-            require!(
-                ctx.accounts.destination_token.amount <= cap,
-                HookError::WalletCapExceeded
-            );
+            return Ok(());
         }
-        Ok(())
+        // 5. everything else
+        Err(HookError::DirectTransferForbidden.into())
     }
 }
 
 fn is_transferring(acc: &AccountInfo) -> Result<bool> {
     let data = acc.try_borrow_data()?;
-    let state = StateWithExtensions::<TokenAccountState>::unpack(&data)
-        .map_err(|_| HookError::InvalidTokenAccount)?;
-    let ext = state
-        .get_extension::<TransferHookAccount>()
-        .map_err(|_| HookError::ProgramCalledOutsideOfTransfer)?;
+    let state = StateWithExtensions::<TokenAccountState>::unpack(&data).map_err(|_| HookError::InvalidTokenAccount)?;
+    let ext = state.get_extension::<TransferHookAccount>().map_err(|_| HookError::ProgramCalledOutsideOfTransfer)?;
     Ok(bool::from(ext.transferring))
 }
 
-/// `true` iff `entry` is the registry's `AllowlistEntry` PDA for `wallet`, exists, and is allowed.
-/// A missing account (never allowlisted) yields `false`.
-fn allowlisted(entry: &AccountInfo, wallet: &Pubkey) -> Result<bool> {
-    let (expected, _) =
-        Pubkey::find_program_address(&[ALLOW, wallet.as_ref()], &merces_registry::ID);
-    require_keys_eq!(*entry.key, expected, HookError::AllowlistEntryMismatch);
-    if entry.data_is_empty() || *entry.owner != merces_registry::ID {
-        return Ok(false);
-    }
-    let data = entry.try_borrow_data()?;
-    let parsed = AllowlistEntry::try_deserialize(&mut &data[..])?;
-    Ok(parsed.allowed && parsed.wallet == *wallet)
+/// Validates the `EscrowArm` PDA (owner = protocol program, seeds `[ESCROW_ARM, mint]`) and reads
+/// `(armed_owner, armed_units)`.
+fn read_arm(arm: &AccountInfo, protocol_program: &Pubkey, mint: &Pubkey) -> Result<(Pubkey, u64)> {
+    let (expected, _) = Pubkey::find_program_address(&[ESCROW_ARM, mint.as_ref()], protocol_program);
+    require_keys_eq!(*arm.key, expected, HookError::EscrowArmMismatch);
+    require_keys_eq!(*arm.owner, *protocol_program, HookError::EscrowArmMismatch);
+    let data = arm.try_borrow_data()?;
+    require!(data.len() >= ARM_MIN_LEN, HookError::EscrowArmMismatch);
+    let mut owner = [0u8; 32];
+    owner.copy_from_slice(&data[ARM_OWNER_OFFSET..ARM_OWNER_OFFSET + 32]);
+    let mut units = [0u8; 8];
+    units.copy_from_slice(&data[ARM_UNITS_OFFSET..ARM_UNITS_OFFSET + 8]);
+    Ok((Pubkey::new_from_array(owner), u64::from_le_bytes(units)))
 }
 
 #[derive(Accounts)]
@@ -239,6 +176,10 @@ pub struct InitializeExtraAccountMetaList<'info> {
     #[account(token::token_program = token_program)]
     pub mint: Box<InterfaceAccount<'info, Mint>>,
     pub mint_authority: Signer<'info>,
+    #[account(seeds = [CONFIG], bump = config.bump, seeds::program = merces_registry::ID)]
+    pub config: Box<Account<'info, ProtocolConfig>>,
+    /// The registry series that owns `mint` (`series.unit_mint == mint`, written by `mark_raise_opened`).
+    pub series: Box<Account<'info, Series>>,
     pub token_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
 }
@@ -253,20 +194,15 @@ pub struct Execute<'info> {
     pub destination_token: Box<InterfaceAccount<'info, TokenAccount>>,
     /// CHECK: the transfer authority; Token-2022 has already verified it.
     pub owner: UncheckedAccount<'info>,
-    /// CHECK: the ExtraAccountMetaList PDA; only its address is checked, Token-2022 read it.
+    /// CHECK: the ExtraAccountMetaList PDA; its contents are checked against the resolved accounts.
     #[account(seeds = [EXTRA_ACCOUNT_METAS_SEED, mint.key().as_ref()], bump)]
     pub extra_account_meta_list: UncheckedAccount<'info>,
-    /// CHECK: the registry program id (needed by Token-2022 to resolve external PDAs).
-    #[account(address = merces_registry::ID)]
-    pub registry_program: UncheckedAccount<'info>,
     #[account(seeds = [CONFIG], bump = config.bump, seeds::program = merces_registry::ID)]
     pub config: Box<Account<'info, ProtocolConfig>>,
-    #[account(seeds = [MINT_LINK, mint.key().as_ref()], bump = mint_link.bump, seeds::program = merces_registry::ID)]
-    pub mint_link: Box<Account<'info, MintLink>>,
-    #[account(address = mint_link.series @ HookError::SeriesMintMismatch)]
     pub series: Box<Account<'info, Series>>,
-    /// CHECK: registry `AllowlistEntry` PDA of the source owner; may not exist. Validated in `allowlisted`.
-    pub source_allowlist: UncheckedAccount<'info>,
-    /// CHECK: registry `AllowlistEntry` PDA of the destination owner; may not exist. Validated in `allowlisted`.
-    pub destination_allowlist: UncheckedAccount<'info>,
+    /// CHECK: the protocol program id, pinned to the registry configuration.
+    #[account(address = config.protocol_program @ HookError::EscrowArmMismatch)]
+    pub protocol_program: UncheckedAccount<'info>,
+    /// CHECK: the protocol's `EscrowArm` PDA for this mint; validated in `read_arm`.
+    pub escrow_arm: UncheckedAccount<'info>,
 }

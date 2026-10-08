@@ -12,7 +12,7 @@ pub struct ProtocolInitialized {
     pub chain_id: u64,
     pub domain: [u8; 32],
     pub protocol_program: Pubkey,
-    pub protocol_signer: Pubkey,
+    pub protocol_authority: Pubkey,
 }
 
 #[event]
@@ -62,6 +62,7 @@ pub struct AttestorRegistered {
 #[event]
 pub struct AttestorRevoked {
     pub addr: [u8; 20],
+    pub revoked_at: u64,
 }
 
 #[event]
@@ -72,6 +73,7 @@ pub struct VerifierKeyRegistered {
 #[event]
 pub struct VerifierKeyRevoked {
     pub addr: [u8; 20],
+    pub revoked_at: u64,
 }
 
 #[event]
@@ -80,6 +82,7 @@ pub struct FxPairSet {
     pub feed_id: [u8; 32],
     pub inverted: bool,
     pub crosscheck: Pubkey,
+    pub crosscheck_effective_period: u32,
     pub enabled: bool,
 }
 
@@ -152,6 +155,11 @@ pub struct TermsAmended {
 pub struct RaiseStateChanged {
     pub series: Pubkey,
     pub state: u8,
+}
+
+#[event]
+pub struct MintFinalized {
+    pub series: Pubkey,
 }
 
 #[event]

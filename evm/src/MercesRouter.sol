@@ -1,0 +1,188 @@
+// SPDX-License-Identifier: GPL-3.0-only
+pragma solidity ^0.8.30;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Create2} from "@openzeppelin/contracts/utils/Create2.sol";
+import {MercesUpgradeable} from "./base/MercesUpgradeable.sol";
+import {IMercesRouter} from "./interfaces/IMercesRouter.sol";
+import {IMercesIncome} from "./interfaces/IMercesIncome.sol";
+import {IMercesVault} from "./interfaces/IMercesVault.sol";
+import {MercesRouterReceiver} from "./MercesRouterReceiver.sol";
+import {MercesMath} from "./libraries/MercesMath.sol";
+import {MercesConstants as C} from "./libraries/MercesConstants.sol";
+import {Periods} from "./libraries/Periods.sol";
+import {ProtocolContracts, SeriesCore, Tier1Terms, TierFlags} from "./types/MercesTypes.sol";
+import "./types/MercesErrors.sol";
+
+/// @title MercesRouter
+/// @notice Tier-1 split router (D5, SPEC v1.1 §6.5). θ and r are the plaintext tier-1 terms stored in the
+/// registry at series creation (public by the issuer's choice, bound to the Poseidon(5) terms commitment).
+/// Income routed here before mint finalization waits in the receiving account; afterwards `route` / `sweep`
+/// pass income below θ to the issuer and send `r × units_outstanding` of the rest to the payout vault, which
+/// credits it against the quarter's proven payment. Period checkpoints (`ytd_at_end`) bind pure tier-1
+/// reports. Non-custodial: it holds funds only within a transaction.
+contract MercesRouter is MercesUpgradeable, IMercesRouter {
+    using SafeERC20 for IERC20;
+    using MercesMath for uint256;
+
+    /// @custom:storage-location erc7201:merces.storage.MercesRouter
+    struct RouterStorage {
+        address income;
+        mapping(uint256 => Router) routers;
+        mapping(uint256 => mapping(uint32 => Checkpoint)) checkpoints;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("merces.storage.MercesRouter")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant ROUTER_STORAGE = 0x8b2a4dd4a9fd50fdc6aebb8a35d4f4ec97cf4b2b7d0e2d3fcd2a2ad05d2ca700;
+
+    function _s() private pure returns (RouterStorage storage $) {
+        assembly ("memory-safe") {
+            $.slot := ROUTER_STORAGE
+        }
+    }
+
+    function initialize(address owner_, address registry_, address income_) external initializer {
+        __MercesUpgradeable_init(owner_, registry_);
+        if (income_ == address(0)) revert ZeroAddress();
+        _s().income = income_;
+        emit IncomeSet(income_);
+    }
+
+    // ---------------------------------------------------------------- receiver
+
+    /// @inheritdoc IMercesRouter
+    /// @dev Anyone may deploy the receiving account of a tier-1 series at its deterministic address.
+    function createRouterReceiver(uint256 seriesId) external override returns (address receiver) {
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
+        if (!TierFlags.has(core.tierFlags, 1)) revert NotTierOne();
+        Router storage r = _s().routers[seriesId];
+        if (r.receiverDeployed) return r.receiver;
+        receiver = address(new MercesRouterReceiver{salt: bytes32(seriesId)}(seriesId));
+        r.receiverDeployed = true;
+        r.receiver = receiver;
+        emit RouterReceiverCreated(seriesId, receiver);
+    }
+
+    /// @inheritdoc IMercesRouter
+    function routerReceiver(uint256 seriesId) public view override returns (address) {
+        Router storage r = _s().routers[seriesId];
+        if (r.receiverDeployed) return r.receiver;
+        bytes32 initHash = keccak256(abi.encodePacked(type(MercesRouterReceiver).creationCode, abi.encode(seriesId)));
+        return Create2.computeAddress(bytes32(seriesId), initHash, address(this));
+    }
+
+    // ---------------------------------------------------------------- routing (anyone)
+
+    /// @inheritdoc IMercesRouter
+    /// @dev Pulls `amount` from the caller and splits it.
+    function route(uint256 seriesId, uint64 amount) external override nonReentrant {
+        SeriesCore memory core = _routable(seriesId);
+        if (amount == 0) revert ZeroAmount();
+        IERC20(core.stablecoin).safeTransferFrom(msg.sender, address(this), amount);
+        _route(seriesId, core, amount);
+    }
+
+    /// @inheritdoc IMercesRouter
+    /// @dev Moves the receiving account's whole balance here and splits it.
+    function sweep(uint256 seriesId) external override nonReentrant {
+        SeriesCore memory core = _routable(seriesId);
+        Router storage r = _s().routers[seriesId];
+        if (!r.receiverDeployed) revert RouterNotConfigured();
+        IERC20 stable = IERC20(core.stablecoin);
+        uint256 bal = stable.balanceOf(r.receiver);
+        if (bal == 0) revert ZeroAmount();
+        uint64 amount = bal.toU64();
+        MercesRouterReceiver(r.receiver).forward(stable, amount);
+        _route(seriesId, core, amount);
+    }
+
+    function _routable(uint256 seriesId) internal view returns (SeriesCore memory core) {
+        core = registry().getSeriesCore(seriesId);
+        if (!TierFlags.has(core.tierFlags, 1)) revert NotTierOne();
+        if (!core.mintFinalized) revert MintNotFinalized();
+    }
+
+    /// @dev SPEC §6.5: close the periods since the last receipt, reset YTD at a year boundary, pass income below
+    /// θ through, route `min(above, mulDiv(above, r × units_outstanding, WAD))` to the vault.
+    function _route(uint256 seriesId, SeriesCore memory core, uint64 amount) internal {
+        Router storage r = _s().routers[seriesId];
+        uint32 pNow = Periods.periodOf(block.timestamp);
+        if (!r.hasReceipt || r.lastReceiptPeriod < pNow) {
+            _closeThrough(seriesId, r, Periods.periodOf(core.settlementTs), pNow - 1);
+        }
+        uint16 year = Periods.yearOf(pNow);
+        if (!r.hasReceipt || year != r.ytdYear) {
+            r.ytdYear = year;
+            r.ytdReceived = 0;
+        }
+        r.hasReceipt = true;
+        r.lastReceiptPeriod = pNow;
+
+        Tier1Terms memory t = registry().getTier1Terms(seriesId);
+        ProtocolContracts memory pc = _contracts();
+        uint256 units = core.terminalStatus != 0 ? 0 : IMercesVault(pc.vault).unitsOutstanding(seriesId);
+        uint256 below = t.theta > r.ytdReceived ? t.theta - r.ytdReceived : 0;
+        uint256 passA = MercesMath.min(amount, below);
+        uint256 above = amount - passA;
+        uint256 share = MercesMath.mulDiv(above, uint256(t.rWad) * units, C.WAD);
+        if (share > above) share = above;
+        r.ytdReceived = (uint256(r.ytdReceived) + amount).toU64();
+        uint64 passThrough = amount - uint64(share);
+        r.routedTotal += uint64(share);
+        r.passedThroughTotal += passThrough;
+
+        IERC20 stable = IERC20(core.stablecoin);
+        if (passThrough > 0) stable.safeTransfer(core.issuer, passThrough);
+        if (share > 0) {
+            stable.safeTransfer(pc.vault, share);
+            IMercesIncome(_s().income).receiveRouterShare(seriesId, uint64(share));
+        }
+        emit IncomeRouted(seriesId, amount, passThrough, uint64(share), r.ytdReceived);
+    }
+
+    /// @inheritdoc IMercesRouter
+    /// @dev Records the checkpoint for `period` (and any earlier missing ones) once the period has ended, so a
+    /// tier-1 report can be verified even when no receipt arrives in the following period.
+    function closeRouterPeriod(uint256 seriesId, uint32 period) external override {
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
+        if (!TierFlags.has(core.tierFlags, 1)) revert NotTierOne();
+        if (period >= Periods.periodOf(block.timestamp)) revert PeriodNotEndedYet(period);
+        _closeThrough(seriesId, _s().routers[seriesId], Periods.periodOf(core.settlementTs), period);
+    }
+
+    /// @dev Checkpoints every period in `(last_checkpoint, upTo]` (from the first period when none exists) with
+    /// the YTD total as of its end: the running total for periods in the last receipt's year, 0 otherwise.
+    /// Invariant: every period before the last receipt's period is checkpointed, so the value is always known.
+    function _closeThrough(uint256 seriesId, Router storage r, uint32 firstPeriod, uint32 upTo) internal {
+        uint32 q = r.hasCheckpoint ? r.lastCheckpointPeriod + 1 : firstPeriod;
+        if (upTo < q) return;
+        mapping(uint32 => Checkpoint) storage cps = _s().checkpoints[seriesId];
+        for (; q <= upTo; q++) {
+            uint64 v = (r.hasReceipt && Periods.yearOf(q) == r.ytdYear) ? r.ytdReceived : 0;
+            cps[q] = Checkpoint({set: true, ytdAtEnd: v});
+            emit RouterPeriodClosed(seriesId, q, v);
+        }
+        r.hasCheckpoint = true;
+        r.lastCheckpointPeriod = upTo;
+    }
+
+    // ---------------------------------------------------------------- views
+
+    function getRouter(uint256 seriesId) external view override returns (Router memory) {
+        return _s().routers[seriesId];
+    }
+
+    /// @inheritdoc IMercesRouter
+    function ytdAtEnd(uint256 seriesId, uint32 period) external view override returns (bool exists, uint64 ytd) {
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
+        if (core.settlementTs == 0) return (false, 0);
+        if (period < Periods.periodOf(core.settlementTs)) return (true, 0);
+        Checkpoint storage cp = _s().checkpoints[seriesId][period];
+        return (cp.set, cp.ytdAtEnd);
+    }
+
+    function income() external view override returns (address) {
+        return _s().income;
+    }
+}

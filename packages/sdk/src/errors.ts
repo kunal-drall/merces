@@ -58,7 +58,6 @@ export const ERRORS = {
   ExceedsProceeds: "released_total + amount > proceeds",
   // reports and payments
   TerminalStatus: "series status forbids the call: Retired/Extinguished for reports, any terminal status for redeem/pause/window (was SeriesTerminal)",
-  SeriesRetired: "reports are not accepted on a Retired series",
   WrongPeriod: "period is not the next expected period",
   ReportTooEarly: "now < period_end(period)",
   PaymentOutstanding: "the previous period's due amount is unpaid",

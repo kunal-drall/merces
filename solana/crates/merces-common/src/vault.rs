@@ -48,7 +48,9 @@ pub fn receive_capped(input: ReceiveInput) -> MathResult<ReceiveOutcome> {
     }
     let n = u128::from(input.units);
     let g = u128::from(input.gross);
-    let cap_wad = u128::from(input.cap_per_unit).checked_mul(WAD).ok_or(MathError::Overflow)?;
+    let cap_wad = u128::from(input.cap_per_unit)
+        .checked_mul(WAD)
+        .ok_or(MathError::Overflow)?;
     let cap_eff_wad = core::cmp::max(cap_wad, input.paid_per_unit_wad);
     let mut inc_wad = mul_div(g, WAD, n)?;
     let (accepted, refund, capped) = if add_u128(input.paid_per_unit_wad, inc_wad)? < cap_eff_wad {
@@ -57,10 +59,21 @@ pub fn receive_capped(input: ReceiveInput) -> MathResult<ReceiveOutcome> {
         let remaining_wad = sub_u128(cap_eff_wad, input.paid_per_unit_wad)?;
         let accepted = to_u64(mul_div(remaining_wad, n, WAD)?)?;
         inc_wad = mul_div(u128::from(accepted), WAD, n)?;
-        let refund = input.gross.checked_sub(accepted).ok_or(MathError::Overflow)?;
+        let refund = input
+            .gross
+            .checked_sub(accepted)
+            .ok_or(MathError::Overflow)?;
         (accepted, refund, true)
     };
-    distribute(input.units, input.carry_wad, input.fee_bps, accepted, refund, inc_wad, capped)
+    distribute(
+        input.units,
+        input.carry_wad,
+        input.fee_bps,
+        accepted,
+        refund,
+        inc_wad,
+        capped,
+    )
 }
 
 /// Final (extinguishment) distribution (SPEC §6.9): no cap, no fee.
@@ -71,7 +84,15 @@ pub fn receive_final(gross: u64, units: u64, carry_wad: u64) -> MathResult<Recei
     distribute(units, carry_wad, 0, gross, 0, 0, false)
 }
 
-fn distribute(units: u64, carry_wad: u64, fee_bps: u16, accepted: u64, refund: u64, inc_wad: u128, capped: bool) -> MathResult<ReceiveOutcome> {
+fn distribute(
+    units: u64,
+    carry_wad: u64,
+    fee_bps: u16,
+    accepted: u64,
+    refund: u64,
+    inc_wad: u128,
+    capped: bool,
+) -> MathResult<ReceiveOutcome> {
     let n = u128::from(units);
     let fee = bps_of(accepted, fee_bps)?;
     let net = accepted.checked_sub(fee).ok_or(MathError::Overflow)?;
@@ -102,12 +123,18 @@ pub fn holder_delta(acc_wad: u128, last_acc_wad: u128, weight: u64) -> MathResul
 
 /// `cap_per_unit = floor(cap_multiple_wad × P0 / WAD)`.
 pub fn cap_per_unit(cap_multiple_wad: u64, clearing_price: u64) -> MathResult<u64> {
-    to_u64(mul_div(u128::from(cap_multiple_wad), u128::from(clearing_price), WAD)?)
+    to_u64(mul_div(
+        u128::from(cap_multiple_wad),
+        u128::from(clearing_price),
+        WAD,
+    )?)
 }
 
 /// `cap_eff_wad − paid_per_unit_wad == 0` (a lowered cap already met): `retire_if_capped`.
 pub fn is_capped(cap_per_unit: u64, paid_per_unit_wad: u128) -> MathResult<bool> {
-    let cap_wad = u128::from(cap_per_unit).checked_mul(WAD).ok_or(MathError::Overflow)?;
+    let cap_wad = u128::from(cap_per_unit)
+        .checked_mul(WAD)
+        .ok_or(MathError::Overflow)?;
     Ok(paid_per_unit_wad >= cap_wad)
 }
 
@@ -165,11 +192,16 @@ mod tests {
         assert_eq!(out.refund, 10_000_000);
         assert_eq!(out.inc_wad, 100_000 * WAD);
         // exactly at cap also caps
-        let exact = receive_capped(inp(10_000_000, 100, 2_500_000, 2_400_000 * WAD, 0, 500)).unwrap();
+        let exact =
+            receive_capped(inp(10_000_000, 100, 2_500_000, 2_400_000 * WAD, 0, 500)).unwrap();
         assert!(exact.capped);
         assert_eq!(exact.refund, 0);
         // one below does not
-        assert!(!receive_capped(inp(9_999_999, 100, 2_500_000, 2_400_000 * WAD, 0, 500)).unwrap().capped);
+        assert!(
+            !receive_capped(inp(9_999_999, 100, 2_500_000, 2_400_000 * WAD, 0, 500))
+                .unwrap()
+                .capped
+        );
         // lowered cap below paid: effective cap = paid → accepted 0, full refund, capped
         let low = receive_capped(inp(5, 100, 1, 2_400_000 * WAD, 0, 500)).unwrap();
         assert!(low.capped);
@@ -183,12 +215,18 @@ mod tests {
     fn final_has_no_fee() {
         let out = receive_final(12_345, 10, 0).unwrap();
         assert_eq!(out.fee, 0);
-        assert_eq!(out.delta_acc_wad * 10 + u128::from(out.carry_wad_out), 12_345 * WAD);
+        assert_eq!(
+            out.delta_acc_wad * 10 + u128::from(out.carry_wad_out),
+            12_345 * WAD
+        );
     }
 
     #[test]
     fn zero_units_rejected() {
-        assert_eq!(receive_capped(inp(1, 0, 1, 0, 0, 0)), Err(MathError::InvalidInput));
+        assert_eq!(
+            receive_capped(inp(1, 0, 1, 0, 0, 0)),
+            Err(MathError::InvalidInput)
+        );
         assert_eq!(receive_final(1, 0, 0), Err(MathError::InvalidInput));
     }
 

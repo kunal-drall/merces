@@ -7,14 +7,13 @@ export const s04: Scenario = {
   async build() {
     const b = new ScenarioBuilder(
       "04_zero_quarters",
-      "Year-to-date method: a whole year of income below θ (four zero payments), then a year that crosses θ in Q3 (payments only for the increments); plus proof/attestation reverts (tampered public signal, wrong key type, disabled tier).",
+      "Year-to-date method: a whole year of income below θ (four zero payments), then a year that crosses θ in Q3 (payments only for the increments); plus proof/attestation reverts (tampered public signal, wrong prior commitment, wrong key type, disabled tier).",
     );
     await bootstrap(b, ["b1", "b2", "b3", "b4"]);
     await b.createSeries({ series: "S1", issuer: "issuer", plain: STD_PLAIN });
     await b.raise({ series: "S1", issuer: "issuer", openAt: ts(2026, 1, 5), bids: FOUR_BACKER_BIDS });
     b.expect("S1", "400 units at 105 USDC");
 
-    // 2026: every quarter below θ = 80,000
     const ytd2026: [number, bigint, [number, number, number]][] = [
       [Q(2026, 1), usdc(20_000), [2026, 4, 2]],
       [Q(2026, 2), usdc(40_000), [2026, 7, 2]],
@@ -28,14 +27,13 @@ export const s04: Scenario = {
     }
     b.expect("S1", "four zero reports: lastPaidPeriod 8107, nothing ever owed, vault 0, status OnTime");
 
-    // 2027: 25k, 70k, 100k (crosses θ), 140k
     b.at(ts(2027, 4, 2));
     await b.report({ series: "S1", period: Q(2027, 1), incomeYtd: usdc(25_000), tier: 2, note: "new year, prior = ZERO commitment" });
     b.at(ts(2027, 7, 2));
     await b.report({ series: "S1", period: Q(2027, 2), incomeYtd: usdc(70_000), tier: 2 });
     b.at(ts(2027, 10, 2));
-    // reverts first: tampered payment, wrong key type, disabled tier
-    await b.reportRevert({ series: "S1", period: Q(2027, 3), incomeYtd: usdc(100_000), tier: 2, tamperPaymentUsd: 0n, note: "honest proof for 800, claimed payment 0 → public signal mismatch → proof fails" }, "InvalidProof");
+    await b.reportRevert({ series: "S1", period: Q(2027, 3), incomeYtd: usdc(100_000), tier: 2, tamperPaymentUsd: 0n }, "InvalidProof", "honest proof for 800, claimed payment 0 → the public signal does not verify");
+    await b.reportRevert({ series: "S1", period: Q(2027, 3), incomeYtd: usdc(100_000), tier: 2, priorOverride: 12345n }, "InvalidProof", "prior commitment must chain to Q2's income commitment");
     await b.reportRevert({ series: "S1", period: Q(2027, 3), incomeYtd: usdc(100_000), tier: 2, attestation: "attestor1" }, "InvalidVerifierSignature", "tier 2 needs a report-verifier key, not an attestor");
     await b.reportRevert({ series: "S1", period: Q(2027, 3), incomeYtd: usdc(100_000), tier: 3 }, "TierNotEnabled", "series enables tier 2 only");
     await b.reportRevert({ series: "S1", period: Q(2027, 3), incomeYtd: usdc(100_000), tier: 2, actor: "b1" }, "NotIssuer");

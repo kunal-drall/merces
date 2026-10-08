@@ -77,28 +77,71 @@ impl Parameters {
     /// The first parameter outside its bounds, if any.
     pub fn first_violation(&self) -> Option<ParamField> {
         let r = |ok: bool, f: ParamField| if ok { None } else { Some(f) };
-        r((2_000_000_000_000_000_000..=3_000_000_000_000_000_000).contains(&self.cap_multiple_wad), ParamField::CapMultiple)
-            .or(r(self.hurdle_rate_wad <= 250_000_000_000_000_000, ParamField::HurdleRate))
-            .or(r((1..=20).contains(&self.payout_multiple_k), ParamField::PayoutMultiple))
-            .or(r(self.lockup_seconds <= 157_680_000, ParamField::Lockup))
-            .or(r((100..=10_000).contains(&self.wallet_cap_bps), ParamField::WalletCap))
-            .or(r(self.auction_fee_bps <= 1_000, ParamField::AuctionFee))
-            .or(r(self.payout_fee_bps <= 2_000, ParamField::PayoutFee))
-            .or(r(self.window_fee_bps <= 1_000, ParamField::WindowFee))
-            .or(r(self.non_reveal_charge_bps <= 1_000, ParamField::NonRevealCharge))
-            .or(r((HOUR..=30 * time::DAY).contains(&self.commit_duration), ParamField::CommitDuration))
-            .or(r((HOUR..=7 * time::DAY).contains(&self.reveal_duration), ParamField::RevealDuration))
-            .or(r((HOUR..=14 * time::DAY).contains(&self.window_commit_duration), ParamField::WindowCommitDuration))
-            .or(r((HOUR..=7 * time::DAY).contains(&self.window_reveal_duration), ParamField::WindowRevealDuration))
-            .or(r((5_000..=10_000).contains(&self.fx_min_coverage_bps), ParamField::FxMinCoverage))
-            .or(r((60..=86_400).contains(&self.fx_max_staleness_seconds), ParamField::FxMaxStaleness))
-            .or(r((1..=1_000).contains(&self.fx_max_conf_bps), ParamField::FxMaxConf))
-            .or(r((10..=5_000).contains(&self.fx_deviation_band_bps), ParamField::FxDeviationBand))
-            .or(r((2_592_000..=63_072_000).contains(&self.max_pause_seconds), ParamField::MaxPause))
-            .or(r(
-                (self.max_pause_seconds..=157_680_000).contains(&self.max_cumulative_pause_seconds),
-                ParamField::MaxCumulativePause,
-            ))
+        r(
+            (2_000_000_000_000_000_000..=3_000_000_000_000_000_000)
+                .contains(&self.cap_multiple_wad),
+            ParamField::CapMultiple,
+        )
+        .or(r(
+            self.hurdle_rate_wad <= 250_000_000_000_000_000,
+            ParamField::HurdleRate,
+        ))
+        .or(r(
+            (1..=20).contains(&self.payout_multiple_k),
+            ParamField::PayoutMultiple,
+        ))
+        .or(r(self.lockup_seconds <= 157_680_000, ParamField::Lockup))
+        .or(r(
+            (100..=10_000).contains(&self.wallet_cap_bps),
+            ParamField::WalletCap,
+        ))
+        .or(r(self.auction_fee_bps <= 1_000, ParamField::AuctionFee))
+        .or(r(self.payout_fee_bps <= 2_000, ParamField::PayoutFee))
+        .or(r(self.window_fee_bps <= 1_000, ParamField::WindowFee))
+        .or(r(
+            self.non_reveal_charge_bps <= 1_000,
+            ParamField::NonRevealCharge,
+        ))
+        .or(r(
+            (HOUR..=30 * time::DAY).contains(&self.commit_duration),
+            ParamField::CommitDuration,
+        ))
+        .or(r(
+            (HOUR..=7 * time::DAY).contains(&self.reveal_duration),
+            ParamField::RevealDuration,
+        ))
+        .or(r(
+            (HOUR..=14 * time::DAY).contains(&self.window_commit_duration),
+            ParamField::WindowCommitDuration,
+        ))
+        .or(r(
+            (HOUR..=7 * time::DAY).contains(&self.window_reveal_duration),
+            ParamField::WindowRevealDuration,
+        ))
+        .or(r(
+            (5_000..=10_000).contains(&self.fx_min_coverage_bps),
+            ParamField::FxMinCoverage,
+        ))
+        .or(r(
+            (60..=86_400).contains(&self.fx_max_staleness_seconds),
+            ParamField::FxMaxStaleness,
+        ))
+        .or(r(
+            (1..=1_000).contains(&self.fx_max_conf_bps),
+            ParamField::FxMaxConf,
+        ))
+        .or(r(
+            (10..=5_000).contains(&self.fx_deviation_band_bps),
+            ParamField::FxDeviationBand,
+        ))
+        .or(r(
+            (2_592_000..=63_072_000).contains(&self.max_pause_seconds),
+            ParamField::MaxPause,
+        ))
+        .or(r(
+            (self.max_pause_seconds..=157_680_000).contains(&self.max_cumulative_pause_seconds),
+            ParamField::MaxCumulativePause,
+        ))
     }
 }
 
@@ -146,7 +189,9 @@ pub fn validate_schedule(schedule: &[Tranche]) -> MathResult<()> {
             return Err(MathError::InvalidInput);
         }
         last_offset = t.at_offset_seconds;
-        sum = sum.checked_add(u64::from(t.bps)).ok_or(MathError::Overflow)?;
+        sum = sum
+            .checked_add(u64::from(t.bps))
+            .ok_or(MathError::Overflow)?;
     }
     if sum != crate::BPS_DENOMINATOR {
         return Err(MathError::InvalidInput);
@@ -242,11 +287,42 @@ mod tests {
     #[test]
     fn schedule_validation() {
         assert!(validate_schedule(&[]).is_err());
-        assert!(validate_schedule(&[Tranche { at_offset_seconds: 0, bps: 10_000 }]).is_ok());
-        assert!(validate_schedule(&[Tranche { at_offset_seconds: 0, bps: 5_000 }, Tranche { at_offset_seconds: 10, bps: 5_000 }]).is_ok());
-        assert!(validate_schedule(&[Tranche { at_offset_seconds: 0, bps: 9_999 }]).is_err());
-        assert!(validate_schedule(&[Tranche { at_offset_seconds: 10, bps: 5_000 }, Tranche { at_offset_seconds: 9, bps: 5_000 }]).is_err());
-        let many = [Tranche { at_offset_seconds: 0, bps: 400 }; 25];
+        assert!(validate_schedule(&[Tranche {
+            at_offset_seconds: 0,
+            bps: 10_000
+        }])
+        .is_ok());
+        assert!(validate_schedule(&[
+            Tranche {
+                at_offset_seconds: 0,
+                bps: 5_000
+            },
+            Tranche {
+                at_offset_seconds: 10,
+                bps: 5_000
+            }
+        ])
+        .is_ok());
+        assert!(validate_schedule(&[Tranche {
+            at_offset_seconds: 0,
+            bps: 9_999
+        }])
+        .is_err());
+        assert!(validate_schedule(&[
+            Tranche {
+                at_offset_seconds: 10,
+                bps: 5_000
+            },
+            Tranche {
+                at_offset_seconds: 9,
+                bps: 5_000
+            }
+        ])
+        .is_err());
+        let many = [Tranche {
+            at_offset_seconds: 0,
+            bps: 400,
+        }; 25];
         assert!(validate_schedule(&many).is_err());
     }
 

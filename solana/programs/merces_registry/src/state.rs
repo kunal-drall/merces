@@ -1,4 +1,4 @@
-//! Registry account layouts (SPEC §3.1).
+//! Registry account layouts (SPEC v1.1 §3.1).
 
 use anchor_lang::prelude::*;
 use merces_common::params::{Parameters, Tranche};
@@ -32,9 +32,7 @@ pub const TIER_FLAGS_MASK: u8 = 0x0F;
 pub const MAX_METADATA_URI: usize = 200;
 
 /// Borsh-serialisable mirror of [`Parameters`].
-#[derive(
-    AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default,
-)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default)]
 pub struct ParametersData {
     pub cap_multiple_wad: u64,
     pub hurdle_rate_wad: u64,
@@ -53,6 +51,8 @@ pub struct ParametersData {
     pub fx_max_staleness_seconds: u64,
     pub fx_max_conf_bps: u16,
     pub fx_deviation_band_bps: u16,
+    pub max_pause_seconds: u64,
+    pub max_cumulative_pause_seconds: u64,
 }
 
 impl From<ParametersData> for Parameters {
@@ -75,6 +75,8 @@ impl From<ParametersData> for Parameters {
             fx_max_staleness_seconds: p.fx_max_staleness_seconds,
             fx_max_conf_bps: p.fx_max_conf_bps,
             fx_deviation_band_bps: p.fx_deviation_band_bps,
+            max_pause_seconds: p.max_pause_seconds,
+            max_cumulative_pause_seconds: p.max_cumulative_pause_seconds,
         }
     }
 }
@@ -99,14 +101,14 @@ impl From<Parameters> for ParametersData {
             fx_max_staleness_seconds: p.fx_max_staleness_seconds,
             fx_max_conf_bps: p.fx_max_conf_bps,
             fx_deviation_band_bps: p.fx_deviation_band_bps,
+            max_pause_seconds: p.max_pause_seconds,
+            max_cumulative_pause_seconds: p.max_cumulative_pause_seconds,
         }
     }
 }
 
 /// Borsh-serialisable mirror of [`Tranche`].
-#[derive(
-    AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default,
-)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default)]
 pub struct TrancheData {
     pub at_offset_seconds: u64,
     pub bps: u16,
@@ -119,6 +121,18 @@ impl From<TrancheData> for Tranche {
             bps: t.bps,
         }
     }
+}
+
+/// Plaintext tier-1 terms (public by the issuer's choice, SPEC §6.5); checked against
+/// `terms_commitment` with Poseidon(5) at series creation.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default)]
+pub struct Tier1Terms {
+    pub theta: u64,
+    pub r_wad: u64,
+    pub currency_code: u32,
+    pub indexing_rule: u32,
+    /// The commitment salt as a 32-byte big-endian field element.
+    pub terms_salt: [u8; 32],
 }
 
 /// Global protocol configuration, one per deployment (`[CONFIG]`).
@@ -138,12 +152,15 @@ pub struct ProtocolConfig {
     /// Zero when unset (early draws off).
     pub early_draw_approver: Pubkey,
     pub defaults: ParametersData,
-    /// The `merces_protocol` program id.
+    /// The `merces_protocol` program id, fixed at init (no setter).
     pub protocol_program: Pubkey,
-    /// `find_program_address([REGISTRY_SIGNER], protocol_program)`: the only key allowed to call the
-    /// write interface (SPEC §3.3).
-    pub protocol_signer: Pubkey,
+    /// `find_program_address([REGISTRY_AUTHORITY], protocol_program)`: the only key allowed to call
+    /// the write interface (SPEC §3.2 `registry_authority`).
+    pub protocol_authority: Pubkey,
     pub series_count: u64,
+    /// Active key counts (a kind's last active key cannot be revoked, SPEC §1.4).
+    pub attestor_count: u32,
+    pub verifier_count: u32,
     pub bump: u8,
 }
 
@@ -168,12 +185,13 @@ pub struct AllowlistEntry {
     pub bump: u8,
 }
 
-/// Attestor key (`[ATTESTOR, addr20]`).
+/// Attestor key (`[ATTESTOR, addr20]`). `revoked_at == 0` while active (SPEC §1.4).
 #[account]
 #[derive(InitSpace)]
 pub struct AttestorKey {
     pub addr: [u8; 20],
     pub active: bool,
+    pub revoked_at: u64,
     pub bump: u8,
 }
 
@@ -183,10 +201,11 @@ pub struct AttestorKey {
 pub struct VerifierKey {
     pub addr: [u8; 20],
     pub active: bool,
+    pub revoked_at: u64,
     pub bump: u8,
 }
 
-/// FX pair configuration (`[FX, pair_id]`).
+/// FX pair configuration (`[FX, pair_id]`), `pair_id = keccak256(feed_id ‖ inverted_u8)`.
 #[account]
 #[derive(InitSpace)]
 pub struct FxPairConfig {
@@ -195,6 +214,8 @@ pub struct FxPairConfig {
     pub inverted: bool,
     /// Zero when no cross-check feed is configured (always zero on Solana in this version, A21).
     pub crosscheck: Pubkey,
+    /// Period from which the current `crosscheck` applies (SPEC §3.1).
+    pub crosscheck_effective_period: u32,
     pub enabled: bool,
     pub bump: u8,
 }
@@ -232,6 +253,8 @@ pub struct Series {
     pub window_commit_duration: u64,
     pub window_reveal_duration: u64,
     pub fx_min_coverage_bps: u16,
+    pub max_pause_seconds: u64,
+    pub max_cumulative_pause_seconds: u64,
     #[max_len(24)]
     pub release_schedule: Vec<TrancheData>,
     pub contract_hash: [u8; 32],
@@ -240,18 +263,23 @@ pub struct Series {
     pub issuer_accepts_public_price: bool,
     #[max_len(200)]
     pub metadata_uri: String,
+    /// Tier-1 plaintext terms (zero unless bit0 of `tier_flags` is set).
+    pub router_theta: u64,
+    pub router_r_wad: u64,
     // amendable (only via amend_terms)
     pub terms_commitment: [u8; 32],
     pub amendment_nonce: u64,
-    // raise results (written by the protocol via the write interface)
+    // raise results (written by the protocol via the write interface, once)
     pub raise_state: u8,
     pub opened_at: u64,
     pub settlement_ts: u64,
     pub units_sold: u64,
     pub clearing_price: u64,
-    /// `true` once the protocol has reported the exact `units_sold` (no further corrections).
-    pub units_sold_final: bool,
+    pub mint_finalized: bool,
     pub terminal_status: u8,
+    // protocol escrow token accounts for the unit mint (read by the hook)
+    pub auction_escrow_ata: Pubkey,
+    pub window_escrow_ata: Pubkey,
     // curve mode (SPEC §9; filled by `mark_curve_activated`, unused for sealed-bid series)
     pub dbc_config: Pubkey,
     pub dbc_pool: Pubkey,
@@ -263,13 +291,4 @@ impl Series {
     pub fn is_terminal(&self) -> bool {
         self.terminal_status != TERMINAL_NONE
     }
-}
-
-/// Unit mint → series lookup (`[MINT_LINK, unit_mint]`), created by `mark_raise_opened` so the
-/// transfer hook can resolve the series from the mint (SPEC §4.1).
-#[account]
-#[derive(InitSpace)]
-pub struct MintLink {
-    pub series: Pubkey,
-    pub bump: u8,
 }

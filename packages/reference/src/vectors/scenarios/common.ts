@@ -29,3 +29,18 @@ export const FOUR_BACKER_BIDS = [
   { actor: "b3", price: usdc(110), quantity: 100n },
   { actor: "b4", price: usdc(105), quantity: 100n },
 ];
+
+/** Quarterly report dates (second day after the quarter ends). */
+export const QUARTER_REPORT_DATES: Record<number, [number, number, number]> = {
+  0: [0, 4, 2],
+  1: [0, 7, 2],
+  2: [0, 10, 2],
+  3: [1, 1, 3],
+};
+
+export function reportDate(period: number): bigint {
+  const year = Math.floor(period / 4);
+  const q = period % 4;
+  const [dy, m, d] = QUARTER_REPORT_DATES[q]!;
+  return ts(year + dy, m, d);
+}

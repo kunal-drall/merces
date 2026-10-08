@@ -29,7 +29,7 @@ bytes (the build is checked in and the embedded proofs in `packages/vectors` dep
 
 | Item | Value |
 | --- | --- |
-| Constraints (snarkjs `r1cs info`) | **3,367** (2,271 non-linear + 1,096 linear; 3,358 wires) |
+| Constraints (snarkjs `r1cs info`) | **3,432** (SPEC v1.1 adds the `payment_usd < 2^64` check; v1.0 had 3,367) |
 | Public inputs | 6 |
 | Private inputs | 9 |
 | Powers of tau | 2^12 |
@@ -57,16 +57,19 @@ snarkjs `publicSignals`, of `Groth16Verifier.verifyProof(..., uint256[6] pubSign
 Private: `theta, r_wad, currency_code, indexing_rule, terms_salt, income_ytd, income_salt, prior_income_ytd, prior_salt`.
 
 Constraints: the three Poseidon openings; 64-bit range checks on `income_ytd`, `prior_income_ytd`,
-`theta`, `r_wad`, `units_outstanding`, `fx_avg_wad`; `income_ytd ≥ prior_income_ytd`;
+`theta`, `r_wad`, `units_outstanding`, `fx_avg_wad` and `payment_usd` (the last is new in SPEC v1.1 §8 so the
+stablecoin amount always fits `u64`); `income_ytd ≥ prior_income_ytd` (the high-water-mark rule of §1.5
+guarantees a witness exists);
 `excess(x) = x > theta ? x − theta : 0` (comparator + multiplication);
 `owed(x) = floor(r_wad × units_outstanding × excess(x) / WAD)` as witness quotient/remainder with
 `num === q × WAD + rem`, `rem < WAD` and `q < 2^128`; `owed(income) ≥ owed(prior)`;
 `payment_usd === floor((owed(income) − owed(prior)) × fx_avg_wad / WAD)` with the same technique.
 All products stay below 2^192 so nothing wraps the field.
 
-Units: `income_ytd` and `theta` are expressed in the income currency at the **stablecoin's decimals**
-(6 for USDC/USDG), so `fx_avg_wad` is a pure ratio and equals `1e18` when the income currency is the
-stablecoin itself (SPEC §6.2 step 4). See `docs/assumptions/track-a.md`.
+Income scale (SPEC v1.1 §1.5): `income_ytd` and `theta` are amounts in the income currency expressed with
+the **stablecoin's decimals** (6 for USDC/USDG), not ISO minor units; `fx_avg_wad` is the unit-less WAD
+ratio "stablecoin units per income-currency unit" and equals `1e18` when the income currency is the
+stablecoin itself (§6.2 step 4), so `payment_usd` is directly in stablecoin base units.
 
 ## Proof encoding
 
@@ -105,5 +108,6 @@ Valid witness proves and verifies with public signals in SPEC order; determinism
 proof, nonce → different proof); wrong `payment_usd` (±1, 0) rejected; wrong terms / income / prior
 commitments rejected; income below prior rejected; θ boundary (income = θ pays 0, income = θ + 1 pays
 `floor(r × units / WAD)`, claiming 0 then fails); the brief's four-quarter YTD example; FX floor
-rounding; 64-bit range checks; tampered public signals fail verification; EVM and Solana encodings
+rounding; 64-bit range checks including an honest witness whose `payment_usd` would be `2^80` (unprovable)
+and one just under `2^64` (proves); tampered public signals fail verification; EVM and Solana encodings
 (including the on-curve check of the negated `pi_a`).

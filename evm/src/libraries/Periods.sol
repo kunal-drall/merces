@@ -64,6 +64,19 @@ library Periods {
         return (periodEnd(pid) - periodStart(pid)) / uint64(DAY);
     }
 
+    /// @dev Monday–Friday civil days of the period (SPEC §6.6 trading-day coverage). 1970-01-01 was a
+    /// Thursday, so `weekday(d) = (d + 4) % 7` with 0 = Sunday.
+    function tradingDaysInPeriod(uint32 pid) internal pure returns (uint64 count) {
+        uint256 start = periodStart(pid) / DAY;
+        uint256 n = periodEnd(pid) / DAY - start;
+        count = uint64((n / 7) * 5);
+        uint256 rem = n % 7;
+        for (uint256 i = 0; i < rem; i++) {
+            uint256 wd = (start + n - rem + i + 4) % 7;
+            if (wd != 0 && wd != 6) count += 1;
+        }
+    }
+
     /// @dev Civil year of a timestamp.
     function civilYear(uint256 timestamp) internal pure returns (uint16) {
         (uint256 y,,) = civilFromDays(timestamp / DAY);

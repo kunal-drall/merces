@@ -110,6 +110,8 @@ struct SeriesTerms {
     uint64 revealDuration;
     uint64 windowCommitDuration;
     uint64 windowRevealDuration;
+    uint64 maxPauseSeconds;
+    uint64 maxCumulativePauseSeconds;
 }
 
 /// @notice Identity, raise results and amendable fields of a series.

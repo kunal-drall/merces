@@ -123,8 +123,15 @@ pub fn classify(side: u8, price: u64, clearing_price: u64, branch: Branch) -> Fi
 }
 
 /// Buyer money movement: `(cost, fee, refund)`.
-pub fn settle_buyer(clearing_price: u64, fill: u64, escrow: u64, window_fee_bps: u16) -> MathResult<(u64, u64, u64)> {
-    let cost = clearing_price.checked_mul(fill).ok_or(MathError::Overflow)?;
+pub fn settle_buyer(
+    clearing_price: u64,
+    fill: u64,
+    escrow: u64,
+    window_fee_bps: u16,
+) -> MathResult<(u64, u64, u64)> {
+    let cost = clearing_price
+        .checked_mul(fill)
+        .ok_or(MathError::Overflow)?;
     let fee = bps_of(cost, window_fee_bps)?;
     let spent = cost.checked_add(fee).ok_or(MathError::Overflow)?;
     let refund = escrow.checked_sub(spent).ok_or(MathError::Overflow)?;
@@ -133,7 +140,14 @@ pub fn settle_buyer(clearing_price: u64, fill: u64, escrow: u64, window_fee_bps:
 
 /// Bid reveal validity: `price ≥ 1`, `quantity ≥ 1`, escrow covers `p × q × (1 + fee)`, and
 /// `balance + quantity ≤ wallet_cap_units`.
-pub fn bid_is_valid(price: u64, quantity: u64, escrow: u64, window_fee_bps: u16, wallet_cap_units: u64, balance: u64) -> bool {
+pub fn bid_is_valid(
+    price: u64,
+    quantity: u64,
+    escrow: u64,
+    window_fee_bps: u16,
+    wallet_cap_units: u64,
+    balance: u64,
+) -> bool {
     if price == 0 || quantity == 0 {
         return false;
     }
@@ -161,45 +175,131 @@ mod tests {
     #[test]
     fn supply_limited() {
         // asks: 10 @ 9, 5 @ 10 ; bids: 8 @ 11, 10 @ 10 → p* = 10: S = 15, D = 18, d_above = 8 < 15 ≤ 18
-        let t = WindowTally { d_above: 8, d_at: 10, s_below: 10, s_at: 5, max_bid: 11, min_ask: 9, valid_count: 4 };
+        let t = WindowTally {
+            d_above: 8,
+            d_at: 10,
+            s_below: 10,
+            s_at: 5,
+            max_bid: 11,
+            min_ask: 9,
+            valid_count: 4,
+        };
         assert_eq!(
             check_window_clearing(&t).unwrap(),
-            Ok(WindowClearing { branch: Branch::SupplyLimited, matched_units: 15, marginal_remaining: 7 })
+            Ok(WindowClearing {
+                branch: Branch::SupplyLimited,
+                matched_units: 15,
+                marginal_remaining: 7
+            })
         );
-        assert_eq!(classify(SIDE_BID, 11, 10, Branch::SupplyLimited), FillClass::Full);
-        assert_eq!(classify(SIDE_BID, 10, 10, Branch::SupplyLimited), FillClass::Marginal);
-        assert_eq!(classify(SIDE_BID, 9, 10, Branch::SupplyLimited), FillClass::Losing);
-        assert_eq!(classify(SIDE_ASK, 10, 10, Branch::SupplyLimited), FillClass::Full);
-        assert_eq!(classify(SIDE_ASK, 11, 10, Branch::SupplyLimited), FillClass::Losing);
+        assert_eq!(
+            classify(SIDE_BID, 11, 10, Branch::SupplyLimited),
+            FillClass::Full
+        );
+        assert_eq!(
+            classify(SIDE_BID, 10, 10, Branch::SupplyLimited),
+            FillClass::Marginal
+        );
+        assert_eq!(
+            classify(SIDE_BID, 9, 10, Branch::SupplyLimited),
+            FillClass::Losing
+        );
+        assert_eq!(
+            classify(SIDE_ASK, 10, 10, Branch::SupplyLimited),
+            FillClass::Full
+        );
+        assert_eq!(
+            classify(SIDE_ASK, 11, 10, Branch::SupplyLimited),
+            FillClass::Losing
+        );
     }
 
     #[test]
     fn demand_limited() {
         // asks 8 × 5 (at 5), bid 10 × 1 → p* = 5: D = 1, S = 8, s_below = 0 ≤ 1 < 8
-        let t = WindowTally { d_above: 1, d_at: 0, s_below: 0, s_at: 8, max_bid: 10, min_ask: 5, valid_count: 2 };
+        let t = WindowTally {
+            d_above: 1,
+            d_at: 0,
+            s_below: 0,
+            s_at: 8,
+            max_bid: 10,
+            min_ask: 5,
+            valid_count: 2,
+        };
         assert_eq!(
             check_window_clearing(&t).unwrap(),
-            Ok(WindowClearing { branch: Branch::DemandLimited, matched_units: 1, marginal_remaining: 1 })
+            Ok(WindowClearing {
+                branch: Branch::DemandLimited,
+                matched_units: 1,
+                marginal_remaining: 1
+            })
         );
-        assert_eq!(classify(SIDE_ASK, 5, 5, Branch::DemandLimited), FillClass::Marginal);
-        assert_eq!(classify(SIDE_ASK, 4, 5, Branch::DemandLimited), FillClass::Full);
-        assert_eq!(classify(SIDE_BID, 5, 5, Branch::DemandLimited), FillClass::Full);
-        assert_eq!(classify(SIDE_BID, 4, 5, Branch::DemandLimited), FillClass::Losing);
+        assert_eq!(
+            classify(SIDE_ASK, 5, 5, Branch::DemandLimited),
+            FillClass::Marginal
+        );
+        assert_eq!(
+            classify(SIDE_ASK, 4, 5, Branch::DemandLimited),
+            FillClass::Full
+        );
+        assert_eq!(
+            classify(SIDE_BID, 5, 5, Branch::DemandLimited),
+            FillClass::Full
+        );
+        assert_eq!(
+            classify(SIDE_BID, 4, 5, Branch::DemandLimited),
+            FillClass::Losing
+        );
     }
 
     #[test]
     fn rejections() {
-        let nm = WindowTally { max_bid: 8, min_ask: 9, valid_count: 2, ..Default::default() };
+        let nm = WindowTally {
+            max_bid: 8,
+            min_ask: 9,
+            valid_count: 2,
+            ..Default::default()
+        };
         assert!(no_match_is_valid(&nm));
         assert!(no_match_is_valid(&WindowTally::default()));
-        let crossing = WindowTally { d_above: 8, d_at: 10, s_below: 10, s_at: 5, max_bid: 11, min_ask: 9, valid_count: 4 };
+        let crossing = WindowTally {
+            d_above: 8,
+            d_at: 10,
+            s_below: 10,
+            s_at: 5,
+            max_bid: 11,
+            min_ask: 9,
+            valid_count: 4,
+        };
         assert!(!no_match_is_valid(&crossing));
         // price not revealed
-        let t = WindowTally { d_above: 5, d_at: 0, s_below: 5, s_at: 0, max_bid: 9, min_ask: 1, valid_count: 2 };
-        assert_eq!(check_window_clearing(&t).unwrap(), Err(WindowReject::PriceNotRevealed));
+        let t = WindowTally {
+            d_above: 5,
+            d_at: 0,
+            s_below: 5,
+            s_at: 0,
+            max_bid: 9,
+            min_ask: 1,
+            valid_count: 2,
+        };
+        assert_eq!(
+            check_window_clearing(&t).unwrap(),
+            Err(WindowReject::PriceNotRevealed)
+        );
         // no crossing: d_above == S with nothing marginal at p* on the demand side and D > S... S=5,D=5,d_above=5 → A fails (d_above<S), B fails (D<S)
-        let t = WindowTally { d_above: 5, d_at: 0, s_below: 0, s_at: 5, max_bid: 9, min_ask: 5, valid_count: 2 };
-        assert_eq!(check_window_clearing(&t).unwrap(), Err(WindowReject::NoCrossing));
+        let t = WindowTally {
+            d_above: 5,
+            d_at: 0,
+            s_below: 0,
+            s_at: 5,
+            max_bid: 9,
+            min_ask: 5,
+            valid_count: 2,
+        };
+        assert_eq!(
+            check_window_clearing(&t).unwrap(),
+            Err(WindowReject::NoCrossing)
+        );
     }
 
     #[test]
@@ -211,7 +311,10 @@ mod tests {
         assert!(!bid_is_valid(0, 5, 100, 100, 10, 0));
         assert!(ask_is_valid(1, 1, 1));
         assert!(!ask_is_valid(1, 2, 1));
-        assert_eq!(settle_buyer(1_000_000, 7, 7_070_000, 100).unwrap(), (7_000_000, 70_000, 0));
+        assert_eq!(
+            settle_buyer(1_000_000, 7, 7_070_000, 100).unwrap(),
+            (7_000_000, 70_000, 0)
+        );
     }
 
     proptest! {

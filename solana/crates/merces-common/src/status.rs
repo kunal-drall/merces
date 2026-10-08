@@ -7,7 +7,7 @@ use crate::{
     mul_div,
     params::{FORMAL_NOTICE_DAYS, GRACE_DAYS, REPORT_DUE_DAYS, TRUEUP_DAYS},
     time::{period_end, DAY},
-    to_u64, MathError, MathResult, WAD,
+    to_u64, MathResult, WAD,
 };
 
 /// `SeriesStatus` (SPEC §1.7).
@@ -68,7 +68,7 @@ pub fn paused_within(pauses: &[Pause], a: u64, b: u64, now: u64) -> u64 {
         let lo = core::cmp::max(p.start, a);
         let hi = core::cmp::min(end, b);
         if hi > lo {
-            total = total.saturating_add(hi - lo);
+            total = total.saturating_add(hi.saturating_sub(lo));
         }
     }
     total
@@ -79,12 +79,15 @@ pub fn unpaused(pauses: &[Pause], a: u64, b: u64, now: u64) -> u64 {
     if b <= a {
         return 0;
     }
-    (b - a).saturating_sub(paused_within(pauses, a, b, now))
+    b.saturating_sub(a)
+        .saturating_sub(paused_within(pauses, a, b, now))
 }
 
 /// An open pause exists with `start ≤ now < end`.
 pub fn is_paused(pauses: &[Pause], now: u64) -> bool {
-    pauses.iter().any(|p| p.start != 0 && p.start <= now && now < p.end)
+    pauses
+        .iter()
+        .any(|p| p.start != 0 && p.start <= now && now < p.end)
 }
 
 /// `countdown(p, now) = unpaused(period_end(p), now)`.
@@ -134,7 +137,8 @@ pub fn is_late_underlying(inp: &StatusInputs, now: u64) -> MathResult<bool> {
     if inp.stored.is_terminal() {
         return Ok(false);
     }
-    Ok(trueup_overdue(inp, now) || countdown(inp.pauses, inp.earliest_unpaid_period, now)? > GRACE_S)
+    Ok(trueup_overdue(inp, now)
+        || countdown(inp.pauses, inp.earliest_unpaid_period, now)? > GRACE_S)
 }
 
 /// `max(0, floor((countdown − grace_s) / DAY))`.
@@ -184,15 +188,34 @@ mod tests {
         let p = 8104;
         let end = period_end(p).unwrap();
         let i = inputs(p, &[]);
-        assert_eq!(derive_status(&i, period_start(p).unwrap()).unwrap(), SeriesStatus::OnTime);
-        assert_eq!(derive_status(&i, end + 30 * DAY).unwrap(), SeriesStatus::OnTime);
-        assert_eq!(derive_status(&i, end + 30 * DAY + 1).unwrap(), SeriesStatus::InGrace);
-        assert_eq!(derive_status(&i, end + 45 * DAY).unwrap(), SeriesStatus::InGrace);
-        assert_eq!(derive_status(&i, end + 45 * DAY + 1).unwrap(), SeriesStatus::Late);
+        assert_eq!(
+            derive_status(&i, period_start(p).unwrap()).unwrap(),
+            SeriesStatus::OnTime
+        );
+        assert_eq!(
+            derive_status(&i, end + 30 * DAY).unwrap(),
+            SeriesStatus::OnTime
+        );
+        assert_eq!(
+            derive_status(&i, end + 30 * DAY + 1).unwrap(),
+            SeriesStatus::InGrace
+        );
+        assert_eq!(
+            derive_status(&i, end + 45 * DAY).unwrap(),
+            SeriesStatus::InGrace
+        );
+        assert_eq!(
+            derive_status(&i, end + 45 * DAY + 1).unwrap(),
+            SeriesStatus::Late
+        );
         assert!(is_late_underlying(&i, end + 45 * DAY + 1).unwrap());
         assert!(!is_late_underlying(&i, end + 45 * DAY).unwrap());
-        assert!(formal_notice_due(countdown(&[], p, end + 90 * DAY).unwrap()));
-        assert!(!formal_notice_due(countdown(&[], p, end + 90 * DAY - 1).unwrap()));
+        assert!(formal_notice_due(
+            countdown(&[], p, end + 90 * DAY).unwrap()
+        ));
+        assert!(!formal_notice_due(
+            countdown(&[], p, end + 90 * DAY - 1).unwrap()
+        ));
     }
 
     #[test]
@@ -205,20 +228,38 @@ mod tests {
             end: end + 50 * DAY,
         }];
         let i = inputs(p, &pauses);
-        assert_eq!(derive_status(&i, end + 25 * DAY).unwrap(), SeriesStatus::Paused);
+        assert_eq!(
+            derive_status(&i, end + 25 * DAY).unwrap(),
+            SeriesStatus::Paused
+        );
         // countdown at end + 50 d = 50 − 30 = 20 d → OnTime
         assert_eq!(countdown(&pauses, p, end + 50 * DAY).unwrap(), 20 * DAY);
-        assert_eq!(derive_status(&i, end + 60 * DAY).unwrap(), SeriesStatus::OnTime);
-        assert_eq!(derive_status(&i, end + 60 * DAY + 1).unwrap(), SeriesStatus::InGrace);
-        assert_eq!(derive_status(&i, end + 75 * DAY + 1).unwrap(), SeriesStatus::Late);
+        assert_eq!(
+            derive_status(&i, end + 60 * DAY).unwrap(),
+            SeriesStatus::OnTime
+        );
+        assert_eq!(
+            derive_status(&i, end + 60 * DAY + 1).unwrap(),
+            SeriesStatus::InGrace
+        );
+        assert_eq!(
+            derive_status(&i, end + 75 * DAY + 1).unwrap(),
+            SeriesStatus::Late
+        );
         // a later obligation that starts after the pause is unaffected
-        assert_eq!(countdown(&pauses, p + 1, period_end(p + 1).unwrap() + 10 * DAY).unwrap(), 10 * DAY);
+        assert_eq!(
+            countdown(&pauses, p + 1, period_end(p + 1).unwrap() + 10 * DAY).unwrap(),
+            10 * DAY
+        );
         // open pause clipped at now
         let open = [Pause {
             start: end + 20 * DAY,
             end: end + 400 * DAY,
         }];
-        assert_eq!(paused_within(&open, end, end + 30 * DAY, end + 30 * DAY), 10 * DAY);
+        assert_eq!(
+            paused_within(&open, end, end + 30 * DAY, end + 30 * DAY),
+            10 * DAY
+        );
     }
 
     #[test]
@@ -231,7 +272,10 @@ mod tests {
         }];
         let i = inputs(p, &pauses);
         // already Late when the pause starts (45 d grace)
-        assert_eq!(derive_status(&i, end + 60 * DAY).unwrap(), SeriesStatus::Paused);
+        assert_eq!(
+            derive_status(&i, end + 60 * DAY).unwrap(),
+            SeriesStatus::Paused
+        );
         assert!(is_late_underlying(&i, end + 60 * DAY).unwrap());
     }
 
@@ -239,11 +283,18 @@ mod tests {
     fn trueup_visible_to_status() {
         let p = 8104;
         let end = period_end(p).unwrap();
-        let mut i = inputs(p, &[]);
+        // the next report is not yet due (its period ends 91 days later)
+        let mut i = inputs(p + 1, &[]);
         i.trueup_due = 1;
         i.trueup_attested_at = end;
-        assert_eq!(derive_status(&i, end + 60 * DAY).unwrap(), SeriesStatus::OnTime);
-        assert_eq!(derive_status(&i, end + 60 * DAY + 1).unwrap(), SeriesStatus::Late);
+        assert_eq!(
+            derive_status(&i, end + 60 * DAY).unwrap(),
+            SeriesStatus::OnTime
+        );
+        assert_eq!(
+            derive_status(&i, end + 60 * DAY + 1).unwrap(),
+            SeriesStatus::Late
+        );
         assert_eq!(trueup_late_days(&[], end, end + 62 * DAY), 2);
         assert!(trueup_notice_due(&[], end, end + 105 * DAY));
         assert!(!trueup_notice_due(&[], end, end + 105 * DAY - 1));
@@ -252,7 +303,10 @@ mod tests {
     #[test]
     fn accrual_nesting() {
         // mulDiv(mulDiv(1_000_000, 0.08e18, WAD), 73, 365) = mulDiv(80_000, 73, 365) = 16_000
-        assert_eq!(late_accrual(1_000_000, 80_000_000_000_000_000, 73).unwrap(), 16_000);
+        assert_eq!(
+            late_accrual(1_000_000, 80_000_000_000_000_000, 73).unwrap(),
+            16_000
+        );
         // rounding point: floor(floor(999 × 0.08) × 1 / 365) = floor(79 / 365) = 0
         assert_eq!(late_accrual(999, 80_000_000_000_000_000, 1).unwrap(), 0);
         assert_eq!(late_days_from_countdown(GRACE_S + 2 * DAY + 5), 2);
@@ -263,6 +317,9 @@ mod tests {
     fn terminal_is_sticky() {
         let mut i = inputs(8104, &[]);
         i.stored = SeriesStatus::Retired;
-        assert_eq!(derive_status(&i, u64::MAX / 2).unwrap(), SeriesStatus::Retired);
+        assert_eq!(
+            derive_status(&i, u64::MAX / 2).unwrap(),
+            SeriesStatus::Retired
+        );
     }
 }

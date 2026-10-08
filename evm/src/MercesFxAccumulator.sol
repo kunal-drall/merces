@@ -13,7 +13,7 @@ import "./types/MercesErrors.sol";
 
 /// @title MercesFxAccumulator
 /// @notice Daily Pyth FX snapshots per currency pair with period checkpoints, Chainlink cross-check and quarter
-/// averages (brief C9, SPEC §6.6). Permissionless keepers call `snapshot` once per UTC day; `MercesIncome`
+/// averages (brief C9, SPEC v1.1 §6.6). Permissionless keepers call `snapshot` once per UTC day; `MercesIncome`
 /// reads `quarterAverage` when a report is submitted. Pair configuration (feed id, inversion, cross-check feed)
 /// lives in the registry; staleness, confidence, coverage and deviation parameters are the protocol defaults.
 contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
@@ -81,7 +81,7 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
             cp.sumWad = st.sumWad;
             cp.count = st.count;
         }
-        if (cfg.crosscheck != address(0)) {
+        if (cfg.crosscheck != address(0) && pid >= cfg.crosscheckEffectivePeriod) {
             (bool fresh, uint256 clWad) = _chainlink(cfg.crosscheck, p.fxMaxStalenessSeconds);
             if (!fresh || _deviates(rateWad, clWad, p.fxDeviationBandBps)) {
                 cp.flagged = true;
@@ -109,12 +109,11 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
         return rate.toU64();
     }
 
-    /// @dev `rate_wad = price × 10^(18 + expo)` (floor when the exponent is below −18).
+    /// @dev SPEC §6.6 step 2: `expo ≤ 0` → `price × 10^(18 + expo)` (requires `expo ≥ −18`), `expo > 0` →
+    /// `price × 10^18 × 10^expo`.
     function _normalize(uint256 price, int32 expo) internal pure returns (uint256) {
-        int256 e = 18 + int256(expo);
-        if (e > 58 || e < -40) revert InvalidPythPrice();
-        if (e >= 0) return price * 10 ** uint256(e);
-        return price / 10 ** uint256(-e);
+        if (expo < -18 || expo > 40) revert InvalidPythPrice();
+        return price * 10 ** uint256(int256(18) + int256(expo));
     }
 
     function _chainlink(address agg, uint64 staleness) internal view returns (bool fresh, uint256 clWad) {
@@ -133,17 +132,33 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
     }
 
     /// @inheritdoc IMercesFxAccumulator
-    /// @dev Checkpoints `p` and `p+1` must exist; `n = count_{p+1} − count_p`; `ok` needs coverage
-    /// `n × 10000 ≥ days_in_period(p) × min_coverage_bps` and no deviation flag on `p`.
+    /// @dev SPEC §6.6 `quarter_average`: the start is `checkpoints[p]`; the end is `checkpoints[p+1]` when present,
+    /// else the live totals once `p` has ended and no snapshot has been taken in `p+1` yet (they are then exactly
+    /// the end-of-`p` totals); otherwise `NeedsFallback`. `ok` needs trading-day coverage
+    /// `n × 10000 ≥ trading_days_in_period(p) × min_coverage_bps` and no deviation flag on `p`.
     function quarterAverage(bytes32 pairId, uint32 period) external view override returns (bool ok, uint64 avgWad) {
         FxCheckpoint storage a = _s().checkpoints[pairId][period];
+        if (!a.exists) return (false, 0);
         FxCheckpoint storage b = _s().checkpoints[pairId][period + 1];
-        if (!a.exists || !b.exists) return (false, 0);
-        uint256 n = b.count - a.count;
+        uint256 sumEnd;
+        uint256 countEnd;
+        if (b.exists) {
+            sumEnd = b.sumWad;
+            countEnd = b.count;
+        } else {
+            FxPairState storage st = _s().pairs[pairId];
+            if (
+                block.timestamp < Periods.periodEnd(period)
+                    || uint256(st.lastDay) * C.DAY >= Periods.periodStart(period + 1)
+            ) return (false, 0);
+            sumEnd = st.sumWad;
+            countEnd = st.count;
+        }
+        uint256 n = countEnd - a.count;
         if (n == 0) return (false, 0);
-        avgWad = ((b.sumWad - a.sumWad) / n).toU64();
+        avgWad = ((sumEnd - a.sumWad) / n).toU64();
         uint16 minCoverage = registry().getDefaults().fxMinCoverageBps;
-        ok = n * C.BPS >= uint256(Periods.daysInPeriod(period)) * minCoverage && !a.flagged;
+        ok = n * C.BPS >= uint256(Periods.tradingDaysInPeriod(period)) * minCoverage && !a.flagged;
     }
 
     function getFxPair(bytes32 pairId) external view override returns (FxPairState memory) {

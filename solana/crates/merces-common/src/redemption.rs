@@ -1,19 +1,66 @@
-//! Redemption formula price (SPEC §6.7, brief C7).
+//! Redemption formula price (SPEC v1.1 §6.7, brief C7).
 
-use crate::{
-    div_ceil, mul_div, params::MAX_YEAR_BUCKETS, time::YEAR, to_u64, MathError, MathResult, WAD,
-};
+use crate::{div_ceil, mul_div, time::YEAR, to_u64, MathError, MathResult, WAD};
+
+/// One slot of the tagged `year_gross` ring (SPEC §6.3): gross paid per unit (WAD) in settlement
+/// year `year`. A slot whose tag does not match reads as 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct YearGross {
+    pub year: u32,
+    pub gross_wad: u128,
+    pub set: bool,
+}
+
+/// Reads `year_gross[y]` from the ring (slot `y % len`, tag must match).
+pub fn year_gross_at(ring: &[YearGross], year: u32) -> u128 {
+    if ring.is_empty() {
+        return 0;
+    }
+    let idx = (year as usize).checked_rem(ring.len()).unwrap_or(0);
+    let slot = &ring[idx];
+    if slot.set && slot.year == year {
+        slot.gross_wad
+    } else {
+        0
+    }
+}
+
+/// Adds `inc_wad` to `year_gross[year]`, re-tagging (zeroing) the slot when it holds another year.
+pub fn year_gross_add(ring: &mut [YearGross], year: u32, inc_wad: u128) -> MathResult<()> {
+    if ring.is_empty() {
+        return Err(MathError::InvalidInput);
+    }
+    let idx = (year as usize).checked_rem(ring.len()).unwrap_or(0);
+    let slot = &mut ring[idx];
+    if !slot.set || slot.year != year {
+        *slot = YearGross {
+            year,
+            gross_wad: 0,
+            set: true,
+        };
+    }
+    slot.gross_wad = slot
+        .gross_wad
+        .checked_add(inc_wad)
+        .ok_or(MathError::Overflow)?;
+    Ok(())
+}
+
+/// `settlement_year(ts) = floor((ts − settlement_ts) / YEAR)`.
+pub fn settlement_year(settlement_ts: u64, ts: u64) -> MathResult<u32> {
+    let elapsed = ts.checked_sub(settlement_ts).ok_or(MathError::Overflow)?;
+    u32::try_from(elapsed / YEAR).map_err(|_| MathError::Overflow)
+}
 
 /// Inputs to `redeem`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct RedemptionInputs<'a> {
     pub clearing_price: u64,
     pub hurdle_rate_wad: u64,
     pub payout_multiple_k: u16,
     pub cap_per_unit: u64,
     pub paid_per_unit_wad: u128,
-    /// `year_gross_wad[y]` indexed by settlement year.
-    pub year_gross_wad: &'a [u128],
+    pub year_gross: &'a [YearGross],
     pub settlement_ts: u64,
     pub now: u64,
 }
@@ -48,7 +95,7 @@ pub fn hurdle_price(clearing_price: u64, hurdle_rate_wad: u64, elapsed: u64) -> 
 }
 
 /// `P_redeem = min(C_rem, max(P_hurdle, k × D_avg))` (the `k × D_avg` term only once a full year
-/// has elapsed).
+/// has elapsed); `C_rem` saturates at 0.
 pub fn redemption_price(inp: &RedemptionInputs) -> MathResult<RedemptionPrice> {
     let t = inp
         .now
@@ -57,21 +104,15 @@ pub fn redemption_price(inp: &RedemptionInputs) -> MathResult<RedemptionPrice> {
     let years = t.checked_div(YEAR).ok_or(MathError::DivisionByZero)?;
     let hurdle = hurdle_price(inp.clearing_price, inp.hurdle_rate_wad, t)?;
     let paid_units = to_u64(div_ceil(inp.paid_per_unit_wad, WAD)?)?;
-    let cap_remaining = inp
-        .cap_per_unit
-        .checked_sub(paid_units)
-        .ok_or(MathError::Overflow)?;
+    let cap_remaining = inp.cap_per_unit.saturating_sub(paid_units);
     let (d_avg, floor_term) = if years >= 1 {
         let n = core::cmp::min(years, 3);
         let start = years.checked_sub(n).ok_or(MathError::Overflow)?;
         let mut sum: u128 = 0;
         for y in start..years {
-            let idx = usize::try_from(y).map_err(|_| MathError::Overflow)?;
-            if idx >= MAX_YEAR_BUCKETS || idx >= inp.year_gross_wad.len() {
-                return Err(MathError::InvalidInput);
-            }
+            let year = u32::try_from(y).map_err(|_| MathError::Overflow)?;
             sum = sum
-                .checked_add(inp.year_gross_wad[idx])
+                .checked_add(year_gross_at(inp.year_gross, year))
                 .ok_or(MathError::Overflow)?;
         }
         let den = u128::from(n).checked_mul(WAD).ok_or(MathError::Overflow)?;
@@ -98,12 +139,19 @@ mod tests {
 
     const H8: u64 = 80_000_000_000_000_000;
 
+    fn ring(entries: &[(u32, u128)]) -> [YearGross; 4] {
+        let mut r = [YearGross::default(); 4];
+        for (y, g) in entries {
+            year_gross_add(&mut r, *y, *g).unwrap();
+        }
+        r
+    }
+
     #[test]
     fn hurdle_compounds_yearly_and_interpolates() {
         assert_eq!(hurdle_price(1_000_000, H8, 0).unwrap(), 1_000_000);
         assert_eq!(hurdle_price(1_000_000, H8, YEAR).unwrap(), 1_080_000);
         assert_eq!(hurdle_price(1_000_000, H8, 2 * YEAR).unwrap(), 1_166_400);
-        // half a year: 1_000_000 × (1 + 0.04) = 1_040_000 (frac = 0.5 exactly? 182.5 d → frac_wad = 0.5e18)
         assert_eq!(hurdle_price(1_000_000, H8, YEAR / 2).unwrap(), 1_040_000);
         assert_eq!(
             hurdle_price(1_000_000, H8, YEAR + YEAR / 2).unwrap(),
@@ -113,33 +161,28 @@ mod tests {
 
     #[test]
     fn each_term_can_decide() {
-        let years = [0u128; 64];
-        // < 1 year: hurdle decides when below the cap
+        let empty = ring(&[]);
         let p = redemption_price(&RedemptionInputs {
             clearing_price: 1_000_000,
             hurdle_rate_wad: H8,
             payout_multiple_k: 5,
             cap_per_unit: 2_500_000,
             paid_per_unit_wad: 0,
-            year_gross_wad: &years,
+            year_gross: &empty,
             settlement_ts: 0,
             now: YEAR / 2,
         })
         .unwrap();
         assert_eq!(p.price, 1_040_000);
         assert_eq!(p.d_avg, 0);
-        assert_eq!(p.cap_remaining, 2_500_000);
-        // 2 years, paid 300_000/unit/yr → D_avg 300_000, k×D = 1_500_000 > hurdle 1_166_400
-        let mut y = [0u128; 64];
-        y[0] = 300_000 * WAD;
-        y[1] = 300_000 * WAD;
+        let y = ring(&[(0, 300_000 * WAD), (1, 300_000 * WAD)]);
         let p = redemption_price(&RedemptionInputs {
             clearing_price: 1_000_000,
             hurdle_rate_wad: H8,
             payout_multiple_k: 5,
             cap_per_unit: 2_500_000,
             paid_per_unit_wad: 600_000 * WAD,
-            year_gross_wad: &y,
+            year_gross: &y,
             settlement_ts: 0,
             now: 2 * YEAR,
         })
@@ -148,53 +191,60 @@ mod tests {
         assert_eq!(p.hurdle, 1_166_400);
         assert_eq!(p.cap_remaining, 1_900_000);
         assert_eq!(p.price, 1_500_000);
-        // remaining cap decides: paid 2_000_000 → C_rem 500_000
         let p = redemption_price(&RedemptionInputs {
             clearing_price: 1_000_000,
             hurdle_rate_wad: H8,
             payout_multiple_k: 5,
             cap_per_unit: 2_500_000,
             paid_per_unit_wad: 2_000_000 * WAD,
-            year_gross_wad: &y,
+            year_gross: &y,
             settlement_ts: 0,
             now: 2 * YEAR,
         })
         .unwrap();
         assert_eq!(p.price, 500_000);
-        // ceil rounding of paid units favours the issuer
+        // ceil rounding favours the issuer; a lowered cap saturates to 0
         let p = redemption_price(&RedemptionInputs {
             clearing_price: 1_000_000,
             hurdle_rate_wad: H8,
             payout_multiple_k: 5,
-            cap_per_unit: 2_500_000,
+            cap_per_unit: 2_000_000,
             paid_per_unit_wad: 2_000_000 * WAD + 1,
-            year_gross_wad: &y,
+            year_gross: &y,
             settlement_ts: 0,
             now: 2 * YEAR,
         })
         .unwrap();
-        assert_eq!(p.cap_remaining, 499_999);
+        assert_eq!(p.cap_remaining, 0);
+        assert_eq!(p.price, 0);
     }
 
     #[test]
-    fn trailing_window_is_three_years() {
-        let mut y = [0u128; 64];
-        y[0] = 900_000 * WAD; // excluded once 4 years elapsed
-        y[1] = 100_000 * WAD;
-        y[2] = 200_000 * WAD;
-        y[3] = 300_000 * WAD;
+    fn ring_retags_and_trailing_window() {
+        let mut r = ring(&[
+            (0, 900_000 * WAD),
+            (1, 100_000 * WAD),
+            (2, 200_000 * WAD),
+            (3, 300_000 * WAD),
+        ]);
+        // year 4 reuses slot 0 and must zero year 0
+        year_gross_add(&mut r, 4, 5 * WAD).unwrap();
+        assert_eq!(year_gross_at(&r, 0), 0);
+        assert_eq!(year_gross_at(&r, 4), 5 * WAD);
+        assert_eq!(year_gross_at(&r, 3), 300_000 * WAD);
         let p = redemption_price(&RedemptionInputs {
             clearing_price: 1_000_000,
             hurdle_rate_wad: 0,
             payout_multiple_k: 1,
             cap_per_unit: 10_000_000,
             paid_per_unit_wad: 0,
-            year_gross_wad: &y,
+            year_gross: &r,
             settlement_ts: 0,
             now: 4 * YEAR,
         })
         .unwrap();
         assert_eq!(p.d_avg, 200_000);
-        assert_eq!(p.price, 1_000_000); // hurdle (h = 0) = P0 > k × D_avg
+        assert_eq!(p.price, 1_000_000);
+        assert_eq!(settlement_year(100, 100 + 3 * YEAR - 1).unwrap(), 2);
     }
 }

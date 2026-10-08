@@ -1,6 +1,6 @@
 /**
- * Parity-vector schema (SPEC §11). Every integer is a decimal string, every hash/commitment/salt is
- * 0x-hex. `t` is the block time the harness warps to before executing the step.
+ * Parity-vector schema (SPEC v1.1 §11). Every integer is a decimal string, every hash/commitment/
+ * salt is 0x-hex. `t` is the block time the harness warps to before executing the step.
  */
 import type { ErrorName } from "@merces/sdk";
 
@@ -76,7 +76,7 @@ export type Call =
   | { op: "register_verifier_key"; key: string }
   | { op: "revoke_verifier_key"; key: string }
   | { op: "set_flags"; newRaisesPaused?: boolean; windowsEnabled?: boolean; tier4Enabled?: boolean }
-  | { op: "set_fx_pair"; pairId: Hex; inverted: boolean; crosscheck: boolean }
+  | { op: "set_fx_pair"; feedId: Hex; inverted: boolean; crosscheck: boolean }
   | {
       op: "create_series";
       actor: string;
@@ -96,8 +96,10 @@ export type Call =
   | { op: "cancel_raise"; actor: string; series: string }
   | { op: "commit_bid"; actor: string; series: string; price: Dec; quantity: Dec; salt: Hex; escrow: Dec }
   | { op: "reveal_bid"; actor: string; series: string; price: Dec; quantity: Dec; salt: Hex }
-  | { op: "settle"; series: string; clearingPrice: Dec }
+  | { op: "begin_settlement"; series: string; clearingPrice: Dec; qAboveClaim: Dec; qAtClaim: Dec }
+  | { op: "finalize_settlement"; series: string }
   | { op: "process_bid"; series: string; bidder: string }
+  | { op: "deliver_bid"; series: string; bidder: string }
   | { op: "claim_release"; actor: string; series: string }
   | { op: "set_release_pause"; actor: string; series: string; paused: boolean }
   | {
@@ -108,6 +110,7 @@ export type Call =
       paymentUsd: Dec;
       fxAvgWad: Dec;
       fxFallback: { attestor: string } | null;
+      priorIncomeCommitment: Hex;
       incomeCommitment: Hex;
       tier: number;
       liquidityEvent: boolean;
@@ -124,11 +127,14 @@ export type Call =
   | { op: "claim"; actor: string; series: string }
   | { op: "register_holder"; series: string; holder: string }
   | { op: "burn_retired"; series: string; holder: string }
+  | { op: "retire_if_capped"; series: string }
   | { op: "crank_status"; series: string }
   | { op: "request_pause"; actor: string; series: string }
+  | { op: "withdraw_pause_request"; actor: string; series: string }
   | { op: "approve_pause"; series: string; pauseEnd: Dec; attestor: string }
   | { op: "end_pause"; actor: string; series: string }
   | { op: "route_income"; series: string; payer: string; amount: Dec }
+  | { op: "close_router_period"; series: string; period: Dec }
   | { op: "fx_snapshot"; pairId: Hex; price: Dec; conf: Dec; expo: number; publishTime: Dec; crosscheckPrice?: Dec; crosscheckExpo?: number }
   | { op: "redeem"; actor: string; series: string }
   | { op: "claim_redemption"; actor: string; series: string }
@@ -140,7 +146,8 @@ export type Call =
   | { op: "commit_ask"; actor: string; series: string; price: Dec; quantity: Dec; salt: Hex; units: Dec }
   | { op: "window_commit_bid"; actor: string; series: string; price: Dec; quantity: Dec; salt: Hex; escrow: Dec }
   | { op: "reveal_order"; actor: string; series: string; price: Dec; quantity: Dec; salt: Hex }
-  | { op: "settle_window"; series: string; clearingPrice: Dec | "NO_MATCH" }
+  | { op: "begin_window_settlement"; series: string; clearingPrice: Dec | "NO_MATCH" }
+  | { op: "finalize_window"; series: string }
   | { op: "process_orders"; series: string }
   | { op: "transfer_units"; actor: string; series: string; to: string; units: Dec };
 
@@ -149,6 +156,7 @@ export type CallOp = Call["op"];
 export interface LedgerExpect {
   status: string;
   raiseState: string;
+  mintFinalized: boolean;
   unitsOutstanding: Dec;
   unitsSold: Dec;
   clearingPrice: Dec;
@@ -160,7 +168,9 @@ export interface LedgerExpect {
   amendmentNonce: Dec;
   paidPerUnitWad: Dec;
   netAccWad: Dec;
+  /** reference's exact WAD-scaled remainder (SPEC's base-unit `carry` is `floor(carryWad / WAD)`, 0 in every vector) */
   carryWad: Dec;
+  carry: Dec;
   grossReceived: Dec;
   feeCollected: Dec;
   refundedToIssuer: Dec;
@@ -169,34 +179,67 @@ export interface LedgerExpect {
   openDuePeriod: Dec | null;
   openDueAmount: Dec;
   routerCredit: Dec;
+  trueupNonce: Dec;
   trueupDue: Dec;
-  pausedTotal: Dec;
   pauseNonce: Dec;
+  pauseCount: Dec;
+  pausedTotal: Dec;
   formalNoticeEmittedFor: Dec | null;
   redemptionPrice: Dec;
   unitsAtRedemption: Dec;
   tailCapPerUnit: Dec;
   tailAccWad: Dec;
+  tailExhausted: boolean;
+  extinguishedAt: Dec;
   finalAccWad: Dec;
+  finalUnits: Dec;
   extinguishNonce: Dec;
 }
 
 export interface AuctionExpect {
   bidCount: Dec;
   revealedCount: Dec;
+  validCount: Dec;
   escrowTotal: Dec;
-  R: Dec;
-  qAt: Dec;
+  auctionEscrowUnits: Dec;
+  tallyRound: Dec;
+  roundRejected: boolean;
+  rejectionReason: string | null;
+  clearingPrice: Dec;
   qAbove: Dec;
-  unitsSoldUpper: Dec;
+  qAt: Dec;
+  R: Dec;
+  unitsSold: Dec;
+  proceeds: Dec;
+  unitsMinted: Dec;
   bidsProcessed: Dec;
+  mintFinalized: boolean;
+}
+
+export interface WindowExpect {
+  period: Dec;
+  state: string;
+  tallyRound: Dec;
+  roundRejected: boolean;
+  clearingPrice: Dec | null;
+  branch: string | null;
+  matchedUnits: Dec;
+  escrowStable: Dec;
+  escrowUnits: Dec;
 }
 
 export interface FxExpect {
   sumWad: Dec;
   count: Dec;
-  /** quarter average for the listed periods: "ok" with the average, or NeedsFallback */
   quarters: Record<string, { ok: boolean; avgWad: Dec | null; n: Dec; flagged: boolean }>;
+}
+
+export interface HolderExpect {
+  pending: Dec;
+  redeemedUnits: Dec;
+  pendingUnits: Dec;
+  pendingRefund: Dec;
+  delivered: boolean;
 }
 
 export interface ExpectStep {
@@ -213,7 +256,8 @@ export interface ExpectStep {
   windowEscrowUnits?: Dec;
   ledger?: LedgerExpect;
   auction?: AuctionExpect;
-  holders?: Record<string, { pending: Dec; redeemedUnits: Dec }>;
+  window?: WindowExpect;
+  holders?: Record<string, HolderExpect>;
   fx?: Record<Hex, FxExpect>;
   note?: string;
 }
@@ -239,7 +283,6 @@ export interface VectorKey {
 }
 
 export interface SeriesPrivate {
-  /** TEST ONLY: the plaintext behind `termsCommitment`, so harnesses can recompute it. */
   termsPlain: { theta: Dec; rWad: Dec; currencyCode: number; indexingRule: number; termsSalt: Dec };
   termsCommitment: Hex;
 }
@@ -247,7 +290,8 @@ export interface SeriesPrivate {
 export interface Vector {
   name: string;
   description: string;
-  schema: 1;
+  schema: 2;
+  specVersion: "1.1";
   generatedBy: string;
   config: {
     parameters: Record<string, Dec>;

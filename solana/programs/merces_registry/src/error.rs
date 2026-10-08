@@ -6,8 +6,8 @@ use anchor_lang::prelude::*;
 pub enum RegistryError {
     #[msg("Caller is not authorised for this instruction")]
     Unauthorized,
-    #[msg("Caller is not the protocol signer PDA")]
-    NotProtocolSigner,
+    #[msg("Caller is not the protocol authority PDA")]
+    NotProtocolAuthority,
     #[msg("Caller is not the pending admin")]
     NotPendingAdmin,
     #[msg("Address must not be zero")]
@@ -28,9 +28,7 @@ pub enum RegistryError {
     ReservePriceZero,
     #[msg("min_raise exceeds reserve_price × units_offered")]
     MinRaiseTooHigh,
-    #[msg(
-        "Release schedule must have 1..=24 tranches, bps summing to 10000, non-decreasing offsets"
-    )]
+    #[msg("Release schedule must have 1..=24 tranches, bps summing to 10000, non-decreasing offsets")]
     InvalidReleaseSchedule,
     #[msg("Tier flags must be non-zero and use only bits 0..=3")]
     InvalidTierFlags,
@@ -62,8 +60,10 @@ pub enum RegistryError {
     NotCurveMode,
     #[msg("Invalid raise state transition")]
     InvalidRaiseTransition,
-    #[msg("units_sold correction may only decrease and only before finalisation")]
-    InvalidUnitsSoldCorrection,
+    #[msg("Raise results are written once")]
+    RaiseResultAlreadyWritten,
+    #[msg("Mint already finalised")]
+    MintAlreadyFinalized,
     #[msg("Invalid terminal status")]
     InvalidTerminalStatus,
     #[msg("Terminal status transition not allowed")]
@@ -82,6 +82,28 @@ pub enum RegistryError {
     ZeroAttestorAddress,
     #[msg("Invalid chain id")]
     InvalidChainId,
+    #[msg("Key is already revoked")]
+    KeyAlreadyRevoked,
+    #[msg("The last active key of a kind cannot be revoked without a replacement")]
+    LastKeyOfKind,
+    #[msg("pair_id must equal keccak256(feed_id ‖ inverted)")]
+    FxPairIdMismatch,
+    #[msg("feed_id and inverted are write-once for an FX pair")]
+    FxPairImmutable,
+    #[msg("Wallet cap allows no bid: floor(units_offered × wallet_cap_bps / 10000) < 1")]
+    WalletCapTooSmall,
+    #[msg("Tier-1 series must supply plaintext router terms")]
+    Tier1TermsRequired,
+    #[msg("Tier-1 series must use stablecoin income (fx_pair_id = 0)")]
+    Tier1NeedsStablecoinIncome,
+    #[msg("Tier-1 series require r_wad × units_offered ≤ WAD")]
+    Tier1ShareTooLarge,
+    #[msg("Tier-1 terms do not hash to terms_commitment")]
+    Tier1TermsMismatch,
+    #[msg("Router terms supplied for a series without tier 1")]
+    Tier1TermsUnexpected,
+    #[msg("Poseidon hashing failed")]
+    PoseidonFailed,
     // Parameter bounds (SPEC §1.6), one code per field
     #[msg("cap_multiple_wad out of bounds [2.0e18, 3.0e18]")]
     BoundCapMultiple,
@@ -117,6 +139,10 @@ pub enum RegistryError {
     BoundFxMaxConf,
     #[msg("fx_deviation_band_bps out of bounds [10, 5000]")]
     BoundFxDeviationBand,
+    #[msg("max_pause_seconds out of bounds [30 d, 730 d]")]
+    BoundMaxPause,
+    #[msg("max_cumulative_pause_seconds out of bounds [max_pause_seconds, 5 y]")]
+    BoundMaxCumulativePause,
 }
 
 impl From<merces_common::params::ParamField> for RegistryError {
@@ -140,6 +166,8 @@ impl From<merces_common::params::ParamField> for RegistryError {
             F::FxMaxStaleness => RegistryError::BoundFxMaxStaleness,
             F::FxMaxConf => RegistryError::BoundFxMaxConf,
             F::FxDeviationBand => RegistryError::BoundFxDeviationBand,
+            F::MaxPause => RegistryError::BoundMaxPause,
+            F::MaxCumulativePause => RegistryError::BoundMaxCumulativePause,
         }
     }
 }

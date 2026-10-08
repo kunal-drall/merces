@@ -7,12 +7,12 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IMercesRegistry} from "../interfaces/IMercesRegistry.sol";
 import {ProtocolContracts} from "../types/MercesTypes.sol";
-import {NotProtocolContract, ProtocolContractsNotSet, ZeroAddress} from "../types/MercesErrors.sol";
+import {NotProtocolContract, ZeroAddress} from "../types/MercesErrors.sol";
 
 /// @notice Base for the money-handling contracts (SPEC §0): UUPS proxies owned by the protocol
 /// `TimelockController`, which is the only address allowed to upgrade them. `ReentrancyGuard` (OZ 5, ERC-7201
 /// namespaced storage) guards every external function that moves tokens. Peer contracts are resolved through
-/// the registry's one-shot `ProtocolContracts` record, so no admin can re-point them.
+/// the registry's `ProtocolContracts` record, fixed at registry construction, so no admin can re-point them.
 abstract contract MercesUpgradeable is Initializable, UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuard {
     /// @custom:storage-location erc7201:merces.storage.MercesUpgradeable
     struct MercesUpgradeableStorage {
@@ -44,10 +44,8 @@ abstract contract MercesUpgradeable is Initializable, UUPSUpgradeable, OwnableUp
         return _mercesStorage().registry;
     }
 
-    function _contracts() internal view returns (ProtocolContracts memory c) {
-        IMercesRegistry r = _mercesStorage().registry;
-        if (!r.protocolContractsSet()) revert ProtocolContractsNotSet();
-        c = r.getProtocolContracts();
+    function _contracts() internal view returns (ProtocolContracts memory) {
+        return _mercesStorage().registry.getProtocolContracts();
     }
 
     function _requireCaller(address expected) internal view {

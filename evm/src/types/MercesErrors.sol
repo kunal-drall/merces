@@ -5,7 +5,9 @@ pragma solidity ^0.8.30;
 
 // ---- generic ----
 error ZeroAddress();
+error ZeroAmount();
 error AmountOutOfRange(uint256 amount);
+error TransferFailed();
 error ParameterOutOfBounds(bytes32 parameter);
 error SeriesNotFound(uint256 seriesId);
 
@@ -88,6 +90,7 @@ error EarlyDrawNotApproved();
 error EarlyDrawExceedsProceeds();
 error ProceedsAlreadySet();
 error ProceedsMismatch();
+error SeriesIsExtinguished();
 
 // ---- income / verifier ----
 error NotIncome();
@@ -107,6 +110,7 @@ error FxMismatch(uint64 expected, uint64 actual);
 error FxFallbackNotNeeded();
 error FxFallbackSignatureRequired();
 error PriorCommitmentMismatch();
+error IncomeCommitmentMismatch();
 error InvalidProof();
 error VerifierKeyNotRegistered(address signer);
 error AttestationRequired();
@@ -128,6 +132,9 @@ error PauseTooLong();
 error CumulativePauseExceeded();
 error TooManyPauses();
 error NotTierOne();
+error NotRouter();
+error Tier1NotPure();
+error AttestationInFuture();
 error RouterNotConfigured();
 error PeriodNotEndedYet(uint32 period);
 error FxPairDisabled(bytes32 pairId);
@@ -146,6 +153,7 @@ error SeriesNotExtinguished();
 error LockupActive();
 error OutstandingDue();
 error UnreportedPeriods();
+error WindowOpen();
 error DuplicateAttestor();
 error InvalidSource();
 error SupplyAlreadySet();

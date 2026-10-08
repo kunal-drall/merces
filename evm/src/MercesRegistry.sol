@@ -531,6 +531,8 @@ contract MercesRegistry is IMercesRegistry {
         t.revealDuration = p.revealDuration;
         t.windowCommitDuration = p.windowCommitDuration;
         t.windowRevealDuration = p.windowRevealDuration;
+        t.maxPauseSeconds = d.maxPauseSeconds;
+        t.maxCumulativePauseSeconds = d.maxCumulativePauseSeconds;
     }
 
     /// @inheritdoc IMercesRegistry

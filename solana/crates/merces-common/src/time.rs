@@ -192,8 +192,12 @@ pub fn day_of(ts: u64) -> u32 {
 /// Monday–Friday civil days in `[period_start(pid), period_end(pid))` (SPEC §6.6 coverage base).
 /// 1970-01-01 was a Thursday, so `weekday = (days + 4) % 7` with `0 = Sunday`.
 pub fn trading_days_in_period(pid: u32) -> MathResult<u64> {
-    let start = period_start(pid)?.checked_div(DAY).ok_or(MathError::DivisionByZero)?;
-    let end = period_end(pid)?.checked_div(DAY).ok_or(MathError::DivisionByZero)?;
+    let start = period_start(pid)?
+        .checked_div(DAY)
+        .ok_or(MathError::DivisionByZero)?;
+    let end = period_end(pid)?
+        .checked_div(DAY)
+        .ok_or(MathError::DivisionByZero)?;
     let mut count: u64 = 0;
     let mut d = start;
     while d < end {
@@ -268,8 +272,6 @@ mod tests {
         assert_eq!(trading_days_in_period(8104).unwrap(), 64);
         // 2026 Q2: Apr 1 (Wed) … Jun 30 (Tue): 91 days, 65 weekdays
         assert_eq!(trading_days_in_period(8105).unwrap(), 65);
-        // 1970 Q1 starts on a Thursday
-        assert_eq!((0 + 4) % 7, 4);
         for pid in 8000u32..8120 {
             let t = trading_days_in_period(pid).unwrap();
             assert!((64..=66).contains(&t), "{pid}: {t}");

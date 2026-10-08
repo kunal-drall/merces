@@ -2,18 +2,17 @@
 //! (SPEC §6.2 step 6, §8).
 //!
 //! Proof encoding accepted by `submit_report` (256 bytes, all big-endian, EIP-197 layout):
-//! `A = x ‖ y` (64), `B = x_im ‖ x_re ‖ y_im ‖ y_re` (128), `C = x ‖ y` (64). `A` is supplied
-//! **un-negated**; the program negates it (`negate_g1`) because the crate's pairing check expects
-//! `e(−A, B) · e(α, β) · e(L, γ) · e(C, δ) = 1`.
+//! `A = x ‖ q − y` (64, **already negated** by the prover/SDK as `packages/vectors` and
+//! `circuits/README.md` specify), `B = x_im ‖ x_re ‖ y_im ‖ y_re` (128), `C = x ‖ y` (64). The
+//! crate's pairing check expects `e(−A, B) · e(α, β) · e(L, γ) · e(C, δ) = 1`; `negate_g1` is kept
+//! as a helper for clients that hold an un-negated `pi_a`.
 
 pub mod vk;
 
 use crate::error::ProtocolError;
 use anchor_lang::prelude::*;
 use groth16_solana::groth16::Groth16Verifier;
-
-/// Number of public inputs (SPEC §8).
-pub const NR_PUBLIC_INPUTS: usize = 6;
+pub use vk::NR_PUBLIC_INPUTS;
 
 /// BN254 base field modulus `q`, big-endian.
 pub const BN254_FQ_BE: [u8; 32] = [
@@ -83,7 +82,7 @@ pub fn verify_report_proof(
     }
     let mut proof_a = [0u8; 64];
     proof_a.copy_from_slice(&proof[0..64]);
-    let proof_a = negate_g1(&proof_a)?;
+    require!(lt_be(&proof_a[..32], &BN254_FQ_BE) && lt_be(&proof_a[32..], &BN254_FQ_BE), ProtocolError::MalformedProof);
     let mut proof_b = [0u8; 128];
     proof_b.copy_from_slice(&proof[64..192]);
     let mut proof_c = [0u8; 64];
@@ -93,7 +92,7 @@ pub fn verify_report_proof(
         &proof_b,
         &proof_c,
         public_inputs,
-        &vk::VERIFYINGKEY,
+        &vk::VERIFYING_KEY,
     )
     .map_err(|_| error!(ProtocolError::MalformedProof))?;
     // Inputs were checked against `r` above, so the crate's field-size check (which pulls in

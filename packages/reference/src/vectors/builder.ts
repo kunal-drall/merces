@@ -13,12 +13,16 @@ import {
   deriveSalt,
   deriveTestPrivateKey,
   fieldToBytes32,
+  fxPairId,
   incomeCommitment,
   keccak256,
   parametersToStrings,
+  quarterIndex,
+  routerIncomeCommitment,
   termsCommitment,
   timestampFromCivil,
   utf8,
+  yearOf,
   type ErrorName,
   type Parameters,
 } from "@merces/sdk";
@@ -49,22 +53,33 @@ interface SeriesSecrets extends TermsPlain {
 export interface ReportArgs {
   series: string;
   period: number;
+  /** attested YTD income at income scale (ignored for tier-1 reports, which use the router checkpoint) */
   incomeYtd: bigint;
   tier: number;
   attestation?: string | null;
   liquidityEvent?: boolean;
   /** fallback rate signed by this attestor when the accumulator is NeedsFallback */
   fxFallback?: { attestor: string; rateWad: bigint };
-  /** override the fx the report claims (to build reverts) */
+  /** first report of a series that settled mid-year: the attested YTD income at period_start(first_period) */
+  attestedPriorYtd?: bigint;
+  /** overrides, to build reverts */
   fxAvgWadOverride?: bigint;
-  /** override the payment the report claims (to build reverts) */
   paymentOverride?: bigint;
-  /** units_outstanding public input override (to build reverts) */
   unitsOverride?: bigint;
   /** prove the honest payment, then alter the claimed payment and public signal (→ InvalidProof) */
   tamperPaymentUsd?: bigint;
+  /** claim a different prior commitment than the chain expects (→ InvalidProof) */
+  priorOverride?: bigint;
   actor?: string;
   note?: string;
+}
+
+export interface BidSpec {
+  actor: string;
+  price: bigint;
+  quantity: bigint;
+  escrow?: bigint;
+  reveal?: boolean;
 }
 
 export class ScenarioBuilder {
@@ -135,7 +150,6 @@ export class ScenarioBuilder {
     const step: Step = note ? { t: this.t.toString(), note, ...call } : { t: this.t.toString(), ...call };
     this.steps.push(step);
     await this.sim.apply(step);
-    this.sim.totalStable();
   }
 
   async revert(call: Call, error: ErrorName, note?: string): Promise<void> {
@@ -158,6 +172,12 @@ export class ScenarioBuilder {
   async fund(actor: string, amount: bigint): Promise<void> {
     this.actors.add(actor);
     await this.step({ op: "fund", actor, amount: amount.toString() });
+  }
+
+  /** Registers an FX pair and returns its pair id (keccak256(feed_id ‖ inverted_u8)). */
+  async fxPair(feedId: string, inverted: boolean, crosscheck: boolean, note?: string): Promise<string> {
+    await this.step({ op: "set_fx_pair", feedId, inverted, crosscheck }, note);
+    return bytesToHex(fxPairId(feedId, inverted));
   }
 
   terms(overrides: Partial<Record<keyof SeriesTermsInput, bigint | number>> = {}): SeriesTermsInput {
@@ -198,10 +218,7 @@ export class ScenarioBuilder {
     return bytesToHex(fieldToBytes32(c));
   }
 
-  /**
-   * New terms commitment for an amendment (θ indexed up, r unchanged). `apply()` switches the
-   * secrets used by later reports; until then proofs still open the old commitment.
-   */
+  /** New terms commitment for an amendment (θ indexed up, r unchanged); `apply()` switches the secrets. */
   prepareAmendment(series: string, newTheta: bigint): { commitment: string; apply: () => void } {
     const sec = this.secrets.get(series)!;
     const termsSalt = this.fieldSalt(`${series}:terms-salt:${sec.incomeCounter}:${newTheta}`);
@@ -243,131 +260,114 @@ export class ScenarioBuilder {
     await this.step(call, args.note);
   }
 
-  /** Standard raise: open, commit, reveal, settle, process every bid. Returns the clearing price. */
-  async raise(args: {
-    series: string;
-    issuer: string;
-    openAt: bigint;
-    bids: { actor: string; price: bigint; quantity: bigint; escrow?: bigint; reveal?: boolean }[];
-    clearingPrice?: bigint;
-  }): Promise<bigint> {
+  bidSalt(series: string, actor: string, index: number): string {
+    return this.salt(`${series}:bid:${actor}:${index}`);
+  }
+
+  /**
+   * Standard raise: open, commit, reveal, propose with honest claims, finalize, process every bid,
+   * deliver every bid (except `undelivered`). Returns the clearing price (0 when the raise failed).
+   */
+  async raise(args: { series: string; issuer: string; openAt: bigint; bids: BidSpec[]; clearingPrice?: bigint; undelivered?: string[]; deliver?: boolean }): Promise<bigint> {
     const s = this.sim.series.get(args.series)!;
     this.at(args.openAt);
     await this.step({ op: "open_raise", actor: args.issuer, series: args.series });
     for (const [i, b] of args.bids.entries()) {
       this.advance(3600n);
       const escrow = b.escrow ?? M.requiredEscrow(b.price, b.quantity, s.terms.auctionFeeBps);
-      await this.step({ op: "commit_bid", actor: b.actor, series: args.series, price: b.price.toString(), quantity: b.quantity.toString(), salt: this.salt(`${args.series}:bid:${b.actor}:${i}`), escrow: escrow.toString() });
+      await this.step({ op: "commit_bid", actor: b.actor, series: args.series, price: b.price.toString(), quantity: b.quantity.toString(), salt: this.bidSalt(args.series, b.actor, i), escrow: escrow.toString() });
     }
     this.at(s.commitEnd + 3600n);
     for (const [i, b] of args.bids.entries()) {
       if (b.reveal === false) continue;
       this.advance(600n);
-      await this.step({ op: "reveal_bid", actor: b.actor, series: args.series, price: b.price.toString(), quantity: b.quantity.toString(), salt: this.salt(`${args.series}:bid:${b.actor}:${i}`) });
+      await this.step({ op: "reveal_bid", actor: b.actor, series: args.series, price: b.price.toString(), quantity: b.quantity.toString(), salt: this.bidSalt(args.series, b.actor, i) });
     }
     this.at(s.revealEnd + 3600n);
-    const revealed = [...s.bids.values()].filter((x) => x.revealed);
-    const p = args.clearingPrice ?? M.findClearingPrice(revealed, s.terms.unitsOffered);
-    await this.step({ op: "settle", series: args.series, clearingPrice: p.toString() });
+    const p = await this.settle(args.series, args.clearingPrice);
     for (const b of args.bids) {
       this.advance(60n);
       await this.step({ op: "process_bid", series: args.series, bidder: b.actor });
     }
+    if (args.deliver !== false) {
+      for (const b of args.bids) {
+        if (args.undelivered?.includes(b.actor)) continue;
+        this.advance(60n);
+        await this.step({ op: "deliver_bid", series: args.series, bidder: b.actor });
+      }
+    }
     return p;
   }
 
-  /** Builds, proves and submits a quarterly report (and keeps the YTD commitment chain). */
-  async report(a: ReportArgs): Promise<{ paymentUsd: bigint; due: bigint }> {
+  /** Honest proposal (price + matching claims) and finalization. */
+  async settle(series: string, clearingPrice?: bigint, note?: string): Promise<bigint> {
+    const s = this.sim.series.get(series)!;
+    const revealed = [...s.bids.values()].filter((x) => x.revealed);
+    const p = clearingPrice ?? M.findClearingPrice(revealed, s.terms.unitsOffered) ?? 0n;
+    const claims = M.claimsFor(revealed, p);
+    await this.step({ op: "begin_settlement", series, clearingPrice: p.toString(), qAboveClaim: claims.qAboveClaim.toString(), qAtClaim: claims.qAtClaim.toString() }, note);
+    await this.step({ op: "finalize_settlement", series });
+    return p;
+  }
+
+  /** The prior-commitment inputs the chain will expect for `period` (SPEC §6.2 step 5). */
+  private priorFor(series: string, period: number, attestedPriorYtd: bigint | undefined): { ytd: bigint; salt: bigint } {
+    const s = this.sim.series.get(series)!;
+    const sec = this.secrets.get(series)!;
+    const l = s.ledger;
+    const chained = l.lastIncomePeriod !== null && l.lastIncomePeriod === period - 1 && yearOf(l.lastIncomePeriod) === yearOf(period);
+    if (chained) {
+      if (!sec.lastIncome || sec.lastIncome.period !== l.lastIncomePeriod) throw new Error(`${this.name}: builder secrets out of sync for ${series}`);
+      return { ytd: sec.lastIncome.ytd, salt: sec.lastIncome.salt };
+    }
+    if (l.lastAcceptedPeriod === null && quarterIndex(period) !== 0 && attestedPriorYtd !== undefined && attestedPriorYtd > 0n) {
+      return { ytd: attestedPriorYtd, salt: this.fieldSalt(`${series}:attested-prior`) };
+    }
+    return { ytd: 0n, salt: 0n };
+  }
+
+  private async buildReportCall(a: ReportArgs): Promise<{ call: Call; incomeYtd: bigint; incomeSalt: bigint; payment: bigint }> {
     const s = this.sim.series.get(a.series)!;
     const sec = this.secrets.get(a.series)!;
-    const sameYearChain = sec.lastIncome !== null && Math.floor(sec.lastIncome.period / 4) === Math.floor(a.period / 4) && sec.lastIncome.period === a.period - 1;
-    const prior = sameYearChain ? sec.lastIncome! : { period: a.period - 1, ytd: 0n, salt: 0n };
     const isTail = s.ledger.redemptionTs !== 0n && s.ledger.status === 5;
-    const units = a.unitsOverride ?? (isTail ? s.ledger.unitsAtRedemption : s.supply);
+    const units = a.unitsOverride ?? (isTail ? s.ledger.unitsAtRedemption : s.ledger.unitsOutstanding);
     let fx = WAD;
     if (s.fxPairId) {
       const pair = this.sim.fxPairs.get(s.fxPairId)!;
-      const qa = M.quarterAverage(pair.state, a.period, this.params);
+      const qa = M.quarterAverage(pair.state, a.period, this.params, this.t);
       if (qa.ok) fx = qa.avgWad;
       else if (a.fxFallback) fx = a.fxFallback.rateWad;
-      else throw new Error(`${this.name}: period ${a.period} needs an fx fallback rate`);
+      else if (a.fxAvgWadOverride === undefined) throw new Error(`${this.name}: period ${a.period} needs an fx fallback rate`);
     }
     if (a.fxAvgWadOverride !== undefined) fx = a.fxAvgWadOverride;
-    const incomeSalt = this.fieldSalt(`${a.series}:income:${sec.incomeCounter}`);
-    const payment = a.paymentOverride ?? M.paymentUsd({ rWad: sec.rWad, unitsOutstanding: units, theta: sec.theta, incomeYtd: a.incomeYtd, priorIncomeYtd: prior.ytd, fxAvgWad: fx });
-    const inputs: ReportInputs = {
-      terms_commitment: sec.termsCommitment,
-      units_outstanding: units,
-      fx_avg_wad: fx,
-      prior_income_commitment: prior.ytd === 0n && prior.salt === 0n ? ZERO_INCOME_COMMITMENT : incomeCommitment(prior.ytd, prior.salt),
-      income_commitment: incomeCommitment(a.incomeYtd, incomeSalt),
-      payment_usd: payment,
-      theta: sec.theta,
-      r_wad: sec.rWad,
-      currency_code: BigInt(sec.currencyCode),
-      indexing_rule: BigInt(sec.indexingRule),
-      terms_salt: sec.termsSalt,
-      income_ytd: a.incomeYtd,
-      income_salt: incomeSalt,
-      prior_income_ytd: prior.ytd,
-      prior_salt: prior.salt,
-    };
-    const { proof, publicSignals } = await proveReport(inputs);
-    const call: Call = {
-      op: "submit_report",
-      actor: a.actor ?? s.issuer,
-      series: a.series,
-      period: a.period.toString(),
-      paymentUsd: payment.toString(),
-      fxAvgWad: fx.toString(),
-      fxFallback: a.fxFallback ? { attestor: a.fxFallback.attestor } : null,
-      incomeCommitment: bytesToHex(fieldToBytes32(inputs.income_commitment)),
-      tier: a.tier,
-      liquidityEvent: a.liquidityEvent ?? false,
-      attestation: a.attestation === undefined ? (a.tier === 2 ? "verifier1" : a.tier === 3 ? "attestor1" : null) : a.attestation,
-      proof: { pi_a: proof.pi_a, pi_b: proof.pi_b, pi_c: proof.pi_c, protocol: proof.protocol, curve: proof.curve },
-      publicSignals,
-      proofEvm: encodeProofForEvm(proof, publicSignals),
-      proofSolana: encodeProofForSolana(proof, publicSignals),
-      witness: { incomeYtd: a.incomeYtd.toString(), incomeSalt: incomeSalt.toString(), priorIncomeYtd: prior.ytd.toString(), priorSalt: prior.salt.toString(), theta: sec.theta.toString(), rWad: sec.rWad.toString() },
-    };
-    const before = s.ledger.openDueAmount;
-    await this.step(call, a.note);
-    sec.incomeCounter++;
-    sec.lastIncome = { period: a.period, ytd: a.incomeYtd, salt: incomeSalt };
-    return { paymentUsd: payment, due: s.ledger.openDueAmount - before };
-  }
-
-  /** Same as {@link report} but expected to revert; does not advance the commitment chain. */
-  async reportRevert(a: ReportArgs, error: ErrorName, note?: string): Promise<void> {
-    if (note) a = { ...a, note };
-    const s = this.sim.series.get(a.series)!;
-    const sec = this.secrets.get(a.series)!;
-    const sameYearChain = sec.lastIncome !== null && Math.floor(sec.lastIncome.period / 4) === Math.floor(a.period / 4) && sec.lastIncome.period === a.period - 1;
-    const prior = sameYearChain ? sec.lastIncome! : { period: a.period - 1, ytd: 0n, salt: 0n };
-    const isTail = s.ledger.redemptionTs !== 0n && s.ledger.status === 5;
-    const units = a.unitsOverride ?? (isTail ? s.ledger.unitsAtRedemption : s.supply);
-    let fx = a.fxAvgWadOverride ?? WAD;
-    if (a.fxAvgWadOverride === undefined && s.fxPairId) {
-      const pair = this.sim.fxPairs.get(s.fxPairId)!;
-      const qa = M.quarterAverage(pair.state, a.period, this.params);
-      fx = qa.ok ? qa.avgWad : (a.fxFallback?.rateWad ?? WAD);
+    let incomeYtd = a.incomeYtd;
+    let incomeSalt = this.fieldSalt(`${a.series}:income:${sec.incomeCounter}`);
+    let prior = this.priorFor(a.series, a.period, a.attestedPriorYtd);
+    if (a.tier === 1) {
+      // tier-1 reports are bound to the router checkpoints with zero salts
+      const r = s.router!;
+      const ytd = M.ytdAtEnd(r, a.period);
+      if (ytd === null) throw new Error(`${this.name}: router period ${a.period} not closed`);
+      incomeYtd = ytd;
+      incomeSalt = 0n;
+      const prevYtd = quarterIndex(a.period) === 0 ? 0n : M.ytdAtEnd(r, a.period - 1);
+      prior = { ytd: prevYtd ?? 0n, salt: 0n };
     }
-    const incomeSalt = this.fieldSalt(`${a.series}:income:${sec.incomeCounter}:revert`);
-    const payment = a.paymentOverride ?? M.paymentUsd({ rWad: sec.rWad, unitsOutstanding: units, theta: sec.theta, incomeYtd: a.incomeYtd, priorIncomeYtd: prior.ytd, fxAvgWad: fx });
+    const payment = a.paymentOverride ?? M.paymentUsd({ rWad: sec.rWad, unitsOutstanding: units, theta: sec.theta, incomeYtd, priorIncomeYtd: prior.ytd, fxAvgWad: fx });
+    const priorCommitment = prior.ytd === 0n && prior.salt === 0n ? ZERO_INCOME_COMMITMENT : a.tier === 1 ? routerIncomeCommitment(prior.ytd) : incomeCommitment(prior.ytd, prior.salt);
     const inputs: ReportInputs = {
       terms_commitment: sec.termsCommitment,
       units_outstanding: units,
       fx_avg_wad: fx,
-      prior_income_commitment: prior.ytd === 0n && prior.salt === 0n ? ZERO_INCOME_COMMITMENT : incomeCommitment(prior.ytd, prior.salt),
-      income_commitment: incomeCommitment(a.incomeYtd, incomeSalt),
+      prior_income_commitment: priorCommitment,
+      income_commitment: incomeCommitment(incomeYtd, incomeSalt),
       payment_usd: payment,
       theta: sec.theta,
       r_wad: sec.rWad,
       currency_code: BigInt(sec.currencyCode),
       indexing_rule: BigInt(sec.indexingRule),
       terms_salt: sec.termsSalt,
-      income_ytd: a.incomeYtd,
+      income_ytd: incomeYtd,
       income_salt: incomeSalt,
       prior_income_ytd: prior.ytd,
       prior_salt: prior.salt,
@@ -379,6 +379,8 @@ export class ScenarioBuilder {
       claimed = a.tamperPaymentUsd;
       publicSignals[5] = claimed.toString();
     }
+    const claimedPrior = a.priorOverride ?? priorCommitment;
+    if (a.priorOverride !== undefined) publicSignals[3] = claimedPrior.toString();
     const call: Call = {
       op: "submit_report",
       actor: a.actor ?? s.issuer,
@@ -387,6 +389,7 @@ export class ScenarioBuilder {
       paymentUsd: claimed.toString(),
       fxAvgWad: fx.toString(),
       fxFallback: a.fxFallback ? { attestor: a.fxFallback.attestor } : null,
+      priorIncomeCommitment: bytesToHex(fieldToBytes32(claimedPrior)),
       incomeCommitment: bytesToHex(fieldToBytes32(inputs.income_commitment)),
       tier: a.tier,
       liquidityEvent: a.liquidityEvent ?? false,
@@ -395,8 +398,29 @@ export class ScenarioBuilder {
       publicSignals,
       proofEvm: encodeProofForEvm(proof, publicSignals),
       proofSolana: encodeProofForSolana(proof, publicSignals),
-      witness: { incomeYtd: a.incomeYtd.toString(), incomeSalt: incomeSalt.toString(), priorIncomeYtd: prior.ytd.toString(), priorSalt: prior.salt.toString(), theta: sec.theta.toString(), rWad: sec.rWad.toString() },
+      witness: { incomeYtd: incomeYtd.toString(), incomeSalt: incomeSalt.toString(), priorIncomeYtd: prior.ytd.toString(), priorSalt: prior.salt.toString(), theta: sec.theta.toString(), rWad: sec.rWad.toString() },
     };
+    return { call, incomeYtd, incomeSalt, payment };
+  }
+
+  /** Builds, proves and submits a quarterly report (and keeps the YTD commitment chain). */
+  async report(a: ReportArgs): Promise<{ paymentUsd: bigint; due: bigint }> {
+    const s = this.sim.series.get(a.series)!;
+    const sec = this.secrets.get(a.series)!;
+    const { call, incomeYtd, incomeSalt, payment } = await this.buildReportCall(a);
+    const before = s.ledger.openDueAmount;
+    await this.step(call, a.note);
+    sec.incomeCounter++;
+    sec.lastIncome = { period: a.period, ytd: incomeYtd, salt: incomeSalt };
+    return { paymentUsd: payment, due: s.ledger.openDueAmount - before };
+  }
+
+  /** Same as {@link report} but expected to revert; does not advance the commitment chain. */
+  async reportRevert(a: ReportArgs, error: ErrorName, note?: string): Promise<void> {
+    if (note) a = { ...a, note };
+    const sec = this.secrets.get(a.series)!;
+    sec.incomeCounter++; // distinct salt for the discarded report
+    const { call } = await this.buildReportCall(a);
     await this.revert(call, error, a.note);
   }
 
@@ -413,14 +437,15 @@ export class ScenarioBuilder {
     return {
       name: this.name,
       description: this.description,
-      schema: 1,
+      schema: 2,
+      specVersion: "1.1",
       generatedBy: "packages/reference/src/vectors/generate.ts (pnpm vectors)",
       config: {
         parameters: parametersToStrings(this.params),
         flags: this.flags,
         stablecoinDecimals: 6,
         chainDomainNote:
-          "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent.",
+          "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces, prior/income commitments, liquidity flags) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent.",
       },
       actors: [...this.actors].sort(),
       keys: this.keys,

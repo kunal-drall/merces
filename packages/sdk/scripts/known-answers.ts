@@ -114,7 +114,7 @@ const keys = ["attestor1", "attestor2", "verifier1", "issuer", "b1"].map((seed) 
   return { seed, privateKey, publicKey: publicKeyFromPrivate(privateKey), address: addressFromPrivateKey(privateKey) };
 });
 
-function msgEntry(domainName: string, seriesKeyNote: string, fields: Record<string, string | number>, m: SignedMessage, signer: (typeof keys)[number]) {
+function msgEntry(domainName: string, seriesKeyNote: string, fields: Record<string, string | number | boolean>, m: SignedMessage, signer: (typeof keys)[number]) {
   const sig = signDigest(m.digest, signer.privateKey);
   return {
     kind: m.kind,

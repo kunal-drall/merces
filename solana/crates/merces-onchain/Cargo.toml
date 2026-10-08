@@ -12,6 +12,7 @@ anchor-spl = { workspace = true }
 spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 solana-keccak-hasher = { workspace = true }
 solana-secp256k1-recover = { workspace = true }
+solana-poseidon = { workspace = true }
 merces-common = { path = "../merces-common" }
 
 [lints.rust]

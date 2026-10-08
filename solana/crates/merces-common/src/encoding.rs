@@ -50,14 +50,24 @@ pub const CHAIN_KIND_EVM: u8 = 2;
 /// `chain_kind_u8 ‖ chain_id_u64 ‖ registry_address_32` (SPEC §1.3 `domain`).
 pub fn domain_preimage(chain_kind: u8, chain_id: u64, registry_address: &[u8; 32]) -> Preimage {
     let mut p = Preimage::new();
-    p.push(&[chain_kind]).push(&chain_id.to_be_bytes()).push(registry_address);
+    p.push(&[chain_kind])
+        .push(&chain_id.to_be_bytes())
+        .push(registry_address);
     p
 }
 
 /// `price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32` (bid / ask commitment).
-pub fn commitment_preimage(price: u64, quantity: u64, salt: &[u8; 32], wallet: &[u8; 32]) -> Preimage {
+pub fn commitment_preimage(
+    price: u64,
+    quantity: u64,
+    salt: &[u8; 32],
+    wallet: &[u8; 32],
+) -> Preimage {
     let mut p = Preimage::new();
-    p.push(&price.to_be_bytes()).push(&quantity.to_be_bytes()).push(salt).push(wallet);
+    p.push(&price.to_be_bytes())
+        .push(&quantity.to_be_bytes())
+        .push(salt)
+        .push(wallet);
     p
 }
 
@@ -91,7 +101,12 @@ pub fn report_message(
 }
 
 /// `"MERCES_FX_V1" ‖ domain ‖ series_key ‖ period_u32 ‖ fx_rate_wad_u64`.
-pub fn fx_message(domain: &[u8; 32], series_key: &[u8; 32], period: u32, fx_rate_wad: u64) -> Preimage {
+pub fn fx_message(
+    domain: &[u8; 32],
+    series_key: &[u8; 32],
+    period: u32,
+    fx_rate_wad: u64,
+) -> Preimage {
     let mut p = Preimage::new();
     p.push(b"MERCES_FX_V1")
         .push(domain)
@@ -102,7 +117,13 @@ pub fn fx_message(domain: &[u8; 32], series_key: &[u8; 32], period: u32, fx_rate
 }
 
 /// `"MERCES_AMEND_V1" ‖ domain ‖ series_key ‖ amendment_nonce_u64 ‖ new_terms_commitment_32 ‖ new_cap_multiple_wad_u64`.
-pub fn amend_message(domain: &[u8; 32], series_key: &[u8; 32], nonce: u64, new_terms_commitment: &[u8; 32], new_cap_multiple_wad: u64) -> Preimage {
+pub fn amend_message(
+    domain: &[u8; 32],
+    series_key: &[u8; 32],
+    nonce: u64,
+    new_terms_commitment: &[u8; 32],
+    new_cap_multiple_wad: u64,
+) -> Preimage {
     let mut p = Preimage::new();
     p.push(b"MERCES_AMEND_V1")
         .push(domain)
@@ -114,7 +135,12 @@ pub fn amend_message(domain: &[u8; 32], series_key: &[u8; 32], nonce: u64, new_t
 }
 
 /// `"MERCES_PAUSE_V1" ‖ domain ‖ series_key ‖ pause_nonce_u64 ‖ pause_end_u64`.
-pub fn pause_message(domain: &[u8; 32], series_key: &[u8; 32], nonce: u64, pause_end: u64) -> Preimage {
+pub fn pause_message(
+    domain: &[u8; 32],
+    series_key: &[u8; 32],
+    nonce: u64,
+    pause_end: u64,
+) -> Preimage {
     let mut p = Preimage::new();
     p.push(b"MERCES_PAUSE_V1")
         .push(domain)
@@ -127,12 +153,22 @@ pub fn pause_message(domain: &[u8; 32], series_key: &[u8; 32], nonce: u64, pause
 /// `"MERCES_EXTINGUISH_V1" ‖ domain ‖ series_key ‖ extinguish_nonce_u64`.
 pub fn extinguish_message(domain: &[u8; 32], series_key: &[u8; 32], nonce: u64) -> Preimage {
     let mut p = Preimage::new();
-    p.push(b"MERCES_EXTINGUISH_V1").push(domain).push(series_key).push(&nonce.to_be_bytes());
+    p.push(b"MERCES_EXTINGUISH_V1")
+        .push(domain)
+        .push(series_key)
+        .push(&nonce.to_be_bytes());
     p
 }
 
 /// `"MERCES_TRUEUP_V1" ‖ domain ‖ series_key ‖ trueup_nonce_u64 ‖ year_u16 ‖ adjustment_i64 ‖ attestation_ts_u64`.
-pub fn trueup_message(domain: &[u8; 32], series_key: &[u8; 32], nonce: u64, year: u16, adjustment: i64, attestation_ts: u64) -> Preimage {
+pub fn trueup_message(
+    domain: &[u8; 32],
+    series_key: &[u8; 32],
+    nonce: u64,
+    year: u16,
+    adjustment: i64,
+    attestation_ts: u64,
+) -> Preimage {
     let mut p = Preimage::new();
     p.push(b"MERCES_TRUEUP_V1")
         .push(domain)
@@ -146,8 +182,8 @@ pub fn trueup_message(domain: &[u8; 32], series_key: &[u8; 32], nonce: u64, year
 
 /// secp256k1 group order halved: signatures with `s` above this are malleable and rejected.
 pub const SECP256K1_HALF_ORDER: [u8; 32] = [
-    0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x5D, 0x57, 0x6E, 0x73, 0x57, 0xA4, 0x50, 0x1D, 0xDF, 0xE9,
-    0x2F, 0x46, 0x68, 0x1B, 0x20, 0xA0,
+    0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0x5D, 0x57, 0x6E, 0x73, 0x57, 0xA4, 0x50, 0x1D, 0xDF, 0xE9, 0x2F, 0x46, 0x68, 0x1B, 0x20, 0xA0,
 ];
 
 /// Parses a 65-byte `(r, s, v)` signature: returns `(r‖s, recovery_id)` after enforcing
@@ -200,15 +236,30 @@ mod tests {
         assert_eq!(&m.as_bytes()[116..148], &c);
         assert_eq!(m.as_bytes()[148], 2);
         assert_eq!(m.as_bytes()[149], 1);
-        assert_eq!(fx_message(&d, &s, 1, 2).as_bytes().len(), 12 + 32 + 32 + 4 + 8);
-        assert_eq!(amend_message(&d, &s, 1, &c, 2).as_bytes().len(), 15 + 32 + 32 + 8 + 32 + 8);
-        assert_eq!(pause_message(&d, &s, 1, 2).as_bytes().len(), 15 + 32 + 32 + 8 + 8);
-        assert_eq!(extinguish_message(&d, &s, 1).as_bytes().len(), 20 + 32 + 32 + 8);
+        assert_eq!(
+            fx_message(&d, &s, 1, 2).as_bytes().len(),
+            12 + 32 + 32 + 4 + 8
+        );
+        assert_eq!(
+            amend_message(&d, &s, 1, &c, 2).as_bytes().len(),
+            15 + 32 + 32 + 8 + 32 + 8
+        );
+        assert_eq!(
+            pause_message(&d, &s, 1, 2).as_bytes().len(),
+            15 + 32 + 32 + 8 + 8
+        );
+        assert_eq!(
+            extinguish_message(&d, &s, 1).as_bytes().len(),
+            20 + 32 + 32 + 8
+        );
         let t = trueup_message(&d, &s, 9, 2026, -5, 7);
         assert_eq!(t.as_bytes().len(), 16 + 32 + 32 + 8 + 2 + 8 + 8);
         assert_eq!(&t.as_bytes()[80..88], &9u64.to_be_bytes());
         assert_eq!(&t.as_bytes()[90..98], &(-5i64).to_be_bytes());
-        assert_eq!(commitment_preimage(1, 2, &c, &s).as_bytes().len(), 8 + 8 + 32 + 32);
+        assert_eq!(
+            commitment_preimage(1, 2, &c, &s).as_bytes().len(),
+            8 + 8 + 32 + 32
+        );
         assert_eq!(domain_preimage(1, 103, &s).as_bytes().len(), 1 + 8 + 32);
         assert_eq!(fx_pair_id_preimage(&s, true).as_bytes().len(), 33);
         assert_eq!(fx_pair_id_preimage(&s, true).as_bytes()[32], 1);

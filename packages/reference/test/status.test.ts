@@ -1,98 +1,117 @@
 import { describe, it, expect } from "vitest";
 import { DAY, SeriesStatus, WAD, periodEnd, periodId, timestampFromCivil } from "@merces/sdk";
 import {
-  closeExpiredPause,
-  deadline,
+  countdown,
   deriveStatus,
   earliestUnpaid,
-  effectiveNow,
   formalNoticeDue,
-  graceEnd,
-  isPaused,
+  isLateUnderlying,
   lateAccrual,
+  lateAccrualTrueup,
   lateDays,
   nextExpectedPeriod,
+  pauseApprovalError,
+  trueupNoticeDue,
+  trueupOverdue,
   type LedgerClock,
   type StatusParams,
 } from "../src/index.js";
 
-const params: StatusParams = { reportDueDays: 30, graceDays: 15, formalNoticeDays: 90, hurdleRateWad: (8n * WAD) / 100n };
+const ts = timestampFromCivil;
+const params: StatusParams = { reportDueDays: 30, graceDays: 15, formalNoticeDays: 90, trueupDays: 60, hurdleRateWad: (8n * WAD) / 100n };
 const q1 = periodId(2026, 1);
-const base: LedgerClock = { status: SeriesStatus.OnTime, firstPeriod: q1, lastAcceptedPeriod: null, openDuePeriod: null, openDueAmount: 0n, pauseStart: 0n, pauseEnd: 0n, pausedTotal: 0n };
+const base: LedgerClock = { status: SeriesStatus.OnTime, firstPeriod: q1, lastAcceptedPeriod: null, openDuePeriod: null, openDueAmount: 0n, pauses: [], trueupDue: 0n, trueupAttestedAt: 0n };
+const deadline = periodEnd(q1) + 30n * DAY; // 1 May 2026
+const graceEnd = deadline + 15n * DAY; // 16 May 2026
 
-describe("deadlines (brief C8)", () => {
-  it("2026 Q1: due 1 May, grace to 16 May, formal notice 30 July", () => {
-    expect(periodEnd(q1)).toBe(timestampFromCivil(2026, 4, 1));
-    expect(deadline(q1, params)).toBe(timestampFromCivil(2026, 5, 1));
-    expect(graceEnd(q1, params)).toBe(timestampFromCivil(2026, 5, 16));
-    expect(formalNoticeDue(q1, base, timestampFromCivil(2026, 7, 30) - 1n, params)).toBe(false);
-    expect(formalNoticeDue(q1, base, timestampFromCivil(2026, 7, 30), params)).toBe(true);
-  });
-  it("earliest unpaid period follows the ledger", () => {
+describe("countdowns (SPEC v1.1 §6.4)", () => {
+  it("run in unpaused time from period_end", () => {
+    expect(countdown(q1, base, periodEnd(q1) - 1n)).toBe(0n);
+    expect(countdown(q1, base, periodEnd(q1) + 5n * DAY)).toBe(5n * DAY);
+    const paused = { ...base, pauses: [{ start: ts(2026, 4, 10), end: ts(2026, 6, 10) }] };
+    expect(countdown(q1, paused, ts(2026, 7, 1))).toBe(91n * DAY - 61n * DAY);
     expect(nextExpectedPeriod(base)).toBe(q1);
-    expect(nextExpectedPeriod({ ...base, lastAcceptedPeriod: q1 })).toBe(q1 + 1);
-    expect(earliestUnpaid({ ...base, lastAcceptedPeriod: q1 + 1, openDuePeriod: q1 + 1, openDueAmount: 5n })).toBe(q1 + 1);
-    expect(earliestUnpaid({ ...base, lastAcceptedPeriod: q1 + 1, openDuePeriod: q1 + 1, openDueAmount: 0n })).toBe(q1 + 2);
+    expect(earliestUnpaid({ ...base, lastAcceptedPeriod: q1, openDuePeriod: q1, openDueAmount: 5n })).toBe(q1);
+    expect(earliestUnpaid({ ...base, lastAcceptedPeriod: q1, openDuePeriod: q1, openDueAmount: 0n })).toBe(q1 + 1);
   });
-});
-
-describe("derive_status", () => {
-  it("OnTime → InGrace → Late across the deadline and grace end", () => {
-    expect(deriveStatus(base, timestampFromCivil(2026, 2, 1), params)).toBe(SeriesStatus.OnTime);
-    expect(deriveStatus(base, deadline(q1, params), params)).toBe(SeriesStatus.OnTime);
-    expect(deriveStatus(base, deadline(q1, params) + 1n, params)).toBe(SeriesStatus.InGrace);
-    expect(deriveStatus(base, graceEnd(q1, params), params)).toBe(SeriesStatus.InGrace);
-    expect(deriveStatus(base, graceEnd(q1, params) + 1n, params)).toBe(SeriesStatus.Late);
-  });
-  it("a report accepted but unpaid keeps the due period as the clock", () => {
-    const c = { ...base, lastAcceptedPeriod: q1, openDuePeriod: q1, openDueAmount: 100n };
-    expect(deriveStatus(c, graceEnd(q1, params) + 1n, params)).toBe(SeriesStatus.Late);
-    const paid = { ...c, openDueAmount: 0n };
-    expect(deriveStatus(paid, graceEnd(q1, params) + 1n, params)).toBe(SeriesStatus.OnTime);
+  it("OnTime → InGrace → Late across the deadline and grace end; formal notice at 90 days", () => {
+    expect(deriveStatus(base, ts(2026, 2, 1), params)).toBe(SeriesStatus.OnTime);
+    expect(deriveStatus(base, deadline, params)).toBe(SeriesStatus.OnTime);
+    expect(deriveStatus(base, deadline + 1n, params)).toBe(SeriesStatus.InGrace);
+    expect(deriveStatus(base, graceEnd, params)).toBe(SeriesStatus.InGrace);
+    expect(deriveStatus(base, graceEnd + 1n, params)).toBe(SeriesStatus.Late);
+    expect(formalNoticeDue(q1, base, periodEnd(q1) + 90n * DAY - 1n, params)).toBe(false);
+    expect(formalNoticeDue(q1, base, periodEnd(q1) + 90n * DAY, params)).toBe(true);
+    expect(isLateUnderlying(base, graceEnd + 1n, params)).toBe(true);
+    expect(isLateUnderlying(base, graceEnd, params)).toBe(false);
   });
   it("terminal statuses are returned as stored", () => {
     for (const s of [SeriesStatus.Retired, SeriesStatus.Redeemed, SeriesStatus.Extinguished]) {
-      expect(deriveStatus({ ...base, status: s }, graceEnd(q1, params) + 100n * DAY, params)).toBe(s);
+      expect(deriveStatus({ ...base, status: s }, graceEnd + 100n * DAY, params)).toBe(s);
+      expect(isLateUnderlying({ ...base, status: s }, graceEnd + 100n * DAY, params)).toBe(false);
     }
   });
-  it("hardship pause stops the clock and reports Paused", () => {
-    const start = timestampFromCivil(2026, 4, 20);
-    const end = timestampFromCivil(2026, 6, 20);
-    const c = { ...base, pauseStart: start, pauseEnd: end };
-    expect(isPaused(c, start)).toBe(true);
-    expect(isPaused(c, end)).toBe(false);
-    expect(deriveStatus(c, timestampFromCivil(2026, 5, 20), params)).toBe(SeriesStatus.Paused);
-    // effective time at the pause end is the pause start
-    expect(effectiveNow(c, end)).toBe(start);
-    // right after the pause ends, 61 days of pause have shifted the deadline from 1 May to 1 July
-    expect(deriveStatus(c, end, params)).toBe(SeriesStatus.OnTime);
-    expect(deriveStatus(c, end + 10n * DAY, params)).toBe(SeriesStatus.OnTime);
-    expect(deriveStatus(c, end + 11n * DAY + 1n, params)).toBe(SeriesStatus.InGrace);
-    // sync folds the finished pause into paused_total; the derived values do not change
-    const closed = { ...c, ...closeExpiredPause(c, end) };
-    expect(closed.pausedTotal).toBe(end - start);
-    expect(closed.pauseStart).toBe(0n);
-    expect(effectiveNow(closed, end + 5n * DAY)).toBe(effectiveNow(c, end + 5n * DAY));
-    expect(closeExpiredPause(c, end - 1n)).toEqual({ pauseStart: start, pauseEnd: end, pausedTotal: 0n });
+  it("a pause stops every running clock but does not shift obligations that start later", () => {
+    const c = { ...base, pauses: [{ start: ts(2026, 4, 10), end: ts(2026, 6, 10) }] };
+    expect(deriveStatus(c, ts(2026, 5, 20), params)).toBe(SeriesStatus.Paused);
+    expect(deriveStatus(c, ts(2026, 6, 10), params)).toBe(SeriesStatus.OnTime); // 61 days paused: deadline effectively 1 July
+    expect(deriveStatus(c, ts(2026, 7, 1), params)).toBe(SeriesStatus.OnTime);
+    expect(deriveStatus(c, ts(2026, 7, 1, 0, 0, 1), params)).toBe(SeriesStatus.InGrace);
+    expect(deriveStatus(c, ts(2026, 7, 16, 0, 0, 1), params)).toBe(SeriesStatus.Late);
+    // Q2's clock starts 1 July, after the pause: it is not shifted
+    const q2Clock = { ...c, lastAcceptedPeriod: q1 };
+    expect(countdown(q1 + 1, q2Clock, ts(2026, 8, 1))).toBe(31n * DAY);
+    expect(deriveStatus(q2Clock, ts(2026, 7, 31), params)).toBe(SeriesStatus.OnTime);
+    expect(deriveStatus(q2Clock, ts(2026, 7, 31, 0, 0, 1), params)).toBe(SeriesStatus.InGrace);
+  });
+  it("a pause approved while Late keeps the underlying lateness (releases stay blocked)", () => {
+    const c = { ...base, pauses: [{ start: ts(2026, 5, 20), end: ts(2026, 7, 20) }] };
+    expect(deriveStatus(c, ts(2026, 6, 1), params)).toBe(SeriesStatus.Paused);
+    expect(isLateUnderlying(c, ts(2026, 6, 1), params)).toBe(true);
+    expect(lateDays(q1, c, ts(2026, 6, 1), params)).toBe(4n); // 16 → 20 May, then frozen
+    expect(lateDays(q1, c, ts(2026, 7, 25), params)).toBe(9n);
   });
 });
 
-describe("late accrual", () => {
-  it("simple interest at the hurdle rate per whole late day, counted from grace end", () => {
-    const c = { ...base, lastAcceptedPeriod: q1, openDuePeriod: q1, openDueAmount: 10_000_000_000n };
-    const g = graceEnd(q1, params);
-    expect(lateDays(q1, c, g, params)).toBe(0n);
-    expect(lateDays(q1, c, g + DAY - 1n, params)).toBe(0n);
-    expect(lateDays(q1, c, g + DAY, params)).toBe(1n);
-    expect(lateDays(q1, c, g + 10n * DAY + 5n, params)).toBe(10n);
-    expect(lateAccrual(q1, 10_000_000_000n, c, g + 10n * DAY, params)).toBe(21_917_808n); // 10,000 × 8% × 10/365
-    expect(lateAccrual(q1, 10_000_000_000n, c, g - 1n, params)).toBe(0n);
-    expect(lateAccrual(q1, 0n, c, g + 100n * DAY, params)).toBe(0n);
+describe("late accrual (nested mulDiv)", () => {
+  const c = { ...base, lastAcceptedPeriod: q1, openDuePeriod: q1, openDueAmount: 10_000_000_000n };
+  it("simple interest per whole late day from grace end", () => {
+    expect(lateDays(q1, c, graceEnd, params)).toBe(0n);
+    expect(lateDays(q1, c, graceEnd + DAY - 1n, params)).toBe(0n);
+    expect(lateDays(q1, c, graceEnd + DAY, params)).toBe(1n);
+    expect(lateAccrual(q1, 10_000_000_000n, c, graceEnd + 10n * DAY, params)).toBe((((10_000_000_000n * params.hurdleRateWad) / WAD) * 10n) / 365n);
+    expect(lateAccrual(q1, 10_000_000_000n, c, graceEnd + 10n * DAY, params)).toBe(21_917_808n);
+    expect(lateAccrual(q1, 2_000_000_000n, c, graceEnd + 77n * DAY, params)).toBe(33_753_424n);
+    expect(lateAccrual(q1, 0n, c, graceEnd + 100n * DAY, params)).toBe(0n);
+    // nested rounding differs from the single-expression floor for small amounts
+    expect(lateAccrual(q1, 7n, c, graceEnd + 365n * DAY, params)).toBe(0n); // mulDiv(7, 0.08) = 0
   });
-  it("a pause removes days from the accrual", () => {
-    const g = graceEnd(q1, params);
-    const c = { ...base, lastAcceptedPeriod: q1, openDuePeriod: q1, openDueAmount: 1n, pauseStart: g + 2n * DAY, pauseEnd: g + 7n * DAY };
-    expect(lateDays(q1, c, g + 10n * DAY, params)).toBe(5n);
-    expect(lateDays(q1, c, g + 4n * DAY, params)).toBe(2n);
+  it("true-up: overdue after trueup_days of unpaused time, accrual and notice", () => {
+    const t = { ...base, trueupDue: 1_000_000_000n, trueupAttestedAt: ts(2027, 2, 1) };
+    expect(trueupOverdue(t, ts(2027, 4, 2), params)).toBe(false); // 60 days exactly
+    expect(trueupOverdue(t, ts(2027, 4, 2, 0, 0, 1), params)).toBe(true);
+    expect(deriveStatus(t, ts(2027, 4, 3), params)).toBe(SeriesStatus.Late);
+    expect(isLateUnderlying(t, ts(2027, 4, 3), params)).toBe(true);
+    expect(lateAccrualTrueup(t, ts(2027, 4, 12), params)).toBe((((1_000_000_000n * params.hurdleRateWad) / WAD) * 10n) / 365n);
+    expect(lateAccrualTrueup(t, ts(2027, 4, 1), params)).toBe(0n);
+    expect(trueupNoticeDue(t, ts(2027, 2, 1) + 60n * DAY + 45n * DAY - 1n, params)).toBe(false);
+    expect(trueupNoticeDue(t, ts(2027, 2, 1) + 60n * DAY + 45n * DAY, params)).toBe(true);
+    const paused = { ...t, pauses: [{ start: ts(2027, 3, 1), end: ts(2027, 3, 11) }] };
+    expect(trueupOverdue(paused, ts(2027, 4, 12), params)).toBe(false);
+  });
+});
+
+describe("pause approval bounds", () => {
+  const bounds = { maxPauseSeconds: 365n * DAY, maxCumulativePauseSeconds: 730n * DAY, maxPauses: 16 };
+  it("checks end, overlap, length, cumulative length and count", () => {
+    const now = ts(2026, 4, 10);
+    expect(pauseApprovalError([], 0n, now, now, bounds)).toBe("InvalidPauseEnd");
+    expect(pauseApprovalError([{ start: now - DAY, end: now + DAY }], 2n * DAY, now, now + 10n * DAY, bounds)).toBe("AlreadyPaused");
+    expect(pauseApprovalError([], 0n, now, now + 366n * DAY, bounds)).toBe("PauseTooLong");
+    expect(pauseApprovalError([], 400n * DAY, now, now + 331n * DAY, bounds)).toBe("PauseTooLong");
+    expect(pauseApprovalError([], 400n * DAY, now, now + 330n * DAY, bounds)).toBeNull();
+    const sixteen = Array.from({ length: 16 }, (_, i) => ({ start: BigInt(i) * 10n, end: BigInt(i) * 10n + 5n }));
+    expect(pauseApprovalError(sixteen, 80n, now, now + DAY, bounds)).toBe("TooManyPauses");
+    expect(pauseApprovalError([], 0n, now, now + 60n * DAY, bounds)).toBeNull();
   });
 });

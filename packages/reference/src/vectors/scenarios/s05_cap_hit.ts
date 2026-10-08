@@ -13,7 +13,7 @@ export const s05: Scenario = {
     await b.createSeries({ series: "S1", issuer: "issuer", plain: STD_PLAIN });
     await b.raise({ series: "S1", issuer: "issuer", openAt: ts(2026, 1, 5), bids: FOUR_BACKER_BIDS });
     const s = b.sim.series.get("S1")!;
-    b.expect("S1", "capPerUnit = floor(2.5e18 × 105e6 / 1e18) = 262,500,000");
+    b.expect("S1", "cap_per_unit() = floor(2.5e18 × 105e6 / 1e18) = 262,500,000 (read live)");
 
     b.at(ts(2026, 4, 2));
     const q1 = await b.report({ series: "S1", period: Q(2026, 1), incomeYtd: usdc(100_000), tier: 2, note: "owed 4% × 20,000 = 800" });
@@ -36,7 +36,10 @@ export const s05: Scenario = {
     if (s.vault.paidPerUnitWad !== 262_500_000n * 10n ** 18n) throw new Error(`paid ${s.vault.paidPerUnitWad}`);
     b.expect("S1", "Retired: paidPerUnitWad == cap × WAD; refundedToIssuer 7,800; gross 105,000 = 400 × 262.5");
 
-    await b.reportRevert({ series: "S1", period: Q(2026, 4), incomeYtd: usdc(3_000_000), tier: 2 }, "SeriesRetired", "no reports after retirement (nothing owed)");
+    await b.reportRevert({ series: "S1", period: Q(2026, 4), incomeYtd: usdc(3_000_000), tier: 2 }, "TerminalStatus", "no reports after retirement (nothing owed)");
+    await b.revert({ op: "retire_if_capped", series: "S1" }, "TerminalStatus", "already Retired");
+    await b.revert({ op: "redeem", actor: "issuer", series: "S1" }, "TerminalStatus", "a Retired series cannot be redeemed");
+    await b.revert({ op: "amend_terms", actor: "issuer", series: "S1", newTermsCommitment: b.salt("new"), newCapMultipleWad: (24n * 10n ** 17n).toString(), attestor: "attestor1" }, "AmendmentAfterTerminal");
     await b.step({ op: "claim", actor: "b1", series: "S1" }, "claim on a Retired series burns the holder's units");
     await b.step({ op: "claim", actor: "b2", series: "S1" });
     await b.step({ op: "burn_retired", series: "S1", holder: "b3" }, "keeper crank: burns b3's units; b3's pending stays claimable");
@@ -44,7 +47,6 @@ export const s05: Scenario = {
     await b.step({ op: "claim", actor: "b3", series: "S1" });
     await b.step({ op: "claim", actor: "b4", series: "S1" });
     b.expect("S1", "all units burned (unitsOutstanding 0); vault empty; fee collector = 420 + 5% × 105,000");
-    await b.revert({ op: "redeem", actor: "issuer", series: "S1" }, "SeriesTerminal", "a Retired series cannot be redeemed (the status check precedes the lockup check)");
 
     b.at(ts(2026, 10, 12));
     await b.step({ op: "claim_release", actor: "issuer", series: "S1" }, "Retired series still release on schedule: tranches 3 and 4");
