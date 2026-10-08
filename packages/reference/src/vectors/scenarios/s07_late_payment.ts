@@ -42,7 +42,6 @@ export const s07: Scenario = {
     await b.reportRevert({ series: "S1", period: Q(2026, 2), incomeYtd: usdc(160_000), tier: 2 }, "PaymentOutstanding", "Q2 cannot be reported while Q1 is unpaid");
     b.at(ts(2026, 7, 14));
     await b.revert({ op: "claim_release", actor: "issuer", series: "S1" }, "SeriesLate", "tranche 3 vested on 13 July but releases pause while Late");
-    await b.revert({ op: "redeem", actor: "issuer", series: "S1" }, "LockupActive");
 
     b.at(ts(2026, 8, 1));
     await b.step({ op: "pay", actor: "issuer", series: "S1" }, "77 late days since 16 May: accrual = mulDiv(mulDiv(2,000e6, 0.08e18, 1e18), 77, 365) = 33,753,424; gross 2,033.753424");

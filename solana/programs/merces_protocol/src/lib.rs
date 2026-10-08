@@ -2,7 +2,7 @@
 //! verifier (D6), payout vault (D7), redemption / tail / pause / extinguishment (D8), transfer
 //! window (D9) and rate accumulator (C9). One program so every money module shares one per-series
 //! ledger (SPEC §0). Upgradeable through the multisig + timelock upgrade authority only; it writes
-//! to the registry solely through the §3.3 interface signed by its `registry_signer` PDA.
+//! to the registry solely through the §3.2 interface signed by its `registry_authority` PDA.
 #![allow(unexpected_cfgs)]
 #![allow(clippy::too_many_arguments)]
 
@@ -64,9 +64,11 @@ pub mod merces_protocol {
     }
     pub fn begin_settlement(
         ctx: Context<BeginSettlement>,
-        proposed_clearing_price: u64,
+        clearing_price: u64,
+        q_above_claim: u64,
+        q_at_claim: u64,
     ) -> Result<()> {
-        raise::begin_settlement(ctx, proposed_clearing_price)
+        raise::begin_settlement(ctx, clearing_price, q_above_claim, q_at_claim)
     }
     pub fn tally_bids<'info>(ctx: Context<'info, TallyBids<'info>>) -> Result<()> {
         raise::tally_bids(ctx)
@@ -74,14 +76,11 @@ pub mod merces_protocol {
     pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
         raise::finalize_settlement(ctx)
     }
-    pub fn claim_win<'info>(ctx: Context<'info, ClaimWin<'info>>) -> Result<()> {
-        raise::claim_win(ctx)
+    pub fn process_bid<'info>(ctx: Context<'info, ProcessBid<'info>>) -> Result<()> {
+        raise::process_bid(ctx)
     }
-    pub fn refund_bid<'info>(ctx: Context<'info, RefundBid<'info>>) -> Result<()> {
-        raise::refund_bid(ctx)
-    }
-    pub fn revoke_mint_authority(ctx: Context<RevokeMintAuthority>) -> Result<()> {
-        raise::revoke_mint_authority(ctx)
+    pub fn deliver_bid<'info>(ctx: Context<'info, DeliverBid<'info>>) -> Result<()> {
+        raise::deliver_bid(ctx)
     }
 
     // ---- treasury (SPEC §5.3)
@@ -128,8 +127,14 @@ pub mod merces_protocol {
     pub fn crank_status(ctx: Context<CrankStatus>) -> Result<()> {
         income::crank_status(ctx)
     }
-    pub fn request_pause(ctx: Context<RequestPause>) -> Result<()> {
+    pub fn retire_if_capped(ctx: Context<RetireIfCapped>) -> Result<()> {
+        income::retire_if_capped(ctx)
+    }
+    pub fn request_pause(ctx: Context<IssuerLedger>) -> Result<()> {
         income::request_pause(ctx)
+    }
+    pub fn withdraw_pause_request(ctx: Context<IssuerLedger>) -> Result<()> {
+        income::withdraw_pause_request(ctx)
     }
     pub fn approve_pause(
         ctx: Context<ApprovePause>,
@@ -139,7 +144,7 @@ pub mod merces_protocol {
     ) -> Result<()> {
         income::approve_pause(ctx, pause_end, attestor_addr, attestor_sig)
     }
-    pub fn end_pause(ctx: Context<EndPause>) -> Result<()> {
+    pub fn end_pause(ctx: Context<IssuerLedger>) -> Result<()> {
         income::end_pause(ctx)
     }
 
@@ -164,11 +169,14 @@ pub mod merces_protocol {
     }
 
     // ---- tier 1 router (SPEC §6.5)
-    pub fn init_router(ctx: Context<InitRouter>, theta: u64, r_wad: u64) -> Result<()> {
-        router::init_router(ctx, theta, r_wad)
+    pub fn init_router(ctx: Context<InitRouter>) -> Result<()> {
+        router::init_router(ctx)
     }
     pub fn route<'info>(ctx: Context<'info, Route<'info>>) -> Result<()> {
         router::route(ctx)
+    }
+    pub fn close_router_period(ctx: Context<CloseRouterPeriod>, period: u32) -> Result<()> {
+        router::close_router_period(ctx, period)
     }
 
     // ---- rate accumulator (SPEC §6.6)
@@ -213,12 +221,11 @@ pub mod merces_protocol {
     }
     pub fn reveal_order(
         ctx: Context<RevealOrder>,
-        side: u8,
         price: u64,
         quantity: u64,
         salt: [u8; 32],
     ) -> Result<()> {
-        window::reveal_order(ctx, side, price, quantity, salt)
+        window::reveal_order(ctx, price, quantity, salt)
     }
     pub fn begin_window_settlement(
         ctx: Context<WindowSettle>,
@@ -235,8 +242,5 @@ pub mod merces_protocol {
     }
     pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<()> {
         window::process_order(ctx)
-    }
-    pub fn return_dust<'info>(ctx: Context<'info, ReturnDust<'info>>) -> Result<()> {
-        window::return_dust(ctx)
     }
 }

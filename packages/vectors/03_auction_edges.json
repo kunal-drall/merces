@@ -1,7 +1,8 @@
 {
   "name": "03_auction_edges",
-  "description": "Oversubscribed raise of 300 units: tie at the margin filled pro rata with rounding dust left unsold, an over-collateralised bid, a bid above the wallet cap (invalid, refunded), a bid below reserve, a losing bid below p*, an unrevealed bid charged 1% of escrow, and the phase/commitment reverts.",
-  "schema": 1,
+  "description": "Oversubscribed raise of 300 units: tie at the margin filled pro rata with rounding dust excluded from units_sold in one pass, an over-collateralised bid, a bid above the wallet cap (invalid, refunded), a bid below reserve, a losing bid below p*, an unrevealed bid charged 1% of escrow, two rejected proposals (wrong price, wrong claims) before the right one, and the phase/commitment reverts.",
+  "schema": 2,
+  "specVersion": "1.1",
   "generatedBy": "packages/reference/src/vectors/generate.ts (pnpm vectors)",
   "config": {
     "parameters": {
@@ -27,6 +28,9 @@
       "fx_max_staleness_seconds": "3600",
       "fx_max_conf_bps": "100",
       "fx_deviation_band_bps": "200",
+      "max_pause_seconds": "31536000",
+      "max_cumulative_pause_seconds": "63072000",
+      "max_pauses": "16",
       "max_release_tranches": "24"
     },
     "flags": {
@@ -35,7 +39,7 @@
       "tier4Enabled": false
     },
     "stablecoinDecimals": 6,
-    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
+    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces, prior/income commitments, liquidity flags) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
   },
   "actors": [
     "attestor1",
@@ -231,6 +235,57 @@
       "contractHash": "0x91ecf0353a09041213be61e39faae4afb4f97e5eb416f65109ee5ff4a4079ac6",
       "tierFlags": 2,
       "fxPairId": null
+    },
+    {
+      "t": "1767312000",
+      "op": "expect_revert",
+      "call": {
+        "op": "create_series",
+        "actor": "issuer",
+        "series": "Sx",
+        "terms": {
+          "unitsOffered": "5",
+          "reservePrice": "100000000",
+          "minRaise": "20000000000",
+          "capMultipleWad": "2500000000000000000",
+          "hurdleRateWad": "80000000000000000",
+          "payoutMultipleK": "5",
+          "lockupSeconds": "47336400",
+          "walletCapBps": "1000",
+          "auctionFeeBps": "100",
+          "payoutFeeBps": "500",
+          "windowFeeBps": "100",
+          "nonRevealChargeBps": "100",
+          "commitDuration": "604800",
+          "revealDuration": "172800",
+          "windowCommitDuration": "259200",
+          "windowRevealDuration": "86400"
+        },
+        "releaseSchedule": [
+          {
+            "atOffsetSeconds": "0",
+            "bps": "2500"
+          },
+          {
+            "atOffsetSeconds": "7776000",
+            "bps": "2500"
+          },
+          {
+            "atOffsetSeconds": "15552000",
+            "bps": "2500"
+          },
+          {
+            "atOffsetSeconds": "23328000",
+            "bps": "2500"
+          }
+        ],
+        "termsCommitment": "0xc86a7174ada355a707dea5ae57e24117adafb9fc24218404247e2c2a07c5f677",
+        "contractHash": "0xeeb1b6d4b947d80779adee0b89308c843ba6c4e9b78f06a269b73a9275fe8bce",
+        "tierFlags": 2,
+        "fxPairId": null
+      },
+      "error": "InvalidTerms",
+      "note": "floor(5 × 10%) = 0: no bid could ever be valid"
     },
     {
       "t": "1767571200",
@@ -430,6 +485,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Open",
+        "mintFinalized": false,
         "unitsOutstanding": "0",
         "unitsSold": "0",
         "clearingPrice": "0",
@@ -442,6 +498,7 @@
         "paidPerUnitWad": "0",
         "netAccWad": "0",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "0",
         "feeCollected": "0",
         "refundedToIssuer": "0",
@@ -450,26 +507,40 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "9",
         "revealedCount": "0",
+        "validCount": "0",
         "escrowTotal": "89134500000",
-        "R": "0",
-        "qAt": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "0",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "0",
         "qAbove": "0",
-        "unitsSoldUpper": "0",
-        "bidsProcessed": "0"
+        "qAt": "0",
+        "R": "0",
+        "unitsSold": "0",
+        "proceeds": "0",
+        "unitsMinted": "0",
+        "bidsProcessed": "0",
+        "mintFinalized": false
       },
       "holders": {},
       "note": "nine bids committed; escrow held"
@@ -591,6 +662,7 @@
     },
     {
       "t": "1768180200",
+      "note": "recorded invalid, never reverts",
       "op": "reveal_bid",
       "actor": "b7",
       "series": "S1",
@@ -600,6 +672,7 @@
     },
     {
       "t": "1768180800",
+      "note": "recorded invalid, never reverts",
       "op": "reveal_bid",
       "actor": "b9",
       "series": "S1",
@@ -631,6 +704,119 @@
       "error": "RaiseNotSettled"
     },
     {
+      "t": "1768180800",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "10000000000",
+          "units": "0"
+        },
+        "b2": {
+          "stable": "17880000000",
+          "units": "0"
+        },
+        "b3": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b4": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b5": {
+          "stable": "26111500000",
+          "units": "0"
+        },
+        "b6": {
+          "stable": "24697500000",
+          "units": "0"
+        },
+        "b7": {
+          "stable": "14698500000",
+          "units": "0"
+        },
+        "b8": {
+          "stable": "19900000000",
+          "units": "0"
+        },
+        "b9": {
+          "stable": "20910000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "0",
+      "treasury": "0",
+      "vault": "0",
+      "auctionEscrow": "89134500000",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Open",
+        "mintFinalized": false,
+        "unitsOutstanding": "0",
+        "unitsSold": "0",
+        "clearingPrice": "0",
+        "proceeds": "0",
+        "releasedTotal": "0",
+        "capPerUnit": "0",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x18ee2239f7375bbc7c5fdaa8d8958c3bf181dbffc8a33b3df2b94a9294467a71",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "9",
+        "revealedCount": "8",
+        "validCount": "6",
+        "escrowTotal": "89134500000",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "0",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "0",
+        "qAbove": "0",
+        "qAt": "0",
+        "R": "0",
+        "unitsSold": "0",
+        "proceeds": "0",
+        "unitsMinted": "0",
+        "bidsProcessed": "0",
+        "mintFinalized": false
+      },
+      "holders": {},
+      "note": "8 revealed, 6 valid"
+    },
+    {
       "t": "1768348800",
       "op": "expect_revert",
       "call": {
@@ -645,43 +831,287 @@
     },
     {
       "t": "1768348800",
-      "op": "expect_revert",
-      "call": {
-        "op": "settle",
-        "series": "S1",
-        "clearingPrice": "120000000"
-      },
-      "error": "InvalidClearingPrice",
-      "note": "q_above + q_at = 200 < 300 and 120 is not the lowest valid price"
-    },
-    {
-      "t": "1768348800",
-      "op": "expect_revert",
-      "call": {
-        "op": "settle",
-        "series": "S1",
-        "clearingPrice": "105000000"
-      },
-      "error": "InvalidClearingPrice",
-      "note": "q_above = 355 ≥ 300"
-    },
-    {
-      "t": "1768348800",
-      "op": "expect_revert",
-      "call": {
-        "op": "settle",
-        "series": "S1",
-        "clearingPrice": "115000000"
-      },
-      "error": "InvalidClearingPrice",
-      "note": "no bid at 115"
-    },
-    {
-      "t": "1768348800",
-      "note": "q_above = 200, q_at = 155, D = 355 ≥ 300 → R = 100",
-      "op": "settle",
+      "note": "round 1: 120 (q_above 100, q_at 100)",
+      "op": "begin_settlement",
       "series": "S1",
-      "clearingPrice": "110000000"
+      "clearingPrice": "120000000",
+      "qAboveClaim": "100",
+      "qAtClaim": "100"
+    },
+    {
+      "t": "1768348800",
+      "op": "expect_revert",
+      "call": {
+        "op": "begin_settlement",
+        "series": "S1",
+        "clearingPrice": "110000000",
+        "qAboveClaim": "200",
+        "qAtClaim": "155"
+      },
+      "error": "TallyInProgress",
+      "note": "a round in progress cannot be reset"
+    },
+    {
+      "t": "1768348800",
+      "note": "q_above + q_at = 200 < 300 and 120 is not the lowest valid price (105) → SettlementRejected(InvalidClearingPrice)",
+      "op": "finalize_settlement",
+      "series": "S1"
+    },
+    {
+      "t": "1768348800",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "10000000000",
+          "units": "0"
+        },
+        "b2": {
+          "stable": "17880000000",
+          "units": "0"
+        },
+        "b3": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b4": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b5": {
+          "stable": "26111500000",
+          "units": "0"
+        },
+        "b6": {
+          "stable": "24697500000",
+          "units": "0"
+        },
+        "b7": {
+          "stable": "14698500000",
+          "units": "0"
+        },
+        "b8": {
+          "stable": "19900000000",
+          "units": "0"
+        },
+        "b9": {
+          "stable": "20910000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "0",
+      "treasury": "0",
+      "vault": "0",
+      "auctionEscrow": "89134500000",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settling",
+        "mintFinalized": false,
+        "unitsOutstanding": "0",
+        "unitsSold": "0",
+        "clearingPrice": "0",
+        "proceeds": "0",
+        "releasedTotal": "0",
+        "capPerUnit": "0",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x18ee2239f7375bbc7c5fdaa8d8958c3bf181dbffc8a33b3df2b94a9294467a71",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "9",
+        "revealedCount": "8",
+        "validCount": "6",
+        "escrowTotal": "89134500000",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": true,
+        "rejectionReason": "InvalidClearingPrice",
+        "clearingPrice": "0",
+        "qAbove": "0",
+        "qAt": "0",
+        "R": "0",
+        "unitsSold": "0",
+        "proceeds": "0",
+        "unitsMinted": "0",
+        "bidsProcessed": "0",
+        "mintFinalized": false
+      },
+      "holders": {},
+      "note": "round 1 rejected; raise still Settling"
+    },
+    {
+      "t": "1768348800",
+      "note": "round 2: 110 with a wrong q_at claim",
+      "op": "begin_settlement",
+      "series": "S1",
+      "clearingPrice": "110000000",
+      "qAboveClaim": "200",
+      "qAtClaim": "150"
+    },
+    {
+      "t": "1768348800",
+      "note": "tally says q_at = 155 → SettlementRejected(ClaimMismatch)",
+      "op": "finalize_settlement",
+      "series": "S1"
+    },
+    {
+      "t": "1768348800",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "10000000000",
+          "units": "0"
+        },
+        "b2": {
+          "stable": "17880000000",
+          "units": "0"
+        },
+        "b3": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b4": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b5": {
+          "stable": "26111500000",
+          "units": "0"
+        },
+        "b6": {
+          "stable": "24697500000",
+          "units": "0"
+        },
+        "b7": {
+          "stable": "14698500000",
+          "units": "0"
+        },
+        "b8": {
+          "stable": "19900000000",
+          "units": "0"
+        },
+        "b9": {
+          "stable": "20910000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "0",
+      "treasury": "0",
+      "vault": "0",
+      "auctionEscrow": "89134500000",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settling",
+        "mintFinalized": false,
+        "unitsOutstanding": "0",
+        "unitsSold": "0",
+        "clearingPrice": "0",
+        "proceeds": "0",
+        "releasedTotal": "0",
+        "capPerUnit": "0",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x18ee2239f7375bbc7c5fdaa8d8958c3bf181dbffc8a33b3df2b94a9294467a71",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "9",
+        "revealedCount": "8",
+        "validCount": "6",
+        "escrowTotal": "89134500000",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "2",
+        "roundRejected": true,
+        "rejectionReason": "ClaimMismatch",
+        "clearingPrice": "0",
+        "qAbove": "0",
+        "qAt": "0",
+        "R": "0",
+        "unitsSold": "0",
+        "proceeds": "0",
+        "unitsMinted": "0",
+        "bidsProcessed": "0",
+        "mintFinalized": false
+      },
+      "holders": {},
+      "note": "round 2 rejected"
+    },
+    {
+      "t": "1768348800",
+      "note": "round 3: r_claim = min(300 − 200, 155) = 100",
+      "op": "begin_settlement",
+      "series": "S1",
+      "clearingPrice": "110000000",
+      "qAboveClaim": "200",
+      "qAtClaim": "155"
+    },
+    {
+      "t": "1768348800",
+      "note": "alloc_sum = floor(100×60/155) + floor(100×60/155) + floor(100×35/155) = 38 + 38 + 22 = 98 → units_sold 298, proceeds 32,780 exact",
+      "op": "finalize_settlement",
+      "series": "S1"
     },
     {
       "t": "1768348800",
@@ -736,8 +1166,9 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": false,
         "unitsOutstanding": "0",
-        "unitsSold": "0",
+        "unitsSold": "298",
         "clearingPrice": "110000000",
         "proceeds": "0",
         "releasedTotal": "0",
@@ -748,6 +1179,7 @@
         "paidPerUnitWad": "0",
         "netAccWad": "0",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "0",
         "feeCollected": "0",
         "refundedToIssuer": "0",
@@ -756,29 +1188,43 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "9",
         "revealedCount": "8",
+        "validCount": "6",
         "escrowTotal": "89134500000",
-        "R": "100",
-        "qAt": "155",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "3",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "110000000",
         "qAbove": "200",
-        "unitsSoldUpper": "300",
-        "bidsProcessed": "0"
+        "qAt": "155",
+        "R": "100",
+        "unitsSold": "298",
+        "proceeds": "32780000000",
+        "unitsMinted": "0",
+        "bidsProcessed": "0",
+        "mintFinalized": false
       },
       "holders": {},
-      "note": "Settled at 110: unitsSoldUpper 300, R = 100, q_at = 155"
+      "note": "Settled at 110: unitsSold 298 (2 units of dust never minted), proceeds 110 × 298"
     },
     {
       "t": "1768348860",
@@ -840,6 +1286,209 @@
       "series": "S1",
       "balances": {
         "b1": {
+          "stable": "10000000000",
+          "units": "0"
+        },
+        "b2": {
+          "stable": "17880000000",
+          "units": "0"
+        },
+        "b3": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b4": {
+          "stable": "23334000000",
+          "units": "0"
+        },
+        "b5": {
+          "stable": "26111500000",
+          "units": "0"
+        },
+        "b6": {
+          "stable": "24697500000",
+          "units": "0"
+        },
+        "b7": {
+          "stable": "14698500000",
+          "units": "0"
+        },
+        "b8": {
+          "stable": "19900000000",
+          "units": "0"
+        },
+        "b9": {
+          "stable": "20910000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "428800000",
+      "treasury": "32780000000",
+      "vault": "0",
+      "auctionEscrow": "55925700000",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "298",
+        "unitsSold": "298",
+        "clearingPrice": "110000000",
+        "proceeds": "32780000000",
+        "releasedTotal": "0",
+        "capPerUnit": "275000000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x18ee2239f7375bbc7c5fdaa8d8958c3bf181dbffc8a33b3df2b94a9294467a71",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "9",
+        "revealedCount": "8",
+        "validCount": "6",
+        "escrowTotal": "55925700000",
+        "auctionEscrowUnits": "298",
+        "tallyRound": "3",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "110000000",
+        "qAbove": "200",
+        "qAt": "155",
+        "R": "100",
+        "unitsSold": "298",
+        "proceeds": "32780000000",
+        "unitsMinted": "298",
+        "bidsProcessed": "9",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "100",
+          "pendingRefund": "8890000000",
+          "delivered": false
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "100",
+          "pendingRefund": "1010000000",
+          "delivered": false
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "38",
+          "pendingRefund": "2444200000",
+          "delivered": false
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "38",
+          "pendingRefund": "2444200000",
+          "delivered": false
+        },
+        "b5": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "22",
+          "pendingRefund": "1444300000",
+          "delivered": false
+        }
+      },
+      "note": "all bids processed: units minted to the auction escrow, cost → treasury, fees + b8's 101 USDC charge → collector; mint finalized (units_minted == units_sold)"
+    },
+    {
+      "t": "1768349400",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768349460",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768349520",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768349580",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
+      "t": "1768349640",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b5"
+    },
+    {
+      "t": "1768349700",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b6"
+    },
+    {
+      "t": "1768349760",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b7"
+    },
+    {
+      "t": "1768349820",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b8"
+    },
+    {
+      "t": "1768349880",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b9"
+    },
+    {
+      "t": "1768349880",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
           "stable": "18890000000",
           "units": "100"
         },
@@ -887,6 +1536,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "298",
         "unitsSold": "298",
         "clearingPrice": "110000000",
@@ -899,6 +1549,7 @@
         "paidPerUnitWad": "0",
         "netAccWad": "0",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "0",
         "feeCollected": "0",
         "refundedToIssuer": "0",
@@ -907,50 +1558,79 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "9",
         "revealedCount": "8",
+        "validCount": "6",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "155",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "3",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "110000000",
         "qAbove": "200",
-        "unitsSoldUpper": "300",
-        "bidsProcessed": "9"
+        "qAt": "155",
+        "R": "100",
+        "unitsSold": "298",
+        "proceeds": "32780000000",
+        "unitsMinted": "298",
+        "bidsProcessed": "9",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b5": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "b1/b2 100 units each; marginal fills floor(100×60/155)=38, 38 and floor(100×35/155)=22 → 298 sold, 2 units of dust unminted; b6/b9/b7 refunded in full; b8 charged 101 USDC; fee = 1% × 110 × 298 = 327.8 → collector 428.8"
+      "note": "b1/b2 100 units each; b3 38, b4 38, b5 22; b6/b9/b7 refunded in full; b8 refunded 9,999; fee = 1% × 32,780 = 327.8 → collector 428.8"
     }
   ]
 }

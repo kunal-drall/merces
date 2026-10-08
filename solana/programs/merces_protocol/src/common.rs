@@ -1,17 +1,19 @@
-//! Shared protocol logic: clock, registry write-interface CPIs, stablecoin transfers, the ledger's
-//! status machine (SPEC §6.4) and the vault accounting glue (SPEC §6.3).
+//! Shared protocol logic: clock, registry write-interface CPIs, token transfers, the ledger's
+//! status machine (SPEC §6.4) and the vault accounting glue (SPEC §6.3, §6.8, §6.9).
 
 use anchor_lang::prelude::*;
-use merces_common::params::MAX_YEAR_BUCKETS;
+use merces_common::params::{Tranche, MAX_PAUSES, YEAR_RING};
+use merces_common::redemption::{settlement_year, year_gross_add, YearGross};
 use merces_common::status::{
-    derive_status, effective_now, formal_notice_at, SeriesStatus, StatusInputs,
+    countdown, derive_status, formal_notice_due, is_late_underlying, trueup_notice_due, Pause,
+    SeriesStatus, StatusInputs,
 };
-use merces_common::time::{period_of, YEAR};
-use merces_common::vault::{self, ReceiveInput, ReceiveOutcome};
+use merces_common::time::period_of;
+use merces_common::vault::{self, cap_per_unit, holder_delta, ReceiveInput, ReceiveOutcome};
 use merces_onchain::{
     token_account_owner_and_amount, transfer_checked_hooked, HelperError, TransferAccounts,
 };
-use merces_registry::state::{TERMINAL_EXTINGUISHED, TERMINAL_REDEEMED, TERMINAL_RETIRED};
+use merces_registry::state::{Series, TERMINAL_EXTINGUISHED, TERMINAL_REDEEMED, TERMINAL_RETIRED};
 
 use crate::error::{math, ProtocolError};
 use crate::events::*;
@@ -23,13 +25,30 @@ pub fn now_ts() -> Result<u64> {
     u64::try_from(ts).map_err(|_| error!(ProtocolError::NegativeTimestamp))
 }
 
-/// Accounts for the registry write interface (SPEC §3.3).
+/// `cap_per_unit() = floor(cap_multiple_wad × P0 / WAD)`, read live from the registry so a
+/// favourable amendment applies immediately (SPEC §6.1).
+pub fn cap_per_unit_of(series: &Series) -> Result<u64> {
+    cap_per_unit(series.cap_multiple_wad, series.clearing_price).map_err(math)
+}
+
+/// The release schedule as shared-crate tranches.
+pub fn schedule_of(series: &Series) -> Vec<Tranche> {
+    series
+        .release_schedule
+        .iter()
+        .map(|t| Tranche::from(*t))
+        .collect()
+}
+
+// ------------------------------------------------------------------------------- registry CPI
+
+/// Accounts for the registry write interface (SPEC §3.2), signed by `[REGISTRY_AUTHORITY]`.
 pub struct RegistryCpi<'info> {
     pub registry_program: AccountInfo<'info>,
     pub config: AccountInfo<'info>,
     pub series: AccountInfo<'info>,
-    pub protocol_signer: AccountInfo<'info>,
-    pub signer_bump: u8,
+    pub registry_authority: AccountInfo<'info>,
+    pub authority_bump: u8,
 }
 
 impl<'info> RegistryCpi<'info> {
@@ -39,16 +58,15 @@ impl<'info> RegistryCpi<'info> {
         settlement_ts: u64,
         units_sold: u64,
         clearing_price: u64,
-        is_final: bool,
     ) -> Result<()> {
-        let bump = [self.signer_bump];
-        let seeds: &[&[u8]] = &[seeds::REGISTRY_SIGNER, &bump];
+        let bump = [self.authority_bump];
+        let seeds: &[&[u8]] = &[seeds::REGISTRY_AUTHORITY, &bump];
         let signer: &[&[&[u8]]] = &[seeds];
         let ctx = CpiContext::new_with_signer(
             *self.registry_program.key,
             merces_registry::cpi::accounts::MarkRaiseResult {
                 config: self.config.clone(),
-                protocol_signer: self.protocol_signer.clone(),
+                protocol_authority: self.registry_authority.clone(),
                 series: self.series.clone(),
             },
             signer,
@@ -59,8 +77,23 @@ impl<'info> RegistryCpi<'info> {
             settlement_ts,
             units_sold,
             clearing_price,
-            is_final,
         )
+    }
+
+    pub fn mark_mint_finalized(&self) -> Result<()> {
+        let bump = [self.authority_bump];
+        let seeds: &[&[u8]] = &[seeds::REGISTRY_AUTHORITY, &bump];
+        let signer: &[&[&[u8]]] = &[seeds];
+        let ctx = CpiContext::new_with_signer(
+            *self.registry_program.key,
+            merces_registry::cpi::accounts::MarkRaiseResult {
+                config: self.config.clone(),
+                protocol_authority: self.registry_authority.clone(),
+                series: self.series.clone(),
+            },
+            signer,
+        );
+        merces_registry::cpi::mark_mint_finalized(ctx)
     }
 
     pub fn mark_terminal(&self, status: SeriesStatus) -> Result<()> {
@@ -70,14 +103,14 @@ impl<'info> RegistryCpi<'info> {
             SeriesStatus::Extinguished => TERMINAL_EXTINGUISHED,
             _ => return Err(ProtocolError::InvalidInput.into()),
         };
-        let bump = [self.signer_bump];
-        let seeds: &[&[u8]] = &[seeds::REGISTRY_SIGNER, &bump];
+        let bump = [self.authority_bump];
+        let seeds: &[&[u8]] = &[seeds::REGISTRY_AUTHORITY, &bump];
         let signer: &[&[&[u8]]] = &[seeds];
         let ctx = CpiContext::new_with_signer(
             *self.registry_program.key,
-            merces_registry::cpi::accounts::MarkTerminal {
+            merces_registry::cpi::accounts::MarkRaiseResult {
                 config: self.config.clone(),
-                protocol_signer: self.protocol_signer.clone(),
+                protocol_authority: self.registry_authority.clone(),
                 series: self.series.clone(),
             },
             signer,
@@ -86,7 +119,28 @@ impl<'info> RegistryCpi<'info> {
     }
 }
 
-/// Hook-aware stablecoin `transfer_checked` with the protocol's error codes.
+// ------------------------------------------------------------------------------------- tokens
+
+fn map_helper_error(e: Error) -> Error {
+    match e {
+        Error::AnchorError(ref a)
+            if a.error_code_number == u32::from(HelperError::TokenProgramMismatch) =>
+        {
+            error!(ProtocolError::TokenProgramMismatch)
+        }
+        Error::AnchorError(ref a)
+            if a.error_code_number == u32::from(HelperError::TransferFeeNotZero) =>
+        {
+            error!(ProtocolError::TransferFeeNotZero)
+        }
+        Error::AnchorError(ref a) if a.error_code_number == u32::from(HelperError::InvalidMint) => {
+            error!(ProtocolError::InvalidMint)
+        }
+        other => other,
+    }
+}
+
+/// Hook-aware stablecoin `transfer_checked` with the protocol's error codes (zero amount = no-op).
 #[allow(clippy::too_many_arguments)]
 pub fn transfer_stable<'info>(
     token_program: &AccountInfo<'info>,
@@ -112,38 +166,45 @@ pub fn transfer_stable<'info>(
         decimals,
         signer_seeds,
     )
-    .map_err(|e| match e {
-        Error::AnchorError(ref a)
-            if a.error_code_number == u32::from(HelperError::TokenProgramMismatch) =>
-        {
-            error!(ProtocolError::TokenProgramMismatch)
-        }
-        Error::AnchorError(ref a)
-            if a.error_code_number == u32::from(HelperError::TransferFeeNotZero) =>
-        {
-            error!(ProtocolError::TransferFeeNotZero)
-        }
-        Error::AnchorError(ref a) if a.error_code_number == u32::from(HelperError::InvalidMint) => {
-            error!(ProtocolError::InvalidMint)
-        }
-        other => other,
-    })
+    .map_err(map_helper_error)
 }
 
-/// Validates a fee-collector token account: owned by the configured fee collector, right mint.
-pub fn check_fee_collector_token(
-    acc: &AccountInfo,
-    mint: &Pubkey,
-    fee_collector: &Pubkey,
+/// Hook-aware unit transfer (Token-2022, `decimals = 0`); the Merces hook's extra accounts come
+/// from `extra` (zero amount = no-op).
+#[allow(clippy::too_many_arguments)]
+pub fn transfer_units<'info>(
+    token_2022: &AccountInfo<'info>,
+    source: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    extra: &[AccountInfo<'info>],
+    amount: u64,
+    signer_seeds: &[&[&[u8]]],
 ) -> Result<()> {
-    let (owner, _) = token_account_owner_and_amount(acc)?;
-    require_keys_eq!(owner, *fee_collector, ProtocolError::FeeCollectorMismatch);
-    require_keys_eq!(
-        token_account_mint(acc)?,
-        *mint,
-        ProtocolError::StablecoinMismatch
-    );
-    Ok(())
+    transfer_checked_hooked(
+        TransferAccounts {
+            token_program: token_2022,
+            source,
+            mint,
+            destination,
+            authority,
+            extra,
+        },
+        amount,
+        0,
+        signer_seeds,
+    )
+    .map_err(map_helper_error)
+}
+
+/// Associated token account address of `owner` for `mint` under `token_program`.
+pub fn ata_address(owner: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
+    anchor_spl::associated_token::get_associated_token_address_with_program_id(
+        owner,
+        mint,
+        token_program,
+    )
 }
 
 /// Requires `acc` to be the associated token account of `owner` for `mint` under `token_program`
@@ -154,29 +215,63 @@ pub fn require_ata(
     mint: &Pubkey,
     token_program: &Pubkey,
 ) -> Result<()> {
-    let expected = anchor_spl::associated_token::get_associated_token_address_with_program_id(
-        owner,
-        mint,
-        token_program,
+    require_keys_eq!(
+        *acc.key,
+        ata_address(owner, mint, token_program),
+        ProtocolError::AtaMismatch
     );
-    require_keys_eq!(*acc.key, expected, ProtocolError::HolderAtaMismatch);
     Ok(())
 }
 
-/// Mint of a token account (bytes 0..32 of the base layout).
-pub fn token_account_mint(acc: &AccountInfo) -> Result<Pubkey> {
-    let data = acc.try_borrow_data()?;
-    if data.len() < 72 {
-        return Err(ProtocolError::InvalidMint.into());
-    }
-    let mut mint = [0u8; 32];
-    mint.copy_from_slice(&data[0..32]);
-    Ok(Pubkey::new_from_array(mint))
+/// Accounts of one idempotent ATA creation.
+pub struct CreateAta<'a, 'info> {
+    pub payer: &'a AccountInfo<'info>,
+    pub ata: &'a AccountInfo<'info>,
+    pub owner: &'a AccountInfo<'info>,
+    pub mint: &'a AccountInfo<'info>,
+    pub system_program: &'a AccountInfo<'info>,
+    pub token_program: &'a AccountInfo<'info>,
+    pub ata_program: &'a AccountInfo<'info>,
 }
 
-/// Amount of a token account (bytes 64..72).
+/// Creates the ATA if it does not exist (the payer funds it); the address is validated first.
+pub fn create_ata_idempotent(a: CreateAta<'_, '_>) -> Result<()> {
+    require_ata(a.ata, a.owner.key, a.mint.key, a.token_program.key)?;
+    anchor_spl::associated_token::create_idempotent(CpiContext::new(
+        *a.ata_program.key,
+        anchor_spl::associated_token::Create {
+            payer: a.payer.clone(),
+            associated_token: a.ata.clone(),
+            authority: a.owner.clone(),
+            mint: a.mint.clone(),
+            system_program: a.system_program.clone(),
+            token_program: a.token_program.clone(),
+        },
+    ))
+}
+
+/// Amount of a token account (bytes 64..72 of the base layout).
 pub fn token_account_amount(acc: &AccountInfo) -> Result<u64> {
     Ok(token_account_owner_and_amount(acc)?.1)
+}
+
+/// Owner (wallet) of a token account.
+pub fn token_account_owner(acc: &AccountInfo) -> Result<Pubkey> {
+    Ok(token_account_owner_and_amount(acc)?.0)
+}
+
+// ------------------------------------------------------------------------------------- ledger
+
+/// A copy of the ledger's pause history as shared-crate pauses.
+pub struct PauseList {
+    items: [Pause; MAX_PAUSES],
+    len: usize,
+}
+
+impl PauseList {
+    pub fn as_slice(&self) -> &[Pause] {
+        &self.items[..self.len]
+    }
 }
 
 impl Ledger {
@@ -206,41 +301,52 @@ impl Ledger {
         self.next_expected_period()
     }
 
-    pub fn status_inputs(&self) -> Result<StatusInputs> {
+    pub fn pauses(&self) -> PauseList {
+        let mut items = [Pause::default(); MAX_PAUSES];
+        let len = core::cmp::min(usize::from(self.pause_count), MAX_PAUSES);
+        for (i, slot) in items.iter_mut().enumerate().take(len) {
+            *slot = Pause {
+                start: self.pause_start[i],
+                end: self.pause_end[i],
+            };
+        }
+        PauseList { items, len }
+    }
+
+    pub fn status_inputs<'a>(&self, pauses: &'a [Pause]) -> Result<StatusInputs<'a>> {
         Ok(StatusInputs {
             stored: self.stored_status(),
-            pause_start: self.pause_start,
-            pause_end: self.pause_end,
-            paused_total: self.paused_total,
+            pauses,
             earliest_unpaid_period: self.earliest_unpaid()?,
+            trueup_due: self.trueup_due,
+            trueup_attested_at: self.trueup_attested_at,
         })
     }
 
     pub fn derived_status(&self, now: u64) -> Result<SeriesStatus> {
-        derive_status(&self.status_inputs()?, now).map_err(math)
+        let pauses = self.pauses();
+        derive_status(&self.status_inputs(pauses.as_slice())?, now).map_err(math)
     }
 
-    pub fn effective_now(&self, now: u64) -> Result<u64> {
-        effective_now(self.pause_start, self.pause_end, self.paused_total, now).map_err(math)
+    /// `is_late_underlying(now)` (SPEC §6.4): the Late condition ignoring an active pause.
+    pub fn is_late_underlying(&self, now: u64) -> Result<bool> {
+        let pauses = self.pauses();
+        is_late_underlying(&self.status_inputs(pauses.as_slice())?, now).map_err(math)
     }
 
-    /// `sync_status(now)` (SPEC §6.4): closes an elapsed pause, stores the derived status, emits
-    /// `StatusChanged` on change and `FormalNoticeDue` once per period.
+    /// An open pause exists with `start ≤ now < end`.
+    pub fn is_paused(&self, now: u64) -> bool {
+        let pauses = self.pauses();
+        merces_common::status::is_paused(pauses.as_slice(), now)
+    }
+
+    /// `sync_status(now)` (SPEC §6.4): stores the derived status, emits `StatusChanged` on change,
+    /// `FormalNoticeDue` once per period and once per true-up. Elapsed pauses need no closing: the
+    /// pause record already holds its end.
     pub fn sync_status(&mut self, now: u64, series_key: Pubkey) -> Result<SeriesStatus> {
-        if self.pause_start != 0 && now >= self.pause_end {
-            let len = self
-                .pause_end
-                .checked_sub(self.pause_start)
-                .ok_or(ProtocolError::MathOverflow)?;
-            self.paused_total = self
-                .paused_total
-                .checked_add(len)
-                .ok_or(ProtocolError::MathOverflow)?;
-            self.pause_start = 0;
-            self.pause_end = 0;
-        }
+        let pauses = self.pauses();
         let old = self.stored_status();
-        let new = self.derived_status(now)?;
+        let new = derive_status(&self.status_inputs(pauses.as_slice())?, now).map_err(math)?;
         if new != old {
             self.status = new as u8;
             emit!(StatusChanged {
@@ -251,66 +357,123 @@ impl Ledger {
         }
         if !new.is_terminal() {
             let p = self.earliest_unpaid()?;
-            let e = self.effective_now(now)?;
-            if e >= formal_notice_at(p).map_err(math)?
-                && self.formal_notice_emitted_for() != Some(p)
-            {
+            let c = countdown(pauses.as_slice(), p, now).map_err(math)?;
+            if formal_notice_due(c) && self.formal_notice_emitted_for() != Some(p) {
                 self.set_formal_notice_emitted_for(Some(p));
                 emit!(FormalNoticeDue {
                     series: series_key,
-                    period: p
+                    period: p,
+                    trueup: false,
+                });
+            }
+            if self.trueup_due > 0
+                && self.trueup_notice_emitted == 0
+                && trueup_notice_due(pauses.as_slice(), self.trueup_attested_at, now)
+            {
+                self.trueup_notice_emitted = 1;
+                emit!(FormalNoticeDue {
+                    series: series_key,
+                    period: self.trueup_year_v,
+                    trueup: true,
                 });
             }
         }
         Ok(new)
     }
 
-    /// Index into `year_gross_wad` for `now`.
-    pub fn settlement_year_index(&self, now: u64) -> Result<usize> {
-        let elapsed = now
-            .checked_sub(self.settlement_ts)
-            .ok_or(ProtocolError::MathOverflow)?;
-        let idx =
-            usize::try_from(elapsed / YEAR).map_err(|_| ProtocolError::YearIndexOutOfRange)?;
-        require!(idx < MAX_YEAR_BUCKETS, ProtocolError::YearIndexOutOfRange);
-        Ok(idx)
+    /// Clears every open obligation (retirement, extinguishment).
+    pub fn clear_dues(&mut self) {
+        self.open_due_amount = 0;
+        self.set_open_due_period(None);
+        self.open_due_tier = 0;
+        self.trueup_due = 0;
+        self.pause_requested = 0;
     }
 
-    /// Main-cap receipt (SPEC §6.3). Updates the accumulators and emits `PayoutDistributed`; the
-    /// caller moves the fee and the refund and handles retirement side effects.
+    // ---- tagged rings
+
+    pub fn year_gross_ring(&self) -> [YearGross; YEAR_RING] {
+        let mut ring = [YearGross::default(); YEAR_RING];
+        for (i, slot) in ring.iter_mut().enumerate() {
+            *slot = YearGross {
+                year: self.year_gross_tag[i],
+                gross_wad: self.year_gross_wad[i],
+                set: self.year_gross_set[i] != 0,
+            };
+        }
+        ring
+    }
+
+    fn set_year_gross_ring(&mut self, ring: &[YearGross; YEAR_RING]) {
+        for (i, slot) in ring.iter().enumerate() {
+            self.year_gross_tag[i] = slot.year;
+            self.year_gross_wad[i] = slot.gross_wad;
+            self.year_gross_set[i] = u8::from(slot.set);
+        }
+    }
+
+    /// Σ `payment_usd` accepted for calendar `year` (tagged ring; a missing tag reads 0).
+    pub fn year_pay_at(&self, year: u32) -> u64 {
+        let i = (year as usize) % YEAR_RING;
+        if self.year_pay_set[i] != 0 && self.year_pay_tag[i] == year {
+            self.year_pay_sum[i]
+        } else {
+            0
+        }
+    }
+
+    pub fn year_pay_add(&mut self, year: u32, amount: u64) -> Result<()> {
+        let i = (year as usize) % YEAR_RING;
+        if self.year_pay_set[i] == 0 || self.year_pay_tag[i] != year {
+            self.year_pay_tag[i] = year;
+            self.year_pay_sum[i] = 0;
+            self.year_pay_set[i] = 1;
+        }
+        self.year_pay_sum[i] = self.year_pay_sum[i]
+            .checked_add(amount)
+            .ok_or(ProtocolError::MathOverflow)?;
+        Ok(())
+    }
+
+    // ---- receipts
+
+    /// `vault_receive_gross(G, source, anchor)` (SPEC §6.3) against the live `cap_per_unit` with
+    /// `N = units_outstanding`. Updates the accumulators and emits `PayoutDistributed`; the caller
+    /// moves the fee and the refund and calls [`retire`] when `capped`.
     pub fn receive_gross(
         &mut self,
         source: u8,
         gross: u64,
-        units: u64,
+        cap_per_unit: u64,
+        anchor_ts: u64,
         fee_bps: u16,
-        now: u64,
         series_key: Pubkey,
     ) -> Result<ReceiveOutcome> {
+        let units = self.units_outstanding;
         require!(units > 0, ProtocolError::NoUnitsOutstanding);
-        let carry_in = self.carry;
-        let out = vault::receive_gross(ReceiveInput {
+        let out = vault::receive_capped(ReceiveInput {
             gross,
             units,
-            cap_per_unit: self.cap_per_unit,
+            cap_per_unit,
             paid_per_unit_wad: self.paid_per_unit_wad,
-            carry: carry_in,
+            carry_wad: self.carry_wad,
             fee_bps,
         })
         .map_err(math)?;
-        let year = self.settlement_year_index(now)?;
+        let anchor = core::cmp::max(anchor_ts, self.settlement_ts);
+        let year = settlement_year(self.settlement_ts, anchor).map_err(math)?;
+        let mut ring = self.year_gross_ring();
+        year_gross_add(&mut ring, year, out.inc_wad).map_err(math)?;
+        self.set_year_gross_ring(&ring);
         self.paid_per_unit_wad = self
             .paid_per_unit_wad
-            .checked_add(out.inc_wad)
-            .ok_or(ProtocolError::MathOverflow)?;
-        self.year_gross_wad[year] = self.year_gross_wad[year]
             .checked_add(out.inc_wad)
             .ok_or(ProtocolError::MathOverflow)?;
         self.net_acc_wad = self
             .net_acc_wad
             .checked_add(out.delta_acc_wad)
             .ok_or(ProtocolError::MathOverflow)?;
-        self.carry = out.carry_out;
+        self.carry_wad = out.carry_wad_out;
         self.gross_received = self
             .gross_received
             .checked_add(out.accepted)
@@ -323,27 +486,22 @@ impl Ledger {
             .refunded_to_issuer
             .checked_add(out.refund)
             .ok_or(ProtocolError::MathOverflow)?;
-        if out.retired {
-            self.status = SeriesStatus::Retired as u8;
-        }
         emit!(PayoutDistributed {
             series: series_key,
             source,
             gross,
             accepted: out.accepted,
             fee: out.fee,
-            net_added: out
-                .net
-                .checked_sub(carry_in)
-                .ok_or(ProtocolError::MathOverflow)?,
+            net_added: out.net,
             delta_acc_wad: out.delta_acc_wad,
             paid_per_unit_wad: self.paid_per_unit_wad,
-            retired: out.retired,
+            retired: out.capped,
         });
         Ok(out)
     }
 
-    /// Tail receipt (SPEC §6.8) against `tail_cap_per_unit` with `units_at_redemption` weights.
+    /// `vault_receive_tail(G)` (SPEC §6.8) against `tail_cap_per_unit` with `units_at_redemption`
+    /// weights; `capped` sets `tail_exhausted`.
     pub fn receive_tail(
         &mut self,
         gross: u64,
@@ -352,13 +510,12 @@ impl Ledger {
     ) -> Result<ReceiveOutcome> {
         let units = self.units_at_redemption;
         require!(units > 0, ProtocolError::NoUnitsOutstanding);
-        let carry_in = self.tail_carry;
-        let out = vault::receive_tail(ReceiveInput {
+        let out = vault::receive_capped(ReceiveInput {
             gross,
             units,
             cap_per_unit: self.tail_cap_per_unit,
             paid_per_unit_wad: self.tail_paid_per_unit_wad,
-            carry: carry_in,
+            carry_wad: self.tail_carry_wad,
             fee_bps,
         })
         .map_err(math)?;
@@ -370,7 +527,7 @@ impl Ledger {
             .tail_acc_wad
             .checked_add(out.delta_acc_wad)
             .ok_or(ProtocolError::MathOverflow)?;
-        self.tail_carry = out.carry_out;
+        self.tail_carry_wad = out.carry_wad_out;
         self.fee_collected = self
             .fee_collected
             .checked_add(out.fee)
@@ -379,16 +536,16 @@ impl Ledger {
             .refunded_to_issuer
             .checked_add(out.refund)
             .ok_or(ProtocolError::MathOverflow)?;
+        if out.capped {
+            self.tail_exhausted = 1;
+        }
         emit!(PayoutDistributed {
             series: series_key,
             source: SOURCE_TAIL,
             gross,
             accepted: out.accepted,
             fee: out.fee,
-            net_added: out
-                .net
-                .checked_sub(carry_in)
-                .ok_or(ProtocolError::MathOverflow)?,
+            net_added: out.net,
             delta_acc_wad: out.delta_acc_wad,
             paid_per_unit_wad: self.tail_paid_per_unit_wad,
             retired: false,
@@ -396,31 +553,23 @@ impl Ledger {
         Ok(out)
     }
 
-    /// Final (extinguishment) distribution (SPEC §6.9): no fee, no cap.
-    pub fn receive_final(
-        &mut self,
-        gross: u64,
-        units: u64,
-        series_key: Pubkey,
-    ) -> Result<ReceiveOutcome> {
+    /// Final (extinguishment) distribution (SPEC §6.9): no fee, no cap, `final_units` weights.
+    pub fn receive_final(&mut self, gross: u64, series_key: Pubkey) -> Result<ReceiveOutcome> {
+        let units = self.final_units;
         require!(units > 0, ProtocolError::NoUnitsOutstanding);
-        let carry_in = self.final_carry;
-        let out = vault::receive_final(gross, units, carry_in).map_err(math)?;
+        let out = vault::receive_final(gross, units, self.final_carry_wad).map_err(math)?;
         self.final_acc_wad = self
             .final_acc_wad
             .checked_add(out.delta_acc_wad)
             .ok_or(ProtocolError::MathOverflow)?;
-        self.final_carry = out.carry_out;
+        self.final_carry_wad = out.carry_wad_out;
         emit!(PayoutDistributed {
             series: series_key,
             source: SOURCE_FINAL,
             gross,
             accepted: out.accepted,
             fee: 0,
-            net_added: out
-                .net
-                .checked_sub(carry_in)
-                .ok_or(ProtocolError::MathOverflow)?,
+            net_added: out.net,
             delta_acc_wad: out.delta_acc_wad,
             paid_per_unit_wad: self.paid_per_unit_wad,
             retired: false,
@@ -428,22 +577,58 @@ impl Ledger {
         Ok(out)
     }
 
-    /// `first_period = period_of(settlement_ts)`.
-    pub fn init_after_settlement(&mut self, settlement_ts: u64, cap_per_unit: u64) -> Result<()> {
+    /// Ledger initialisation at settlement: `first_period = period_of(settlement_ts)`.
+    pub fn init_after_settlement(&mut self, settlement_ts: u64) -> Result<()> {
         self.settlement_ts = settlement_ts;
         self.first_period = period_of(settlement_ts).map_err(math)?;
-        self.cap_per_unit = cap_per_unit;
         self.status = SeriesStatus::OnTime as u8;
         Ok(())
     }
 }
 
-/// `settle_holder` (SPEC §6.3): credits the pending payout for `balance` units since the last
-/// snapshot and moves the snapshot forward.
+/// `retire()` (SPEC §6.3): stored status `Retired`, dues cleared, registry mirror, events.
+pub fn retire(
+    ledger: &mut Ledger,
+    registry: &RegistryCpi<'_>,
+    series_key: Pubkey,
+    refund: u64,
+) -> Result<()> {
+    if ledger.stored_status() == SeriesStatus::Retired {
+        return Ok(());
+    }
+    let old = ledger.status;
+    ledger.status = SeriesStatus::Retired as u8;
+    ledger.clear_dues();
+    registry.mark_terminal(SeriesStatus::Retired)?;
+    emit!(StatusChanged {
+        series: series_key,
+        old,
+        new: SeriesStatus::Retired as u8,
+    });
+    emit!(SeriesRetired {
+        series: series_key,
+        paid_per_unit_wad: ledger.paid_per_unit_wad,
+        refund,
+    });
+    Ok(())
+}
+
+// ------------------------------------------------------------------------------------ holders
+
+/// `accrual_units(w) = unit_balance + undelivered auction units + ask-escrow units` (SPEC §6.1).
+pub fn accrual_units(holder: &Holder, balance: u64) -> Result<u64> {
+    balance
+        .checked_add(holder.undelivered_units)
+        .and_then(|v| v.checked_add(holder.ask_escrow_units))
+        .ok_or(ProtocolError::MathOverflow.into())
+}
+
+/// `settle_holder` (SPEC §6.3): credits the pending payout for the holder's accrual weight since
+/// the last snapshot and moves the snapshot forward.
 pub fn settle_holder(ledger: &Ledger, holder: &mut Holder, balance: u64) -> Result<()> {
     require!(holder.registered, ProtocolError::HolderNotRegistered);
-    let delta =
-        vault::holder_delta(ledger.net_acc_wad, holder.last_net_acc_wad, balance).map_err(math)?;
+    let weight = accrual_units(holder, balance)?;
+    let delta = holder_delta(ledger.net_acc_wad, holder.last_net_acc_wad, weight).map_err(math)?;
     holder.pending = holder
         .pending
         .checked_add(delta)
@@ -452,7 +637,8 @@ pub fn settle_holder(ledger: &Ledger, holder: &mut Holder, balance: u64) -> Resu
     Ok(())
 }
 
-/// Registers a holder at the current accumulators if not yet registered.
+/// Registers a holder at the current accumulators if not yet registered. Returns `true` when the
+/// record was created now.
 pub fn register_holder_now(
     ledger: &Ledger,
     holder: &mut Holder,
@@ -471,6 +657,8 @@ pub fn register_holder_now(
     holder.last_final_acc_wad = ledger.final_acc_wad;
     holder.pending = 0;
     holder.redeemed_units = 0;
+    holder.undelivered_units = 0;
+    holder.ask_escrow_units = 0;
     holder.bump = bump;
     emit!(HolderRegistered {
         series,

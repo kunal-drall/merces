@@ -1,4 +1,4 @@
-//! Holder claim path (SPEC §6.3, §6.7–§6.9). Isolated so a private-payout implementation can
+//! Holder claim path (SPEC v1.1 §6.3, §6.7–§6.9). Isolated so a private-payout implementation can
 //! replace it without touching the accounting in `common.rs`.
 
 use anchor_lang::prelude::*;
@@ -55,7 +55,7 @@ pub struct HolderClaim<'info> {
     pub ledger: AccountLoader<'info, Ledger>,
     #[account(mut, seeds = [seeds::HOLDER, series.key().as_ref(), holder_wallet.key().as_ref()], bump = holder.bump)]
     pub holder: Box<Account<'info, Holder>>,
-    /// CHECK: the holder's wallet; payouts go to its associated token account only.
+    /// CHECK: the holder's wallet; payouts go to its associated token accounts only.
     #[account(address = holder.wallet @ ProtocolError::HolderNotRegistered)]
     pub holder_wallet: UncheckedAccount<'info>,
     #[account(mut, token::mint = unit_mint, token::authority = holder_wallet, token::token_program = token_2022_program)]
@@ -77,6 +77,53 @@ pub struct HolderClaim<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Owned handles for the permanent-delegate burn, so the holder record can be borrowed mutably
+/// alongside (disjoint field borrows).
+pub struct BurnCtx<'info> {
+    series_key: Pubkey,
+    holder_wallet: Pubkey,
+    token_2022: AccountInfo<'info>,
+    unit_mint: AccountInfo<'info>,
+    from: AccountInfo<'info>,
+    vault_auth: AccountInfo<'info>,
+    bump: u8,
+}
+
+impl<'info> BurnCtx<'info> {
+    /// Burns `units` from the holder's unit account through the permanent delegate (zero-amount
+    /// rule: nothing is issued for 0) and reduces `units_outstanding`.
+    fn burn(&self, ledger: &mut Ledger, units: u64, reason: u8) -> Result<()> {
+        if units == 0 {
+            return Ok(());
+        }
+        let bump_arr = [self.bump];
+        let seeds: &[&[u8]] = &[seeds::VAULT_AUTH, self.series_key.as_ref(), &bump_arr];
+        ti::burn(
+            CpiContext::new_with_signer(
+                *self.token_2022.key,
+                ti::Burn {
+                    mint: self.unit_mint.clone(),
+                    from: self.from.clone(),
+                    authority: self.vault_auth.clone(),
+                },
+                &[seeds],
+            ),
+            units,
+        )?;
+        ledger.units_outstanding = ledger
+            .units_outstanding
+            .checked_sub(units)
+            .ok_or(ProtocolError::MathOverflow)?;
+        emit!(UnitsBurned {
+            series: self.series_key,
+            holder: self.holder_wallet,
+            units,
+            reason,
+        });
+        Ok(())
+    }
+}
+
 impl<'info> HolderClaim<'info> {
     /// ATA derivation of both holder token accounts.
     fn check_atas(&self) -> Result<()> {
@@ -95,17 +142,21 @@ impl<'info> HolderClaim<'info> {
         )
     }
 
-    fn vault_seeds(&self, bump: u8) -> ([u8; 1], Pubkey) {
-        ([bump], self.series.key())
+    fn burn_ctx(&self, bump: u8) -> BurnCtx<'info> {
+        BurnCtx {
+            series_key: self.series.key(),
+            holder_wallet: self.holder.wallet,
+            token_2022: self.token_2022_program.to_account_info(),
+            unit_mint: self.unit_mint.to_account_info(),
+            from: self.holder_unit_ata.to_account_info(),
+            vault_auth: self.vault_auth.to_account_info(),
+            bump,
+        }
     }
 
-    fn pay_out<'a>(
-        &self,
-        ctx_remaining: &'a [AccountInfo<'info>],
-        amount: u64,
-        bump: u8,
-    ) -> Result<()> {
-        let (bump_arr, series_key) = self.vault_seeds(bump);
+    fn pay_out(&self, extra: &[AccountInfo<'info>], amount: u64, bump: u8) -> Result<()> {
+        let series_key = self.series.key();
+        let bump_arr = [bump];
         let seeds: &[&[u8]] = &[seeds::VAULT_AUTH, series_key.as_ref(), &bump_arr];
         transfer_stable(
             &self.stablecoin_program.to_account_info(),
@@ -113,31 +164,10 @@ impl<'info> HolderClaim<'info> {
             &self.stablecoin_mint.to_account_info(),
             &self.holder_stable_ata.to_account_info(),
             &self.vault_auth.to_account_info(),
-            ctx_remaining,
+            extra,
             amount,
             self.series.stablecoin_decimals,
             &[seeds],
-        )
-    }
-
-    /// Burns `units` from the holder's unit account through the permanent delegate.
-    fn burn_units(&self, units: u64, bump: u8) -> Result<()> {
-        if units == 0 {
-            return Ok(());
-        }
-        let (bump_arr, series_key) = self.vault_seeds(bump);
-        let seeds: &[&[u8]] = &[seeds::VAULT_AUTH, series_key.as_ref(), &bump_arr];
-        ti::burn(
-            CpiContext::new_with_signer(
-                self.token_2022_program.key(),
-                ti::Burn {
-                    mint: self.unit_mint.to_account_info(),
-                    from: self.holder_unit_ata.to_account_info(),
-                    authority: self.vault_auth.to_account_info(),
-                },
-                &[seeds],
-            ),
-            units,
         )
     }
 }
@@ -157,13 +187,9 @@ pub fn claim<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     ctx.accounts
         .pay_out(ctx.remaining_accounts, amount, ctx.bumps.vault_auth)?;
     let burned = if status == SeriesStatus::Retired && balance > 0 {
-        ctx.accounts.burn_units(balance, ctx.bumps.vault_auth)?;
-        emit!(UnitsBurned {
-            series: series_key,
-            holder: ctx.accounts.holder.wallet,
-            units: balance,
-            reason: BURN_RETIRED,
-        });
+        ctx.accounts
+            .burn_ctx(ctx.bumps.vault_auth)
+            .burn(&mut ledger, balance, BURN_RETIRED)?;
         balance
     } else {
         0
@@ -188,35 +214,31 @@ pub fn burn_retired<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()
     let balance = ctx.accounts.holder_unit_ata.amount;
     require!(balance > 0, ProtocolError::ZeroUnits);
     settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
-    ctx.accounts.burn_units(balance, ctx.bumps.vault_auth)?;
-    emit!(UnitsBurned {
-        series: series_key,
-        holder: ctx.accounts.holder.wallet,
-        units: balance,
-        reason: BURN_RETIRED,
-    });
-    Ok(())
+    ctx.accounts
+        .burn_ctx(ctx.bumps.vault_auth)
+        .burn(&mut ledger, balance, BURN_RETIRED)
 }
 
-/// `claim_redemption` (SPEC §6.7): `pending + P_redeem × units`, units burned, `redeemed_units`
-/// recorded once. Allowed after a redemption even if the series was later extinguished.
-pub fn claim_redemption<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
-    let mut ledger = ctx.accounts.ledger.load_mut()?;
-    let now = now_ts()?;
-    ctx.accounts.check_atas()?;
-    let series_key = ctx.accounts.series.key();
-    ledger.sync_status(now, series_key)?;
+/// The `claim_redemption` body (SPEC §6.7): settles, records `redeemed_units`, burns the balance
+/// and returns `(units, pending + P_redeem × units)` (not yet paid).
+fn redemption_body(
+    burn: &BurnCtx<'_>,
+    holder: &mut Holder,
+    balance: u64,
+    ledger: &mut Ledger,
+) -> Result<(u64, u64)> {
     require!(ledger.redemption_ts != 0, ProtocolError::NotRedeemed);
-    let balance = ctx.accounts.holder_unit_ata.amount;
-    settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
+    require!(holder.undelivered_units == 0, ProtocolError::DeliverFirst);
+    require!(
+        holder.ask_escrow_units == 0,
+        ProtocolError::AskEscrowOutstanding
+    );
+    settle_holder(ledger, holder, balance)?;
     let price = ledger.redemption_price;
-    let holder = &mut ctx.accounts.holder;
-    if balance > 0 {
-        holder.redeemed_units = holder
-            .redeemed_units
-            .checked_add(balance)
-            .ok_or(ProtocolError::MathOverflow)?;
-    }
+    holder.redeemed_units = holder
+        .redeemed_units
+        .checked_add(balance)
+        .ok_or(ProtocolError::MathOverflow)?;
     let redemption = price
         .checked_mul(balance)
         .ok_or(ProtocolError::MathOverflow)?;
@@ -225,27 +247,33 @@ pub fn claim_redemption<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Resul
         .checked_add(redemption)
         .ok_or(ProtocolError::MathOverflow)?;
     holder.pending = 0;
-    ctx.accounts.burn_units(balance, ctx.bumps.vault_auth)?;
+    burn.burn(ledger, balance, BURN_REDEEMED)?;
+    Ok((balance, amount))
+}
+
+/// `claim_redemption` (SPEC §6.7). Available in `Redeemed` and `Extinguished`.
+pub fn claim_redemption<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
+    let now = now_ts()?;
+    ctx.accounts.check_atas()?;
+    let series_key = ctx.accounts.series.key();
+    ledger.sync_status(now, series_key)?;
+    let burn = ctx.accounts.burn_ctx(ctx.bumps.vault_auth);
+    let balance = ctx.accounts.holder_unit_ata.amount;
+    let (units, amount) = redemption_body(&burn, &mut ctx.accounts.holder, balance, &mut ledger)?;
     ctx.accounts
         .pay_out(ctx.remaining_accounts, amount, ctx.bumps.vault_auth)?;
-    if balance > 0 {
-        emit!(UnitsBurned {
-            series: series_key,
-            holder: ctx.accounts.holder.wallet,
-            units: balance,
-            reason: BURN_REDEEMED,
-        });
-    }
     emit!(RedemptionClaimed {
         series: series_key,
         holder: ctx.accounts.holder.wallet,
-        units: balance,
+        units,
         amount,
     });
     Ok(())
 }
 
-/// `claim_tail` (SPEC §6.8): tail payouts weighted by `redeemed_units`.
+/// `claim_tail` (SPEC §6.8): tail payouts weighted by `redeemed_units`; an unredeemed balance is
+/// redeemed first.
 pub fn claim_tail<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
@@ -253,28 +281,43 @@ pub fn claim_tail<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> 
     let series_key = ctx.accounts.series.key();
     ledger.sync_status(now, series_key)?;
     require!(ledger.redemption_ts != 0, ProtocolError::NotRedeemed);
+    let mut total = 0u64;
+    let balance = ctx.accounts.holder_unit_ata.amount;
+    if balance > 0 {
+        let burn = ctx.accounts.burn_ctx(ctx.bumps.vault_auth);
+        let (units, amount) =
+            redemption_body(&burn, &mut ctx.accounts.holder, balance, &mut ledger)?;
+        total = amount;
+        emit!(RedemptionClaimed {
+            series: series_key,
+            holder: ctx.accounts.holder.wallet,
+            units,
+            amount,
+        });
+    }
     let holder = &mut ctx.accounts.holder;
     require!(holder.redeemed_units > 0, ProtocolError::NoRedeemedUnits);
-    let amount = holder_delta(
+    let tail = holder_delta(
         ledger.tail_acc_wad,
         holder.last_tail_acc_wad,
         holder.redeemed_units,
     )
     .map_err(math)?;
     holder.last_tail_acc_wad = ledger.tail_acc_wad;
+    total = total.checked_add(tail).ok_or(ProtocolError::MathOverflow)?;
     ctx.accounts
-        .pay_out(ctx.remaining_accounts, amount, ctx.bumps.vault_auth)?;
+        .pay_out(ctx.remaining_accounts, total, ctx.bumps.vault_auth)?;
     emit!(TailClaimed {
         series: series_key,
         holder: ctx.accounts.holder.wallet,
-        amount,
+        amount: tail,
     });
     Ok(())
 }
 
-/// `claim_final` (SPEC §6.9): pending payouts plus the pro-rata share of unreleased treasury
-/// funds; units burned. For a series redeemed before extinguishment the weight is
-/// `redeemed_units` and the holder must have claimed redemption first.
+/// `claim_final` (SPEC §6.9): pending payouts plus the pro-rata share of the unreleased treasury
+/// funds; units burned. Weight: `redeemed_units` (after redeeming any balance) for a redeemed
+/// series, else the holder's accrual units.
 pub fn claim_final<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
@@ -285,38 +328,54 @@ pub fn claim_final<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()>
         status == SeriesStatus::Extinguished,
         ProtocolError::NotExtinguished
     );
+    let mut amount = 0u64;
+    let mut burned = 0u64;
+    let burn = ctx.accounts.burn_ctx(ctx.bumps.vault_auth);
     let balance = ctx.accounts.holder_unit_ata.amount;
-    settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
-    let holder = &mut ctx.accounts.holder;
-    let weight = if ledger.units_at_redemption > 0 {
-        require!(balance == 0, ProtocolError::PartialBurn);
-        holder.redeemed_units
+    let weight = if ledger.redemption_ts != 0 {
+        if balance > 0 {
+            let (units, redeemed) =
+                redemption_body(&burn, &mut ctx.accounts.holder, balance, &mut ledger)?;
+            amount = redeemed;
+            burned = units;
+            emit!(RedemptionClaimed {
+                series: series_key,
+                holder: ctx.accounts.holder.wallet,
+                units,
+                amount: redeemed,
+            });
+        }
+        ctx.accounts.holder.redeemed_units
     } else {
+        let holder = &ctx.accounts.holder;
+        require!(holder.undelivered_units == 0, ProtocolError::DeliverFirst);
+        require!(
+            holder.ask_escrow_units == 0,
+            ProtocolError::AskEscrowOutstanding
+        );
+        settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
+        amount = ctx.accounts.holder.pending;
+        ctx.accounts.holder.pending = 0;
+        burned = balance;
+        burn.burn(&mut ledger, balance, BURN_EXTINGUISHED)?;
         balance
     };
+    let holder = &mut ctx.accounts.holder;
     let final_share =
         holder_delta(ledger.final_acc_wad, holder.last_final_acc_wad, weight).map_err(math)?;
     holder.last_final_acc_wad = ledger.final_acc_wad;
-    let amount = holder
-        .pending
-        .checked_add(final_share)
-        .ok_or(ProtocolError::MathOverflow)?;
+    let pending = holder.pending;
     holder.pending = 0;
-    ctx.accounts.burn_units(balance, ctx.bumps.vault_auth)?;
+    amount = amount
+        .checked_add(final_share)
+        .and_then(|v| v.checked_add(pending))
+        .ok_or(ProtocolError::MathOverflow)?;
     ctx.accounts
         .pay_out(ctx.remaining_accounts, amount, ctx.bumps.vault_auth)?;
-    if balance > 0 {
-        emit!(UnitsBurned {
-            series: series_key,
-            holder: ctx.accounts.holder.wallet,
-            units: balance,
-            reason: BURN_EXTINGUISHED,
-        });
-    }
     emit!(FinalClaimed {
         series: series_key,
         holder: ctx.accounts.holder.wallet,
-        units: balance,
+        units: burned,
         amount,
     });
     Ok(())

@@ -32,7 +32,9 @@ pub const TIER_FLAGS_MASK: u8 = 0x0F;
 pub const MAX_METADATA_URI: usize = 200;
 
 /// Borsh-serialisable mirror of [`Parameters`].
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default)]
+#[derive(
+    AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default,
+)]
 pub struct ParametersData {
     pub cap_multiple_wad: u64,
     pub hurdle_rate_wad: u64,
@@ -108,7 +110,9 @@ impl From<Parameters> for ParametersData {
 }
 
 /// Borsh-serialisable mirror of [`Tranche`].
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default)]
+#[derive(
+    AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default,
+)]
 pub struct TrancheData {
     pub at_offset_seconds: u64,
     pub bps: u16,
@@ -125,7 +129,9 @@ impl From<TrancheData> for Tranche {
 
 /// Plaintext tier-1 terms (public by the issuer's choice, SPEC §6.5); checked against
 /// `terms_commitment` with Poseidon(5) at series creation.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default)]
+#[derive(
+    AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default,
+)]
 pub struct Tier1Terms {
     pub theta: u64,
     pub r_wad: u64,

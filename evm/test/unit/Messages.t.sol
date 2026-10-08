@@ -26,9 +26,16 @@ contract MessagesTest is Test {
 
     function test_reportDigestEncoding() public pure {
         bytes32 ic = keccak256("income");
-        bytes memory pre = abi.encodePacked("MERCES_REPORT_V1", DOM, bytes32(uint256(7)), uint32(8104), ic, uint8(2));
-        assertEq(pre.length, 16 + 32 + 32 + 4 + 32 + 1);
-        assertEq(MercesMessages.reportDigest(DOM, 7, 8104, ic, 2), keccak256(pre));
+        bytes32 prior = keccak256("prior");
+        bytes memory pre =
+            abi.encodePacked("MERCES_REPORT_V1", DOM, bytes32(uint256(7)), uint32(8104), prior, ic, uint8(2), uint8(1));
+        assertEq(pre.length, 16 + 32 + 32 + 4 + 32 + 32 + 1 + 1);
+        assertEq(MercesMessages.reportDigest(DOM, 7, 8104, prior, ic, 2, true), keccak256(pre));
+        // the liquidity flag is part of the message: a tail attestation cannot be reused for a regular report
+        assertTrue(
+            MercesMessages.reportDigest(DOM, 7, 8104, prior, ic, 2, true)
+                != MercesMessages.reportDigest(DOM, 7, 8104, prior, ic, 2, false)
+        );
     }
 
     function test_otherDigests() public pure {
@@ -53,18 +60,18 @@ contract MessagesTest is Test {
             keccak256(abi.encodePacked("MERCES_EXTINGUISH_V1", DOM, bytes32(uint256(7)), uint64(0)))
         );
         bytes memory pre = abi.encodePacked(
-            "MERCES_TRUEUP_V1", DOM, bytes32(uint256(7)), uint16(2026), int64(-5), uint64(1_800_000_000)
+            "MERCES_TRUEUP_V1", DOM, bytes32(uint256(7)), uint64(4), uint16(2026), int64(-5), uint64(1_800_000_000)
         );
-        assertEq(pre.length, 16 + 32 + 32 + 2 + 8 + 8);
+        assertEq(pre.length, 16 + 32 + 32 + 8 + 2 + 8 + 8);
         // two's complement big-endian for -5
-        assertEq(uint8(pre[16 + 32 + 32 + 2]), 0xff);
-        assertEq(uint8(pre[16 + 32 + 32 + 2 + 7]), 0xfb);
-        assertEq(MercesMessages.trueupDigest(DOM, 7, 2026, -5, 1_800_000_000), keccak256(pre));
+        assertEq(uint8(pre[16 + 32 + 32 + 8 + 2]), 0xff);
+        assertEq(uint8(pre[16 + 32 + 32 + 8 + 2 + 7]), 0xfb);
+        assertEq(MercesMessages.trueupDigest(DOM, 7, 4, 2026, -5, 1_800_000_000), keccak256(pre));
     }
 
     function test_rawDigestSignatureRecovers() public pure {
         uint256 pk = 0xA11CE;
-        bytes32 digest = MercesMessages.reportDigest(DOM, 1, 8104, keccak256("x"), 2);
+        bytes32 digest = MercesMessages.reportDigest(DOM, 1, 8104, keccak256("p"), keccak256("x"), 2, false);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
         // raw digest, no EIP-191 prefix
         assertEq(ECDSA.recover(digest, abi.encodePacked(r, s, v)), vm.addr(pk));

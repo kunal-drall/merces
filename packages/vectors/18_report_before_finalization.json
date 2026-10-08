@@ -1,0 +1,1505 @@
+{
+  "name": "18_report_before_finalization",
+  "description": "Settled raise with one bid still unprocessed: the mint is not finalized, units_outstanding is still 0, and submit_report, pay, claim_release, retire_if_capped and redeem all revert MintNotFinalized; split-router receipts are held in the router account. Processing the last bid finalizes the mint (units_outstanding = 400); releases flow, the held income is routed with the next receipt and the Q1 report is accepted.",
+  "schema": 2,
+  "specVersion": "1.1",
+  "generatedBy": "packages/reference/src/vectors/generate.ts (pnpm vectors)",
+  "config": {
+    "parameters": {
+      "cap_multiple_wad": "2500000000000000000",
+      "hurdle_rate_wad": "80000000000000000",
+      "payout_multiple_k": "5",
+      "lockup_seconds": "47336400",
+      "wallet_cap_bps": "1000",
+      "auction_fee_bps": "100",
+      "payout_fee_bps": "500",
+      "window_fee_bps": "100",
+      "non_reveal_charge_bps": "100",
+      "commit_duration": "604800",
+      "reveal_duration": "172800",
+      "window_commit_duration": "259200",
+      "window_reveal_duration": "86400",
+      "report_due_days": "30",
+      "grace_days": "15",
+      "formal_notice_days": "90",
+      "trueup_days": "60",
+      "tail_seconds": "31536000",
+      "fx_min_coverage_bps": "8000",
+      "fx_max_staleness_seconds": "3600",
+      "fx_max_conf_bps": "100",
+      "fx_deviation_band_bps": "200",
+      "max_pause_seconds": "31536000",
+      "max_cumulative_pause_seconds": "63072000",
+      "max_pauses": "16",
+      "max_release_tranches": "24"
+    },
+    "flags": {
+      "newRaisesPaused": false,
+      "windowsEnabled": false,
+      "tier4Enabled": false
+    },
+    "stablecoinDecimals": 6,
+    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces, prior/income commitments, liquidity flags) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
+  },
+  "actors": [
+    "attestor1",
+    "attestor2",
+    "b1",
+    "b2",
+    "b3",
+    "b4",
+    "client",
+    "issuer",
+    "keeper",
+    "verifier1"
+  ],
+  "keys": {
+    "attestor1": {
+      "seed": "18_report_before_finalization:attestor1",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0x608a4c71cc40c9d9f83278f01dc3c2f12d139b7b98a4bd90fa9e98c8ff39bab1",
+      "address": "0x95a841797746973e59c78e331d5844a6c9cd9998",
+      "role": "attestor"
+    },
+    "attestor2": {
+      "seed": "18_report_before_finalization:attestor2",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0xe1aaba1751135ef72f5630f7e3840ea2d50f73a62022acb3d879d81932850c9f",
+      "address": "0x5dd704a50c62e35abfaf6c24055994f1c948bd3c",
+      "role": "attestor"
+    },
+    "verifier1": {
+      "seed": "18_report_before_finalization:verifier1",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0x27be59ca86125da8a6e7fd5c26fbd90ac33efdfeb277b14e9b4bc73cd1dc9e05",
+      "address": "0x617d267ba8f8df33b00cc4990da3371193da7fe4",
+      "role": "verifier"
+    }
+  },
+  "seriesPrivate": {
+    "S1": {
+      "termsPlain": {
+        "theta": "80000000000",
+        "rWad": "100000000000000",
+        "currencyCode": 840,
+        "indexingRule": 0,
+        "termsSalt": "5596980170985026236090278042041556431264940537429240710851537673558276897271"
+      },
+      "termsCommitment": "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635"
+    }
+  },
+  "steps": [
+    {
+      "t": "1767312000",
+      "op": "register_attestor",
+      "key": "attestor1"
+    },
+    {
+      "t": "1767312000",
+      "op": "register_attestor",
+      "key": "attestor2"
+    },
+    {
+      "t": "1767312000",
+      "op": "register_verifier_key",
+      "key": "verifier1"
+    },
+    {
+      "t": "1767312000",
+      "op": "allowlist",
+      "wallets": [
+        "issuer",
+        "b1",
+        "b2",
+        "b3",
+        "b4"
+      ]
+    },
+    {
+      "t": "1767312000",
+      "op": "register_issuer",
+      "wallet": "issuer"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "issuer",
+      "amount": "200000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b1",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b2",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b3",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b4",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "client",
+      "amount": "500000000000"
+    },
+    {
+      "t": "1767312000",
+      "note": "tier 1|2: on-chain router plus attested proofs",
+      "op": "create_series",
+      "actor": "issuer",
+      "series": "S1",
+      "terms": {
+        "unitsOffered": "1000",
+        "reservePrice": "100000000",
+        "minRaise": "20000000000",
+        "capMultipleWad": "2500000000000000000",
+        "hurdleRateWad": "80000000000000000",
+        "payoutMultipleK": "5",
+        "lockupSeconds": "47336400",
+        "walletCapBps": "1000",
+        "auctionFeeBps": "100",
+        "payoutFeeBps": "500",
+        "windowFeeBps": "100",
+        "nonRevealChargeBps": "100",
+        "commitDuration": "604800",
+        "revealDuration": "172800",
+        "windowCommitDuration": "259200",
+        "windowRevealDuration": "86400"
+      },
+      "releaseSchedule": [
+        {
+          "atOffsetSeconds": "0",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "7776000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "15552000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "23328000",
+          "bps": "2500"
+        }
+      ],
+      "termsCommitment": "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+      "contractHash": "0x44229d5532930e21391217d078cbf2e609ca41e4995c9bdffc7168142900cffb",
+      "tierFlags": 3,
+      "fxPairId": null,
+      "router": {
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1767571200",
+      "op": "open_raise",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1767574800",
+      "op": "commit_bid",
+      "actor": "b1",
+      "series": "S1",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0xdb39035f97ffe9b01e29e3cdd3b9e542f4f0208db1ce9e48b8bc363639c162d2",
+      "escrow": "12120000000"
+    },
+    {
+      "t": "1767578400",
+      "op": "commit_bid",
+      "actor": "b2",
+      "series": "S1",
+      "price": "115000000",
+      "quantity": "100",
+      "salt": "0x10b1f6a1960bd7147025db245f1cc278d9e7ca7e6d3256f9fac0163ccb17b01a",
+      "escrow": "11615000000"
+    },
+    {
+      "t": "1767582000",
+      "op": "commit_bid",
+      "actor": "b3",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "100",
+      "salt": "0x327bcedcb13333a839a6c68697c6e860c1d87435f45c338f4b0a2d428028d7d9",
+      "escrow": "11110000000"
+    },
+    {
+      "t": "1767585600",
+      "op": "commit_bid",
+      "actor": "b4",
+      "series": "S1",
+      "price": "105000000",
+      "quantity": "100",
+      "salt": "0xc8fcfaad79a91f6cc8409754ab5971461b8b49a5333d0fd81554df79fb8deebc",
+      "escrow": "10605000000"
+    },
+    {
+      "t": "1768180200",
+      "op": "reveal_bid",
+      "actor": "b1",
+      "series": "S1",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0xdb39035f97ffe9b01e29e3cdd3b9e542f4f0208db1ce9e48b8bc363639c162d2"
+    },
+    {
+      "t": "1768180800",
+      "op": "reveal_bid",
+      "actor": "b2",
+      "series": "S1",
+      "price": "115000000",
+      "quantity": "100",
+      "salt": "0x10b1f6a1960bd7147025db245f1cc278d9e7ca7e6d3256f9fac0163ccb17b01a"
+    },
+    {
+      "t": "1768181400",
+      "op": "reveal_bid",
+      "actor": "b3",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "100",
+      "salt": "0x327bcedcb13333a839a6c68697c6e860c1d87435f45c338f4b0a2d428028d7d9"
+    },
+    {
+      "t": "1768182000",
+      "op": "reveal_bid",
+      "actor": "b4",
+      "series": "S1",
+      "price": "105000000",
+      "quantity": "100",
+      "salt": "0xc8fcfaad79a91f6cc8409754ab5971461b8b49a5333d0fd81554df79fb8deebc"
+    },
+    {
+      "t": "1768352400",
+      "op": "begin_settlement",
+      "series": "S1",
+      "clearingPrice": "105000000",
+      "qAboveClaim": "300",
+      "qAtClaim": "100"
+    },
+    {
+      "t": "1768352400",
+      "op": "finalize_settlement",
+      "series": "S1"
+    },
+    {
+      "t": "1768352460",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768352520",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768352580",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768352640",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768352700",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768352760",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768352760",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "0"
+        },
+        "client": {
+          "stable": "500000000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "315000000",
+      "treasury": "31500000000",
+      "vault": "0",
+      "auctionEscrow": "10605000000",
+      "routerBalance": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": false,
+        "unitsOutstanding": "0",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "31500000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "10605000000",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "300",
+        "bidsProcessed": "3",
+        "mintFinalized": false
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "note": "Settled at 105, units_sold 400 but bids_processed 3 of 4: units_minted 300, mintFinalized false, unitsOutstanding 0 (stored only at finalization); b4's escrow still held"
+    },
+    {
+      "t": "1768867200",
+      "op": "expect_revert",
+      "call": {
+        "op": "claim_release",
+        "actor": "issuer",
+        "series": "S1"
+      },
+      "error": "MintNotFinalized",
+      "note": "tranche 1 is vested but releases wait for finalization"
+    },
+    {
+      "t": "1770681600",
+      "note": "receipts before finalization accumulate in the router's receiving account (IncomeHeld)",
+      "op": "route_income",
+      "series": "S1",
+      "payer": "client",
+      "amount": "30000000000"
+    },
+    {
+      "t": "1770681600",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "0"
+        },
+        "client": {
+          "stable": "470000000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "315000000",
+      "treasury": "31500000000",
+      "vault": "0",
+      "auctionEscrow": "10605000000",
+      "routerBalance": "30000000000",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": false,
+        "unitsOutstanding": "0",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "31500000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "10605000000",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "300",
+        "bidsProcessed": "3",
+        "mintFinalized": false
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "note": "routerBalance 30,000; nothing passed through, nothing routed"
+    },
+    {
+      "t": "1775088000",
+      "op": "expect_revert",
+      "call": {
+        "op": "submit_report",
+        "actor": "issuer",
+        "series": "S1",
+        "period": "8104",
+        "paymentUsd": "0",
+        "fxAvgWad": "1000000000000000000",
+        "fxFallback": null,
+        "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+        "incomeCommitment": "0x25e20fc177e24b82c620df75fe34b3df4aa0b4a7a7c815cb99e9190a196ac771",
+        "tier": 2,
+        "liquidityEvent": false,
+        "attestation": "verifier1",
+        "proof": {
+          "pi_a": [
+            "5143151319951442894555302954478156124924667161457040998665254364540895083069",
+            "7406451387949868426527139577159190994119065905449679429963660975095531382704",
+            "1"
+          ],
+          "pi_b": [
+            [
+              "303655621213886984408900071907710539946065390555355988865681771523103486414",
+              "15960222058200337552964815535182173963470301459772844193961242979844747139108"
+            ],
+            [
+              "10311114986248252059184776744335681432997762545603938897683915683173979606808",
+              "17945507372085440717597820648934226045481070887387909941203320897763011805589"
+            ],
+            [
+              "1",
+              "0"
+            ]
+          ],
+          "pi_c": [
+            "8951794015982515840120299507015815428540493451862967797551738525172434275607",
+            "15463580505026685519521921184328523100414565024785020060197028514160765353150",
+            "1"
+          ],
+          "protocol": "groth16",
+          "curve": "bn128"
+        },
+        "publicSignals": [
+          "5982870340584687657724792093578899916249437088941587252421472667294729942581",
+          "0",
+          "1000000000000000000",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "17134991576310934904110703908447125874564589625346621125887322294389056391025",
+          "0"
+        ],
+        "proofEvm": {
+          "pA": [
+            "5143151319951442894555302954478156124924667161457040998665254364540895083069",
+            "7406451387949868426527139577159190994119065905449679429963660975095531382704"
+          ],
+          "pB": [
+            [
+              "15960222058200337552964815535182173963470301459772844193961242979844747139108",
+              "303655621213886984408900071907710539946065390555355988865681771523103486414"
+            ],
+            [
+              "17945507372085440717597820648934226045481070887387909941203320897763011805589",
+              "10311114986248252059184776744335681432997762545603938897683915683173979606808"
+            ]
+          ],
+          "pC": [
+            "8951794015982515840120299507015815428540493451862967797551738525172434275607",
+            "15463580505026685519521921184328523100414565024785020060197028514160765353150"
+          ],
+          "pubSignals": [
+            "5982870340584687657724792093578899916249437088941587252421472667294729942581",
+            "0",
+            "1000000000000000000",
+            "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+            "17134991576310934904110703908447125874564589625346621125887322294389056391025",
+            "0"
+          ],
+          "proofBytes": "0x0b5eeba5194af89d2711b529b4cce582f6e176b3b0c45c423d74323f0e05ba3d105fe7266df464e97c3865c437195c206a9a14a9c239623cdd2dc4ecdcd327b023492a623f02dda8a8c7c1c674e16fd6ab44ca3f0842e8c509dc4b3306bf982400abdcecfa9e03736b5350a0030496841285953e149b44da4a9202df11f371ce27accc1737ab509431d3ecc8ebce0278cfbc0169d1b0968f3af88860e8f5419516cbe25f463d48dd337eed09fcfc4a0a9b6e33a73d786dcca6d23b8c10474f1813ca892e3cd9622452d3928e244c161b39e0ff2136c086d818b5bacfb7fd0d172230138f357dcd56eb8e418159b0f25f4443a0b8d3a570d25cceea5660f0bcbe",
+          "calldata": "0xf398789b0b5eeba5194af89d2711b529b4cce582f6e176b3b0c45c423d74323f0e05ba3d105fe7266df464e97c3865c437195c206a9a14a9c239623cdd2dc4ecdcd327b023492a623f02dda8a8c7c1c674e16fd6ab44ca3f0842e8c509dc4b3306bf982400abdcecfa9e03736b5350a0030496841285953e149b44da4a9202df11f371ce27accc1737ab509431d3ecc8ebce0278cfbc0169d1b0968f3af88860e8f5419516cbe25f463d48dd337eed09fcfc4a0a9b6e33a73d786dcca6d23b8c10474f1813ca892e3cd9622452d3928e244c161b39e0ff2136c086d818b5bacfb7fd0d172230138f357dcd56eb8e418159b0f25f4443a0b8d3a570d25cceea5660f0bcbe0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b63500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b6486425e20fc177e24b82c620df75fe34b3df4aa0b4a7a7c815cb99e9190a196ac7710000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "proofSolana": {
+          "proofA": "0x0b5eeba5194af89d2711b529b4cce582f6e176b3b0c45c423d74323f0e05ba3d2004674c733d3b403c17dff24a67fc3d2ce755e7a63868505ef2c729fba9d597",
+          "proofB": "0x23492a623f02dda8a8c7c1c674e16fd6ab44ca3f0842e8c509dc4b3306bf982400abdcecfa9e03736b5350a0030496841285953e149b44da4a9202df11f371ce27accc1737ab509431d3ecc8ebce0278cfbc0169d1b0968f3af88860e8f5419516cbe25f463d48dd337eed09fcfc4a0a9b6e33a73d786dcca6d23b8c10474f18",
+          "proofC": "0x13ca892e3cd9622452d3928e244c161b39e0ff2136c086d818b5bacfb7fd0d172230138f357dcd56eb8e418159b0f25f4443a0b8d3a570d25cceea5660f0bcbe",
+          "proof": "0x0b5eeba5194af89d2711b529b4cce582f6e176b3b0c45c423d74323f0e05ba3d2004674c733d3b403c17dff24a67fc3d2ce755e7a63868505ef2c729fba9d59723492a623f02dda8a8c7c1c674e16fd6ab44ca3f0842e8c509dc4b3306bf982400abdcecfa9e03736b5350a0030496841285953e149b44da4a9202df11f371ce27accc1737ab509431d3ecc8ebce0278cfbc0169d1b0968f3af88860e8f5419516cbe25f463d48dd337eed09fcfc4a0a9b6e33a73d786dcca6d23b8c10474f1813ca892e3cd9622452d3928e244c161b39e0ff2136c086d818b5bacfb7fd0d172230138f357dcd56eb8e418159b0f25f4443a0b8d3a570d25cceea5660f0bcbe",
+          "publicInputs": [
+            "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+            "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+            "0x25e20fc177e24b82c620df75fe34b3df4aa0b4a7a7c815cb99e9190a196ac771",
+            "0x0000000000000000000000000000000000000000000000000000000000000000"
+          ]
+        },
+        "witness": {
+          "incomeYtd": "30000000000",
+          "incomeSalt": "983409475405951796241301352038801734917894264588317378217447020015463069904",
+          "priorIncomeYtd": "0",
+          "priorSalt": "0",
+          "theta": "80000000000",
+          "rWad": "100000000000000"
+        }
+      },
+      "error": "MintNotFinalized"
+    },
+    {
+      "t": "1775088000",
+      "op": "expect_revert",
+      "call": {
+        "op": "pay",
+        "actor": "issuer",
+        "series": "S1"
+      },
+      "error": "MintNotFinalized"
+    },
+    {
+      "t": "1775088000",
+      "op": "expect_revert",
+      "call": {
+        "op": "retire_if_capped",
+        "series": "S1"
+      },
+      "error": "MintNotFinalized"
+    },
+    {
+      "t": "1775088000",
+      "op": "expect_revert",
+      "call": {
+        "op": "redeem",
+        "actor": "issuer",
+        "series": "S1"
+      },
+      "error": "MintNotFinalized"
+    },
+    {
+      "t": "1775174400",
+      "note": "last bid: units_minted 400 == units_sold → RaiseMintFinalized; unitsOutstanding = 400",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
+      "t": "1775174400",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
+      "t": "1775174400",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "client": {
+          "stable": "470000000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "200000000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "420000000",
+      "treasury": "42000000000",
+      "vault": "0",
+      "auctionEscrow": "0",
+      "routerBalance": "30000000000",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "0",
+        "netAccWad": "0",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "0",
+        "feeCollected": "0",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "note": "mint finalized; every bidder holds 100 units; auction escrow empty"
+    },
+    {
+      "t": "1775174400",
+      "note": "tranche 1 (settlement + 0 d); tranche 2 vests mid-April",
+      "op": "claim_release",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1775260800",
+      "note": "held 30,000 + 60,000 = 90,000 routed in one go: 80,000 passes through, 4% of 10,000 = 400 to the vault (fee 20); routerCredit 400",
+      "op": "route_income",
+      "series": "S1",
+      "payer": "client",
+      "amount": "60000000000"
+    },
+    {
+      "t": "1775260800",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "client": {
+          "stable": "410000000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "300100000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "440000000",
+      "treasury": "31500000000",
+      "vault": "380000000",
+      "auctionEscrow": "0",
+      "routerBalance": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "10500000000",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "1000000000000000000000000",
+        "netAccWad": "950000000000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "400000000",
+        "feeCollected": "20000000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": null,
+        "lastPaidPeriod": null,
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "400000000",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "note": "routerBalance 0; issuer received 89,600; vault 380"
+    },
+    {
+      "t": "1775347200",
+      "note": "Q1 attested income 30,000 < θ → payment 0",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S1",
+      "period": "8104",
+      "paymentUsd": "0",
+      "fxAvgWad": "1000000000000000000",
+      "fxFallback": null,
+      "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+      "incomeCommitment": "0x25e20fc177e24b82c620df75fe34b3df4aa0b4a7a7c815cb99e9190a196ac771",
+      "tier": 2,
+      "liquidityEvent": false,
+      "attestation": "verifier1",
+      "proof": {
+        "pi_a": [
+          "3445261325778245449602640414809578371961396693857302840159492231386636187577",
+          "2703167810928575721726635043253478627310484309014584071804886020835347439183",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "614962137373661272740165397204682841631160113954563061805476239694588124763",
+            "4975577549776825726081093620779848775427575346287312078532421495192784651633"
+          ],
+          [
+            "14802481238636822429479520269980203468547220214116914404239912408810522896545",
+            "21331596727240964165486782986766292309345147187198455550243974495153549273134"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "19192054175640192494118397987424632047385102121105470080239746314252934920121",
+          "18400559970030594332594398135655636644898115028235527842350949740622323924457",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "5982870340584687657724792093578899916249437088941587252421472667294729942581",
+        "400",
+        "1000000000000000000",
+        "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+        "17134991576310934904110703908447125874564589625346621125887322294389056391025",
+        "0"
+      ],
+      "proofEvm": {
+        "pA": [
+          "3445261325778245449602640414809578371961396693857302840159492231386636187577",
+          "2703167810928575721726635043253478627310484309014584071804886020835347439183"
+        ],
+        "pB": [
+          [
+            "4975577549776825726081093620779848775427575346287312078532421495192784651633",
+            "614962137373661272740165397204682841631160113954563061805476239694588124763"
+          ],
+          [
+            "21331596727240964165486782986766292309345147187198455550243974495153549273134",
+            "14802481238636822429479520269980203468547220214116914404239912408810522896545"
+          ]
+        ],
+        "pC": [
+          "19192054175640192494118397987424632047385102121105470080239746314252934920121",
+          "18400559970030594332594398135655636644898115028235527842350949740622323924457"
+        ],
+        "pubSignals": [
+          "5982870340584687657724792093578899916249437088941587252421472667294729942581",
+          "400",
+          "1000000000000000000",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "17134991576310934904110703908447125874564589625346621125887322294389056391025",
+          "0"
+        ],
+        "proofBytes": "0x079df2e500c6075b4f30db787b78000711fff3a885dcb2bb7c77360ddddb77b905f9f052b4d45a7b473a6df6a47a4f072ce16d2c5422d73d998ee24f0eea9e4f0b0013bc822ff92d8c3dff5285e961792665670c9f7598c65b65f06b8906c571015c0e656c8243a15803591fb501a70c55431454c951d933213d7bb5ec719e5b2f294181d8be9cf7e8018f452585e59ed76c4081dd95be467e48ed315d50e82e20b9e8508ed07a427cfa27ddf11798bdf4ca926a59694b768eed8492ae0368a12a6e5155ed156bbe876029344d7efca384488c2bc33642983c27d7efb75b37b928ae590e2b5766080aa3ab0e8583208ea3f605e17281484e2a135ed1e2583de9",
+        "calldata": "0xf398789b079df2e500c6075b4f30db787b78000711fff3a885dcb2bb7c77360ddddb77b905f9f052b4d45a7b473a6df6a47a4f072ce16d2c5422d73d998ee24f0eea9e4f0b0013bc822ff92d8c3dff5285e961792665670c9f7598c65b65f06b8906c571015c0e656c8243a15803591fb501a70c55431454c951d933213d7bb5ec719e5b2f294181d8be9cf7e8018f452585e59ed76c4081dd95be467e48ed315d50e82e20b9e8508ed07a427cfa27ddf11798bdf4ca926a59694b768eed8492ae0368a12a6e5155ed156bbe876029344d7efca384488c2bc33642983c27d7efb75b37b928ae590e2b5766080aa3ab0e8583208ea3f605e17281484e2a135ed1e2583de90d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b63500000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b6486425e20fc177e24b82c620df75fe34b3df4aa0b4a7a7c815cb99e9190a196ac7710000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "proofSolana": {
+        "proofA": "0x079df2e500c6075b4f30db787b78000711fff3a885dcb2bb7c77360ddddb77b92a6a5e202c5d45ae7115d7bfdd0709566a9ffd65144ef34fa291a9c7c9925ef8",
+        "proofB": "0x0b0013bc822ff92d8c3dff5285e961792665670c9f7598c65b65f06b8906c571015c0e656c8243a15803591fb501a70c55431454c951d933213d7bb5ec719e5b2f294181d8be9cf7e8018f452585e59ed76c4081dd95be467e48ed315d50e82e20b9e8508ed07a427cfa27ddf11798bdf4ca926a59694b768eed8492ae0368a1",
+        "proofC": "0x2a6e5155ed156bbe876029344d7efca384488c2bc33642983c27d7efb75b37b928ae590e2b5766080aa3ab0e8583208ea3f605e17281484e2a135ed1e2583de9",
+        "proof": "0x079df2e500c6075b4f30db787b78000711fff3a885dcb2bb7c77360ddddb77b92a6a5e202c5d45ae7115d7bfdd0709566a9ffd65144ef34fa291a9c7c9925ef80b0013bc822ff92d8c3dff5285e961792665670c9f7598c65b65f06b8906c571015c0e656c8243a15803591fb501a70c55431454c951d933213d7bb5ec719e5b2f294181d8be9cf7e8018f452585e59ed76c4081dd95be467e48ed315d50e82e20b9e8508ed07a427cfa27ddf11798bdf4ca926a59694b768eed8492ae0368a12a6e5155ed156bbe876029344d7efca384488c2bc33642983c27d7efb75b37b928ae590e2b5766080aa3ab0e8583208ea3f605e17281484e2a135ed1e2583de9",
+        "publicInputs": [
+          "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+          "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+          "0x25e20fc177e24b82c620df75fe34b3df4aa0b4a7a7c815cb99e9190a196ac771",
+          "0x0000000000000000000000000000000000000000000000000000000000000000"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "30000000000",
+        "incomeSalt": "983409475405951796241301352038801734917894264588317378217447020015463069904",
+        "priorIncomeYtd": "0",
+        "priorSalt": "0",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1775347200",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "client": {
+          "stable": "410000000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "300100000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "440000000",
+      "treasury": "31500000000",
+      "vault": "380000000",
+      "auctionEscrow": "0",
+      "routerBalance": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "10500000000",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "1000000000000000000000000",
+        "netAccWad": "950000000000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "400000000",
+        "feeCollected": "20000000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8104",
+        "lastPaidPeriod": "8104",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "400000000",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "note": "Q1 accepted; OnTime; routerCredit 400 carried to Q2"
+    },
+    {
+      "t": "1782950400",
+      "note": "payment 400 fully covered by the router credit → due 0",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S1",
+      "period": "8105",
+      "paymentUsd": "400000000",
+      "fxAvgWad": "1000000000000000000",
+      "fxFallback": null,
+      "priorIncomeCommitment": "0x25e20fc177e24b82c620df75fe34b3df4aa0b4a7a7c815cb99e9190a196ac771",
+      "incomeCommitment": "0x1fd9fa18bb5eca1f8c4e46dfd6fd87cfaa0f6a2628dd1a2c6aacb98810e3a6bd",
+      "tier": 2,
+      "liquidityEvent": false,
+      "attestation": "verifier1",
+      "proof": {
+        "pi_a": [
+          "21084906422351737728496756744645959351341942682378934790872077800574238716811",
+          "8307430425675055310230727204189881659041875364081488231448853262340350838201",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "8876772377780975343920846083841123909340079144731373601281479532297804101058",
+            "1749683899798221785915477840018108906963622729094664433055963878236731495228"
+          ],
+          [
+            "7492909146870136313237665564528929640607230819994381956520820792984983640337",
+            "480450015865734131980154016440401789555609115443748421446910778727796275221"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "15228503992724011778950860540838389844300281056628775399831885205523897978761",
+          "15409858355526211050224386785833058974486801455526231129690994292877898708670",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "5982870340584687657724792093578899916249437088941587252421472667294729942581",
+        "400",
+        "1000000000000000000",
+        "17134991576310934904110703908447125874564589625346621125887322294389056391025",
+        "14406830222495977790287462096607918402057787465376555057943534004514628806333",
+        "400000000"
+      ],
+      "proofEvm": {
+        "pA": [
+          "21084906422351737728496756744645959351341942682378934790872077800574238716811",
+          "8307430425675055310230727204189881659041875364081488231448853262340350838201"
+        ],
+        "pB": [
+          [
+            "1749683899798221785915477840018108906963622729094664433055963878236731495228",
+            "8876772377780975343920846083841123909340079144731373601281479532297804101058"
+          ],
+          [
+            "480450015865734131980154016440401789555609115443748421446910778727796275221",
+            "7492909146870136313237665564528929640607230819994381956520820792984983640337"
+          ]
+        ],
+        "pC": [
+          "15228503992724011778950860540838389844300281056628775399831885205523897978761",
+          "15409858355526211050224386785833058974486801455526231129690994292877898708670"
+        ],
+        "pubSignals": [
+          "5982870340584687657724792093578899916249437088941587252421472667294729942581",
+          "400",
+          "1000000000000000000",
+          "17134991576310934904110703908447125874564589625346621125887322294389056391025",
+          "14406830222495977790287462096607918402057787465376555057943534004514628806333",
+          "400000000"
+        ],
+        "proofBytes": "0x2e9da255e272610bdd4316559f548c98f7eadabbda6580e6996b87576b31f38b125dd6c8502f03b488da6d4335c5772242fbd23d3abb2b468dee83160a3485b903de4936d432ffb797ef66ef488aaa6ed18da6938e52c22d2844c9afce38533c13a0133b04e896626b63b5be8794dd5276eb4182beff85f5075f668ffc54b5c2010fecd18a1abd24a2279a6e522e1bba0bdeac2aa9a165e7e81086becc9f78151090d616f0edbb289db09e70794308118d92a2bb92dbf4af3a02bb328db5191121ab071ec17c0435026ec69830e40cb98bb650c91e30e21f3c8c8511c5230f892211abb5ef763a0c0c1d7e55368427c93a8e4bd54952378e5f34e99bcf0276be",
+        "calldata": "0xf398789b2e9da255e272610bdd4316559f548c98f7eadabbda6580e6996b87576b31f38b125dd6c8502f03b488da6d4335c5772242fbd23d3abb2b468dee83160a3485b903de4936d432ffb797ef66ef488aaa6ed18da6938e52c22d2844c9afce38533c13a0133b04e896626b63b5be8794dd5276eb4182beff85f5075f668ffc54b5c2010fecd18a1abd24a2279a6e522e1bba0bdeac2aa9a165e7e81086becc9f78151090d616f0edbb289db09e70794308118d92a2bb92dbf4af3a02bb328db5191121ab071ec17c0435026ec69830e40cb98bb650c91e30e21f3c8c8511c5230f892211abb5ef763a0c0c1d7e55368427c93a8e4bd54952378e5f34e99bcf0276be0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b63500000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a764000025e20fc177e24b82c620df75fe34b3df4aa0b4a7a7c815cb99e9190a196ac7711fd9fa18bb5eca1f8c4e46dfd6fd87cfaa0f6a2628dd1a2c6aacb98810e3a6bd0000000000000000000000000000000000000000000000000000000017d78400"
+      },
+      "proofSolana": {
+        "proofA": "0x2e9da255e272610bdd4316559f548c98f7eadabbda6580e6996b87576b31f38b1e0677aa91029c752f75d8734bbbe13b548598542db69f46ae320900ce48778e",
+        "proofB": "0x03de4936d432ffb797ef66ef488aaa6ed18da6938e52c22d2844c9afce38533c13a0133b04e896626b63b5be8794dd5276eb4182beff85f5075f668ffc54b5c2010fecd18a1abd24a2279a6e522e1bba0bdeac2aa9a165e7e81086becc9f78151090d616f0edbb289db09e70794308118d92a2bb92dbf4af3a02bb328db51911",
+        "proofC": "0x21ab071ec17c0435026ec69830e40cb98bb650c91e30e21f3c8c8511c5230f892211abb5ef763a0c0c1d7e55368427c93a8e4bd54952378e5f34e99bcf0276be",
+        "proof": "0x2e9da255e272610bdd4316559f548c98f7eadabbda6580e6996b87576b31f38b1e0677aa91029c752f75d8734bbbe13b548598542db69f46ae320900ce48778e03de4936d432ffb797ef66ef488aaa6ed18da6938e52c22d2844c9afce38533c13a0133b04e896626b63b5be8794dd5276eb4182beff85f5075f668ffc54b5c2010fecd18a1abd24a2279a6e522e1bba0bdeac2aa9a165e7e81086becc9f78151090d616f0edbb289db09e70794308118d92a2bb92dbf4af3a02bb328db5191121ab071ec17c0435026ec69830e40cb98bb650c91e30e21f3c8c8511c5230f892211abb5ef763a0c0c1d7e55368427c93a8e4bd54952378e5f34e99bcf0276be",
+        "publicInputs": [
+          "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+          "0x25e20fc177e24b82c620df75fe34b3df4aa0b4a7a7c815cb99e9190a196ac771",
+          "0x1fd9fa18bb5eca1f8c4e46dfd6fd87cfaa0f6a2628dd1a2c6aacb98810e3a6bd",
+          "0x0000000000000000000000000000000000000000000000000000000017d78400"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "90000000000",
+        "incomeSalt": "14278635926481545709300995829835971384662413148657627211565742526961010674482",
+        "priorIncomeYtd": "30000000000",
+        "priorSalt": "983409475405951796241301352038801734917894264588317378217447020015463069904",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1782950400",
+      "op": "claim",
+      "actor": "b1",
+      "series": "S1"
+    },
+    {
+      "t": "1782950400",
+      "op": "claim",
+      "actor": "b2",
+      "series": "S1"
+    },
+    {
+      "t": "1782950400",
+      "op": "claim",
+      "actor": "b3",
+      "series": "S1"
+    },
+    {
+      "t": "1782950400",
+      "op": "claim",
+      "actor": "b4",
+      "series": "S1"
+    },
+    {
+      "t": "1782950400",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39490000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39490000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39490000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39490000000",
+          "units": "100"
+        },
+        "client": {
+          "stable": "410000000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "300100000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "440000000",
+      "treasury": "31500000000",
+      "vault": "0",
+      "auctionEscrow": "0",
+      "routerBalance": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "10500000000",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x0d3a2f42a91e705bc6b45ff50b95b7bd02cde0150cbcbcbfd7595e88d746b635",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "1000000000000000000000000",
+        "netAccWad": "950000000000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "400000000",
+        "feeCollected": "20000000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8105",
+        "lastPaidPeriod": "8105",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "note": "each holder claimed 95 USDC (25% of 380)"
+    }
+  ]
+}

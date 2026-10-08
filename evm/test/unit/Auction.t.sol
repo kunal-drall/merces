@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.30;
 
-import {ProtocolFixture} from "../utils/ProtocolFixture.sol";
-import {IMercesAuction} from "../../src/interfaces/IMercesAuction.sol";
+import {FullFixture} from "../utils/FullFixture.sol";
+import {
+    IMercesAuction, REJECT_CLAIM_MISMATCH, REJECT_INVALID_CLEARING_PRICE
+} from "../../src/interfaces/IMercesAuction.sol";
 import {IMercesTreasury} from "../../src/interfaces/IMercesTreasury.sol";
 import {IMercesRegistry} from "../../src/interfaces/IMercesRegistry.sol";
 import {MercesMessages} from "../../src/libraries/MercesMessages.sol";
-import {Parameters, RaiseState, SeriesCore, SeriesMode, SeriesParams} from "../../src/types/MercesTypes.sol";
+import {RaiseState, SeriesCore, SeriesMode, SeriesParams} from "../../src/types/MercesTypes.sol";
 import "../../src/types/MercesErrors.sol";
 
-contract AuctionTest is ProtocolFixture {
+contract AuctionTest is FullFixture {
     uint256 internal sid;
 
     function setUp() public override {
@@ -38,7 +40,8 @@ contract AuctionTest is ProtocolFixture {
         assertEq(unitToken(sid).decimals(), 0);
         assertEq(unitToken(sid).name(), string.concat("Merces HEU ", vm.toString(sid)));
         assertTrue(unitToken(sid).isAgent(address(auction)));
-        assertTrue(unitToken(sid).isAgent(address(mockVault)));
+        assertTrue(unitToken(sid).isAgent(address(vault)));
+        assertTrue(unitToken(sid).isAgent(address(window)));
         assertEq(tokenFactory.tokenOf(sid), a.unitToken);
     }
 
@@ -50,7 +53,7 @@ contract AuctionTest is ProtocolFixture {
         // no contract hash
         vm.prank(issuer);
         uint256 draft = registry.createSeries(
-            defaultSeriesParams(), defaultSchedule(), keccak256("t2"), 2, bytes32(0), SeriesMode.SealedBid, false
+            defaultSeriesParams(), defaultSchedule(), keccak256("t2"), 2, bytes32(0), SeriesMode.SealedBid, false, noTier1()
         );
         vm.prank(issuer);
         vm.expectRevert(ContractHashNotSet.selector);
@@ -196,12 +199,9 @@ contract AuctionTest is ProtocolFixture {
     function test_happyPathUniformPrice() public {
         // 1000 units offered, min raise 200 USDC; b1: 100 @ 1.20, b2: 100 @ 1.10, b3: 100 @ 1.00 → all win,
         // D = 300 < N so p* must be the lowest valid price (1.00)
-        vm.prank(issuer);
-        sid = registry.createSeries(
-            smallParams(1000, 1e6, 200e6), defaultSchedule(), keccak256("hp"), 2, bytes32(0), SeriesMode.SealedBid, false
+        sid = createSeriesWith(
+            smallParams(1000, 1e6, 200e6), defaultSchedule(), keccak256("hp"), 2, bytes32(0), noTier1()
         );
-        vm.prank(issuer);
-        registry.setContractHash(sid, keccak256("c"));
         openRaise(sid);
         BidPlan memory p1 = plan(b1, 1_200_000, 100, escrowFor(1_200_000, 100));
         BidPlan memory p2 = plan(b2, 1_100_000, 100, escrowFor(1_100_000, 100) + 5e6); // over-collateralised
@@ -215,22 +215,32 @@ contract AuctionTest is ProtocolFixture {
         reveal(sid, p3);
         warpToSettle(sid);
 
-        // wrong proposals
+        // wrong proposals are rejected, never reverted; a new proposal may follow
         vm.startPrank(keeper);
-        auction.beginSettlement(sid, 1_100_000);
+        auction.beginSettlement(sid, 1_100_000, 100, 100);
         auction.tallyBids(sid, 0, 3);
-        vm.expectRevert(InvalidClearingPrice.selector); // a valid bid sits below p* and D < N
+        vm.expectEmit(true, false, false, true);
+        emit IMercesAuction.SettlementRejected(sid, 1, 1_100_000, REJECT_INVALID_CLEARING_PRICE); // valid bid below p*
         auction.finalizeSettlement(sid);
-        auction.beginSettlement(sid, 900_000);
+        assertTrue(auction.getAuction(sid).roundRejected);
+        vm.expectRevert(InvalidSettlementState.selector); // nothing to finalize after a rejection
+        auction.finalizeSettlement(sid);
+        auction.beginSettlement(sid, 900_000, 300, 0);
         auction.tallyBids(sid, 0, 3);
-        vm.expectRevert(InvalidClearingPrice.selector); // no bid exactly at p*
+        vm.expectEmit(true, false, false, true);
+        emit IMercesAuction.SettlementRejected(sid, 2, 900_000, REJECT_INVALID_CLEARING_PRICE); // no bid at p*
+        auction.finalizeSettlement(sid);
+        auction.beginSettlement(sid, 1_000_000, 200, 99); // wrong claim
+        auction.tallyBids(sid, 0, 3);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesAuction.SettlementRejected(sid, 3, 1_000_000, REJECT_CLAIM_MISMATCH);
         auction.finalizeSettlement(sid);
         vm.stopPrank();
 
         uint64 p = 1_000_000;
         uint64 ts = uint64(block.timestamp);
         vm.prank(keeper);
-        auction.beginSettlement(sid, p);
+        auction.beginSettlement(sid, p, 200, 100);
         vm.prank(keeper);
         auction.tallyBids(sid, 0, 3);
         vm.prank(keeper);
@@ -240,61 +250,78 @@ contract AuctionTest is ProtocolFixture {
 
         IMercesAuction.Auction memory a = auction.getAuction(sid);
         assertEq(uint8(a.state), uint8(RaiseState.Settled));
-        assertEq(a.unitsSoldUpper, 300);
-        assertEq(a.remainderAtMargin, 100);
+        assertEq(a.unitsSold, 300);
+        assertEq(a.proceeds, 300e6);
+        assertEq(a.rClaim, 100);
+        assertEq(a.tallyRound, 4);
         SeriesCore memory c = registry.getSeriesCore(sid);
         assertEq(c.unitsSold, 300);
         assertEq(c.clearingPrice, p);
         assertEq(c.settlementTs, ts);
+        assertFalse(c.mintFinalized);
+        assertEq(treasury.getTreasury(sid).proceeds, 300e6);
+        assertTrue(treasury.getTreasury(sid).proceedsSet);
 
-        // process: every winner pays p* × q + 1%; excess escrow back
-        processAll(sid);
-        assertEq(unitToken(sid).balanceOf(b1), 100);
-        assertEq(unitToken(sid).balanceOf(b2), 100);
-        assertEq(unitToken(sid).balanceOf(b3), 100);
+        // process: every winner pays p* × q + 1%; units are minted to the auction escrow; refunds recorded
+        vm.prank(keeper);
+        vm.expectEmit(true, true, false, true);
+        emit IMercesAuction.UnitsAllocated(sid, b1, 100, 100e6, 1e6, p1.escrow - 101e6);
+        auction.processBid(sid, 0);
+        assertEq(unitToken(sid).balanceOf(address(auction)), 100);
+        assertEq(unitToken(sid).balanceOf(b1), 0);
+        assertEq(auction.pendingUnitsOf(sid, b1), 100);
+        assertEq(vault.accrualUnits(sid, b1), 100); // escrowed units count toward accrual
+        vm.prank(keeper);
+        auction.processBid(sid, 1);
+        assertFalse(auction.mintFinalized(sid));
+        vm.prank(keeper);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesAuction.RaiseMintFinalized(sid, 300, 300e6);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesAuction.MintAuthorityRevoked(sid);
+        auction.processBid(sid, 2);
+        assertTrue(auction.mintFinalized(sid));
+        assertTrue(registry.getSeriesCore(sid).mintFinalized);
+        assertEq(vault.unitsOutstanding(sid), 300);
         assertEq(unitToken(sid).totalSupply(), 300);
-        uint256 costEach = 100e6;
-        uint256 feeEach = 1e6;
-        assertEq(usdc.balanceOf(b1), p1.escrow - costEach - feeEach);
-        assertEq(usdc.balanceOf(b2), p2.escrow - costEach - feeEach);
-        assertEq(usdc.balanceOf(b3), p3.escrow - costEach - feeEach);
         assertEq(usdc.balanceOf(address(treasury)), 300e6);
         assertEq(usdc.balanceOf(address(feeCollector)), 3e6);
-        assertEq(usdc.balanceOf(address(auction)), 0);
+        assertEq(treasury.getTreasury(sid).deposited, 300e6);
         a = auction.getAuction(sid);
-        assertEq(a.unitsSold, 300);
-        assertEq(a.proceeds, 300e6);
-        assertTrue(a.mintAuthorityRevoked);
-        assertTrue(auction.mintFinalized(sid));
-        assertEq(a.refundedTotal + a.proceedsTransferred + a.feesTotal + a.chargesTotal, a.escrowTotal);
-        IMercesTreasury.Ledger memory t = treasury.getTreasury(sid);
-        assertTrue(t.finalized);
-        assertEq(t.proceeds, 300e6);
-        assertEq(mockVault.registrations(sid), 3);
-        // processed bids cannot be processed twice
+        assertEq(a.unitsMinted, 300);
+        assertEq(a.pendingUnitsTotal, 300);
+        assertEq(usdc.balanceOf(address(auction)), a.pendingRefundTotal);
+        _assertConserved(sid);
+
+        // delivery pushes units and refunds to the bidders' own addresses
+        vm.prank(stranger); // anyone
+        vm.expectEmit(true, true, false, true);
+        emit IMercesAuction.BidDelivered(sid, b1, 100, p1.escrow - 101e6);
+        auction.deliverBid(sid, 0);
+        assertEq(unitToken(sid).balanceOf(b1), 100);
+        assertEq(usdc.balanceOf(b1), p1.escrow - 101e6);
+        assertEq(auction.pendingUnitsOf(sid, b1), 0);
+        vm.expectRevert(BidAlreadyDelivered.selector);
+        auction.deliverBid(sid, 0);
+        deliverAll(sid);
+        assertEq(unitToken(sid).balanceOf(b2), 100);
+        assertEq(unitToken(sid).balanceOf(b3), 100);
+        assertEq(usdc.balanceOf(b2), p2.escrow - 101e6);
+        assertEq(usdc.balanceOf(b3), p3.escrow - 101e6);
+        assertEq(usdc.balanceOf(address(auction)), 0);
+        assertEq(unitToken(sid).balanceOf(address(auction)), 0);
+        _assertConserved(sid);
         vm.expectRevert(BidAlreadyProcessed.selector);
         auction.processBid(sid, 0);
     }
 
-    function test_marginalProRataAndExactUnitsSold() public {
-        // offered 1000; cap per wallet 100. b1 100 @ 1.5 (above), b2 60 @ 1.0 and b3 60 @ 1.0 at the margin
-        // → D = 220 < N = 1000 so p* = 1.0 is the lowest valid price and everyone is filled (R = q_at).
-        // To get a real margin use a smaller series.
-        vm.prank(issuer);
-        uint256 s = registry.createSeries(
-            smallParams(150, 1e6, 100e6), defaultSchedule(), keccak256("t3"), 2, bytes32(0), SeriesMode.SealedBid, false
-        );
-        vm.prank(issuer);
-        registry.setContractHash(s, keccak256("c"));
-        // wallet cap = 10% of 150 = 15 units
+    function test_marginalProRataExactInOnePass() public {
+        // offered 150, wallet cap 100%; b1 100 @ 1.5 (above), b2 70 and b3 50 at 1.0 (margin)
         vm.prank(admin);
-        registry.setDefaults(walletCap(10_000)); // allow full-size bids for this test
-        vm.prank(issuer);
-        s = registry.createSeries(
-            smallParams(150, 1e6, 100e6), defaultSchedule(), keccak256("t4"), 2, bytes32(0), SeriesMode.SealedBid, false
+        registry.setDefaults(walletCap(10_000));
+        uint256 s = createSeriesWith(
+            smallParams(150, 1e6, 100e6), defaultSchedule(), keccak256("t4"), 2, bytes32(0), noTier1()
         );
-        vm.prank(issuer);
-        registry.setContractHash(s, keccak256("c"));
         openRaise(s);
         BidPlan memory p1 = plan(b1, 1_500_000, 100, escrowFor(1_500_000, 100));
         BidPlan memory p2 = plan(b2, 1_000_000, 70, escrowFor(1_000_000, 70));
@@ -307,38 +334,41 @@ contract AuctionTest is ProtocolFixture {
         reveal(s, p2);
         reveal(s, p3);
         warpToSettle(s);
-        settle(s, 1_000_000);
+        // q_above = 100, q_at = 120, R = min(150 − 100, 120) = 50; b2 floor(50×70/120) = 29, b3 floor(50×50/120) = 20
+        vm.prank(keeper);
+        auction.beginSettlement(s, 1_000_000, 100, 120);
+        vm.prank(keeper);
+        auction.tallyBids(s, 0, 3);
+        vm.prank(keeper);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesAuction.RaiseSettled(s, 1_000_000, 149, 149e6, uint64(block.timestamp));
+        auction.finalizeSettlement(s);
         IMercesAuction.Auction memory a = auction.getAuction(s);
-        // q_above = 100, q_at = 120, R = min(150 − 100, 120) = 50; upper = 150
-        assertEq(a.remainderAtMargin, 50);
-        assertEq(a.unitsSoldUpper, 150);
+        assertEq(a.rClaim, 50);
+        assertEq(a.allocSum, 49);
+        assertEq(a.unitsSold, 149);
+        assertEq(registry.getSeriesCore(s).unitsSold, 149);
+        assertEq(treasury.getTreasury(s).proceeds, 149e6);
         processAll(s);
-        // b2: floor(50 × 70 / 120) = 29; b3: floor(50 × 50 / 120) = 20 → exact units sold 149
+        deliverAll(s);
         assertEq(unitToken(s).balanceOf(b1), 100);
         assertEq(unitToken(s).balanceOf(b2), 29);
         assertEq(unitToken(s).balanceOf(b3), 20);
-        a = auction.getAuction(s);
-        assertEq(a.unitsSold, 149);
-        assertEq(a.proceeds, 149e6);
-        assertEq(registry.getSeriesCore(s).unitsSold, 149);
-        assertEq(treasury.getTreasury(s).proceeds, 149e6);
+        assertEq(unitToken(s).totalSupply(), 149);
+        assertEq(vault.unitsOutstanding(s), 149);
         assertEq(usdc.balanceOf(address(treasury)), 149e6);
-        // b2 paid 29 × 1.0 + 1% fee, refund rest
         assertEq(usdc.balanceOf(b2), p2.escrow - 29e6 - 290_000);
         assertEq(usdc.balanceOf(b3), p3.escrow - 20e6 - 200_000);
         assertEq(usdc.balanceOf(address(feeCollector)), 1_000_000 + 290_000 + 200_000); // everyone pays p* = 1.0
-        assertEq(a.refundedTotal + a.proceedsTransferred + a.feesTotal + a.chargesTotal, a.escrowTotal);
+        _assertConserved(s);
     }
 
     function test_oversubscribedClearingPriceIsLowestWinningBid() public {
         vm.prank(admin);
         registry.setDefaults(walletCap(10_000));
-        vm.prank(issuer);
-        uint256 s = registry.createSeries(
-            smallParams(100, 1e6, 50e6), defaultSchedule(), keccak256("t5"), 2, bytes32(0), SeriesMode.SealedBid, false
+        uint256 s = createSeriesWith(
+            smallParams(100, 1e6, 50e6), defaultSchedule(), keccak256("t5"), 2, bytes32(0), noTier1()
         );
-        vm.prank(issuer);
-        registry.setContractHash(s, keccak256("c"));
         openRaise(s);
         BidPlan memory p1 = plan(b1, 3_000_000, 60, escrowFor(3_000_000, 60));
         BidPlan memory p2 = plan(b2, 2_000_000, 60, escrowFor(2_000_000, 60));
@@ -351,19 +381,22 @@ contract AuctionTest is ProtocolFixture {
         reveal(s, p2);
         reveal(s, p3);
         warpToSettle(s);
-        // p* = 1.0 would have q_above = 120 ≥ N → invalid; p* = 2.0: q_above = 60 < 100, q_at = 60, D = 120 ≥ N ok
+        // p* = 1.0 would have q_above = 120 ≥ N → rejected; p* = 3.0: D = 60 < N and lower valid bids exist → rejected
         vm.startPrank(keeper);
-        auction.beginSettlement(s, 1_000_000);
+        auction.beginSettlement(s, 1_000_000, 120, 60);
         auction.tallyBids(s, 0, 3);
-        vm.expectRevert(InvalidClearingPrice.selector);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesAuction.SettlementRejected(s, 1, 1_000_000, REJECT_INVALID_CLEARING_PRICE);
         auction.finalizeSettlement(s);
-        auction.beginSettlement(s, 3_000_000);
+        auction.beginSettlement(s, 3_000_000, 0, 60);
         auction.tallyBids(s, 0, 3);
-        vm.expectRevert(InvalidClearingPrice.selector); // D = 60 < N and lower valid bids exist
+        vm.expectEmit(true, false, false, true);
+        emit IMercesAuction.SettlementRejected(s, 2, 3_000_000, REJECT_INVALID_CLEARING_PRICE);
         auction.finalizeSettlement(s);
         vm.stopPrank();
-        settle(s, 2_000_000);
+        settle(s, 2_000_000, 60, 60); // q_above = 60 < 100, q_at = 60, D = 120 ≥ N
         processAll(s);
+        deliverAll(s);
         assertEq(unitToken(s).balanceOf(b1), 60);
         assertEq(unitToken(s).balanceOf(b2), 40); // R = 40 → floor(40 × 60 / 60)
         assertEq(unitToken(s).balanceOf(b3), 0);
@@ -372,6 +405,7 @@ contract AuctionTest is ProtocolFixture {
         assertEq(usdc.balanceOf(b2), p2.escrow - 80e6 - 800_000);
         assertEq(usdc.balanceOf(b3), p3.escrow); // losing bid refunded in full, no fee
         assertEq(treasury.getTreasury(s).proceeds, 200e6);
+        assertEq(auction.getAuction(s).unitsSold, 100);
     }
 
     function test_failedRaiseFullRefundsNoFees() public {
@@ -387,7 +421,7 @@ contract AuctionTest is ProtocolFixture {
         reveal(sid, p2);
         warpToSettle(sid);
         vm.startPrank(keeper);
-        auction.beginSettlement(sid, 1e6);
+        auction.beginSettlement(sid, 1e6, 0, 200);
         auction.tallyBids(sid, 0, 3);
         vm.expectEmit(true, false, false, true);
         emit IMercesAuction.RaiseFailed(sid, 1e6, 200e6, 500e6);
@@ -395,6 +429,7 @@ contract AuctionTest is ProtocolFixture {
         vm.stopPrank();
         assertEq(uint8(registry.getSeriesCore(sid).raiseState), uint8(RaiseState.Failed));
         processAll(sid);
+        deliverAll(sid);
         assertEq(usdc.balanceOf(b1), p1.escrow);
         assertEq(usdc.balanceOf(b2), p2.escrow);
         assertEq(usdc.balanceOf(b3), unrevealed.escrow); // no non-reveal charge on a failed raise
@@ -403,19 +438,31 @@ contract AuctionTest is ProtocolFixture {
         assertEq(usdc.balanceOf(address(auction)), 0);
         assertEq(unitToken(sid).totalSupply(), 0);
         assertFalse(auction.mintFinalized(sid));
+        assertFalse(treasury.getTreasury(sid).proceedsSet);
         assertTrue(registry.isTransferLocked(sid, type(uint64).max));
+        vm.prank(keeper);
+        vm.expectRevert(InvalidSettlementState.selector);
+        auction.beginSettlement(sid, 1e6, 0, 200);
     }
 
-    function test_noValidBidsFails() public {
+    function test_noValidBidsFailsWithZeroPrice() public {
         openRaise(sid);
         BidPlan memory bad = plan(b1, 1, 10, 1000); // below reserve
         commit(sid, bad);
         warpToReveal(sid);
         reveal(sid, bad);
         warpToSettle(sid);
-        settle(sid, 123); // proposal irrelevant
+        vm.startPrank(keeper);
+        auction.beginSettlement(sid, 123, 7, 7); // proposal irrelevant
+        auction.tallyBids(sid, 0, 1);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesAuction.RaiseFailed(sid, 0, 0, 500e6);
+        auction.finalizeSettlement(sid);
+        vm.stopPrank();
         assertEq(uint8(auction.getAuction(sid).state), uint8(RaiseState.Failed));
+        assertEq(auction.getAuction(sid).clearingPrice, 0);
         processAll(sid);
+        deliverAll(sid);
         assertEq(usdc.balanceOf(b1), 1000);
     }
 
@@ -423,7 +470,7 @@ contract AuctionTest is ProtocolFixture {
         openRaise(sid);
         warpToSettle(sid);
         vm.prank(keeper);
-        auction.beginSettlement(sid, 1e6);
+        auction.beginSettlement(sid, 1e6, 0, 0);
         vm.prank(keeper);
         auction.finalizeSettlement(sid);
         assertEq(uint8(auction.getAuction(sid).state), uint8(RaiseState.Failed));
@@ -431,75 +478,70 @@ contract AuctionTest is ProtocolFixture {
 
     function test_unrevealedBidChargedOnePercent() public {
         openRaise(sid);
-        BidPlan memory p1 = plan(b1, 1e6, 100, escrowFor(1e6, 100));
-        BidPlan memory p2 = plan(b2, 1e6, 100, escrowFor(1e6, 100));
-        BidPlan memory p3 = plan(b3, 1e6, 100, escrowFor(1e6, 100));
-        BidPlan memory p4 = plan(makeAddr("b4"), 1e6, 100, escrowFor(1e6, 100));
-        BidPlan memory p5 = plan(makeAddr("b5"), 1e6, 100, escrowFor(1e6, 100));
-        allow(p4.bidder);
-        allow(p5.bidder);
+        BidPlan[5] memory ps;
+        address[5] memory bidders = [b1, b2, b3, makeAddr("b4"), makeAddr("b5")];
+        for (uint256 i = 0; i < 5; i++) {
+            allow(bidders[i]);
+            ps[i] = plan(bidders[i], 1e6, 100, escrowFor(1e6, 100));
+            commit(sid, ps[i]);
+        }
         BidPlan memory silent = plan(makeAddr("silent"), 1e6, 100, 50e6);
         allow(silent.bidder);
-        commit(sid, p1);
-        commit(sid, p2);
-        commit(sid, p3);
-        commit(sid, p4);
-        commit(sid, p5);
         commit(sid, silent);
         warpToReveal(sid);
-        reveal(sid, p1);
-        reveal(sid, p2);
-        reveal(sid, p3);
-        reveal(sid, p4);
-        reveal(sid, p5);
+        for (uint256 i = 0; i < 5; i++) {
+            reveal(sid, ps[i]);
+        }
         warpToSettle(sid);
-        settle(sid, 1e6); // 500 units × 1.0 = 500 USDC = min raise
+        settle(sid, 1e6, 0, 500); // 500 units × 1.0 = 500 USDC = min raise
         vm.prank(keeper);
         vm.expectEmit(true, true, false, true);
         emit IMercesAuction.NonRevealCharged(sid, silent.bidder, 500_000);
         auction.processBid(sid, 5);
+        assertEq(usdc.balanceOf(address(feeCollector)), 500_000); // charge goes to the collector now
+        assertEq(auction.getBid(sid, 5).pendingRefund, 50e6 - 500_000);
+        vm.prank(keeper);
+        auction.deliverBid(sid, 5);
         assertEq(usdc.balanceOf(silent.bidder), 50e6 - 500_000);
-        assertEq(usdc.balanceOf(address(feeCollector)), 500_000);
         processAll_except(sid, 5);
+        deliverAll(sid);
         IMercesAuction.Auction memory a = auction.getAuction(sid);
         assertEq(a.chargesTotal, 500_000);
-        assertEq(a.refundedTotal + a.proceedsTransferred + a.feesTotal + a.chargesTotal, a.escrowTotal);
+        assertTrue(a.mintFinalized);
+        _assertConserved(sid);
         assertEq(usdc.balanceOf(address(auction)), 0);
     }
 
-    function test_deallowlistedWinnerRefundedUnitsStayUnsold() public {
+    function test_deallowlistedWinnerStillReceives() public {
+        // validity is fixed at reveal (brief C10): a wallet removed from the allowlist before processing keeps its
+        // units; processing never depends on the recipient and delivery works because identities persist.
         openRaise(sid);
-        BidPlan memory p1 = plan(b1, 1e6, 100, escrowFor(1e6, 100));
-        BidPlan memory p2 = plan(b2, 1e6, 100, escrowFor(1e6, 100));
-        BidPlan memory p3 = plan(b3, 1e6, 100, escrowFor(1e6, 100));
-        BidPlan memory p4 = plan(makeAddr("b4"), 1e6, 100, escrowFor(1e6, 100));
-        BidPlan memory p5 = plan(makeAddr("b5"), 1e6, 100, escrowFor(1e6, 100));
-        allow(p4.bidder);
-        allow(p5.bidder);
-        commit(sid, p1);
-        commit(sid, p2);
-        commit(sid, p3);
-        commit(sid, p4);
-        commit(sid, p5);
+        address[5] memory bidders = [b1, b2, b3, makeAddr("b4"), makeAddr("b5")];
+        BidPlan[5] memory ps;
+        for (uint256 i = 0; i < 5; i++) {
+            allow(bidders[i]);
+            ps[i] = plan(bidders[i], 1e6, 100, escrowFor(1e6, 100));
+            commit(sid, ps[i]);
+        }
         warpToReveal(sid);
-        reveal(sid, p1);
-        reveal(sid, p2);
-        reveal(sid, p3);
-        reveal(sid, p4);
-        reveal(sid, p5);
+        for (uint256 i = 0; i < 5; i++) {
+            reveal(sid, ps[i]);
+        }
         warpToSettle(sid);
-        settle(sid, 1e6);
+        settle(sid, 1e6, 0, 500);
         disallow(b2);
         processAll(sid);
-        assertEq(unitToken(sid).balanceOf(b2), 0);
-        assertEq(usdc.balanceOf(b2), p2.escrow);
-        assertEq(unitToken(sid).totalSupply(), 400);
-        assertEq(auction.getAuction(sid).unitsSold, 400);
-        assertEq(registry.getSeriesCore(sid).unitsSold, 400);
-        assertEq(treasury.getTreasury(sid).proceeds, 400e6);
+        assertTrue(auction.mintFinalized(sid));
+        assertEq(auction.getAuction(sid).unitsSold, 500);
+        assertEq(vault.getHolder(sid, b2).registered, true);
+        deliverAll(sid);
+        assertEq(unitToken(sid).balanceOf(b2), 100);
+        assertEq(usdc.balanceOf(b2), 0);
+        assertEq(unitToken(sid).totalSupply(), 500);
+        assertEq(vault.unitsOutstanding(sid), 500);
     }
 
-    function test_tallyPagingAndIncompleteTally() public {
+    function test_tallyPagingTallyInProgressAndIncompleteTally() public {
         openRaise(sid);
         BidPlan memory p1 = plan(b1, 1e6, 100, escrowFor(1e6, 100));
         BidPlan memory p2 = plan(b2, 1e6, 100, escrowFor(1e6, 100));
@@ -512,7 +554,7 @@ contract AuctionTest is ProtocolFixture {
         vm.startPrank(keeper);
         vm.expectRevert(InvalidSettlementState.selector);
         auction.tallyBids(sid, 0, 2);
-        auction.beginSettlement(sid, 1e6);
+        auction.beginSettlement(sid, 1e6, 0, 200);
         vm.expectRevert(TallyRangeInvalid.selector);
         auction.tallyBids(sid, 0, 3);
         vm.expectRevert(TallyRangeInvalid.selector);
@@ -520,56 +562,61 @@ contract AuctionTest is ProtocolFixture {
         auction.tallyBids(sid, 0, 1);
         vm.expectRevert(TallyIncomplete.selector);
         auction.finalizeSettlement(sid);
+        // nobody can reset an in-progress round (SPEC §5.2 liveness)
+        vm.stopPrank();
+        vm.prank(stranger);
+        vm.expectRevert(TallyInProgress.selector);
+        auction.beginSettlement(sid, 1e6, 0, 200);
+        vm.startPrank(keeper);
         auction.tallyBids(sid, 0, 2); // overlapping page is harmless
         assertEq(auction.getAuction(sid).talliedCount, 2);
         assertEq(auction.getAuction(sid).qAt, 200);
-        // re-proposal resets the round
-        auction.beginSettlement(sid, 1e6);
-        assertEq(auction.getAuction(sid).talliedCount, 0);
-        assertEq(auction.getAuction(sid).tallyRound, 2);
-        auction.tallyBids(sid, 0, 2);
-        auction.finalizeSettlement(sid); // 200 USDC < 500 min raise → failed
+        // a completed round may be finalized by anyone; here 200 USDC < 500 min raise → failed
+        auction.finalizeSettlement(sid);
         assertEq(uint8(auction.getAuction(sid).state), uint8(RaiseState.Failed));
         vm.expectRevert(InvalidSettlementState.selector);
-        auction.beginSettlement(sid, 1e6);
+        auction.beginSettlement(sid, 1e6, 0, 200);
         vm.stopPrank();
     }
 
     function test_settlementTimingGuards() public {
         openRaise(sid);
         vm.expectRevert(RevealNotOver.selector);
-        auction.beginSettlement(sid, 1e6);
+        auction.beginSettlement(sid, 1e6, 0, 0);
         vm.expectRevert(NotSettledOrFailed.selector);
         auction.processBid(sid, 0);
+        vm.expectRevert(BidNotFound.selector);
+        auction.deliverBid(sid, 0);
         warpToSettle(sid);
         vm.prank(keeper);
-        auction.beginSettlement(sid, 1e6);
+        auction.beginSettlement(sid, 1e6, 0, 0);
         vm.prank(b1);
         vm.expectRevert(RaiseNotOpen.selector); // committing after settlement began
         auction.commitBid(sid, bytes32(0), 1);
     }
 
-    function test_tallyPageLimit() public {
+    function test_deliverRequiresProcessed() public {
         openRaise(sid);
-        // 201 bids would be needed to exceed the page; check the explicit guard on the range instead
         BidPlan memory p1 = plan(b1, 1e6, 100, escrowFor(1e6, 100));
         commit(sid, p1);
         warpToSettle(sid);
-        vm.prank(keeper);
-        auction.beginSettlement(sid, 1e6);
-        vm.expectRevert(TallyRangeInvalid.selector);
-        auction.tallyBids(sid, 0, 201);
+        vm.startPrank(keeper);
+        auction.beginSettlement(sid, 1e6, 0, 0);
+        auction.finalizeSettlement(sid); // unrevealed only → no valid bids → failed
+        vm.expectRevert(BidNotProcessed.selector);
+        auction.deliverBid(sid, 0);
+        auction.processBid(sid, 0);
+        auction.deliverBid(sid, 0);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(b1), p1.escrow);
     }
 
     function test_maxBidsPerAuction() public {
         vm.prank(admin);
         registry.setDefaults(walletCap(10_000));
-        vm.prank(issuer);
-        uint256 s = registry.createSeries(
-            smallParams(10_000, 1e6, 0), defaultSchedule(), keccak256("big"), 2, bytes32(0), SeriesMode.SealedBid, false
+        uint256 s = createSeriesWith(
+            smallParams(10_000, 1e6, 0), defaultSchedule(), keccak256("big"), 2, bytes32(0), noTier1()
         );
-        vm.prank(issuer);
-        registry.setContractHash(s, keccak256("c"));
         openRaise(s);
         for (uint256 i = 0; i < 4096; i++) {
             address bidder = address(uint160(0x100000 + i));
@@ -589,10 +636,9 @@ contract AuctionTest is ProtocolFixture {
         auction.commitBid(s, keccak256("x"), 1_010_000);
         vm.stopPrank();
         assertEq(auction.getAuction(s).bidCount, 4096);
-        // a page of 200 over a 4096-bid array tallies within gas; a 201 page is rejected
         warpToSettle(s);
         vm.startPrank(keeper);
-        auction.beginSettlement(s, 1e6);
+        auction.beginSettlement(s, 1e6, 0, 0);
         vm.expectRevert(TallyPageTooLarge.selector);
         auction.tallyBids(s, 0, 201);
         for (uint256 from = 0; from < 4096; from += 200) {
@@ -605,6 +651,18 @@ contract AuctionTest is ProtocolFixture {
     }
 
     // ------------------------------------------------------------ helpers
+
+    /// @dev Escrow conservation: everything that came in is recorded as a refund (pending or delivered), proceeds,
+    /// fee or non-reveal charge.
+    function _assertConserved(uint256 s) internal view {
+        IMercesAuction.Auction memory a = auction.getAuction(s);
+        assertEq(
+            uint256(a.pendingRefundTotal) + a.refundsDelivered + a.proceedsTransferred + a.feesTotal + a.chargesTotal,
+            a.escrowTotal
+        );
+        assertEq(usdc.balanceOf(address(auction)), a.pendingRefundTotal);
+        assertEq(unitToken(s).balanceOf(address(auction)), a.pendingUnitsTotal);
+    }
 
     function processAll_except(uint256 seriesId, uint256 skip) internal {
         uint256 n = auction.getAuction(seriesId).bidCount;
@@ -621,11 +679,5 @@ contract AuctionTest is ProtocolFixture {
         p.reservePrice = reserve;
         p.minRaise = minRaise;
         return p;
-    }
-
-    function walletCap(uint16 bps) internal pure returns (Parameters memory) {
-        Parameters memory d = defaultParameters();
-        d.walletCapBps = bps;
-        return d;
     }
 }

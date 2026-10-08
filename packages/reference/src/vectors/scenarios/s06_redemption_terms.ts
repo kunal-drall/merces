@@ -58,7 +58,7 @@ export const s06: Scenario = {
     if (S("S2").ledger.redemptionPrice !== usdc(150)) throw new Error(`S2 price ${S("S2").ledger.redemptionPrice}`);
     b.expect("S2", "redemptionPrice 150; deposit 60,000; tailCapPerUnit = 232.5 − 150 = 82.5");
 
-    b.at(lockupEnd("S3") + DAY);
+    b.at(ts(2027, 10, 2)); // S3's lockup ended in August 2027; the issuer waits for the Q3 report
     const r = await b.report({ series: "S3", period: Q(2027, 3), incomeYtd: usdc(100_000), tier: 2, note: "Q3 2027 ended 1 October; a due payment must be settled before redeeming" });
     if (r.due === 0n) throw new Error("expected a due");
     await b.revert({ op: "redeem", actor: "issuer", series: "S3" }, "PaymentOutstanding");

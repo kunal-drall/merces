@@ -1,0 +1,4528 @@
+{
+  "name": "13_fx",
+  "description": "EUR income reported in USDC through the EUR/USD rate accumulator (snapshots on trading days only): a normally covered quarter whose average is read from the live end checkpoint, a low-coverage quarter (40 of 65 trading days → attestor-signed fallback rate), a quarter flagged for a >2% Pyth/Chainlink deviation (fallback), a fourth normal quarter; pair registration is write-once; FX reverts included.",
+  "schema": 2,
+  "specVersion": "1.1",
+  "generatedBy": "packages/reference/src/vectors/generate.ts (pnpm vectors)",
+  "config": {
+    "parameters": {
+      "cap_multiple_wad": "2500000000000000000",
+      "hurdle_rate_wad": "80000000000000000",
+      "payout_multiple_k": "5",
+      "lockup_seconds": "47336400",
+      "wallet_cap_bps": "1000",
+      "auction_fee_bps": "100",
+      "payout_fee_bps": "500",
+      "window_fee_bps": "100",
+      "non_reveal_charge_bps": "100",
+      "commit_duration": "604800",
+      "reveal_duration": "172800",
+      "window_commit_duration": "259200",
+      "window_reveal_duration": "86400",
+      "report_due_days": "30",
+      "grace_days": "15",
+      "formal_notice_days": "90",
+      "trueup_days": "60",
+      "tail_seconds": "31536000",
+      "fx_min_coverage_bps": "8000",
+      "fx_max_staleness_seconds": "3600",
+      "fx_max_conf_bps": "100",
+      "fx_deviation_band_bps": "200",
+      "max_pause_seconds": "31536000",
+      "max_cumulative_pause_seconds": "63072000",
+      "max_pauses": "16",
+      "max_release_tranches": "24"
+    },
+    "flags": {
+      "newRaisesPaused": false,
+      "windowsEnabled": false,
+      "tier4Enabled": false
+    },
+    "stablecoinDecimals": 6,
+    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces, prior/income commitments, liquidity flags) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
+  },
+  "actors": [
+    "attestor1",
+    "attestor2",
+    "b1",
+    "b2",
+    "b3",
+    "b4",
+    "issuer",
+    "keeper",
+    "verifier1"
+  ],
+  "keys": {
+    "attestor1": {
+      "seed": "13_fx:attestor1",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0x89d12cfbaf985087524a99847dc805ac6899e53a33c6761766dd3f7e01be3c97",
+      "address": "0x847fa8f8b6bd361ac65e70e5db5af06a4746f99e",
+      "role": "attestor"
+    },
+    "attestor2": {
+      "seed": "13_fx:attestor2",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0x03ec07940cec18931287132503c5e3e507b3dbd6f81986d97c261083dfd08d38",
+      "address": "0x6d336fd7497c28ea63205dbfdd620d97bb1196d7",
+      "role": "attestor"
+    },
+    "verifier1": {
+      "seed": "13_fx:verifier1",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0xd7716439ab32179a8ae01bbe1aad458792ca3dd7fd4c2aff8fe5a94e18d7b719",
+      "address": "0x69dd8d1c40f49eead7ada4e4b06b0adb4dea8e7c",
+      "role": "verifier"
+    }
+  },
+  "seriesPrivate": {
+    "S1": {
+      "termsPlain": {
+        "theta": "80000000000",
+        "rWad": "100000000000000",
+        "currencyCode": 978,
+        "indexingRule": 0,
+        "termsSalt": "3020696153961530434162000650608979848791190319577187968765160718080855359854"
+      },
+      "termsCommitment": "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254"
+    }
+  },
+  "steps": [
+    {
+      "t": "1767312000",
+      "op": "register_attestor",
+      "key": "attestor1"
+    },
+    {
+      "t": "1767312000",
+      "op": "register_attestor",
+      "key": "attestor2"
+    },
+    {
+      "t": "1767312000",
+      "op": "register_verifier_key",
+      "key": "verifier1"
+    },
+    {
+      "t": "1767312000",
+      "op": "allowlist",
+      "wallets": [
+        "issuer",
+        "b1",
+        "b2",
+        "b3",
+        "b4"
+      ]
+    },
+    {
+      "t": "1767312000",
+      "op": "register_issuer",
+      "wallet": "issuer"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "issuer",
+      "amount": "200000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b1",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b2",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b3",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b4",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "note": "EUR/USD, quoted USD per EUR, Chainlink cross-check configured; pair id = keccak256(feed_id ‖ 0x00)",
+      "op": "set_fx_pair",
+      "feedId": "0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b",
+      "inverted": false,
+      "crosscheck": true
+    },
+    {
+      "t": "1767312000",
+      "op": "expect_revert",
+      "call": {
+        "op": "set_fx_pair",
+        "feedId": "0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b",
+        "inverted": false,
+        "crosscheck": false
+      },
+      "error": "FxPairExists",
+      "note": "feed id and direction are write-once"
+    },
+    {
+      "t": "1767312000",
+      "op": "expect_revert",
+      "call": {
+        "op": "create_series",
+        "actor": "issuer",
+        "series": "Sx",
+        "terms": {
+          "unitsOffered": "1000",
+          "reservePrice": "100000000",
+          "minRaise": "20000000000",
+          "capMultipleWad": "2500000000000000000",
+          "hurdleRateWad": "80000000000000000",
+          "payoutMultipleK": "5",
+          "lockupSeconds": "47336400",
+          "walletCapBps": "1000",
+          "auctionFeeBps": "100",
+          "payoutFeeBps": "500",
+          "windowFeeBps": "100",
+          "nonRevealChargeBps": "100",
+          "commitDuration": "604800",
+          "revealDuration": "172800",
+          "windowCommitDuration": "259200",
+          "windowRevealDuration": "86400"
+        },
+        "releaseSchedule": [
+          {
+            "atOffsetSeconds": "0",
+            "bps": "2500"
+          },
+          {
+            "atOffsetSeconds": "7776000",
+            "bps": "2500"
+          },
+          {
+            "atOffsetSeconds": "15552000",
+            "bps": "2500"
+          },
+          {
+            "atOffsetSeconds": "23328000",
+            "bps": "2500"
+          }
+        ],
+        "termsCommitment": "0xc438c893591fe5e1d6c0e1b56293716a61b01a2545ac8209ed6124dce68cf08f",
+        "contractHash": "0x4789f561a2d21662b04e5be80b8a016eda3fe5a844263969155ce3e0de9e665f",
+        "tierFlags": 2,
+        "fxPairId": "0xd870b2ba0cdc4dd0dac14fd27111a30405a62440038f84233c120cc2b98cd320"
+      },
+      "error": "UnknownFxPair"
+    },
+    {
+      "t": "1767312000",
+      "note": "θ = 80,000 EUR at 6 decimals (income scale), currency 978",
+      "op": "create_series",
+      "actor": "issuer",
+      "series": "S1",
+      "terms": {
+        "unitsOffered": "1000",
+        "reservePrice": "100000000",
+        "minRaise": "20000000000",
+        "capMultipleWad": "2500000000000000000",
+        "hurdleRateWad": "80000000000000000",
+        "payoutMultipleK": "5",
+        "lockupSeconds": "47336400",
+        "walletCapBps": "1000",
+        "auctionFeeBps": "100",
+        "payoutFeeBps": "500",
+        "windowFeeBps": "100",
+        "nonRevealChargeBps": "100",
+        "commitDuration": "604800",
+        "revealDuration": "172800",
+        "windowCommitDuration": "259200",
+        "windowRevealDuration": "86400"
+      },
+      "releaseSchedule": [
+        {
+          "atOffsetSeconds": "0",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "7776000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "15552000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "23328000",
+          "bps": "2500"
+        }
+      ],
+      "termsCommitment": "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+      "contractHash": "0x466e6c4e53202a60d2add1f4d81b36054679b1862836fa10ce789a9c56d66641",
+      "tierFlags": 2,
+      "fxPairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c"
+    },
+    {
+      "t": "1767571200",
+      "op": "open_raise",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1767574800",
+      "op": "commit_bid",
+      "actor": "b1",
+      "series": "S1",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0xd8ae04ba2917a6a7dcd1e810610db4157d4fcf1d05001fddf672d5802b07618f",
+      "escrow": "12120000000"
+    },
+    {
+      "t": "1767578400",
+      "op": "commit_bid",
+      "actor": "b2",
+      "series": "S1",
+      "price": "115000000",
+      "quantity": "100",
+      "salt": "0x37c47e83bd6b9fb54604b5d74124d6b86287930afb582bf1f8a6291d0f3b76a8",
+      "escrow": "11615000000"
+    },
+    {
+      "t": "1767582000",
+      "op": "commit_bid",
+      "actor": "b3",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "100",
+      "salt": "0x2e8b001a53c128d6612dc18eca968414fcbb456e74f6c2720d5c1b537964b343",
+      "escrow": "11110000000"
+    },
+    {
+      "t": "1767585600",
+      "op": "commit_bid",
+      "actor": "b4",
+      "series": "S1",
+      "price": "105000000",
+      "quantity": "100",
+      "salt": "0x419a32ba3db92bd43ac69cbc5f7e1ab4c5c19715cf1e6e6aae6f1fc54ef40231",
+      "escrow": "10605000000"
+    },
+    {
+      "t": "1768180200",
+      "op": "reveal_bid",
+      "actor": "b1",
+      "series": "S1",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0xd8ae04ba2917a6a7dcd1e810610db4157d4fcf1d05001fddf672d5802b07618f"
+    },
+    {
+      "t": "1768180800",
+      "op": "reveal_bid",
+      "actor": "b2",
+      "series": "S1",
+      "price": "115000000",
+      "quantity": "100",
+      "salt": "0x37c47e83bd6b9fb54604b5d74124d6b86287930afb582bf1f8a6291d0f3b76a8"
+    },
+    {
+      "t": "1768181400",
+      "op": "reveal_bid",
+      "actor": "b3",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "100",
+      "salt": "0x2e8b001a53c128d6612dc18eca968414fcbb456e74f6c2720d5c1b537964b343"
+    },
+    {
+      "t": "1768182000",
+      "op": "reveal_bid",
+      "actor": "b4",
+      "series": "S1",
+      "price": "105000000",
+      "quantity": "100",
+      "salt": "0x419a32ba3db92bd43ac69cbc5f7e1ab4c5c19715cf1e6e6aae6f1fc54ef40231"
+    },
+    {
+      "t": "1768352400",
+      "op": "begin_settlement",
+      "series": "S1",
+      "clearingPrice": "105000000",
+      "qAboveClaim": "300",
+      "qAtClaim": "100"
+    },
+    {
+      "t": "1768352400",
+      "op": "finalize_settlement",
+      "series": "S1"
+    },
+    {
+      "t": "1768352460",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768352520",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768352580",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768352640",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
+      "t": "1768352700",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768352760",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768352820",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768352880",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
+      "t": "1768478400",
+      "note": "first snapshot of Q1 creates the Q1 checkpoint (sums 0)",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108140000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768478340",
+      "crosscheckPrice": "108140000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1768564800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108150000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768564740",
+      "crosscheckPrice": "108150000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1768824000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108180000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768823940",
+      "crosscheckPrice": "108180000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1768910400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108190000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768910340",
+      "crosscheckPrice": "108190000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1768996800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108200000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768996740",
+      "crosscheckPrice": "108200000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769083200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108210000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769083140",
+      "crosscheckPrice": "108210000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769169600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108220000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769169540",
+      "crosscheckPrice": "108220000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769428800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108250000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769428740",
+      "crosscheckPrice": "108250000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769515200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108260000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769515140",
+      "crosscheckPrice": "108260000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769601600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108270000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769601540",
+      "crosscheckPrice": "108270000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769688000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108280000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769687940",
+      "crosscheckPrice": "108280000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769774400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108290000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769774340",
+      "crosscheckPrice": "108290000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770033600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108320000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770033540",
+      "crosscheckPrice": "108320000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770120000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108330000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770119940",
+      "crosscheckPrice": "108330000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770206400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108340000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770206340",
+      "crosscheckPrice": "108340000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770292800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108350000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770292740",
+      "crosscheckPrice": "108350000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770379200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108360000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770379140",
+      "crosscheckPrice": "108360000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770638400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108390000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770638340",
+      "crosscheckPrice": "108390000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770724800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108400000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770724740",
+      "crosscheckPrice": "108400000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770811200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108410000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770811140",
+      "crosscheckPrice": "108410000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770897600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108420000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770897540",
+      "crosscheckPrice": "108420000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770984000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108430000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770983940",
+      "crosscheckPrice": "108430000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771243200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108460000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771243140",
+      "crosscheckPrice": "108460000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771329600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108470000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771329540",
+      "crosscheckPrice": "108470000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771416000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108480000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771415940",
+      "crosscheckPrice": "108480000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771502400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108490000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771502340",
+      "crosscheckPrice": "108490000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771588800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108500000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771588740",
+      "crosscheckPrice": "108500000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771848000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108530000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771847940",
+      "crosscheckPrice": "108530000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771934400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108540000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771934340",
+      "crosscheckPrice": "108540000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772020800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108550000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772020740",
+      "crosscheckPrice": "108550000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772107200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108560000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772107140",
+      "crosscheckPrice": "108560000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772193600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108570000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772193540",
+      "crosscheckPrice": "108570000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772452800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108600000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772452740",
+      "crosscheckPrice": "108600000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772539200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108610000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772539140",
+      "crosscheckPrice": "108610000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772625600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108620000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772625540",
+      "crosscheckPrice": "108620000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772712000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108630000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772711940",
+      "crosscheckPrice": "108630000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772798400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108640000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772798340",
+      "crosscheckPrice": "108640000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773057600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108670000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773057540",
+      "crosscheckPrice": "108670000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773144000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108680000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773143940",
+      "crosscheckPrice": "108680000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773230400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108690000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773230340",
+      "crosscheckPrice": "108690000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773316800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108700000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773316740",
+      "crosscheckPrice": "108700000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773403200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108710000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773403140",
+      "crosscheckPrice": "108710000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773662400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108740000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773662340",
+      "crosscheckPrice": "108740000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773748800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108750000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773748740",
+      "crosscheckPrice": "108750000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773835200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108760000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773835140",
+      "crosscheckPrice": "108760000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773921600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108770000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773921540",
+      "crosscheckPrice": "108770000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774008000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108780000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774007940",
+      "crosscheckPrice": "108780000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774267200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108810000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774267140",
+      "crosscheckPrice": "108810000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774353600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108820000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774353540",
+      "crosscheckPrice": "108820000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774440000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108830000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774439940",
+      "crosscheckPrice": "108830000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774526400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108840000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774526340",
+      "crosscheckPrice": "108840000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774612800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108850000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774612740",
+      "crosscheckPrice": "108850000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774872000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108880000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774871940",
+      "crosscheckPrice": "108880000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774958400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "108890000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774958340",
+      "crosscheckPrice": "108890000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774958400",
+      "op": "expect_revert",
+      "call": {
+        "op": "fx_snapshot",
+        "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+        "price": "108000000",
+        "conf": "20000",
+        "expo": -8,
+        "publishTime": "1774958340"
+      },
+      "error": "SnapshotAlreadyTaken"
+    },
+    {
+      "t": "1774958400",
+      "op": "expect_revert",
+      "call": {
+        "op": "fx_snapshot",
+        "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+        "price": "108000000",
+        "conf": "20000",
+        "expo": -8,
+        "publishTime": "1774954799"
+      },
+      "error": "SnapshotAlreadyTaken",
+      "note": "same day: the day check comes first"
+    },
+    {
+      "t": "1775023200",
+      "op": "expect_revert",
+      "call": {
+        "op": "submit_report",
+        "actor": "issuer",
+        "series": "S1",
+        "period": "8104",
+        "paymentUsd": "1200000000",
+        "fxAvgWad": "1000000000000000000",
+        "fxFallback": null,
+        "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+        "incomeCommitment": "0x29dac42daeb7d3046926eb6ec1a634ebaf998d2a8551051f5c67dcdae114ed7d",
+        "tier": 2,
+        "liquidityEvent": false,
+        "attestation": "verifier1",
+        "proof": {
+          "pi_a": [
+            "18610492909046658976828465459774378854856685922841415974764280007603128667788",
+            "10735297483963287705499367770971303890243653981548847182676456918411827834969",
+            "1"
+          ],
+          "pi_b": [
+            [
+              "12505611504667203648396685043038047760738402098238702789008681517214545792921",
+              "11903576849858230861985528755803610948427719513005519908714282949485638625574"
+            ],
+            [
+              "1626122770836761866041940150170091157366658845248589120267208061500231319845",
+              "7807850743067624718363029878318146502607740661615745663080986857261208885817"
+            ],
+            [
+              "1",
+              "0"
+            ]
+          ],
+          "pi_c": [
+            "10088401281280597354735501065195024981923369286127003471729453714424021618499",
+            "599479384271541587604426907717016881130039227725961130181097215228937266231",
+            "1"
+          ],
+          "protocol": "groth16",
+          "curve": "bn128"
+        },
+        "publicSignals": [
+          "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+          "400",
+          "1000000000000000000",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "18931353425917140354877038916858976711963117078714968501705032624523791625597",
+          "1200000000"
+        ],
+        "proofEvm": {
+          "pA": [
+            "18610492909046658976828465459774378854856685922841415974764280007603128667788",
+            "10735297483963287705499367770971303890243653981548847182676456918411827834969"
+          ],
+          "pB": [
+            [
+              "11903576849858230861985528755803610948427719513005519908714282949485638625574",
+              "12505611504667203648396685043038047760738402098238702789008681517214545792921"
+            ],
+            [
+              "7807850743067624718363029878318146502607740661615745663080986857261208885817",
+              "1626122770836761866041940150170091157366658845248589120267208061500231319845"
+            ]
+          ],
+          "pC": [
+            "10088401281280597354735501065195024981923369286127003471729453714424021618499",
+            "599479384271541587604426907717016881130039227725961130181097215228937266231"
+          ],
+          "pubSignals": [
+            "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+            "400",
+            "1000000000000000000",
+            "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+            "18931353425917140354877038916858976711963117078714968501705032624523791625597",
+            "1200000000"
+          ],
+          "proofBytes": "0x29252a6ba7d5bc31ffd8db1925e3d913d9cb078ca9f2fe4360d3f9a5b1148e8c17bbf68a91dbad6e17cfc5d68be6cb3e20bb99cd22f0762040192ee3c52570591a512f8caaafd53e27b92d076505cb828729dcef34c48e7fb9595c138846a9261ba5ecdf1cb876dfde438b2e094a850b3d01a39e521227b7b611ae7fc590cf991143163fff9461a371602eab656992bbb295c4cac1ae1325580a9f9552feda3903985a55d5673221652223c8910142bc8ce50994fef39c57bb71f9fa62050125164dd530d4cf5374d61d1749713bdc1d180a94b70b692ab1338628cf206b8f4301534b1631896b5a04e60368db9fb13724239992094599c55fabea9fe3846437",
+          "calldata": "0xf398789b29252a6ba7d5bc31ffd8db1925e3d913d9cb078ca9f2fe4360d3f9a5b1148e8c17bbf68a91dbad6e17cfc5d68be6cb3e20bb99cd22f0762040192ee3c52570591a512f8caaafd53e27b92d076505cb828729dcef34c48e7fb9595c138846a9261ba5ecdf1cb876dfde438b2e094a850b3d01a39e521227b7b611ae7fc590cf991143163fff9461a371602eab656992bbb295c4cac1ae1325580a9f9552feda3903985a55d5673221652223c8910142bc8ce50994fef39c57bb71f9fa62050125164dd530d4cf5374d61d1749713bdc1d180a94b70b692ab1338628cf206b8f4301534b1631896b5a04e60368db9fb13724239992094599c55fabea9fe38464371c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc18325400000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b6486429dac42daeb7d3046926eb6ec1a634ebaf998d2a8551051f5c67dcdae114ed7d0000000000000000000000000000000000000000000000000000000047868c00"
+        },
+        "proofSolana": {
+          "proofA": "0x29252a6ba7d5bc31ffd8db1925e3d913d9cb078ca9f2fe4360d3f9a5b1148e8c18a857e84f55f2bba0807fdff59a8d1f76c5d0c44581546cfc075d3313578cee",
+          "proofB": "0x1a512f8caaafd53e27b92d076505cb828729dcef34c48e7fb9595c138846a9261ba5ecdf1cb876dfde438b2e094a850b3d01a39e521227b7b611ae7fc590cf991143163fff9461a371602eab656992bbb295c4cac1ae1325580a9f9552feda3903985a55d5673221652223c8910142bc8ce50994fef39c57bb71f9fa62050125",
+          "proofC": "0x164dd530d4cf5374d61d1749713bdc1d180a94b70b692ab1338628cf206b8f4301534b1631896b5a04e60368db9fb13724239992094599c55fabea9fe3846437",
+          "proof": "0x29252a6ba7d5bc31ffd8db1925e3d913d9cb078ca9f2fe4360d3f9a5b1148e8c18a857e84f55f2bba0807fdff59a8d1f76c5d0c44581546cfc075d3313578cee1a512f8caaafd53e27b92d076505cb828729dcef34c48e7fb9595c138846a9261ba5ecdf1cb876dfde438b2e094a850b3d01a39e521227b7b611ae7fc590cf991143163fff9461a371602eab656992bbb295c4cac1ae1325580a9f9552feda3903985a55d5673221652223c8910142bc8ce50994fef39c57bb71f9fa62050125164dd530d4cf5374d61d1749713bdc1d180a94b70b692ab1338628cf206b8f4301534b1631896b5a04e60368db9fb13724239992094599c55fabea9fe3846437",
+          "publicInputs": [
+            "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+            "0x0000000000000000000000000000000000000000000000000000000000000190",
+            "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+            "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+            "0x29dac42daeb7d3046926eb6ec1a634ebaf998d2a8551051f5c67dcdae114ed7d",
+            "0x0000000000000000000000000000000000000000000000000000000047868c00"
+          ]
+        },
+        "witness": {
+          "incomeYtd": "110000000000",
+          "incomeSalt": "18490443710826081322766829134701740555339631185640014362537035054841637609952",
+          "priorIncomeYtd": "0",
+          "priorSalt": "0",
+          "theta": "80000000000",
+          "rWad": "100000000000000"
+        }
+      },
+      "error": "FxMismatch",
+      "note": "stablecoin-rate shortcut is wrong for an FX series"
+    },
+    {
+      "t": "1775023200",
+      "op": "expect_revert",
+      "call": {
+        "op": "submit_report",
+        "actor": "issuer",
+        "series": "S1",
+        "period": "8104",
+        "paymentUsd": "1302180000",
+        "fxAvgWad": "1085150000000000000",
+        "fxFallback": {
+          "attestor": "attestor1"
+        },
+        "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+        "incomeCommitment": "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+        "tier": 2,
+        "liquidityEvent": false,
+        "attestation": "verifier1",
+        "proof": {
+          "pi_a": [
+            "4093024255932970198642293768134781690753128821348615740164586804697861205443",
+            "17591508301076704955298684141300632813724257417143286755259830708562038340118",
+            "1"
+          ],
+          "pi_b": [
+            [
+              "8784874510101044752498622750645939569409123246151334831903306732711417003774",
+              "16537571926497172020489243741825952156237999069062838011254813016922726311675"
+            ],
+            [
+              "1358978857712879657200565762186225548519600844372746462589501498262791674950",
+              "368683824511320268863889354963353531108405294486404925697360760530210238953"
+            ],
+            [
+              "1",
+              "0"
+            ]
+          ],
+          "pi_c": [
+            "17193633337825726772459294921528078766028167047442081032313281041710603763427",
+            "18398454667927141801048928775269967839881929619321632061812765554888290048798",
+            "1"
+          ],
+          "protocol": "groth16",
+          "curve": "bn128"
+        },
+        "publicSignals": [
+          "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+          "400",
+          "1085150000000000000",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+          "1302180000"
+        ],
+        "proofEvm": {
+          "pA": [
+            "4093024255932970198642293768134781690753128821348615740164586804697861205443",
+            "17591508301076704955298684141300632813724257417143286755259830708562038340118"
+          ],
+          "pB": [
+            [
+              "16537571926497172020489243741825952156237999069062838011254813016922726311675",
+              "8784874510101044752498622750645939569409123246151334831903306732711417003774"
+            ],
+            [
+              "368683824511320268863889354963353531108405294486404925697360760530210238953",
+              "1358978857712879657200565762186225548519600844372746462589501498262791674950"
+            ]
+          ],
+          "pC": [
+            "17193633337825726772459294921528078766028167047442081032313281041710603763427",
+            "18398454667927141801048928775269967839881929619321632061812765554888290048798"
+          ],
+          "pubSignals": [
+            "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+            "400",
+            "1085150000000000000",
+            "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+            "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+            "1302180000"
+          ],
+          "proofBytes": "0x090c91d3733fe6886dec4162cf9a98e36cc249333cdeddd4747398caaa1c2dc326e470dbe6f83f329126fc383ee0a75f335e021d7da213544d1d0c36d237ba16248fef1b126de58cd74e42d549bba325c6f02737eeb9f4962da5e4ec8793a6fb136c1011a8a9b36a0356a1c928ddd40f46f1edb50de43d89cbc072b4221cbefe00d0aaeb1869be360821bc970934e7bacf114e4bdd185f0681ffe79c9f8db1e90301279f6077c946a77220abdb7ed803309e4189441b3685a2a3309681005c46260340694b140f717d54a2fad08e6af5887bafcd92dbcb71903692f61ddefee328ad28042c97c033849f99f4052635bd1d4930dd5b71d3077665516181e79b1e",
+          "calldata": "0xf398789b090c91d3733fe6886dec4162cf9a98e36cc249333cdeddd4747398caaa1c2dc326e470dbe6f83f329126fc383ee0a75f335e021d7da213544d1d0c36d237ba16248fef1b126de58cd74e42d549bba325c6f02737eeb9f4962da5e4ec8793a6fb136c1011a8a9b36a0356a1c928ddd40f46f1edb50de43d89cbc072b4221cbefe00d0aaeb1869be360821bc970934e7bacf114e4bdd185f0681ffe79c9f8db1e90301279f6077c946a77220abdb7ed803309e4189441b3685a2a3309681005c46260340694b140f717d54a2fad08e6af5887bafcd92dbcb71903692f61ddefee328ad28042c97c033849f99f4052635bd1d4930dd5b71d3077665516181e79b1e1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc18325400000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000f0f3a2cf603e0002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648641001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba000000000000000000000000000000000000000000000000000000004d9db0a0"
+        },
+        "proofSolana": {
+          "proofA": "0x090c91d3733fe6886dec4162cf9a98e36cc249333cdeddd4747398caaa1c2dc3097fdd96fa3960f72729497e42a0b0fe64236873eacfb738ef037fe006454331",
+          "proofB": "0x248fef1b126de58cd74e42d549bba325c6f02737eeb9f4962da5e4ec8793a6fb136c1011a8a9b36a0356a1c928ddd40f46f1edb50de43d89cbc072b4221cbefe00d0aaeb1869be360821bc970934e7bacf114e4bdd185f0681ffe79c9f8db1e90301279f6077c946a77220abdb7ed803309e4189441b3685a2a3309681005c46",
+          "proofC": "0x260340694b140f717d54a2fad08e6af5887bafcd92dbcb71903692f61ddefee328ad28042c97c033849f99f4052635bd1d4930dd5b71d3077665516181e79b1e",
+          "proof": "0x090c91d3733fe6886dec4162cf9a98e36cc249333cdeddd4747398caaa1c2dc3097fdd96fa3960f72729497e42a0b0fe64236873eacfb738ef037fe006454331248fef1b126de58cd74e42d549bba325c6f02737eeb9f4962da5e4ec8793a6fb136c1011a8a9b36a0356a1c928ddd40f46f1edb50de43d89cbc072b4221cbefe00d0aaeb1869be360821bc970934e7bacf114e4bdd185f0681ffe79c9f8db1e90301279f6077c946a77220abdb7ed803309e4189441b3685a2a3309681005c46260340694b140f717d54a2fad08e6af5887bafcd92dbcb71903692f61ddefee328ad28042c97c033849f99f4052635bd1d4930dd5b71d3077665516181e79b1e",
+          "publicInputs": [
+            "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+            "0x0000000000000000000000000000000000000000000000000000000000000190",
+            "0x0000000000000000000000000000000000000000000000000f0f3a2cf603e000",
+            "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+            "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+            "0x000000000000000000000000000000000000000000000000000000004d9db0a0"
+          ]
+        },
+        "witness": {
+          "incomeYtd": "110000000000",
+          "incomeSalt": "3736626952657381017965016237073077365364214352779559484911832724692141962787",
+          "priorIncomeYtd": "0",
+          "priorSalt": "0",
+          "theta": "80000000000",
+          "rWad": "100000000000000"
+        }
+      },
+      "error": "FxFallbackNotAllowed",
+      "note": "the accumulator is valid for Q1"
+    },
+    {
+      "t": "1775023200",
+      "note": "live end checkpoint: owed 4% × 30,000 EUR = 1,200 EUR × avg(54 rates) → USDC, floor",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S1",
+      "period": "8104",
+      "paymentUsd": "1302180000",
+      "fxAvgWad": "1085150000000000000",
+      "fxFallback": null,
+      "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+      "incomeCommitment": "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+      "tier": 2,
+      "liquidityEvent": false,
+      "attestation": "verifier1",
+      "proof": {
+        "pi_a": [
+          "4093024255932970198642293768134781690753128821348615740164586804697861205443",
+          "17591508301076704955298684141300632813724257417143286755259830708562038340118",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "8784874510101044752498622750645939569409123246151334831903306732711417003774",
+            "16537571926497172020489243741825952156237999069062838011254813016922726311675"
+          ],
+          [
+            "1358978857712879657200565762186225548519600844372746462589501498262791674950",
+            "368683824511320268863889354963353531108405294486404925697360760530210238953"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "17193633337825726772459294921528078766028167047442081032313281041710603763427",
+          "18398454667927141801048928775269967839881929619321632061812765554888290048798",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+        "400",
+        "1085150000000000000",
+        "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+        "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+        "1302180000"
+      ],
+      "proofEvm": {
+        "pA": [
+          "4093024255932970198642293768134781690753128821348615740164586804697861205443",
+          "17591508301076704955298684141300632813724257417143286755259830708562038340118"
+        ],
+        "pB": [
+          [
+            "16537571926497172020489243741825952156237999069062838011254813016922726311675",
+            "8784874510101044752498622750645939569409123246151334831903306732711417003774"
+          ],
+          [
+            "368683824511320268863889354963353531108405294486404925697360760530210238953",
+            "1358978857712879657200565762186225548519600844372746462589501498262791674950"
+          ]
+        ],
+        "pC": [
+          "17193633337825726772459294921528078766028167047442081032313281041710603763427",
+          "18398454667927141801048928775269967839881929619321632061812765554888290048798"
+        ],
+        "pubSignals": [
+          "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+          "400",
+          "1085150000000000000",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+          "1302180000"
+        ],
+        "proofBytes": "0x090c91d3733fe6886dec4162cf9a98e36cc249333cdeddd4747398caaa1c2dc326e470dbe6f83f329126fc383ee0a75f335e021d7da213544d1d0c36d237ba16248fef1b126de58cd74e42d549bba325c6f02737eeb9f4962da5e4ec8793a6fb136c1011a8a9b36a0356a1c928ddd40f46f1edb50de43d89cbc072b4221cbefe00d0aaeb1869be360821bc970934e7bacf114e4bdd185f0681ffe79c9f8db1e90301279f6077c946a77220abdb7ed803309e4189441b3685a2a3309681005c46260340694b140f717d54a2fad08e6af5887bafcd92dbcb71903692f61ddefee328ad28042c97c033849f99f4052635bd1d4930dd5b71d3077665516181e79b1e",
+        "calldata": "0xf398789b090c91d3733fe6886dec4162cf9a98e36cc249333cdeddd4747398caaa1c2dc326e470dbe6f83f329126fc383ee0a75f335e021d7da213544d1d0c36d237ba16248fef1b126de58cd74e42d549bba325c6f02737eeb9f4962da5e4ec8793a6fb136c1011a8a9b36a0356a1c928ddd40f46f1edb50de43d89cbc072b4221cbefe00d0aaeb1869be360821bc970934e7bacf114e4bdd185f0681ffe79c9f8db1e90301279f6077c946a77220abdb7ed803309e4189441b3685a2a3309681005c46260340694b140f717d54a2fad08e6af5887bafcd92dbcb71903692f61ddefee328ad28042c97c033849f99f4052635bd1d4930dd5b71d3077665516181e79b1e1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc18325400000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000f0f3a2cf603e0002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648641001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba000000000000000000000000000000000000000000000000000000004d9db0a0"
+      },
+      "proofSolana": {
+        "proofA": "0x090c91d3733fe6886dec4162cf9a98e36cc249333cdeddd4747398caaa1c2dc3097fdd96fa3960f72729497e42a0b0fe64236873eacfb738ef037fe006454331",
+        "proofB": "0x248fef1b126de58cd74e42d549bba325c6f02737eeb9f4962da5e4ec8793a6fb136c1011a8a9b36a0356a1c928ddd40f46f1edb50de43d89cbc072b4221cbefe00d0aaeb1869be360821bc970934e7bacf114e4bdd185f0681ffe79c9f8db1e90301279f6077c946a77220abdb7ed803309e4189441b3685a2a3309681005c46",
+        "proofC": "0x260340694b140f717d54a2fad08e6af5887bafcd92dbcb71903692f61ddefee328ad28042c97c033849f99f4052635bd1d4930dd5b71d3077665516181e79b1e",
+        "proof": "0x090c91d3733fe6886dec4162cf9a98e36cc249333cdeddd4747398caaa1c2dc3097fdd96fa3960f72729497e42a0b0fe64236873eacfb738ef037fe006454331248fef1b126de58cd74e42d549bba325c6f02737eeb9f4962da5e4ec8793a6fb136c1011a8a9b36a0356a1c928ddd40f46f1edb50de43d89cbc072b4221cbefe00d0aaeb1869be360821bc970934e7bacf114e4bdd185f0681ffe79c9f8db1e90301279f6077c946a77220abdb7ed803309e4189441b3685a2a3309681005c46260340694b140f717d54a2fad08e6af5887bafcd92dbcb71903692f61ddefee328ad28042c97c033849f99f4052635bd1d4930dd5b71d3077665516181e79b1e",
+        "publicInputs": [
+          "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000f0f3a2cf603e000",
+          "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+          "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+          "0x000000000000000000000000000000000000000000000000000000004d9db0a0"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "110000000000",
+        "incomeSalt": "3736626952657381017965016237073077365364214352779559484911832724692141962787",
+        "priorIncomeYtd": "0",
+        "priorSalt": "0",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1775023200",
+      "op": "pay",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1775023200",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "issuer": {
+          "stable": "198697820000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "485109000",
+      "treasury": "42000000000",
+      "vault": "1237071000",
+      "auctionEscrow": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "3255450000000000000000000",
+        "netAccWad": "3092677500000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "1302180000",
+        "feeCollected": "65109000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8104",
+        "lastPaidPeriod": "8104",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "fx": {
+        "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c": {
+          "sumWad": "58598100000000000000",
+          "count": "54",
+          "quarters": {
+            "8104": {
+              "ok": true,
+              "avgWad": "1085150000000000000",
+              "n": "54",
+              "flagged": false
+            }
+          }
+        }
+      },
+      "note": "Q1 paid: 1302180000 USDC; coverage 54/64 trading days"
+    },
+    {
+      "t": "1775044800",
+      "op": "expect_revert",
+      "call": {
+        "op": "fx_snapshot",
+        "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+        "price": "109000000",
+        "conf": "20000",
+        "expo": -8,
+        "publishTime": "1775041199"
+      },
+      "error": "StalePrice",
+      "note": "publish_time older than 3600 s"
+    },
+    {
+      "t": "1775044800",
+      "op": "expect_revert",
+      "call": {
+        "op": "fx_snapshot",
+        "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+        "price": "109000000",
+        "conf": "1100000",
+        "expo": -8,
+        "publishTime": "1775044740"
+      },
+      "error": "ConfidenceTooWide",
+      "note": "conf 1.01% > 1%"
+    },
+    {
+      "t": "1775044800",
+      "note": "first snapshot of Q2 stores the Q1 end checkpoint; the stored average equals the live one",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1775044740",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1775044800",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "issuer": {
+          "stable": "198697820000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "485109000",
+      "treasury": "42000000000",
+      "vault": "1237071000",
+      "auctionEscrow": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "3255450000000000000000000",
+        "netAccWad": "3092677500000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "1302180000",
+        "feeCollected": "65109000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8104",
+        "lastPaidPeriod": "8104",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "fx": {
+        "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c": {
+          "sumWad": "59688100000000000000",
+          "count": "55",
+          "quarters": {
+            "8104": {
+              "ok": true,
+              "avgWad": "1085150000000000000",
+              "n": "54",
+              "flagged": false
+            }
+          }
+        }
+      },
+      "note": "Q1 average unchanged once the checkpoint is stored"
+    },
+    {
+      "t": "1775131200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1775131140",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1775217600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1775217540",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1775476800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1775476740",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1775563200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1775563140",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1775649600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1775649540",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1775736000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1775735940",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1775822400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1775822340",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1776081600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1776081540",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1776168000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1776167940",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1776254400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1776254340",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1776340800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1776340740",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1776427200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1776427140",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1776686400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1776686340",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1776772800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1776772740",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1776859200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1776859140",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1776945600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1776945540",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1777032000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1777031940",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1777291200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1777291140",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1777377600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1777377540",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1777464000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1777463940",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1777550400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1777550340",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1777636800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1777636740",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1777896000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1777895940",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1777982400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1777982340",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1778068800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1778068740",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1778155200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1778155140",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1778241600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1778241540",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1778500800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1778500740",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1778587200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1778587140",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1778673600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1778673540",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1778760000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1778759940",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1778846400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1778846340",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1779105600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1779105540",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1779192000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1779191940",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1779278400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1779278340",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1779364800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1779364740",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1779451200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1779451140",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1779710400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1779710340",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1779796800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "109000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1779796740",
+      "crosscheckPrice": "109000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1782907200",
+      "note": "first snapshot of Q3 closes Q2 with 40 of 65 trading days → NeedsFallback",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1782907140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1782907200",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "issuer": {
+          "stable": "198697820000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "485109000",
+      "treasury": "42000000000",
+      "vault": "1237071000",
+      "auctionEscrow": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "3255450000000000000000000",
+        "netAccWad": "3092677500000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "1302180000",
+        "feeCollected": "65109000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8104",
+        "lastPaidPeriod": "8104",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "fx": {
+        "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c": {
+          "sumWad": "103298100000000000000",
+          "count": "95",
+          "quarters": {
+            "8105": {
+              "ok": false,
+              "avgWad": "1090000000000000000",
+              "n": "40",
+              "flagged": false
+            }
+          }
+        }
+      },
+      "note": "Q2 NeedsFallback (coverage 40/65)"
+    },
+    {
+      "t": "1783036800",
+      "op": "expect_revert",
+      "call": {
+        "op": "submit_report",
+        "actor": "issuer",
+        "series": "S1",
+        "period": "8105",
+        "paymentUsd": "2180000000",
+        "fxAvgWad": "1090000000000000000",
+        "fxFallback": null,
+        "priorIncomeCommitment": "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+        "incomeCommitment": "0x035cb35019955e5ea8d7696077a8ae594bce8035de330d052efcc29e042fc843",
+        "tier": 2,
+        "liquidityEvent": false,
+        "attestation": "verifier1",
+        "proof": {
+          "pi_a": [
+            "17853596688595938923954840210041274668704137818445349846212467532708586724767",
+            "1126130774059587364579685404020264695078020908516164896534480594661692400824",
+            "1"
+          ],
+          "pi_b": [
+            [
+              "17289354179626964992327631174560677815620713376192902610874717106613505024655",
+              "12996853422734907556622826165580181551598365632207058916655947911824348693521"
+            ],
+            [
+              "15131776768584874226939087217133229502608649778661246638167063659750550337367",
+              "10116198352574335237723312274926123596925113581017230147269274561281008268128"
+            ],
+            [
+              "1",
+              "0"
+            ]
+          ],
+          "pi_c": [
+            "5942429902371487988224443616451320839368506901445763419701741541868272572098",
+            "9979339391257372611673022723683107883378302321406739398396335980641593687845",
+            "1"
+          ],
+          "protocol": "groth16",
+          "curve": "bn128"
+        },
+        "publicSignals": [
+          "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+          "400",
+          "1090000000000000000",
+          "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+          "1520726047795473389248618658080775397964572459209257840247173537725116565571",
+          "2180000000"
+        ],
+        "proofEvm": {
+          "pA": [
+            "17853596688595938923954840210041274668704137818445349846212467532708586724767",
+            "1126130774059587364579685404020264695078020908516164896534480594661692400824"
+          ],
+          "pB": [
+            [
+              "12996853422734907556622826165580181551598365632207058916655947911824348693521",
+              "17289354179626964992327631174560677815620713376192902610874717106613505024655"
+            ],
+            [
+              "10116198352574335237723312274926123596925113581017230147269274561281008268128",
+              "15131776768584874226939087217133229502608649778661246638167063659750550337367"
+            ]
+          ],
+          "pC": [
+            "5942429902371487988224443616451320839368506901445763419701741541868272572098",
+            "9979339391257372611673022723683107883378302321406739398396335980641593687845"
+          ],
+          "pubSignals": [
+            "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+            "400",
+            "1090000000000000000",
+            "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+            "1520726047795473389248618658080775397964572459209257840247173537725116565571",
+            "2180000000"
+          ],
+          "proofBytes": "0x2778c7127e0919a22d1d7b5fac262b3d6dd9161d7b6c3169d5bd95e010c01d9f027d5e0fefaaf090c6d085455813fee9b99b3e3e227aa1979589609889b7e4b81cbbf5568d4a18239583e04f12947a1ed3c6a68719f588fb13c19df8200e441126396d7ca5154aed9eead631882d3b3a688a9ff97e6a1284e17d499b9eb4e28f165d90bb8269cc140265172ba3dfa7c38266f72692414da05d4863d4cf86f3602174483a9bcfdd01a3595511499469c9ce3aed9b6af078156e9fc563f506f7570d234bcf7065b24045d3d4d44ac8075d5a2693c02bb24c5d574933089c2b56c216101b1e7f9d1d893d10268483ddd851c44325ccffc755713b957c5a08097f25",
+          "calldata": "0xf398789b2778c7127e0919a22d1d7b5fac262b3d6dd9161d7b6c3169d5bd95e010c01d9f027d5e0fefaaf090c6d085455813fee9b99b3e3e227aa1979589609889b7e4b81cbbf5568d4a18239583e04f12947a1ed3c6a68719f588fb13c19df8200e441126396d7ca5154aed9eead631882d3b3a688a9ff97e6a1284e17d499b9eb4e28f165d90bb8269cc140265172ba3dfa7c38266f72692414da05d4863d4cf86f3602174483a9bcfdd01a3595511499469c9ce3aed9b6af078156e9fc563f506f7570d234bcf7065b24045d3d4d44ac8075d5a2693c02bb24c5d574933089c2b56c216101b1e7f9d1d893d10268483ddd851c44325ccffc755713b957c5a08097f251c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc18325400000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000f207539952d00001001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba035cb35019955e5ea8d7696077a8ae594bce8035de330d052efcc29e042fc8430000000000000000000000000000000000000000000000000000000081f02900"
+        },
+        "proofSolana": {
+          "proofA": "0x2778c7127e0919a22d1d7b5fac262b3d6dd9161d7b6c3169d5bd95e010c01d9f2de6f062f186af98f17fc071296d5973dde62c5345f728f5a6972b7e4ec5188f",
+          "proofB": "0x1cbbf5568d4a18239583e04f12947a1ed3c6a68719f588fb13c19df8200e441126396d7ca5154aed9eead631882d3b3a688a9ff97e6a1284e17d499b9eb4e28f165d90bb8269cc140265172ba3dfa7c38266f72692414da05d4863d4cf86f3602174483a9bcfdd01a3595511499469c9ce3aed9b6af078156e9fc563f506f757",
+          "proofC": "0x0d234bcf7065b24045d3d4d44ac8075d5a2693c02bb24c5d574933089c2b56c216101b1e7f9d1d893d10268483ddd851c44325ccffc755713b957c5a08097f25",
+          "proof": "0x2778c7127e0919a22d1d7b5fac262b3d6dd9161d7b6c3169d5bd95e010c01d9f2de6f062f186af98f17fc071296d5973dde62c5345f728f5a6972b7e4ec5188f1cbbf5568d4a18239583e04f12947a1ed3c6a68719f588fb13c19df8200e441126396d7ca5154aed9eead631882d3b3a688a9ff97e6a1284e17d499b9eb4e28f165d90bb8269cc140265172ba3dfa7c38266f72692414da05d4863d4cf86f3602174483a9bcfdd01a3595511499469c9ce3aed9b6af078156e9fc563f506f7570d234bcf7065b24045d3d4d44ac8075d5a2693c02bb24c5d574933089c2b56c216101b1e7f9d1d893d10268483ddd851c44325ccffc755713b957c5a08097f25",
+          "publicInputs": [
+            "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+            "0x0000000000000000000000000000000000000000000000000000000000000190",
+            "0x0000000000000000000000000000000000000000000000000f207539952d0000",
+            "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+            "0x035cb35019955e5ea8d7696077a8ae594bce8035de330d052efcc29e042fc843",
+            "0x0000000000000000000000000000000000000000000000000000000081f02900"
+          ]
+        },
+        "witness": {
+          "incomeYtd": "160000000000",
+          "incomeSalt": "4171387725429366633954650533311946685460688809548340129110999734485709628017",
+          "priorIncomeYtd": "110000000000",
+          "priorSalt": "3736626952657381017965016237073077365364214352779559484911832724692141962787",
+          "theta": "80000000000",
+          "rWad": "100000000000000"
+        }
+      },
+      "error": "FxFallbackRequired",
+      "note": "low coverage: an attestor-signed rate is required"
+    },
+    {
+      "t": "1783036800",
+      "op": "expect_revert",
+      "call": {
+        "op": "submit_report",
+        "actor": "issuer",
+        "series": "S1",
+        "period": "8105",
+        "paymentUsd": "2180000000",
+        "fxAvgWad": "1090000000000000000",
+        "fxFallback": {
+          "attestor": "verifier1"
+        },
+        "priorIncomeCommitment": "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+        "incomeCommitment": "0x178d2f4631a6e3d0efe547d64400b276d14f8d74ba862513639038a8413e25b5",
+        "tier": 2,
+        "liquidityEvent": false,
+        "attestation": "verifier1",
+        "proof": {
+          "pi_a": [
+            "1505574064783251442048316339311872272423619017789405072023324441879453982115",
+            "12256737896838418304012579000561461805441644217280770151247950227483040196736",
+            "1"
+          ],
+          "pi_b": [
+            [
+              "10867675797731370963763663613902763208276003801389344246321623836894486846535",
+              "17087245918614208803461829835146876739386356449190966650854405288804872123849"
+            ],
+            [
+              "461105268587400283336949423697707679914015598894819993575434607978559181390",
+              "10688427867514548537725097653248197495769234796968695102998757361629791828118"
+            ],
+            [
+              "1",
+              "0"
+            ]
+          ],
+          "pi_c": [
+            "11579593239285111049258708430652142248800121332870345925431792040518393054225",
+            "11872537643033860391595397918687689024867854277801319869242091796356485603133",
+            "1"
+          ],
+          "protocol": "groth16",
+          "curve": "bn128"
+        },
+        "publicSignals": [
+          "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+          "400",
+          "1090000000000000000",
+          "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+          "10652647228052401797444059310468339787096152060367197947491025511535272142261",
+          "2180000000"
+        ],
+        "proofEvm": {
+          "pA": [
+            "1505574064783251442048316339311872272423619017789405072023324441879453982115",
+            "12256737896838418304012579000561461805441644217280770151247950227483040196736"
+          ],
+          "pB": [
+            [
+              "17087245918614208803461829835146876739386356449190966650854405288804872123849",
+              "10867675797731370963763663613902763208276003801389344246321623836894486846535"
+            ],
+            [
+              "10688427867514548537725097653248197495769234796968695102998757361629791828118",
+              "461105268587400283336949423697707679914015598894819993575434607978559181390"
+            ]
+          ],
+          "pC": [
+            "11579593239285111049258708430652142248800121332870345925431792040518393054225",
+            "11872537643033860391595397918687689024867854277801319869242091796356485603133"
+          ],
+          "pubSignals": [
+            "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+            "400",
+            "1090000000000000000",
+            "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+            "10652647228052401797444059310468339787096152060367197947491025511535272142261",
+            "2180000000"
+          ],
+          "proofBytes": "0x03541fedd06887675f4b4bcdac3271ce264dcd8421e69f5809ce08c943195da31b19115bf1735f87c100e286572e2422e97d322f4461f763ce73370d9248a88025c709d898a8aa04740afa3210e627287bc675bcbc1a25552bd5e500edb075c91806e2f3204ff93bdf92d2bb14774103a5308da252a1aff02e962bef9fcfdc4717a16f8fdfa6bddbeaf4c4cc325ca60eeb652d51e17f624ccc51ed1958d8b8960104f9f0fbcc65b71158d470d39f83afe8b8e030a0789232877a9c04a9ce124e1999d148a7f95354b1361211e4a347d279d1e5a491ae7a78d62fc5d35504c4111a3f9e407f82ea516373c4cf854df559cc3eb2d240562d967f7f467e7ca7df3d",
+          "calldata": "0xf398789b03541fedd06887675f4b4bcdac3271ce264dcd8421e69f5809ce08c943195da31b19115bf1735f87c100e286572e2422e97d322f4461f763ce73370d9248a88025c709d898a8aa04740afa3210e627287bc675bcbc1a25552bd5e500edb075c91806e2f3204ff93bdf92d2bb14774103a5308da252a1aff02e962bef9fcfdc4717a16f8fdfa6bddbeaf4c4cc325ca60eeb652d51e17f624ccc51ed1958d8b8960104f9f0fbcc65b71158d470d39f83afe8b8e030a0789232877a9c04a9ce124e1999d148a7f95354b1361211e4a347d279d1e5a491ae7a78d62fc5d35504c4111a3f9e407f82ea516373c4cf854df559cc3eb2d240562d967f7f467e7ca7df3d1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc18325400000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000f207539952d00001001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba178d2f4631a6e3d0efe547d64400b276d14f8d74ba862513639038a8413e25b50000000000000000000000000000000000000000000000000000000081f02900"
+        },
+        "proofSolana": {
+          "proofA": "0x03541fedd06887675f4b4bcdac3271ce264dcd8421e69f5809ce08c943195da3154b3d16efbe40a1f74f63302a53343aae043862240fd3296dad5509463454c7",
+          "proofB": "0x25c709d898a8aa04740afa3210e627287bc675bcbc1a25552bd5e500edb075c91806e2f3204ff93bdf92d2bb14774103a5308da252a1aff02e962bef9fcfdc4717a16f8fdfa6bddbeaf4c4cc325ca60eeb652d51e17f624ccc51ed1958d8b8960104f9f0fbcc65b71158d470d39f83afe8b8e030a0789232877a9c04a9ce124e",
+          "proofC": "0x1999d148a7f95354b1361211e4a347d279d1e5a491ae7a78d62fc5d35504c4111a3f9e407f82ea516373c4cf854df559cc3eb2d240562d967f7f467e7ca7df3d",
+          "proof": "0x03541fedd06887675f4b4bcdac3271ce264dcd8421e69f5809ce08c943195da3154b3d16efbe40a1f74f63302a53343aae043862240fd3296dad5509463454c725c709d898a8aa04740afa3210e627287bc675bcbc1a25552bd5e500edb075c91806e2f3204ff93bdf92d2bb14774103a5308da252a1aff02e962bef9fcfdc4717a16f8fdfa6bddbeaf4c4cc325ca60eeb652d51e17f624ccc51ed1958d8b8960104f9f0fbcc65b71158d470d39f83afe8b8e030a0789232877a9c04a9ce124e1999d148a7f95354b1361211e4a347d279d1e5a491ae7a78d62fc5d35504c4111a3f9e407f82ea516373c4cf854df559cc3eb2d240562d967f7f467e7ca7df3d",
+          "publicInputs": [
+            "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+            "0x0000000000000000000000000000000000000000000000000000000000000190",
+            "0x0000000000000000000000000000000000000000000000000f207539952d0000",
+            "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+            "0x178d2f4631a6e3d0efe547d64400b276d14f8d74ba862513639038a8413e25b5",
+            "0x0000000000000000000000000000000000000000000000000000000081f02900"
+          ]
+        },
+        "witness": {
+          "incomeYtd": "160000000000",
+          "incomeSalt": "8165354240968890717875270334212676683747347458038308661462099153605216265579",
+          "priorIncomeYtd": "110000000000",
+          "priorSalt": "3736626952657381017965016237073077365364214352779559484911832724692141962787",
+          "theta": "80000000000",
+          "rWad": "100000000000000"
+        }
+      },
+      "error": "InvalidAttestorSignature",
+      "note": "the fallback rate must be signed by an attestor"
+    },
+    {
+      "t": "1783036800",
+      "note": "fallback rate 1.09 signed by attestor1 (MERCES_FX_V1 message); payment 2,000 EUR → 2,180 USDC",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S1",
+      "period": "8105",
+      "paymentUsd": "2180000000",
+      "fxAvgWad": "1090000000000000000",
+      "fxFallback": {
+        "attestor": "attestor1"
+      },
+      "priorIncomeCommitment": "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+      "incomeCommitment": "0x178d2f4631a6e3d0efe547d64400b276d14f8d74ba862513639038a8413e25b5",
+      "tier": 2,
+      "liquidityEvent": false,
+      "attestation": "verifier1",
+      "proof": {
+        "pi_a": [
+          "1505574064783251442048316339311872272423619017789405072023324441879453982115",
+          "12256737896838418304012579000561461805441644217280770151247950227483040196736",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "10867675797731370963763663613902763208276003801389344246321623836894486846535",
+            "17087245918614208803461829835146876739386356449190966650854405288804872123849"
+          ],
+          [
+            "461105268587400283336949423697707679914015598894819993575434607978559181390",
+            "10688427867514548537725097653248197495769234796968695102998757361629791828118"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "11579593239285111049258708430652142248800121332870345925431792040518393054225",
+          "11872537643033860391595397918687689024867854277801319869242091796356485603133",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+        "400",
+        "1090000000000000000",
+        "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+        "10652647228052401797444059310468339787096152060367197947491025511535272142261",
+        "2180000000"
+      ],
+      "proofEvm": {
+        "pA": [
+          "1505574064783251442048316339311872272423619017789405072023324441879453982115",
+          "12256737896838418304012579000561461805441644217280770151247950227483040196736"
+        ],
+        "pB": [
+          [
+            "17087245918614208803461829835146876739386356449190966650854405288804872123849",
+            "10867675797731370963763663613902763208276003801389344246321623836894486846535"
+          ],
+          [
+            "10688427867514548537725097653248197495769234796968695102998757361629791828118",
+            "461105268587400283336949423697707679914015598894819993575434607978559181390"
+          ]
+        ],
+        "pC": [
+          "11579593239285111049258708430652142248800121332870345925431792040518393054225",
+          "11872537643033860391595397918687689024867854277801319869242091796356485603133"
+        ],
+        "pubSignals": [
+          "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+          "400",
+          "1090000000000000000",
+          "7240332847432385809315511662340673757287065736205251564833068681860422707898",
+          "10652647228052401797444059310468339787096152060367197947491025511535272142261",
+          "2180000000"
+        ],
+        "proofBytes": "0x03541fedd06887675f4b4bcdac3271ce264dcd8421e69f5809ce08c943195da31b19115bf1735f87c100e286572e2422e97d322f4461f763ce73370d9248a88025c709d898a8aa04740afa3210e627287bc675bcbc1a25552bd5e500edb075c91806e2f3204ff93bdf92d2bb14774103a5308da252a1aff02e962bef9fcfdc4717a16f8fdfa6bddbeaf4c4cc325ca60eeb652d51e17f624ccc51ed1958d8b8960104f9f0fbcc65b71158d470d39f83afe8b8e030a0789232877a9c04a9ce124e1999d148a7f95354b1361211e4a347d279d1e5a491ae7a78d62fc5d35504c4111a3f9e407f82ea516373c4cf854df559cc3eb2d240562d967f7f467e7ca7df3d",
+        "calldata": "0xf398789b03541fedd06887675f4b4bcdac3271ce264dcd8421e69f5809ce08c943195da31b19115bf1735f87c100e286572e2422e97d322f4461f763ce73370d9248a88025c709d898a8aa04740afa3210e627287bc675bcbc1a25552bd5e500edb075c91806e2f3204ff93bdf92d2bb14774103a5308da252a1aff02e962bef9fcfdc4717a16f8fdfa6bddbeaf4c4cc325ca60eeb652d51e17f624ccc51ed1958d8b8960104f9f0fbcc65b71158d470d39f83afe8b8e030a0789232877a9c04a9ce124e1999d148a7f95354b1361211e4a347d279d1e5a491ae7a78d62fc5d35504c4111a3f9e407f82ea516373c4cf854df559cc3eb2d240562d967f7f467e7ca7df3d1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc18325400000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000f207539952d00001001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba178d2f4631a6e3d0efe547d64400b276d14f8d74ba862513639038a8413e25b50000000000000000000000000000000000000000000000000000000081f02900"
+      },
+      "proofSolana": {
+        "proofA": "0x03541fedd06887675f4b4bcdac3271ce264dcd8421e69f5809ce08c943195da3154b3d16efbe40a1f74f63302a53343aae043862240fd3296dad5509463454c7",
+        "proofB": "0x25c709d898a8aa04740afa3210e627287bc675bcbc1a25552bd5e500edb075c91806e2f3204ff93bdf92d2bb14774103a5308da252a1aff02e962bef9fcfdc4717a16f8fdfa6bddbeaf4c4cc325ca60eeb652d51e17f624ccc51ed1958d8b8960104f9f0fbcc65b71158d470d39f83afe8b8e030a0789232877a9c04a9ce124e",
+        "proofC": "0x1999d148a7f95354b1361211e4a347d279d1e5a491ae7a78d62fc5d35504c4111a3f9e407f82ea516373c4cf854df559cc3eb2d240562d967f7f467e7ca7df3d",
+        "proof": "0x03541fedd06887675f4b4bcdac3271ce264dcd8421e69f5809ce08c943195da3154b3d16efbe40a1f74f63302a53343aae043862240fd3296dad5509463454c725c709d898a8aa04740afa3210e627287bc675bcbc1a25552bd5e500edb075c91806e2f3204ff93bdf92d2bb14774103a5308da252a1aff02e962bef9fcfdc4717a16f8fdfa6bddbeaf4c4cc325ca60eeb652d51e17f624ccc51ed1958d8b8960104f9f0fbcc65b71158d470d39f83afe8b8e030a0789232877a9c04a9ce124e1999d148a7f95354b1361211e4a347d279d1e5a491ae7a78d62fc5d35504c4111a3f9e407f82ea516373c4cf854df559cc3eb2d240562d967f7f467e7ca7df3d",
+        "publicInputs": [
+          "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000f207539952d0000",
+          "0x1001e2174ea4e7f86f2223e088d0d2050931bb328f39d8632da214808ce62aba",
+          "0x178d2f4631a6e3d0efe547d64400b276d14f8d74ba862513639038a8413e25b5",
+          "0x0000000000000000000000000000000000000000000000000000000081f02900"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "160000000000",
+        "incomeSalt": "8165354240968890717875270334212676683747347458038308661462099153605216265579",
+        "priorIncomeYtd": "110000000000",
+        "priorSalt": "3736626952657381017965016237073077365364214352779559484911832724692141962787",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1783036800",
+      "op": "pay",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1783339200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1783339140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1783425600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1783425540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1783512000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1783511940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1783598400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1783598340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1783684800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1783684740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1783944000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1783943940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1784030400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1784030340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1784116800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1784116740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1784203200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1784203140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1784289600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1784289540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1784548800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1784548740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1784635200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1784635140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1784721600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1784721540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1784808000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1784807940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1784894400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1784894340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1785153600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1785153540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1785240000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1785239940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1785326400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1785326340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1785412800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1785412740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1785499200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1785499140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1785758400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1785758340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1785844800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1785844740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1785931200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1785931140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1786017600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1786017540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1786104000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1786103940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1786363200",
+      "note": "Chainlink 1.133 vs Pyth 1.10: 3% > 2% band → period flagged",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1786363140",
+      "crosscheckPrice": "113300000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1786449600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1786449540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1786536000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1786535940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1786622400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1786622340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1786708800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1786708740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1786968000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1786967940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1787054400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1787054340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1787140800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1787140740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1787227200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1787227140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1787313600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1787313540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1787572800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1787572740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1787659200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1787659140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1787745600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1787745540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1787832000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1787831940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1787918400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1787918340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1788177600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1788177540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1788264000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1788263940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1788350400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1788350340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1788436800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1788436740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1788523200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1788523140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1788782400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1788782340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1788868800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1788868740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1788955200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1788955140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1789041600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1789041540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1789128000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1789127940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1789387200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1789387140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1789473600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1789473540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1789560000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1789559940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1789646400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1789646340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1789732800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1789732740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1789992000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1789991940",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1790078400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1790078340",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1790164800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1790164740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1790251200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1790251140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1790337600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1790337540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1790596800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1790596740",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1790683200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1790683140",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1790769600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1790769540",
+      "crosscheckPrice": "110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1790856000",
+      "note": "first snapshot of Q4 closes Q3",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1790855940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1790856000",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "issuer": {
+          "stable": "196517820000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "594109000",
+      "treasury": "42000000000",
+      "vault": "3308071000",
+      "auctionEscrow": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "8705450000000000000000000",
+        "netAccWad": "8270177500000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "3482180000",
+        "feeCollected": "174109000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8105",
+        "lastPaidPeriod": "8105",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "fx": {
+        "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c": {
+          "sumWad": "173708100000000000000",
+          "count": "159",
+          "quarters": {
+            "8106": {
+              "ok": false,
+              "avgWad": "1100000000000000000",
+              "n": "64",
+              "flagged": true
+            }
+          }
+        }
+      },
+      "note": "Q3 covered 64 of 66 trading days but flagged → NeedsFallback"
+    },
+    {
+      "t": "1790985600",
+      "note": "deviation fallback at 1.10: 1,600 EUR → 1,760 USDC",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S1",
+      "period": "8106",
+      "paymentUsd": "1760000000",
+      "fxAvgWad": "1100000000000000000",
+      "fxFallback": {
+        "attestor": "attestor2"
+      },
+      "priorIncomeCommitment": "0x178d2f4631a6e3d0efe547d64400b276d14f8d74ba862513639038a8413e25b5",
+      "incomeCommitment": "0x03396c42ca0a5ebd9114a41f069b488a2c90159b0edbc613882ceff004320348",
+      "tier": 2,
+      "liquidityEvent": false,
+      "attestation": "verifier1",
+      "proof": {
+        "pi_a": [
+          "15601001328244469923459017077149324456978085367255523302967250907788522847680",
+          "13315196880369463687425595775854339389835075539499300289421353119289885025948",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "8472152009534012898337518046822738696618538915205456419085154548846575491018",
+            "5766363508209423490041339746104697273050272302966461898245428344068939849418"
+          ],
+          [
+            "9097563138666502755718704046201200523896103559403719700019533752286788956488",
+            "14454067250765522594719438721517491729670822609780340710752814224995193080581"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "12695121695016075734342400479991936748842943078384659794144423822466050774407",
+          "18719955553820653172414501293141094079181375811904779979063908161524326518437",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+        "400",
+        "1100000000000000000",
+        "10652647228052401797444059310468339787096152060367197947491025511535272142261",
+        "1458396017681449405285099580286377611644789685884003612712428643255116235592",
+        "1760000000"
+      ],
+      "proofEvm": {
+        "pA": [
+          "15601001328244469923459017077149324456978085367255523302967250907788522847680",
+          "13315196880369463687425595775854339389835075539499300289421353119289885025948"
+        ],
+        "pB": [
+          [
+            "5766363508209423490041339746104697273050272302966461898245428344068939849418",
+            "8472152009534012898337518046822738696618538915205456419085154548846575491018"
+          ],
+          [
+            "14454067250765522594719438721517491729670822609780340710752814224995193080581",
+            "9097563138666502755718704046201200523896103559403719700019533752286788956488"
+          ]
+        ],
+        "pC": [
+          "12695121695016075734342400479991936748842943078384659794144423822466050774407",
+          "18719955553820653172414501293141094079181375811904779979063908161524326518437"
+        ],
+        "pubSignals": [
+          "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+          "400",
+          "1100000000000000000",
+          "10652647228052401797444059310468339787096152060367197947491025511535272142261",
+          "1458396017681449405285099580286377611644789685884003612712428643255116235592",
+          "1760000000"
+        ],
+        "proofBytes": "0x227dda94d608b2158a4a00894b9c8def14814f24f7c7a8b48d41a9be94c47dc01d702265a9ad8287c61c894af22db1364d8f9690da06434480a6ccf5cb03669c0cbfa565eae1355747994bc5aff1170d96a2ffaf7e69627abf07990543c21eca12bb116f6ee7bd89455810b1fc9ba28bb40a2f0b020bfb519a34bdd0b0a817ca1ff4b64f7d697fb84d828b103c46bb21db20d01329ab5e8cd1c493bfcf3a4b05141d09cb8088f0b5fe14e40b813d33ff837c2c911aa8580f9703bf92cd07b1481c112f2abfb0ab484d0074b205977ccb10d5c8d235a1b194b2ea17f32849558729631e8eceea997d44f0ebdacd607bc2ff06a6795e811151882170bbbaa4cea5",
+        "calldata": "0xf398789b227dda94d608b2158a4a00894b9c8def14814f24f7c7a8b48d41a9be94c47dc01d702265a9ad8287c61c894af22db1364d8f9690da06434480a6ccf5cb03669c0cbfa565eae1355747994bc5aff1170d96a2ffaf7e69627abf07990543c21eca12bb116f6ee7bd89455810b1fc9ba28bb40a2f0b020bfb519a34bdd0b0a817ca1ff4b64f7d697fb84d828b103c46bb21db20d01329ab5e8cd1c493bfcf3a4b05141d09cb8088f0b5fe14e40b813d33ff837c2c911aa8580f9703bf92cd07b1481c112f2abfb0ab484d0074b205977ccb10d5c8d235a1b194b2ea17f32849558729631e8eceea997d44f0ebdacd607bc2ff06a6795e811151882170bbbaa4cea51c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc18325400000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000f43fc2c04ee0000178d2f4631a6e3d0efe547d64400b276d14f8d74ba862513639038a8413e25b503396c42ca0a5ebd9114a41f069b488a2c90159b0edbc613882ceff0043203480000000000000000000000000000000000000000000000000000000068e77800"
+      },
+      "proofSolana": {
+        "proofA": "0x227dda94d608b2158a4a00894b9c8def14814f24f7c7a8b48d41a9be94c47dc012f42c0d37841da1f233bc6b8f53a72749f1d4008e6b8748bb79bf210d7996ab",
+        "proofB": "0x0cbfa565eae1355747994bc5aff1170d96a2ffaf7e69627abf07990543c21eca12bb116f6ee7bd89455810b1fc9ba28bb40a2f0b020bfb519a34bdd0b0a817ca1ff4b64f7d697fb84d828b103c46bb21db20d01329ab5e8cd1c493bfcf3a4b05141d09cb8088f0b5fe14e40b813d33ff837c2c911aa8580f9703bf92cd07b148",
+        "proofC": "0x1c112f2abfb0ab484d0074b205977ccb10d5c8d235a1b194b2ea17f32849558729631e8eceea997d44f0ebdacd607bc2ff06a6795e811151882170bbbaa4cea5",
+        "proof": "0x227dda94d608b2158a4a00894b9c8def14814f24f7c7a8b48d41a9be94c47dc012f42c0d37841da1f233bc6b8f53a72749f1d4008e6b8748bb79bf210d7996ab0cbfa565eae1355747994bc5aff1170d96a2ffaf7e69627abf07990543c21eca12bb116f6ee7bd89455810b1fc9ba28bb40a2f0b020bfb519a34bdd0b0a817ca1ff4b64f7d697fb84d828b103c46bb21db20d01329ab5e8cd1c493bfcf3a4b05141d09cb8088f0b5fe14e40b813d33ff837c2c911aa8580f9703bf92cd07b1481c112f2abfb0ab484d0074b205977ccb10d5c8d235a1b194b2ea17f32849558729631e8eceea997d44f0ebdacd607bc2ff06a6795e811151882170bbbaa4cea5",
+        "publicInputs": [
+          "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000f43fc2c04ee0000",
+          "0x178d2f4631a6e3d0efe547d64400b276d14f8d74ba862513639038a8413e25b5",
+          "0x03396c42ca0a5ebd9114a41f069b488a2c90159b0edbc613882ceff004320348",
+          "0x0000000000000000000000000000000000000000000000000000000068e77800"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "200000000000",
+        "incomeSalt": "15287337638460455267477442701299996837529818621706341647787371606713050125877",
+        "priorIncomeYtd": "160000000000",
+        "priorSalt": "8165354240968890717875270334212676683747347458038308661462099153605216265579",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1790985600",
+      "op": "pay",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1791201600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1791201540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1791288000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1791287940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1791374400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1791374340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1791460800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1791460740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1791547200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1791547140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1791806400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1791806340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1791892800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1791892740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1791979200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1791979140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1792065600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1792065540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1792152000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1792151940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1792411200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1792411140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1792497600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1792497540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1792584000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1792583940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1792670400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1792670340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1792756800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1792756740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793016000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793015940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793102400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793102340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793188800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793188740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793275200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793275140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793361600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793361540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793620800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793620740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793707200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793707140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793793600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793793540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793880000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793879940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1793966400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1793966340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1794225600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1794225540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1794312000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1794311940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1794398400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1794398340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1794484800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1794484740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1794571200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1794571140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1794830400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1794830340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1794916800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1794916740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1795003200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1795003140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1795089600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1795089540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1795176000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1795175940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1795435200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1795435140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1795521600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1795521540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1795608000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1795607940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1795694400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1795694340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1795780800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1795780740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796040000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796039940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796126400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796126340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796212800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796212740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796299200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796299140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796385600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796385540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796644800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796644740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796731200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796731140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796817600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796817540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796904000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796903940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1796990400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1796990340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1797249600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1797249540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1797336000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1797335940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1797422400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1797422340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1797508800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1797508740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1797595200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1797595140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1797854400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1797854340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1797940800",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1797940740",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1798027200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1798027140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1798113600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1798113540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1798200000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1798199940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1798459200",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1798459140",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1798545600",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1798545540",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1798632000",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1798631940",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1798718400",
+      "op": "fx_snapshot",
+      "pairId": "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c",
+      "price": "111000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1798718340",
+      "crosscheckPrice": "111000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1799020800",
+      "note": "live end checkpoint, average 1.11 exactly: 2,000 EUR → 2,220 USDC",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S1",
+      "period": "8107",
+      "paymentUsd": "2220000000",
+      "fxAvgWad": "1110000000000000000",
+      "fxFallback": null,
+      "priorIncomeCommitment": "0x03396c42ca0a5ebd9114a41f069b488a2c90159b0edbc613882ceff004320348",
+      "incomeCommitment": "0x2799bb764e5b16f31d704a79721d3f29907d2495b23f27b51a8333e238d8bb58",
+      "tier": 2,
+      "liquidityEvent": false,
+      "attestation": "verifier1",
+      "proof": {
+        "pi_a": [
+          "6502168853140083061925262690684307097360393938212838960693480161642365658894",
+          "12453151535375088330789626405703717222161475389937474176338260619658740817019",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "16847166832804606461429223839225651906165801633624615788096169655009010175734",
+            "8471217743854815974182997935351959378832253320713751618614081290998957279818"
+          ],
+          [
+            "11836938341406771334795331468108183093050657597235791496506142224776199977022",
+            "10037582036521493946220744235066584499952915849340364471338818957980646037369"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "6613167044838760142858252381544357974220628939096086696456011220906702509274",
+          "19727750651309447876339239227210103431420797379908626672167636515882770036991",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+        "400",
+        "1110000000000000000",
+        "1458396017681449405285099580286377611644789685884003612712428643255116235592",
+        "17911822511750869365710679495659136848164808351145437789524556259629043596120",
+        "2220000000"
+      ],
+      "proofEvm": {
+        "pA": [
+          "6502168853140083061925262690684307097360393938212838960693480161642365658894",
+          "12453151535375088330789626405703717222161475389937474176338260619658740817019"
+        ],
+        "pB": [
+          [
+            "8471217743854815974182997935351959378832253320713751618614081290998957279818",
+            "16847166832804606461429223839225651906165801633624615788096169655009010175734"
+          ],
+          [
+            "10037582036521493946220744235066584499952915849340364471338818957980646037369",
+            "11836938341406771334795331468108183093050657597235791496506142224776199977022"
+          ]
+        ],
+        "pC": [
+          "6613167044838760142858252381544357974220628939096086696456011220906702509274",
+          "19727750651309447876339239227210103431420797379908626672167636515882770036991"
+        ],
+        "pubSignals": [
+          "12871503685100594422973318354704258231333279634450077721718100020384828502612",
+          "400",
+          "1110000000000000000",
+          "1458396017681449405285099580286377611644789685884003612712428643255116235592",
+          "17911822511750869365710679495659136848164808351145437789524556259629043596120",
+          "2220000000"
+        ],
+        "proofBytes": "0x0e6018df075c67829ac683b3f5ec279f892a9b2d41817ce72794fec4dfad270e1b883be6b45de6e0c614f7ef13de4ac2216e2103c4affe2f1ea2d8e976c2dc7b12ba8a1197db1b289fe2cc444a0aeedcd22888ce42c1ed9a2b215db9fb610a4a253f2894610380e092bad1a202bc915b199eb8b7aa7868a8e8d53cea836acef6163111f2476954edff01b01b598556bcd02df255fca6e266ed9c1292a8c8d7791a2b783d0335aa190bbf74595de5b5f1800fb69fc4af14d29cac72dd1050b83e0e9eeb7ec84ae63ba1bd331689bed7151cdce6e585391e8abf366d7e312f94da2b9d82dc8cf7424e68dc1a44dbb7e5bc896d69c78d8336818fdbe33696a2f8ff",
+        "calldata": "0xf398789b0e6018df075c67829ac683b3f5ec279f892a9b2d41817ce72794fec4dfad270e1b883be6b45de6e0c614f7ef13de4ac2216e2103c4affe2f1ea2d8e976c2dc7b12ba8a1197db1b289fe2cc444a0aeedcd22888ce42c1ed9a2b215db9fb610a4a253f2894610380e092bad1a202bc915b199eb8b7aa7868a8e8d53cea836acef6163111f2476954edff01b01b598556bcd02df255fca6e266ed9c1292a8c8d7791a2b783d0335aa190bbf74595de5b5f1800fb69fc4af14d29cac72dd1050b83e0e9eeb7ec84ae63ba1bd331689bed7151cdce6e585391e8abf366d7e312f94da2b9d82dc8cf7424e68dc1a44dbb7e5bc896d69c78d8336818fdbe33696a2f8ff1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc18325400000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000f67831e74af000003396c42ca0a5ebd9114a41f069b488a2c90159b0edbc613882ceff0043203482799bb764e5b16f31d704a79721d3f29907d2495b23f27b51a8333e238d8bb580000000000000000000000000000000000000000000000000000000084528300"
+      },
+      "proofSolana": {
+        "proofA": "0x0e6018df075c67829ac683b3f5ec279f892a9b2d41817ce72794fec4dfad270e14dc128c2cd3b948f23b4dc76da30d9b7613498da3c1cc5e1d7db32d61ba20cc",
+        "proofB": "0x12ba8a1197db1b289fe2cc444a0aeedcd22888ce42c1ed9a2b215db9fb610a4a253f2894610380e092bad1a202bc915b199eb8b7aa7868a8e8d53cea836acef6163111f2476954edff01b01b598556bcd02df255fca6e266ed9c1292a8c8d7791a2b783d0335aa190bbf74595de5b5f1800fb69fc4af14d29cac72dd1050b83e",
+        "proofC": "0x0e9eeb7ec84ae63ba1bd331689bed7151cdce6e585391e8abf366d7e312f94da2b9d82dc8cf7424e68dc1a44dbb7e5bc896d69c78d8336818fdbe33696a2f8ff",
+        "proof": "0x0e6018df075c67829ac683b3f5ec279f892a9b2d41817ce72794fec4dfad270e14dc128c2cd3b948f23b4dc76da30d9b7613498da3c1cc5e1d7db32d61ba20cc12ba8a1197db1b289fe2cc444a0aeedcd22888ce42c1ed9a2b215db9fb610a4a253f2894610380e092bad1a202bc915b199eb8b7aa7868a8e8d53cea836acef6163111f2476954edff01b01b598556bcd02df255fca6e266ed9c1292a8c8d7791a2b783d0335aa190bbf74595de5b5f1800fb69fc4af14d29cac72dd1050b83e0e9eeb7ec84ae63ba1bd331689bed7151cdce6e585391e8abf366d7e312f94da2b9d82dc8cf7424e68dc1a44dbb7e5bc896d69c78d8336818fdbe33696a2f8ff",
+        "publicInputs": [
+          "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000f67831e74af0000",
+          "0x03396c42ca0a5ebd9114a41f069b488a2c90159b0edbc613882ceff004320348",
+          "0x2799bb764e5b16f31d704a79721d3f29907d2495b23f27b51a8333e238d8bb58",
+          "0x0000000000000000000000000000000000000000000000000000000084528300"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "250000000000",
+        "incomeSalt": "18230047200198262316418915654416599788878025130872508535468946787793394053300",
+        "priorIncomeYtd": "200000000000",
+        "priorSalt": "15287337638460455267477442701299996837529818621706341647787371606713050125877",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1799020800",
+      "op": "pay",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1799020800",
+      "op": "claim",
+      "actor": "b1",
+      "series": "S1"
+    },
+    {
+      "t": "1799020800",
+      "op": "claim",
+      "actor": "b2",
+      "series": "S1"
+    },
+    {
+      "t": "1799020800",
+      "op": "claim",
+      "actor": "b3",
+      "series": "S1"
+    },
+    {
+      "t": "1799020800",
+      "op": "claim",
+      "actor": "b4",
+      "series": "S1"
+    },
+    {
+      "t": "1799020800",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "41167267750",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "41167267750",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "41167267750",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "41167267750",
+          "units": "100"
+        },
+        "issuer": {
+          "stable": "192537820000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "793109000",
+      "treasury": "42000000000",
+      "vault": "0",
+      "auctionEscrow": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x1c75034e5fab6a80d73cbc1a49e6b97aaf2913e48c51fd66429b680bcc183254",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "18655450000000000000000000",
+        "netAccWad": "17722677500000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "7462180000",
+        "feeCollected": "373109000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8107",
+        "lastPaidPeriod": "8107",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "fx": {
+        "0xf50d009be9a5f36203af322785fe5e0ebf21fbd322f08f25514701fafe423d1c": {
+          "sumWad": "244748100000000000000",
+          "count": "223",
+          "quarters": {
+            "8104": {
+              "ok": true,
+              "avgWad": "1085150000000000000",
+              "n": "54",
+              "flagged": false
+            },
+            "8105": {
+              "ok": false,
+              "avgWad": "1090000000000000000",
+              "n": "40",
+              "flagged": false
+            },
+            "8106": {
+              "ok": false,
+              "avgWad": "1100000000000000000",
+              "n": "64",
+              "flagged": true
+            },
+            "8107": {
+              "ok": true,
+              "avgWad": "1110000000000000000",
+              "n": "65",
+              "flagged": false
+            }
+          }
+        }
+      },
+      "note": "2026 payments in USDC: 1302180000, 2180000000, 1760000000, 2220000000; all OnTime"
+    }
+  ]
+}

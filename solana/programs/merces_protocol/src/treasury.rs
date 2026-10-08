@@ -1,10 +1,9 @@
-//! Treasury (SPEC §5.3): scheduled releases, issuer pause, early-draw hook.
+//! Treasury (SPEC v1.1 §5.3): scheduled releases, issuer pause, early-draw hook.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
-use merces_common::params::Tranche;
 use merces_common::status::SeriesStatus;
-use merces_common::treasury::claimable;
+use merces_common::treasury::vested;
 use merces_onchain::seeds::CONFIG;
 use merces_registry::state::{ProtocolConfig, Series};
 
@@ -35,39 +34,36 @@ pub struct ClaimRelease<'info> {
     pub stablecoin_program: Interface<'info, TokenInterface>,
 }
 
-/// `claim_release` (SPEC §5.3): `amount = min(vested(now), proceeds) − released_total`. Blocked
-/// only by the issuer's own pause, the derived `Late` status, or extinguishment (C11 §1).
+/// `claim_release` (SPEC §5.3): `cap = vested(extinguished_at == 0 ? now : extinguished_at)`,
+/// `amount = cap − released_total`. Blocked only by the issuer's own pause, the derived `Late`
+/// status or an underlying lateness masked by a hardship pause (C11 §1). Retired, Redeemed and
+/// Extinguished series keep releasing what has vested.
 pub fn claim_release<'info>(ctx: Context<'info, ClaimRelease<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
     let t = &ctx.accounts.treasury;
-    require!(t.finalized, ProtocolError::MintNotFinalized);
+    require!(t.mint_finalized, ProtocolError::MintNotFinalized);
     require!(
         !t.issuer_paused_releases,
         ProtocolError::ReleasesPausedByIssuer
     );
     let status = ledger.sync_status(now, series_key)?;
-    require!(
-        status != SeriesStatus::Extinguished,
-        ProtocolError::SeriesExtinguished
-    );
     require!(status != SeriesStatus::Late, ProtocolError::SeriesLate);
-    let schedule: Vec<Tranche> = series
-        .release_schedule
-        .iter()
-        .map(|x| Tranche::from(*x))
-        .collect();
-    let amount = claimable(
+    require!(!ledger.is_late_underlying(now)?, ProtocolError::SeriesLate);
+    let schedule = schedule_of(series);
+    let at = if t.extinguished_at == 0 {
+        now
+    } else {
+        t.extinguished_at
+    };
+    let cap = core::cmp::min(
+        vested(t.proceeds, &schedule, ledger.settlement_ts, at).map_err(math)?,
         t.proceeds,
-        &schedule,
-        ledger.settlement_ts,
-        now,
-        t.released_total,
-    )
-    .map_err(math)?;
-    require!(amount > 0, ProtocolError::NothingToRelease);
+    );
+    let amount = cap.saturating_sub(t.released_total);
+    require!(amount > 0, ProtocolError::NothingVested);
     let bump = [ctx.bumps.treasury_auth];
     let auth_seeds: &[&[u8]] = &[seeds::TREASURY_AUTH, series_key.as_ref(), &bump];
     transfer_stable(
@@ -139,7 +135,8 @@ pub struct RequestEarlyDraw<'info> {
 }
 
 /// Early draw (brief R7/D4): switched off while `early_draw_approver` is unset. Counts against
-/// vesting (`released_total`), never beyond `proceeds`.
+/// vesting (`released_total`), never beyond `proceeds`; unavailable once the estate is fixed by
+/// extinguishment.
 pub fn request_early_draw<'info>(
     ctx: Context<'info, RequestEarlyDraw<'info>>,
     amount: u64,
@@ -159,8 +156,8 @@ pub fn request_early_draw<'info>(
         ProtocolError::EarlyDrawApproverMismatch
     );
     let t = &ctx.accounts.treasury;
-    require!(t.finalized, ProtocolError::MintNotFinalized);
-    require!(amount > 0, ProtocolError::NothingToRelease);
+    require!(t.mint_finalized, ProtocolError::MintNotFinalized);
+    require!(amount > 0, ProtocolError::NothingVested);
     let status = ledger.sync_status(now, series_key)?;
     require!(
         status != SeriesStatus::Extinguished,

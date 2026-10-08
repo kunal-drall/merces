@@ -58,8 +58,12 @@ pub fn u64_field(v: u64) -> [u8; 32] {
 /// output are 32-byte big-endian field elements.
 #[allow(deprecated)]
 pub fn poseidon2(a: &[u8; 32], b: &[u8; 32]) -> Result<[u8; 32]> {
-    let h = solana_poseidon::hashv(solana_poseidon::Parameters::Bn254X5, solana_poseidon::Endianness::BigEndian, &[a, b])
-        .map_err(|_| error!(HelperError::PoseidonFailed))?;
+    let h = solana_poseidon::hashv(
+        solana_poseidon::Parameters::Bn254X5,
+        solana_poseidon::Endianness::BigEndian,
+        &[a, b],
+    )
+    .map_err(|_| error!(HelperError::PoseidonFailed))?;
     Ok(h.to_bytes())
 }
 
@@ -67,8 +71,12 @@ pub fn poseidon2(a: &[u8; 32], b: &[u8; 32]) -> Result<[u8; 32]> {
 #[allow(deprecated)]
 pub fn poseidon5(inputs: &[[u8; 32]; 5]) -> Result<[u8; 32]> {
     let refs: [&[u8]; 5] = [&inputs[0], &inputs[1], &inputs[2], &inputs[3], &inputs[4]];
-    let h = solana_poseidon::hashv(solana_poseidon::Parameters::Bn254X5, solana_poseidon::Endianness::BigEndian, &refs)
-        .map_err(|_| error!(HelperError::PoseidonFailed))?;
+    let h = solana_poseidon::hashv(
+        solana_poseidon::Parameters::Bn254X5,
+        solana_poseidon::Endianness::BigEndian,
+        &refs,
+    )
+    .map_err(|_| error!(HelperError::PoseidonFailed))?;
     Ok(h.to_bytes())
 }
 
@@ -83,9 +91,13 @@ pub enum SigError {
 
 /// Recovers the 20-byte Ethereum-style address of the secp256k1 key that signed `msg_hash`
 /// with the 65-byte `(r, s, v)` signature (SPEC §1.4).
-pub fn recover_eth_address(msg_hash: &[u8; 32], sig: &[u8]) -> core::result::Result<[u8; 20], SigError> {
+pub fn recover_eth_address(
+    msg_hash: &[u8; 32],
+    sig: &[u8],
+) -> core::result::Result<[u8; 20], SigError> {
     let (rs, recovery_id) = parse_signature(sig).ok_or(SigError::Malformed)?;
-    let pubkey = solana_secp256k1_recover::secp256k1_recover(msg_hash, recovery_id, &rs).map_err(|_| SigError::RecoveryFailed)?;
+    let pubkey = solana_secp256k1_recover::secp256k1_recover(msg_hash, recovery_id, &rs)
+        .map_err(|_| SigError::RecoveryFailed)?;
     let hash = keccak(&[&pubkey.to_bytes()]);
     let mut addr = [0u8; 20];
     addr.copy_from_slice(&hash[12..32]);
@@ -107,8 +119,11 @@ pub fn assert_zero_transfer_fee(mint: &AccountInfo) -> core::result::Result<(), 
     if *mint.owner != anchor_spl::token_2022::ID {
         return Ok(());
     }
-    let data = mint.try_borrow_data().map_err(|_| FeeCheckError::InvalidMint)?;
-    let state = StateWithExtensions::<MintState>::unpack(&data).map_err(|_| FeeCheckError::InvalidMint)?;
+    let data = mint
+        .try_borrow_data()
+        .map_err(|_| FeeCheckError::InvalidMint)?;
+    let state =
+        StateWithExtensions::<MintState>::unpack(&data).map_err(|_| FeeCheckError::InvalidMint)?;
     if let Ok(cfg) = state.get_extension::<TransferFeeConfig>() {
         for fee in [&cfg.older_transfer_fee, &cfg.newer_transfer_fee] {
             if u16::from(fee.transfer_fee_basis_points) != 0 || u64::from(fee.maximum_fee) != 0 {
@@ -133,11 +148,20 @@ pub struct TransferAccounts<'a, 'info> {
 /// `transfer_checked` through the mint's own token program, resolving transfer-hook extra accounts
 /// via `spl_token_2022::onchain` for Token-2022 mints and asserting the transfer fee is zero
 /// (SPEC §5.3). `amount == 0` is a no-op (SPEC §1.1 zero-amount rule).
-pub fn transfer_checked_hooked<'info>(accounts: TransferAccounts<'_, 'info>, amount: u64, decimals: u8, signer_seeds: &[&[&[u8]]]) -> Result<()> {
+pub fn transfer_checked_hooked<'info>(
+    accounts: TransferAccounts<'_, 'info>,
+    amount: u64,
+    decimals: u8,
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
     if amount == 0 {
         return Ok(());
     }
-    require_keys_eq!(*accounts.mint.owner, *accounts.token_program.key, HelperError::TokenProgramMismatch);
+    require_keys_eq!(
+        *accounts.mint.owner,
+        *accounts.token_program.key,
+        HelperError::TokenProgramMismatch
+    );
     assert_zero_transfer_fee(accounts.mint).map_err(|e| match e {
         FeeCheckError::InvalidMint => error!(HelperError::InvalidMint),
         FeeCheckError::TransferFeeNotZero => error!(HelperError::TransferFeeNotZero),
@@ -172,14 +196,16 @@ pub enum HelperError {
 /// Reads `mint.supply`.
 pub fn mint_supply(mint: &AccountInfo) -> Result<u64> {
     let data = mint.try_borrow_data()?;
-    let state = StateWithExtensions::<MintState>::unpack(&data).map_err(|_| error!(HelperError::InvalidMint))?;
+    let state = StateWithExtensions::<MintState>::unpack(&data)
+        .map_err(|_| error!(HelperError::InvalidMint))?;
     Ok(state.base.supply)
 }
 
 /// Reads `mint.decimals`.
 pub fn mint_decimals(mint: &AccountInfo) -> Result<u8> {
     let data = mint.try_borrow_data()?;
-    let state = StateWithExtensions::<MintState>::unpack(&data).map_err(|_| error!(HelperError::InvalidMint))?;
+    let state = StateWithExtensions::<MintState>::unpack(&data)
+        .map_err(|_| error!(HelperError::InvalidMint))?;
     Ok(state.base.decimals)
 }
 

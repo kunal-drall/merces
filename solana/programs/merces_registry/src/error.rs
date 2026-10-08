@@ -28,7 +28,9 @@ pub enum RegistryError {
     ReservePriceZero,
     #[msg("min_raise exceeds reserve_price × units_offered")]
     MinRaiseTooHigh,
-    #[msg("Release schedule must have 1..=24 tranches, bps summing to 10000, non-decreasing offsets")]
+    #[msg(
+        "Release schedule must have 1..=24 tranches, bps summing to 10000, non-decreasing offsets"
+    )]
     InvalidReleaseSchedule,
     #[msg("Tier flags must be non-zero and use only bits 0..=3")]
     InvalidTierFlags,

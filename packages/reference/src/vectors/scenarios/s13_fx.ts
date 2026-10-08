@@ -83,16 +83,16 @@ export const s13: Scenario = {
     await b.step({ op: "pay", actor: "issuer", series: "S1" });
 
     // Q3 2026: full coverage but one day deviates 3% from the cross-check → flagged
-    await snapRange(q3, 1, 92, () => 110_000_000n, (d) => (d === 40 ? 113_300_000n : 110_000_000n), (d) => (d === 40 ? "Chainlink 1.133 vs Pyth 1.10: 3% > 2% band → period flagged" : undefined));
+    await snapRange(q3, 3, 92, () => 110_000_000n, (d) => (d === 40 ? 113_300_000n : 110_000_000n), (d) => (d === 40 ? "Chainlink 1.133 vs Pyth 1.10: 3% > 2% band → period flagged" : undefined));
     await snap(noon(q4, 0), 111_000_000n, 111_000_000n, "first snapshot of Q4 closes Q3");
-    b.expect("S1", "Q3 fully covered but flagged → NeedsFallback", { [EURUSD]: [q3] });
+    b.expect("S1", "Q3 covered 64 of 66 trading days but flagged → NeedsFallback", { [EURUSD]: [q3] });
     b.at(ts(2026, 10, 3));
     const r3 = await b.report({ series: "S1", period: q3, incomeYtd: usdc(200_000), tier: 2, fxFallback: { attestor: "attestor2", rateWad: 1_100_000_000_000_000_000n }, note: "deviation fallback at 1.10: 1,600 EUR → 1,760 USDC" });
     if (r3.paymentUsd !== 1_760n * 1_000_000n) throw new Error(`r3 ${r3.paymentUsd}`);
     await b.step({ op: "pay", actor: "issuer", series: "S1" });
 
     // Q4 2026: normal again at exactly 1.11; the report uses the live end before 2027 starts snapshotting
-    await snapRange(q4, 1, 92, () => 111_000_000n, () => 111_000_000n);
+    await snapRange(q4, 2, 92, () => 111_000_000n, () => 111_000_000n);
     b.at(ts(2027, 1, 4));
     const r4 = await b.report({ series: "S1", period: q4, incomeYtd: usdc(250_000), tier: 2, note: "live end checkpoint, average 1.11 exactly: 2,000 EUR → 2,220 USDC" });
     if (r4.paymentUsd !== 2_220n * 1_000_000n) throw new Error(`r4 ${r4.paymentUsd}`);

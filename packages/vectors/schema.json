@@ -1,15 +1,16 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://merces.dev/schemas/parity-vector-1.json",
-  "title": "Merces parity vector",
+  "$id": "https://merces.dev/schemas/parity-vector-2.json",
+  "title": "Merces parity vector (schema 2, SPEC v1.1)",
   "description": "One scenario of SPEC.md §11. All integers are decimal strings, all byte strings are 0x-prefixed lowercase hex. `t` is the block time (unix seconds) the harness warps to before executing the step.",
   "type": "object",
-  "required": ["name", "description", "schema", "generatedBy", "config", "actors", "keys", "seriesPrivate", "steps"],
+  "required": ["name", "description", "schema", "specVersion", "generatedBy", "config", "actors", "keys", "seriesPrivate", "steps"],
   "additionalProperties": false,
   "properties": {
     "name": { "type": "string", "pattern": "^[0-9]{2}_[a-z0-9_]+$" },
     "description": { "type": "string" },
-    "schema": { "const": 1 },
+    "schema": { "const": 2 },
+    "specVersion": { "const": "1.1" },
     "generatedBy": { "type": "string" },
     "config": {
       "type": "object",
@@ -70,6 +71,7 @@
     "hex20": { "type": "string", "pattern": "^0x[0-9a-f]{40}$" },
     "hex": { "type": "string", "pattern": "^0x[0-9a-f]*$" },
     "nullableDec": { "oneOf": [{ "$ref": "#/definitions/dec" }, { "type": "null" }] },
+    "nullableString": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
     "step": {
       "oneOf": [{ "$ref": "#/definitions/expectStep" }, { "$ref": "#/definitions/expectRevertStep" }, { "$ref": "#/definitions/actionStep" }]
     },
@@ -115,36 +117,22 @@
         "routerBalance": { "$ref": "#/definitions/dec" },
         "windowEscrowStable": { "$ref": "#/definitions/dec" },
         "windowEscrowUnits": { "$ref": "#/definitions/dec" },
-        "ledger": {
-          "type": "object",
-          "required": [
-            "status", "raiseState", "unitsOutstanding", "unitsSold", "clearingPrice", "proceeds", "releasedTotal", "capPerUnit", "capMultipleWad",
-            "termsCommitment", "amendmentNonce", "paidPerUnitWad", "netAccWad", "carryWad", "grossReceived", "feeCollected", "refundedToIssuer",
-            "lastAcceptedPeriod", "lastPaidPeriod", "openDuePeriod", "openDueAmount", "routerCredit", "trueupDue", "pausedTotal", "pauseNonce",
-            "formalNoticeEmittedFor", "redemptionPrice", "unitsAtRedemption", "tailCapPerUnit", "tailAccWad", "finalAccWad", "extinguishNonce"
-          ],
-          "properties": {
-            "status": { "enum": ["OnTime", "InGrace", "Late", "Paused", "Retired", "Redeemed", "Extinguished"] },
-            "raiseState": { "enum": ["Draft", "Open", "Reveal", "Settling", "Settled", "Failed", "Cancelled"] },
-            "termsCommitment": { "$ref": "#/definitions/hex32" },
-            "lastAcceptedPeriod": { "$ref": "#/definitions/nullableDec" },
-            "lastPaidPeriod": { "$ref": "#/definitions/nullableDec" },
-            "openDuePeriod": { "$ref": "#/definitions/nullableDec" },
-            "formalNoticeEmittedFor": { "$ref": "#/definitions/nullableDec" }
-          },
-          "additionalProperties": { "$ref": "#/definitions/dec" }
-        },
-        "auction": {
-          "type": "object",
-          "required": ["bidCount", "revealedCount", "escrowTotal", "R", "qAt", "qAbove", "unitsSoldUpper", "bidsProcessed"],
-          "additionalProperties": { "$ref": "#/definitions/dec" }
-        },
+        "ledger": { "$ref": "#/definitions/ledger" },
+        "auction": { "$ref": "#/definitions/auction" },
+        "window": { "$ref": "#/definitions/window" },
         "holders": {
           "type": "object",
           "additionalProperties": {
             "type": "object",
-            "required": ["pending", "redeemedUnits"],
-            "properties": { "pending": { "$ref": "#/definitions/dec" }, "redeemedUnits": { "$ref": "#/definitions/dec" } }
+            "required": ["pending", "redeemedUnits", "pendingUnits", "pendingRefund", "delivered"],
+            "additionalProperties": false,
+            "properties": {
+              "pending": { "$ref": "#/definitions/dec" },
+              "redeemedUnits": { "$ref": "#/definitions/dec" },
+              "pendingUnits": { "$ref": "#/definitions/dec" },
+              "pendingRefund": { "$ref": "#/definitions/dec" },
+              "delivered": { "type": "boolean" }
+            }
           }
         },
         "fx": {
@@ -168,6 +156,103 @@
         }
       }
     },
+    "ledger": {
+      "type": "object",
+      "description": "Series ledger view. `status` is the DERIVED status at `t` (§6.4). `carryWad` is the reference's exact WAD-scaled remainder (0 ≤ carryWad < units_outstanding); `carry` = floor(carryWad / WAD) is the SPEC's base-unit carry (0 in every vector).",
+      "required": [
+        "status", "raiseState", "mintFinalized", "unitsOutstanding", "unitsSold", "clearingPrice", "proceeds", "releasedTotal", "capPerUnit", "capMultipleWad",
+        "termsCommitment", "amendmentNonce", "paidPerUnitWad", "netAccWad", "carryWad", "carry", "grossReceived", "feeCollected", "refundedToIssuer",
+        "lastAcceptedPeriod", "lastPaidPeriod", "openDuePeriod", "openDueAmount", "routerCredit", "trueupNonce", "trueupDue", "pauseNonce", "pauseCount", "pausedTotal",
+        "formalNoticeEmittedFor", "redemptionPrice", "unitsAtRedemption", "tailCapPerUnit", "tailAccWad", "tailExhausted", "extinguishedAt", "finalAccWad", "finalUnits", "extinguishNonce"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "enum": ["OnTime", "InGrace", "Late", "Paused", "Retired", "Redeemed", "Extinguished"] },
+        "raiseState": { "enum": ["Draft", "Open", "Reveal", "Settling", "Settled", "Failed", "Cancelled"] },
+        "mintFinalized": { "type": "boolean" },
+        "unitsOutstanding": { "$ref": "#/definitions/dec" },
+        "unitsSold": { "$ref": "#/definitions/dec" },
+        "clearingPrice": { "$ref": "#/definitions/dec" },
+        "proceeds": { "$ref": "#/definitions/dec" },
+        "releasedTotal": { "$ref": "#/definitions/dec" },
+        "capPerUnit": { "$ref": "#/definitions/dec" },
+        "capMultipleWad": { "$ref": "#/definitions/dec" },
+        "termsCommitment": { "$ref": "#/definitions/hex32" },
+        "amendmentNonce": { "$ref": "#/definitions/dec" },
+        "paidPerUnitWad": { "$ref": "#/definitions/dec" },
+        "netAccWad": { "$ref": "#/definitions/dec" },
+        "carryWad": { "$ref": "#/definitions/dec" },
+        "carry": { "$ref": "#/definitions/dec" },
+        "grossReceived": { "$ref": "#/definitions/dec" },
+        "feeCollected": { "$ref": "#/definitions/dec" },
+        "refundedToIssuer": { "$ref": "#/definitions/dec" },
+        "lastAcceptedPeriod": { "$ref": "#/definitions/nullableDec" },
+        "lastPaidPeriod": { "$ref": "#/definitions/nullableDec" },
+        "openDuePeriod": { "$ref": "#/definitions/nullableDec" },
+        "openDueAmount": { "$ref": "#/definitions/dec" },
+        "routerCredit": { "$ref": "#/definitions/dec" },
+        "trueupNonce": { "$ref": "#/definitions/dec" },
+        "trueupDue": { "$ref": "#/definitions/dec" },
+        "pauseNonce": { "$ref": "#/definitions/dec" },
+        "pauseCount": { "$ref": "#/definitions/dec" },
+        "pausedTotal": { "$ref": "#/definitions/dec" },
+        "formalNoticeEmittedFor": { "$ref": "#/definitions/nullableDec" },
+        "redemptionPrice": { "$ref": "#/definitions/dec" },
+        "unitsAtRedemption": { "$ref": "#/definitions/dec" },
+        "tailCapPerUnit": { "$ref": "#/definitions/dec" },
+        "tailAccWad": { "$ref": "#/definitions/dec" },
+        "tailExhausted": { "type": "boolean" },
+        "extinguishedAt": { "$ref": "#/definitions/dec" },
+        "finalAccWad": { "$ref": "#/definitions/dec" },
+        "finalUnits": { "$ref": "#/definitions/dec" },
+        "extinguishNonce": { "$ref": "#/definitions/dec" }
+      }
+    },
+    "auction": {
+      "type": "object",
+      "description": "Raise state: bid counters, the current settlement round (a wrong proposal is RECORDED as rejected, not reverted) and the exact one-pass results.",
+      "required": [
+        "bidCount", "revealedCount", "validCount", "escrowTotal", "auctionEscrowUnits", "tallyRound", "roundRejected", "rejectionReason", "clearingPrice", "qAbove", "qAt", "R",
+        "unitsSold", "proceeds", "unitsMinted", "bidsProcessed", "mintFinalized"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "bidCount": { "$ref": "#/definitions/dec" },
+        "revealedCount": { "$ref": "#/definitions/dec" },
+        "validCount": { "$ref": "#/definitions/dec" },
+        "escrowTotal": { "$ref": "#/definitions/dec" },
+        "auctionEscrowUnits": { "$ref": "#/definitions/dec" },
+        "tallyRound": { "$ref": "#/definitions/dec" },
+        "roundRejected": { "type": "boolean" },
+        "rejectionReason": { "oneOf": [{ "enum": ["ClaimMismatch", "InvalidClearingPrice"] }, { "type": "null" }] },
+        "clearingPrice": { "$ref": "#/definitions/dec" },
+        "qAbove": { "$ref": "#/definitions/dec" },
+        "qAt": { "$ref": "#/definitions/dec" },
+        "R": { "$ref": "#/definitions/dec" },
+        "unitsSold": { "$ref": "#/definitions/dec" },
+        "proceeds": { "$ref": "#/definitions/dec" },
+        "unitsMinted": { "$ref": "#/definitions/dec" },
+        "bidsProcessed": { "$ref": "#/definitions/dec" },
+        "mintFinalized": { "type": "boolean" }
+      }
+    },
+    "window": {
+      "type": "object",
+      "description": "The series' current (or last) transfer window.",
+      "required": ["period", "state", "tallyRound", "roundRejected", "clearingPrice", "branch", "matchedUnits", "escrowStable", "escrowUnits"],
+      "additionalProperties": false,
+      "properties": {
+        "period": { "$ref": "#/definitions/dec" },
+        "state": { "enum": ["Commit", "Reveal", "Settling", "Settled", "NoMatch", "Done"] },
+        "tallyRound": { "$ref": "#/definitions/dec" },
+        "roundRejected": { "type": "boolean" },
+        "clearingPrice": { "$ref": "#/definitions/nullableDec" },
+        "branch": { "oneOf": [{ "enum": ["SupplyLimited", "DemandLimited"] }, { "type": "null" }] },
+        "matchedUnits": { "$ref": "#/definitions/dec" },
+        "escrowStable": { "$ref": "#/definitions/dec" },
+        "escrowUnits": { "$ref": "#/definitions/dec" }
+      }
+    },
     "proof": {
       "type": "object",
       "required": ["pi_a", "pi_b", "pi_c", "protocol", "curve"],
@@ -187,14 +272,16 @@
           "enum": [
             "fund", "allowlist", "register_issuer", "deactivate_issuer", "register_attestor", "revoke_attestor", "register_verifier_key", "revoke_verifier_key",
             "set_flags", "set_fx_pair", "create_series", "set_contract_hash", "stop_issuance", "resume_issuance", "open_raise", "cancel_raise", "commit_bid",
-            "reveal_bid", "settle", "process_bid", "claim_release", "set_release_pause", "submit_report", "pay", "submit_trueup", "pay_trueup", "claim",
-            "register_holder", "burn_retired", "crank_status", "request_pause", "approve_pause", "end_pause", "route_income", "fx_snapshot", "redeem",
-            "claim_redemption", "claim_tail", "extinguish", "claim_final", "amend_terms", "open_window", "commit_ask", "window_commit_bid", "reveal_order",
-            "settle_window", "process_orders", "transfer_units"
+            "reveal_bid", "begin_settlement", "finalize_settlement", "process_bid", "deliver_bid", "claim_release", "set_release_pause", "submit_report", "pay",
+            "submit_trueup", "pay_trueup", "claim", "register_holder", "burn_retired", "retire_if_capped", "crank_status", "request_pause", "withdraw_pause_request",
+            "approve_pause", "end_pause", "route_income", "close_router_period", "fx_snapshot", "redeem", "claim_redemption", "claim_tail", "extinguish", "claim_final",
+            "amend_terms", "open_window", "commit_ask", "window_commit_bid", "reveal_order", "begin_window_settlement", "finalize_window", "process_orders", "transfer_units"
           ]
         },
         "actor": { "type": "string" },
         "series": { "type": "string" },
+        "priorIncomeCommitment": { "$ref": "#/definitions/hex32" },
+        "incomeCommitment": { "$ref": "#/definitions/hex32" },
         "proof": { "$ref": "#/definitions/proof" },
         "publicSignals": { "type": "array", "items": { "$ref": "#/definitions/dec" }, "minItems": 6, "maxItems": 6 },
         "proofEvm": {

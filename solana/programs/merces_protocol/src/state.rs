@@ -23,7 +23,9 @@ pub mod seeds {
     pub const ESCROW_AUTH: &[u8] = b"escrow_auth";
     pub const TREASURY_AUTH: &[u8] = b"treasury_auth";
     pub const ROUTER_AUTH: &[u8] = b"router_auth";
-    pub use merces_onchain::seeds::{AUCTION_ESCROW, ESCROW_ARM, REGISTRY_AUTHORITY, WINDOW_ESCROW};
+    pub use merces_onchain::seeds::{
+        AUCTION_ESCROW, ESCROW_ARM, REGISTRY_AUTHORITY, WINDOW_ESCROW,
+    };
     // stablecoin token accounts (PDAs owned by the authorities above)
     pub const ESCROW_TOKEN: &[u8] = b"escrow_token";
     pub const TREASURY_TOKEN: &[u8] = b"treasury_token";

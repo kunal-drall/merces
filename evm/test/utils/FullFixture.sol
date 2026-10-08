@@ -3,115 +3,127 @@ pragma solidity ^0.8.30;
 
 import {MercesFixture} from "./MercesFixture.sol";
 import {Proofs} from "./Proofs.sol";
-import {MercesAuction} from "../../src/MercesAuction.sol";
-import {MercesTreasury} from "../../src/MercesTreasury.sol";
-import {MercesIncome} from "../../src/MercesIncome.sol";
-import {MercesVault} from "../../src/MercesVault.sol";
-import {MercesFxAccumulator} from "../../src/MercesFxAccumulator.sol";
-import {Groth16Verifier} from "../../src/zk/Groth16Verifier.sol";
-import {MockPyth} from "../../src/mocks/MockPyth.sol";
-import {MockChainlinkAggregator} from "../../src/mocks/MockChainlinkAggregator.sol";
 import {IMercesIncome} from "../../src/interfaces/IMercesIncome.sol";
-import {IERC3643Token} from "../../src/interfaces/external/IERC3643Token.sol";
+import {IMercesAuction} from "../../src/interfaces/IMercesAuction.sol";
 import {MercesMessages} from "../../src/libraries/MercesMessages.sol";
 import {Periods} from "../../src/libraries/Periods.sol";
-import {
-    ProtocolContracts,
-    RaiseState,
-    ReleaseTranche,
-    SeriesMode,
-    SeriesParams,
-    TierFlags
-} from "../../src/types/MercesTypes.sol";
+import {SeriesParams, Tier1Terms, TierFlags} from "../../src/types/MercesTypes.sol";
 
-/// @notice Full protocol stack: real auction, treasury, income, FX accumulator and vault proxies. The window is
-/// a stand-in address until the window module joins the fixture.
+/// @notice Fixture with the standard raise (300 units at P0 = 100 USDC to b1..b3) and report / payment helpers.
 abstract contract FullFixture is MercesFixture {
-    MercesAuction internal auction;
-    MercesTreasury internal treasury;
-    MercesIncome internal income;
-    MercesVault internal vault;
-    MercesFxAccumulator internal fx;
-    Groth16Verifier internal groth16;
-    MockPyth internal pyth;
-
     uint64 internal constant P0 = 100e6; // 100 USDC per unit
     uint64 internal constant UNITS = 300;
     uint32 internal constant Q1_2026 = 8104;
 
-    function _deployProtocol() internal virtual override {
-        groth16 = new Groth16Verifier();
-        pyth = new MockPyth(0);
-        auction = MercesAuction(
-            deployProxy(
-                address(new MercesAuction()),
-                abi.encodeCall(MercesAuction.initialize, (address(timelock), address(registry)))
-            )
-        );
-        treasury = MercesTreasury(
-            deployProxy(
-                address(new MercesTreasury()),
-                abi.encodeCall(MercesTreasury.initialize, (address(timelock), address(registry)))
-            )
-        );
-        vault = MercesVault(
-            deployProxy(
-                address(new MercesVault()), abi.encodeCall(MercesVault.initialize, (address(timelock), address(registry)))
-            )
-        );
-        fx = MercesFxAccumulator(
-            deployProxy(
-                address(new MercesFxAccumulator()),
-                abi.encodeCall(MercesFxAccumulator.initialize, (address(timelock), address(registry), address(pyth)))
-            )
-        );
-        income = MercesIncome(
-            deployProxy(
-                address(new MercesIncome()),
-                abi.encodeCall(
-                    MercesIncome.initialize, (address(timelock), address(registry), address(groth16), address(fx))
-                )
-            )
-        );
-        _deployWindow();
-        auctionAddr = address(auction);
-        vaultAddr = address(vault);
-        _deployTokenUnit();
-        vm.prank(admin);
-        registry.setProtocolContracts(
-            ProtocolContracts({
-                auction: address(auction),
-                treasury: address(treasury),
-                income: address(income),
-                vault: address(vault),
-                window: windowAddr,
-                tokenFactory: address(tokenFactory)
-            })
-        );
+    // ---------------------------------------------------------------- auction helpers
+
+    struct BidPlan {
+        address bidder;
+        uint64 price;
+        uint64 quantity;
+        uint64 escrow;
+        bytes32 salt;
     }
 
-    /// @dev Overridden by the window fixture once the module exists.
-    function _deployWindow() internal virtual {
-        windowAddr = makeAddr("windowStub");
+    function plan(address bidder, uint64 price, uint64 quantity, uint64 escrow) internal pure returns (BidPlan memory) {
+        return BidPlan({
+            bidder: bidder,
+            price: price,
+            quantity: quantity,
+            escrow: escrow,
+            salt: keccak256(abi.encode(bidder, price, quantity))
+        });
+    }
+
+    /// @dev `p × q` plus the 1% auction fee.
+    function escrowFor(uint64 price, uint64 quantity) internal pure returns (uint64) {
+        uint256 cost = uint256(price) * quantity;
+        return uint64(cost + cost * 100 / 10_000);
+    }
+
+    function commit(uint256 seriesId, BidPlan memory b) internal {
+        fund(b.bidder, b.escrow);
+        vm.startPrank(b.bidder);
+        usdc.approve(address(auction), b.escrow);
+        auction.commitBid(seriesId, MercesMessages.orderCommitment(b.price, b.quantity, b.salt, b.bidder), b.escrow);
+        vm.stopPrank();
+    }
+
+    function reveal(uint256 seriesId, BidPlan memory b) internal {
+        vm.prank(b.bidder);
+        auction.revealBid(seriesId, b.price, b.quantity, b.salt);
+    }
+
+    function openRaise(uint256 seriesId) internal {
+        vm.prank(issuer);
+        auction.openRaise(seriesId);
+    }
+
+    function warpToReveal(uint256 seriesId) internal {
+        vm.warp(auction.getAuction(seriesId).commitEnd);
+    }
+
+    function warpToSettle(uint256 seriesId) internal {
+        vm.warp(auction.getAuction(seriesId).revealEnd);
+    }
+
+    /// @dev Proposes `(p*, q_above, q_at)`, tallies every page and finalizes, as a keeper.
+    function settle(uint256 seriesId, uint64 clearingPrice, uint64 qAbove, uint64 qAt) internal {
+        vm.startPrank(keeper);
+        auction.beginSettlement(seriesId, clearingPrice, qAbove, qAt);
+        tallyAll(seriesId);
+        auction.finalizeSettlement(seriesId);
+        vm.stopPrank();
+    }
+
+    function tallyAll(uint256 seriesId) internal {
+        uint256 n = auction.getAuction(seriesId).bidCount;
+        for (uint256 from = 0; from < n; from += 200) {
+            uint256 to = from + 200 > n ? n : from + 200;
+            auction.tallyBids(seriesId, from, to);
+        }
+    }
+
+    function processAll(uint256 seriesId) internal {
+        uint256 n = auction.getAuction(seriesId).bidCount;
+        for (uint256 i = 0; i < n; i++) {
+            vm.prank(keeper);
+            auction.processBid(seriesId, i);
+        }
+    }
+
+    function deliverAll(uint256 seriesId) internal {
+        uint256 n = auction.getAuction(seriesId).bidCount;
+        for (uint256 i = 0; i < n; i++) {
+            if (auction.getBid(seriesId, i).delivered) continue;
+            vm.prank(keeper);
+            auction.deliverBid(seriesId, i);
+        }
     }
 
     // ---------------------------------------------------------------- standard raise
 
-    /// @dev 1000 units offered at reserve 100 USDC, min raise 20,000 USDC, tier flags as given; b1..b3 each buy
-    /// 100 units at the reserve so P0 = 100 USDC, 300 units, proceeds 30,000 USDC, cap 250 USDC/unit.
+    /// @dev 1000 units offered at reserve 100 USDC, min raise 20,000 USDC; b1..b3 each buy 100 units at the reserve
+    /// so P0 = 100 USDC, 300 units, proceeds 30,000 USDC, cap 250 USDC/unit.
     function standardSeries(uint8 tierFlags, bytes32 fxPairId) internal returns (uint256 sid) {
         return standardSeries(tierFlags, fxPairId, Proofs.q1().termsCommitment);
     }
 
     function standardSeries(uint8 tierFlags, bytes32 fxPairId, bytes32 termsCommitment) internal returns (uint256 sid) {
+        return standardSeries(tierFlags, fxPairId, termsCommitment, P0, 47_336_400);
+    }
+
+    function standardSeries(uint8 tierFlags, bytes32 fxPairId, bytes32 termsCommitment, uint64 reserve, uint64 lockup)
+        internal
+        returns (uint256 sid)
+    {
         SeriesParams memory p = defaultSeriesParams();
         p.unitsOffered = 1000;
-        p.reservePrice = P0;
+        p.reservePrice = reserve;
         p.minRaise = 20_000e6;
-        vm.prank(issuer);
-        sid = registry.createSeries(p, defaultSchedule(), termsCommitment, tierFlags, fxPairId, SeriesMode.SealedBid, false);
-        vm.prank(issuer);
-        registry.setContractHash(sid, keccak256("contract"));
+        p.lockupSeconds = lockup;
+        Tier1Terms memory t1 = tierFlags & TierFlags.TIER1_SPLIT != 0 ? proofTier1Terms() : noTier1();
+        sid = createSeriesWith(p, defaultSchedule(), termsCommitment, tierFlags, fxPairId, t1);
     }
 
     function runStandardRaise(uint8 tierFlags, bytes32 fxPairId) internal returns (uint256 sid) {
@@ -119,47 +131,36 @@ abstract contract FullFixture is MercesFixture {
     }
 
     function runStandardRaise(uint8 tierFlags, bytes32 fxPairId, bytes32 termsCommitment) internal returns (uint256 sid) {
-        sid = standardSeries(tierFlags, fxPairId, termsCommitment);
+        return runStandardRaise(tierFlags, fxPairId, termsCommitment, P0, 47_336_400);
+    }
+
+    /// @dev Same raise at a different reserve price (P0 = `reserve`) and lockup; the bids follow the reserve.
+    function runStandardRaise(uint8 tierFlags, bytes32 fxPairId, bytes32 termsCommitment, uint64 reserve, uint64 lockup)
+        internal
+        returns (uint256 sid)
+    {
+        sid = standardSeries(tierFlags, fxPairId, termsCommitment, reserve, lockup);
         allow(b1);
         allow(b2);
         allow(b3);
-        vm.prank(issuer);
-        auction.openRaise(sid);
+        openRaise(sid);
         address[3] memory bidders = [b1, b2, b3];
-        uint64 escrow = uint64(uint256(P0) * 100 * 101 / 100);
+        uint64 escrow = escrowFor(reserve, 100);
         for (uint256 i = 0; i < 3; i++) {
-            fund(bidders[i], escrow);
-            vm.startPrank(bidders[i]);
-            usdc.approve(address(auction), escrow);
-            auction.commitBid(sid, MercesMessages.orderCommitment(P0, 100, keccak256(abi.encode(i)), bidders[i]), escrow);
-            vm.stopPrank();
+            commit(sid, plan(bidders[i], reserve, 100, escrow));
         }
-        vm.warp(auction.getAuction(sid).commitEnd);
+        warpToReveal(sid);
         for (uint256 i = 0; i < 3; i++) {
-            vm.prank(bidders[i]);
-            auction.revealBid(sid, P0, 100, keccak256(abi.encode(i)));
+            reveal(sid, plan(bidders[i], reserve, 100, escrow));
         }
-        vm.warp(auction.getAuction(sid).revealEnd);
-        vm.startPrank(keeper);
-        auction.beginSettlement(sid, P0);
-        auction.tallyBids(sid, 0, 3);
-        auction.finalizeSettlement(sid);
-        for (uint256 i = 0; i < 3; i++) {
-            auction.processBid(sid, i);
-        }
-        vm.stopPrank();
+        warpToSettle(sid);
+        settle(sid, reserve, 0, 300);
+        processAll(sid);
+        deliverAll(sid);
     }
 
     function runStandardRaise() internal returns (uint256 sid) {
         return runStandardRaise(TierFlags.TIER2_ZKTLS | TierFlags.TIER3_ATTESTOR, bytes32(0));
-    }
-
-    function unitToken(uint256 sid) internal view returns (IERC3643Token) {
-        return IERC3643Token(registry.getSeriesCore(sid).unitToken);
-    }
-
-    function settlementTs(uint256 sid) internal view returns (uint64) {
-        return registry.getSeriesCore(sid).settlementTs;
     }
 
     // ---------------------------------------------------------------- reports
@@ -173,11 +174,14 @@ abstract contract FullFixture is MercesFixture {
         r.period = period;
         r.paymentUsd = p.paymentUsd;
         r.fxAvgWad = p.fxAvgWad;
+        r.priorIncomeCommitment = p.priorCommitment;
         r.incomeCommitment = p.incomeCommitment;
         r.tier = tier;
         r.liquidityEvent = liquidityEvent;
         r.proof = IMercesIncome.Groth16Proof({a: p.a, b: p.b, c: p.c});
-        bytes32 digest = MercesMessages.reportDigest(domain, sid, period, p.incomeCommitment, tier);
+        bytes32 digest = MercesMessages.reportDigest(
+            domain, sid, period, p.priorCommitment, p.incomeCommitment, tier, liquidityEvent
+        );
         if (tier == 2) r.attestationSignature = sign(verifierKey, digest);
         else if (tier == 3) r.attestationSignature = sign(attestorKey, digest);
     }
@@ -210,7 +214,15 @@ abstract contract FullFixture is MercesFixture {
     }
 
     function extinguishSigs(uint256 sid, uint64 nonce) internal view returns (bytes memory a, bytes memory b) {
-        bytes32 d = MercesMessages.extinguishDigest(domain, sid, nonce);
-        return (sign(attestorKey, d), sign(attestor2Key, d));
+        bytes32 dg = MercesMessages.extinguishDigest(domain, sid, nonce);
+        return (sign(attestorKey, dg), sign(attestor2Key, dg));
+    }
+
+    function trueupSig(uint256 sid, uint64 nonce, uint16 year, int64 adjustment, uint64 attestationTs)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return sign(attestorKey, MercesMessages.trueupDigest(domain, sid, nonce, year, adjustment, attestationTs));
     }
 }

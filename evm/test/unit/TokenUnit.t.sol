@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.30;
 
-import {MercesFixture} from "../utils/MercesFixture.sol";
+import {FullFixture} from "../utils/FullFixture.sol";
 import {IERC3643Token} from "../../src/interfaces/external/IERC3643Token.sol";
-import {IMercesTokenFactory} from "../../src/interfaces/IMercesTokenFactory.sol";
 import {IAgentRole} from "../../src/interfaces/external/IAgentRole.sol";
+import {IIdentityRegistryLite} from "../../src/interfaces/external/IIdentityRegistryLite.sol";
 
 interface IModularComplianceLite {
     function getModules() external view returns (address[] memory);
@@ -17,60 +17,31 @@ interface IModuleLite {
     function name() external pure returns (string memory);
     function isPlugAndPlay() external pure returns (bool);
     function isComplianceBound(address compliance) external view returns (bool);
-    function window() external view returns (address);
+    function escrowsOf(address compliance) external view returns (address auction, address window);
+    function moduleTransferAction(address from, address to, uint256 value) external;
 }
 
-/// @dev Stand-in for the window escrow: exposes `armedDeposit` like `MercesWindow` does.
-contract WindowStub {
-    mapping(address => uint256) public armedDeposit;
-
-    function arm(address from, uint256 amount) external {
-        armedDeposit[from] = amount;
-    }
-
-    function pull(IERC3643Token token, address from, uint256 amount) external {
-        armedDeposit[from] = amount;
-        token.transferFrom(from, address(this), amount);
-        delete armedDeposit[from];
-    }
-
-    function push(IERC3643Token token, address to, uint256 amount) external {
-        token.transfer(to, amount);
-    }
-}
-
-contract TokenUnitTest is MercesFixture {
+/// @notice ERC-3643 unit token wiring and compliance rules (SPEC v1.1 §4.2, brief C10).
+contract TokenUnitTest is FullFixture {
+    uint256 internal sid;
     IERC3643Token internal token;
     address internal compliance;
-    WindowStub internal windowStub;
-
-    function _deployProtocol() internal override {
-        windowStub = new WindowStub();
-        windowAddr = address(windowStub);
-        auctionAddr = address(this);
-        vaultAddr = makeAddr("vaultStub");
-        _deployTokenUnit();
-    }
 
     function setUp() public override {
         super.setUp();
-        (address t, address c) = tokenFactory.createToken(1, "Merces HEU 1", "HEU");
-        token = IERC3643Token(t);
-        compliance = c;
-        allow(b1);
-        allow(b2);
-        allow(address(windowStub));
+        sid = runStandardRaise();
+        token = unitToken(sid);
+        compliance = token.compliance();
     }
 
     function test_factoryWiring() public view {
         assertEq(token.decimals(), 0);
-        assertEq(token.name(), "Merces HEU 1");
+        assertEq(token.name(), string.concat("Merces HEU ", vm.toString(sid)));
         assertEq(token.symbol(), "HEU");
         assertFalse(token.paused());
         assertEq(token.identityRegistry(), trex.identityRegistry);
-        assertEq(token.compliance(), compliance);
-        assertEq(token.owner(), address(timelock));
-        assertEq(IModularComplianceLite(compliance).owner(), address(timelock));
+        assertEq(token.owner(), governor);
+        assertEq(IModularComplianceLite(compliance).owner(), governor);
         assertEq(IModularComplianceLite(compliance).getTokenBound(), address(token));
         address[] memory mods = IModularComplianceLite(compliance).getModules();
         assertEq(mods.length, 1);
@@ -78,38 +49,46 @@ contract TokenUnitTest is MercesFixture {
         assertTrue(IModuleLite(complianceModule).isComplianceBound(compliance));
         assertTrue(IModuleLite(complianceModule).isPlugAndPlay());
         assertEq(IModuleLite(complianceModule).name(), "MercesComplianceModule");
-        assertEq(IModuleLite(complianceModule).window(), address(windowStub));
-        // agents: auction (mint) and vault (burn) only; factory removed itself
-        assertTrue(token.isAgent(address(this)));
-        assertTrue(token.isAgent(vaultAddr));
+        (address a, address w) = IModuleLite(complianceModule).escrowsOf(compliance);
+        assertEq(a, address(auction));
+        assertEq(w, address(window));
+        // agents: exactly auction, vault and window; the factory removed itself
+        assertTrue(token.isAgent(address(auction)));
+        assertTrue(token.isAgent(address(vault)));
+        assertTrue(token.isAgent(address(window)));
         assertFalse(token.isAgent(address(tokenFactory)));
-        assertFalse(token.isAgent(address(windowStub)));
-        assertEq(tokenFactory.tokenOf(1), address(token));
-        assertEq(tokenFactory.tokenOwner(), address(timelock));
+        assertFalse(token.isAgent(address(treasury)));
+        assertFalse(token.isAgent(address(income)));
+        assertEq(tokenFactory.tokenOf(sid), address(token));
+        assertEq(tokenFactory.tokenOwner(), governor);
+        assertEq(token.totalSupply(), 300);
     }
 
     function test_onlyAuctionCreatesTokens() public {
         vm.prank(stranger);
         vm.expectRevert(abi.encodeWithSignature("NotAuction()"));
-        tokenFactory.createToken(2, "x", "y");
+        tokenFactory.createToken(99, "x", "y");
+        vm.prank(address(auction));
         vm.expectRevert(abi.encodeWithSignature("TokenExists()"));
-        tokenFactory.createToken(1, "x", "y");
+        tokenFactory.createToken(sid, "x", "y");
     }
 
-    function test_mintToAllowlistedWorks_mintToOthersFails() public {
-        token.mint(b1, 10);
-        assertEq(token.balanceOf(b1), 10);
-        assertEq(token.totalSupply(), 10);
-        vm.expectRevert(bytes("Identity is not verified."));
-        token.mint(stranger, 1);
+    function test_mintOnlyToAuctionEscrowByAgents() public {
         // only agents mint
         vm.prank(b1);
         vm.expectRevert(bytes("AgentRole: caller does not have the Agent role"));
         token.mint(b1, 1);
+        // an agent may only mint to the auction escrow (compliance rule 1)
+        vm.prank(address(vault));
+        vm.expectRevert(bytes("Compliance not followed"));
+        token.mint(b1, 1);
+        vm.prank(address(vault));
+        token.mint(address(auction), 1);
+        assertEq(token.balanceOf(address(auction)), 1);
     }
 
     function test_directTransfersAlwaysFail() public {
-        token.mint(b1, 10);
+        assertEq(token.balanceOf(b1), 100);
         assertFalse(IModularComplianceLite(compliance).canTransfer(b1, b2, 1));
         vm.prank(b1);
         vm.expectRevert(bytes("Transfer not possible"));
@@ -124,65 +103,68 @@ contract TokenUnitTest is MercesFixture {
         vm.prank(b1);
         vm.expectRevert(bytes("Transfer not possible"));
         token.transfer(b2, 1);
+        // nor a push into the auction escrow
+        vm.prank(b1);
+        vm.expectRevert(bytes("Transfer not possible"));
+        token.transfer(address(auction), 1);
     }
 
-    function test_escrowDepositRequiresArming() public {
-        token.mint(b1, 10);
-        vm.prank(b1);
-        token.approve(address(windowStub), 10);
-        // direct push into the escrow address is refused
-        vm.prank(b1);
-        vm.expectRevert(bytes("Transfer not possible"));
-        token.transfer(address(windowStub), 3);
-        // the window arms the exact amount and pulls
-        windowStub.pull(token, b1, 3);
-        assertEq(token.balanceOf(address(windowStub)), 3);
-        assertEq(token.balanceOf(b1), 7);
-        // armed amount must match exactly
-        windowStub.arm(b1, 2);
-        vm.prank(b1);
-        vm.expectRevert(bytes("Transfer not possible"));
-        token.transfer(address(windowStub), 3);
+    function test_escrowRules() public view {
+        IModularComplianceLite c = IModularComplianceLite(compliance);
+        // mint: only to the auction escrow
+        assertTrue(c.canTransfer(address(0), address(auction), 5));
+        assertFalse(c.canTransfer(address(0), b1, 5));
+        assertFalse(c.canTransfer(address(0), address(window), 5));
+        // out of either escrow: always (deliveries, fills, returns)
+        assertTrue(c.canTransfer(address(auction), b1, 5));
+        assertTrue(c.canTransfer(address(window), b1, 5));
+        assertTrue(c.canTransfer(address(window), stranger, 5));
+        // into the window escrow: only when armed for exactly that amount
+        assertFalse(c.canTransfer(b1, address(window), 5));
+        assertEq(window.armedDeposit(b1), 0);
     }
 
-    function test_escrowReleaseToVerifiedWalletOnly() public {
-        token.mint(b1, 10);
-        vm.prank(b1);
-        token.approve(address(windowStub), 10);
-        windowStub.pull(token, b1, 4);
-        windowStub.push(token, b2, 4);
-        assertEq(token.balanceOf(b2), 4);
-        vm.prank(b2);
-        token.approve(address(windowStub), 4);
-        windowStub.pull(token, b2, 4);
-        vm.expectRevert(bytes("Transfer not possible"));
-        windowStub.push(token, stranger, 4); // not verified
+    function test_identityPersistsAfterRemovalFromAllowlist() public {
+        IIdentityRegistryLite ir = IIdentityRegistryLite(trex.identityRegistry);
+        assertTrue(ir.isVerified(b1));
+        disallow(b1);
+        assertFalse(registry.isAllowed(b1));
+        assertTrue(ir.isVerified(b1)); // identities are never deleted (SPEC §4.2)
+        // protocol-initiated movements to the wallet still work: a window return / auction delivery
+        vm.prank(address(window));
+        vm.expectRevert(bytes("Insufficient Balance")); // the escrow is empty here, but the compliance passed
+        token.transfer(b1, 1);
     }
 
     function test_burnByVaultAgentAlwaysWorks() public {
-        token.mint(b1, 10);
         disallow(b1); // removal from the allowlist never blocks burns
-        vm.prank(vaultAddr);
-        token.burn(b1, 10);
+        vm.prank(address(vault));
+        token.burn(b1, 100);
         assertEq(token.balanceOf(b1), 0);
-        assertEq(token.totalSupply(), 0);
+        assertEq(token.totalSupply(), 200);
+        vm.prank(stranger);
+        vm.expectRevert(bytes("AgentRole: caller does not have the Agent role"));
+        token.burn(b2, 1);
     }
 
     function test_moduleHooksOnlyFromBoundCompliance() public {
         vm.expectRevert(bytes("only bound compliance can call"));
-        IModuleLike(complianceModule).moduleTransferAction(b1, b2, 1);
+        IModuleLite(complianceModule).moduleTransferAction(b1, b2, 1);
     }
 
-    function test_timelockOwnsToken_noOneElseConfigures() public {
+    function test_governorIsADeadEnd() public {
+        // nobody but the governor may configure the token, and the governor exposes no function to do so
         vm.prank(admin);
         vm.expectRevert(bytes("Ownable: caller is not the owner"));
         IAgentRole(address(token)).addAgent(admin);
         vm.prank(address(timelock));
+        vm.expectRevert(bytes("Ownable: caller is not the owner"));
         IAgentRole(address(token)).addAgent(admin);
-        assertTrue(token.isAgent(admin));
+        (bool ok,) = governor.call(abi.encodeWithSignature("forward(address,bytes)", address(token), ""));
+        assertFalse(ok);
+        assertEq(IAgentRole(trex.identityRegistry).owner(), governor);
+        vm.prank(admin);
+        vm.expectRevert(bytes("Ownable: caller is not the owner"));
+        IAgentRole(trex.identityRegistry).addAgent(admin);
     }
-}
-
-interface IModuleLike {
-    function moduleTransferAction(address from, address to, uint256 value) external;
 }

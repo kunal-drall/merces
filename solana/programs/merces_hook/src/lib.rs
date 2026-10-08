@@ -15,14 +15,20 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::spl_token_2022::extension::transfer_hook::TransferHookAccount;
-use anchor_spl::token_interface::spl_token_2022::extension::{BaseStateWithExtensions, StateWithExtensions};
+use anchor_spl::token_interface::spl_token_2022::extension::{
+    BaseStateWithExtensions, StateWithExtensions,
+};
 use anchor_spl::token_interface::spl_token_2022::state::Account as TokenAccountState;
 use anchor_spl::token_interface::{Mint, Token2022, TokenAccount};
 use merces_onchain::seeds::{CONFIG, ESCROW_ARM};
 use merces_registry::state::{ProtocolConfig, Series, MODE_SEALED_BID};
 use spl_discriminator::SplDiscriminate;
-use spl_tlv_account_resolution::{account::ExtraAccountMeta, seeds::Seed, state::ExtraAccountMetaList};
-use spl_transfer_hook_interface::instruction::{ExecuteInstruction, InitializeExtraAccountMetaListInstruction};
+use spl_tlv_account_resolution::{
+    account::ExtraAccountMeta, seeds::Seed, state::ExtraAccountMetaList,
+};
+use spl_transfer_hook_interface::instruction::{
+    ExecuteInstruction, InitializeExtraAccountMetaListInstruction,
+};
 
 declare_id!("2PuKMkGkGLCwsDMLCmm2bcbzjxtabvt9LVJni154ezRt");
 
@@ -61,7 +67,10 @@ pub enum HookError {
 }
 
 /// The extra account metas for a mint, in order (indices 5..=8 of the `Execute` instruction).
-pub fn extra_account_metas(series: &Pubkey, protocol_program: &Pubkey) -> Result<Vec<ExtraAccountMeta>> {
+pub fn extra_account_metas(
+    series: &Pubkey,
+    protocol_program: &Pubkey,
+) -> Result<Vec<ExtraAccountMeta>> {
     let (config, _) = Pubkey::find_program_address(&[CONFIG], &merces_registry::ID);
     Ok(vec![
         // 5: ProtocolConfig
@@ -73,7 +82,12 @@ pub fn extra_account_metas(series: &Pubkey, protocol_program: &Pubkey) -> Result
         // 8: EscrowArm = PDA(protocol_program, [ESCROW_ARM, mint]) — mint is account index 1
         ExtraAccountMeta::new_external_pda_with_seeds(
             7,
-            &[Seed::Literal { bytes: ESCROW_ARM.to_vec() }, Seed::AccountKey { index: 1 }],
+            &[
+                Seed::Literal {
+                    bytes: ESCROW_ARM.to_vec(),
+                },
+                Seed::AccountKey { index: 1 },
+            ],
             false,
             false,
         )?,
@@ -88,11 +102,23 @@ pub mod merces_hook {
     /// `auction_authority` PDA) must sign, so only `merces_protocol::open_raise` can call this
     /// for a Merces mint, and the registry must already map the series to the mint.
     #[instruction(discriminator = InitializeExtraAccountMetaListInstruction::SPL_DISCRIMINATOR_SLICE)]
-    pub fn initialize_extra_account_meta_list(ctx: Context<InitializeExtraAccountMetaList>) -> Result<()> {
+    pub fn initialize_extra_account_meta_list(
+        ctx: Context<InitializeExtraAccountMetaList>,
+    ) -> Result<()> {
         let authority: Option<Pubkey> = ctx.accounts.mint.mint_authority.into();
-        require!(authority == Some(ctx.accounts.mint_authority.key()), HookError::MintAuthorityMismatch);
-        require_keys_eq!(ctx.accounts.series.unit_mint, ctx.accounts.mint.key(), HookError::SeriesMintMismatch);
-        let metas = extra_account_metas(&ctx.accounts.series.key(), &ctx.accounts.config.protocol_program)?;
+        require!(
+            authority == Some(ctx.accounts.mint_authority.key()),
+            HookError::MintAuthorityMismatch
+        );
+        require_keys_eq!(
+            ctx.accounts.series.unit_mint,
+            ctx.accounts.mint.key(),
+            HookError::SeriesMintMismatch
+        );
+        let metas = extra_account_metas(
+            &ctx.accounts.series.key(),
+            &ctx.accounts.config.protocol_program,
+        )?;
         let mut data = ctx.accounts.extra_account_meta_list.try_borrow_mut_data()?;
         ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &metas)?;
         Ok(())
@@ -102,20 +128,35 @@ pub mod merces_hook {
     #[instruction(discriminator = ExecuteInstruction::SPL_DISCRIMINATOR_SLICE)]
     pub fn execute(ctx: Context<Execute>, amount: u64) -> Result<()> {
         // 1. transferring flags
-        require!(is_transferring(&ctx.accounts.source_token.to_account_info())?, HookError::ProgramCalledOutsideOfTransfer);
-        require!(is_transferring(&ctx.accounts.destination_token.to_account_info())?, HookError::ProgramCalledOutsideOfTransfer);
+        require!(
+            is_transferring(&ctx.accounts.source_token.to_account_info())?,
+            HookError::ProgramCalledOutsideOfTransfer
+        );
+        require!(
+            is_transferring(&ctx.accounts.destination_token.to_account_info())?,
+            HookError::ProgramCalledOutsideOfTransfer
+        );
         // the resolved extra accounts must be exactly the mint's list
         {
             let list = ctx.accounts.extra_account_meta_list.try_borrow_data()?;
             let infos: Vec<AccountInfo> = ctx.accounts.to_account_infos();
             let mut ix_data = ExecuteInstruction::SPL_DISCRIMINATOR_SLICE.to_vec();
             ix_data.extend_from_slice(&amount.to_le_bytes());
-            ExtraAccountMetaList::check_account_infos::<ExecuteInstruction>(&infos, &ix_data, &crate::ID, &list)
-                .map_err(|_| HookError::ExtraAccountsMismatch)?;
+            ExtraAccountMetaList::check_account_infos::<ExecuteInstruction>(
+                &infos,
+                &ix_data,
+                &crate::ID,
+                &list,
+            )
+            .map_err(|_| HookError::ExtraAccountsMismatch)?;
         }
         // 2. series by mint
         let series = &ctx.accounts.series;
-        require_keys_eq!(series.unit_mint, ctx.accounts.mint.key(), HookError::SeriesMintMismatch);
+        require_keys_eq!(
+            series.unit_mint,
+            ctx.accounts.mint.key(),
+            HookError::SeriesMintMismatch
+        );
         require!(series.mode == MODE_SEALED_BID, HookError::CurveModeNoHook);
 
         let source = ctx.accounts.source_token.key();
@@ -126,9 +167,15 @@ pub mod merces_hook {
         }
         // 4. armed deposit into the window escrow
         if destination == series.window_escrow_ata {
-            let (armed_owner, armed_units) = read_arm(&ctx.accounts.escrow_arm, &ctx.accounts.config.protocol_program, &ctx.accounts.mint.key())?;
+            let (armed_owner, armed_units) = read_arm(
+                &ctx.accounts.escrow_arm,
+                &ctx.accounts.config.protocol_program,
+                &ctx.accounts.mint.key(),
+            )?;
             require!(
-                armed_owner == ctx.accounts.source_token.owner && armed_units == amount && amount > 0,
+                armed_owner == ctx.accounts.source_token.owner
+                    && armed_units == amount
+                    && amount > 0,
                 HookError::UnarmedEscrowDeposit
             );
             return Ok(());
@@ -140,15 +187,19 @@ pub mod merces_hook {
 
 fn is_transferring(acc: &AccountInfo) -> Result<bool> {
     let data = acc.try_borrow_data()?;
-    let state = StateWithExtensions::<TokenAccountState>::unpack(&data).map_err(|_| HookError::InvalidTokenAccount)?;
-    let ext = state.get_extension::<TransferHookAccount>().map_err(|_| HookError::ProgramCalledOutsideOfTransfer)?;
+    let state = StateWithExtensions::<TokenAccountState>::unpack(&data)
+        .map_err(|_| HookError::InvalidTokenAccount)?;
+    let ext = state
+        .get_extension::<TransferHookAccount>()
+        .map_err(|_| HookError::ProgramCalledOutsideOfTransfer)?;
     Ok(bool::from(ext.transferring))
 }
 
 /// Validates the `EscrowArm` PDA (owner = protocol program, seeds `[ESCROW_ARM, mint]`) and reads
 /// `(armed_owner, armed_units)`.
 fn read_arm(arm: &AccountInfo, protocol_program: &Pubkey, mint: &Pubkey) -> Result<(Pubkey, u64)> {
-    let (expected, _) = Pubkey::find_program_address(&[ESCROW_ARM, mint.as_ref()], protocol_program);
+    let (expected, _) =
+        Pubkey::find_program_address(&[ESCROW_ARM, mint.as_ref()], protocol_program);
     require_keys_eq!(*arm.key, expected, HookError::EscrowArmMismatch);
     require_keys_eq!(*arm.owner, *protocol_program, HookError::EscrowArmMismatch);
     let data = arm.try_borrow_data()?;

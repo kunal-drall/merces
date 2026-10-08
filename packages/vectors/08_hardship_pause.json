@@ -1,7 +1,8 @@
 {
   "name": "08_hardship_pause",
-  "description": "An attestor-approved hardship pause (10 April – 10 June 2026) spans the Q1 deadline: the clock stops for 61 days, the status reads Paused, releases keep flowing, the deadline and grace move by 61 days and the payment on 10 July carries no accrual; a second pause is ended early by the issuer.",
-  "schema": 1,
+  "description": "An attestor-approved hardship pause (10 April – 10 June 2026) spans the Q1 deadline: Q1's countdown stops for 61 days, the status reads Paused, releases keep flowing, Q1's deadline and grace move by 61 days while Q2's clock (starting 1 July) is untouched, the payment on 10 July carries no accrual; a request is withdrawn (nonce advances), bounds are enforced, and a second pause is ended early by the issuer.",
+  "schema": 2,
+  "specVersion": "1.1",
   "generatedBy": "packages/reference/src/vectors/generate.ts (pnpm vectors)",
   "config": {
     "parameters": {
@@ -27,6 +28,9 @@
       "fx_max_staleness_seconds": "3600",
       "fx_max_conf_bps": "100",
       "fx_deviation_band_bps": "200",
+      "max_pause_seconds": "31536000",
+      "max_cumulative_pause_seconds": "63072000",
+      "max_pauses": "16",
       "max_release_tranches": "24"
     },
     "flags": {
@@ -35,7 +39,7 @@
       "tier4Enabled": false
     },
     "stablecoinDecimals": 6,
-    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
+    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces, prior/income commitments, liquidity flags) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
   },
   "actors": [
     "attestor1",
@@ -275,9 +279,16 @@
     },
     {
       "t": "1768352400",
-      "op": "settle",
+      "op": "begin_settlement",
       "series": "S1",
-      "clearingPrice": "105000000"
+      "clearingPrice": "105000000",
+      "qAboveClaim": "300",
+      "qAtClaim": "100"
+    },
+    {
+      "t": "1768352400",
+      "op": "finalize_settlement",
+      "series": "S1"
     },
     {
       "t": "1768352460",
@@ -304,6 +315,30 @@
       "bidder": "b4"
     },
     {
+      "t": "1768352700",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768352760",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768352820",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768352880",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
       "t": "1768867200",
       "op": "claim_release",
       "actor": "issuer",
@@ -319,24 +354,25 @@
       "paymentUsd": "2000000000",
       "fxAvgWad": "1000000000000000000",
       "fxFallback": null,
+      "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
       "incomeCommitment": "0x3021fd8d83e6e5df27a56d7a5f99fe836d1626f3b8073527f2f927453606d6a6",
       "tier": 2,
       "liquidityEvent": false,
       "attestation": "verifier1",
       "proof": {
         "pi_a": [
-          "19210709237004302442943588186993266828656037195101861246170947010242497135657",
-          "14856957011979754701082680184228167385411594545630071888924103319389592288137",
+          "5334571680488104431191285002476376517377694951259518594515541344920573967510",
+          "3675366942574763404046518135672795993142476130889028202809609353653560193204",
           "1"
         ],
         "pi_b": [
           [
-            "17942347611400088770006105130681722170793497395719834793136061406483283197880",
-            "6017321347151701594278449415321808118070783395727270890369652913794351664846"
+            "18094788677386688189686957114750790037702022286591369886416581429830881819707",
+            "16580119148728237501045135402330446207871365896822876593055832266182025406350"
           ],
           [
-            "19473710553470429697263409224463898448699475260637749306128901095079992143218",
-            "21181400200242281864456625463905628648302135846619405855305093954443797630767"
+            "9584532182793497931491746443791397973558799824411082598572322139871713170227",
+            "6505208709119080299096379849276307259703107738517501406026495732238953244507"
           ],
           [
             "1",
@@ -344,8 +380,8 @@
           ]
         ],
         "pi_c": [
-          "11253525959714869361824116826716621527321582941130650606001991034108347579199",
-          "8139658164303257536836808439275683396855529739879504339356867785572046830602",
+          "1731035808970497106394454294688649122239347976706222351364658953282757432281",
+          "19112686916625267342399393693445490388814763963689376179461556966196818730582",
           "1"
         ],
         "protocol": "groth16",
@@ -361,22 +397,22 @@
       ],
       "proofEvm": {
         "pA": [
-          "19210709237004302442943588186993266828656037195101861246170947010242497135657",
-          "14856957011979754701082680184228167385411594545630071888924103319389592288137"
+          "5334571680488104431191285002476376517377694951259518594515541344920573967510",
+          "3675366942574763404046518135672795993142476130889028202809609353653560193204"
         ],
         "pB": [
           [
-            "6017321347151701594278449415321808118070783395727270890369652913794351664846",
-            "17942347611400088770006105130681722170793497395719834793136061406483283197880"
+            "16580119148728237501045135402330446207871365896822876593055832266182025406350",
+            "18094788677386688189686957114750790037702022286591369886416581429830881819707"
           ],
           [
-            "21181400200242281864456625463905628648302135846619405855305093954443797630767",
-            "19473710553470429697263409224463898448699475260637749306128901095079992143218"
+            "6505208709119080299096379849276307259703107738517501406026495732238953244507",
+            "9584532182793497931491746443791397973558799824411082598572322139871713170227"
           ]
         ],
         "pC": [
-          "11253525959714869361824116826716621527321582941130650606001991034108347579199",
-          "8139658164303257536836808439275683396855529739879504339356867785572046830602"
+          "1731035808970497106394454294688649122239347976706222351364658953282757432281",
+          "19112686916625267342399393693445490388814763963689376179461556966196818730582"
         ],
         "pubSignals": [
           "11772623398991248159346554101417359751440547629698149343596607856691440656469",
@@ -386,14 +422,14 @@
           "21771072642203587515879145691146034460814758117300375825527603916396082681510",
           "2000000000"
         ],
-        "proofBytes": "0x2a78e0489c116113954c2b00cc56e19eb1f63a23f1782960fa12e05c29dac42920d8bd5b4b1847159a0221dd00da7110a604de9ec8d8c9c73e61211d39fefb890d4daee583e2b69560a757fbadbebcec30acf99a5a93d72f2d72917ca2ac8ece27ab02452e0563900e238e9278b0f21891bb35a5da6d0630ece8f3df6bc03fb82ed43f67077364a09020418d557dd4ba91d3b57d78330b921de6e570c3248f2f2b0dbac59dcbc75f575f860a710ec6db62fd30cc1e395fa8745c767f9a08ad7218e1451d11239bea789dd5d1c19690ce4ce1c537d251b61cf212f6ffd47e7b3f11fee21d4677eaaf192b6a657206d3fbe21c4f5f0d59501dae4c15822fff7c0a",
-        "calldata": "0xf398789b2a78e0489c116113954c2b00cc56e19eb1f63a23f1782960fa12e05c29dac42920d8bd5b4b1847159a0221dd00da7110a604de9ec8d8c9c73e61211d39fefb890d4daee583e2b69560a757fbadbebcec30acf99a5a93d72f2d72917ca2ac8ece27ab02452e0563900e238e9278b0f21891bb35a5da6d0630ece8f3df6bc03fb82ed43f67077364a09020418d557dd4ba91d3b57d78330b921de6e570c3248f2f2b0dbac59dcbc75f575f860a710ec6db62fd30cc1e395fa8745c767f9a08ad7218e1451d11239bea789dd5d1c19690ce4ce1c537d251b61cf212f6ffd47e7b3f11fee21d4677eaaf192b6a657206d3fbe21c4f5f0d59501dae4c15822fff7c0a1a07119736703a11d329633c82c60c139767da9081eb2f99e48a3d1c39da205500000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648643021fd8d83e6e5df27a56d7a5f99fe836d1626f3b8073527f2f927453606d6a60000000000000000000000000000000000000000000000000000000077359400"
+        "proofBytes": "0x0bcb42b4e2afbde2b5fa6a0e25ad55f014679ffea44dc9dff17052b0d731fc9608202f18b1bea69d37f6652c1dc56121ac796d25e39617fc6413fa34c84eb0b424a803cf4184aceb7c716b5352e5888a7a1d109c739968112532b0665d4de78e2801499693552839acb13de8592bf474912975c53bb7bd3c297b0a2a6cc6bc3b0e61d1518dbf333ea1d02fb2f5e4dc7048591cf9826adf7f5a1886dd756c675b1530a7293d217574fe02e6784b25f5a4ad5f89f2fb74cc2231ad7f9bc4a4133303d3bb46b26a5c6d3c7b6e02e605849c1989344b7dc96b09dd52aadea3e593d92a4165beac4feb945d1536594cc66b4b8e52742578cac73c8f9a177ad23bde56",
+        "calldata": "0xf398789b0bcb42b4e2afbde2b5fa6a0e25ad55f014679ffea44dc9dff17052b0d731fc9608202f18b1bea69d37f6652c1dc56121ac796d25e39617fc6413fa34c84eb0b424a803cf4184aceb7c716b5352e5888a7a1d109c739968112532b0665d4de78e2801499693552839acb13de8592bf474912975c53bb7bd3c297b0a2a6cc6bc3b0e61d1518dbf333ea1d02fb2f5e4dc7048591cf9826adf7f5a1886dd756c675b1530a7293d217574fe02e6784b25f5a4ad5f89f2fb74cc2231ad7f9bc4a4133303d3bb46b26a5c6d3c7b6e02e605849c1989344b7dc96b09dd52aadea3e593d92a4165beac4feb945d1536594cc66b4b8e52742578cac73c8f9a177ad23bde561a07119736703a11d329633c82c60c139767da9081eb2f99e48a3d1c39da205500000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648643021fd8d83e6e5df27a56d7a5f99fe836d1626f3b8073527f2f927453606d6a60000000000000000000000000000000000000000000000000000000077359400"
       },
       "proofSolana": {
-        "proofA": "0x2a78e0489c116113954c2b00cc56e19eb1f63a23f1782960fa12e05c29dac4290f8b9117961959141e4e23d980a6e74cf17c8bf29f9900c5fdbf6af99e7e01be",
-        "proofB": "0x0d4daee583e2b69560a757fbadbebcec30acf99a5a93d72f2d72917ca2ac8ece27ab02452e0563900e238e9278b0f21891bb35a5da6d0630ece8f3df6bc03fb82ed43f67077364a09020418d557dd4ba91d3b57d78330b921de6e570c3248f2f2b0dbac59dcbc75f575f860a710ec6db62fd30cc1e395fa8745c767f9a08ad72",
-        "proofC": "0x18e1451d11239bea789dd5d1c19690ce4ce1c537d251b61cf212f6ffd47e7b3f11fee21d4677eaaf192b6a657206d3fbe21c4f5f0d59501dae4c15822fff7c0a",
-        "proof": "0x2a78e0489c116113954c2b00cc56e19eb1f63a23f1782960fa12e05c29dac4290f8b9117961959141e4e23d980a6e74cf17c8bf29f9900c5fdbf6af99e7e01be0d4daee583e2b69560a757fbadbebcec30acf99a5a93d72f2d72917ca2ac8ece27ab02452e0563900e238e9278b0f21891bb35a5da6d0630ece8f3df6bc03fb82ed43f67077364a09020418d557dd4ba91d3b57d78330b921de6e570c3248f2f2b0dbac59dcbc75f575f860a710ec6db62fd30cc1e395fa8745c767f9a08ad7218e1451d11239bea789dd5d1c19690ce4ce1c537d251b61cf212f6ffd47e7b3f11fee21d4677eaaf192b6a657206d3fbe21c4f5f0d59501dae4c15822fff7c0a",
+        "proofA": "0x0bcb42b4e2afbde2b5fa6a0e25ad55f014679ffea44dc9dff17052b0d731fc9628441f5a2f72f98c8059e08a63bbf73beb07fd6b84dbb290d80c91e2102e4c93",
+        "proofB": "0x24a803cf4184aceb7c716b5352e5888a7a1d109c739968112532b0665d4de78e2801499693552839acb13de8592bf474912975c53bb7bd3c297b0a2a6cc6bc3b0e61d1518dbf333ea1d02fb2f5e4dc7048591cf9826adf7f5a1886dd756c675b1530a7293d217574fe02e6784b25f5a4ad5f89f2fb74cc2231ad7f9bc4a41333",
+        "proofC": "0x03d3bb46b26a5c6d3c7b6e02e605849c1989344b7dc96b09dd52aadea3e593d92a4165beac4feb945d1536594cc66b4b8e52742578cac73c8f9a177ad23bde56",
+        "proof": "0x0bcb42b4e2afbde2b5fa6a0e25ad55f014679ffea44dc9dff17052b0d731fc9628441f5a2f72f98c8059e08a63bbf73beb07fd6b84dbb290d80c91e2102e4c9324a803cf4184aceb7c716b5352e5888a7a1d109c739968112532b0665d4de78e2801499693552839acb13de8592bf474912975c53bb7bd3c297b0a2a6cc6bc3b0e61d1518dbf333ea1d02fb2f5e4dc7048591cf9826adf7f5a1886dd756c675b1530a7293d217574fe02e6784b25f5a4ad5f89f2fb74cc2231ad7f9bc4a4133303d3bb46b26a5c6d3c7b6e02e605849c1989344b7dc96b09dd52aadea3e593d92a4165beac4feb945d1536594cc66b4b8e52742578cac73c8f9a177ad23bde56",
         "publicInputs": [
           "0x1a07119736703a11d329633c82c60c139767da9081eb2f99e48a3d1c39da2055",
           "0x0000000000000000000000000000000000000000000000000000000000000190",
@@ -413,7 +449,32 @@
       }
     },
     {
-      "t": "1775779200",
+      "t": "1775606400",
+      "op": "expect_revert",
+      "call": {
+        "op": "approve_pause",
+        "series": "S1",
+        "pauseEnd": "1781049600",
+        "attestor": "attestor1"
+      },
+      "error": "PauseNotRequested"
+    },
+    {
+      "t": "1775606400",
+      "note": "no reason is stored on-chain; nonce 1",
+      "op": "request_pause",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1775606400",
+      "note": "withdrawing advances the nonce (2): a signature over nonce 1 is dead",
+      "op": "withdraw_pause_request",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1775606400",
       "op": "expect_revert",
       "call": {
         "op": "approve_pause",
@@ -425,7 +486,7 @@
     },
     {
       "t": "1775779200",
-      "note": "no reason is stored on-chain",
+      "note": "nonce 3",
       "op": "request_pause",
       "actor": "issuer",
       "series": "S1"
@@ -447,6 +508,18 @@
       "call": {
         "op": "approve_pause",
         "series": "S1",
+        "pauseEnd": "1807401600",
+        "attestor": "attestor1"
+      },
+      "error": "PauseTooLong",
+      "note": "366 days > max_pause_seconds (365 d)"
+    },
+    {
+      "t": "1775779200",
+      "op": "expect_revert",
+      "call": {
+        "op": "approve_pause",
+        "series": "S1",
         "pauseEnd": "1781049600",
         "attestor": "verifier1"
       },
@@ -455,7 +528,7 @@
     },
     {
       "t": "1775779200",
-      "note": "pause 10 April → 10 June (61 days)",
+      "note": "pause 10 April → 10 June (61 days); pausedTotal = 61 d",
       "op": "approve_pause",
       "series": "S1",
       "pauseEnd": "1781049600",
@@ -494,6 +567,7 @@
       "ledger": {
         "status": "Paused",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -506,6 +580,7 @@
         "paidPerUnitWad": "0",
         "netAccWad": "0",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "0",
         "feeCollected": "0",
         "refundedToIssuer": "0",
@@ -514,46 +589,72 @@
         "openDuePeriod": "8104",
         "openDueAmount": "2000000000",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
-        "pauseNonce": "1",
+        "pauseNonce": "3",
+        "pauseCount": "1",
+        "pausedTotal": "5270400",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "status Paused; pauseNonce 1"
+      "note": "status Paused; pauseNonce 3; pauseCount 1"
     },
     {
       "t": "1775779200",
@@ -571,6 +672,12 @@
         "attestor": "attestor2"
       },
       "error": "AlreadyPaused"
+    },
+    {
+      "t": "1775779200",
+      "op": "withdraw_pause_request",
+      "actor": "issuer",
+      "series": "S1"
     },
     {
       "t": "1776643200",
@@ -617,6 +724,7 @@
       "ledger": {
         "status": "Paused",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -629,6 +737,7 @@
         "paidPerUnitWad": "0",
         "netAccWad": "0",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "0",
         "feeCollected": "0",
         "refundedToIssuer": "0",
@@ -637,50 +746,76 @@
         "openDuePeriod": "8104",
         "openDueAmount": "2000000000",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "3024000",
-        "pauseNonce": "1",
+        "pauseNonce": "5",
+        "pauseCount": "1",
+        "pausedTotal": "5270400",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "15 May, past the nominal deadline: Paused, pausedTotal so far 35 days"
+      "note": "15 May, past the nominal deadline: Paused"
     },
     {
       "t": "1781136000",
-      "note": "pause ended: paused_total = 61 days = 5,270,400 s",
+      "note": "pause over",
       "op": "crank_status",
       "series": "S1"
     },
@@ -717,6 +852,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -729,6 +865,7 @@
         "paidPerUnitWad": "0",
         "netAccWad": "0",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "0",
         "feeCollected": "0",
         "refundedToIssuer": "0",
@@ -737,46 +874,72 @@
         "openDuePeriod": "8104",
         "openDueAmount": "2000000000",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
+        "pauseNonce": "5",
+        "pauseCount": "1",
         "pausedTotal": "5270400",
-        "pauseNonce": "1",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "effective time 11 June − 61 d = 11 April → OnTime"
+      "note": "Q1 countdown = 71 d − 61 d = 10 d → OnTime"
     },
     {
       "t": "1782950400",
@@ -816,6 +979,7 @@
       "ledger": {
         "status": "InGrace",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -828,6 +992,7 @@
         "paidPerUnitWad": "0",
         "netAccWad": "0",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "0",
         "feeCollected": "0",
         "refundedToIssuer": "0",
@@ -836,50 +1001,76 @@
         "openDuePeriod": "8104",
         "openDueAmount": "2000000000",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
+        "pauseNonce": "5",
+        "pauseCount": "1",
         "pausedTotal": "5270400",
-        "pauseNonce": "1",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "effective 2 May → InGrace (deadline shifted to 1 July)"
+      "note": "Q1 countdown 31 d → InGrace (deadline shifted to 1 July)"
     },
     {
       "t": "1783641600",
-      "note": "effective 10 May, inside grace → accrual 0",
+      "note": "countdown 39 d, inside grace → accrual 0",
       "op": "pay",
       "actor": "issuer",
       "series": "S1"
@@ -917,6 +1108,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -929,6 +1121,7 @@
         "paidPerUnitWad": "5000000000000000000000000",
         "netAccWad": "4750000000000000000000000",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "2000000000",
         "feeCollected": "100000000",
         "refundedToIssuer": "0",
@@ -937,46 +1130,72 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
+        "pauseNonce": "5",
+        "pauseCount": "1",
         "pausedTotal": "5270400",
-        "pauseNonce": "1",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "paid without accrual; Q2 (due 31 July nominal, 30 September effective) still OnTime"
+      "note": "paid without accrual; Q2's clock started 1 July (after the pause) and is unshifted: OnTime, deadline 31 July"
     },
     {
       "t": "1783814400",
@@ -987,24 +1206,25 @@
       "paymentUsd": "1200000000",
       "fxAvgWad": "1000000000000000000",
       "fxFallback": null,
+      "priorIncomeCommitment": "0x3021fd8d83e6e5df27a56d7a5f99fe836d1626f3b8073527f2f927453606d6a6",
       "incomeCommitment": "0x2a3ca5a9d43632609db83559ec2a221a20592794fe3e712d09df1717ed3b5590",
       "tier": 2,
       "liquidityEvent": false,
       "attestation": "verifier1",
       "proof": {
         "pi_a": [
-          "13635317633417127852228909088079435294201512770904206529315352753480101674056",
-          "4596415325428032095750645673465764713924658327419530322929398973949264398251",
+          "18979016439244538725267646979209830105450523634926205821683671223951269242510",
+          "16086358599440481532683954070958897248981962938549944906847070091497502859224",
           "1"
         ],
         "pi_b": [
           [
-            "14421981929160265403921876591988051749305351172380044413573852499031629489988",
-            "9836193248765237397449518445884171997531485013518412672236845827414206856424"
+            "19895641271952257338354822545098416336758845862648702775102348481336935472703",
+            "8308442013378244575020014663507448635884634031875151524472320385347337007584"
           ],
           [
-            "16998968311676816626867110328850423036248873195310397467355344014524410193238",
-            "4466788557254816906727456517581523625097589137346109157217961913091855361702"
+            "906354132814828168028627327053687461841136618131965858386006194126855276534",
+            "15527653139712316149207584824735696412827372314130222736641982600134759686086"
           ],
           [
             "1",
@@ -1012,8 +1232,8 @@
           ]
         ],
         "pi_c": [
-          "13085035474620309443534951815910852650880916084621590172750306657141325921038",
-          "2464628652794151293808346169874822815877746418276656005419566261071120815349",
+          "10241436056495861665278012817318252594550225584261247316078612264360608866784",
+          "14073243844762870411796218229729094302130966029297285041276602523372021201900",
           "1"
         ],
         "protocol": "groth16",
@@ -1029,22 +1249,22 @@
       ],
       "proofEvm": {
         "pA": [
-          "13635317633417127852228909088079435294201512770904206529315352753480101674056",
-          "4596415325428032095750645673465764713924658327419530322929398973949264398251"
+          "18979016439244538725267646979209830105450523634926205821683671223951269242510",
+          "16086358599440481532683954070958897248981962938549944906847070091497502859224"
         ],
         "pB": [
           [
-            "9836193248765237397449518445884171997531485013518412672236845827414206856424",
-            "14421981929160265403921876591988051749305351172380044413573852499031629489988"
+            "8308442013378244575020014663507448635884634031875151524472320385347337007584",
+            "19895641271952257338354822545098416336758845862648702775102348481336935472703"
           ],
           [
-            "4466788557254816906727456517581523625097589137346109157217961913091855361702",
-            "16998968311676816626867110328850423036248873195310397467355344014524410193238"
+            "15527653139712316149207584824735696412827372314130222736641982600134759686086",
+            "906354132814828168028627327053687461841136618131965858386006194126855276534"
           ]
         ],
         "pC": [
-          "13085035474620309443534951815910852650880916084621590172750306657141325921038",
-          "2464628652794151293808346169874822815877746418276656005419566261071120815349"
+          "10241436056495861665278012817318252594550225584261247316078612264360608866784",
+          "14073243844762870411796218229729094302130966029297285041276602523372021201900"
         ],
         "pubSignals": [
           "11772623398991248159346554101417359751440547629698149343596607856691440656469",
@@ -1054,14 +1274,14 @@
           "19104293831110599661566876478089297774016320217691409217626413881406206465424",
           "1200000000"
         ],
-        "proofBytes": "0x1e2550f85310c54de132d9b5fdf943bfa47e701d77ddb130150c93cb216a3c480a297a97f6401d860a8cd8552d90d6510d1d162d55cf4485c5ad2b58a9ae07ab15bf168cfa0914fee58b5a85b2844dca25662d37cb1efc78b09203c7c5463ce81fe28d70c477035a56b9d6a5ec13088dd61816402de9711d54afb9991e97e74409e01cdbe765d54587e5c9e20793912765933d379d57fb0902de92ec19ba26a62595133a2b8d20cb7399eec0215362196aa90b400e27dc77c8248cc5bf9765561cedde1ca4ed681f7165b18ea0a0f9878023ca33523388ab277ba25e69097b0e0572ee2d94bf60ad230ef1d5646aca47291f94bddf3b0fa831adf9e12c15d4f5",
-        "calldata": "0xf398789b1e2550f85310c54de132d9b5fdf943bfa47e701d77ddb130150c93cb216a3c480a297a97f6401d860a8cd8552d90d6510d1d162d55cf4485c5ad2b58a9ae07ab15bf168cfa0914fee58b5a85b2844dca25662d37cb1efc78b09203c7c5463ce81fe28d70c477035a56b9d6a5ec13088dd61816402de9711d54afb9991e97e74409e01cdbe765d54587e5c9e20793912765933d379d57fb0902de92ec19ba26a62595133a2b8d20cb7399eec0215362196aa90b400e27dc77c8248cc5bf9765561cedde1ca4ed681f7165b18ea0a0f9878023ca33523388ab277ba25e69097b0e0572ee2d94bf60ad230ef1d5646aca47291f94bddf3b0fa831adf9e12c15d4f51a07119736703a11d329633c82c60c139767da9081eb2f99e48a3d1c39da205500000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400003021fd8d83e6e5df27a56d7a5f99fe836d1626f3b8073527f2f927453606d6a62a3ca5a9d43632609db83559ec2a221a20592794fe3e712d09df1717ed3b55900000000000000000000000000000000000000000000000000000000047868c00"
+        "proofBytes": "0x29f5be1d1abc44f1bacb36122678b893a49bb824cb5d2a389ffd7e4cc80f268e23908e6a9792a37420532e76e7c26d0a2dd4607894ee7ae9b709fd96e88adfd8125e695a2fc00407e86815b9afc5b752f3bb412c5793165ca29ff23fa22331e02bfc88adc728458d5596ae56e2704ba7245e9662a7f4ec7e9bc85577e11c5e3f2254571950cc52d9f6f559f0d9fe4bfe0b670f41e06bb75f6e2235ddeffe1fc60200fa6f3dcae6346718c214216d66ec7b285dc8fc4b000d5d24015e30ef07f616a472882052d2fef73e50b398d192083edcc9377ddf1e32369e3917d7b121e01f1d2c7a4a8afd9fdc0a3c52553682b108ee18165ffe1942fe2cf5cc4aa1bbec",
+        "calldata": "0xf398789b29f5be1d1abc44f1bacb36122678b893a49bb824cb5d2a389ffd7e4cc80f268e23908e6a9792a37420532e76e7c26d0a2dd4607894ee7ae9b709fd96e88adfd8125e695a2fc00407e86815b9afc5b752f3bb412c5793165ca29ff23fa22331e02bfc88adc728458d5596ae56e2704ba7245e9662a7f4ec7e9bc85577e11c5e3f2254571950cc52d9f6f559f0d9fe4bfe0b670f41e06bb75f6e2235ddeffe1fc60200fa6f3dcae6346718c214216d66ec7b285dc8fc4b000d5d24015e30ef07f616a472882052d2fef73e50b398d192083edcc9377ddf1e32369e3917d7b121e01f1d2c7a4a8afd9fdc0a3c52553682b108ee18165ffe1942fe2cf5cc4aa1bbec1a07119736703a11d329633c82c60c139767da9081eb2f99e48a3d1c39da205500000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400003021fd8d83e6e5df27a56d7a5f99fe836d1626f3b8073527f2f927453606d6a62a3ca5a9d43632609db83559ec2a221a20592794fe3e712d09df1717ed3b55900000000000000000000000000000000000000000000000000000000047868c00"
       },
       "proofSolana": {
-        "proofA": "0x1e2550f85310c54de132d9b5fdf943bfa47e701d77ddb130150c93cb216a3c48263ad3daeaf182a3adc36d6153f0820c8a64546412a28607767360be2ecef59c",
-        "proofB": "0x15bf168cfa0914fee58b5a85b2844dca25662d37cb1efc78b09203c7c5463ce81fe28d70c477035a56b9d6a5ec13088dd61816402de9711d54afb9991e97e74409e01cdbe765d54587e5c9e20793912765933d379d57fb0902de92ec19ba26a62595133a2b8d20cb7399eec0215362196aa90b400e27dc77c8248cc5bf976556",
-        "proofC": "0x1cedde1ca4ed681f7165b18ea0a0f9878023ca33523388ab277ba25e69097b0e0572ee2d94bf60ad230ef1d5646aca47291f94bddf3b0fa831adf9e12c15d4f5",
-        "proof": "0x1e2550f85310c54de132d9b5fdf943bfa47e701d77ddb130150c93cb216a3c48263ad3daeaf182a3adc36d6153f0820c8a64546412a28607767360be2ecef59c15bf168cfa0914fee58b5a85b2844dca25662d37cb1efc78b09203c7c5463ce81fe28d70c477035a56b9d6a5ec13088dd61816402de9711d54afb9991e97e74409e01cdbe765d54587e5c9e20793912765933d379d57fb0902de92ec19ba26a62595133a2b8d20cb7399eec0215362196aa90b400e27dc77c8248cc5bf9765561cedde1ca4ed681f7165b18ea0a0f9878023ca33523388ab277ba25e69097b0e0572ee2d94bf60ad230ef1d5646aca47291f94bddf3b0fa831adf9e12c15d4f5",
+        "proofA": "0x29f5be1d1abc44f1bacb36122678b893a49bb824cb5d2a389ffd7e4cc80f268e0cd3c008499efcb597fd173f99beeb5369ad0a18d3834fa385168e7feff21d6f",
+        "proofB": "0x125e695a2fc00407e86815b9afc5b752f3bb412c5793165ca29ff23fa22331e02bfc88adc728458d5596ae56e2704ba7245e9662a7f4ec7e9bc85577e11c5e3f2254571950cc52d9f6f559f0d9fe4bfe0b670f41e06bb75f6e2235ddeffe1fc60200fa6f3dcae6346718c214216d66ec7b285dc8fc4b000d5d24015e30ef07f6",
+        "proofC": "0x16a472882052d2fef73e50b398d192083edcc9377ddf1e32369e3917d7b121e01f1d2c7a4a8afd9fdc0a3c52553682b108ee18165ffe1942fe2cf5cc4aa1bbec",
+        "proof": "0x29f5be1d1abc44f1bacb36122678b893a49bb824cb5d2a389ffd7e4cc80f268e0cd3c008499efcb597fd173f99beeb5369ad0a18d3834fa385168e7feff21d6f125e695a2fc00407e86815b9afc5b752f3bb412c5793165ca29ff23fa22331e02bfc88adc728458d5596ae56e2704ba7245e9662a7f4ec7e9bc85577e11c5e3f2254571950cc52d9f6f559f0d9fe4bfe0b670f41e06bb75f6e2235ddeffe1fc60200fa6f3dcae6346718c214216d66ec7b285dc8fc4b000d5d24015e30ef07f616a472882052d2fef73e50b398d192083edcc9377ddf1e32369e3917d7b121e01f1d2c7a4a8afd9fdc0a3c52553682b108ee18165ffe1942fe2cf5cc4aa1bbec",
         "publicInputs": [
           "0x1a07119736703a11d329633c82c60c139767da9081eb2f99e48a3d1c39da2055",
           "0x0000000000000000000000000000000000000000000000000000000000000190",
@@ -1088,13 +1308,13 @@
     },
     {
       "t": "1788220800",
-      "note": "the earlier stale request was consumed by the first approval; a new one is needed",
       "op": "request_pause",
       "actor": "issuer",
       "series": "S1"
     },
     {
       "t": "1788220800",
+      "note": "91 days approved; pausedTotal 152 d",
       "op": "approve_pause",
       "series": "S1",
       "pauseEnd": "1796083200",
@@ -1112,7 +1332,7 @@
     },
     {
       "t": "1789862400",
-      "note": "ended after 19 days: paused_total = 80 days",
+      "note": "ended after 19 days: pausedTotal = 61 + 19 = 80 d",
       "op": "end_pause",
       "actor": "issuer",
       "series": "S1"
@@ -1160,6 +1380,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -1172,6 +1393,7 @@
         "paidPerUnitWad": "8000000000000000000000000",
         "netAccWad": "7600000000000000000000000",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "3200000000",
         "feeCollected": "160000000",
         "refundedToIssuer": "0",
@@ -1180,46 +1402,72 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
+        "pauseNonce": "6",
+        "pauseCount": "2",
         "pausedTotal": "6912000",
-        "pauseNonce": "2",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "pausedTotal 6,912,000 s; pauseNonce 2; OnTime"
+      "note": "pausedTotal 6,912,000 s; pauseCount 2; OnTime"
     },
     {
       "t": "1791763200",
@@ -1261,6 +1509,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -1273,6 +1522,7 @@
         "paidPerUnitWad": "8000000000000000000000000",
         "netAccWad": "7600000000000000000000000",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "3200000000",
         "feeCollected": "160000000",
         "refundedToIssuer": "0",
@@ -1281,43 +1531,69 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
+        "pauseNonce": "6",
+        "pauseCount": "2",
         "pausedTotal": "6912000",
-        "pauseNonce": "2",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       }
     }

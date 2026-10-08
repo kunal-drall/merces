@@ -268,7 +268,20 @@ export class ScenarioBuilder {
    * Standard raise: open, commit, reveal, propose with honest claims, finalize, process every bid,
    * deliver every bid (except `undelivered`). Returns the clearing price (0 when the raise failed).
    */
-  async raise(args: { series: string; issuer: string; openAt: bigint; bids: BidSpec[]; clearingPrice?: bigint; undelivered?: string[]; deliver?: boolean }): Promise<bigint> {
+  async raise(args: {
+    series: string;
+    issuer: string;
+    openAt: bigint;
+    bids: BidSpec[];
+    clearingPrice?: bigint;
+    /** bidders whose `deliver_bid` is deferred (recipient-side failure modelled by the harness) */
+    undelivered?: string[];
+    /** bidders whose `process_bid` is deferred (the mint stays unfinalized) */
+    skipProcess?: string[];
+    deliver?: boolean;
+    /** runs after the reveal phase closes and before the settlement proposal */
+    beforeSettle?: () => Promise<void>;
+  }): Promise<bigint> {
     const s = this.sim.series.get(args.series)!;
     this.at(args.openAt);
     await this.step({ op: "open_raise", actor: args.issuer, series: args.series });
@@ -284,14 +297,16 @@ export class ScenarioBuilder {
       await this.step({ op: "reveal_bid", actor: b.actor, series: args.series, price: b.price.toString(), quantity: b.quantity.toString(), salt: this.bidSalt(args.series, b.actor, i) });
     }
     this.at(s.revealEnd + 3600n);
+    if (args.beforeSettle) await args.beforeSettle();
     const p = await this.settle(args.series, args.clearingPrice);
     for (const b of args.bids) {
+      if (args.skipProcess?.includes(b.actor)) continue;
       this.advance(60n);
       await this.step({ op: "process_bid", series: args.series, bidder: b.actor });
     }
     if (args.deliver !== false) {
       for (const b of args.bids) {
-        if (args.undelivered?.includes(b.actor)) continue;
+        if (args.undelivered?.includes(b.actor) || args.skipProcess?.includes(b.actor)) continue;
         this.advance(60n);
         await this.step({ op: "deliver_bid", series: args.series, bidder: b.actor });
       }
@@ -345,10 +360,10 @@ export class ScenarioBuilder {
     let prior = this.priorFor(a.series, a.period, a.attestedPriorYtd);
     if (a.tier === 1) {
       // tier-1 reports are bound to the router checkpoints with zero salts
+      // (an unclosed checkpoint yields a zero-income proof so the chain can reject it with RouterPeriodNotClosed)
       const r = s.router!;
       const ytd = M.ytdAtEnd(r, a.period);
-      if (ytd === null) throw new Error(`${this.name}: router period ${a.period} not closed`);
-      incomeYtd = ytd;
+      incomeYtd = ytd ?? 0n;
       incomeSalt = 0n;
       const prevYtd = quarterIndex(a.period) === 0 ? 0n : M.ytdAtEnd(r, a.period - 1);
       prior = { ytd: prevYtd ?? 0n, salt: 0n };

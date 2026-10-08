@@ -1,19 +1,21 @@
-//! Redemption (SPEC §6.7) and extinguishment (SPEC §6.9).
+//! Redemption (SPEC v1.1 §6.7) and extinguishment (SPEC v1.1 §6.9).
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 use merces_common::encoding::extinguish_message;
 use merces_common::redemption::{redemption_price, RedemptionInputs};
 use merces_common::status::SeriesStatus;
+use merces_common::time::period_of;
+use merces_common::treasury::vested;
+use merces_onchain::keccak;
 use merces_onchain::seeds::CONFIG;
-use merces_onchain::{keccak, recover_eth_address};
 use merces_registry::program::MercesRegistry;
 use merces_registry::state::{ProtocolConfig, Series};
 
 use crate::common::*;
 use crate::error::{math, ProtocolError};
 use crate::events::*;
-use crate::income::{map_sig_error, require_active_attestor};
+use crate::income::{require_active_attestor, require_signer};
 use crate::state::*;
 
 // --------------------------------------------------------------------------------------- redeem
@@ -28,56 +30,80 @@ pub struct Redeem<'info> {
     pub series: Box<Account<'info, Series>>,
     #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
     pub ledger: AccountLoader<'info, Ledger>,
-    #[account(seeds = [seeds::TREASURY, series.key().as_ref()], bump = treasury.bump)]
-    pub treasury: Box<Account<'info, Treasury>>,
     #[account(mut, token::mint = stablecoin_mint, token::authority = issuer, token::token_program = stablecoin_program)]
     pub issuer_stable: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, seeds = [seeds::VAULT_TOKEN, series.key().as_ref()], bump)]
     pub vault_token: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(address = series.unit_mint @ ProtocolError::UnitMintMismatch)]
-    pub unit_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = series.stablecoin @ ProtocolError::StablecoinMismatch)]
     pub stablecoin_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = series.stablecoin_program @ ProtocolError::TokenProgramMismatch)]
     pub stablecoin_program: Interface<'info, TokenInterface>,
     /// CHECK: data-less signer PDA for the registry write interface.
-    #[account(seeds = [seeds::REGISTRY_SIGNER], bump)]
-    pub registry_signer: UncheckedAccount<'info>,
+    #[account(seeds = [seeds::REGISTRY_AUTHORITY], bump)]
+    pub registry_authority: UncheckedAccount<'info>,
     pub registry_program: Program<'info, MercesRegistry>,
 }
 
-/// `redeem` (SPEC §6.7): issuer only, after lockup, with no open due. Never blockable by anyone
-/// else (C7). No fee.
+/// `redeem` (SPEC §6.7): issuer only, after lockup, with every own obligation met. Never
+/// blockable by anyone else (C7). No fee. A series with nothing left under the cap retires instead.
 pub fn redeem<'info>(ctx: Context<'info, Redeem<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
     let status = ledger.sync_status(now, series_key)?;
-    require!(!status.is_terminal(), ProtocolError::SeriesTerminal);
+    require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
     require!(
-        ctx.accounts.treasury.finalized,
-        ProtocolError::MintNotFinalized
+        matches!(
+            status,
+            SeriesStatus::OnTime | SeriesStatus::InGrace | SeriesStatus::Paused
+        ),
+        ProtocolError::RedemptionStatusNotAllowed
     );
     let unlock = ledger
         .settlement_ts
         .checked_add(series.lockup_seconds)
         .ok_or(ProtocolError::MathOverflow)?;
     require!(now >= unlock, ProtocolError::LockupActive);
-    require!(ledger.open_due_amount == 0, ProtocolError::DueOutstanding);
-    let units = ctx.accounts.unit_mint.supply;
+    require!(
+        ledger.open_due_amount == 0 && ledger.trueup_due == 0,
+        ProtocolError::DueOutstanding
+    );
+    let current = period_of(now).map_err(math)?;
+    if let Some(prev) = current.checked_sub(1) {
+        if prev >= ledger.first_period {
+            require!(
+                matches!(ledger.last_accepted_period(), Some(p) if p >= prev),
+                ProtocolError::UnreportedPeriods
+            );
+        }
+    }
+    let units = ledger.units_outstanding;
     require!(units > 0, ProtocolError::NoUnitsOutstanding);
+    let cap = cap_per_unit_of(series)?;
+    let ring = ledger.year_gross_ring();
     let price = redemption_price(&RedemptionInputs {
         clearing_price: series.clearing_price,
         hurdle_rate_wad: series.hurdle_rate_wad,
         payout_multiple_k: series.payout_multiple_k,
-        cap_per_unit: ledger.cap_per_unit,
+        cap_per_unit: cap,
         paid_per_unit_wad: ledger.paid_per_unit_wad,
-        year_gross_wad: &ledger.year_gross_wad,
+        year_gross: &ring,
         settlement_ts: ledger.settlement_ts,
         now,
     })
     .map_err(math)?;
+    let registry = RegistryCpi {
+        registry_program: ctx.accounts.registry_program.to_account_info(),
+        config: ctx.accounts.config.to_account_info(),
+        series: ctx.accounts.series.to_account_info(),
+        registry_authority: ctx.accounts.registry_authority.to_account_info(),
+        authority_bump: ctx.bumps.registry_authority,
+    };
+    if price.cap_remaining == 0 {
+        // nothing is owed either way
+        return retire(&mut ledger, &registry, series_key, 0);
+    }
     let deposit = price
         .price
         .checked_mul(units)
@@ -102,15 +128,8 @@ pub fn redeem<'info>(ctx: Context<'info, Redeem<'info>>) -> Result<()> {
         .cap_remaining
         .checked_sub(price.price)
         .ok_or(ProtocolError::MathOverflow)?;
-    ledger.trueup_due = 0;
-    RegistryCpi {
-        registry_program: ctx.accounts.registry_program.to_account_info(),
-        config: ctx.accounts.config.to_account_info(),
-        series: ctx.accounts.series.to_account_info(),
-        protocol_signer: ctx.accounts.registry_signer.to_account_info(),
-        signer_bump: ctx.bumps.registry_signer,
-    }
-    .mark_terminal(SeriesStatus::Redeemed)?;
+    ledger.pause_requested = 0;
+    registry.mark_terminal(SeriesStatus::Redeemed)?;
     emit!(StatusChanged {
         series: series_key,
         old,
@@ -148,8 +167,6 @@ pub struct Extinguish<'info> {
     pub treasury_auth: UncheckedAccount<'info>,
     #[account(mut, seeds = [seeds::VAULT_TOKEN, series.key().as_ref()], bump)]
     pub vault_token: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(address = series.unit_mint @ ProtocolError::UnitMintMismatch)]
-    pub unit_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = series.stablecoin @ ProtocolError::StablecoinMismatch)]
     pub stablecoin_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = series.stablecoin_program @ ProtocolError::TokenProgramMismatch)]
@@ -159,13 +176,14 @@ pub struct Extinguish<'info> {
     /// CHECK: registry `AttestorKey` PDA for `attestor_b`; validated in the handler.
     pub attestor_key_b: UncheckedAccount<'info>,
     /// CHECK: data-less signer PDA for the registry write interface.
-    #[account(seeds = [seeds::REGISTRY_SIGNER], bump)]
-    pub registry_signer: UncheckedAccount<'info>,
+    #[account(seeds = [seeds::REGISTRY_AUTHORITY], bump)]
+    pub registry_authority: UncheckedAccount<'info>,
     pub registry_program: Program<'info, MercesRegistry>,
 }
 
-/// `extinguish` (SPEC §6.9, C11 §6): two distinct active attestors sign; unreleased treasury
-/// funds move to the vault as a no-fee final distribution; open dues are cleared.
+/// `extinguish` (SPEC §6.9, C11 §6): two distinct active attestors sign; allowed in every status
+/// but `Extinguished`. The unvested treasury balance moves to the vault as a no-fee final
+/// distribution; vested-but-unclaimed tranches stay with the estate; open dues are cleared.
 pub fn extinguish<'info>(
     ctx: Context<'info, Extinguish<'info>>,
     attestor_a: [u8; 20],
@@ -176,10 +194,15 @@ pub fn extinguish<'info>(
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
+    let series = &ctx.accounts.series;
     let status = ledger.sync_status(now, series_key)?;
     require!(
-        status != SeriesStatus::Extinguished && status != SeriesStatus::Retired,
-        ProtocolError::SeriesTerminal
+        ctx.accounts.treasury.mint_finalized,
+        ProtocolError::MintNotFinalized
+    );
+    require!(
+        status != SeriesStatus::Extinguished,
+        ProtocolError::TerminalStatus
     );
     require!(
         attestor_a != attestor_b,
@@ -191,26 +214,23 @@ pub fn extinguish<'info>(
         ledger.extinguish_nonce,
     )
     .as_bytes()]);
-    let rec_a = recover_eth_address(&msg, &sig_a).map_err(map_sig_error)?;
-    let rec_b = recover_eth_address(&msg, &sig_b).map_err(map_sig_error)?;
-    require!(
-        rec_a == attestor_a && rec_b == attestor_b,
-        ProtocolError::SignerMismatch
-    );
+    require_signer(&msg, &sig_a, &attestor_a)?;
+    require_signer(&msg, &sig_b, &attestor_b)?;
     require_active_attestor(&ctx.accounts.attestor_key_a.to_account_info(), &attestor_a)?;
     require_active_attestor(&ctx.accounts.attestor_key_b.to_account_info(), &attestor_b)?;
 
+    // unreleased = proceeds − vested(now); early draws beyond the vested amount are already gone
     let t = &ctx.accounts.treasury;
-    let unreleased = if t.finalized {
-        t.proceeds
-            .checked_sub(t.released_total)
-            .ok_or(ProtocolError::MathOverflow)?
-    } else {
-        // settlement never finalised: everything the treasury received is unreleased
-        t.proceeds_received
-            .checked_sub(t.released_total)
-            .ok_or(ProtocolError::MathOverflow)?
-    };
+    let schedule = schedule_of(series);
+    let vested_now = core::cmp::min(
+        vested(t.proceeds, &schedule, ledger.settlement_ts, now).map_err(math)?,
+        t.proceeds,
+    );
+    let base = core::cmp::max(vested_now, t.released_total);
+    let unreleased = t
+        .proceeds
+        .checked_sub(base)
+        .ok_or(ProtocolError::MathOverflow)?;
     let bump = [ctx.bumps.treasury_auth];
     let auth_seeds: &[&[u8]] = &[seeds::TREASURY_AUTH, series_key.as_ref(), &bump];
     transfer_stable(
@@ -221,39 +241,33 @@ pub fn extinguish<'info>(
         &ctx.accounts.treasury_auth.to_account_info(),
         ctx.remaining_accounts,
         unreleased,
-        ctx.accounts.series.stablecoin_decimals,
+        series.stablecoin_decimals,
         &[auth_seeds],
     )?;
-    let weights = if ledger.units_at_redemption > 0 {
+    ledger.final_units = if ledger.redemption_ts != 0 {
         ledger.units_at_redemption
     } else {
-        ctx.accounts.unit_mint.supply
+        ledger.units_outstanding
     };
-    if unreleased > 0 {
-        ledger.receive_final(unreleased, weights, series_key)?;
+    if unreleased > 0 && ledger.final_units > 0 {
+        ledger.receive_final(unreleased, series_key)?;
     }
     let old = ledger.status;
     ledger.status = SeriesStatus::Extinguished as u8;
-    ledger.open_due_amount = 0;
-    ledger.set_open_due_period(None);
-    ledger.open_due_is_tail = 0;
-    ledger.trueup_due = 0;
-    ledger.pause_requested = 0;
+    ledger.extinguished_at = now;
+    ledger.clear_dues();
     ledger.extinguish_nonce = ledger
         .extinguish_nonce
         .checked_add(1)
         .ok_or(ProtocolError::MathOverflow)?;
     let t = &mut ctx.accounts.treasury;
-    t.released_total = t
-        .released_total
-        .checked_add(unreleased)
-        .ok_or(ProtocolError::MathOverflow)?;
+    t.extinguished_at = now;
     RegistryCpi {
         registry_program: ctx.accounts.registry_program.to_account_info(),
         config: ctx.accounts.config.to_account_info(),
         series: ctx.accounts.series.to_account_info(),
-        protocol_signer: ctx.accounts.registry_signer.to_account_info(),
-        signer_bump: ctx.bumps.registry_signer,
+        registry_authority: ctx.accounts.registry_authority.to_account_info(),
+        authority_bump: ctx.bumps.registry_authority,
     }
     .mark_terminal(SeriesStatus::Extinguished)?;
     emit!(StatusChanged {

@@ -115,14 +115,20 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         _addYearGross(seriesId, core, anchor, incWad);
         _accumulate(l, d, n, terms.payoutFeeBps);
         l.refundedToIssuer += d.refund;
-        emit PayoutDistributed(
-            seriesId, source, gross, d.accepted, d.fee, d.accepted - d.fee, d.deltaAcc, l.paidPerUnitWad, d.retired
-        );
+        _emitDistributed(seriesId, source, gross, d, l.paidPerUnitWad);
         if (d.retired && core.terminalStatus == 0) _retire(seriesId, l, d.refund);
         IERC20 stable = IERC20(core.stablecoin);
         if (d.fee > 0) stable.safeTransfer(registry().feeCollector(), d.fee);
         if (d.refund > 0) stable.safeTransfer(core.issuer, d.refund);
         return (d.accepted, d.fee, d.refund);
+    }
+
+    function _emitDistributed(uint256 seriesId, PayoutSource source, uint64 gross, Dist memory d, uint256 paidWad)
+        internal
+    {
+        emit PayoutDistributed(
+            seriesId, source, gross, d.accepted, d.fee, d.accepted - d.fee, d.deltaAcc, paidWad, d.retired
+        );
     }
 
     /// @dev Cap truncation (brief C6) against the effective cap: accepts all of `gross` while
@@ -688,7 +694,7 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
     /// @dev `cap_eff_wad = max(cap_per_unit × WAD, paid_per_unit_wad)` (SPEC §6.3 effective cap).
     function _capEffWad(SeriesCore memory core, SeriesTerms memory terms, Ledger storage l)
         internal
-        pure
+        view
         returns (uint256)
     {
         uint256 capWad = _capPerUnit(core, terms) * C.WAD;

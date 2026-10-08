@@ -1,7 +1,8 @@
 {
   "name": "12_multi_series_router",
-  "description": "One issuer, two live series: S1 (tier 2) and S2 (tier 1 split router + quarterly proofs). On-chain receipts pass through 100% until θ, then route r × units to the vault; routed amounts are credited against each quarter's proven payment (shortfall paid, excess carried forward, year reset). Issuance stop/resume gates new series only.",
-  "schema": 1,
+  "description": "One issuer, three live series: S1 (tier 2), S2 (tier 1 split router + tier 2 proofs: routed amounts are credited against each quarter's attested payment — shortfall paid, excess carried, year reset) and S3 (pure tier 1: reports bind to the router's period checkpoints through Poseidon(2)(ytd_at_end, 0) with no attestation). Issuance stop/resume gates new series only.",
+  "schema": 2,
+  "specVersion": "1.1",
   "generatedBy": "packages/reference/src/vectors/generate.ts (pnpm vectors)",
   "config": {
     "parameters": {
@@ -27,6 +28,9 @@
       "fx_max_staleness_seconds": "3600",
       "fx_max_conf_bps": "100",
       "fx_deviation_band_bps": "200",
+      "max_pause_seconds": "31536000",
+      "max_cumulative_pause_seconds": "63072000",
+      "max_pauses": "16",
       "max_release_tranches": "24"
     },
     "flags": {
@@ -35,7 +39,7 @@
       "tier4Enabled": false
     },
     "stablecoinDecimals": 6,
-    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
+    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces, prior/income commitments, liquidity flags) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
   },
   "actors": [
     "attestor1",
@@ -92,6 +96,16 @@
         "termsSalt": "12657895351517053109122722588982345877213589644723238897796975851161007911616"
       },
       "termsCommitment": "0x0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf132"
+    },
+    "S3": {
+      "termsPlain": {
+        "theta": "80000000000",
+        "rWad": "100000000000000",
+        "currencyCode": 840,
+        "indexingRule": 0,
+        "termsSalt": "413228529378580179126709501755472716402544170420471421787093349634797600958"
+      },
+      "termsCommitment": "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12"
     }
   },
   "steps": [
@@ -136,25 +150,25 @@
       "t": "1767312000",
       "op": "fund",
       "actor": "b1",
-      "amount": "60000000000"
+      "amount": "80000000000"
     },
     {
       "t": "1767312000",
       "op": "fund",
       "actor": "b2",
-      "amount": "60000000000"
+      "amount": "80000000000"
     },
     {
       "t": "1767312000",
       "op": "fund",
       "actor": "b3",
-      "amount": "60000000000"
+      "amount": "80000000000"
     },
     {
       "t": "1767312000",
       "op": "fund",
       "actor": "b4",
-      "amount": "60000000000"
+      "amount": "80000000000"
     },
     {
       "t": "1767312000",
@@ -261,7 +275,62 @@
     },
     {
       "t": "1767312000",
-      "note": "tier flags 1|2: on-chain split router (plaintext θ and r, the issuer's choice) plus quarterly proofs",
+      "op": "expect_revert",
+      "call": {
+        "op": "create_series",
+        "actor": "issuer",
+        "series": "Sx",
+        "terms": {
+          "unitsOffered": "1000",
+          "reservePrice": "100000000",
+          "minRaise": "20000000000",
+          "capMultipleWad": "2500000000000000000",
+          "hurdleRateWad": "80000000000000000",
+          "payoutMultipleK": "5",
+          "lockupSeconds": "47336400",
+          "walletCapBps": "1000",
+          "auctionFeeBps": "100",
+          "payoutFeeBps": "500",
+          "windowFeeBps": "100",
+          "nonRevealChargeBps": "100",
+          "commitDuration": "604800",
+          "revealDuration": "172800",
+          "windowCommitDuration": "259200",
+          "windowRevealDuration": "86400"
+        },
+        "releaseSchedule": [
+          {
+            "atOffsetSeconds": "0",
+            "bps": "2500"
+          },
+          {
+            "atOffsetSeconds": "7776000",
+            "bps": "2500"
+          },
+          {
+            "atOffsetSeconds": "15552000",
+            "bps": "2500"
+          },
+          {
+            "atOffsetSeconds": "23328000",
+            "bps": "2500"
+          }
+        ],
+        "termsCommitment": "0xcfdc0f0c1e14b23584cfeee312ca44e8d4dd8ea22fbc32ff5b5eb27fed0bb3cb",
+        "contractHash": "0x0b2aa8fdfe60932cffdc84249762447124f7001bd9af850d97472b318836f5cd",
+        "tierFlags": 1,
+        "fxPairId": null,
+        "router": {
+          "theta": "80000000000",
+          "rWad": "10000000000000000"
+        }
+      },
+      "error": "InvalidTerms",
+      "note": "r_wad × units_offered = 10 WAD > WAD"
+    },
+    {
+      "t": "1767312000",
+      "note": "tier flags 1|2: on-chain split router (plaintext θ and r, the issuer's choice) plus attested quarterly proofs",
       "op": "create_series",
       "actor": "issuer",
       "series": "S2",
@@ -304,6 +373,57 @@
       "termsCommitment": "0x0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf132",
       "contractHash": "0x28fbc96dd45a0f0abba40dda88b2d95762de48665b9fe3caaa7588996e7e81ac",
       "tierFlags": 3,
+      "fxPairId": null,
+      "router": {
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1767312000",
+      "note": "pure tier 1: reports are bound to the router checkpoints and need no attestation",
+      "op": "create_series",
+      "actor": "issuer",
+      "series": "S3",
+      "terms": {
+        "unitsOffered": "1000",
+        "reservePrice": "100000000",
+        "minRaise": "20000000000",
+        "capMultipleWad": "2500000000000000000",
+        "hurdleRateWad": "80000000000000000",
+        "payoutMultipleK": "5",
+        "lockupSeconds": "47336400",
+        "walletCapBps": "1000",
+        "auctionFeeBps": "100",
+        "payoutFeeBps": "500",
+        "windowFeeBps": "100",
+        "nonRevealChargeBps": "100",
+        "commitDuration": "604800",
+        "revealDuration": "172800",
+        "windowCommitDuration": "259200",
+        "windowRevealDuration": "86400"
+      },
+      "releaseSchedule": [
+        {
+          "atOffsetSeconds": "0",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "7776000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "15552000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "23328000",
+          "bps": "2500"
+        }
+      ],
+      "termsCommitment": "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12",
+      "contractHash": "0x985d2e2cfabb0e88c3b4e9ac065ade60b459f14b6dfeb6fb5980db673f6bfabe",
+      "tierFlags": 1,
       "fxPairId": null,
       "router": {
         "theta": "80000000000",
@@ -394,9 +514,16 @@
     },
     {
       "t": "1768352400",
-      "op": "settle",
+      "op": "begin_settlement",
       "series": "S1",
-      "clearingPrice": "105000000"
+      "clearingPrice": "105000000",
+      "qAboveClaim": "300",
+      "qAtClaim": "100"
+    },
+    {
+      "t": "1768352400",
+      "op": "finalize_settlement",
+      "series": "S1"
     },
     {
       "t": "1768352460",
@@ -419,6 +546,30 @@
     {
       "t": "1768352640",
       "op": "process_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
+      "t": "1768352700",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768352760",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768352820",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768352880",
+      "op": "deliver_bid",
       "series": "S1",
       "bidder": "b4"
     },
@@ -506,9 +657,16 @@
     },
     {
       "t": "1769216400",
-      "op": "settle",
+      "op": "begin_settlement",
       "series": "S2",
-      "clearingPrice": "105000000"
+      "clearingPrice": "105000000",
+      "qAboveClaim": "300",
+      "qAtClaim": "100"
+    },
+    {
+      "t": "1769216400",
+      "op": "finalize_settlement",
+      "series": "S2"
     },
     {
       "t": "1769216460",
@@ -535,24 +693,191 @@
       "bidder": "b4"
     },
     {
-      "t": "1769216640",
+      "t": "1769216700",
+      "op": "deliver_bid",
+      "series": "S2",
+      "bidder": "b1"
+    },
+    {
+      "t": "1769216760",
+      "op": "deliver_bid",
+      "series": "S2",
+      "bidder": "b2"
+    },
+    {
+      "t": "1769216820",
+      "op": "deliver_bid",
+      "series": "S2",
+      "bidder": "b3"
+    },
+    {
+      "t": "1769216880",
+      "op": "deliver_bid",
+      "series": "S2",
+      "bidder": "b4"
+    },
+    {
+      "t": "1769299200",
+      "op": "open_raise",
+      "actor": "issuer",
+      "series": "S3"
+    },
+    {
+      "t": "1769302800",
+      "op": "commit_bid",
+      "actor": "b1",
+      "series": "S3",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0x77b36308704cb4d828b356ebea930bb9e41f1cb3122210bf1f11ccff35cc2a7a",
+      "escrow": "12120000000"
+    },
+    {
+      "t": "1769306400",
+      "op": "commit_bid",
+      "actor": "b2",
+      "series": "S3",
+      "price": "115000000",
+      "quantity": "100",
+      "salt": "0x3721e1100813a4e2dd518300abdc6dbda7dd05d47aa67aa4b678e8257e1d6cb1",
+      "escrow": "11615000000"
+    },
+    {
+      "t": "1769310000",
+      "op": "commit_bid",
+      "actor": "b3",
+      "series": "S3",
+      "price": "110000000",
+      "quantity": "100",
+      "salt": "0x15409a041234cd1e2da4084942bbb3c45bd4c2bf47bb18f6f1cda63f646e25ad",
+      "escrow": "11110000000"
+    },
+    {
+      "t": "1769313600",
+      "op": "commit_bid",
+      "actor": "b4",
+      "series": "S3",
+      "price": "105000000",
+      "quantity": "100",
+      "salt": "0xea0995a49543b13d301dba1100393a13cb22e0e0d07acd5c2f5114dfa70529f2",
+      "escrow": "10605000000"
+    },
+    {
+      "t": "1769908200",
+      "op": "reveal_bid",
+      "actor": "b1",
+      "series": "S3",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0x77b36308704cb4d828b356ebea930bb9e41f1cb3122210bf1f11ccff35cc2a7a"
+    },
+    {
+      "t": "1769908800",
+      "op": "reveal_bid",
+      "actor": "b2",
+      "series": "S3",
+      "price": "115000000",
+      "quantity": "100",
+      "salt": "0x3721e1100813a4e2dd518300abdc6dbda7dd05d47aa67aa4b678e8257e1d6cb1"
+    },
+    {
+      "t": "1769909400",
+      "op": "reveal_bid",
+      "actor": "b3",
+      "series": "S3",
+      "price": "110000000",
+      "quantity": "100",
+      "salt": "0x15409a041234cd1e2da4084942bbb3c45bd4c2bf47bb18f6f1cda63f646e25ad"
+    },
+    {
+      "t": "1769910000",
+      "op": "reveal_bid",
+      "actor": "b4",
+      "series": "S3",
+      "price": "105000000",
+      "quantity": "100",
+      "salt": "0xea0995a49543b13d301dba1100393a13cb22e0e0d07acd5c2f5114dfa70529f2"
+    },
+    {
+      "t": "1770080400",
+      "op": "begin_settlement",
+      "series": "S3",
+      "clearingPrice": "105000000",
+      "qAboveClaim": "300",
+      "qAtClaim": "100"
+    },
+    {
+      "t": "1770080400",
+      "op": "finalize_settlement",
+      "series": "S3"
+    },
+    {
+      "t": "1770080460",
+      "op": "process_bid",
+      "series": "S3",
+      "bidder": "b1"
+    },
+    {
+      "t": "1770080520",
+      "op": "process_bid",
+      "series": "S3",
+      "bidder": "b2"
+    },
+    {
+      "t": "1770080580",
+      "op": "process_bid",
+      "series": "S3",
+      "bidder": "b3"
+    },
+    {
+      "t": "1770080640",
+      "op": "process_bid",
+      "series": "S3",
+      "bidder": "b4"
+    },
+    {
+      "t": "1770080700",
+      "op": "deliver_bid",
+      "series": "S3",
+      "bidder": "b1"
+    },
+    {
+      "t": "1770080760",
+      "op": "deliver_bid",
+      "series": "S3",
+      "bidder": "b2"
+    },
+    {
+      "t": "1770080820",
+      "op": "deliver_bid",
+      "series": "S3",
+      "bidder": "b3"
+    },
+    {
+      "t": "1770080880",
+      "op": "deliver_bid",
+      "series": "S3",
+      "bidder": "b4"
+    },
+    {
+      "t": "1770080880",
       "op": "expect",
       "series": "S2",
       "balances": {
         "b1": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b2": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b3": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b4": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "client": {
@@ -564,7 +889,7 @@
           "units": "0"
         }
       },
-      "feeCollector": "840000000",
+      "feeCollector": "1260000000",
       "treasury": "42000000000",
       "vault": "0",
       "auctionEscrow": "0",
@@ -572,6 +897,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -584,6 +910,7 @@
         "paidPerUnitWad": "0",
         "netAccWad": "0",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "0",
         "feeCollected": "0",
         "refundedToIssuer": "0",
@@ -592,59 +919,85 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "both series settled: 400 units each at 105; r × units = 4% on each"
+      "note": "three series settled: 400 units each at 105; r × units = 4% on each"
     },
     {
-      "t": "1769385600",
+      "t": "1770249600",
       "op": "stop_issuance",
       "actor": "issuer"
     },
     {
-      "t": "1769385600",
+      "t": "1770249600",
       "op": "expect_revert",
       "call": {
         "op": "create_series",
         "actor": "issuer",
-        "series": "S3",
+        "series": "S4",
         "terms": {
           "unitsOffered": "1000",
           "reservePrice": "100000000",
@@ -681,22 +1034,22 @@
             "bps": "2500"
           }
         ],
-        "termsCommitment": "0x37ca22143eaeb2bee9f22d06dda06e02b33e2cdfcda034c5c59336aa1765dc3d",
-        "contractHash": "0x985d2e2cfabb0e88c3b4e9ac065ade60b459f14b6dfeb6fb5980db673f6bfabe",
+        "termsCommitment": "0x80812930c875a1efdf65b827957030bbd1bac63dc30457483370dd51bc7ac105",
+        "contractHash": "0x897abbae2ce9c664cdbe720920908d5bb80483feead9566e4ac49739422a645e",
         "tierFlags": 2,
         "fxPairId": null
       },
       "error": "IssuanceStopped"
     },
     {
-      "t": "1769385600",
+      "t": "1770249600",
       "note": "existing series are unaffected by the issuance stop",
       "op": "claim_release",
       "actor": "issuer",
       "series": "S1"
     },
     {
-      "t": "1769385600",
+      "t": "1770249600",
       "op": "resume_issuance",
       "actor": "issuer"
     },
@@ -707,6 +1060,14 @@
       "series": "S2",
       "payer": "client",
       "amount": "30000000000"
+    },
+    {
+      "t": "1770681600",
+      "note": "S3: 80,000 passes, 10,000 above θ → 400 routed (4%)",
+      "op": "route_income",
+      "series": "S3",
+      "payer": "client",
+      "amount": "90000000000"
     },
     {
       "t": "1770681600",
@@ -733,31 +1094,31 @@
       "series": "S2",
       "balances": {
         "b1": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b2": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b3": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b4": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "client": {
-          "stable": "910000000000",
+          "stable": "820000000000",
           "units": "0"
         },
         "issuer": {
-          "stable": "300100000000",
+          "stable": "389700000000",
           "units": "0"
         }
       },
-      "feeCollector": "860000000",
+      "feeCollector": "1300000000",
       "treasury": "42000000000",
       "vault": "380000000",
       "auctionEscrow": "0",
@@ -765,6 +1126,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -777,6 +1139,7 @@
         "paidPerUnitWad": "1000000000000000000000000",
         "netAccWad": "950000000000000000000000",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "400000000",
         "feeCollected": "20000000",
         "refundedToIssuer": "0",
@@ -785,46 +1148,180 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "400000000",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
       "note": "routerCredit 400; vault 380; ytd 90,000"
+    },
+    {
+      "t": "1775088000",
+      "op": "expect_revert",
+      "call": {
+        "op": "submit_report",
+        "actor": "issuer",
+        "series": "S2",
+        "period": "8104",
+        "paymentUsd": "0",
+        "fxAvgWad": "1000000000000000000",
+        "fxFallback": null,
+        "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+        "incomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+        "tier": 1,
+        "liquidityEvent": false,
+        "attestation": null,
+        "proof": {
+          "pi_a": [
+            "6218070240695552677816671613375684639831165316892822271692294862580305924523",
+            "11382029987364754495298154961530722999451444025522327171741414496386957807406",
+            "1"
+          ],
+          "pi_b": [
+            [
+              "5304179051815860072339355697602152163082286369988192797265901753227968634701",
+              "11145555612254781382865898937965865398415821565409501183672844715579412182187"
+            ],
+            [
+              "9646812713182908673887797007320340295899525277937112377388319048282377291565",
+              "11885737978455396329366661517934274175280934030146979498989482653752863634998"
+            ],
+            [
+              "1",
+              "0"
+            ]
+          ],
+          "pi_c": [
+            "12547099363754360328956101518211863883621680966207787548558891883423662582089",
+            "10996644067092937625103121472463327272364695808158928063691486431175975010684",
+            "1"
+          ],
+          "protocol": "groth16",
+          "curve": "bn128"
+        },
+        "publicSignals": [
+          "6439852318357076615527385542666985338989246866338479621215321242960127652146",
+          "400",
+          "1000000000000000000",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "0"
+        ],
+        "proofEvm": {
+          "pA": [
+            "6218070240695552677816671613375684639831165316892822271692294862580305924523",
+            "11382029987364754495298154961530722999451444025522327171741414496386957807406"
+          ],
+          "pB": [
+            [
+              "11145555612254781382865898937965865398415821565409501183672844715579412182187",
+              "5304179051815860072339355697602152163082286369988192797265901753227968634701"
+            ],
+            [
+              "11885737978455396329366661517934274175280934030146979498989482653752863634998",
+              "9646812713182908673887797007320340295899525277937112377388319048282377291565"
+            ]
+          ],
+          "pC": [
+            "12547099363754360328956101518211863883621680966207787548558891883423662582089",
+            "10996644067092937625103121472463327272364695808158928063691486431175975010684"
+          ],
+          "pubSignals": [
+            "6439852318357076615527385542666985338989246866338479621215321242960127652146",
+            "400",
+            "1000000000000000000",
+            "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+            "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+            "0"
+          ],
+          "proofBytes": "0x0dbf4d93d26ae51aae54875499fe4097336a027ba0b5d513638d624fd86091ab192a002c5d4aa47e3325092bca1a9567876927b6307108f675edef15c1a18f2e18a429324c4c71932bd53570b0516216e1e74d72d73d7ad2c79eadbd96f9f4ab0bba0f17a228502997e6725486f899af451f9760b95e0e53b155b4813ac5df4d1a4716dc26c5f94a9a52468703d25ff26592132874b4e3196664586b348636361553e70a80af69462ceb0a4cd5fd879059071f29dd466ad5cd7f88f4567c072d1bbd6815554f277f30078287cd831ada3c81c0168de11846e02bc7fa0defa949184fe1461b16ab4436d54b6aa24a455d3de80d907507075465a5d67137f6817c",
+          "calldata": "0xf398789b0dbf4d93d26ae51aae54875499fe4097336a027ba0b5d513638d624fd86091ab192a002c5d4aa47e3325092bca1a9567876927b6307108f675edef15c1a18f2e18a429324c4c71932bd53570b0516216e1e74d72d73d7ad2c79eadbd96f9f4ab0bba0f17a228502997e6725486f899af451f9760b95e0e53b155b4813ac5df4d1a4716dc26c5f94a9a52468703d25ff26592132874b4e3196664586b348636361553e70a80af69462ceb0a4cd5fd879059071f29dd466ad5cd7f88f4567c072d1bbd6815554f277f30078287cd831ada3c81c0168de11846e02bc7fa0defa949184fe1461b16ab4436d54b6aa24a455d3de80d907507075465a5d67137f6817c0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf13200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648642098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648640000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "proofSolana": {
+          "proofA": "0x0dbf4d93d26ae51aae54875499fe4097336a027ba0b5d513638d624fd86091ab173a4e4683e6fbab852b3c8ab766c2f6101842db3800c196c6329d0116db6e19",
+          "proofB": "0x18a429324c4c71932bd53570b0516216e1e74d72d73d7ad2c79eadbd96f9f4ab0bba0f17a228502997e6725486f899af451f9760b95e0e53b155b4813ac5df4d1a4716dc26c5f94a9a52468703d25ff26592132874b4e3196664586b348636361553e70a80af69462ceb0a4cd5fd879059071f29dd466ad5cd7f88f4567c072d",
+          "proofC": "0x1bbd6815554f277f30078287cd831ada3c81c0168de11846e02bc7fa0defa949184fe1461b16ab4436d54b6aa24a455d3de80d907507075465a5d67137f6817c",
+          "proof": "0x0dbf4d93d26ae51aae54875499fe4097336a027ba0b5d513638d624fd86091ab173a4e4683e6fbab852b3c8ab766c2f6101842db3800c196c6329d0116db6e1918a429324c4c71932bd53570b0516216e1e74d72d73d7ad2c79eadbd96f9f4ab0bba0f17a228502997e6725486f899af451f9760b95e0e53b155b4813ac5df4d1a4716dc26c5f94a9a52468703d25ff26592132874b4e3196664586b348636361553e70a80af69462ceb0a4cd5fd879059071f29dd466ad5cd7f88f4567c072d1bbd6815554f277f30078287cd831ada3c81c0168de11846e02bc7fa0defa949184fe1461b16ab4436d54b6aa24a455d3de80d907507075465a5d67137f6817c",
+          "publicInputs": [
+            "0x0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf132",
+            "0x0000000000000000000000000000000000000000000000000000000000000190",
+            "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+            "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+            "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+            "0x0000000000000000000000000000000000000000000000000000000000000000"
+          ]
+        },
+        "witness": {
+          "incomeYtd": "0",
+          "incomeSalt": "0",
+          "priorIncomeYtd": "0",
+          "priorSalt": "0",
+          "theta": "80000000000",
+          "rWad": "100000000000000"
+        }
+      },
+      "error": "TierNotEnabled",
+      "note": "a series with tier 2 enabled must report with the attested tier"
     },
     {
       "t": "1775088000",
@@ -836,24 +1333,25 @@
       "paymentUsd": "400000000",
       "fxAvgWad": "1000000000000000000",
       "fxFallback": null,
-      "incomeCommitment": "0x149dd3afe0a87bc98932055a0e5519f1abb3269e66b6267da695807d68eb6234",
+      "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+      "incomeCommitment": "0x16e4c61925485d22793c3bc564597f3049aac5d7e87ff05d6f1cde9ef7fe779d",
       "tier": 2,
       "liquidityEvent": false,
       "attestation": "verifier1",
       "proof": {
         "pi_a": [
-          "5040656143592413071903699342941871856456465363631687634703260271338714783165",
-          "8293163620221853545219362101378366273376972494821379106676800699880500262864",
+          "7471124614186909708514392116341880133370024882039001789353764282594968385894",
+          "20420555398173828458519152296469460045824815242838882284865640220267778350431",
           "1"
         ],
         "pi_b": [
           [
-            "7011217920627418154919936593649321259265396078504435321877459102499341022757",
-            "17131987239009206070850721101655723060060179545736065407848478379165014541861"
+            "16872834386127110330955638763384124596380384106797337033262978268999859042254",
+            "21360141674253003799265268498111368269710236735045291399047115529256325139294"
           ],
           [
-            "21723896642442914540551431382096766133175314469222672148690616384474681567892",
-            "21865349022174277569792775975868440610364168617243788239626908302081316206076"
+            "13553421778221428876152415612315253271477465166757551084705981002066884192960",
+            "2797398146938209812078589334363365625226706985171214120448352861832116815594"
           ],
           [
             "1",
@@ -861,8 +1359,8 @@
           ]
         ],
         "pi_c": [
-          "15021628063599024159622466036522980111931338773345717717304545741040899738976",
-          "1158245573033953181110983163855181141804003676080865867039068300168651054343",
+          "12315394114899960991267815522378910941411727348679709055512535712148419001131",
+          "7473508670153136615322316267023510237028102636603777438787717304370115280624",
           "1"
         ],
         "protocol": "groth16",
@@ -873,56 +1371,56 @@
         "400",
         "1000000000000000000",
         "14744269619966411208579211824598458697587494354926760081771325075741142829156",
-        "9325112970964637111137388130748134905685785409667353602102286218293391614516",
+        "10355091023302986917154683596918194007995669769302398777673176637629502748573",
         "400000000"
       ],
       "proofEvm": {
         "pA": [
-          "5040656143592413071903699342941871856456465363631687634703260271338714783165",
-          "8293163620221853545219362101378366273376972494821379106676800699880500262864"
+          "7471124614186909708514392116341880133370024882039001789353764282594968385894",
+          "20420555398173828458519152296469460045824815242838882284865640220267778350431"
         ],
         "pB": [
           [
-            "17131987239009206070850721101655723060060179545736065407848478379165014541861",
-            "7011217920627418154919936593649321259265396078504435321877459102499341022757"
+            "21360141674253003799265268498111368269710236735045291399047115529256325139294",
+            "16872834386127110330955638763384124596380384106797337033262978268999859042254"
           ],
           [
-            "21865349022174277569792775975868440610364168617243788239626908302081316206076",
-            "21723896642442914540551431382096766133175314469222672148690616384474681567892"
+            "2797398146938209812078589334363365625226706985171214120448352861832116815594",
+            "13553421778221428876152415612315253271477465166757551084705981002066884192960"
           ]
         ],
         "pC": [
-          "15021628063599024159622466036522980111931338773345717717304545741040899738976",
-          "1158245573033953181110983163855181141804003676080865867039068300168651054343"
+          "12315394114899960991267815522378910941411727348679709055512535712148419001131",
+          "7473508670153136615322316267023510237028102636603777438787717304370115280624"
         ],
         "pubSignals": [
           "6439852318357076615527385542666985338989246866338479621215321242960127652146",
           "400",
           "1000000000000000000",
           "14744269619966411208579211824598458697587494354926760081771325075741142829156",
-          "9325112970964637111137388130748134905685785409667353602102286218293391614516",
+          "10355091023302986917154683596918194007995669769302398777673176637629502748573",
           "400000000"
         ],
-        "proofBytes": "0x0b24e907b68fe524f9d3c369a502d5c2445fb883e2deca3aa849eb6efc2b5dbd1255c3a7167cb8fb5bd46499d3e6a57f87c95dea8c30da5f86da8fc1a23a77d025e05c74678118d89586b6277094309e8508631f655457a372b4bce17343c6250f80356e599a50e0933518bdf68161a5dbe9e09f4b1369fefa0d8973d7eb362530575956ccbd168178edde64171f476188159cb1b922161c665c44206f81b5fc30074a2e6e3355b9013d10f2fa9d18661eaed5547e7e4fa4277f4e7aea7dea942135f0b01182d889ca0de5cd4801376c859c18c81f6b5dc78773ecf4f40e4d60028f8b3408f8645878009ba0ce7a2f07ba9e66d556eb07c0f1e6998833a79d07",
-        "calldata": "0xf398789b0b24e907b68fe524f9d3c369a502d5c2445fb883e2deca3aa849eb6efc2b5dbd1255c3a7167cb8fb5bd46499d3e6a57f87c95dea8c30da5f86da8fc1a23a77d025e05c74678118d89586b6277094309e8508631f655457a372b4bce17343c6250f80356e599a50e0933518bdf68161a5dbe9e09f4b1369fefa0d8973d7eb362530575956ccbd168178edde64171f476188159cb1b922161c665c44206f81b5fc30074a2e6e3355b9013d10f2fa9d18661eaed5547e7e4fa4277f4e7aea7dea942135f0b01182d889ca0de5cd4801376c859c18c81f6b5dc78773ecf4f40e4d60028f8b3408f8645878009ba0ce7a2f07ba9e66d556eb07c0f1e6998833a79d070e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf13200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864149dd3afe0a87bc98932055a0e5519f1abb3269e66b6267da695807d68eb62340000000000000000000000000000000000000000000000000000000017d78400"
+        "proofBytes": "0x108481b5b7067cb4956eca23d0f6383990fa29300ac4b1708fdf0d5ef21eb9662d259ff0d5668a6efc2f612a42695c4aaf23456e5a5a5618d0d92fd73b531d5f2f396968c6e582e83f6319ac0151e007a4218423645a113916e67c195e28cb5e254daf92d87496960ad8aec5d7379a6f6d3980742bb312b32baee705a357f7ce062f4570201d5caa46b234f2adc0067a3d78751e8cdbe2df7cfbcef4961dc6ea1df6f70239f533748d45e86920a51673a5360f42ea3160abdaeb72cabe726ac01b3a441bfdc39d023e3af598b14eb39500dbc48b96ed19db4b71a6dd2dc03b2b1085db2343f65b4f63f6420c826349eeeaf23b1ec24d9d59101ad243cfba7ef0",
+        "calldata": "0xf398789b108481b5b7067cb4956eca23d0f6383990fa29300ac4b1708fdf0d5ef21eb9662d259ff0d5668a6efc2f612a42695c4aaf23456e5a5a5618d0d92fd73b531d5f2f396968c6e582e83f6319ac0151e007a4218423645a113916e67c195e28cb5e254daf92d87496960ad8aec5d7379a6f6d3980742bb312b32baee705a357f7ce062f4570201d5caa46b234f2adc0067a3d78751e8cdbe2df7cfbcef4961dc6ea1df6f70239f533748d45e86920a51673a5360f42ea3160abdaeb72cabe726ac01b3a441bfdc39d023e3af598b14eb39500dbc48b96ed19db4b71a6dd2dc03b2b1085db2343f65b4f63f6420c826349eeeaf23b1ec24d9d59101ad243cfba7ef00e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf13200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b6486416e4c61925485d22793c3bc564597f3049aac5d7e87ff05d6f1cde9ef7fe779d0000000000000000000000000000000000000000000000000000000017d78400"
       },
       "proofSolana": {
-        "proofA": "0x0b24e907b68fe524f9d3c369a502d5c2445fb883e2deca3aa849eb6efc2b5dbd1e0e8acbcab4e72e5c7be11cad9ab2de0fb80ca6dc40f02db545fc5536428577",
-        "proofB": "0x25e05c74678118d89586b6277094309e8508631f655457a372b4bce17343c6250f80356e599a50e0933518bdf68161a5dbe9e09f4b1369fefa0d8973d7eb362530575956ccbd168178edde64171f476188159cb1b922161c665c44206f81b5fc30074a2e6e3355b9013d10f2fa9d18661eaed5547e7e4fa4277f4e7aea7dea94",
-        "proofC": "0x2135f0b01182d889ca0de5cd4801376c859c18c81f6b5dc78773ecf4f40e4d60028f8b3408f8645878009ba0ce7a2f07ba9e66d556eb07c0f1e6998833a79d07",
-        "proof": "0x0b24e907b68fe524f9d3c369a502d5c2445fb883e2deca3aa849eb6efc2b5dbd1e0e8acbcab4e72e5c7be11cad9ab2de0fb80ca6dc40f02db545fc553642857725e05c74678118d89586b6277094309e8508631f655457a372b4bce17343c6250f80356e599a50e0933518bdf68161a5dbe9e09f4b1369fefa0d8973d7eb362530575956ccbd168178edde64171f476188159cb1b922161c665c44206f81b5fc30074a2e6e3355b9013d10f2fa9d18661eaed5547e7e4fa4277f4e7aea7dea942135f0b01182d889ca0de5cd4801376c859c18c81f6b5dc78773ecf4f40e4d60028f8b3408f8645878009ba0ce7a2f07ba9e66d556eb07c0f1e6998833a79d07",
+        "proofA": "0x108481b5b7067cb4956eca23d0f6383990fa29300ac4b1708fdf0d5ef21eb966033eae820bcb15babc20e48c3f17fc12e85e25230e1774746b475c3f9d29dfe8",
+        "proofB": "0x2f396968c6e582e83f6319ac0151e007a4218423645a113916e67c195e28cb5e254daf92d87496960ad8aec5d7379a6f6d3980742bb312b32baee705a357f7ce062f4570201d5caa46b234f2adc0067a3d78751e8cdbe2df7cfbcef4961dc6ea1df6f70239f533748d45e86920a51673a5360f42ea3160abdaeb72cabe726ac0",
+        "proofC": "0x1b3a441bfdc39d023e3af598b14eb39500dbc48b96ed19db4b71a6dd2dc03b2b1085db2343f65b4f63f6420c826349eeeaf23b1ec24d9d59101ad243cfba7ef0",
+        "proof": "0x108481b5b7067cb4956eca23d0f6383990fa29300ac4b1708fdf0d5ef21eb966033eae820bcb15babc20e48c3f17fc12e85e25230e1774746b475c3f9d29dfe82f396968c6e582e83f6319ac0151e007a4218423645a113916e67c195e28cb5e254daf92d87496960ad8aec5d7379a6f6d3980742bb312b32baee705a357f7ce062f4570201d5caa46b234f2adc0067a3d78751e8cdbe2df7cfbcef4961dc6ea1df6f70239f533748d45e86920a51673a5360f42ea3160abdaeb72cabe726ac01b3a441bfdc39d023e3af598b14eb39500dbc48b96ed19db4b71a6dd2dc03b2b1085db2343f65b4f63f6420c826349eeeaf23b1ec24d9d59101ad243cfba7ef0",
         "publicInputs": [
           "0x0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf132",
           "0x0000000000000000000000000000000000000000000000000000000000000190",
           "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
           "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
-          "0x149dd3afe0a87bc98932055a0e5519f1abb3269e66b6267da695807d68eb6234",
+          "0x16e4c61925485d22793c3bc564597f3049aac5d7e87ff05d6f1cde9ef7fe779d",
           "0x0000000000000000000000000000000000000000000000000000000017d78400"
         ]
       },
       "witness": {
         "incomeYtd": "90000000000",
-        "incomeSalt": "11351076791522617657916976991798550768324926727725068679019613213233580250538",
+        "incomeSalt": "14939689401426964032655838864985288626453727697241431687675697047042659209615",
         "priorIncomeYtd": "0",
         "priorSalt": "0",
         "theta": "80000000000",
@@ -938,24 +1436,25 @@
       "paymentUsd": "0",
       "fxAvgWad": "1000000000000000000",
       "fxFallback": null,
+      "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
       "incomeCommitment": "0x24afc2486380f8c579d440a124b6091ab1d20082c1a116ecbf3b53fd0fe565da",
       "tier": 2,
       "liquidityEvent": false,
       "attestation": "verifier1",
       "proof": {
         "pi_a": [
-          "263370176913161523023165324933768235471446953282006971727721203270603245990",
-          "6696394727618849703090587260343833588057227530328896673276816220561054533059",
+          "11532109150680549475489971125965872930019974046155987734844642870164467862403",
+          "2541366993725756737714069998987621552330206401114461601216944922074724523521",
           "1"
         ],
         "pi_b": [
           [
-            "2111767292924957182185926684606651465104652985624162146792799125387333594959",
-            "1313909354814624525906925225461246081569577775666409871054562844478591767557"
+            "14130372959124460874566375686780051197708872508764176085760724579969338215829",
+            "17659431342613387446536751548937865215911536241193906845323097535780401273663"
           ],
           [
-            "8554227863001983818236976482355468954171780139197753769560494399721248557791",
-            "18103686817516552880399925248450874688005342775818538175859170836766673229499"
+            "7483132318780545394691693555808285527150957539795946148875671277804017554835",
+            "15327012767643432807963843488258656418077866435376283409313868180349438723392"
           ],
           [
             "1",
@@ -963,8 +1462,8 @@
           ]
         ],
         "pi_c": [
-          "12622036267363564116375134163517090482303084868549979535501800067435560760444",
-          "5221523665962742042851760324036915774976810580201508481112924159873810745113",
+          "11361416344298965483900177134385935216766369549089192441466207512303128991410",
+          "11604032377219325983820866402624566714567055601758033331733855241441604395156",
           "1"
         ],
         "protocol": "groth16",
@@ -980,22 +1479,22 @@
       ],
       "proofEvm": {
         "pA": [
-          "263370176913161523023165324933768235471446953282006971727721203270603245990",
-          "6696394727618849703090587260343833588057227530328896673276816220561054533059"
+          "11532109150680549475489971125965872930019974046155987734844642870164467862403",
+          "2541366993725756737714069998987621552330206401114461601216944922074724523521"
         ],
         "pB": [
           [
-            "1313909354814624525906925225461246081569577775666409871054562844478591767557",
-            "2111767292924957182185926684606651465104652985624162146792799125387333594959"
+            "17659431342613387446536751548937865215911536241193906845323097535780401273663",
+            "14130372959124460874566375686780051197708872508764176085760724579969338215829"
           ],
           [
-            "18103686817516552880399925248450874688005342775818538175859170836766673229499",
-            "8554227863001983818236976482355468954171780139197753769560494399721248557791"
+            "15327012767643432807963843488258656418077866435376283409313868180349438723392",
+            "7483132318780545394691693555808285527150957539795946148875671277804017554835"
           ]
         ],
         "pC": [
-          "12622036267363564116375134163517090482303084868549979535501800067435560760444",
-          "5221523665962742042851760324036915774976810580201508481112924159873810745113"
+          "11361416344298965483900177134385935216766369549089192441466207512303128991410",
+          "11604032377219325983820866402624566714567055601758033331733855241441604395156"
         ],
         "pubSignals": [
           "4544400968910601960161572207459349789799486975090542838653122642518894827070",
@@ -1005,14 +1504,14 @@
           "16593801675720217424570273679133411120675569381202587503926693945093048853978",
           "0"
         ],
-        "proofBytes": "0x00950feecd17779723cbd91ea57b79c9c9b7992de6ca2dabf75cb74f0f0409a60ece066d1c741a08447f491c464604d4214d0508245550b0f6bcce48927685c302e7a5769a6e086842078c2f3c91ebdea66a041cd3c68588eacaff0b84b8940504ab37ca513fab5858b2c57915fb1a95701eebae4e1fa71ef0b73a92c1a3ef4f280652d8efbf3df4658bedc97589cf54e34780f1f45d3cf2a8f64f0d9e0e56bb12e9857a09cd2913a57f3d8505b9a445e680d9c82b66be5a7cfb6d7b14728adf1be7d1c1923017c96d94b49c0f4f9853a78646c3425bbb161ea7c9080f08f47c0b8b4714fa3cbe0b7f1226758e063994d2e9eea1c0ccf50903f9819d6c88c719",
-        "calldata": "0xf398789b00950feecd17779723cbd91ea57b79c9c9b7992de6ca2dabf75cb74f0f0409a60ece066d1c741a08447f491c464604d4214d0508245550b0f6bcce48927685c302e7a5769a6e086842078c2f3c91ebdea66a041cd3c68588eacaff0b84b8940504ab37ca513fab5858b2c57915fb1a95701eebae4e1fa71ef0b73a92c1a3ef4f280652d8efbf3df4658bedc97589cf54e34780f1f45d3cf2a8f64f0d9e0e56bb12e9857a09cd2913a57f3d8505b9a445e680d9c82b66be5a7cfb6d7b14728adf1be7d1c1923017c96d94b49c0f4f9853a78646c3425bbb161ea7c9080f08f47c0b8b4714fa3cbe0b7f1226758e063994d2e9eea1c0ccf50903f9819d6c88c7190a0c0a30402fe52018073d0402fcae485b733946ac7ad5fd75493ccb84e9d63e00000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b6486424afc2486380f8c579d440a124b6091ab1d20082c1a116ecbf3b53fd0fe565da0000000000000000000000000000000000000000000000000000000000000000"
+        "proofBytes": "0x197ef145ebc89d730a065743035faed65c2fa4ad0fdd3c1cbcab2d020d3dcb83059e5cdcd7c2c671a10d07312b7d64903e69ea787889e91b37a8ba603b615e01270ae24989611c67600653ef4987f93f1f1fc53866223c3d2779d7df83015b3f1f3d81f6ea37fb0185670572bb283018308f4e8b5c2936d2f8c2867a8fc48d9521e2c8244b489a5bf9f7623e3d0e0355ffae0d85fd28499f8db51e0a63290540108b4d843b771c88bcfe232909a1c4d976a0dea6d60917720726a6c52f5e1593191e5571d912ce5a5083c9765aa178d09b0fa9071bb3d9b4427e2a44f82ed6b219a7a64aa9e050dce0aeebd71fc26666c752fd7921f86e04a6451b4b6739e094",
+        "calldata": "0xf398789b197ef145ebc89d730a065743035faed65c2fa4ad0fdd3c1cbcab2d020d3dcb83059e5cdcd7c2c671a10d07312b7d64903e69ea787889e91b37a8ba603b615e01270ae24989611c67600653ef4987f93f1f1fc53866223c3d2779d7df83015b3f1f3d81f6ea37fb0185670572bb283018308f4e8b5c2936d2f8c2867a8fc48d9521e2c8244b489a5bf9f7623e3d0e0355ffae0d85fd28499f8db51e0a63290540108b4d843b771c88bcfe232909a1c4d976a0dea6d60917720726a6c52f5e1593191e5571d912ce5a5083c9765aa178d09b0fa9071bb3d9b4427e2a44f82ed6b219a7a64aa9e050dce0aeebd71fc26666c752fd7921f86e04a6451b4b6739e0940a0c0a30402fe52018073d0402fcae485b733946ac7ad5fd75493ccb84e9d63e00000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b6486424afc2486380f8c579d440a124b6091ab1d20082c1a116ecbf3b53fd0fe565da0000000000000000000000000000000000000000000000000000000000000000"
       },
       "proofSolana": {
-        "proofA": "0x00950feecd17779723cbd91ea57b79c9c9b7992de6ca2dabf75cb74f0f0409a621964805c4bd862173d0fc9a3b3b538976346589441c79dc4563bdce46067784",
-        "proofB": "0x02e7a5769a6e086842078c2f3c91ebdea66a041cd3c68588eacaff0b84b8940504ab37ca513fab5858b2c57915fb1a95701eebae4e1fa71ef0b73a92c1a3ef4f280652d8efbf3df4658bedc97589cf54e34780f1f45d3cf2a8f64f0d9e0e56bb12e9857a09cd2913a57f3d8505b9a445e680d9c82b66be5a7cfb6d7b14728adf",
-        "proofC": "0x1be7d1c1923017c96d94b49c0f4f9853a78646c3425bbb161ea7c9080f08f47c0b8b4714fa3cbe0b7f1226758e063994d2e9eea1c0ccf50903f9819d6c88c719",
-        "proof": "0x00950feecd17779723cbd91ea57b79c9c9b7992de6ca2dabf75cb74f0f0409a621964805c4bd862173d0fc9a3b3b538976346589441c79dc4563bdce4606778402e7a5769a6e086842078c2f3c91ebdea66a041cd3c68588eacaff0b84b8940504ab37ca513fab5858b2c57915fb1a95701eebae4e1fa71ef0b73a92c1a3ef4f280652d8efbf3df4658bedc97589cf54e34780f1f45d3cf2a8f64f0d9e0e56bb12e9857a09cd2913a57f3d8505b9a445e680d9c82b66be5a7cfb6d7b14728adf1be7d1c1923017c96d94b49c0f4f9853a78646c3425bbb161ea7c9080f08f47c0b8b4714fa3cbe0b7f1226758e063994d2e9eea1c0ccf50903f9819d6c88c719",
+        "proofA": "0x197ef145ebc89d730a065743035faed65c2fa4ad0fdd3c1cbcab2d020d3dcb832ac5f196096ed9b817433e855603f3cd59178018efe7e1720477d1b69d1b9f46",
+        "proofB": "0x270ae24989611c67600653ef4987f93f1f1fc53866223c3d2779d7df83015b3f1f3d81f6ea37fb0185670572bb283018308f4e8b5c2936d2f8c2867a8fc48d9521e2c8244b489a5bf9f7623e3d0e0355ffae0d85fd28499f8db51e0a63290540108b4d843b771c88bcfe232909a1c4d976a0dea6d60917720726a6c52f5e1593",
+        "proofC": "0x191e5571d912ce5a5083c9765aa178d09b0fa9071bb3d9b4427e2a44f82ed6b219a7a64aa9e050dce0aeebd71fc26666c752fd7921f86e04a6451b4b6739e094",
+        "proof": "0x197ef145ebc89d730a065743035faed65c2fa4ad0fdd3c1cbcab2d020d3dcb832ac5f196096ed9b817433e855603f3cd59178018efe7e1720477d1b69d1b9f46270ae24989611c67600653ef4987f93f1f1fc53866223c3d2779d7df83015b3f1f3d81f6ea37fb0185670572bb283018308f4e8b5c2936d2f8c2867a8fc48d9521e2c8244b489a5bf9f7623e3d0e0355ffae0d85fd28499f8db51e0a63290540108b4d843b771c88bcfe232909a1c4d976a0dea6d60917720726a6c52f5e1593191e5571d912ce5a5083c9765aa178d09b0fa9071bb3d9b4427e2a44f82ed6b219a7a64aa9e050dce0aeebd71fc26666c752fd7921f86e04a6451b4b6739e094",
         "publicInputs": [
           "0x0a0c0a30402fe52018073d0402fcae485b733946ac7ad5fd75493ccb84e9d63e",
           "0x0000000000000000000000000000000000000000000000000000000000000190",
@@ -1033,35 +1532,254 @@
     },
     {
       "t": "1775088000",
+      "op": "expect_revert",
+      "call": {
+        "op": "submit_report",
+        "actor": "issuer",
+        "series": "S3",
+        "period": "8104",
+        "paymentUsd": "0",
+        "fxAvgWad": "1000000000000000000",
+        "fxFallback": null,
+        "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+        "incomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+        "tier": 1,
+        "liquidityEvent": false,
+        "attestation": null,
+        "proof": {
+          "pi_a": [
+            "11176207919893726566007615761717856728449176797201703206103546679213937436982",
+            "176704932941656038658889241523776974903498682262484874230171690534625389261",
+            "1"
+          ],
+          "pi_b": [
+            [
+              "2266338110937266242897443569472839673701294904081012501848010079803062578321",
+              "20228130749962405351369334593585786805258603421237993666207443155371585741183"
+            ],
+            [
+              "17273333418111626431072129807068492484513063329095468482097801772687331737094",
+              "13199510857776398865481830981430081520379818393751556744941396462830692616046"
+            ],
+            [
+              "1",
+              "0"
+            ]
+          ],
+          "pi_c": [
+            "6305254485856523286685152216213199527791783161632328182804669942900250279184",
+            "2269208074240490940222345757139420837761839834407714150548899023459150469065",
+            "1"
+          ],
+          "protocol": "groth16",
+          "curve": "bn128"
+        },
+        "publicSignals": [
+          "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+          "400",
+          "1000000000000000000",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "0"
+        ],
+        "proofEvm": {
+          "pA": [
+            "11176207919893726566007615761717856728449176797201703206103546679213937436982",
+            "176704932941656038658889241523776974903498682262484874230171690534625389261"
+          ],
+          "pB": [
+            [
+              "20228130749962405351369334593585786805258603421237993666207443155371585741183",
+              "2266338110937266242897443569472839673701294904081012501848010079803062578321"
+            ],
+            [
+              "13199510857776398865481830981430081520379818393751556744941396462830692616046",
+              "17273333418111626431072129807068492484513063329095468482097801772687331737094"
+            ]
+          ],
+          "pC": [
+            "6305254485856523286685152216213199527791783161632328182804669942900250279184",
+            "2269208074240490940222345757139420837761839834407714150548899023459150469065"
+          ],
+          "pubSignals": [
+            "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+            "400",
+            "1000000000000000000",
+            "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+            "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+            "0"
+          ],
+          "proofBytes": "0x18b5826f940c4f23f2f61026024240a6bdd5193d27f7cf9e5087b9f345d0a936006402ee3dc1e76816121b09d0bb2dbdfad63dbdccef74ca6db32a2075bcaacd2cb8b75df25ae045b9584a25ce54af81403741b7eeb14a28abf27f0976c8a17f0502b3b09b33bcb05519cf66615eb949d30496c4e8e6b00aa270274527536c911d2ea88c98e8675ecf116cd59a6781c1c037cc99e9870b50392f9c4bdda8476e26305c3992c68ec28cdecec42ca45d01eb679e20ed062f54452d3c391d28be060df0a5c734b4dc3ed99661f12fd6daa6e5bfc9fded974306035a9715f1067d1005045385762cfb8033c681ccf927932b6f11f440a10ff3292f545d27cd3817c9",
+          "calldata": "0xf398789b18b5826f940c4f23f2f61026024240a6bdd5193d27f7cf9e5087b9f345d0a936006402ee3dc1e76816121b09d0bb2dbdfad63dbdccef74ca6db32a2075bcaacd2cb8b75df25ae045b9584a25ce54af81403741b7eeb14a28abf27f0976c8a17f0502b3b09b33bcb05519cf66615eb949d30496c4e8e6b00aa270274527536c911d2ea88c98e8675ecf116cd59a6781c1c037cc99e9870b50392f9c4bdda8476e26305c3992c68ec28cdecec42ca45d01eb679e20ed062f54452d3c391d28be060df0a5c734b4dc3ed99661f12fd6daa6e5bfc9fded974306035a9715f1067d1005045385762cfb8033c681ccf927932b6f11f440a10ff3292f545d27cd3817c91df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c1200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648642098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648640000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "proofSolana": {
+          "proofA": "0x18b5826f940c4f23f2f61026024240a6bdd5193d27f7cf9e5087b9f345d0a93630004b84a36fb8c1a23e2aacb0c62a9f9cab2cd39b8255c2ce6d61f662c0527a",
+          "proofB": "0x2cb8b75df25ae045b9584a25ce54af81403741b7eeb14a28abf27f0976c8a17f0502b3b09b33bcb05519cf66615eb949d30496c4e8e6b00aa270274527536c911d2ea88c98e8675ecf116cd59a6781c1c037cc99e9870b50392f9c4bdda8476e26305c3992c68ec28cdecec42ca45d01eb679e20ed062f54452d3c391d28be06",
+          "proofC": "0x0df0a5c734b4dc3ed99661f12fd6daa6e5bfc9fded974306035a9715f1067d1005045385762cfb8033c681ccf927932b6f11f440a10ff3292f545d27cd3817c9",
+          "proof": "0x18b5826f940c4f23f2f61026024240a6bdd5193d27f7cf9e5087b9f345d0a93630004b84a36fb8c1a23e2aacb0c62a9f9cab2cd39b8255c2ce6d61f662c0527a2cb8b75df25ae045b9584a25ce54af81403741b7eeb14a28abf27f0976c8a17f0502b3b09b33bcb05519cf66615eb949d30496c4e8e6b00aa270274527536c911d2ea88c98e8675ecf116cd59a6781c1c037cc99e9870b50392f9c4bdda8476e26305c3992c68ec28cdecec42ca45d01eb679e20ed062f54452d3c391d28be060df0a5c734b4dc3ed99661f12fd6daa6e5bfc9fded974306035a9715f1067d1005045385762cfb8033c681ccf927932b6f11f440a10ff3292f545d27cd3817c9",
+          "publicInputs": [
+            "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12",
+            "0x0000000000000000000000000000000000000000000000000000000000000190",
+            "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+            "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+            "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+            "0x0000000000000000000000000000000000000000000000000000000000000000"
+          ]
+        },
+        "witness": {
+          "incomeYtd": "0",
+          "incomeSalt": "0",
+          "priorIncomeYtd": "0",
+          "priorSalt": "0",
+          "theta": "80000000000",
+          "rWad": "100000000000000"
+        }
+      },
+      "error": "RouterPeriodNotClosed",
+      "note": "no receipt arrived in Q2 yet, so Q1's checkpoint is missing"
+    },
+    {
+      "t": "1775088000",
+      "note": "keeper closes Q1: ytd_at_end = 90,000",
+      "op": "close_router_period",
+      "series": "S3",
+      "period": "8104"
+    },
+    {
+      "t": "1775088000",
+      "note": "tier-1 report: income_commitment = Poseidon(2)(90,000e6, 0); payment 400 covered by router credit",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S3",
+      "period": "8104",
+      "paymentUsd": "400000000",
+      "fxAvgWad": "1000000000000000000",
+      "fxFallback": null,
+      "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+      "incomeCommitment": "0x0f7e70c3aab64842edc02fe74d2d98c53f8bcfb915084bb94ecb46e939396ac9",
+      "tier": 1,
+      "liquidityEvent": false,
+      "attestation": null,
+      "proof": {
+        "pi_a": [
+          "17037538615619922529018257798116231724537176302622721745134708303142162026188",
+          "4406941113405796642941762812610322687421141488357832019957042900817855591763",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "19223336645676805133255720423433141774204567535086753660541927024089349259951",
+            "19068297871331694823533006583007876459120546537731297461295934595640746953789"
+          ],
+          [
+            "12947094430908897897344503776212873219561302775739177620409700956311718925611",
+            "20962331656144771015632093458251313599176921828111216024220497116764216145563"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "1657980878499582971541709072803130897616973676462791780037462584684037170692",
+          "2404487778772523763428675424441331330142159060479962746228980696918542799573",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+        "400",
+        "1000000000000000000",
+        "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+        "7008093729669589049316679297344846005046103217635857813537982631486154173129",
+        "400000000"
+      ],
+      "proofEvm": {
+        "pA": [
+          "17037538615619922529018257798116231724537176302622721745134708303142162026188",
+          "4406941113405796642941762812610322687421141488357832019957042900817855591763"
+        ],
+        "pB": [
+          [
+            "19068297871331694823533006583007876459120546537731297461295934595640746953789",
+            "19223336645676805133255720423433141774204567535086753660541927024089349259951"
+          ],
+          [
+            "20962331656144771015632093458251313599176921828111216024220497116764216145563",
+            "12947094430908897897344503776212873219561302775739177620409700956311718925611"
+          ]
+        ],
+        "pC": [
+          "1657980878499582971541709072803130897616973676462791780037462584684037170692",
+          "2404487778772523763428675424441331330142159060479962746228980696918542799573"
+        ],
+        "pubSignals": [
+          "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+          "400",
+          "1000000000000000000",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "7008093729669589049316679297344846005046103217635857813537982631486154173129",
+          "400000000"
+        ],
+        "proofBytes": "0x25aae7b6419e1a619a6b3a52906e32b4d9a6bb731f9c26055cd141d89cd44ecc09be3d82d5eb3a47c2283cd8ef1c2a326e60586ea1b71d276bba9070178f35532a28462d798eb6615764f3379bc691bfc1d55b2bc6117b830174306ee2b5cc3d2a8005e13a922f20e47eaaedcc85dcb6ec34ba7b822f22802c85be285bb882af2e58425f1e0203e6f6d3d6ce6045ceb3052d5b9829fc48bec0a95a0a57eeb69b1c9fcbb6f771e18fa589438688124a4fbc7b9a1586aa73ae722227ec9e57152b03aa6248b8f79637257ad1a41461037301206549727cb705ebadade5628666040550e450952f9da3cbc6e468deb66b242cf10cf05800ac642e83ba2cb36052d5",
+        "calldata": "0xf398789b25aae7b6419e1a619a6b3a52906e32b4d9a6bb731f9c26055cd141d89cd44ecc09be3d82d5eb3a47c2283cd8ef1c2a326e60586ea1b71d276bba9070178f35532a28462d798eb6615764f3379bc691bfc1d55b2bc6117b830174306ee2b5cc3d2a8005e13a922f20e47eaaedcc85dcb6ec34ba7b822f22802c85be285bb882af2e58425f1e0203e6f6d3d6ce6045ceb3052d5b9829fc48bec0a95a0a57eeb69b1c9fcbb6f771e18fa589438688124a4fbc7b9a1586aa73ae722227ec9e57152b03aa6248b8f79637257ad1a41461037301206549727cb705ebadade5628666040550e450952f9da3cbc6e468deb66b242cf10cf05800ac642e83ba2cb36052d51df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c1200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400002098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648640f7e70c3aab64842edc02fe74d2d98c53f8bcfb915084bb94ecb46e939396ac90000000000000000000000000000000000000000000000000000000017d78400"
+      },
+      "proofSolana": {
+        "proofA": "0x25aae7b6419e1a619a6b3a52906e32b4d9a6bb731f9c26055cd141d89cd44ecc26a610f00b4665e1f62808dd92652e2b29211222c6baad65d065fba6c0edc7f4",
+        "proofB": "0x2a28462d798eb6615764f3379bc691bfc1d55b2bc6117b830174306ee2b5cc3d2a8005e13a922f20e47eaaedcc85dcb6ec34ba7b822f22802c85be285bb882af2e58425f1e0203e6f6d3d6ce6045ceb3052d5b9829fc48bec0a95a0a57eeb69b1c9fcbb6f771e18fa589438688124a4fbc7b9a1586aa73ae722227ec9e57152b",
+        "proofC": "0x03aa6248b8f79637257ad1a41461037301206549727cb705ebadade5628666040550e450952f9da3cbc6e468deb66b242cf10cf05800ac642e83ba2cb36052d5",
+        "proof": "0x25aae7b6419e1a619a6b3a52906e32b4d9a6bb731f9c26055cd141d89cd44ecc26a610f00b4665e1f62808dd92652e2b29211222c6baad65d065fba6c0edc7f42a28462d798eb6615764f3379bc691bfc1d55b2bc6117b830174306ee2b5cc3d2a8005e13a922f20e47eaaedcc85dcb6ec34ba7b822f22802c85be285bb882af2e58425f1e0203e6f6d3d6ce6045ceb3052d5b9829fc48bec0a95a0a57eeb69b1c9fcbb6f771e18fa589438688124a4fbc7b9a1586aa73ae722227ec9e57152b03aa6248b8f79637257ad1a41461037301206549727cb705ebadade5628666040550e450952f9da3cbc6e468deb66b242cf10cf05800ac642e83ba2cb36052d5",
+        "publicInputs": [
+          "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+          "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+          "0x0f7e70c3aab64842edc02fe74d2d98c53f8bcfb915084bb94ecb46e939396ac9",
+          "0x0000000000000000000000000000000000000000000000000000000017d78400"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "90000000000",
+        "incomeSalt": "0",
+        "priorIncomeYtd": "0",
+        "priorSalt": "0",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1775088000",
       "op": "expect",
       "series": "S2",
       "balances": {
         "b1": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b2": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b3": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b4": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "client": {
-          "stable": "910000000000",
+          "stable": "820000000000",
           "units": "0"
         },
         "issuer": {
-          "stable": "300100000000",
+          "stable": "389700000000",
           "units": "0"
         }
       },
-      "feeCollector": "860000000",
+      "feeCollector": "1300000000",
       "treasury": "42000000000",
       "vault": "380000000",
       "auctionEscrow": "0",
@@ -1069,6 +1787,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -1081,6 +1800,7 @@
         "paidPerUnitWad": "1000000000000000000000000",
         "netAccWad": "950000000000000000000000",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "400000000",
         "feeCollected": "20000000",
         "refundedToIssuer": "0",
@@ -1089,46 +1809,198 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
       "note": "Q1 reconciled: routerCredit 0, lastPaidPeriod 8104"
+    },
+    {
+      "t": "1775088000",
+      "op": "expect",
+      "series": "S3",
+      "balances": {
+        "b1": {
+          "stable": "48185000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "48185000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "48185000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "48185000000",
+          "units": "100"
+        },
+        "client": {
+          "stable": "820000000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "389700000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "1300000000",
+      "treasury": "42000000000",
+      "vault": "380000000",
+      "auctionEscrow": "0",
+      "routerBalance": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "1000000000000000000000000",
+        "netAccWad": "950000000000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "400000000",
+        "feeCollected": "20000000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8104",
+        "lastPaidPeriod": "8104",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      }
     },
     {
       "t": "1778544000",
@@ -1137,6 +2009,14 @@
       "series": "S2",
       "payer": "client",
       "amount": "40000000000"
+    },
+    {
+      "t": "1778544000",
+      "note": "the Q2 receipt closes S3's Q1 checkpoint implicitly (already closed) and routes 2,000",
+      "op": "route_income",
+      "series": "S3",
+      "payer": "client",
+      "amount": "50000000000"
     },
     {
       "t": "1782950400",
@@ -1148,24 +2028,25 @@
       "paymentUsd": "2000000000",
       "fxAvgWad": "1000000000000000000",
       "fxFallback": null,
-      "incomeCommitment": "0x03657d5bbebe0342fd261c145ac327b862cb5cf5c506407fdbf33c9ced574e40",
+      "priorIncomeCommitment": "0x16e4c61925485d22793c3bc564597f3049aac5d7e87ff05d6f1cde9ef7fe779d",
+      "incomeCommitment": "0x0ba2370472ec9a63c66ac3b21ecc633f2f6eebf0729bb1545721b6c89aeee166",
       "tier": 2,
       "liquidityEvent": false,
       "attestation": "verifier1",
       "proof": {
         "pi_a": [
-          "20265370269331635783361356020740201185608025911928376171715496164663617969268",
-          "19926896318787435938487250304406641238950592108476350152522578055645584637900",
+          "19166628421396949113216280654390036571921305761132652576352910508458453206386",
+          "3189091351846969176404427608169006621798096833331432541966941093233919014609",
           "1"
         ],
         "pi_b": [
           [
-            "317979599128223574962116653696503667960389609857900004904936438235940191737",
-            "15473362788548111469254906849315326805607328921651313986139652354020098699571"
+            "1811566252256398816008009042349366520908731722456215722695668648041636441429",
+            "19184506372855746649544442951523195698454269359852215229491798936777757691638"
           ],
           [
-            "9431246475769576427906524851763452130329814255989533548800725552099934774570",
-            "8686252331854894494811723145696727042474156708217494252634986676400291783487"
+            "12850525827959619107231670049308617013345424305076869995965574760109122304788",
+            "18586334156652583395555961441531101693706172585188408135239351900922300330995"
           ],
           [
             "1",
@@ -1173,8 +2054,8 @@
           ]
         ],
         "pi_c": [
-          "439979545869147165989406607508890333012685380107403935112639521762377086671",
-          "4800606738977275610715926701671749495005753146123471391705792421665792313484",
+          "10682939937031841198025784396059799229365638198360740128527675897977552329927",
+          "9272687600624278731084895945311052233526165122527244787835386508235728855991",
           "1"
         ],
         "protocol": "groth16",
@@ -1184,59 +2065,59 @@
         "6439852318357076615527385542666985338989246866338479621215321242960127652146",
         "400",
         "1000000000000000000",
-        "9325112970964637111137388130748134905685785409667353602102286218293391614516",
-        "1536255291028413638398198391551902066352918475036269549686992196099148041792",
+        "10355091023302986917154683596918194007995669769302398777673176637629502748573",
+        "5262050274901822796964458050192751485529965997459450003718701699667738943846",
         "2000000000"
       ],
       "proofEvm": {
         "pA": [
-          "20265370269331635783361356020740201185608025911928376171715496164663617969268",
-          "19926896318787435938487250304406641238950592108476350152522578055645584637900"
+          "19166628421396949113216280654390036571921305761132652576352910508458453206386",
+          "3189091351846969176404427608169006621798096833331432541966941093233919014609"
         ],
         "pB": [
           [
-            "15473362788548111469254906849315326805607328921651313986139652354020098699571",
-            "317979599128223574962116653696503667960389609857900004904936438235940191737"
+            "19184506372855746649544442951523195698454269359852215229491798936777757691638",
+            "1811566252256398816008009042349366520908731722456215722695668648041636441429"
           ],
           [
-            "8686252331854894494811723145696727042474156708217494252634986676400291783487",
-            "9431246475769576427906524851763452130329814255989533548800725552099934774570"
+            "18586334156652583395555961441531101693706172585188408135239351900922300330995",
+            "12850525827959619107231670049308617013345424305076869995965574760109122304788"
           ]
         ],
         "pC": [
-          "439979545869147165989406607508890333012685380107403935112639521762377086671",
-          "4800606738977275610715926701671749495005753146123471391705792421665792313484"
+          "10682939937031841198025784396059799229365638198360740128527675897977552329927",
+          "9272687600624278731084895945311052233526165122527244787835386508235728855991"
         ],
         "pubSignals": [
           "6439852318357076615527385542666985338989246866338479621215321242960127652146",
           "400",
           "1000000000000000000",
-          "9325112970964637111137388130748134905685785409667353602102286218293391614516",
-          "1536255291028413638398198391551902066352918475036269549686992196099148041792",
+          "10355091023302986917154683596918194007995669769302398777673176637629502748573",
+          "5262050274901822796964458050192751485529965997459450003718701699667738943846",
           "2000000000"
         ],
-        "proofBytes": "0x2ccdcb087d5854f5fcdd053e1011b907a14e59fdfdccddfcebb644f36e38dc742c0e393fe5c713bf5b8f3a99fd723a68c627d6cff59fce2eeeaf3ad006633fcc22359cec456099a31037734d2a95331fd11015d015ab4047f67abd99cc53f13300b3f856d94aa5ab1a3ce05155e84aece92953d6b0c1474699f5ae5eb6eefdf913343e9dc1e465a29080634f50aa8e9aed7bf7653b222c231615b56764cf233f14d9e5765da0dc69d023ac4f19d79b75be73b43bb9bcfd5e3a5eef8452a6a52a00f90504608c92fabaf3a00a31ddef2f1d5384b4cff50331ab51bc3351be36cf0a9d0c106eb5b20431d6ea56b55514036dae637bc83ab8b1348ebc8eada3c88c",
-        "calldata": "0xf398789b2ccdcb087d5854f5fcdd053e1011b907a14e59fdfdccddfcebb644f36e38dc742c0e393fe5c713bf5b8f3a99fd723a68c627d6cff59fce2eeeaf3ad006633fcc22359cec456099a31037734d2a95331fd11015d015ab4047f67abd99cc53f13300b3f856d94aa5ab1a3ce05155e84aece92953d6b0c1474699f5ae5eb6eefdf913343e9dc1e465a29080634f50aa8e9aed7bf7653b222c231615b56764cf233f14d9e5765da0dc69d023ac4f19d79b75be73b43bb9bcfd5e3a5eef8452a6a52a00f90504608c92fabaf3a00a31ddef2f1d5384b4cff50331ab51bc3351be36cf0a9d0c106eb5b20431d6ea56b55514036dae637bc83ab8b1348ebc8eada3c88c0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf13200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a7640000149dd3afe0a87bc98932055a0e5519f1abb3269e66b6267da695807d68eb623403657d5bbebe0342fd261c145ac327b862cb5cf5c506407fdbf33c9ced574e400000000000000000000000000000000000000000000000000000000077359400"
+        "proofBytes": "0x2a5fed60492e0f1cf8eef3b8d3ab375a878d70136b37cf20b2d6bbc96c978572070cf63492e12d1799a3370c17aff1f6549480734d57539bb19c9f7a67bc36d12a6a0bba5c698ecf005e77dfd1a67beb2cbc2cdc419f35602462effe7d2a0ef604014f66da3b9a14afeec669d00b1c6813cbb7cd4582814452b612a9303c2d5529177e09b9d2ec8489c3946f377720023d53e890079229b4bc22ae2f2293f3f31c6923ce6806ceb8215ea6f2d4ed6d4a559bf0c9164dc055bc99c6fb1020bb14179e546937f80118341266c3626d47194d0436be13a3b34400eb855b33455cc7148027bad0fea5ee5bab6a08b01835cbe94d908c23c10a9553f6e6cb3a6da3b7",
+        "calldata": "0xf398789b2a5fed60492e0f1cf8eef3b8d3ab375a878d70136b37cf20b2d6bbc96c978572070cf63492e12d1799a3370c17aff1f6549480734d57539bb19c9f7a67bc36d12a6a0bba5c698ecf005e77dfd1a67beb2cbc2cdc419f35602462effe7d2a0ef604014f66da3b9a14afeec669d00b1c6813cbb7cd4582814452b612a9303c2d5529177e09b9d2ec8489c3946f377720023d53e890079229b4bc22ae2f2293f3f31c6923ce6806ceb8215ea6f2d4ed6d4a559bf0c9164dc055bc99c6fb1020bb14179e546937f80118341266c3626d47194d0436be13a3b34400eb855b33455cc7148027bad0fea5ee5bab6a08b01835cbe94d908c23c10a9553f6e6cb3a6da3b70e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf13200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a764000016e4c61925485d22793c3bc564597f3049aac5d7e87ff05d6f1cde9ef7fe779d0ba2370472ec9a63c66ac3b21ecc633f2f6eebf0729bb1545721b6c89aeee1660000000000000000000000000000000000000000000000000000000077359400"
       },
       "proofSolana": {
-        "proofA": "0x2ccdcb087d5854f5fcdd053e1011b907a14e59fdfdccddfcebb644f36e38dc7404561532fb6a8c6a5cc10b1c840f1df4d15993c172d1fc5e4d715146d219bd7b",
-        "proofB": "0x22359cec456099a31037734d2a95331fd11015d015ab4047f67abd99cc53f13300b3f856d94aa5ab1a3ce05155e84aece92953d6b0c1474699f5ae5eb6eefdf913343e9dc1e465a29080634f50aa8e9aed7bf7653b222c231615b56764cf233f14d9e5765da0dc69d023ac4f19d79b75be73b43bb9bcfd5e3a5eef8452a6a52a",
-        "proofC": "0x00f90504608c92fabaf3a00a31ddef2f1d5384b4cff50331ab51bc3351be36cf0a9d0c106eb5b20431d6ea56b55514036dae637bc83ab8b1348ebc8eada3c88c",
-        "proof": "0x2ccdcb087d5854f5fcdd053e1011b907a14e59fdfdccddfcebb644f36e38dc7404561532fb6a8c6a5cc10b1c840f1df4d15993c172d1fc5e4d715146d219bd7b22359cec456099a31037734d2a95331fd11015d015ab4047f67abd99cc53f13300b3f856d94aa5ab1a3ce05155e84aece92953d6b0c1474699f5ae5eb6eefdf913343e9dc1e465a29080634f50aa8e9aed7bf7653b222c231615b56764cf233f14d9e5765da0dc69d023ac4f19d79b75be73b43bb9bcfd5e3a5eef8452a6a52a00f90504608c92fabaf3a00a31ddef2f1d5384b4cff50331ab51bc3351be36cf0a9d0c106eb5b20431d6ea56b55514036dae637bc83ab8b1348ebc8eada3c88c",
+        "proofA": "0x2a5fed60492e0f1cf8eef3b8d3ab375a878d70136b37cf20b2d6bbc96c9785722957583e4e5073121ead0eaa69d1666742ecea1e1b1a76f18a83ec9c70c0c676",
+        "proofB": "0x2a6a0bba5c698ecf005e77dfd1a67beb2cbc2cdc419f35602462effe7d2a0ef604014f66da3b9a14afeec669d00b1c6813cbb7cd4582814452b612a9303c2d5529177e09b9d2ec8489c3946f377720023d53e890079229b4bc22ae2f2293f3f31c6923ce6806ceb8215ea6f2d4ed6d4a559bf0c9164dc055bc99c6fb1020bb14",
+        "proofC": "0x179e546937f80118341266c3626d47194d0436be13a3b34400eb855b33455cc7148027bad0fea5ee5bab6a08b01835cbe94d908c23c10a9553f6e6cb3a6da3b7",
+        "proof": "0x2a5fed60492e0f1cf8eef3b8d3ab375a878d70136b37cf20b2d6bbc96c9785722957583e4e5073121ead0eaa69d1666742ecea1e1b1a76f18a83ec9c70c0c6762a6a0bba5c698ecf005e77dfd1a67beb2cbc2cdc419f35602462effe7d2a0ef604014f66da3b9a14afeec669d00b1c6813cbb7cd4582814452b612a9303c2d5529177e09b9d2ec8489c3946f377720023d53e890079229b4bc22ae2f2293f3f31c6923ce6806ceb8215ea6f2d4ed6d4a559bf0c9164dc055bc99c6fb1020bb14179e546937f80118341266c3626d47194d0436be13a3b34400eb855b33455cc7148027bad0fea5ee5bab6a08b01835cbe94d908c23c10a9553f6e6cb3a6da3b7",
         "publicInputs": [
           "0x0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf132",
           "0x0000000000000000000000000000000000000000000000000000000000000190",
           "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
-          "0x149dd3afe0a87bc98932055a0e5519f1abb3269e66b6267da695807d68eb6234",
-          "0x03657d5bbebe0342fd261c145ac327b862cb5cf5c506407fdbf33c9ced574e40",
+          "0x16e4c61925485d22793c3bc564597f3049aac5d7e87ff05d6f1cde9ef7fe779d",
+          "0x0ba2370472ec9a63c66ac3b21ecc633f2f6eebf0729bb1545721b6c89aeee166",
           "0x0000000000000000000000000000000000000000000000000000000077359400"
         ]
       },
       "witness": {
         "incomeYtd": "140000000000",
-        "incomeSalt": "14939689401426964032655838864985288626453727697241431687675697047042659209615",
+        "incomeSalt": "16957114881738351182600004245204880431835571446880441484971879057803601351385",
         "priorIncomeYtd": "90000000000",
-        "priorSalt": "11351076791522617657916976991798550768324926727725068679019613213233580250538",
+        "priorSalt": "14939689401426964032655838864985288626453727697241431687675697047042659209615",
         "theta": "80000000000",
         "rWad": "100000000000000"
       }
@@ -1256,24 +2137,25 @@
       "paymentUsd": "400000000",
       "fxAvgWad": "1000000000000000000",
       "fxFallback": null,
+      "priorIncomeCommitment": "0x24afc2486380f8c579d440a124b6091ab1d20082c1a116ecbf3b53fd0fe565da",
       "incomeCommitment": "0x0072789b73d0e4f599b371ca8af26c2391b183274ca2b5e9c87572f70dd5eae9",
       "tier": 2,
       "liquidityEvent": false,
       "attestation": "verifier1",
       "proof": {
         "pi_a": [
-          "18187437356315764510547652103448962860721671372009369850227040534508467739092",
-          "11469763533403401170254301666194981132714426284731210163532257309330664168328",
+          "21595031909482212851314274303106494250157068166148458661739450881274504135948",
+          "18733550124242636434755409454934103147735087801163798142882457330086006376370",
           "1"
         ],
         "pi_b": [
           [
-            "5304649689781327206157084648278642996920508712635267715421906063603261216386",
-            "14810051788179264714829915382048254285753643465757967551175714468087696469095"
+            "571006409554695095769544246714537339227998421260878467210651035995546657122",
+            "21842264666304071342348496778923888591219425465854476532172082828957452393626"
           ],
           [
-            "13586774059671922172657270679808231058743722523145552819667820044752519939698",
-            "13843644214627579943029189012218568282985766737087520698243277375152896647140"
+            "302867982338065359311422438109566419260845948162589600271092889886407134102",
+            "18401557721230062901413061095473083630682443953765841234316561919151757546228"
           ],
           [
             "1",
@@ -1281,8 +2163,8 @@
           ]
         ],
         "pi_c": [
-          "9704453370307340611372554644821862127646578363583649347826028112910282317045",
-          "7113359160021951830895934372088684204645847870627714667277073482948652973283",
+          "21341472844011385449482570793044987463494052475538741831101925029230951097713",
+          "12607477950805859329412619486254000371874561276506731179641033664179591175973",
           "1"
         ],
         "protocol": "groth16",
@@ -1298,22 +2180,22 @@
       ],
       "proofEvm": {
         "pA": [
-          "18187437356315764510547652103448962860721671372009369850227040534508467739092",
-          "11469763533403401170254301666194981132714426284731210163532257309330664168328"
+          "21595031909482212851314274303106494250157068166148458661739450881274504135948",
+          "18733550124242636434755409454934103147735087801163798142882457330086006376370"
         ],
         "pB": [
           [
-            "14810051788179264714829915382048254285753643465757967551175714468087696469095",
-            "5304649689781327206157084648278642996920508712635267715421906063603261216386"
+            "21842264666304071342348496778923888591219425465854476532172082828957452393626",
+            "571006409554695095769544246714537339227998421260878467210651035995546657122"
           ],
           [
-            "13843644214627579943029189012218568282985766737087520698243277375152896647140",
-            "13586774059671922172657270679808231058743722523145552819667820044752519939698"
+            "18401557721230062901413061095473083630682443953765841234316561919151757546228",
+            "302867982338065359311422438109566419260845948162589600271092889886407134102"
           ]
         ],
         "pC": [
-          "9704453370307340611372554644821862127646578363583649347826028112910282317045",
-          "7113359160021951830895934372088684204645847870627714667277073482948652973283"
+          "21341472844011385449482570793044987463494052475538741831101925029230951097713",
+          "12607477950805859329412619486254000371874561276506731179641033664179591175973"
         ],
         "pubSignals": [
           "4544400968910601960161572207459349789799486975090542838653122642518894827070",
@@ -1323,14 +2205,14 @@
           "202252965934931791973688115386822163150208421656886739485613609609407621865",
           "400000000"
         ],
-        "proofBytes": "0x2835b98912a8a9957847f998da8f9fc833c0b5923571118c8d29948a884959d4195ba7f67346fbb41ec6786a259ae991f26abb24975de21a11335fc939519b8820be3137d8de048fbd02d650f61147c317262485c43958bddbbfb383c13c2c670bba534890d7a0821f5d385a0ed85b290d3a0fd0885953c31123aae7639f96821e9b3996b0311fa055c77c1fdd1b72c7b9026e852b3be24b4240458466189fe41e09d77319f255e8e050b4a3132218d443bc9b05f4a9cecd8ff8a78f394bc672157486a54d5202d5cfccf4cbb52cf3934f0577940fd49a7fcbac88281b82dcf50fba04c37be8d26a3ae884a94e80827db6b551075fed3dcebe31c8b427963ce3",
-        "calldata": "0xf398789b2835b98912a8a9957847f998da8f9fc833c0b5923571118c8d29948a884959d4195ba7f67346fbb41ec6786a259ae991f26abb24975de21a11335fc939519b8820be3137d8de048fbd02d650f61147c317262485c43958bddbbfb383c13c2c670bba534890d7a0821f5d385a0ed85b290d3a0fd0885953c31123aae7639f96821e9b3996b0311fa055c77c1fdd1b72c7b9026e852b3be24b4240458466189fe41e09d77319f255e8e050b4a3132218d443bc9b05f4a9cecd8ff8a78f394bc672157486a54d5202d5cfccf4cbb52cf3934f0577940fd49a7fcbac88281b82dcf50fba04c37be8d26a3ae884a94e80827db6b551075fed3dcebe31c8b427963ce30a0c0a30402fe52018073d0402fcae485b733946ac7ad5fd75493ccb84e9d63e00000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a764000024afc2486380f8c579d440a124b6091ab1d20082c1a116ecbf3b53fd0fe565da0072789b73d0e4f599b371ca8af26c2391b183274ca2b5e9c87572f70dd5eae90000000000000000000000000000000000000000000000000000000017d78400"
+        "proofBytes": "0x2fbe5adbd4553b7012b86d1bc80fda2440408009ffb6f8647944695b0d7dc50c296ad04973553597a19f00f385c485f005c886f2a483d3b4285e424e52ca47b2304a48a073b4b2d13cf8efb67f96f2d1fac22c7644de2e128b06c7b421c0dc9a01432d9cdd308e60d41b6f10cbc5c7fdf39451532f63d54a78f72bdf5e75216228aee99ed17309bfee880e4e1aced4de271849f7ea128fca91f584bb57af52f400ab6acdd4500bea85542a509ee34998d3ed49d2fca5e6bdb360374941620b962f2ed877609a68327b372d15fdcecfa63ad9c6a3aa48142b90cd113d468565711bdf9463990cca37206de3394fdbf7026eab4c988e914b249e515f19b073df25",
+        "calldata": "0xf398789b2fbe5adbd4553b7012b86d1bc80fda2440408009ffb6f8647944695b0d7dc50c296ad04973553597a19f00f385c485f005c886f2a483d3b4285e424e52ca47b2304a48a073b4b2d13cf8efb67f96f2d1fac22c7644de2e128b06c7b421c0dc9a01432d9cdd308e60d41b6f10cbc5c7fdf39451532f63d54a78f72bdf5e75216228aee99ed17309bfee880e4e1aced4de271849f7ea128fca91f584bb57af52f400ab6acdd4500bea85542a509ee34998d3ed49d2fca5e6bdb360374941620b962f2ed877609a68327b372d15fdcecfa63ad9c6a3aa48142b90cd113d468565711bdf9463990cca37206de3394fdbf7026eab4c988e914b249e515f19b073df250a0c0a30402fe52018073d0402fcae485b733946ac7ad5fd75493ccb84e9d63e00000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a764000024afc2486380f8c579d440a124b6091ab1d20082c1a116ecbf3b53fd0fe565da0072789b73d0e4f599b371ca8af26c2391b183274ca2b5e9c87572f70dd5eae90000000000000000000000000000000000000000000000000000000017d78400"
       },
       "proofSolana": {
-        "proofA": "0x2835b98912a8a9957847f998da8f9fc833c0b5923571118c8d29948a884959d41708a67c6deaa4759989cd4c5be66ecba516af6cd113e8732aed2c4d9f2b61bf",
-        "proofB": "0x20be3137d8de048fbd02d650f61147c317262485c43958bddbbfb383c13c2c670bba534890d7a0821f5d385a0ed85b290d3a0fd0885953c31123aae7639f96821e9b3996b0311fa055c77c1fdd1b72c7b9026e852b3be24b4240458466189fe41e09d77319f255e8e050b4a3132218d443bc9b05f4a9cecd8ff8a78f394bc672",
-        "proofC": "0x157486a54d5202d5cfccf4cbb52cf3934f0577940fd49a7fcbac88281b82dcf50fba04c37be8d26a3ae884a94e80827db6b551075fed3dcebe31c8b427963ce3",
-        "proof": "0x2835b98912a8a9957847f998da8f9fc833c0b5923571118c8d29948a884959d41708a67c6deaa4759989cd4c5be66ecba516af6cd113e8732aed2c4d9f2b61bf20be3137d8de048fbd02d650f61147c317262485c43958bddbbfb383c13c2c670bba534890d7a0821f5d385a0ed85b290d3a0fd0885953c31123aae7639f96821e9b3996b0311fa055c77c1fdd1b72c7b9026e852b3be24b4240458466189fe41e09d77319f255e8e050b4a3132218d443bc9b05f4a9cecd8ff8a78f394bc672157486a54d5202d5cfccf4cbb52cf3934f0577940fd49a7fcbac88281b82dcf50fba04c37be8d26a3ae884a94e80827db6b551075fed3dcebe31c8b427963ce3",
+        "proofA": "0x2fbe5adbd4553b7012b86d1bc80fda2440408009ffb6f8647944695b0d7dc50c06f97e296ddc6a9216b144c2fbbcd26d91b8e39ec3edf6d913c249c885b2b595",
+        "proofB": "0x304a48a073b4b2d13cf8efb67f96f2d1fac22c7644de2e128b06c7b421c0dc9a01432d9cdd308e60d41b6f10cbc5c7fdf39451532f63d54a78f72bdf5e75216228aee99ed17309bfee880e4e1aced4de271849f7ea128fca91f584bb57af52f400ab6acdd4500bea85542a509ee34998d3ed49d2fca5e6bdb360374941620b96",
+        "proofC": "0x2f2ed877609a68327b372d15fdcecfa63ad9c6a3aa48142b90cd113d468565711bdf9463990cca37206de3394fdbf7026eab4c988e914b249e515f19b073df25",
+        "proof": "0x2fbe5adbd4553b7012b86d1bc80fda2440408009ffb6f8647944695b0d7dc50c06f97e296ddc6a9216b144c2fbbcd26d91b8e39ec3edf6d913c249c885b2b595304a48a073b4b2d13cf8efb67f96f2d1fac22c7644de2e128b06c7b421c0dc9a01432d9cdd308e60d41b6f10cbc5c7fdf39451532f63d54a78f72bdf5e75216228aee99ed17309bfee880e4e1aced4de271849f7ea128fca91f584bb57af52f400ab6acdd4500bea85542a509ee34998d3ed49d2fca5e6bdb360374941620b962f2ed877609a68327b372d15fdcecfa63ad9c6a3aa48142b90cd113d468565711bdf9463990cca37206de3394fdbf7026eab4c988e914b249e515f19b073df25",
         "publicInputs": [
           "0x0a0c0a30402fe52018073d0402fcae485b733946ac7ad5fd75493ccb84e9d63e",
           "0x0000000000000000000000000000000000000000000000000000000000000190",
@@ -1357,35 +2239,145 @@
     },
     {
       "t": "1782950400",
+      "op": "close_router_period",
+      "series": "S3",
+      "period": "8105"
+    },
+    {
+      "t": "1782950400",
+      "note": "ytd_at_end 140,000 → payment 2,000, fully routed already → due 0",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S3",
+      "period": "8105",
+      "paymentUsd": "2000000000",
+      "fxAvgWad": "1000000000000000000",
+      "fxFallback": null,
+      "priorIncomeCommitment": "0x0f7e70c3aab64842edc02fe74d2d98c53f8bcfb915084bb94ecb46e939396ac9",
+      "incomeCommitment": "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+      "tier": 1,
+      "liquidityEvent": false,
+      "attestation": null,
+      "proof": {
+        "pi_a": [
+          "10390413140487098403354094729700774915619111062176643924622931308877456182314",
+          "10610367097057506375368144753907273077809498330802511712509685980521838255437",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "18243528079487481893655879308389493309043685312709871480383112174910526197032",
+            "12798626938464359202927330188012838535031867506049734015413774135758117907914"
+          ],
+          [
+            "2916744768217973608607218312257418437934025966561902849391853789910771594138",
+            "17630145719931260761194297592786615156163869702176790049227951719693450464683"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "1044916792486928246576380533727015836690222045396772772613592328321068416721",
+          "11141315731388388410930366188954442976689840864637358211516614933727038800374",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+        "400",
+        "1000000000000000000",
+        "7008093729669589049316679297344846005046103217635857813537982631486154173129",
+        "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+        "2000000000"
+      ],
+      "proofEvm": {
+        "pA": [
+          "10390413140487098403354094729700774915619111062176643924622931308877456182314",
+          "10610367097057506375368144753907273077809498330802511712509685980521838255437"
+        ],
+        "pB": [
+          [
+            "12798626938464359202927330188012838535031867506049734015413774135758117907914",
+            "18243528079487481893655879308389493309043685312709871480383112174910526197032"
+          ],
+          [
+            "17630145719931260761194297592786615156163869702176790049227951719693450464683",
+            "2916744768217973608607218312257418437934025966561902849391853789910771594138"
+          ]
+        ],
+        "pC": [
+          "1044916792486928246576380533727015836690222045396772772613592328321068416721",
+          "11141315731388388410930366188954442976689840864637358211516614933727038800374"
+        ],
+        "pubSignals": [
+          "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+          "400",
+          "1000000000000000000",
+          "7008093729669589049316679297344846005046103217635857813537982631486154173129",
+          "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+          "2000000000"
+        ],
+        "proofBytes": "0x16f8c3f349ed95de98e6f2c64671fff8d0f28ddfdc844ad66910652a02698c2a17754144f97d835b0e041790166938cdbe84fd34497566527f44f1cb1cd59d4d1c4bc4219ae507c4e1e99e7ae48c7d03c9272d37c7e9d84d6f3fc818743fadca28557891a071cd4e9230d7d3853940f22e2303ea8b01b38882a0f8e2c83c0d2826fa4f116b397549f6f15c1d950f82763cbfa939155a58148e356dddae27cdab0672d1ac57b44870acb3cab50d24bcb6e932f4e90c776c2384883c87a0b6739a024f66e5efbddd792204c56bba1dca41cb6b99a41d0ffa0fc86ff32510a3bed118a1c2e0604c3e1d732f311db011222ad8863e6ccfa0729964d3507fc9fe01f6",
+        "calldata": "0xf398789b16f8c3f349ed95de98e6f2c64671fff8d0f28ddfdc844ad66910652a02698c2a17754144f97d835b0e041790166938cdbe84fd34497566527f44f1cb1cd59d4d1c4bc4219ae507c4e1e99e7ae48c7d03c9272d37c7e9d84d6f3fc818743fadca28557891a071cd4e9230d7d3853940f22e2303ea8b01b38882a0f8e2c83c0d2826fa4f116b397549f6f15c1d950f82763cbfa939155a58148e356dddae27cdab0672d1ac57b44870acb3cab50d24bcb6e932f4e90c776c2384883c87a0b6739a024f66e5efbddd792204c56bba1dca41cb6b99a41d0ffa0fc86ff32510a3bed118a1c2e0604c3e1d732f311db011222ad8863e6ccfa0729964d3507fc9fe01f61df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c1200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400000f7e70c3aab64842edc02fe74d2d98c53f8bcfb915084bb94ecb46e939396ac90326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f10000000000000000000000000000000000000000000000000000000077359400"
+      },
+      "proofSolana": {
+        "proofA": "0x16f8c3f349ed95de98e6f2c64671fff8d0f28ddfdc844ad66910652a02698c2a18ef0d2de7b41cceaa4c2e266b181f8fd8fc6d5d1efc643abcdb9a4bbba75ffa",
+        "proofB": "0x1c4bc4219ae507c4e1e99e7ae48c7d03c9272d37c7e9d84d6f3fc818743fadca28557891a071cd4e9230d7d3853940f22e2303ea8b01b38882a0f8e2c83c0d2826fa4f116b397549f6f15c1d950f82763cbfa939155a58148e356dddae27cdab0672d1ac57b44870acb3cab50d24bcb6e932f4e90c776c2384883c87a0b6739a",
+        "proofC": "0x024f66e5efbddd792204c56bba1dca41cb6b99a41d0ffa0fc86ff32510a3bed118a1c2e0604c3e1d732f311db011222ad8863e6ccfa0729964d3507fc9fe01f6",
+        "proof": "0x16f8c3f349ed95de98e6f2c64671fff8d0f28ddfdc844ad66910652a02698c2a18ef0d2de7b41cceaa4c2e266b181f8fd8fc6d5d1efc643abcdb9a4bbba75ffa1c4bc4219ae507c4e1e99e7ae48c7d03c9272d37c7e9d84d6f3fc818743fadca28557891a071cd4e9230d7d3853940f22e2303ea8b01b38882a0f8e2c83c0d2826fa4f116b397549f6f15c1d950f82763cbfa939155a58148e356dddae27cdab0672d1ac57b44870acb3cab50d24bcb6e932f4e90c776c2384883c87a0b6739a024f66e5efbddd792204c56bba1dca41cb6b99a41d0ffa0fc86ff32510a3bed118a1c2e0604c3e1d732f311db011222ad8863e6ccfa0729964d3507fc9fe01f6",
+        "publicInputs": [
+          "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+          "0x0f7e70c3aab64842edc02fe74d2d98c53f8bcfb915084bb94ecb46e939396ac9",
+          "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+          "0x0000000000000000000000000000000000000000000000000000000077359400"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "140000000000",
+        "incomeSalt": "0",
+        "priorIncomeYtd": "90000000000",
+        "priorSalt": "0",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1782950400",
       "op": "expect",
       "series": "S2",
       "balances": {
         "b1": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b2": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b3": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b4": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "client": {
-          "stable": "870000000000",
+          "stable": "730000000000",
           "units": "0"
         },
         "issuer": {
-          "stable": "337700000000",
+          "stable": "475300000000",
           "units": "0"
         }
       },
-      "feeCollector": "980000000",
+      "feeCollector": "1520000000",
       "treasury": "42000000000",
       "vault": "2280000000",
       "auctionEscrow": "0",
@@ -1393,6 +2385,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -1405,6 +2398,7 @@
         "paidPerUnitWad": "6000000000000000000000000",
         "netAccWad": "5700000000000000000000000",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "2400000000",
         "feeCollected": "120000000",
         "refundedToIssuer": "0",
@@ -1413,45 +2407,198 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       }
+    },
+    {
+      "t": "1782950400",
+      "op": "expect",
+      "series": "S3",
+      "balances": {
+        "b1": {
+          "stable": "48185000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "48185000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "48185000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "48185000000",
+          "units": "100"
+        },
+        "client": {
+          "stable": "730000000000",
+          "units": "0"
+        },
+        "issuer": {
+          "stable": "475300000000",
+          "units": "0"
+        }
+      },
+      "feeCollector": "1520000000",
+      "treasury": "42000000000",
+      "vault": "2280000000",
+      "auctionEscrow": "0",
+      "routerBalance": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "6000000000000000000000000",
+        "netAccWad": "5700000000000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "2400000000",
+        "feeCollected": "120000000",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8105",
+        "lastPaidPeriod": "8105",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "note": "S3 routerCredit 0 after reconciling 2,400 of routed income"
     },
     {
       "t": "1786492800",
@@ -1470,24 +2617,25 @@
       "paymentUsd": "1600000000",
       "fxAvgWad": "1000000000000000000",
       "fxFallback": null,
-      "incomeCommitment": "0x20e06c6b3491b5fe4fdcf8e0ec635949921752366aaede110a11563131840afa",
+      "priorIncomeCommitment": "0x0ba2370472ec9a63c66ac3b21ecc633f2f6eebf0729bb1545721b6c89aeee166",
+      "incomeCommitment": "0x25d45ab6a37e7d94fe73655319c94c7852239a9c7b950ff64eda5c4fed72ff6e",
       "tier": 2,
       "liquidityEvent": false,
       "attestation": "verifier1",
       "proof": {
         "pi_a": [
-          "12081958925218220476516859097274198284297206484024103995126268232246030147154",
-          "3783252150771046374974427029808490794427295568252235725297723591045041338404",
+          "7573246885413867348862514079086142205014388102738528915757133381614804562534",
+          "15417376675617089633034868091277955578484018081652495831422921135073189737195",
           "1"
         ],
         "pi_b": [
           [
-            "21000752781398006094539922765267778941634746884258515926235204148035845027186",
-            "19188110806205941281293581048026661539890982248476334229301687018258237589380"
+            "19296314141848497249384713084692777340257504936323315614514190814390933246425",
+            "11690761911985618458585255820783462001502410051098567965779158363079603346667"
           ],
           [
-            "7376959674771330242651348836363069618409816719287732208712851439620709865702",
-            "2038987745463216129096784105718955141660435809912180275344906081054476750944"
+            "16029430546232812935020796554498361768086056416166105863000616829219721118584",
+            "8018400567589900562473009315917120561655596480100039592678259203010208886859"
           ],
           [
             "1",
@@ -1495,8 +2643,8 @@
           ]
         ],
         "pi_c": [
-          "19284141890392908679593273284581809299546801601657601199578127224574851942149",
-          "12788619296294401090541850142251291961294750672455356104536888833165955820969",
+          "19602855176308572176522475268878234500596542729524202065895984642766071063631",
+          "17713911964083692294336001500014763623012335614374362607623626624708279516576",
           "1"
         ],
         "protocol": "groth16",
@@ -1506,59 +2654,170 @@
         "6439852318357076615527385542666985338989246866338479621215321242960127652146",
         "400",
         "1000000000000000000",
-        "1536255291028413638398198391551902066352918475036269549686992196099148041792",
-        "14870533176030810442876491135916029129872677212706284169153905202826632760058",
+        "5262050274901822796964458050192751485529965997459450003718701699667738943846",
+        "17110773056413317157878107987537620015144936820617420045353530387648908296046",
         "1600000000"
       ],
       "proofEvm": {
         "pA": [
-          "12081958925218220476516859097274198284297206484024103995126268232246030147154",
-          "3783252150771046374974427029808490794427295568252235725297723591045041338404"
+          "7573246885413867348862514079086142205014388102738528915757133381614804562534",
+          "15417376675617089633034868091277955578484018081652495831422921135073189737195"
         ],
         "pB": [
           [
-            "19188110806205941281293581048026661539890982248476334229301687018258237589380",
-            "21000752781398006094539922765267778941634746884258515926235204148035845027186"
+            "11690761911985618458585255820783462001502410051098567965779158363079603346667",
+            "19296314141848497249384713084692777340257504936323315614514190814390933246425"
           ],
           [
-            "2038987745463216129096784105718955141660435809912180275344906081054476750944",
-            "7376959674771330242651348836363069618409816719287732208712851439620709865702"
+            "8018400567589900562473009315917120561655596480100039592678259203010208886859",
+            "16029430546232812935020796554498361768086056416166105863000616829219721118584"
           ]
         ],
         "pC": [
-          "19284141890392908679593273284581809299546801601657601199578127224574851942149",
-          "12788619296294401090541850142251291961294750672455356104536888833165955820969"
+          "19602855176308572176522475268878234500596542729524202065895984642766071063631",
+          "17713911964083692294336001500014763623012335614374362607623626624708279516576"
         ],
         "pubSignals": [
           "6439852318357076615527385542666985338989246866338479621215321242960127652146",
           "400",
           "1000000000000000000",
-          "1536255291028413638398198391551902066352918475036269549686992196099148041792",
-          "14870533176030810442876491135916029129872677212706284169153905202826632760058",
+          "5262050274901822796964458050192751485529965997459450003718701699667738943846",
+          "17110773056413317157878107987537620015144936820617420045353530387648908296046",
           "1600000000"
         ],
-        "proofBytes": "0x1ab6257b93e598882824e8111095c5cb6fd90c8f3b8dbabf4a70ea19b0069e52085d3ead78f01c837dfea2a0c40e7c8657beb22756f42cae9dd8f1109b7bb8242a6c15fa397964265a79e171b54e5b6418fa39e32a581f81c1f99e64a82987842e6e013ddbb7e1be987fdecfc1c993303f313f85029af7b8e59f91ca38aef572048206b2ddd1ebe14d8d81a59670dbccae4cf62f33c64de92352b9f4260c5060104f3611fd8782b9133b368c7a662db21e85696b4b65baa3d821a65b903ad8e62aa270011b11fee950b2de923f013023e0d9177ec4533fc8cb8f1b8c45e807051c461a1d86b1ca17c734a6edbe9ddb1f6161a9f512960a1c8cd6795f47c1eda9",
-        "calldata": "0xf398789b1ab6257b93e598882824e8111095c5cb6fd90c8f3b8dbabf4a70ea19b0069e52085d3ead78f01c837dfea2a0c40e7c8657beb22756f42cae9dd8f1109b7bb8242a6c15fa397964265a79e171b54e5b6418fa39e32a581f81c1f99e64a82987842e6e013ddbb7e1be987fdecfc1c993303f313f85029af7b8e59f91ca38aef572048206b2ddd1ebe14d8d81a59670dbccae4cf62f33c64de92352b9f4260c5060104f3611fd8782b9133b368c7a662db21e85696b4b65baa3d821a65b903ad8e62aa270011b11fee950b2de923f013023e0d9177ec4533fc8cb8f1b8c45e807051c461a1d86b1ca17c734a6edbe9ddb1f6161a9f512960a1c8cd6795f47c1eda90e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf13200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a764000003657d5bbebe0342fd261c145ac327b862cb5cf5c506407fdbf33c9ced574e4020e06c6b3491b5fe4fdcf8e0ec635949921752366aaede110a11563131840afa000000000000000000000000000000000000000000000000000000005f5e1000"
+        "proofBytes": "0x10be4e4b47cfd05f8479c31cb85f6dd777532b5dc247d0f5439188e64a9272662215ed0bed3814d36cbab74fdcf3cc44bb5bab908165365d3cab049702d8b2eb19d8bc9be6cecb9303d383e5e553456fe29da698d946cfb39066e31f76b75ceb2aa953a70162a06e2f6f8800b8bd7540b52247f7d1b502715f2fac6f5323d1d911ba40ff0a30502477bb84dc49343d2cbee7d842519924b551937c12000e704b2370560fbdb486167cfec6bdc69c846e92d17dd99a1855cb62d6a81f36ef03782b56d2a5e8f4c8eddfecc323e5567f053346483c051228997eb4df5ce58ee44f2729b8081961b81595cde11b95af103bbf0e0b8d0d8770f53c9804657c37bda0",
+        "calldata": "0xf398789b10be4e4b47cfd05f8479c31cb85f6dd777532b5dc247d0f5439188e64a9272662215ed0bed3814d36cbab74fdcf3cc44bb5bab908165365d3cab049702d8b2eb19d8bc9be6cecb9303d383e5e553456fe29da698d946cfb39066e31f76b75ceb2aa953a70162a06e2f6f8800b8bd7540b52247f7d1b502715f2fac6f5323d1d911ba40ff0a30502477bb84dc49343d2cbee7d842519924b551937c12000e704b2370560fbdb486167cfec6bdc69c846e92d17dd99a1855cb62d6a81f36ef03782b56d2a5e8f4c8eddfecc323e5567f053346483c051228997eb4df5ce58ee44f2729b8081961b81595cde11b95af103bbf0e0b8d0d8770f53c9804657c37bda00e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf13200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400000ba2370472ec9a63c66ac3b21ecc633f2f6eebf0729bb1545721b6c89aeee16625d45ab6a37e7d94fe73655319c94c7852239a9c7b950ff64eda5c4fed72ff6e000000000000000000000000000000000000000000000000000000005f5e1000"
       },
       "proofSolana": {
-        "proofA": "0x1ab6257b93e598882824e8111095c5cb6fd90c8f3b8dbabf4a70ea19b0069e5228070fc5684183a63a51a315bd72dbd73fc2b86a117d9dde9e479b063d014523",
-        "proofB": "0x2a6c15fa397964265a79e171b54e5b6418fa39e32a581f81c1f99e64a82987842e6e013ddbb7e1be987fdecfc1c993303f313f85029af7b8e59f91ca38aef572048206b2ddd1ebe14d8d81a59670dbccae4cf62f33c64de92352b9f4260c5060104f3611fd8782b9133b368c7a662db21e85696b4b65baa3d821a65b903ad8e6",
-        "proofC": "0x2aa270011b11fee950b2de923f013023e0d9177ec4533fc8cb8f1b8c45e807051c461a1d86b1ca17c734a6edbe9ddb1f6161a9f512960a1c8cd6795f47c1eda9",
-        "proof": "0x1ab6257b93e598882824e8111095c5cb6fd90c8f3b8dbabf4a70ea19b0069e5228070fc5684183a63a51a315bd72dbd73fc2b86a117d9dde9e479b063d0145232a6c15fa397964265a79e171b54e5b6418fa39e32a581f81c1f99e64a82987842e6e013ddbb7e1be987fdecfc1c993303f313f85029af7b8e59f91ca38aef572048206b2ddd1ebe14d8d81a59670dbccae4cf62f33c64de92352b9f4260c5060104f3611fd8782b9133b368c7a662db21e85696b4b65baa3d821a65b903ad8e62aa270011b11fee950b2de923f013023e0d9177ec4533fc8cb8f1b8c45e807051c461a1d86b1ca17c734a6edbe9ddb1f6161a9f512960a1c8cd6795f47c1eda9",
+        "proofA": "0x10be4e4b47cfd05f8479c31cb85f6dd777532b5dc247d0f5439188e64a9272660e4e6166f3f98b564b958e66a48d8c18dc25bf00e70c942fff75877fd5a44a5c",
+        "proofB": "0x19d8bc9be6cecb9303d383e5e553456fe29da698d946cfb39066e31f76b75ceb2aa953a70162a06e2f6f8800b8bd7540b52247f7d1b502715f2fac6f5323d1d911ba40ff0a30502477bb84dc49343d2cbee7d842519924b551937c12000e704b2370560fbdb486167cfec6bdc69c846e92d17dd99a1855cb62d6a81f36ef0378",
+        "proofC": "0x2b56d2a5e8f4c8eddfecc323e5567f053346483c051228997eb4df5ce58ee44f2729b8081961b81595cde11b95af103bbf0e0b8d0d8770f53c9804657c37bda0",
+        "proof": "0x10be4e4b47cfd05f8479c31cb85f6dd777532b5dc247d0f5439188e64a9272660e4e6166f3f98b564b958e66a48d8c18dc25bf00e70c942fff75877fd5a44a5c19d8bc9be6cecb9303d383e5e553456fe29da698d946cfb39066e31f76b75ceb2aa953a70162a06e2f6f8800b8bd7540b52247f7d1b502715f2fac6f5323d1d911ba40ff0a30502477bb84dc49343d2cbee7d842519924b551937c12000e704b2370560fbdb486167cfec6bdc69c846e92d17dd99a1855cb62d6a81f36ef03782b56d2a5e8f4c8eddfecc323e5567f053346483c051228997eb4df5ce58ee44f2729b8081961b81595cde11b95af103bbf0e0b8d0d8770f53c9804657c37bda0",
         "publicInputs": [
           "0x0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf132",
           "0x0000000000000000000000000000000000000000000000000000000000000190",
           "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
-          "0x03657d5bbebe0342fd261c145ac327b862cb5cf5c506407fdbf33c9ced574e40",
-          "0x20e06c6b3491b5fe4fdcf8e0ec635949921752366aaede110a11563131840afa",
+          "0x0ba2370472ec9a63c66ac3b21ecc633f2f6eebf0729bb1545721b6c89aeee166",
+          "0x25d45ab6a37e7d94fe73655319c94c7852239a9c7b950ff64eda5c4fed72ff6e",
           "0x000000000000000000000000000000000000000000000000000000005f5e1000"
         ]
       },
       "witness": {
         "incomeYtd": "180000000000",
-        "incomeSalt": "16957114881738351182600004245204880431835571446880441484971879057803601351385",
+        "incomeSalt": "16972925423082522306820737965304826634862712699822679819281126375917906875746",
         "priorIncomeYtd": "140000000000",
-        "priorSalt": "14939689401426964032655838864985288626453727697241431687675697047042659209615",
+        "priorSalt": "16957114881738351182600004245204880431835571446880441484971879057803601351385",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1790899200",
+      "note": "no receipts in Q3: checkpoint holds the year total so far (140,000)",
+      "op": "close_router_period",
+      "series": "S3",
+      "period": "8106"
+    },
+    {
+      "t": "1790899200",
+      "note": "payment 0",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S3",
+      "period": "8106",
+      "paymentUsd": "0",
+      "fxAvgWad": "1000000000000000000",
+      "fxFallback": null,
+      "priorIncomeCommitment": "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+      "incomeCommitment": "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+      "tier": 1,
+      "liquidityEvent": false,
+      "attestation": null,
+      "proof": {
+        "pi_a": [
+          "7321165883750634978291093443351383148654223961854083743211132219941539483472",
+          "15768545697031202413519970541843836566923625153446439884382921866943164776922",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "9589814775554704060385537911949493370594093013662090250733467987448243494591",
+            "12871193224677637793287408487863546491164320628671156270034934194806616881014"
+          ],
+          [
+            "4030076160859025402362343246678944447009772279317829167092828440306253742172",
+            "11271434922134153360177575346287391056131418584184486869247535588947533253344"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "15909593245995684202580897830442405167858596614825590668887584390521471005437",
+          "15137269554164876960503374924078510960721023025730559620529256493354029515094",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+        "400",
+        "1000000000000000000",
+        "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+        "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+        "0"
+      ],
+      "proofEvm": {
+        "pA": [
+          "7321165883750634978291093443351383148654223961854083743211132219941539483472",
+          "15768545697031202413519970541843836566923625153446439884382921866943164776922"
+        ],
+        "pB": [
+          [
+            "12871193224677637793287408487863546491164320628671156270034934194806616881014",
+            "9589814775554704060385537911949493370594093013662090250733467987448243494591"
+          ],
+          [
+            "11271434922134153360177575346287391056131418584184486869247535588947533253344",
+            "4030076160859025402362343246678944447009772279317829167092828440306253742172"
+          ]
+        ],
+        "pC": [
+          "15909593245995684202580897830442405167858596614825590668887584390521471005437",
+          "15137269554164876960503374924078510960721023025730559620529256493354029515094"
+        ],
+        "pubSignals": [
+          "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+          "400",
+          "1000000000000000000",
+          "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+          "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+          "0"
+        ],
+        "proofBytes": "0x102fa20f43197ce1af0e5c256b43b1741bdd590924f79b14f81a2bdb947b0f5022dcae3ade44d9da42413bd66844485ff2904dba6ed92f0d50cc4827cc3b01da1c74d652c1b0e7782d16ee46908324d3a99a0066915ca1e58ffa5d1e5b71f7761533a48f7e9167e5fd9b185d22581a03952c0132d3b080ef5607906e47791ebf18eb67f5670c3473933f7c548f56d63f603a70b2454a76395b707c1efff44ae008e8f138d602291e652f78172cfa2c56cf87802724e9781146c89927832ec05c232c82bb3ad5a59d9b95c1b02de4abea6f78f5f86557587a9fcd450d5d5e72fd2177641559665a3ea75ab18a528cdfdeb6ebf66a568ee8a1d12f8a3326518156",
+        "calldata": "0xf398789b102fa20f43197ce1af0e5c256b43b1741bdd590924f79b14f81a2bdb947b0f5022dcae3ade44d9da42413bd66844485ff2904dba6ed92f0d50cc4827cc3b01da1c74d652c1b0e7782d16ee46908324d3a99a0066915ca1e58ffa5d1e5b71f7761533a48f7e9167e5fd9b185d22581a03952c0132d3b080ef5607906e47791ebf18eb67f5670c3473933f7c548f56d63f603a70b2454a76395b707c1efff44ae008e8f138d602291e652f78172cfa2c56cf87802724e9781146c89927832ec05c232c82bb3ad5a59d9b95c1b02de4abea6f78f5f86557587a9fcd450d5d5e72fd2177641559665a3ea75ab18a528cdfdeb6ebf66a568ee8a1d12f8a33265181561df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c1200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400000326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f10326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f10000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "proofSolana": {
+        "proofA": "0x102fa20f43197ce1af0e5c256b43b1741bdd590924f79b14f81a2bdb947b0f500d87a03802ecc64f760f09e0193d0ffda4f11cd6f9989b7feb5443ef0c41fb6d",
+        "proofB": "0x1c74d652c1b0e7782d16ee46908324d3a99a0066915ca1e58ffa5d1e5b71f7761533a48f7e9167e5fd9b185d22581a03952c0132d3b080ef5607906e47791ebf18eb67f5670c3473933f7c548f56d63f603a70b2454a76395b707c1efff44ae008e8f138d602291e652f78172cfa2c56cf87802724e9781146c89927832ec05c",
+        "proofC": "0x232c82bb3ad5a59d9b95c1b02de4abea6f78f5f86557587a9fcd450d5d5e72fd2177641559665a3ea75ab18a528cdfdeb6ebf66a568ee8a1d12f8a3326518156",
+        "proof": "0x102fa20f43197ce1af0e5c256b43b1741bdd590924f79b14f81a2bdb947b0f500d87a03802ecc64f760f09e0193d0ffda4f11cd6f9989b7feb5443ef0c41fb6d1c74d652c1b0e7782d16ee46908324d3a99a0066915ca1e58ffa5d1e5b71f7761533a48f7e9167e5fd9b185d22581a03952c0132d3b080ef5607906e47791ebf18eb67f5670c3473933f7c548f56d63f603a70b2454a76395b707c1efff44ae008e8f138d602291e652f78172cfa2c56cf87802724e9781146c89927832ec05c232c82bb3ad5a59d9b95c1b02de4abea6f78f5f86557587a9fcd450d5d5e72fd2177641559665a3ea75ab18a528cdfdeb6ebf66a568ee8a1d12f8a3326518156",
+        "publicInputs": [
+          "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+          "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+          "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+          "0x0000000000000000000000000000000000000000000000000000000000000000"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "140000000000",
+        "incomeSalt": "0",
+        "priorIncomeYtd": "140000000000",
+        "priorSalt": "0",
         "theta": "80000000000",
         "rWad": "100000000000000"
       }
@@ -1569,31 +2828,31 @@
       "series": "S2",
       "balances": {
         "b1": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b2": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b3": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "b4": {
-          "stable": "38790000000",
+          "stable": "48185000000",
           "units": "100"
         },
         "client": {
-          "stable": "820000000000",
+          "stable": "680000000000",
           "units": "0"
         },
         "issuer": {
-          "stable": "385700000000",
+          "stable": "523300000000",
           "units": "0"
         }
       },
-      "feeCollector": "1080000000",
+      "feeCollector": "1620000000",
       "treasury": "42000000000",
       "vault": "4180000000",
       "auctionEscrow": "0",
@@ -1601,6 +2860,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -1613,6 +2873,7 @@
         "paidPerUnitWad": "11000000000000000000000000",
         "netAccWad": "10450000000000000000000000",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "4400000000",
         "feeCollected": "220000000",
         "refundedToIssuer": "0",
@@ -1621,43 +2882,69 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "400000000",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
       "note": "routerCredit 400 carried forward"
@@ -1671,24 +2958,25 @@
       "paymentUsd": "800000000",
       "fxAvgWad": "1000000000000000000",
       "fxFallback": null,
-      "incomeCommitment": "0x0446594d1628b92277ed2a592709a34ed1dad4b83209058604e9f845a623773b",
+      "priorIncomeCommitment": "0x25d45ab6a37e7d94fe73655319c94c7852239a9c7b950ff64eda5c4fed72ff6e",
+      "incomeCommitment": "0x106e6a5821a5d70237714a18e5a2136babf52838a444df599cb07ecd08f64803",
       "tier": 2,
       "liquidityEvent": false,
       "attestation": "verifier1",
       "proof": {
         "pi_a": [
-          "14522806083671547754419372009056579391400840856016508122388299045141709358516",
-          "621257924312094459888587862527268365889565408154541341838721142443844739485",
+          "16899885368301618838501826473451788003662478238963841256153466419944893715694",
+          "21329686876927063717333487224914832114685065752747544243393708703505045042836",
           "1"
         ],
         "pi_b": [
           [
-            "4475812871438581051883827712130975085655834688763590606815501043632216262916",
-            "6046513158639445269589637953330672262521420815114872276016904003848756569598"
+            "11543015132592379110872913456413624002936190424135111209971427641329185790984",
+            "18170938299611604991397394569927657875051695709950000371269055515583796563826"
           ],
           [
-            "11489051161771571558747384083417570247799358697601294420061532668767033281591",
-            "20375267190512680252493278213950135119149099307039741874388213118391231410988"
+            "6983991220209363391606404773131286539941353904151538391338922187840589517517",
+            "11526492853711801131005630435007658133276414147375131110752098125175471293834"
           ],
           [
             "1",
@@ -1696,8 +2984,8 @@
           ]
         ],
         "pi_c": [
-          "133780768745703624587630732724093373328861539122459027916518079426446976569",
-          "13384245913690659918499832156482337600863513463512610543483989793868881903491",
+          "14461486391461457208126953809553778959083253891278106943676713141327560663550",
+          "8729549194100377288359244907292422245939530616630739030053068164068204690379",
           "1"
         ],
         "protocol": "groth16",
@@ -1707,59 +2995,59 @@
         "6439852318357076615527385542666985338989246866338479621215321242960127652146",
         "400",
         "1000000000000000000",
-        "14870533176030810442876491135916029129872677212706284169153905202826632760058",
-        "1933547022541933149522177876938368988602098823434620196415117499584385087291",
+        "17110773056413317157878107987537620015144936820617420045353530387648908296046",
+        "7432092715589479192890172415689612468855995328149974101598147800843834247171",
         "800000000"
       ],
       "proofEvm": {
         "pA": [
-          "14522806083671547754419372009056579391400840856016508122388299045141709358516",
-          "621257924312094459888587862527268365889565408154541341838721142443844739485"
+          "16899885368301618838501826473451788003662478238963841256153466419944893715694",
+          "21329686876927063717333487224914832114685065752747544243393708703505045042836"
         ],
         "pB": [
           [
-            "6046513158639445269589637953330672262521420815114872276016904003848756569598",
-            "4475812871438581051883827712130975085655834688763590606815501043632216262916"
+            "18170938299611604991397394569927657875051695709950000371269055515583796563826",
+            "11543015132592379110872913456413624002936190424135111209971427641329185790984"
           ],
           [
-            "20375267190512680252493278213950135119149099307039741874388213118391231410988",
-            "11489051161771571558747384083417570247799358697601294420061532668767033281591"
+            "11526492853711801131005630435007658133276414147375131110752098125175471293834",
+            "6983991220209363391606404773131286539941353904151538391338922187840589517517"
           ]
         ],
         "pC": [
-          "133780768745703624587630732724093373328861539122459027916518079426446976569",
-          "13384245913690659918499832156482337600863513463512610543483989793868881903491"
+          "14461486391461457208126953809553778959083253891278106943676713141327560663550",
+          "8729549194100377288359244907292422245939530616630739030053068164068204690379"
         ],
         "pubSignals": [
           "6439852318357076615527385542666985338989246866338479621215321242960127652146",
           "400",
           "1000000000000000000",
-          "14870533176030810442876491135916029129872677212706284169153905202826632760058",
-          "1933547022541933149522177876938368988602098823434620196415117499584385087291",
+          "17110773056413317157878107987537620015144936820617420045353530387648908296046",
+          "7432092715589479192890172415689612468855995328149974101598147800843834247171",
           "800000000"
         ],
-        "proofBytes": "0x201b9df0820925984e00184da72ac4063ac2f3ac8046f57cdc27627e9b3485b4015f9e9923e54677057922380aa3c0519bac12da03f9a16b3f19a02ba74aa19d0d5e3485fb7d29b60bb5483d2bdb361f8af3244e6d0e6aa2fe7b5b89eb78a5fe09e538665216b7995859d796313977ed01ef919fdd3c407a8189dc9ecf54c9042d0bfe17d978571ac35f4137be762bee755720a249865cb10b3853931343732c19669290591a2eeeba446f303f50e3f9e0aad97dcc70926bdcb9b7f3d14acc37004bb79c80b46432c717338e93c25fd405dc1e07f12fd3d74655761cba7f66391d9736f8a75bc13fffeb24cce1a98688e14bdcbac8b1f6dd6705989cfc9cbf83",
-        "calldata": "0xf398789b201b9df0820925984e00184da72ac4063ac2f3ac8046f57cdc27627e9b3485b4015f9e9923e54677057922380aa3c0519bac12da03f9a16b3f19a02ba74aa19d0d5e3485fb7d29b60bb5483d2bdb361f8af3244e6d0e6aa2fe7b5b89eb78a5fe09e538665216b7995859d796313977ed01ef919fdd3c407a8189dc9ecf54c9042d0bfe17d978571ac35f4137be762bee755720a249865cb10b3853931343732c19669290591a2eeeba446f303f50e3f9e0aad97dcc70926bdcb9b7f3d14acc37004bb79c80b46432c717338e93c25fd405dc1e07f12fd3d74655761cba7f66391d9736f8a75bc13fffeb24cce1a98688e14bdcbac8b1f6dd6705989cfc9cbf830e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf13200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a764000020e06c6b3491b5fe4fdcf8e0ec635949921752366aaede110a11563131840afa0446594d1628b92277ed2a592709a34ed1dad4b83209058604e9f845a623773b000000000000000000000000000000000000000000000000000000002faf0800"
+        "proofBytes": "0x255cff038a48662bd68e44ece5432a8f5c740a1929bdee3c3a3ad6cbc75014ee2f282cc98fb465ee05d383edee927ad95516f5b454cab0a5aa6049d89facb694282c62f90bfbbd62b4aa7abcb7f4c92895bfd4c5c64830d17d78db47d1a54f7219851d7345dc88c1fc9cecfeb861540e9f86ad037e45836bd1255b89bd511c08197bc385e36fc4d52aee2b6ce6a6ed637ae24bc3ac05505134015b551cfd458a0f70cc87e74a26908ca650da7b4d8cb118067be298be4e732d0147fbb8edd2cd1ff8e946b68173f6d4c2837b084a469d0f2fb53deab0443a8df96beebd5761fe134cbfefa285e280d52ec74457e81c1fdf573f8fe0bacc9f2c0e09a6513d3bcb",
+        "calldata": "0xf398789b255cff038a48662bd68e44ece5432a8f5c740a1929bdee3c3a3ad6cbc75014ee2f282cc98fb465ee05d383edee927ad95516f5b454cab0a5aa6049d89facb694282c62f90bfbbd62b4aa7abcb7f4c92895bfd4c5c64830d17d78db47d1a54f7219851d7345dc88c1fc9cecfeb861540e9f86ad037e45836bd1255b89bd511c08197bc385e36fc4d52aee2b6ce6a6ed637ae24bc3ac05505134015b551cfd458a0f70cc87e74a26908ca650da7b4d8cb118067be298be4e732d0147fbb8edd2cd1ff8e946b68173f6d4c2837b084a469d0f2fb53deab0443a8df96beebd5761fe134cbfefa285e280d52ec74457e81c1fdf573f8fe0bacc9f2c0e09a6513d3bcb0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf13200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a764000025d45ab6a37e7d94fe73655319c94c7852239a9c7b950ff64eda5c4fed72ff6e106e6a5821a5d70237714a18e5a2136babf52838a444df599cb07ecd08f64803000000000000000000000000000000000000000000000000000000002faf0800"
       },
       "proofSolana": {
-        "proofA": "0x201b9df0820925984e00184da72ac4063ac2f3ac8046f57cdc27627e9b3485b42f04afd9bd4c59b2b2d7237e76dd980bfbd557b764782921fd06ebeb31325baa",
-        "proofB": "0x0d5e3485fb7d29b60bb5483d2bdb361f8af3244e6d0e6aa2fe7b5b89eb78a5fe09e538665216b7995859d796313977ed01ef919fdd3c407a8189dc9ecf54c9042d0bfe17d978571ac35f4137be762bee755720a249865cb10b3853931343732c19669290591a2eeeba446f303f50e3f9e0aad97dcc70926bdcb9b7f3d14acc37",
-        "proofC": "0x004bb79c80b46432c717338e93c25fd405dc1e07f12fd3d74655761cba7f66391d9736f8a75bc13fffeb24cce1a98688e14bdcbac8b1f6dd6705989cfc9cbf83",
-        "proof": "0x201b9df0820925984e00184da72ac4063ac2f3ac8046f57cdc27627e9b3485b42f04afd9bd4c59b2b2d7237e76dd980bfbd557b764782921fd06ebeb31325baa0d5e3485fb7d29b60bb5483d2bdb361f8af3244e6d0e6aa2fe7b5b89eb78a5fe09e538665216b7995859d796313977ed01ef919fdd3c407a8189dc9ecf54c9042d0bfe17d978571ac35f4137be762bee755720a249865cb10b3853931343732c19669290591a2eeeba446f303f50e3f9e0aad97dcc70926bdcb9b7f3d14acc37004bb79c80b46432c717338e93c25fd405dc1e07f12fd3d74655761cba7f66391d9736f8a75bc13fffeb24cce1a98688e14bdcbac8b1f6dd6705989cfc9cbf83",
+        "proofA": "0x255cff038a48662bd68e44ece5432a8f5c740a1929bdee3c3a3ad6cbc75014ee013c21a9517d3a3bb27cc1c892eedd84426a74dd13a719e791c0423e38d046b3",
+        "proofB": "0x282c62f90bfbbd62b4aa7abcb7f4c92895bfd4c5c64830d17d78db47d1a54f7219851d7345dc88c1fc9cecfeb861540e9f86ad037e45836bd1255b89bd511c08197bc385e36fc4d52aee2b6ce6a6ed637ae24bc3ac05505134015b551cfd458a0f70cc87e74a26908ca650da7b4d8cb118067be298be4e732d0147fbb8edd2cd",
+        "proofC": "0x1ff8e946b68173f6d4c2837b084a469d0f2fb53deab0443a8df96beebd5761fe134cbfefa285e280d52ec74457e81c1fdf573f8fe0bacc9f2c0e09a6513d3bcb",
+        "proof": "0x255cff038a48662bd68e44ece5432a8f5c740a1929bdee3c3a3ad6cbc75014ee013c21a9517d3a3bb27cc1c892eedd84426a74dd13a719e791c0423e38d046b3282c62f90bfbbd62b4aa7abcb7f4c92895bfd4c5c64830d17d78db47d1a54f7219851d7345dc88c1fc9cecfeb861540e9f86ad037e45836bd1255b89bd511c08197bc385e36fc4d52aee2b6ce6a6ed637ae24bc3ac05505134015b551cfd458a0f70cc87e74a26908ca650da7b4d8cb118067be298be4e732d0147fbb8edd2cd1ff8e946b68173f6d4c2837b084a469d0f2fb53deab0443a8df96beebd5761fe134cbfefa285e280d52ec74457e81c1fdf573f8fe0bacc9f2c0e09a6513d3bcb",
         "publicInputs": [
           "0x0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf132",
           "0x0000000000000000000000000000000000000000000000000000000000000190",
           "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
-          "0x20e06c6b3491b5fe4fdcf8e0ec635949921752366aaede110a11563131840afa",
-          "0x0446594d1628b92277ed2a592709a34ed1dad4b83209058604e9f845a623773b",
+          "0x25d45ab6a37e7d94fe73655319c94c7852239a9c7b950ff64eda5c4fed72ff6e",
+          "0x106e6a5821a5d70237714a18e5a2136babf52838a444df599cb07ecd08f64803",
           "0x000000000000000000000000000000000000000000000000000000002faf0800"
         ]
       },
       "witness": {
         "incomeYtd": "200000000000",
-        "incomeSalt": "16972925423082522306820737965304826634862712699822679819281126375917906875746",
+        "incomeSalt": "9527308079817714452561782722112051343291345171569334427030718416182636529031",
         "priorIncomeYtd": "180000000000",
-        "priorSalt": "16957114881738351182600004245204880431835571446880441484971879057803601351385",
+        "priorSalt": "16972925423082522306820737965304826634862712699822679819281126375917906875746",
         "theta": "80000000000",
         "rWad": "100000000000000"
       }
@@ -1800,31 +3088,31 @@
       "series": "S2",
       "balances": {
         "b1": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "b2": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "b3": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "b4": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "client": {
-          "stable": "820000000000",
+          "stable": "680000000000",
           "units": "0"
         },
         "issuer": {
-          "stable": "385300000000",
+          "stable": "522900000000",
           "units": "0"
         }
       },
-      "feeCollector": "1100000000",
+      "feeCollector": "1640000000",
       "treasury": "42000000000",
       "vault": "0",
       "auctionEscrow": "0",
@@ -1832,6 +3120,7 @@
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -1844,6 +3133,7 @@
         "paidPerUnitWad": "12000000000000000000000000",
         "netAccWad": "11400000000000000000000000",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "4800000000",
         "feeCollected": "240000000",
         "refundedToIssuer": "0",
@@ -1852,50 +3142,76 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
       "note": "2026 gross on S2 = 4% × 120,000 = 4,800 (router 4,000 + issuer 800); holders got 95%"
     },
     {
       "t": "1799971200",
-      "note": "2027: below θ again → 100% pass-through",
+      "note": "2027: below θ again → 100% pass-through; the receipt closes 2026 Q4 for S2's router",
       "op": "route_income",
       "series": "S2",
       "payer": "client",
@@ -1903,42 +3219,155 @@
     },
     {
       "t": "1799971200",
+      "note": "closes S3's Q4 2026 checkpoint (140,000) and resets the year",
+      "op": "route_income",
+      "series": "S3",
+      "payer": "client",
+      "amount": "20000000000"
+    },
+    {
+      "t": "1799971200",
+      "note": "Q4 2026 bound to the closed checkpoint; prior = Poseidon(2)(140,000e6, 0)",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S3",
+      "period": "8107",
+      "paymentUsd": "0",
+      "fxAvgWad": "1000000000000000000",
+      "fxFallback": null,
+      "priorIncomeCommitment": "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+      "incomeCommitment": "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+      "tier": 1,
+      "liquidityEvent": false,
+      "attestation": null,
+      "proof": {
+        "pi_a": [
+          "7321165883750634978291093443351383148654223961854083743211132219941539483472",
+          "15768545697031202413519970541843836566923625153446439884382921866943164776922",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "9589814775554704060385537911949493370594093013662090250733467987448243494591",
+            "12871193224677637793287408487863546491164320628671156270034934194806616881014"
+          ],
+          [
+            "4030076160859025402362343246678944447009772279317829167092828440306253742172",
+            "11271434922134153360177575346287391056131418584184486869247535588947533253344"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "15909593245995684202580897830442405167858596614825590668887584390521471005437",
+          "15137269554164876960503374924078510960721023025730559620529256493354029515094",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+        "400",
+        "1000000000000000000",
+        "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+        "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+        "0"
+      ],
+      "proofEvm": {
+        "pA": [
+          "7321165883750634978291093443351383148654223961854083743211132219941539483472",
+          "15768545697031202413519970541843836566923625153446439884382921866943164776922"
+        ],
+        "pB": [
+          [
+            "12871193224677637793287408487863546491164320628671156270034934194806616881014",
+            "9589814775554704060385537911949493370594093013662090250733467987448243494591"
+          ],
+          [
+            "11271434922134153360177575346287391056131418584184486869247535588947533253344",
+            "4030076160859025402362343246678944447009772279317829167092828440306253742172"
+          ]
+        ],
+        "pC": [
+          "15909593245995684202580897830442405167858596614825590668887584390521471005437",
+          "15137269554164876960503374924078510960721023025730559620529256493354029515094"
+        ],
+        "pubSignals": [
+          "13555264598001162488511319094029809995090101526177266677864219204775845977106",
+          "400",
+          "1000000000000000000",
+          "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+          "1424797063953324304499310822549224625366867597807960627652277134886663768305",
+          "0"
+        ],
+        "proofBytes": "0x102fa20f43197ce1af0e5c256b43b1741bdd590924f79b14f81a2bdb947b0f5022dcae3ade44d9da42413bd66844485ff2904dba6ed92f0d50cc4827cc3b01da1c74d652c1b0e7782d16ee46908324d3a99a0066915ca1e58ffa5d1e5b71f7761533a48f7e9167e5fd9b185d22581a03952c0132d3b080ef5607906e47791ebf18eb67f5670c3473933f7c548f56d63f603a70b2454a76395b707c1efff44ae008e8f138d602291e652f78172cfa2c56cf87802724e9781146c89927832ec05c232c82bb3ad5a59d9b95c1b02de4abea6f78f5f86557587a9fcd450d5d5e72fd2177641559665a3ea75ab18a528cdfdeb6ebf66a568ee8a1d12f8a3326518156",
+        "calldata": "0xf398789b102fa20f43197ce1af0e5c256b43b1741bdd590924f79b14f81a2bdb947b0f5022dcae3ade44d9da42413bd66844485ff2904dba6ed92f0d50cc4827cc3b01da1c74d652c1b0e7782d16ee46908324d3a99a0066915ca1e58ffa5d1e5b71f7761533a48f7e9167e5fd9b185d22581a03952c0132d3b080ef5607906e47791ebf18eb67f5670c3473933f7c548f56d63f603a70b2454a76395b707c1efff44ae008e8f138d602291e652f78172cfa2c56cf87802724e9781146c89927832ec05c232c82bb3ad5a59d9b95c1b02de4abea6f78f5f86557587a9fcd450d5d5e72fd2177641559665a3ea75ab18a528cdfdeb6ebf66a568ee8a1d12f8a33265181561df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c1200000000000000000000000000000000000000000000000000000000000001900000000000000000000000000000000000000000000000000de0b6b3a76400000326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f10326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f10000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "proofSolana": {
+        "proofA": "0x102fa20f43197ce1af0e5c256b43b1741bdd590924f79b14f81a2bdb947b0f500d87a03802ecc64f760f09e0193d0ffda4f11cd6f9989b7feb5443ef0c41fb6d",
+        "proofB": "0x1c74d652c1b0e7782d16ee46908324d3a99a0066915ca1e58ffa5d1e5b71f7761533a48f7e9167e5fd9b185d22581a03952c0132d3b080ef5607906e47791ebf18eb67f5670c3473933f7c548f56d63f603a70b2454a76395b707c1efff44ae008e8f138d602291e652f78172cfa2c56cf87802724e9781146c89927832ec05c",
+        "proofC": "0x232c82bb3ad5a59d9b95c1b02de4abea6f78f5f86557587a9fcd450d5d5e72fd2177641559665a3ea75ab18a528cdfdeb6ebf66a568ee8a1d12f8a3326518156",
+        "proof": "0x102fa20f43197ce1af0e5c256b43b1741bdd590924f79b14f81a2bdb947b0f500d87a03802ecc64f760f09e0193d0ffda4f11cd6f9989b7feb5443ef0c41fb6d1c74d652c1b0e7782d16ee46908324d3a99a0066915ca1e58ffa5d1e5b71f7761533a48f7e9167e5fd9b185d22581a03952c0132d3b080ef5607906e47791ebf18eb67f5670c3473933f7c548f56d63f603a70b2454a76395b707c1efff44ae008e8f138d602291e652f78172cfa2c56cf87802724e9781146c89927832ec05c232c82bb3ad5a59d9b95c1b02de4abea6f78f5f86557587a9fcd450d5d5e72fd2177641559665a3ea75ab18a528cdfdeb6ebf66a568ee8a1d12f8a3326518156",
+        "publicInputs": [
+          "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+          "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+          "0x0326681454ba7b88a5f1f82e014b7ed8c1b8612be3e05c13013d9a84f70648f1",
+          "0x0000000000000000000000000000000000000000000000000000000000000000"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "140000000000",
+        "incomeSalt": "0",
+        "priorIncomeYtd": "140000000000",
+        "priorSalt": "0",
+        "theta": "80000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1799971200",
       "op": "expect",
-      "series": "S2",
+      "series": "S3",
       "balances": {
         "b1": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "b2": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "b3": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "b4": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "client": {
-          "stable": "800000000000",
+          "stable": "640000000000",
           "units": "0"
         },
         "issuer": {
-          "stable": "405300000000",
+          "stable": "562900000000",
           "units": "0"
         }
       },
-      "feeCollector": "1100000000",
+      "feeCollector": "1640000000",
       "treasury": "42000000000",
-      "vault": "0",
+      "vault": "2280000000",
       "auctionEscrow": "0",
       "routerBalance": "0",
       "ledger": {
         "status": "OnTime",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -1946,59 +3375,86 @@
         "releasedTotal": "0",
         "capPerUnit": "262500000",
         "capMultipleWad": "2500000000000000000",
-        "termsCommitment": "0x0e3cd3c649a5de12e8f60c8c4c983e33d7d2f650cb12b8d48ea88b86db1cf132",
+        "termsCommitment": "0x1df802043604fe2713ec4297a4c54fad0158154de4608e9926080e96edfe5c12",
         "amendmentNonce": "0",
-        "paidPerUnitWad": "12000000000000000000000000",
-        "netAccWad": "11400000000000000000000000",
+        "paidPerUnitWad": "6000000000000000000000000",
+        "netAccWad": "5700000000000000000000000",
         "carryWad": "0",
-        "grossReceived": "4800000000",
-        "feeCollected": "240000000",
+        "carry": "0",
+        "grossReceived": "2400000000",
+        "feeCollected": "120000000",
         "refundedToIssuer": "0",
         "lastAcceptedPeriod": "8107",
         "lastPaidPeriod": "8107",
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "routerCredit still 0; issuer received the full 20,000"
+      "note": "S3 2026 complete: 2,400 routed and reconciled, nothing paid by the issuer directly"
     },
     {
       "t": "1799971200",
@@ -2006,37 +3462,38 @@
       "series": "S1",
       "balances": {
         "b1": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "b2": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "b3": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "b4": {
-          "stable": "39930000000",
+          "stable": "49325000000",
           "units": "100"
         },
         "client": {
-          "stable": "800000000000",
+          "stable": "640000000000",
           "units": "0"
         },
         "issuer": {
-          "stable": "405300000000",
+          "stable": "562900000000",
           "units": "0"
         }
       },
-      "feeCollector": "1100000000",
+      "feeCollector": "1640000000",
       "treasury": "31500000000",
       "vault": "380000000",
       "auctionEscrow": "0",
       "ledger": {
         "status": "Late",
         "raiseState": "Settled",
+        "mintFinalized": true,
         "unitsOutstanding": "400",
         "unitsSold": "400",
         "clearingPrice": "105000000",
@@ -2049,6 +3506,7 @@
         "paidPerUnitWad": "1000000000000000000000000",
         "netAccWad": "950000000000000000000000",
         "carryWad": "0",
+        "carry": "0",
         "grossReceived": "400000000",
         "feeCollected": "20000000",
         "refundedToIssuer": "0",
@@ -2057,46 +3515,72 @@
         "openDuePeriod": null,
         "openDueAmount": "0",
         "routerCredit": "0",
+        "trueupNonce": "0",
         "trueupDue": "0",
-        "pausedTotal": "0",
         "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
         "formalNoticeEmittedFor": null,
         "redemptionPrice": "0",
         "unitsAtRedemption": "0",
         "tailCapPerUnit": "0",
         "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
         "finalAccWad": "0",
+        "finalUnits": "0",
         "extinguishNonce": "0"
       },
       "auction": {
         "bidCount": "4",
         "revealedCount": "4",
+        "validCount": "4",
         "escrowTotal": "0",
-        "R": "100",
-        "qAt": "100",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
         "qAbove": "300",
-        "unitsSoldUpper": "400",
-        "bidsProcessed": "4"
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
       },
       "holders": {
         "b1": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b2": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b3": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         },
         "b4": {
           "pending": "0",
-          "redeemedUnits": "0"
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
         }
       },
-      "note": "S1 untouched by S2's router"
+      "note": "S1 untouched by the routers"
     }
   ]
 }

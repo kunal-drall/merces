@@ -7,8 +7,9 @@ const { poseidonContract } = require("circomlibjs");
 const chunk = (hex) => {
   const body = hex.slice(2);
   const lines = [];
+  // adjacent hex literals are concatenated by the compiler; bytes.concat(...) of 160+ parts is stack-too-deep
   for (let i = 0; i < body.length; i += 120) lines.push('            hex"' + body.slice(i, i + 120) + '"');
-  return lines.join(",\n");
+  return lines.join("\n");
 };
 const c2 = poseidonContract.createCode(2);
 const c5 = poseidonContract.createCode(5);
@@ -18,20 +19,19 @@ pragma solidity ^0.8.30;
 /// @notice EVM creation bytecode of circomlib's Poseidon hashers (BN254, circomlib parameters), generated with
 /// \`circomlibjs\` 0.1.7 \`poseidonContract.createCode(n)\` (see evm/scripts/gen-poseidon.mjs). The deployed contracts
 /// expose \`poseidon(uint256[n]) pure returns (uint256)\` and \`poseidon(bytes32[n]) pure returns (bytes32)\` and
-/// match \`poseidon-lite\` / the circuit exactly (SPEC §1.5). Deploy with \`PoseidonDeployer.deploy\`.
+/// match \`poseidon-lite\` / the circuit exactly (SPEC §1.5). Deploy with \`PoseidonDeployer.deploy\`. The code is
+/// written as adjacent hex literals (implicitly concatenated) so the legacy code generator needs no stack for it.
 library PoseidonBytecode {
     /// @dev Poseidon(2): ${(c2.length - 2) / 2} bytes of creation code.
     function poseidon2() internal pure returns (bytes memory) {
-        return bytes.concat(
-${chunk(c2)}
-        );
+        return
+${chunk(c2)};
     }
 
     /// @dev Poseidon(5): ${(c5.length - 2) / 2} bytes of creation code.
     function poseidon5() internal pure returns (bytes memory) {
-        return bytes.concat(
-${chunk(c5)}
-        );
+        return
+${chunk(c5)};
     }
 }
 

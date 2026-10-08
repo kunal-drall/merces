@@ -8,12 +8,19 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::Mint;
-use merces_common::encoding::{amend_message, domain_preimage, fx_pair_id_preimage, CHAIN_KIND_SOLANA};
+use merces_common::encoding::{
+    amend_message, domain_preimage, fx_pair_id_preimage, CHAIN_KIND_SOLANA,
+};
 use merces_common::params::{validate_schedule, wallet_cap_allows_a_bid, Parameters, Tranche};
 use merces_common::time::period_of;
 use merces_common::WAD;
-use merces_onchain::seeds::{ALLOW, ATTESTOR, CONFIG, FX, ISSUER, REGISTRY_AUTHORITY, SERIES, VERIFIER};
-use merces_onchain::{assert_zero_transfer_fee, keccak, poseidon5, recover_eth_address, u64_field, FeeCheckError, SigError};
+use merces_onchain::seeds::{
+    ALLOW, ATTESTOR, CONFIG, FX, ISSUER, REGISTRY_AUTHORITY, SERIES, VERIFIER,
+};
+use merces_onchain::{
+    assert_zero_transfer_fee, keccak, poseidon5, recover_eth_address, u64_field, FeeCheckError,
+    SigError,
+};
 
 pub mod error;
 pub mod events;
@@ -91,16 +98,32 @@ pub mod merces_registry {
     /// Creates `ProtocolConfig` once (SPEC §3.2).
     pub fn init_protocol(ctx: Context<InitProtocol>, args: InitProtocolArgs) -> Result<()> {
         require_keys_neq!(args.admin, Pubkey::default(), RegistryError::ZeroAddress);
-        require_keys_neq!(args.allowlist_manager, Pubkey::default(), RegistryError::ZeroAddress);
-        require_keys_neq!(args.fee_collector, Pubkey::default(), RegistryError::ZeroAddress);
-        require_keys_neq!(args.protocol_program, Pubkey::default(), RegistryError::ZeroAddress);
+        require_keys_neq!(
+            args.allowlist_manager,
+            Pubkey::default(),
+            RegistryError::ZeroAddress
+        );
+        require_keys_neq!(
+            args.fee_collector,
+            Pubkey::default(),
+            RegistryError::ZeroAddress
+        );
+        require_keys_neq!(
+            args.protocol_program,
+            Pubkey::default(),
+            RegistryError::ZeroAddress
+        );
         require!(args.chain_id != 0, RegistryError::InvalidChainId);
         let params: Parameters = args.defaults.into();
         if let Some(f) = params.first_violation() {
             return Err(RegistryError::from(f).into());
         }
-        let (protocol_authority, _) = Pubkey::find_program_address(&[REGISTRY_AUTHORITY], &args.protocol_program);
-        let domain = keccak(&[domain_preimage(CHAIN_KIND_SOLANA, args.chain_id, &crate::ID.to_bytes()).as_bytes()]);
+        let (protocol_authority, _) =
+            Pubkey::find_program_address(&[REGISTRY_AUTHORITY], &args.protocol_program);
+        let domain =
+            keccak(&[
+                domain_preimage(CHAIN_KIND_SOLANA, args.chain_id, &crate::ID.to_bytes()).as_bytes(),
+            ]);
         let cfg = &mut ctx.accounts.config;
         cfg.admin = args.admin;
         cfg.pending_admin = Pubkey::default();
@@ -136,18 +159,27 @@ pub mod merces_registry {
     pub fn set_allowlist_manager(ctx: Context<AdminOnly>, new_manager: Pubkey) -> Result<()> {
         require_keys_neq!(new_manager, Pubkey::default(), RegistryError::ZeroAddress);
         ctx.accounts.config.allowlist_manager = new_manager;
-        emit!(AllowlistManagerSet { allowlist_manager: new_manager });
+        emit!(AllowlistManagerSet {
+            allowlist_manager: new_manager
+        });
         Ok(())
     }
 
     pub fn set_fee_collector(ctx: Context<AdminOnly>, new_collector: Pubkey) -> Result<()> {
         require_keys_neq!(new_collector, Pubkey::default(), RegistryError::ZeroAddress);
         ctx.accounts.config.fee_collector = new_collector;
-        emit!(FeeCollectorSet { fee_collector: new_collector });
+        emit!(FeeCollectorSet {
+            fee_collector: new_collector
+        });
         Ok(())
     }
 
-    pub fn set_flags(ctx: Context<AdminOnly>, new_raises_paused: bool, windows_enabled: bool, tier4_enabled: bool) -> Result<()> {
+    pub fn set_flags(
+        ctx: Context<AdminOnly>,
+        new_raises_paused: bool,
+        windows_enabled: bool,
+        tier4_enabled: bool,
+    ) -> Result<()> {
         let cfg = &mut ctx.accounts.config;
         cfg.new_raises_paused = new_raises_paused;
         cfg.windows_enabled = windows_enabled;
@@ -183,7 +215,12 @@ pub mod merces_registry {
         require!(addr != [0u8; 20], RegistryError::ZeroAttestorAddress);
         let k = &mut ctx.accounts.attestor;
         if !k.active {
-            ctx.accounts.config.attestor_count = ctx.accounts.config.attestor_count.checked_add(1).ok_or(RegistryError::MathOverflow)?;
+            ctx.accounts.config.attestor_count = ctx
+                .accounts
+                .config
+                .attestor_count
+                .checked_add(1)
+                .ok_or(RegistryError::MathOverflow)?;
         }
         k.addr = addr;
         k.active = true;
@@ -197,12 +234,23 @@ pub mod merces_registry {
     pub fn revoke_attestor(ctx: Context<RevokeAttestor>, addr: [u8; 20]) -> Result<()> {
         let k = &mut ctx.accounts.attestor;
         require!(k.active, RegistryError::KeyAlreadyRevoked);
-        require!(ctx.accounts.config.attestor_count >= 2, RegistryError::LastKeyOfKind);
+        require!(
+            ctx.accounts.config.attestor_count >= 2,
+            RegistryError::LastKeyOfKind
+        );
         let now = now_u64()?;
         k.active = false;
         k.revoked_at = now;
-        ctx.accounts.config.attestor_count = ctx.accounts.config.attestor_count.checked_sub(1).ok_or(RegistryError::MathOverflow)?;
-        emit!(AttestorRevoked { addr, revoked_at: now });
+        ctx.accounts.config.attestor_count = ctx
+            .accounts
+            .config
+            .attestor_count
+            .checked_sub(1)
+            .ok_or(RegistryError::MathOverflow)?;
+        emit!(AttestorRevoked {
+            addr,
+            revoked_at: now
+        });
         Ok(())
     }
 
@@ -210,7 +258,12 @@ pub mod merces_registry {
         require!(addr != [0u8; 20], RegistryError::ZeroAttestorAddress);
         let k = &mut ctx.accounts.verifier;
         if !k.active {
-            ctx.accounts.config.verifier_count = ctx.accounts.config.verifier_count.checked_add(1).ok_or(RegistryError::MathOverflow)?;
+            ctx.accounts.config.verifier_count = ctx
+                .accounts
+                .config
+                .verifier_count
+                .checked_add(1)
+                .ok_or(RegistryError::MathOverflow)?;
         }
         k.addr = addr;
         k.active = true;
@@ -223,19 +276,37 @@ pub mod merces_registry {
     pub fn revoke_verifier_key(ctx: Context<RevokeVerifierKey>, addr: [u8; 20]) -> Result<()> {
         let k = &mut ctx.accounts.verifier;
         require!(k.active, RegistryError::KeyAlreadyRevoked);
-        require!(ctx.accounts.config.verifier_count >= 2, RegistryError::LastKeyOfKind);
+        require!(
+            ctx.accounts.config.verifier_count >= 2,
+            RegistryError::LastKeyOfKind
+        );
         let now = now_u64()?;
         k.active = false;
         k.revoked_at = now;
-        ctx.accounts.config.verifier_count = ctx.accounts.config.verifier_count.checked_sub(1).ok_or(RegistryError::MathOverflow)?;
-        emit!(VerifierKeyRevoked { addr, revoked_at: now });
+        ctx.accounts.config.verifier_count = ctx
+            .accounts
+            .config
+            .verifier_count
+            .checked_sub(1)
+            .ok_or(RegistryError::MathOverflow)?;
+        emit!(VerifierKeyRevoked {
+            addr,
+            revoked_at: now
+        });
         Ok(())
     }
 
     /// FX pair configuration (SPEC §3.1): `pair_id = keccak256(feed_id ‖ inverted)`; `feed_id` and
     /// `inverted` are write-once; `crosscheck` may be set from zero once (effective now), later
     /// changes apply from the next period; `enabled` only gates new series.
-    pub fn set_fx_pair(ctx: Context<SetFxPair>, pair_id: [u8; 32], feed_id: [u8; 32], inverted: bool, crosscheck: Pubkey, enabled: bool) -> Result<()> {
+    pub fn set_fx_pair(
+        ctx: Context<SetFxPair>,
+        pair_id: [u8; 32],
+        feed_id: [u8; 32],
+        inverted: bool,
+        crosscheck: Pubkey,
+        enabled: bool,
+    ) -> Result<()> {
         require!(feed_id != [0u8; 32], RegistryError::ZeroAddress);
         let expected = keccak(&[fx_pair_id_preimage(&feed_id, inverted).as_bytes()]);
         require!(pair_id == expected, RegistryError::FxPairIdMismatch);
@@ -247,15 +318,24 @@ pub mod merces_registry {
             p.feed_id = feed_id;
             p.inverted = inverted;
             p.crosscheck = crosscheck;
-            p.crosscheck_effective_period = if crosscheck == Pubkey::default() { 0 } else { current_period };
+            p.crosscheck_effective_period = if crosscheck == Pubkey::default() {
+                0
+            } else {
+                current_period
+            };
             p.bump = ctx.bumps.fx_pair;
         } else {
-            require!(p.feed_id == feed_id && p.inverted == inverted, RegistryError::FxPairImmutable);
+            require!(
+                p.feed_id == feed_id && p.inverted == inverted,
+                RegistryError::FxPairImmutable
+            );
             if crosscheck != p.crosscheck {
                 p.crosscheck_effective_period = if p.crosscheck == Pubkey::default() {
                     current_period
                 } else {
-                    current_period.checked_add(1).ok_or(RegistryError::MathOverflow)?
+                    current_period
+                        .checked_add(1)
+                        .ok_or(RegistryError::MathOverflow)?
                 };
                 p.crosscheck = crosscheck;
             }
@@ -331,18 +411,40 @@ pub mod merces_registry {
         let issuer = &ctx.accounts.issuer;
         require!(issuer.active, RegistryError::IssuerInactive);
         require!(!issuer.issuance_stopped, RegistryError::IssuanceStopped);
-        require!(ctx.accounts.allowlist_entry.allowed, RegistryError::NotAllowlisted);
+        require!(
+            ctx.accounts.allowlist_entry.allowed,
+            RegistryError::NotAllowlisted
+        );
         require!(args.units_offered >= 1, RegistryError::UnitsOfferedZero);
         require!(args.reserve_price >= 1, RegistryError::ReservePriceZero);
-        let max_raise = args.reserve_price.checked_mul(args.units_offered).ok_or(RegistryError::MathOverflow)?;
+        let max_raise = args
+            .reserve_price
+            .checked_mul(args.units_offered)
+            .ok_or(RegistryError::MathOverflow)?;
         require!(args.min_raise <= max_raise, RegistryError::MinRaiseTooHigh);
-        require!(args.tier_flags != 0 && args.tier_flags & !TIER_FLAGS_MASK == 0, RegistryError::InvalidTierFlags);
-        require!(args.mode == MODE_SEALED_BID || args.mode == MODE_CURVE, RegistryError::InvalidMode);
+        require!(
+            args.tier_flags != 0 && args.tier_flags & !TIER_FLAGS_MASK == 0,
+            RegistryError::InvalidTierFlags
+        );
+        require!(
+            args.mode == MODE_SEALED_BID || args.mode == MODE_CURVE,
+            RegistryError::InvalidMode
+        );
         if args.mode == MODE_CURVE {
-            require!(args.issuer_accepts_public_price, RegistryError::PublicPriceNotAccepted);
+            require!(
+                args.issuer_accepts_public_price,
+                RegistryError::PublicPriceNotAccepted
+            );
         }
-        require!(args.metadata_uri.len() <= MAX_METADATA_URI, RegistryError::MetadataUriTooLong);
-        let schedule: Vec<Tranche> = args.release_schedule.iter().map(|t| Tranche::from(*t)).collect();
+        require!(
+            args.metadata_uri.len() <= MAX_METADATA_URI,
+            RegistryError::MetadataUriTooLong
+        );
+        let schedule: Vec<Tranche> = args
+            .release_schedule
+            .iter()
+            .map(|t| Tranche::from(*t))
+            .collect();
         validate_schedule(&schedule).map_err(|_| RegistryError::InvalidReleaseSchedule)?;
 
         // Bounds: issuer-chosen values plus the protocol defaults, checked as one parameter set.
@@ -373,21 +475,34 @@ pub mod merces_registry {
         }
         // SPEC §1.6: at least one unit of wallet cap, so a bid can be valid.
         require!(
-            wallet_cap_allows_a_bid(args.units_offered, args.wallet_cap_bps).map_err(|_| RegistryError::MathOverflow)?,
+            wallet_cap_allows_a_bid(args.units_offered, args.wallet_cap_bps)
+                .map_err(|_| RegistryError::MathOverflow)?,
             RegistryError::WalletCapTooSmall
         );
 
         // FX pair: zero means stablecoin income (fx = 1); otherwise the pair must exist and be enabled.
         if args.fx_pair_id != [0u8; 32] {
-            let pair = ctx.accounts.fx_pair.as_ref().ok_or(RegistryError::FxPairMismatch)?;
-            require!(pair.pair_id == args.fx_pair_id && pair.enabled, RegistryError::FxPairMismatch);
+            let pair = ctx
+                .accounts
+                .fx_pair
+                .as_ref()
+                .ok_or(RegistryError::FxPairMismatch)?;
+            require!(
+                pair.pair_id == args.fx_pair_id && pair.enabled,
+                RegistryError::FxPairMismatch
+            );
         }
 
         // Tier-1 router terms (SPEC §6.5): plaintext θ / r, Poseidon(5)-bound to the commitment.
         let (router_theta, router_r_wad) = if args.tier_flags & TIER_FLAG_SPLIT != 0 {
             let t = args.tier1_terms.ok_or(RegistryError::Tier1TermsRequired)?;
-            require!(args.fx_pair_id == [0u8; 32], RegistryError::Tier1NeedsStablecoinIncome);
-            let share = u128::from(t.r_wad).checked_mul(u128::from(args.units_offered)).ok_or(RegistryError::MathOverflow)?;
+            require!(
+                args.fx_pair_id == [0u8; 32],
+                RegistryError::Tier1NeedsStablecoinIncome
+            );
+            let share = u128::from(t.r_wad)
+                .checked_mul(u128::from(args.units_offered))
+                .ok_or(RegistryError::MathOverflow)?;
             require!(share <= WAD, RegistryError::Tier1ShareTooLarge);
             let h = poseidon5(&[
                 u64_field(t.theta),
@@ -397,10 +512,16 @@ pub mod merces_registry {
                 t.terms_salt,
             ])
             .map_err(|_| RegistryError::PoseidonFailed)?;
-            require!(h == args.terms_commitment, RegistryError::Tier1TermsMismatch);
+            require!(
+                h == args.terms_commitment,
+                RegistryError::Tier1TermsMismatch
+            );
             (t.theta, t.r_wad)
         } else {
-            require!(args.tier1_terms.is_none(), RegistryError::Tier1TermsUnexpected);
+            require!(
+                args.tier1_terms.is_none(),
+                RegistryError::Tier1TermsUnexpected
+            );
             (0, 0)
         };
 
@@ -461,9 +582,15 @@ pub mod merces_registry {
         s.bump = ctx.bumps.series;
 
         let cfg = &mut ctx.accounts.config;
-        cfg.series_count = cfg.series_count.checked_add(1).ok_or(RegistryError::MathOverflow)?;
+        cfg.series_count = cfg
+            .series_count
+            .checked_add(1)
+            .ok_or(RegistryError::MathOverflow)?;
         let issuer = &mut ctx.accounts.issuer;
-        issuer.series_count = issuer.series_count.checked_add(1).ok_or(RegistryError::MathOverflow)?;
+        issuer.series_count = issuer
+            .series_count
+            .checked_add(1)
+            .ok_or(RegistryError::MathOverflow)?;
 
         emit!(SeriesCreated {
             series: s.key(),
@@ -496,7 +623,10 @@ pub mod merces_registry {
         require!(s.raise_state == RAISE_DRAFT, RegistryError::NotDraft);
         require!(hash != [0u8; 32], RegistryError::ZeroContractHash);
         s.contract_hash = hash;
-        emit!(ContractHashSet { series: s.key(), hash });
+        emit!(ContractHashSet {
+            series: s.key(),
+            hash
+        });
         Ok(())
     }
 
@@ -519,18 +649,37 @@ pub mod merces_registry {
     /// Issuer-favourable amendment (SPEC §3.2, brief C4): the issuer signs the transaction and an
     /// active attestor signs the `MERCES_AMEND_V1` message with the current nonce. The cap
     /// multiple may only decrease. Allowed only while `terminal_status == 0`.
-    pub fn amend_terms(ctx: Context<AmendTerms>, new_terms_commitment: [u8; 32], new_cap_multiple_wad: u64, attestor_addr: [u8; 20], attestor_sig: [u8; 65]) -> Result<()> {
+    pub fn amend_terms(
+        ctx: Context<AmendTerms>,
+        new_terms_commitment: [u8; 32],
+        new_cap_multiple_wad: u64,
+        attestor_addr: [u8; 20],
+        attestor_sig: [u8; 65],
+    ) -> Result<()> {
         let cfg = &ctx.accounts.config;
         let s = &mut ctx.accounts.series;
         require!(!s.is_terminal(), RegistryError::SeriesTerminal);
-        require!(ctx.accounts.attestor.active, RegistryError::AttestorInactive);
-        require!(new_cap_multiple_wad <= s.cap_multiple_wad, RegistryError::CapMultipleIncrease);
+        require!(
+            ctx.accounts.attestor.active,
+            RegistryError::AttestorInactive
+        );
+        require!(
+            new_cap_multiple_wad <= s.cap_multiple_wad,
+            RegistryError::CapMultipleIncrease
+        );
         require!(
             (2_000_000_000_000_000_000..=3_000_000_000_000_000_000).contains(&new_cap_multiple_wad),
             RegistryError::BoundCapMultiple
         );
         let series_key = s.key().to_bytes();
-        let msg = keccak(&[amend_message(&cfg.domain, &series_key, s.amendment_nonce, &new_terms_commitment, new_cap_multiple_wad).as_bytes()]);
+        let msg = keccak(&[amend_message(
+            &cfg.domain,
+            &series_key,
+            s.amendment_nonce,
+            &new_terms_commitment,
+            new_cap_multiple_wad,
+        )
+        .as_bytes()]);
         let recovered = recover_eth_address(&msg, &attestor_sig).map_err(map_sig_error)?;
         require!(recovered == attestor_addr, RegistryError::AttestorMismatch);
         let nonce = s.amendment_nonce;
@@ -551,17 +700,37 @@ pub mod merces_registry {
 
     /// Draft → Open. Also enforces the D1 gate: contract hash set, issuer allowlisted, raises not
     /// paused. Records the unit mint and the protocol's unit escrow ATAs for the hook.
-    pub fn mark_raise_opened(ctx: Context<MarkRaiseOpened>, unit_mint: Pubkey, opened_at: u64, auction_escrow_ata: Pubkey, window_escrow_ata: Pubkey) -> Result<()> {
+    pub fn mark_raise_opened(
+        ctx: Context<MarkRaiseOpened>,
+        unit_mint: Pubkey,
+        opened_at: u64,
+        auction_escrow_ata: Pubkey,
+        window_escrow_ata: Pubkey,
+    ) -> Result<()> {
         let cfg = &ctx.accounts.config;
         let s = &mut ctx.accounts.series;
         require!(s.raise_state == RAISE_DRAFT, RegistryError::NotDraft);
         require!(s.mode == MODE_SEALED_BID, RegistryError::NotSealedBid);
-        require!(s.contract_hash != [0u8; 32], RegistryError::ContractHashNotSet);
+        require!(
+            s.contract_hash != [0u8; 32],
+            RegistryError::ContractHashNotSet
+        );
         require!(!cfg.new_raises_paused, RegistryError::NewRaisesPaused);
-        require!(ctx.accounts.issuer_allowlist.allowed, RegistryError::NotAllowlisted);
+        require!(
+            ctx.accounts.issuer_allowlist.allowed,
+            RegistryError::NotAllowlisted
+        );
         require_keys_neq!(unit_mint, Pubkey::default(), RegistryError::ZeroAddress);
-        require_keys_neq!(auction_escrow_ata, Pubkey::default(), RegistryError::ZeroAddress);
-        require_keys_neq!(window_escrow_ata, Pubkey::default(), RegistryError::ZeroAddress);
+        require_keys_neq!(
+            auction_escrow_ata,
+            Pubkey::default(),
+            RegistryError::ZeroAddress
+        );
+        require_keys_neq!(
+            window_escrow_ata,
+            Pubkey::default(),
+            RegistryError::ZeroAddress
+        );
         s.unit_mint = unit_mint;
         s.opened_at = opened_at;
         s.auction_escrow_ata = auction_escrow_ata;
@@ -575,23 +744,41 @@ pub mod merces_registry {
     }
 
     /// Records the raise outcome, exact and written once (SPEC §3.2).
-    pub fn mark_raise_result(ctx: Context<MarkRaiseResult>, state: u8, settlement_ts: u64, units_sold: u64, clearing_price: u64) -> Result<()> {
+    pub fn mark_raise_result(
+        ctx: Context<MarkRaiseResult>,
+        state: u8,
+        settlement_ts: u64,
+        units_sold: u64,
+        clearing_price: u64,
+    ) -> Result<()> {
         let s = &mut ctx.accounts.series;
         match state {
             RAISE_CANCELLED => {
-                require!(s.raise_state == RAISE_OPEN, RegistryError::InvalidRaiseTransition);
+                require!(
+                    s.raise_state == RAISE_OPEN,
+                    RegistryError::InvalidRaiseTransition
+                );
                 s.raise_state = RAISE_CANCELLED;
             }
             RAISE_FAILED => {
-                require!(s.raise_state == RAISE_OPEN || s.raise_state == RAISE_SETTLING, RegistryError::InvalidRaiseTransition);
+                require!(
+                    s.raise_state == RAISE_OPEN || s.raise_state == RAISE_SETTLING,
+                    RegistryError::InvalidRaiseTransition
+                );
                 s.raise_state = RAISE_FAILED;
                 s.settlement_ts = settlement_ts;
                 s.clearing_price = clearing_price;
                 s.units_sold = 0;
             }
             RAISE_SETTLED => {
-                require!(s.raise_state == RAISE_OPEN || s.raise_state == RAISE_SETTLING, RegistryError::InvalidRaiseTransition);
-                require!(units_sold >= 1 && clearing_price >= 1, RegistryError::InvalidRaiseTransition);
+                require!(
+                    s.raise_state == RAISE_OPEN || s.raise_state == RAISE_SETTLING,
+                    RegistryError::InvalidRaiseTransition
+                );
+                require!(
+                    units_sold >= 1 && clearing_price >= 1,
+                    RegistryError::InvalidRaiseTransition
+                );
                 s.raise_state = RAISE_SETTLED;
                 s.settlement_ts = settlement_ts;
                 s.units_sold = units_sold;
@@ -609,7 +796,10 @@ pub mod merces_registry {
     /// Settled → mint finalised (every bid processed, mint authority revoked).
     pub fn mark_mint_finalized(ctx: Context<MarkRaiseResult>) -> Result<()> {
         let s = &mut ctx.accounts.series;
-        require!(s.raise_state == RAISE_SETTLED, RegistryError::InvalidRaiseTransition);
+        require!(
+            s.raise_state == RAISE_SETTLED,
+            RegistryError::InvalidRaiseTransition
+        );
         require!(!s.mint_finalized, RegistryError::MintAlreadyFinalized);
         s.mint_finalized = true;
         emit!(MintFinalized { series: s.key() });
@@ -621,31 +811,60 @@ pub mod merces_registry {
     pub fn mark_terminal(ctx: Context<MarkRaiseResult>, status: u8) -> Result<()> {
         let s = &mut ctx.accounts.series;
         require!(
-            matches!(status, TERMINAL_RETIRED | TERMINAL_REDEEMED | TERMINAL_EXTINGUISHED),
+            matches!(
+                status,
+                TERMINAL_RETIRED | TERMINAL_REDEEMED | TERMINAL_EXTINGUISHED
+            ),
             RegistryError::InvalidTerminalStatus
         );
         match s.terminal_status {
             TERMINAL_NONE => {}
             TERMINAL_RETIRED | TERMINAL_REDEEMED => {
-                require!(status == TERMINAL_EXTINGUISHED, RegistryError::InvalidTerminalTransition)
+                require!(
+                    status == TERMINAL_EXTINGUISHED,
+                    RegistryError::InvalidTerminalTransition
+                )
             }
             _ => return Err(RegistryError::InvalidTerminalTransition.into()),
         }
         s.terminal_status = status;
-        emit!(TerminalStatusSet { series: s.key(), status });
+        emit!(TerminalStatusSet {
+            series: s.key(),
+            status
+        });
         Ok(())
     }
 
     /// Curve-mode activation (SPEC §9; the Meteora integration is a later track). Records the DBC
     /// accounts and fixes `P0` and `units_sold` for cap accounting. Draft → Settled, mint finalised.
-    pub fn mark_curve_activated(ctx: Context<MarkCurveActivated>, dbc_config: Pubkey, dbc_pool: Pubkey, base_mint: Pubkey, activated_at: u64, units_sold: u64, clearing_price: u64) -> Result<()> {
+    pub fn mark_curve_activated(
+        ctx: Context<MarkCurveActivated>,
+        dbc_config: Pubkey,
+        dbc_pool: Pubkey,
+        base_mint: Pubkey,
+        activated_at: u64,
+        units_sold: u64,
+        clearing_price: u64,
+    ) -> Result<()> {
         let s = &mut ctx.accounts.series;
         require!(s.mode == MODE_CURVE, RegistryError::NotCurveMode);
         require!(s.raise_state == RAISE_DRAFT, RegistryError::NotDraft);
-        require!(s.contract_hash != [0u8; 32], RegistryError::ContractHashNotSet);
-        require!(!ctx.accounts.config.new_raises_paused, RegistryError::NewRaisesPaused);
-        require!(ctx.accounts.issuer_allowlist.allowed, RegistryError::NotAllowlisted);
-        require!(units_sold >= 1 && clearing_price >= 1, RegistryError::InvalidRaiseTransition);
+        require!(
+            s.contract_hash != [0u8; 32],
+            RegistryError::ContractHashNotSet
+        );
+        require!(
+            !ctx.accounts.config.new_raises_paused,
+            RegistryError::NewRaisesPaused
+        );
+        require!(
+            ctx.accounts.issuer_allowlist.allowed,
+            RegistryError::NotAllowlisted
+        );
+        require!(
+            units_sold >= 1 && clearing_price >= 1,
+            RegistryError::InvalidRaiseTransition
+        );
         require_keys_neq!(base_mint, Pubkey::default(), RegistryError::ZeroAddress);
         s.dbc_config = dbc_config;
         s.dbc_pool = dbc_pool;

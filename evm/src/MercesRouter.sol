@@ -107,9 +107,28 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
     /// θ through, route `min(above, mulDiv(above, r × units_outstanding, WAD))` to the vault.
     function _route(uint256 seriesId, SeriesCore memory core, uint64 amount) internal {
         Router storage r = _s().routers[seriesId];
+        _advance(seriesId, r, core.settlementTs);
+        ProtocolContracts memory pc = _contracts();
+        uint256 units = core.terminalStatus != 0 ? 0 : IMercesVault(pc.vault).unitsOutstanding(seriesId);
+        uint64 share = _split(seriesId, r, amount, units);
+        uint64 passThrough = amount - share;
+        r.routedTotal += share;
+        r.passedThroughTotal += passThrough;
+
+        IERC20 stable = IERC20(core.stablecoin);
+        if (passThrough > 0) stable.safeTransfer(core.issuer, passThrough);
+        if (share > 0) {
+            stable.safeTransfer(pc.vault, share);
+            IMercesIncome(_s().income).receiveRouterShare(seriesId, share);
+        }
+        emit IncomeRouted(seriesId, amount, passThrough, share, r.ytdReceived);
+    }
+
+    /// @dev `close_period_if_needed()` plus the YTD year reset, then records the receipt's period.
+    function _advance(uint256 seriesId, Router storage r, uint64 settlementTs) internal {
         uint32 pNow = Periods.periodOf(block.timestamp);
         if (!r.hasReceipt || r.lastReceiptPeriod < pNow) {
-            _closeThrough(seriesId, r, Periods.periodOf(core.settlementTs), pNow - 1);
+            _closeThrough(seriesId, r, Periods.periodOf(settlementTs), pNow - 1);
         }
         uint16 year = Periods.yearOf(pNow);
         if (!r.hasReceipt || year != r.ytdYear) {
@@ -118,27 +137,17 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
         }
         r.hasReceipt = true;
         r.lastReceiptPeriod = pNow;
+    }
 
+    /// @dev θ / r split against the running YTD; `r_wad × units ≤ WAD` is enforced at creation so the product fits.
+    function _split(uint256 seriesId, Router storage r, uint64 amount, uint256 units) internal returns (uint64) {
         Tier1Terms memory t = registry().getTier1Terms(seriesId);
-        ProtocolContracts memory pc = _contracts();
-        uint256 units = core.terminalStatus != 0 ? 0 : IMercesVault(pc.vault).unitsOutstanding(seriesId);
         uint256 below = t.theta > r.ytdReceived ? t.theta - r.ytdReceived : 0;
-        uint256 passA = MercesMath.min(amount, below);
-        uint256 above = amount - passA;
+        uint256 above = amount - MercesMath.min(amount, below);
         uint256 share = MercesMath.mulDiv(above, uint256(t.rWad) * units, C.WAD);
         if (share > above) share = above;
         r.ytdReceived = (uint256(r.ytdReceived) + amount).toU64();
-        uint64 passThrough = amount - uint64(share);
-        r.routedTotal += uint64(share);
-        r.passedThroughTotal += passThrough;
-
-        IERC20 stable = IERC20(core.stablecoin);
-        if (passThrough > 0) stable.safeTransfer(core.issuer, passThrough);
-        if (share > 0) {
-            stable.safeTransfer(pc.vault, share);
-            IMercesIncome(_s().income).receiveRouterShare(seriesId, uint64(share));
-        }
-        emit IncomeRouted(seriesId, amount, passThrough, uint64(share), r.ytdReceived);
+        return uint64(share);
     }
 
     /// @inheritdoc IMercesRouter

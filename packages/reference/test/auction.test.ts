@@ -89,7 +89,7 @@ describe("one-pass settlement", () => {
     expect(finalizeSettlement(tallyBids(bids, wrongClaims), 3, r, wrongClaims)).toEqual({ kind: "rejected", reason: "ClaimMismatch" });
     const wrongPrice = settle(bids, r, 1_100_000n);
     expect(wrongPrice.outcome).toEqual({ kind: "rejected", reason: "InvalidClearingPrice" });
-    expect(settle(bids, r, 900_000n).outcome).toEqual({ kind: "rejected", reason: "ClaimMismatch" }); // honest claims for an unrevealed price are (120, 0); tally gives the same… except min_valid_price
+    expect(settle(bids, r, 900_000n).outcome).toEqual({ kind: "rejected", reason: "InvalidClearingPrice" }); // honest claims for 900,000 match the tally (q_above = 120, q_at = 0); the price itself is invalid
   });
   it("no valid bids → Failed with clearing price 0 regardless of the proposal", () => {
     const bids = [bid(900_000n, 10n)];

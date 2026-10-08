@@ -341,16 +341,16 @@ Ledger {
   formal_notice_emitted_for: u32|none, trueup_notice_emitted: bool,
   // supply and accumulators
   units_outstanding: u64 (= units_sold at mint finalization; reduced only by burns),
-  paid_per_unit_wad: u128, net_acc_wad: u128, carry: u64,
+  paid_per_unit_wad: u128, net_acc_wad: u128, carry_wad: u128,
   year_gross: [{ year: u16, gross_wad: u128 }; 4]  (tagged ring, §6.3),
   fee_collected: u64, gross_received: u64, refunded_to_issuer: u64,
   // commitments
   last_income_commitment: bytes32, last_income_period: u32|none,
   // redemption and tail
   redemption_ts: u64, redemption_price: u64, units_at_redemption: u64, tail_cap_per_unit: u64,
-  tail_paid_per_unit_wad: u128, tail_acc_wad: u128, tail_carry: u64, tail_exhausted: bool,
+  tail_paid_per_unit_wad: u128, tail_acc_wad: u128, tail_carry_wad: u128, tail_exhausted: bool,
   // extinguishment
-  extinguished_at: u64, final_acc_wad: u128, final_carry: u64, final_units: u64, extinguish_nonce: u64
+  extinguished_at: u64, final_acc_wad: u128, final_carry_wad: u128, final_units: u64, extinguish_nonce: u64
 }
 Holder (per series × wallet) { registered: bool, last_net_acc_wad: u128, pending: u64, redeemed_units: u64, last_tail_acc_wad: u128, last_final_acc_wad: u128 }
 Report (per series × period) { accepted_at, payment_usd, fx_avg_wad, fx_fallback: bool, tier, liquidity_event, income_commitment, prior_income_commitment, due, accrual_paid: u64, paid_at }
@@ -398,17 +398,19 @@ else:
 paid_per_unit_wad += inc_wad
 year_gross.add(settlement_year(anchor), inc_wad)     // anchor = deadline(period_for_year) for Payment (the period's due date, outside issuer control), now for Router
 fee          = floor(accepted × payout_fee_bps / 10000)  → fee collector
-net          = accepted − fee + carry
-delta_acc    = floor(net × WAD / N)
-distributed  = floor(delta_acc × N / WAD)
-carry        = net − distributed
+net          = accepted − fee
+num_wad      = net × WAD + carry_wad                      // carry is the exact WAD-scaled remainder, 0 ≤ carry_wad < N
+delta_acc    = floor(num_wad / N)
+carry_wad    = num_wad − delta_acc × N
 net_acc_wad += delta_acc
 gross_received += accepted; fee_collected += fee
-emit PayoutDistributed(series, source, gross = G, accepted, fee, net_added = net − carry_in, delta_acc_wad, paid_per_unit_wad, retired)
+emit PayoutDistributed(series, source, gross = G, accepted, fee, net_added = net, delta_acc_wad, paid_per_unit_wad, retired)
 ```
+Why the WAD remainder: a base-unit carry (`net − floor(delta × N / WAD)`) double-counts the fractional part already credited to `net_acc_wad` and lets holders claim more than was paid (N = 3, three payments of 1 → claims of 4). With `carry_wad` the invariant `net_acc_wad × N ≤ Σ net × WAD` holds exactly, so `Σ claims ≤ Σ net`.
+
 `settlement_year(ts) = floor((ts − settlement_ts) / YEAR)`. `year_gross` is a tagged 4-slot ring: slot `y % 4` is zeroed and re-tagged when its `year != y` before adding; readers treat a missing tag as 0. `retire_if_capped(series)` — anyone: if `cap_eff_wad − paid_per_unit_wad == 0` (a lowered cap already met) → `retire()`.
 
-The `Tail` (§6.8) and `Final` (§6.9) sources use their own accumulators and carries (`tail_carry`, `final_carry`); `Final` takes no fee. All three use the same `<` boundary rule.
+The `Tail` (§6.8) and `Final` (§6.9) sources use their own accumulators and WAD carries (`tail_carry_wad`, `final_carry_wad`) with the identical `accumulate(acc, carry_wad, amount, N)` step; `Final` takes no fee. All three use the same `<` boundary rule.
 
 Holder functions (claim path is behind `IPayoutClaims` on EVM and a dedicated instruction set on Solana so a private implementation can replace it):
 
@@ -518,14 +520,14 @@ N = units_at_redemption; cap_wad = tail_cap_per_unit × WAD
 inc_wad = floor(G × WAD / N)
 if tail_paid_per_unit_wad + inc_wad < cap_wad: accepted = G
 else: remaining = cap_wad − tail_paid_per_unit_wad; accepted = floor(remaining × N / WAD); inc_wad = floor(accepted × WAD / N); refund = G − accepted → issuer; tail_exhausted = true
-tail_paid_per_unit_wad += inc_wad; fee = floor(accepted × payout_fee_bps / 10000); net = accepted − fee + tail_carry
-delta = floor(net × WAD / N); tail_carry = net − floor(delta × N / WAD); tail_acc_wad += delta
+tail_paid_per_unit_wad += inc_wad; fee = floor(accepted × payout_fee_bps / 10000); net = accepted − fee
+num_wad = net × WAD + tail_carry_wad; delta = floor(num_wad / N); tail_carry_wad = num_wad − delta × N; tail_acc_wad += delta
 ```
 `claim_tail(series)` — holder with `redeemed_units > 0` (or with units not yet redeemed: `claim_redemption` runs first): `amount = floor((tail_acc_wad − last_tail_acc_wad) × redeemed_units / WAD)`; update; transfer. Emits `TailDistributed`, `TailClaimed`.
 
 ### 6.9 Extinguishment (C11 §6)
 
-`extinguish(series, sig_a, sig_b)` — anyone submits two signatures from **two distinct** active attestors over the §1.4 message with `extinguish_nonce`; allowed in **every** status except `Extinguished` (including Retired and Redeemed at any time), `mint_finalized`. Effects: `status = Extinguished`, `extinguished_at = now`; registry `mark_terminal`; `unreleased = proceeds − vested(now)` moves from the treasury to the vault with **no fee** (vested-but-unclaimed tranches stay claimable by the issuer's wallet, §5.3); `final_units = units_outstanding` (for a Redeemed series: `units_at_redemption`); `final_acc_wad += floor(unreleased × WAD / final_units)` with `final_carry` as usual (`unreleased == 0` or `final_units == 0` → no distribution); all open dues (`open_due_*`, `trueup_due`) are cleared; the tail ends. Emits `SeriesExtinguished(series, unreleased, attestor_a, attestor_b)`.
+`extinguish(series, sig_a, sig_b)` — anyone submits two signatures from **two distinct** active attestors over the §1.4 message with `extinguish_nonce`; allowed in **every** status except `Extinguished` (including Retired and Redeemed at any time), `mint_finalized`. Effects: `status = Extinguished`, `extinguished_at = now`; registry `mark_terminal`; `unreleased = proceeds − vested(now)` moves from the treasury to the vault with **no fee** (vested-but-unclaimed tranches stay claimable by the issuer's wallet, §5.3); `final_units = units_outstanding` (for a Redeemed series: `units_at_redemption`); `final_acc_wad += floor((unreleased × WAD + final_carry_wad) / final_units)` with the WAD remainder kept in `final_carry_wad` (`unreleased == 0` or `final_units == 0` → no distribution); all open dues (`open_due_*`, `trueup_due`) are cleared; the tail ends. Emits `SeriesExtinguished(series, unreleased, attestor_a, attestor_b)`.
 
 `claim_final(series)` — holder: weight `w = redemption_ts != 0 ? redeemed_units + unit_balance (after running the `claim_redemption` body for any unredeemed balance, which pays `P_redeem × balance`) : accrual_units(holder)`; `settle_holder`; `amount = pending + floor((final_acc_wad − last_final_acc_wad) × w / WAD)`; burn any remaining balance; transfer. Emits `FinalClaimed(series, holder, units, amount)`. `claim`, `claim_redemption` and `claim_tail` also remain callable for funds already in the vault.
 
@@ -657,3 +659,4 @@ From the adversarial spec audit (71 findings; nine lenses). Each item names the 
 15. **Hook / compliance** (§4.1, §4.2): escrow-based rules with `EscrowArm`/`armedDeposit`; resolvable extra-account list; EVM allowlist is a Merces flag and identities are never deleted; normative T-REX governance (fixed agent set, governor contract, unpause).
 16. **Registry** (§3): `protocol_program` fixed at init; FX pairs write-once with forward-only cross-check changes; key revocation forward-only with grace; `mint_finalized`.
 17. **Conventions** (§1.1): entry-point range rule, zero-amount rule, nested `mulDiv` forms.
+18. **Carry is an exact WAD remainder** (§6.3, §6.8, §6.9): `num_wad = net × WAD + carry_wad; delta = floor(num_wad / N); carry_wad = num_wad − delta × N`. The v1.0 base-unit carry could over-credit holders (found by Track A's conservation tests).

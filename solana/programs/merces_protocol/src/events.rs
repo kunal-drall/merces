@@ -1,4 +1,4 @@
-//! Protocol events (SPEC §10). Field names match the EVM events (camelCase there).
+//! Protocol events (SPEC v1.1 §10). Field names match the EVM events (camelCase there).
 
 use anchor_lang::prelude::*;
 
@@ -39,12 +39,21 @@ pub struct SettlementProposed {
     pub round: u32,
 }
 
+/// `reason`: 1 = ClaimMismatch, 2 = InvalidClearingPrice.
+#[event]
+pub struct SettlementRejected {
+    pub series: Pubkey,
+    pub round: u32,
+    pub clearing_price: u64,
+    pub reason: u8,
+}
+
 #[event]
 pub struct RaiseSettled {
     pub series: Pubkey,
     pub clearing_price: u64,
-    pub units_sold_upper: u64,
-    pub proceeds_upper: u64,
+    pub units_sold: u64,
+    pub proceeds: u64,
     pub settlement_ts: u64,
 }
 
@@ -52,7 +61,7 @@ pub struct RaiseSettled {
 pub struct RaiseFailed {
     pub series: Pubkey,
     pub clearing_price: u64,
-    pub proceeds_upper: u64,
+    pub proceeds: u64,
     pub min_raise: u64,
 }
 
@@ -67,11 +76,11 @@ pub struct UnitsAllocated {
 }
 
 #[event]
-pub struct BidRefunded {
+pub struct BidDelivered {
     pub series: Pubkey,
     pub bidder: Pubkey,
+    pub units: u64,
     pub refund: u64,
-    pub charge: u64,
 }
 
 #[event]
@@ -137,6 +146,7 @@ pub struct PaymentSettled {
     pub refunded: u64,
 }
 
+/// `source`: 0 = Payment, 1 = Router, 2 = Tail, 3 = Final.
 #[event]
 pub struct PayoutDistributed {
     pub series: Pubkey,
@@ -164,6 +174,7 @@ pub struct HolderRegistered {
     pub holder: Pubkey,
 }
 
+/// `reason`: 0 = Retired, 1 = Redeemed, 2 = Extinguished.
 #[event]
 pub struct UnitsBurned {
     pub series: Pubkey,
@@ -186,15 +197,25 @@ pub struct StatusChanged {
     pub new: u8,
 }
 
+/// `trueup == false`: the report countdown of `period` reached the formal-notice threshold.
+/// `trueup == true`: the true-up of calendar year `period` did (SPEC §6.4, `FormalNoticeDue(series, trueup)`).
 #[event]
 pub struct FormalNoticeDue {
     pub series: Pubkey,
     pub period: u32,
+    pub trueup: bool,
 }
 
 #[event]
 pub struct PauseRequested {
     pub series: Pubkey,
+    pub nonce: u64,
+}
+
+#[event]
+pub struct PauseRequestWithdrawn {
+    pub series: Pubkey,
+    pub nonce: u64,
 }
 
 #[event]
@@ -218,6 +239,13 @@ pub struct IncomeRouted {
     pub pass_through: u64,
     pub routed: u64,
     pub ytd_received: u64,
+}
+
+#[event]
+pub struct RouterPeriodClosed {
+    pub series: Pubkey,
+    pub period: u32,
+    pub ytd_at_end: u64,
 }
 
 #[event]
@@ -332,12 +360,24 @@ pub struct OrderRevealed {
     pub valid: bool,
 }
 
+/// `reason`: 1 = NoMatchInvalid, 2 = PriceNotRevealed, 3 = NoCrossing. `clearing_price` is
+/// `u64::MAX` for a rejected `NO_MATCH` proposal.
+#[event]
+pub struct WindowSettlementRejected {
+    pub series: Pubkey,
+    pub period: u32,
+    pub clearing_price: u64,
+    pub reason: u8,
+}
+
+/// `branch`: 0 = SupplyLimited, 1 = DemandLimited.
 #[event]
 pub struct WindowCleared {
     pub series: Pubkey,
     pub period: u32,
     pub clearing_price: u64,
     pub matched_units: u64,
+    pub branch: u8,
 }
 
 #[event]

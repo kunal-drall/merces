@@ -3,29 +3,36 @@ pragma solidity ^0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {MercesDeploy} from "../../script/lib/MercesDeploy.sol";
 import {TrexDeploy} from "../../script/lib/TrexDeploy.sol";
 import {MercesRegistry} from "../../src/MercesRegistry.sol";
+import {MercesAuction} from "../../src/MercesAuction.sol";
+import {MercesTreasury} from "../../src/MercesTreasury.sol";
+import {MercesVault} from "../../src/MercesVault.sol";
+import {MercesIncome} from "../../src/MercesIncome.sol";
+import {MercesRouter} from "../../src/MercesRouter.sol";
+import {MercesWindow} from "../../src/MercesWindow.sol";
+import {MercesFxAccumulator} from "../../src/MercesFxAccumulator.sol";
 import {FeeCollector} from "../../src/FeeCollector.sol";
 import {MockUSDC} from "../../src/mocks/MockUSDC.sol";
-import {IAgentRole} from "../../src/interfaces/external/IAgentRole.sol";
-import {IIdFactoryLite} from "../../src/interfaces/external/IIdFactoryLite.sol";
-import {IERC3643Token} from "../../src/interfaces/external/IERC3643Token.sol";
+import {MockPyth} from "../../src/mocks/MockPyth.sol";
 import {IMercesTokenFactory} from "../../src/interfaces/IMercesTokenFactory.sol";
+import {IERC3643Token} from "../../src/interfaces/external/IERC3643Token.sol";
 import {
     Parameters,
-    ProtocolContracts,
     ReleaseTranche,
     SeriesMode,
     SeriesParams,
+    Tier1Terms,
     TierFlags
 } from "../../src/types/MercesTypes.sol";
 
-/// @notice Shared deployment fixture: mock stablecoin, timelock, T-REX suite, registry, fee collector and
-/// the 0.8.17 token factory / compliance module (deployed from artifacts).
+/// @notice Shared deployment fixture: the whole protocol stack wired exactly as the deploy script does it
+/// (`MercesDeploy`), a mock stablecoin and a mock Pyth, plus the actors and helpers every test uses.
 abstract contract MercesFixture is Test {
     uint256 internal constant WAD = 1e18;
     uint256 internal constant USDC = 1e6;
+    uint64 internal constant T0 = 1_767_225_600; // 2026-01-01T00:00:00Z
 
     // actors
     address internal admin = makeAddr("admin");
@@ -45,60 +52,61 @@ abstract contract MercesFixture is Test {
 
     // infrastructure
     MockUSDC internal usdc;
+    MockPyth internal pyth;
     TimelockController internal timelock;
-    TrexDeploy.Stack internal trex;
     FeeCollector internal feeCollector;
     MercesRegistry internal registry;
+    MercesAuction internal auction;
+    MercesTreasury internal treasury;
+    MercesVault internal vault;
+    MercesIncome internal income;
+    MercesRouter internal router;
+    MercesWindow internal window;
+    MercesFxAccumulator internal fx;
+    IMercesTokenFactory internal tokenFactory;
+    address internal complianceModule;
+    address internal governor;
+    address internal groth16;
+    address internal poseidon2;
+    address internal poseidon5;
+    TrexDeploy.Stack internal trex;
     /// @dev Cached so test helpers can build digests without an external call (which would consume a prank).
     bytes32 internal domain;
-    address internal complianceModule;
-    IMercesTokenFactory internal tokenFactory;
-
-    /// @dev Addresses the compliance module / factory are wired to. Milestone fixtures override these with
-    /// the real proxies; the base fixture uses stand-ins so the token unit can be tested in isolation.
-    address internal windowAddr;
-    address internal auctionAddr;
-    address internal vaultAddr;
-
-    uint64 internal constant T0 = 1_767_225_600; // 2026-01-01T00:00:00Z
 
     function setUp() public virtual {
         vm.warp(T0);
         usdc = new MockUSDC();
-
-        address[] memory proposers = new address[](1);
-        proposers[0] = admin;
-        address[] memory executors = new address[](1);
-        executors[0] = admin;
-        timelock = new TimelockController(1 days, proposers, executors, address(0));
-
-        trex = TrexDeploy.deploy(vm);
-        feeCollector = new FeeCollector(address(timelock));
-        registry = new MercesRegistry(
-            admin,
-            allowlistManager,
-            address(feeCollector),
-            uint64(block.chainid),
-            defaultParameters(),
-            trex.identityRegistry,
-            trex.idFactory
+        pyth = new MockPyth(0);
+        MercesDeploy.Deployment memory d = MercesDeploy.deploy(
+            vm,
+            address(this),
+            MercesDeploy.Config({
+                admin: admin,
+                allowlistManager: allowlistManager,
+                timelockProposer: admin,
+                timelockDelay: 1 days,
+                pyth: address(pyth),
+                defaults: defaultParameters()
+            })
         );
-
+        timelock = TimelockController(payable(d.timelock));
+        feeCollector = FeeCollector(d.feeCollector);
+        registry = MercesRegistry(d.registry);
+        auction = MercesAuction(d.auction);
+        treasury = MercesTreasury(d.treasury);
+        vault = MercesVault(d.vault);
+        income = MercesIncome(d.income);
+        router = MercesRouter(d.router);
+        window = MercesWindow(d.window);
+        fx = MercesFxAccumulator(d.fx);
+        tokenFactory = IMercesTokenFactory(d.tokenFactory);
+        complianceModule = d.complianceModule;
+        governor = d.governor;
+        groth16 = d.groth16Verifier;
+        poseidon2 = d.poseidon2;
+        poseidon5 = d.poseidon5;
+        trex = d.trex;
         domain = registry.domain();
-
-        // identity wiring: the registry is an identity-registry agent and owns the IdFactory (SPEC §4.2)
-        IAgentRole(trex.identityRegistry).addAgent(address(registry));
-        IIdFactoryLite(trex.idFactory).transferOwnership(address(registry));
-
-        _deployProtocol();
-
-        // hand T-REX ownership to the timelock
-        IAgentRole(trex.identityRegistry).transferOwnership(address(timelock));
-        IAgentRole(trex.identityRegistryStorage).transferOwnership(address(timelock));
-        IAgentRole(trex.claimTopicsRegistry).transferOwnership(address(timelock));
-        IAgentRole(trex.trustedIssuersRegistry).transferOwnership(address(timelock));
-        IAgentRole(trex.implementationAuthority).transferOwnership(address(timelock));
-        IAgentRole(trex.identityImplementationAuthority).transferOwnership(address(timelock));
 
         vm.startPrank(admin);
         registry.setStablecoin(address(usdc), true);
@@ -111,32 +119,7 @@ abstract contract MercesFixture is Test {
         allow(issuer);
     }
 
-    /// @dev Base behaviour: stand-in addresses, token unit only. Milestone fixtures override.
-    function _deployProtocol() internal virtual {
-        windowAddr = makeAddr("windowStub");
-        auctionAddr = address(this);
-        vaultAddr = makeAddr("vaultStub");
-        _deployTokenUnit();
-    }
-
-    function _deployTokenUnit() internal {
-        complianceModule = deployCode("MercesComplianceModule.sol:MercesComplianceModule", abi.encode(windowAddr));
-        tokenFactory = IMercesTokenFactory(
-            deployCode(
-                "MercesTokenFactory.sol:MercesTokenFactory",
-                abi.encode(
-                    trex.implementationAuthority,
-                    trex.identityRegistry,
-                    complianceModule,
-                    auctionAddr,
-                    vaultAddr,
-                    address(timelock)
-                )
-            )
-        );
-    }
-
-    // ---------------------------------------------------------------- helpers
+    // ---------------------------------------------------------------- parameters
 
     function defaultParameters() internal pure returns (Parameters memory) {
         return Parameters({
@@ -156,7 +139,9 @@ abstract contract MercesFixture is Test {
             fxMinCoverageBps: 8000,
             fxMaxStalenessSeconds: 3600,
             fxMaxConfBps: 100,
-            fxDeviationBandBps: 200
+            fxDeviationBandBps: 200,
+            maxPauseSeconds: 31_536_000,
+            maxCumulativePauseSeconds: 63_072_000
         });
     }
 
@@ -185,6 +170,20 @@ abstract contract MercesFixture is Test {
         s[3] = ReleaseTranche({atOffsetSeconds: 270 days, bps: 2500});
     }
 
+    function noTier1() internal pure returns (Tier1Terms memory t) {}
+
+    /// @dev Plaintext of the terms commitment used by the test proofs (test/utils/Proofs.sol).
+    function proofTier1Terms() internal pure returns (Tier1Terms memory) {
+        return Tier1Terms({theta: 80_000e6, rWad: 1e15, currencyCode: 840, indexingRule: 0, termsSalt: 11111});
+    }
+
+    function walletCap(uint16 bps) internal pure returns (Parameters memory p) {
+        p = defaultParameters();
+        p.walletCapBps = bps;
+    }
+
+    // ---------------------------------------------------------------- actions
+
     function allow(address wallet) internal {
         vm.prank(allowlistManager);
         registry.setAllowed(wallet, true);
@@ -204,22 +203,37 @@ abstract contract MercesFixture is Test {
         return abi.encodePacked(r, s, v);
     }
 
+    /// @dev Default series: tiers 2 + 3, stablecoin income, contract hash set.
     function createSeries(bytes32 termsCommitment) internal returns (uint256 id) {
-        vm.prank(issuer);
-        id = registry.createSeries(
+        return createSeriesWith(
             defaultSeriesParams(),
             defaultSchedule(),
             termsCommitment,
             TierFlags.TIER2_ZKTLS | TierFlags.TIER3_ATTESTOR,
             bytes32(0),
-            SeriesMode.SealedBid,
-            false
+            noTier1()
         );
+    }
+
+    function createSeriesWith(
+        SeriesParams memory p,
+        ReleaseTranche[] memory schedule,
+        bytes32 termsCommitment,
+        uint8 tierFlags,
+        bytes32 fxPairId,
+        Tier1Terms memory t1
+    ) internal returns (uint256 id) {
+        vm.prank(issuer);
+        id = registry.createSeries(p, schedule, termsCommitment, tierFlags, fxPairId, SeriesMode.SealedBid, false, t1);
         vm.prank(issuer);
         registry.setContractHash(id, keccak256("signed HEU contract + charter"));
     }
 
-    function deployProxy(address impl, bytes memory init) internal returns (address) {
-        return address(new ERC1967Proxy(impl, init));
+    function unitToken(uint256 seriesId) internal view returns (IERC3643Token) {
+        return IERC3643Token(registry.getSeriesCore(seriesId).unitToken);
+    }
+
+    function settlementTs(uint256 sid) internal view returns (uint64) {
+        return registry.getSeriesCore(sid).settlementTs;
     }
 }

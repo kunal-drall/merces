@@ -7,10 +7,11 @@ export const s04: Scenario = {
   async build() {
     const b = new ScenarioBuilder(
       "04_zero_quarters",
-      "Year-to-date method: a whole year of income below θ (four zero payments), then a year that crosses θ in Q3 (payments only for the increments); plus proof/attestation reverts (tampered public signal, wrong prior commitment, wrong key type, disabled tier).",
+      "Year-to-date method: S1 has a whole year of income below θ (four zero payments), then a year that crosses θ in Q3 (payments only for the increments); S2 settles mid-year (April) and its first report carries an attested prior commitment for the income earned before settlement (90,000 > θ), so only the increment is charged; plus proof/attestation reverts (tampered public signal, wrong prior commitment, wrong key type, disabled tier).",
     );
     await bootstrap(b, ["b1", "b2", "b3", "b4"]);
     await b.createSeries({ series: "S1", issuer: "issuer", plain: STD_PLAIN });
+    await b.createSeries({ series: "S2", issuer: "issuer", plain: STD_PLAIN, note: "raised in April: first_period = Q2 2026" });
     await b.raise({ series: "S1", issuer: "issuer", openAt: ts(2026, 1, 5), bids: FOUR_BACKER_BIDS });
     b.expect("S1", "400 units at 105 USDC");
 
@@ -24,8 +25,32 @@ export const s04: Scenario = {
       b.at(ts(y, m, d));
       const r = await b.report({ series: "S1", period, incomeYtd: ytd, tier: 2 });
       if (r.paymentUsd !== 0n) throw new Error("expected zero payment");
+      if (period === Q(2026, 1)) {
+        await b.raise({ series: "S2", issuer: "issuer", openAt: ts(2026, 4, 6), bids: FOUR_BACKER_BIDS });
+        b.expect("S2", "S2 settled mid-April 2026: first_period 8105 (Q2)");
+      }
+      if (period === Q(2026, 2)) {
+        await b.reportRevert({ series: "S2", period: Q(2026, 1), incomeYtd: usdc(90_000), tier: 2 }, "WrongPeriod", "the first expected period is Q2, the quarter of settlement");
+        const first = await b.report({
+          series: "S2",
+          period: Q(2026, 2),
+          incomeYtd: usdc(150_000),
+          tier: 2,
+          attestedPriorYtd: usdc(90_000),
+          note: "first report of a mid-year series: prior = Poseidon(2)(90,000e6, salt) attested with the report (§6.2 step 5); owed(150,000) − owed(90,000) = 2,800 − 400 = 2,400",
+        });
+        if (first.paymentUsd !== usdc(2_400)) throw new Error(`S2 first ${first.paymentUsd}`);
+        await b.step({ op: "pay", actor: "issuer", series: "S2" });
+        b.expect("S2", "the 400 owed on pre-settlement income is never charged");
+      }
+      if (period === Q(2026, 3)) {
+        const s2q3 = await b.report({ series: "S2", period: Q(2026, 3), incomeYtd: usdc(200_000), tier: 2, note: "chained prior = Q2's income commitment: owed 4,800 − 2,800 = 2,000" });
+        if (s2q3.paymentUsd !== usdc(2_000)) throw new Error(`S2 q3 ${s2q3.paymentUsd}`);
+        await b.step({ op: "pay", actor: "issuer", series: "S2" });
+      }
     }
     b.expect("S1", "four zero reports: lastPaidPeriod 8107, nothing ever owed, vault 0, status OnTime");
+    b.expect("S2", "S2: 4,400 gross over Q2–Q3 2026 (incomes 90,000 → 200,000 at 4%)");
 
     b.at(ts(2027, 4, 2));
     await b.report({ series: "S1", period: Q(2027, 1), incomeYtd: usdc(25_000), tier: 2, note: "new year, prior = ZERO commitment" });

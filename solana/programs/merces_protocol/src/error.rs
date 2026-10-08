@@ -12,6 +12,7 @@ pub enum ProtocolError {
     InvalidInput,
     #[msg("Clock returned a negative timestamp")]
     NegativeTimestamp,
+    // ---- raise
     #[msg("Caller is not the series issuer")]
     NotIssuer,
     #[msg("Series is not a sealed-bid series")]
@@ -24,8 +25,6 @@ pub enum ProtocolError {
     NewRaisesPaused,
     #[msg("Wallet is not allowlisted")]
     NotAllowlisted,
-    #[msg("Allowlist entry does not match the wallet")]
-    AllowlistEntryMismatch,
     #[msg("Raise is not open")]
     RaiseNotOpen,
     #[msg("Raise already has bids")]
@@ -42,70 +41,79 @@ pub enum ProtocolError {
     AlreadyRevealed,
     #[msg("Commitment does not match the revealed values")]
     CommitmentMismatch,
+    #[msg("A settlement tally is in progress; it cannot be reset")]
+    TallyInProgress,
     #[msg("Auction is not settling")]
     NotSettling,
     #[msg("Bid account is not a bid of this series")]
     BidSeriesMismatch,
     #[msg("Bid account is not the expected PDA")]
     BidPdaMismatch,
-    #[msg("Too many bids in one tally page")]
+    #[msg("Too many accounts in one tally page")]
     TallyPageTooLarge,
     #[msg("Not every revealed bid has been tallied in this round")]
     TallyIncomplete,
-    #[msg("Proposed clearing price is not the uniform clearing price")]
-    InvalidClearingPrice,
     #[msg("Auction has not settled or failed")]
     NotSettledOrFailed,
     #[msg("Bid already processed")]
     BidAlreadyProcessed,
-    #[msg("Not every bid has been processed")]
-    BidsNotProcessed,
-    #[msg("Mint authority already revoked")]
-    MintAuthorityAlreadyRevoked,
+    #[msg("Bid has not been processed yet")]
+    BidNotProcessed,
+    #[msg("Bid already delivered")]
+    BidAlreadyDelivered,
+    #[msg("Minted units do not equal units sold")]
+    MintedUnitsMismatch,
+    #[msg("Treasury deposits do not sum to the proceeds")]
+    ProceedsMismatch,
+    #[msg("Escrow token account is not the recorded protocol escrow")]
+    EscrowAccountMismatch,
+    // ---- tokens
     #[msg("Stablecoin account mint mismatch")]
     StablecoinMismatch,
-    #[msg("Token account owner mismatch")]
-    TokenOwnerMismatch,
     #[msg("Token program is not the mint's owner")]
     TokenProgramMismatch,
     #[msg("Stablecoin transfer fee is not zero")]
     TransferFeeNotZero,
     #[msg("Mint account could not be read")]
     InvalidMint,
-    #[msg("Fee collector token account is not owned by the configured fee collector")]
-    FeeCollectorMismatch,
+    #[msg("Token account is not the expected associated token account")]
+    AtaMismatch,
     #[msg("Unit mint does not match the series")]
     UnitMintMismatch,
-    #[msg("Treasury releases are blocked until the mint is finalised")]
+    // ---- treasury
+    #[msg("Mint is not finalised")]
     MintNotFinalized,
     #[msg("Issuer has paused releases")]
     ReleasesPausedByIssuer,
-    #[msg("Series is Late; releases are paused")]
+    #[msg("Series is Late; releases are blocked")]
     SeriesLate,
     #[msg("Series is extinguished")]
     SeriesExtinguished,
-    #[msg("Nothing to release")]
-    NothingToRelease,
+    #[msg("Nothing vested to release")]
+    NothingVested,
     #[msg("Early-draw approver is not configured")]
     EarlyDrawApproverUnset,
     #[msg("Early-draw approver must co-sign")]
     EarlyDrawApproverMismatch,
     #[msg("Early draw exceeds the remaining proceeds")]
     EarlyDrawExceedsProceeds,
-    #[msg("Series is terminal")]
-    SeriesTerminal,
-    #[msg("Series is retired; no reports are accepted")]
-    SeriesRetired,
-    #[msg("Series is redeemed; only tail reports within the tail window are accepted")]
-    SeriesRedeemed,
+    // ---- reports
+    #[msg("Series is in a terminal status")]
+    TerminalStatus,
     #[msg("Report period is not the next expected period")]
     WrongPeriod,
     #[msg("The period has not ended yet")]
     PeriodNotEnded,
     #[msg("A previous due amount is still open")]
     DueOutstanding,
+    #[msg("Tail reporting window has ended")]
+    TailEnded,
+    #[msg("No tail is due for this series")]
+    NoTailDue,
     #[msg("Tier is not enabled for this series")]
     TierNotEnabled,
+    #[msg("Tier 1 reports are only valid for pure on-chain-income series")]
+    Tier1NotExclusive,
     #[msg("Tier 4 self-attestation is disabled")]
     Tier4Disabled,
     #[msg("fx_avg_wad must equal WAD for stablecoin income")]
@@ -116,8 +124,10 @@ pub enum ProtocolError {
     FxNeedsFallback,
     #[msg("FX fallback signature supplied but the pair did not need a fallback")]
     FxFallbackNotNeeded,
-    #[msg("FX checkpoint account mismatch")]
+    #[msg("FX accumulator or checkpoint account mismatch")]
     FxCheckpointMismatch,
+    #[msg("Prior income commitment does not match the chain")]
+    PriorCommitmentMismatch,
     #[msg("Groth16 proof is invalid")]
     InvalidProof,
     #[msg("Proof bytes are malformed")]
@@ -130,22 +140,44 @@ pub enum ProtocolError {
     SignatureRecoveryFailed,
     #[msg("Recovered signer is not the supplied key")]
     SignerMismatch,
-    #[msg("Verifier key is not active")]
+    #[msg("Verifier key is not active (or outside its revocation grace)")]
     VerifierKeyInactive,
-    #[msg("Attestor key is not active")]
+    #[msg("Attestor key is not active (or outside its revocation grace)")]
     AttestorInactive,
     #[msg("Attestation key account is not the expected registry PDA")]
     KeyAccountMismatch,
     #[msg("Attestation required for this tier")]
     AttestationRequired,
+    #[msg("Router checkpoint for the period is missing")]
+    RouterPeriodNotClosed,
+    #[msg("Router account required for a tier 1 report")]
+    RouterRequired,
+    #[msg("Income commitment does not match the router checkpoint")]
+    RouterCommitmentMismatch,
     #[msg("No due amount to pay")]
     NothingDue,
     #[msg("Units outstanding is zero")]
     NoUnitsOutstanding,
+    // ---- true-ups
+    #[msg("True-up adjustment must be non-zero")]
+    ZeroAdjustment,
+    #[msg("A true-up was already recorded for this year")]
+    TrueUpYearUsed,
+    #[msg("True-up year has not ended")]
+    TrueUpYearNotEnded,
+    #[msg("Not every period of the true-up year has an accepted report")]
+    TrueUpYearIncomplete,
+    #[msg("The previous true-up is still unpaid")]
+    TrueUpOutstanding,
+    #[msg("Negative true-up exceeds the year's accepted payments")]
+    TrueUpExceedsYear,
+    #[msg("True-up attestation timestamp is in the future")]
+    TrueUpTimestampInFuture,
+    #[msg("No true-up is due")]
+    NoTrueUpDue,
+    // ---- holders
     #[msg("Holder is not registered for this series")]
     HolderNotRegistered,
-    #[msg("Holder token account is not the holder's associated token account")]
-    HolderAtaMismatch,
     #[msg("Series is not retired")]
     NotRetired,
     #[msg("Series is not redeemed")]
@@ -154,12 +186,15 @@ pub enum ProtocolError {
     NotExtinguished,
     #[msg("Lockup has not ended")]
     LockupActive,
-    #[msg("No tail is due for this series")]
-    NoTailDue,
-    #[msg("Tail window has closed")]
-    TailWindowClosed,
     #[msg("Holder has no redeemed units")]
     NoRedeemedUnits,
+    #[msg("Pending auction units must be delivered before redemption")]
+    DeliverFirst,
+    #[msg("Units escrowed in a window must be processed before redemption")]
+    AskEscrowOutstanding,
+    #[msg("Units must be positive")]
+    ZeroUnits,
+    // ---- pauses
     #[msg("Pause not requested by the issuer")]
     PauseNotRequested,
     #[msg("Series is already paused")]
@@ -168,18 +203,33 @@ pub enum ProtocolError {
     NotPaused,
     #[msg("Pause end must be in the future")]
     PauseEndInPast,
+    #[msg("Pause exceeds max_pause_seconds")]
+    PauseTooLong,
+    #[msg("Cumulative pause exceeds max_cumulative_pause_seconds")]
+    PauseCumulativeExceeded,
+    #[msg("Pause history is full")]
+    TooManyPauses,
+    // ---- redemption / extinguishment
+    #[msg("Series status does not allow redemption")]
+    RedemptionStatusNotAllowed,
+    #[msg("Ended periods are unreported")]
+    UnreportedPeriods,
     #[msg("The two extinguishment attestors must be distinct")]
     AttestorsNotDistinct,
-    #[msg("True-up adjustment must be non-zero")]
-    ZeroAdjustment,
-    #[msg("No true-up is due")]
-    NoTrueUpDue,
+    #[msg("Cap is not yet met")]
+    NotCapped,
+    // ---- router
     #[msg("Series is not a tier 1 (split) series")]
     NotTierOne,
-    #[msg("Router already initialised")]
-    RouterAlreadyInitialized,
+    #[msg("Router may only be initialised before settlement")]
+    RouterTooLate,
     #[msg("Nothing to route")]
     NothingToRoute,
+    #[msg("Router period has not ended")]
+    RouterPeriodNotEnded,
+    #[msg("Router period already closed")]
+    RouterPeriodAlreadyClosed,
+    // ---- fx
     #[msg("FX pair is disabled in the registry")]
     FxPairDisabled,
     #[msg("A snapshot was already taken today")]
@@ -194,6 +244,7 @@ pub enum ProtocolError {
     ConfidenceTooWide,
     #[msg("Pyth price update is not fully verified")]
     InsufficientVerification,
+    // ---- window
     #[msg("Transfer windows are disabled")]
     WindowsDisabled,
     #[msg("Series status does not allow a window")]
@@ -202,6 +253,8 @@ pub enum ProtocolError {
     ReportNotPaid,
     #[msg("Window period must be the quarter before the current one")]
     WindowWrongPeriod,
+    #[msg("Window already open for this series")]
+    WindowAlreadyOpen,
     #[msg("Window is not in the commit phase")]
     WindowNotCommit,
     #[msg("Window is not in the reveal phase")]
@@ -212,34 +265,18 @@ pub enum ProtocolError {
     WindowNotSettling,
     #[msg("Window is not settled")]
     WindowNotSettled,
-    #[msg("Invalid window clearing proposal")]
-    InvalidWindowClearing,
     #[msg("Order account mismatch")]
     OrderMismatch,
     #[msg("Order already processed")]
     OrderAlreadyProcessed,
-    #[msg("Bids must be processed before asks")]
-    BidsBeforeAsks,
-    #[msg("Dust must be fully returned before asks are processed")]
-    DustNotReturned,
-    #[msg("Return-dust order must be price-descending then reveal-index-descending")]
-    DustOrderViolation,
-    #[msg("Ask quantity exceeds escrowed units")]
-    AskExceedsEscrow,
-    #[msg("Destination balance would exceed the wallet cap")]
-    WalletCapExceeded,
-    #[msg("Window already open for this series")]
-    WindowAlreadyOpen,
+    #[msg("Orders must be processed in reveal order: bids first, then asks")]
+    OutOfOrder,
+    #[msg("Ask quantity exceeds the holder's unit balance")]
+    AskExceedsBalance,
     #[msg("Wrong side for this instruction")]
     WrongSide,
-    #[msg("Units must be positive")]
-    ZeroUnits,
-    #[msg("Per-year accumulator index out of range (series older than 64 years)")]
-    YearIndexOutOfRange,
-    #[msg("Proceeds must be known (mint finalised) before this action")]
-    ProceedsUnknown,
-    #[msg("Holder units must be zero or the holder's full balance")]
-    PartialBurn,
+    #[msg("Escrow arm is busy")]
+    EscrowArmBusy,
 }
 
 impl From<merces_common::MathError> for ProtocolError {

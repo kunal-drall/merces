@@ -1,4 +1,4 @@
-//! Rate accumulator (SPEC §6.6, brief C9) fed by Pyth `PriceUpdateV2` accounts.
+//! Rate accumulator (SPEC v1.1 §6.6, brief C9) fed by Pyth `PriceUpdateV2` accounts.
 
 use anchor_lang::prelude::*;
 use merces_common::fx::{conf_ok, invert, normalize};
@@ -58,23 +58,16 @@ pub struct SnapshotFx<'info> {
         seeds = [seeds::FX_CHECKPOINT, pair.pair_id.as_ref(), period.to_le_bytes().as_ref()],
         bump
     )]
-    pub checkpoint: Account<'info, FxCheckpoint>,
+    pub checkpoint: Box<Account<'info, FxCheckpoint>>,
     /// Owner (Pyth receiver program) and discriminator checked by Anchor.
     pub price_update: Box<Account<'info, PriceUpdateV2>>,
-    pub clock: Sysvar<'info, Clock>,
     pub system_program: Program<'info, System>,
-}
-
-/// Period of the current clock, used in the checkpoint seeds.
-pub fn current_period(clock: &Clock) -> Result<u32> {
-    let now = u64::try_from(clock.unix_timestamp)
-        .map_err(|_| error!(ProtocolError::NegativeTimestamp))?;
-    period_of(now).map_err(math)
 }
 
 /// `snapshot` (SPEC §6.6): one per UTC day per pair; validates the Pyth update (full verification,
 /// feed id, staleness, confidence), normalises the rate to WAD, writes the period checkpoint on the
-/// first snapshot of a quarter, and adds to the running sum.
+/// first snapshot of a quarter, and adds to the running sum. Staleness and confidence bounds are the
+/// protocol defaults (the accumulator is shared by every series of the pair).
 pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
     let now = now_ts()?;
     require!(
@@ -119,7 +112,7 @@ pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
         rate_wad = invert(rate_wad).map_err(math)?;
     }
 
-    // 3. checkpoint before adding (first snapshot in the period)
+    // 3. checkpoint before adding (first snapshot in the period closes the previous one)
     let cp = &mut ctx.accounts.checkpoint;
     if cp.pair_id == [0u8; 32] {
         cp.pair_id = pair.pair_id;

@@ -82,7 +82,10 @@ pub fn verify_report_proof(
     }
     let mut proof_a = [0u8; 64];
     proof_a.copy_from_slice(&proof[0..64]);
-    require!(lt_be(&proof_a[..32], &BN254_FQ_BE) && lt_be(&proof_a[32..], &BN254_FQ_BE), ProtocolError::MalformedProof);
+    require!(
+        lt_be(&proof_a[..32], &BN254_FQ_BE) && lt_be(&proof_a[32..], &BN254_FQ_BE),
+        ProtocolError::MalformedProof
+    );
     let mut proof_b = [0u8; 128];
     proof_b.copy_from_slice(&proof[64..192]);
     let mut proof_c = [0u8; 64];
