@@ -13,6 +13,8 @@ import { registerMeteoraRoutes } from './meteora/routes.ts';
 import { registerThresholdRoutes } from './threshold/routes.ts';
 import { registerAttestorRoutes } from './attestor/routes.ts';
 import { registerAccountingRoutes } from './accounting/routes.ts';
+import { registerNotificationsRoutes } from './notifications/routes.ts';
+import { registerAdminRoutes } from './admin/routes.ts';
 
 export * from './context.ts';
 export * from './identity/service.ts';
@@ -25,6 +27,8 @@ export * from './meteora/service.ts';
 export * from './threshold/service.ts';
 export * from './attestor/service.ts';
 export * from './accounting/service.ts';
+export * from './notifications/service.ts';
+export * from './admin/service.ts';
 export { registerMeteoraRoutes, defaultMeteoraProviders } from './meteora/routes.ts';
 
 export interface ProviderOverrides {
@@ -58,4 +62,4 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
 }
 
 /** Every service route module, in registration order. The server composes them into the gateway. */
-export const serviceRoutes: ((app: import('fastify').FastifyInstance, ctx: AppContext) => void)[] = [registerIdentityRoutes, registerContractRoutes, registerTermsRoutes, registerPoiRoutes, registerAuctionRoutes, registerLifecycleRoutes, registerMeteoraRoutes, registerThresholdRoutes, registerAttestorRoutes, registerAccountingRoutes];
+export const serviceRoutes: ((app: import('fastify').FastifyInstance, ctx: AppContext) => void)[] = [registerIdentityRoutes, registerContractRoutes, registerTermsRoutes, registerPoiRoutes, registerAuctionRoutes, registerLifecycleRoutes, registerMeteoraRoutes, registerThresholdRoutes, registerAttestorRoutes, registerAccountingRoutes, registerNotificationsRoutes, registerAdminRoutes];

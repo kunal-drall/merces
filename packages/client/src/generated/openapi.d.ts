@@ -1328,6 +1328,1073 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/admin/accounting/fees": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fee ledger rows (1% auction, 5% payout) for a chain / series / block-time window, with totals by kind and by series */
+        get: operations["adminAccountingFees"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/accounting/series/{seriesId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Per-series statement — gross payments vs cap, fees by kind, payouts claimed, refunds, treasury released vs total, redemption and tail totals */
+        get: operations["adminAccountingSeriesStatement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/accounting": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The issuer's own statement for a series (the same numbers the admin sees) */
+        get: operations["issuerAccountingStatement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/accounting/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run a reconciliation of the read model against every chain (fee collector balance per stablecoin, vault gross and fee totals, treasury totals per settled series); the run is persisted and audited */
+        get: operations["adminAccountingReconcile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/accounting/reconcile/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Past reconciliation runs, newest first */
+        get: operations["adminAccountingReconcileRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/accounting/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** CSV of money events joined with series (chain, seq, block_time ISO, series_id, period_id, kind, wallet, amount, tx_id, stablecoin); every export is audited */
+        get: operations["adminAccountingExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Per-chain health, indexer cursor and series counts; keeper runs; outbox backlog; open applications; flags */
+        get: operations["adminOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/flags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Feature flags */
+        get: operations["adminListFlags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/flags/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Switch a feature flag; audited. private_payouts is "coming soon" and can never be enabled (409). */
+        put: operations["adminSetFlag"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/audit-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The append-only audit log, newest first */
+        get: operations["adminAuditLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/attestors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build registerAttestor for the multisig, grant the attestor role to the account (when active) and open a tx request; audited */
+        post: operations["adminRegisterAttestor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/tx-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Multisig requests, newest first */
+        get: operations["adminListTxRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/tx-requests/{requestId}/sent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (listAttestors, listVerifierKeys, info); audited */
+        post: operations["adminTxRequestSent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/verifier-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active report-verifier keys per chain, read from the chain */
+        get: operations["adminListVerifierKeys"];
+        put?: never;
+        /** Build registerVerifierKey for the multisig and open a tx request; audited */
+        post: operations["adminRegisterVerifierKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/raises/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build pauseNewRaises (pause or resume) for the multisig and open a tx request; audited */
+        post: operations["adminPauseRaises"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/eligibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Eligibility rows with their allowlist sync state against the indexed chain allowlist */
+        get: operations["adminListEligibility"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/audit-samples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Audit samples, newest first */
+        get: operations["adminListAuditSamples"];
+        put?: never;
+        /** Tier-4 scaffolding — randomly sample up to `count` accepted or paid tier-4 reports not yet sampled; returns sampled 0 with a note while the tier4 flag is off; audited */
+        post: operations["adminDrawAuditSamples"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/keepers/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Keeper runs, newest first */
+        get: operations["adminKeeperRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["attestorMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["attestorQueue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/hardship": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["hardshipStatus"];
+        put?: never;
+        post: operations["requestHardship"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/hardship/{hardshipId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getHardship"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/hardship/{hardshipId}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["decideHardship"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/tier3/annual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["openTier3Annual"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/tier3/{periodId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["openTier3Case"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/tier3": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listTier3"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/tier3/annual/{annualId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getTier3Annual"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/tier3/annual/{annualId}/sign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["signTier3Annual"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/tier3/{caseId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getTier3Case"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/tier3/{caseId}/prefill-spec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["tier3PrefillSpec"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/tier3/{caseId}/sign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["signTier3Case"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/fx-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listFxRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/fx-requests/{requestId}/sign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["signFxRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/reporting/fx-fallback/{periodId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["fxFallbackForSeries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/extinguish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["requestExtinguishment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/extinguish/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getExtinguishment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/treasury/build-draw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildTreasuryDraw"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/treasury/build-pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildTreasuryPause"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/payouts/build-claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildClaimPayout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/redemption/quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRedemptionQuote"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/redemption/build-redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildRedeem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/redemption/build-claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildClaimRedemption"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/redemption": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRedemption"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/retirement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRetirement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/retirement/crank-burn": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["crankBurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getTransferWindow"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/window/build-commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildWindowCommit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/window/build-reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildWindowReveal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/window/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putWindowBackup"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/window/backup/{wallet}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getWindowBackup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCurveStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve/configure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["configureCurve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve/build-buy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildCurveBuy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/curves/monitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["monitorCurves"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listMyNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/notifications/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["markNotificationsRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/notification-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getNotificationPreferences"];
+        put: operations["setNotificationPreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/notifications/outbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminNotificationsOutbox"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/notifications/emails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminNotificationsEmails"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/thresholds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every country with threshold data, its latest year, currency, placeholder flag and source */
+        get: operations["listThresholdCountries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/thresholds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every threshold row with its history count */
+        get: operations["adminListThresholds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/thresholds/{country}/{year}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Insert or replace the row for a country and year; recorded in the append-only history and audited */
+        put: operations["adminUpsertThreshold"];
+        post?: never;
+        /** Delete the row for a country and year; the removed values stay in the history */
+        delete: operations["adminDeleteThreshold"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/thresholds/{country}/{year}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Append-only change history of one country and year (works for deleted rows) */
+        get: operations["adminThresholdHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/indexing/{year}/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Live CPI-indexed series with no inflation amendment for the year and an inflation index on file for their country (metadata only, no vault decryption) */
+        get: operations["adminIndexingCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/indexing/{year}/notify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enqueue one `indexing.due` notification per candidate not yet notified for the year (idempotent per series and year) and audit */
+        post: operations["adminIndexingNotify"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -1482,6 +2549,566 @@ export type components = {
             lockupEndsAt?: number | null;
             redemptionPrice?: string | null;
         };
+        AccountingFeeRow: {
+            chain: string;
+            seq: number;
+            seriesId: string;
+            /** @enum {string|null} */
+            stablecoin: "USDC" | "USDG" | null;
+            /**
+             * @description 1% auction fee on cleared bids or 5% payout fee at pay-in (C5)
+             * @enum {string}
+             */
+            kind: "auction" | "payout";
+            /** @description the bidder (auction) or the issuer's wallet the fee was taken from at pay-in (payout) */
+            payer: string;
+            amount: components["schemas"]["Money"];
+            /** @description unix seconds */
+            blockTime: number;
+            txId: string;
+        };
+        AccountingFeeSeriesTotal: {
+            seriesId: string;
+            chain: string;
+            stablecoin: string | null;
+            auction: components["schemas"]["Money"];
+            payout: components["schemas"]["Money"];
+            total: components["schemas"]["Money"];
+            count: number;
+        };
+        AccountingFeesReport: {
+            filter: {
+                chain?: string | null;
+                seriesId?: string | null;
+                from?: number | null;
+                to?: number | null;
+                limit?: number;
+            };
+            rows: components["schemas"]["AccountingFeeRow"][];
+            /** @description rows matching the filter (before the limit) */
+            rowCount: number;
+            truncated: boolean;
+            totals: {
+                total: components["schemas"]["Money"];
+                count: number;
+                byKind: {
+                    auction: components["schemas"]["Money"];
+                    payout: components["schemas"]["Money"];
+                };
+                bySeries: components["schemas"]["AccountingFeeSeriesTotal"][];
+            };
+        };
+        AccountingPeriodLine: {
+            periodId: string;
+            tier?: number | null;
+            paymentDue: components["schemas"]["Money"];
+            accrual: components["schemas"]["Money"];
+            paid: components["schemas"]["Money"];
+            splitReceived: components["schemas"]["Money"];
+            reportAccepted: boolean;
+            settled: boolean;
+            liquidityEvent?: boolean;
+        };
+        /** @description Per-series statement from the read model. Amounts, kinds, counts and statuses only; never an income figure. */
+        AccountingStatement: {
+            seriesId: string;
+            chain: string;
+            issuer: string;
+            /** @enum {string} */
+            stablecoin: "USDC" | "USDG";
+            /** @enum {string} */
+            phase: "Draft" | "Open" | "Reveal" | "Settled" | "Failed" | "Cancelled";
+            /** @enum {string} */
+            status: "OnTime" | "InGrace" | "Late" | "Paused" | "Retired" | "Redeemed" | "Extinguished";
+            settledAt?: number | null;
+            feeRates: {
+                auctionFeeBps?: number;
+                payoutFeeBps?: number;
+            };
+            /** @description C6: cap per unit = m × P0; remaining per unit = capPerUnit − paidPerUnitWad / 1e18 */
+            cap: {
+                capMultipleWad?: components["schemas"]["Wad"];
+                issuePrice?: string | null;
+                /** @description cap per unit */
+                perUnit?: string | null;
+                unitsSold?: string;
+                unitsOutstanding?: string;
+                /** @description perUnit × unitsSold */
+                total?: string | null;
+                paidPerUnitWad?: components["schemas"]["Wad"];
+                paidPerUnit?: components["schemas"]["Money"];
+                remainingPerUnit?: string | null;
+                /** @description remainingPerUnit × unitsOutstanding */
+                remainingTotal?: string | null;
+                /** @description paid / cap in basis points */
+                progressBps?: number | null;
+            };
+            payments: {
+                /** @description lifetime gross accepted into the vault */
+                grossPaidTotal?: components["schemas"]["Money"];
+                /** @description gross minus payout fees */
+                netDistributed?: components["schemas"]["Money"];
+                feesTaken?: components["schemas"]["Money"];
+                count?: number;
+            };
+            fees: {
+                auction?: components["schemas"]["Money"];
+                payout?: components["schemas"]["Money"];
+                total?: components["schemas"]["Money"];
+                /** @description payout fees as accumulated on the series row (should equal fees.payout) */
+                vaultFeesTotal?: components["schemas"]["Money"];
+            };
+            payouts: {
+                claimed?: components["schemas"]["Money"];
+                /** @description netDistributed − claimed */
+                unclaimed?: components["schemas"]["Money"];
+                count?: number;
+            };
+            refunds: {
+                total?: components["schemas"]["Money"];
+                /** @description bid deposit refunds claimed */
+                bids?: components["schemas"]["Money"];
+                /** @description pay-in refunds (cap */
+                payments?: components["schemas"]["Money"];
+            };
+            treasury: {
+                total?: components["schemas"]["Money"];
+                released?: components["schemas"]["Money"];
+                balance?: components["schemas"]["Money"];
+                releasesPaused?: boolean;
+            };
+            redemption: {
+                price?: string | null;
+                redeemedAt?: number | null;
+                deposit?: components["schemas"]["Money"];
+                claimed?: components["schemas"]["Money"];
+            };
+            tail: {
+                total?: components["schemas"]["Money"];
+            };
+            extinguishment: {
+                extinguishedAt?: number | null;
+                returnedToHolders?: components["schemas"]["Money"];
+            };
+            burns: {
+                units?: string;
+            };
+            periods: components["schemas"]["AccountingPeriodLine"][];
+            /** @description count and total per money_events kind (payment, fee, payout, refund, release, treasury, redemption, redemption_claim, tail, burn, extinguishment, split) */
+            moneyEventTotals: {
+                [key: string]: {
+                    count?: number;
+                    total?: string;
+                };
+            };
+        };
+        AccountingReconciliationCheck: {
+            /** @enum {string} */
+            check: "fee-collector-balance" | "vault-gross" | "vault-fees" | "treasury-total" | "treasury-released";
+            chain: string;
+            seriesId: string | null;
+            stablecoin: string | null;
+            /** @description read-model total */
+            indexed: string | null;
+            /** @description onchain value */
+            onchain: string | null;
+            /** @description onchain − indexed */
+            delta: string | null;
+            ok: boolean;
+            note?: string;
+        };
+        AccountingReconciliationRun: {
+            runId: string;
+            /** Format: date-time */
+            at: string;
+            actor: string;
+            ok: boolean;
+            checksTotal: number;
+            checksFailed: number;
+            checks: components["schemas"]["AccountingReconciliationCheck"][];
+        };
+        AdminFlag: {
+            /** @enum {string} */
+            name: "tier4" | "transfer_windows" | "early_draws" | "secondary_trading" | "private_payouts";
+            enabled: boolean;
+            /** @description true for flags that cannot be enabled from the API (private_payouts is "coming soon") */
+            locked: boolean;
+        };
+        AdminFlagSet: {
+            enabled: boolean;
+        };
+        AdminFlagResult: components["schemas"]["AdminFlag"] & {
+            /** @description false when the flag already had this value */
+            changed: boolean;
+        };
+        AdminAuditEntry: {
+            id: number;
+            /** Format: date-time */
+            at: string;
+            /** @description account id of the admin or attestor */
+            actor: string;
+            actorRole: string;
+            /** @description dotted action name */
+            action: string;
+            target?: string | null;
+            /** @description codes */
+            detail: Record<string, never>;
+        };
+        /** @description A multisig action proposed by an admin. The backend never signs it; `state` moves to confirmed only when the chain shows the effect. */
+        AdminTxRequest: {
+            requestId: string;
+            /** @enum {string} */
+            kind: "registerAttestor" | "registerVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
+            chain: string;
+            /** @description the canonical AdminCommand as built */
+            command: Record<string, never>;
+            /** @enum {string} */
+            state: "proposed" | "sent" | "confirmed";
+            txId: string | null;
+            /** @description admin account id */
+            createdBy: string;
+            /** @description registerAttestor: {accountId, jurisdiction, kind} */
+            meta: Record<string, never>;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            sentAt?: string | null;
+            /** Format: date-time */
+            confirmedAt?: string | null;
+        };
+        AdminTxProposal: {
+            request: components["schemas"]["AdminTxRequest"];
+            tx: components["schemas"]["UnsignedTx"];
+        };
+        AdminTxSent: {
+            /** @description the transaction id the multisig broadcast */
+            txId: string;
+        };
+        AdminRegisterAttestor: {
+            chain: string;
+            /** @description the attestor's signing wallet on that chain */
+            wallet: string;
+            /** @description the Merces account that receives the attestor role (when active) */
+            accountId: string;
+            /** @description false deactivates an attestor onchain */
+            active: boolean;
+            /** @description ISO 3166-1 alpha-2 */
+            jurisdiction?: string;
+            /** @enum {string} */
+            kind?: "CA" | "CPA";
+        };
+        AdminRegisterVerifierKey: {
+            chain: string;
+            keyId: string;
+            /** @description DER SubjectPublicKeyInfo of the report verifier's ed25519 key */
+            publicKeySpkiHex: string;
+            active: boolean;
+        };
+        AdminPauseRaises: {
+            chain: string;
+            paused: boolean;
+        };
+        AdminVerifierKeys: {
+            chain: string;
+            keys: {
+                keyId: string;
+                publicKey: string;
+            }[];
+        };
+        AdminEligibilityRow: {
+            chain: string;
+            wallet: string;
+            accountId: string;
+            /** @enum {string} */
+            kind: "issuer" | "backer";
+            /** Format: date-time */
+            approvedAt: string;
+            /** Format: date-time */
+            revokedAt: string | null;
+            /** @description what the allowlist should say (not revoked) */
+            expectedAllowed: boolean;
+            /** Format: date-time */
+            allowlistSyncedAt: string | null;
+            allowlistTx: string | null;
+            /** @description the onchain allowlist as indexed; null when the indexer has not seen the wallet */
+            indexedAllowed: boolean | null;
+            /** @enum {string} */
+            syncState: "pending" | "unindexed" | "synced" | "diverged";
+        };
+        AdminAuditSample: {
+            sampleId: string;
+            reportId: string;
+            seriesId?: string | null;
+            periodId?: string | null;
+            tier?: number | null;
+            reportState?: string | null;
+            /** Format: date-time */
+            sampledAt: string;
+            sampledBy: string;
+            /** @enum {string} */
+            outcome: "pending" | "passed" | "failed";
+        };
+        AdminAuditSamplesDraw: {
+            count: number;
+        };
+        AdminAuditSamplesResult: {
+            sampled: number;
+            samples: components["schemas"]["AdminAuditSample"][];
+            /** @description present when the tier4 flag is off and nothing was sampled */
+            note?: string;
+        };
+        AdminKeeperRun: {
+            id: number;
+            job: string;
+            chain?: string | null;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+            /** @description null while running */
+            ok: boolean | null;
+            actions: number;
+            detail?: string | null;
+        };
+        AdminChainOverview: {
+            chain: string;
+            /** @enum {string} */
+            family: "solana" | "evm";
+            /** @enum {string} */
+            mode: "mock" | "live";
+            network: string;
+            /** @description the protocol multisig address every admin UnsignedTx is built for */
+            admin: string;
+            newRaisesPaused: boolean;
+            health: {
+                ok: boolean;
+                latencyMs: number;
+                detail: string;
+            };
+            indexer: {
+                cursor?: string | null;
+                lastSeq?: number;
+                /** Format: date-time */
+                updatedAt?: string;
+            } | null;
+            series: {
+                total: number;
+                byStatus: {
+                    [key: string]: number;
+                };
+                byPhase: {
+                    [key: string]: number;
+                };
+            };
+        };
+        AdminOverview: {
+            /** Format: date-time */
+            at: string;
+            chains: components["schemas"]["AdminChainOverview"][];
+            keepers: {
+                /** @description the most recent run of each job */
+                lastRuns: components["schemas"]["AdminKeeperRun"][];
+                /** @description the last 20 failed runs */
+                recentFailures: components["schemas"]["AdminKeeperRun"][];
+            };
+            outbox: {
+                /** @description rows not yet dispatched */
+                pending: number;
+                /** @description pending rows whose last attempt errored */
+                failed: number;
+            };
+            applications: {
+                open: number;
+                submitted: number;
+                inReview: number;
+            };
+            txRequests: {
+                proposed: number;
+                sent: number;
+                confirmed: number;
+            };
+            flags: components["schemas"]["AdminFlag"][];
+        };
+        /** @description End-to-end ciphertext (base64, base64url or hex) encrypted on the client for the attestor's key. Plaintext and JSON are rejected (422). */
+        Ciphertext: string;
+        /** @description What holders and the issuer see — statuses and dates only, never ciphertext or decision codes. */
+        HardshipStatus: {
+            seriesId?: string;
+            seriesStatus?: string;
+            paused?: boolean;
+            pausedUntil?: number | null;
+            requests?: {
+                /** @enum {string} */
+                state?: "pending" | "approved" | "rejected";
+                requestedUntil?: number;
+                approvedUntil?: number | null;
+                requestedAt?: string;
+                decidedAt?: string | null;
+            }[];
+        };
+        /** @description A transaction for the user or attestor to sign; the backend never signs. */
+        UnsignedTx: {
+            chain?: string;
+            /** @enum {string} */
+            family?: "solana" | "evm";
+            signer?: string;
+            coSigners?: string[];
+            command?: Record<string, never>;
+            payload?: string;
+            encoding?: string;
+            summary?: string;
+            expiresAt?: number | null;
+        };
+        Notification: {
+            notificationId: string;
+            /** @description the outbox payload kind */
+            kind: string;
+            subject: string;
+            /** @description statuses */
+            body: string;
+            /** @description whitelisted payload keys (ids */
+            data: {
+                [key: string]: string | number;
+            };
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            readAt: string | null;
+        };
+        NotificationList: {
+            notifications: components["schemas"]["Notification"][];
+            unreadCount: number;
+        };
+        NotificationPreferences: {
+            /** @description send emails for notifications that are not muted */
+            email: boolean;
+            mutedKinds: string[];
+            /**
+             * Format: email
+             * @description the account's own address (accounts.email); never shown to other users
+             */
+            emailAddress: string | null;
+            /** @description the configured channel */
+            channel: string;
+            /** Format: date-time */
+            updatedAt?: string | null;
+            /** @description kinds with a dedicated template */
+            knownKinds: string[];
+        };
+        NotificationPreferencesUpdate: {
+            email: boolean;
+            mutedKinds: string[];
+            /**
+             * Format: email
+             * @description omitted leaves the stored address unchanged; null clears it
+             */
+            emailAddress?: string | null;
+        };
+        OutboxRow: {
+            id: number;
+            topic: string;
+            kind: string | null;
+            /** @description the raw outbox payload (admin-only; may carry amounts owed to issuers or holders) */
+            payload?: Record<string, never>;
+            attempts: number;
+            lastError: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            dispatchedAt?: string | null;
+        };
+        OutboxBacklog: {
+            counts: {
+                pending: number;
+                /** @description pending rows whose last attempt failed */
+                failed: number;
+                dispatched: number;
+            };
+            /** @description up to 50 pending rows with a last_error */
+            failed: components["schemas"]["OutboxRow"][];
+            /** @description the last 50 rows */
+            recent: components["schemas"]["OutboxRow"][];
+        };
+        EmailOutboxRow: {
+            emailId: string;
+            to: string;
+            subject: string;
+            body: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ThresholdRow: {
+            /** @description ISO 3166-1 alpha-2 */
+            country: string;
+            year: number;
+            /** @description ISO 4217 */
+            currency: string;
+            /** @description annual median full-time income in currency base units (6 decimals) */
+            medianFullTimeIncome: components["schemas"]["Money"];
+            /** @description year-over-year CPI change in basis points */
+            inflationIndexBps: number;
+            source: string;
+            sourceUrl?: string | null;
+            /** Format: date */
+            retrievedAt: string;
+            /** @description true until a real statistic with a source replaces the seed */
+            placeholder: boolean;
+        };
+        ThresholdAdminRow: components["schemas"]["ThresholdRow"] & {
+            updatedBy?: string | null;
+            /** Format: date-time */
+            updatedAt?: string;
+            historyCount?: number;
+        };
+        ThresholdUpsert: {
+            currency: string;
+            medianFullTimeIncome: components["schemas"]["Money"];
+            inflationIndexBps: number;
+            source: string;
+            /** Format: uri */
+            sourceUrl?: string | null;
+            /** Format: date */
+            retrievedAt: string;
+            placeholder: boolean;
+        };
+        ThresholdHistoryEntry: components["schemas"]["ThresholdRow"] & {
+            id: number;
+            /** Format: date-time */
+            at: string;
+            /** @enum {string} */
+            op: "insert" | "update" | "delete";
+            changedBy: string;
+        };
+        ThresholdCountrySummary: {
+            country: string;
+            latestYear: number;
+            currency: string;
+            placeholder: boolean;
+            source: string;
+        };
+        IndexingCandidate: {
+            seriesId: string;
+            chain: string;
+            issuer: string;
+            status: string;
+            draftId: string;
+            country: string;
+            vaultVersion?: number;
+            inflationIndexBps: number;
+            indexPlaceholder: boolean;
+            source?: string;
+            notified: boolean;
+            /** Format: date-time */
+            notifiedAt?: string | null;
+        };
+        IndexingNotifyResult: {
+            year: number;
+            candidates: number;
+            /** @description series ids nudged by this call */
+            notified: string[];
+            /** @description series ids nudged by an earlier call for this year */
+            alreadyNotified: string[];
+        };
     };
     responses: {
         /** @description No or invalid session */
@@ -1520,6 +3147,24 @@ export type components = {
         limit: number;
         offset: number;
         chainQuery: string;
+        /** @description inclusive lower bound on block_time */
+        accountingFrom: string;
+        /** @description inclusive upper bound on block_time */
+        accountingTo: string;
+        /** @description <chain>:<address> */
+        accountingSeriesQuery: string;
+        /** @description rows returned; totals always cover the whole filter */
+        accountingLimit: number;
+        accountingRunsLimit: number;
+        adminFlagName: "tier4" | "transfer_windows" | "early_draws" | "secondary_trading" | "private_payouts";
+        adminRequestId: string;
+        adminLimit: number;
+        adminIdempotencyKey: string;
+        /** @description ISO 3166-1 alpha-2 (case-insensitive) */
+        thresholdCountry: string;
+        thresholdYear: number;
+        /** @description the indexing (CPI) year */
+        indexingYear: number;
     };
     requestBodies: never;
     headers: never;
@@ -3768,6 +5413,2385 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+        };
+    };
+    adminAccountingFees: {
+        parameters: {
+            query?: {
+                chain?: components["parameters"]["chainQuery"];
+                /** @description <chain>:<address> */
+                seriesId?: components["parameters"]["accountingSeriesQuery"];
+                /** @description inclusive lower bound on block_time */
+                from?: components["parameters"]["accountingFrom"];
+                /** @description inclusive upper bound on block_time */
+                to?: components["parameters"]["accountingTo"];
+                /** @description rows returned; totals always cover the whole filter */
+                limit?: components["parameters"]["accountingLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ledger rows and totals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountingFeesReport"];
+                };
+            };
+            /** @description Unknown chain */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminAccountingSeriesStatement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Statement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountingStatement"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    issuerAccountingStatement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Statement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountingStatement"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminAccountingReconcile: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description a retried call with the same key replays the same run instead of recording another */
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The persisted run with every check */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountingReconciliationRun"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminAccountingReconcileRuns: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["accountingRunsLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        runs: components["schemas"]["AccountingReconciliationRun"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminAccountingExport: {
+        parameters: {
+            query?: {
+                chain?: components["parameters"]["chainQuery"];
+                /** @description inclusive lower bound on block_time */
+                from?: components["parameters"]["accountingFrom"];
+                /** @description inclusive upper bound on block_time */
+                to?: components["parameters"]["accountingTo"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description RFC 4180 CSV with a header row; Content-Disposition names the file */
+            200: {
+                headers: {
+                    /** @description attachment; filename="merces-money-events_<chain>_<from>_<to>.csv" */
+                    "Content-Disposition"?: string;
+                    "X-Row-Count"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description Unknown chain */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Overview (counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOverview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminListFlags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Flags */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        flags: components["schemas"]["AdminFlag"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminSetFlag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["adminFlagName"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminFlagSet"];
+            };
+        };
+        responses: {
+            /** @description The flag after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminFlagResult"];
+                };
+            };
+            /** @description Body is not {enabled: boolean} */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Not one of the known flags */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The flag is locked (private_payouts cannot be enabled) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminAuditLog: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["adminLimit"];
+                /** @description account id */
+                actor?: string;
+                /** @description exact action */
+                action?: string;
+                target?: string;
+                /** @description entries with an id below this (paging) */
+                before?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        entries: components["schemas"]["AdminAuditEntry"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminRegisterAttestor: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["adminIdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRegisterAttestor"];
+            };
+        };
+        responses: {
+            /** @description The tracked request and the UnsignedTx for the multisig */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTxProposal"];
+                };
+            };
+            /** @description Unknown chain or a wallet of the wrong family */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description The account does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency key reused with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminListTxRequests: {
+        parameters: {
+            query?: {
+                chain?: string;
+                kind?: "registerAttestor" | "registerVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
+                state?: "proposed" | "sent" | "confirmed";
+                limit?: components["parameters"]["adminLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requests */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        requests: components["schemas"]["AdminTxRequest"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminTxRequestSent: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["adminIdempotencyKey"];
+            };
+            path: {
+                requestId: components["parameters"]["adminRequestId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTxSent"];
+            };
+        };
+        responses: {
+            /** @description The request in state sent or confirmed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTxRequest"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Already confirmed with a different tx id */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminListVerifierKeys: {
+        parameters: {
+            query?: {
+                chain?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Keys per chain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        chains: components["schemas"]["AdminVerifierKeys"][];
+                    };
+                };
+            };
+            /** @description Unknown chain */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminRegisterVerifierKey: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["adminIdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRegisterVerifierKey"];
+            };
+        };
+        responses: {
+            /** @description The tracked request and the UnsignedTx for the multisig */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTxProposal"];
+                };
+            };
+            /** @description Unknown chain or malformed key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Idempotency key reused with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminPauseRaises: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["adminIdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminPauseRaises"];
+            };
+        };
+        responses: {
+            /** @description The tracked request and the UnsignedTx for the multisig */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTxProposal"];
+                };
+            };
+            /** @description Unknown chain */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Idempotency key reused with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminListEligibility: {
+        parameters: {
+            query?: {
+                chain?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        rows: components["schemas"]["AdminEligibilityRow"][];
+                    };
+                };
+            };
+            /** @description Unknown chain */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminListAuditSamples: {
+        parameters: {
+            query?: {
+                outcome?: "pending" | "passed" | "failed";
+                limit?: components["parameters"]["adminLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Samples */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        samples: components["schemas"]["AdminAuditSample"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminDrawAuditSamples: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["adminIdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAuditSamplesDraw"];
+            };
+        };
+        responses: {
+            /** @description The samples drawn by this call */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAuditSamplesResult"];
+                };
+            };
+            /** @description count out of range */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Idempotency key reused with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminKeeperRuns: {
+        parameters: {
+            query?: {
+                /** @description job name */
+                job?: string;
+                limit?: components["parameters"]["adminLimit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        runs: components["schemas"]["AdminKeeperRun"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    attestorMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The attestor's wallets with their onchain registration flag per chain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    attestorQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Open work across both chains for the caller's registered attestor wallets: hardship requests, tier-3 cases and annual attestations, FX fallback requests, amendments awaiting attestation, extinguishment requests (never ciphertext) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    hardshipStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Statuses and dates only */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HardshipStatus"];
+                };
+            };
+        };
+    };
+    requestHardship: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description requested pause end (unix seconds) */
+                    until: number;
+                    /** @description a registered attestor wallet on the series' chain */
+                    attestor: string;
+                    ciphertext: components["schemas"]["Ciphertext"];
+                    keyHint?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description The hardship record (no ciphertext) and the unsigned requestPause transaction for the issuer */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Series not settled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Plaintext-looking payload */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getHardship: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hardshipId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Addressed to another attestor */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    decideHardship: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                hardshipId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    approve: boolean;
+                    /** @description approved end; defaults to the requested end and may not exceed it */
+                    until?: number;
+                    /** @description rejection code (never free text) */
+                    decisionCode?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Approved: the record and the unsigned approvePause transaction for the attestor. Rejected: the record with its decision code and tx null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Not the chosen attestor */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already decided */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Approved end after the requested end or in the past */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    openTier3Annual: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    year: number;
+                    attestor: string;
+                    documentsCiphertext: components["schemas"]["Ciphertext"];
+                    keyHint?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description The annual attestation (state open) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Year not ended */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Plaintext-looking payload or unknown attestor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    openTier3Case: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+                periodId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    attestor: string;
+                    documentsCiphertext: components["schemas"]["Ciphertext"];
+                    keyHint?: string | null;
+                    estimatePaymentStable: components["schemas"]["Money"];
+                };
+            };
+        };
+        responses: {
+            /** @description The case (state open; no ciphertext) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Period not ended */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Plaintext-looking payload or unknown attestor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listTier3: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The series' tier-3 cases and annual attestations (amounts and states; no ciphertext) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    getTier3Annual: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                annualId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The annual attestation with its ciphertext (chosen attestor or admin) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Addressed to another attestor */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    signTier3Annual: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                annualId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    totalPaymentStable: components["schemas"]["Money"];
+                };
+            };
+        };
+        responses: {
+            /** @description The true-up as amounts only: estimated (sum of the year's accepted quarterly payments), overpayment credited to the next period, or underpayment due within 60 days with no accrual */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Not the chosen attestor */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already signed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getTier3Case: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                caseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The case with its documents ciphertext and metadata (chosen attestor or admin) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Addressed to another attestor */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    tier3PrefillSpec: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                caseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The CLIENT-SIDE extraction specification: which fields to pull from tax returns, W-2s, 1099s, royalty statements and accounting exports, the currency and the period. The server extracts nothing (R26) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    signTier3Case: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                caseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    paymentStable: components["schemas"]["Money"];
+                    incomeCommitment: string;
+                    liquidityEvent?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The case marked signed with the attested payment; the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Not the chosen attestor */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already signed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listFxRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Open FX fallback requests (opened by the rate keeper */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    signFxRequest: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    rateWad: components["schemas"]["Wad"];
+                    attestorWallet: string;
+                    /** @description a code such as ecb-reference-rate */
+                    sourceNote: string;
+                    /** @description the wallet's signature over fxAttestationMessage({pair, periodId, rateWad}), made on the attestor's device (sim: signatures in mock mode) */
+                    signature: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The request marked signed with the rate */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Wallet not linked to the account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not open */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Signature does not verify or wallet not a registered attestor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    fxFallbackForSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+                periodId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signed fallback rate for the series' pair and period, if any, as `attestorRate` for report assembly */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    requestExtinguishment: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    seriesId: string;
+                    /** @description two distinct registered attestors; both sign */
+                    attestors: string[];
+                    evidenceCiphertext: components["schemas"]["Ciphertext"];
+                    keyHint?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description The request and the unsigned extinguish transaction (signer = first attestor */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx?: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            /** @description Neither attestor is linked to the account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already extinguished */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Attestors not distinct or not registered; plaintext-looking evidence */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getExtinguishment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request with its evidence ciphertext (named attestors or admin) and the series' onchain status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Names other attestors */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildTreasuryDraw: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unsigned drawRelease for every tranche that is due; no approval from anyone (C11.1) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Paused or nothing drawable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildTreasuryPause: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    paused: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned pauseReleases (the issuer's own pause) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    buildClaimPayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    holder: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Nothing to claim */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getRedemptionQuote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Formula price (min(C_remaining */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    buildRedeem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    maxPricePerUnit: components["schemas"]["Money"];
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned redeem (deposit = price × units outstanding; no fee) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Lockup */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildClaimRedemption: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    holder: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned claimRedemption; units burn on claim */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    getRedemption: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redemption state and tail tracking (window end */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    getRetirement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cap progress and burn progress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    crankBurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Permissionless burn crank triggered for unclaimed holders */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    getTransferWindow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current transfer window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    buildWindowCommit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    wallet: string;
+                    /** @enum {string} */
+                    side: "buy" | "sell";
+                    commitment: string;
+                    deposit: components["schemas"]["Money"];
+                    units: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned commitWindowOrder (buys need the allowlist; sells never do) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Transfer windows are switched off */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildWindowReveal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    wallet: string;
+                    side: string;
+                    pricePerUnit: string;
+                    quantity: string;
+                    salt: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned revealWindowOrder */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Transfer windows are switched off */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putWindowBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    wallet: string;
+                    ciphertext: string;
+                    keyHint?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Client-encrypted order backup stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    getWindowBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+                wallet: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The backup ciphertext */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    getCurveStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Curve progress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Not a curve-mode series */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    configureCurve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Config generated through the Meteora port (Stage 1's oracle-driven generator) and stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    buildCurveBuy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    buyer: string;
+                    amountIn: components["schemas"]["Money"];
+                    /** @enum {string} */
+                    payIn?: "USDC" | "USDG";
+                    slippageBps?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Curve quote */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    monitorCurves: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Graduation check across curve-mode series; cranks graduation when the threshold is crossed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    listMyNotifications: {
+        parameters: {
+            query?: {
+                /** @description only unread rows */
+                unread?: "true" | "false";
+                limit?: components["parameters"]["limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest notifications for the signed-in account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationList"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    markNotificationsRead: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    ids: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description The ids marked read now (ids of other accounts or already-read rows are ignored) and the remaining unread count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        read: string[];
+                        unreadCount: number;
+                    };
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency key reused with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getNotificationPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Email on/off */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferences"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    setNotificationPreferences: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationPreferencesUpdate"];
+            };
+        };
+        responses: {
+            /** @description The stored preferences */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferences"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency key reused with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminNotificationsOutbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backlog counts (pending */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutboxBacklog"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not an admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminNotificationsEmails: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The mock email channel's outbox (dev visibility); the view is audited */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        channel: string;
+                        emails: components["schemas"]["EmailOutboxRow"][];
+                    };
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not an admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listThresholdCountries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Country summaries (no admin fields) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        countries: components["schemas"]["ThresholdCountrySummary"][];
+                    };
+                };
+            };
+        };
+    };
+    adminListThresholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        rows: components["schemas"]["ThresholdAdminRow"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminUpsertThreshold: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                /** @description ISO 3166-1 alpha-2 (case-insensitive) */
+                country: components["parameters"]["thresholdCountry"];
+                year: components["parameters"]["thresholdYear"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThresholdUpsert"];
+            };
+        };
+        responses: {
+            /** @description Row replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        created: false;
+                        row: components["schemas"]["ThresholdAdminRow"];
+                    };
+                };
+            };
+            /** @description Row created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        created: true;
+                        row: components["schemas"]["ThresholdAdminRow"];
+                    };
+                };
+            };
+            /** @description Validation failed (missing source or retrievedAt */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Idempotency key reused with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminDeleteThreshold: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                /** @description ISO 3166-1 alpha-2 (case-insensitive) */
+                country: components["parameters"]["thresholdCountry"];
+                year: components["parameters"]["thresholdYear"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        deleted: true;
+                        country: string;
+                        year: number;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminThresholdHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description ISO 3166-1 alpha-2 (case-insensitive) */
+                country: components["parameters"]["thresholdCountry"];
+                year: components["parameters"]["thresholdYear"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description History */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        country: string;
+                        year: number;
+                        history: components["schemas"]["ThresholdHistoryEntry"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminIndexingCandidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description the indexing (CPI) year */
+                year: components["parameters"]["indexingYear"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Candidates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        year: number;
+                        candidates: components["schemas"]["IndexingCandidate"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminIndexingNotify: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                /** @description the indexing (CPI) year */
+                year: components["parameters"]["indexingYear"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Which series were nudged by this call and which already had been */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexingNotifyResult"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
 }

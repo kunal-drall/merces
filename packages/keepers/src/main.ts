@@ -2,7 +2,7 @@ import { createLogger } from '@merces/core';
 import { createPool, migrate } from '@merces/db';
 import { chainsConfigFromEnv, createChains } from '@merces/chains';
 import { makeContext } from '@merces/api';
-import { createServiceContext } from '@merces/services';
+import { createServiceContext, notificationsOutboxHandler } from '@merces/services';
 import { HermesPyth, MockChainlink, MockPyth } from '@merces/ports';
 import { KeeperScheduler } from './scheduler.ts';
 import { standardJobs } from './index.ts';
@@ -14,6 +14,6 @@ const chains = await createChains(chainsConfigFromEnv(process.env, { pool, log: 
 const devMode = [...chains.chains.values()].every((c) => c.mode === 'mock');
 const ctx = createServiceContext(makeContext({ pool, chains, log, sessionSecret: process.env.MERCES_SESSION_SECRET ?? 'dev-session-secret-not-for-production', devMode }));
 const pyth = (process.env.MERCES_PRICE_FEED_PROVIDER ?? 'mock') === 'pyth' ? new HermesPyth(process.env.PYTH_HERMES_URL) : new MockPyth();
-const jobs = standardJobs({ pyth, chainlink: new MockChainlink(), outbox: async (topic, payload) => log.info({ topic, kind: payload.kind }, 'outbox (no channel configured)') });
+const jobs = standardJobs({ pyth, chainlink: new MockChainlink(), outbox: notificationsOutboxHandler(ctx) });
 log.info({ jobs: jobs.map((j) => j.name), devMode }, 'keepers started');
 await new KeeperScheduler(ctx, jobs).start();

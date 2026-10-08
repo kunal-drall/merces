@@ -1,0 +1,374 @@
+# E13 admin API with an append-only audit log. Every operation is admin-tier. Admins have no path to user funds or
+# raw income: chain actions are UnsignedTx objects built for the protocol multisig and tracked as tx requests until
+# the chain itself shows the effect. Offchain actions (flags, role grants, audit sampling) are audited.
+tags:
+  - { name: admin, description: Operations console (E13) — overview, flags, audit log, multisig requests, keepers }
+components:
+  schemas:
+    AdminFlag:
+      type: object
+      required: [name, enabled, locked]
+      properties:
+        name: { type: string, enum: [tier4, transfer_windows, early_draws, secondary_trading, private_payouts] }
+        enabled: { type: boolean }
+        locked: { type: boolean, description: true for flags that cannot be enabled from the API (private_payouts is "coming soon") }
+    AdminFlagSet:
+      type: object
+      required: [enabled]
+      properties: { enabled: { type: boolean } }
+    AdminFlagResult:
+      allOf:
+        - $ref: '#/components/schemas/AdminFlag'
+        - type: object
+          required: [changed]
+          properties: { changed: { type: boolean, description: false when the flag already had this value } }
+    AdminAuditEntry:
+      type: object
+      required: [id, at, actor, actorRole, action, detail]
+      properties:
+        id: { type: integer }
+        at: { type: string, format: date-time }
+        actor: { type: string, description: account id of the admin or attestor }
+        actorRole: { type: string }
+        action: { type: string, description: dotted action name, e.g. flag.set, attestor.register, application.approved }
+        target: { type: [string, 'null'] }
+        detail: { type: object, description: codes, ids and booleans only — never a figure, document or reason }
+    AdminTxRequest:
+      type: object
+      description: A multisig action proposed by an admin. The backend never signs it; `state` moves to confirmed only when the chain shows the effect.
+      required: [requestId, kind, chain, command, state, txId, createdBy, meta, createdAt]
+      properties:
+        requestId: { type: string }
+        kind: { type: string, enum: [registerAttestor, registerVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] }
+        chain: { type: string }
+        command: { type: object, description: the canonical AdminCommand as built }
+        state: { type: string, enum: [proposed, sent, confirmed] }
+        txId: { type: [string, 'null'] }
+        createdBy: { type: string, description: admin account id }
+        meta: { type: object, description: "registerAttestor: {accountId, jurisdiction, kind}" }
+        createdAt: { type: string, format: date-time }
+        sentAt: { type: [string, 'null'], format: date-time }
+        confirmedAt: { type: [string, 'null'], format: date-time }
+    AdminTxProposal:
+      type: object
+      required: [request, tx]
+      properties:
+        request: { $ref: '#/components/schemas/AdminTxRequest' }
+        tx: { $ref: '#/components/schemas/UnsignedTx' }
+    AdminTxSent:
+      type: object
+      required: [txId]
+      properties: { txId: { type: string, description: the transaction id the multisig broadcast } }
+    AdminRegisterAttestor:
+      type: object
+      required: [chain, wallet, accountId, active]
+      properties:
+        chain: { type: string }
+        wallet: { type: string, description: the attestor's signing wallet on that chain }
+        accountId: { type: string, description: the Merces account that receives the attestor role (when active) }
+        active: { type: boolean, description: false deactivates an attestor onchain }
+        jurisdiction: { type: string, minLength: 2, maxLength: 2, description: ISO 3166-1 alpha-2 }
+        kind: { type: string, enum: [CA, CPA] }
+    AdminRegisterVerifierKey:
+      type: object
+      required: [chain, keyId, publicKeySpkiHex, active]
+      properties:
+        chain: { type: string }
+        keyId: { type: string }
+        publicKeySpkiHex: { type: string, pattern: '^(0x)?([0-9a-fA-F]{2}){32,128}$', description: DER SubjectPublicKeyInfo of the report verifier's ed25519 key, hex }
+        active: { type: boolean }
+    AdminPauseRaises:
+      type: object
+      required: [chain, paused]
+      properties: { chain: { type: string }, paused: { type: boolean } }
+    AdminVerifierKeys:
+      type: object
+      required: [chain, keys]
+      properties:
+        chain: { type: string }
+        keys: { type: array, items: { type: object, required: [keyId, publicKey], properties: { keyId: { type: string }, publicKey: { type: string } } } }
+    AdminEligibilityRow:
+      type: object
+      required: [chain, wallet, accountId, kind, approvedAt, revokedAt, expectedAllowed, allowlistSyncedAt, allowlistTx, indexedAllowed, syncState]
+      properties:
+        chain: { type: string }
+        wallet: { type: string }
+        accountId: { type: string }
+        kind: { type: string, enum: [issuer, backer] }
+        approvedAt: { type: string, format: date-time }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        expectedAllowed: { type: boolean, description: what the allowlist should say (not revoked) }
+        allowlistSyncedAt: { type: [string, 'null'], format: date-time }
+        allowlistTx: { type: [string, 'null'] }
+        indexedAllowed: { type: [boolean, 'null'], description: the onchain allowlist as indexed; null when the indexer has not seen the wallet }
+        syncState: { type: string, enum: [pending, unindexed, synced, diverged] }
+    AdminAuditSample:
+      type: object
+      required: [sampleId, reportId, sampledAt, sampledBy, outcome]
+      properties:
+        sampleId: { type: string }
+        reportId: { type: string }
+        seriesId: { type: [string, 'null'] }
+        periodId: { type: [string, 'null'] }
+        tier: { type: [integer, 'null'] }
+        reportState: { type: [string, 'null'] }
+        sampledAt: { type: string, format: date-time }
+        sampledBy: { type: string }
+        outcome: { type: string, enum: [pending, passed, failed] }
+    AdminAuditSamplesDraw:
+      type: object
+      required: [count]
+      properties: { count: { type: integer, minimum: 1, maximum: 100 } }
+    AdminAuditSamplesResult:
+      type: object
+      required: [sampled, samples]
+      properties:
+        sampled: { type: integer }
+        samples: { type: array, items: { $ref: '#/components/schemas/AdminAuditSample' } }
+        note: { type: string, description: present when the tier4 flag is off and nothing was sampled }
+    AdminKeeperRun:
+      type: object
+      required: [id, job, startedAt, finishedAt, ok, actions]
+      properties:
+        id: { type: integer }
+        job: { type: string }
+        chain: { type: [string, 'null'] }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        ok: { type: [boolean, 'null'], description: null while running }
+        actions: { type: integer }
+        detail: { type: [string, 'null'] }
+    AdminChainOverview:
+      type: object
+      required: [chain, family, mode, network, admin, newRaisesPaused, health, indexer, series]
+      properties:
+        chain: { type: string }
+        family: { type: string, enum: [solana, evm] }
+        mode: { type: string, enum: [mock, live] }
+        network: { type: string }
+        admin: { type: string, description: the protocol multisig address every admin UnsignedTx is built for }
+        newRaisesPaused: { type: boolean }
+        health: { type: object, required: [ok, latencyMs, detail], properties: { ok: { type: boolean }, latencyMs: { type: number }, detail: { type: string } } }
+        indexer: { type: [object, 'null'], properties: { cursor: { type: [string, 'null'] }, lastSeq: { type: integer }, updatedAt: { type: string, format: date-time } } }
+        series: { type: object, required: [total, byStatus, byPhase], properties: { total: { type: integer }, byStatus: { type: object, additionalProperties: { type: integer } }, byPhase: { type: object, additionalProperties: { type: integer } } } }
+    AdminOverview:
+      type: object
+      required: [at, chains, keepers, outbox, applications, txRequests, flags]
+      properties:
+        at: { type: string, format: date-time }
+        chains: { type: array, items: { $ref: '#/components/schemas/AdminChainOverview' } }
+        keepers:
+          type: object
+          required: [lastRuns, recentFailures]
+          properties:
+            lastRuns: { type: array, description: the most recent run of each job, items: { $ref: '#/components/schemas/AdminKeeperRun' } }
+            recentFailures: { type: array, description: the last 20 failed runs, items: { $ref: '#/components/schemas/AdminKeeperRun' } }
+        outbox: { type: object, required: [pending, failed], properties: { pending: { type: integer, description: rows not yet dispatched }, failed: { type: integer, description: pending rows whose last attempt errored } } }
+        applications: { type: object, required: [open, submitted, inReview], properties: { open: { type: integer }, submitted: { type: integer }, inReview: { type: integer } } }
+        txRequests: { type: object, required: [proposed, sent, confirmed], properties: { proposed: { type: integer }, sent: { type: integer }, confirmed: { type: integer } } }
+        flags: { type: array, items: { $ref: '#/components/schemas/AdminFlag' } }
+  parameters:
+    adminFlagName: { name: name, in: path, required: true, schema: { type: string, enum: [tier4, transfer_windows, early_draws, secondary_trading, private_payouts] } }
+    adminRequestId: { name: requestId, in: path, required: true, schema: { type: string } }
+    adminLimit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    adminIdempotencyKey: { name: Idempotency-Key, in: header, schema: { type: string } }
+paths:
+  /admin/overview:
+    get:
+      operationId: adminOverview
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Per-chain health, indexer cursor and series counts; keeper runs; outbox backlog; open applications; flags
+      responses:
+        '200': { description: Overview (counts, statuses and cursors only), content: { application/json: { schema: { $ref: '#/components/schemas/AdminOverview' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/flags:
+    get:
+      operationId: adminListFlags
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Feature flags
+      responses:
+        '200': { description: Flags, content: { application/json: { schema: { type: object, required: [flags], properties: { flags: { type: array, items: { $ref: '#/components/schemas/AdminFlag' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/flags/{name}:
+    put:
+      operationId: adminSetFlag
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Switch a feature flag; audited. private_payouts is "coming soon" and can never be enabled (409).
+      parameters: [{ $ref: '#/components/parameters/adminFlagName' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminFlagSet' } } } }
+      responses:
+        '200': { description: The flag after the change, content: { application/json: { schema: { $ref: '#/components/schemas/AdminFlagResult' } } } }
+        '400': { description: 'Body is not {enabled: boolean}', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Not one of the known flags, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: The flag is locked (private_payouts cannot be enabled), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /admin/audit-log:
+    get:
+      operationId: adminAuditLog
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: The append-only audit log, newest first
+      parameters:
+        - $ref: '#/components/parameters/adminLimit'
+        - { name: actor, in: query, schema: { type: string }, description: account id }
+        - { name: action, in: query, schema: { type: string }, description: exact action, or a namespace prefix ("flag" matches "flag.set") }
+        - { name: target, in: query, schema: { type: string } }
+        - { name: before, in: query, schema: { type: integer }, description: entries with an id below this (paging) }
+      responses:
+        '200': { description: Entries, content: { application/json: { schema: { type: object, required: [entries], properties: { entries: { type: array, items: { $ref: '#/components/schemas/AdminAuditEntry' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/attestors:
+    post:
+      operationId: adminRegisterAttestor
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Build registerAttestor for the multisig, grant the attestor role to the account (when active) and open a tx request; audited
+      parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRegisterAttestor' } } } }
+      responses:
+        '201': { description: The tracked request and the UnsignedTx for the multisig, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxProposal' } } } }
+        '400': { description: Unknown chain or a wallet of the wrong family, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: The account does not exist, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: Idempotency key reused with a different body, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /admin/tx-requests:
+    get:
+      operationId: adminListTxRequests
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Multisig requests, newest first
+      parameters:
+        - { name: chain, in: query, schema: { type: string } }
+        - { name: kind, in: query, schema: { type: string, enum: [registerAttestor, registerVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] } }
+        - { name: state, in: query, schema: { type: string, enum: [proposed, sent, confirmed] } }
+        - $ref: '#/components/parameters/adminLimit'
+      responses:
+        '200': { description: Requests, content: { application/json: { schema: { type: object, required: [requests], properties: { requests: { type: array, items: { $ref: '#/components/schemas/AdminTxRequest' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/tx-requests/{requestId}/sent:
+    post:
+      operationId: adminTxRequestSent
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (listAttestors, listVerifierKeys, info); audited
+      parameters: [{ $ref: '#/components/parameters/adminRequestId' }, { $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxSent' } } } }
+      responses:
+        '200': { description: The request in state sent or confirmed, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxRequest' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Already confirmed with a different tx id, or idempotency key reused with a different body, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /admin/verifier-keys:
+    post:
+      operationId: adminRegisterVerifierKey
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Build registerVerifierKey for the multisig and open a tx request; audited
+      parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRegisterVerifierKey' } } } }
+      responses:
+        '201': { description: The tracked request and the UnsignedTx for the multisig, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxProposal' } } } }
+        '400': { description: Unknown chain or malformed key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Idempotency key reused with a different body, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    get:
+      operationId: adminListVerifierKeys
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Active report-verifier keys per chain, read from the chain
+      parameters: [{ name: chain, in: query, schema: { type: string } }]
+      responses:
+        '200': { description: Keys per chain, content: { application/json: { schema: { type: object, required: [chains], properties: { chains: { type: array, items: { $ref: '#/components/schemas/AdminVerifierKeys' } } } } } } }
+        '400': { description: Unknown chain, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/raises/pause:
+    post:
+      operationId: adminPauseRaises
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Build pauseNewRaises (pause or resume) for the multisig and open a tx request; audited
+      parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminPauseRaises' } } } }
+      responses:
+        '201': { description: The tracked request and the UnsignedTx for the multisig, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxProposal' } } } }
+        '400': { description: Unknown chain, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Idempotency key reused with a different body, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /admin/eligibility:
+    get:
+      operationId: adminListEligibility
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Eligibility rows with their allowlist sync state against the indexed chain allowlist
+      parameters: [{ name: chain, in: query, schema: { type: string } }]
+      responses:
+        '200': { description: Rows, content: { application/json: { schema: { type: object, required: [rows], properties: { rows: { type: array, items: { $ref: '#/components/schemas/AdminEligibilityRow' } } } } } } }
+        '400': { description: Unknown chain, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/audit-samples:
+    post:
+      operationId: adminDrawAuditSamples
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Tier-4 scaffolding — randomly sample up to `count` accepted or paid tier-4 reports not yet sampled; returns sampled 0 with a note while the tier4 flag is off; audited
+      parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAuditSamplesDraw' } } } }
+      responses:
+        '200': { description: The samples drawn by this call, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAuditSamplesResult' } } } }
+        '400': { description: count out of range, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Idempotency key reused with a different body, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    get:
+      operationId: adminListAuditSamples
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Audit samples, newest first
+      parameters:
+        - { name: outcome, in: query, schema: { type: string, enum: [pending, passed, failed] } }
+        - $ref: '#/components/parameters/adminLimit'
+      responses:
+        '200': { description: Samples, content: { application/json: { schema: { type: object, required: [samples], properties: { samples: { type: array, items: { $ref: '#/components/schemas/AdminAuditSample' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/keepers/runs:
+    get:
+      operationId: adminKeeperRuns
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Keeper runs, newest first
+      parameters:
+        - { name: job, in: query, schema: { type: string }, description: job name, e.g. auction.settle }
+        - $ref: '#/components/parameters/adminLimit'
+      responses:
+        '200': { description: Runs, content: { application/json: { schema: { type: object, required: [runs], properties: { runs: { type: array, items: { $ref: '#/components/schemas/AdminKeeperRun' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
