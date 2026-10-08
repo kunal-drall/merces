@@ -127,7 +127,8 @@ export class TermsService {
     const commitment = termsCommitment({ threshold: priv.threshold, ratePerUnitWad: derived.ratePerUnitWad!, reportingCurrency: pub.reportingCurrency, indexingRule: priv.indexingRule, salt });
     const privatePayload = JSON.stringify({ threshold: priv.threshold, shareRate: priv.shareRate, ratePerUnitWad: derived.ratePerUnitWad, reportingCurrency: pub.reportingCurrency, indexingRule: priv.indexingRule, salt });
     const ciphertext = this.ctx.vault.encrypt(privatePayload, `terms:${draftId}`);
-    const publicStored = { ...pub, capMultipleWad: derived.capMultipleWad, capMultipleDecimal: pub.capMultiple, hurdleWad: derived.hurdleWad, thresholdFloor: derived.thresholdFloor, floorPlaceholder: derived.floorPlaceholder };
+    // the indexing rule is a public rule name (the commitment hides θ and r, not the rule), so it is kept as metadata for the yearly indexing run (E9)
+    const publicStored = { ...pub, indexingRule: priv.indexingRule, capMultipleWad: derived.capMultipleWad, capMultipleDecimal: pub.capMultiple, hurdleWad: derived.hurdleWad, thresholdFloor: derived.thresholdFloor, floorPlaceholder: derived.floorPlaceholder };
     await this.ctx.pool.query("update series_drafts set public_terms = $2, terms_commitment = $3, state = 'terms_set', updated_at = now() where draft_id = $1", [draftId, JSON.stringify(publicStored), commitment]);
     await this.ctx.pool.query('insert into terms_vault (draft_id, ciphertext, key_id, commitment, version) values ($1,$2,$3,$4,1) on conflict (draft_id) do update set ciphertext = excluded.ciphertext, key_id = excluded.key_id, commitment = excluded.commitment, version = terms_vault.version + 1', [draftId, ciphertext, this.ctx.vault.keyId, commitment]);
     return this.getDraft(draftId, session);

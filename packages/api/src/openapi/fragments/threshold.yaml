@@ -1,0 +1,179 @@
+# E9 threshold data service (R34). Public summary, admin editing with an append-only history, yearly indexing.
+tags:
+  - { name: thresholds, description: Curated median-income and inflation table and yearly indexing (E9) }
+components:
+  schemas:
+    ThresholdRow:
+      type: object
+      required: [country, year, currency, medianFullTimeIncome, inflationIndexBps, source, retrievedAt, placeholder]
+      properties:
+        country: { type: string, description: ISO 3166-1 alpha-2 }
+        year: { type: integer }
+        currency: { type: string, description: ISO 4217 }
+        medianFullTimeIncome: { $ref: '#/components/schemas/Money', description: annual median full-time income in currency base units (6 decimals) }
+        inflationIndexBps: { type: integer, description: year-over-year CPI change in basis points }
+        source: { type: string }
+        sourceUrl: { type: [string, 'null'] }
+        retrievedAt: { type: string, format: date }
+        placeholder: { type: boolean, description: true until a real statistic with a source replaces the seed }
+    ThresholdAdminRow:
+      allOf:
+        - $ref: '#/components/schemas/ThresholdRow'
+        - type: object
+          properties:
+            updatedBy: { type: [string, 'null'] }
+            updatedAt: { type: string, format: date-time }
+            historyCount: { type: integer }
+    ThresholdUpsert:
+      type: object
+      required: [currency, medianFullTimeIncome, inflationIndexBps, source, retrievedAt, placeholder]
+      properties:
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        medianFullTimeIncome: { $ref: '#/components/schemas/Money' }
+        inflationIndexBps: { type: integer, minimum: -10000, maximum: 100000 }
+        source: { type: string, minLength: 1, maxLength: 2000 }
+        sourceUrl: { type: [string, 'null'], format: uri }
+        retrievedAt: { type: string, format: date }
+        placeholder: { type: boolean }
+    ThresholdHistoryEntry:
+      allOf:
+        - $ref: '#/components/schemas/ThresholdRow'
+        - type: object
+          required: [id, at, op, changedBy]
+          properties:
+            id: { type: integer }
+            at: { type: string, format: date-time }
+            op: { type: string, enum: [insert, update, delete] }
+            changedBy: { type: string }
+    ThresholdCountrySummary:
+      type: object
+      required: [country, latestYear, currency, placeholder, source]
+      properties:
+        country: { type: string }
+        latestYear: { type: integer }
+        currency: { type: string }
+        placeholder: { type: boolean }
+        source: { type: string }
+    IndexingCandidate:
+      type: object
+      required: [seriesId, chain, issuer, status, draftId, country, inflationIndexBps, indexPlaceholder, notified]
+      properties:
+        seriesId: { type: string }
+        chain: { type: string }
+        issuer: { type: string }
+        status: { type: string }
+        draftId: { type: string }
+        country: { type: string }
+        vaultVersion: { type: integer }
+        inflationIndexBps: { type: integer }
+        indexPlaceholder: { type: boolean }
+        source: { type: string }
+        notified: { type: boolean }
+        notifiedAt: { type: [string, 'null'], format: date-time }
+    IndexingNotifyResult:
+      type: object
+      required: [year, candidates, notified, alreadyNotified]
+      properties:
+        year: { type: integer }
+        candidates: { type: integer }
+        notified: { type: array, items: { type: string }, description: series ids nudged by this call }
+        alreadyNotified: { type: array, items: { type: string }, description: series ids nudged by an earlier call for this year }
+  parameters:
+    thresholdCountry: { name: country, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z]{2}$' }, description: ISO 3166-1 alpha-2 (case-insensitive) }
+    thresholdYear: { name: year, in: path, required: true, schema: { type: integer, minimum: 2000, maximum: 2100 } }
+    indexingYear: { name: year, in: path, required: true, schema: { type: integer, minimum: 2000, maximum: 2100 }, description: the indexing (CPI) year }
+paths:
+  /thresholds:
+    get:
+      operationId: listThresholdCountries
+      x-access: public
+      tags: [thresholds]
+      summary: Every country with threshold data, its latest year, currency, placeholder flag and source
+      responses:
+        '200': { description: Country summaries (no admin fields), content: { application/json: { schema: { type: object, required: [countries], properties: { countries: { type: array, items: { $ref: '#/components/schemas/ThresholdCountrySummary' } } } } } } }
+  /admin/thresholds:
+    get:
+      operationId: adminListThresholds
+      x-access: admin
+      tags: [admin, thresholds]
+      security: [{ session: [] }]
+      summary: Every threshold row with its history count
+      responses:
+        '200': { description: Rows, content: { application/json: { schema: { type: object, required: [rows], properties: { rows: { type: array, items: { $ref: '#/components/schemas/ThresholdAdminRow' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/thresholds/{country}/{year}:
+    put:
+      operationId: adminUpsertThreshold
+      x-access: admin
+      tags: [admin, thresholds]
+      security: [{ session: [] }]
+      summary: Insert or replace the row for a country and year; recorded in the append-only history and audited
+      parameters:
+        - $ref: '#/components/parameters/thresholdCountry'
+        - $ref: '#/components/parameters/thresholdYear'
+        - { name: Idempotency-Key, in: header, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ThresholdUpsert' } } } }
+      responses:
+        '200': { description: Row replaced, content: { application/json: { schema: { type: object, required: [created, row], properties: { created: { type: boolean, const: false }, row: { $ref: '#/components/schemas/ThresholdAdminRow' } } } } } }
+        '201': { description: Row created, content: { application/json: { schema: { type: object, required: [created, row], properties: { created: { type: boolean, const: true }, row: { $ref: '#/components/schemas/ThresholdAdminRow' } } } } } }
+        '400': { description: Validation failed (missing source or retrievedAt, bad currency, non-integer income), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Idempotency key reused with a different body, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    delete:
+      operationId: adminDeleteThreshold
+      x-access: admin
+      tags: [admin, thresholds]
+      security: [{ session: [] }]
+      summary: Delete the row for a country and year; the removed values stay in the history
+      parameters:
+        - $ref: '#/components/parameters/thresholdCountry'
+        - $ref: '#/components/parameters/thresholdYear'
+        - { name: Idempotency-Key, in: header, schema: { type: string } }
+      responses:
+        '200': { description: Deleted, content: { application/json: { schema: { type: object, required: [deleted, country, year], properties: { deleted: { type: boolean, const: true }, country: { type: string }, year: { type: integer } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/thresholds/{country}/{year}/history:
+    get:
+      operationId: adminThresholdHistory
+      x-access: admin
+      tags: [admin, thresholds]
+      security: [{ session: [] }]
+      summary: Append-only change history of one country and year (works for deleted rows)
+      parameters:
+        - $ref: '#/components/parameters/thresholdCountry'
+        - $ref: '#/components/parameters/thresholdYear'
+      responses:
+        '200': { description: History, oldest first, content: { application/json: { schema: { type: object, required: [country, year, history], properties: { country: { type: string }, year: { type: integer }, history: { type: array, items: { $ref: '#/components/schemas/ThresholdHistoryEntry' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/indexing/{year}/candidates:
+    get:
+      operationId: adminIndexingCandidates
+      x-access: admin
+      tags: [admin, thresholds]
+      security: [{ session: [] }]
+      summary: Live CPI-indexed series with no inflation amendment for the year and an inflation index on file for their country (metadata only, no vault decryption)
+      parameters:
+        - $ref: '#/components/parameters/indexingYear'
+      responses:
+        '200': { description: Candidates, content: { application/json: { schema: { type: object, required: [year, candidates], properties: { year: { type: integer }, candidates: { type: array, items: { $ref: '#/components/schemas/IndexingCandidate' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/indexing/{year}/notify:
+    post:
+      operationId: adminIndexingNotify
+      x-access: admin
+      tags: [admin, thresholds]
+      security: [{ session: [] }]
+      summary: Enqueue one `indexing.due` notification per candidate not yet notified for the year (idempotent per series and year) and audit
+      parameters:
+        - $ref: '#/components/parameters/indexingYear'
+        - { name: Idempotency-Key, in: header, schema: { type: string } }
+      responses:
+        '200': { description: Which series were nudged by this call and which already had been, content: { application/json: { schema: { $ref: '#/components/schemas/IndexingNotifyResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }

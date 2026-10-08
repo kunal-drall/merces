@@ -130,9 +130,13 @@ export class ProofOfIncomeService {
     if (input.tier === 3 && !input.attestor) throw AppError.unprocessable('tier 3 needs the attestor who will co-sign');
     const reportId = this.ctx.newId('rep');
     await this.ctx.pool.query("update reports set state = 'superseded', updated_at = now() where series_id = $1 and period_id = $2 and state in ('assembled','rejected')", [seriesId, input.periodId]);
+    if (input.tier === 3) {
+      const registered = await chain.listAttestors();
+      if (!registered.includes(input.attestor!)) throw AppError.unprocessable('tier 3 attestor is not registered onchain');
+    }
     await this.ctx.pool.query(
-      'insert into reports (report_id, series_id, period_id, account_id, tier, source, payment_stable, income_commitment, terms_commitment, fx_basis, fx_avg_wad, pair, proof, attestation, attestor_rate, liquidity_event, verified_offchain) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true)',
-      [reportId, seriesId, input.periodId, session.accountId, input.tier, input.source, input.paymentStable, input.incomeCommitment, series.terms.termsCommitment, fx.basis, fxAvgWad, fx.pair, JSON.stringify(input.proof), input.attestation ? JSON.stringify(input.attestation) : null, input.attestorRate ? JSON.stringify(input.attestorRate) : null, input.liquidityEvent],
+      'insert into reports (report_id, series_id, period_id, account_id, tier, source, payment_stable, income_commitment, terms_commitment, fx_basis, fx_avg_wad, pair, proof, attestation, attestor_rate, liquidity_event, verified_offchain, attestor) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true,$17)',
+      [reportId, seriesId, input.periodId, session.accountId, input.tier, input.source, input.paymentStable, input.incomeCommitment, series.terms.termsCommitment, fx.basis, fxAvgWad, fx.pair, JSON.stringify(input.proof), input.attestation ? JSON.stringify(input.attestation) : null, input.attestorRate ? JSON.stringify(input.attestorRate) : null, input.liquidityEvent, input.tier === 3 ? input.attestor : null],
     );
     return { ...(await this.getReport(reportId)), tx: (await this.buildSubmit(reportId, session)).tx };
   }
@@ -141,7 +145,7 @@ export class ProofOfIncomeService {
     const r = await this.ctx.pool.query('select * from reports where report_id = $1', [reportId]);
     const x = r.rows[0];
     if (!x) throw AppError.notFound('report');
-    return { reportId: x.report_id, seriesId: x.series_id, periodId: x.period_id, tier: x.tier, source: x.source, state: x.state, paymentStable: x.payment_stable, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment, fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, liquidityEvent: x.liquidity_event, verifiedOffchain: x.verified_offchain, submitTx: x.submit_tx, payinTx: x.payin_tx, createdAt: x.created_at };
+    return { reportId: x.report_id, seriesId: x.series_id, periodId: x.period_id, tier: x.tier, source: x.source, state: x.state, attestor: x.attestor ?? null, paymentStable: x.payment_stable, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment, fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, liquidityEvent: x.liquidity_event, verifiedOffchain: x.verified_offchain, submitTx: x.submit_tx, payinTx: x.payin_tx, createdAt: x.created_at };
   }
 
   async listReports(seriesId: string): Promise<Record<string, unknown>[]> {
@@ -157,7 +161,7 @@ export class ProofOfIncomeService {
     const cmd: Extract<UserCommand, { kind: 'submitReport' }> = {
       kind: 'submitReport', seriesId: x.series_id, periodId: x.period_id, tier: x.tier, source: x.source, paymentStable: x.payment_stable, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment,
       fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, attestorRate: x.attestor_rate ? { attestor: x.attestor_rate.attestor, rateWad: x.attestor_rate.rateWad, pair: x.pair } : null, proof: x.proof, attestation: x.attestation,
-      attestor: x.tier === 3 ? (x.attestation?.attestor ?? null) : null, liquidityEvent: x.liquidity_event,
+      attestor: x.tier === 3 ? (x.attestor ?? null) : null, liquidityEvent: x.liquidity_event,
     };
     const coSigners = [cmd.attestorRate?.attestor, cmd.attestor].filter((a): a is string => !!a);
     const tx = await chain.build(cmd, series.issuer, [...new Set(coSigners)]);
