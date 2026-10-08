@@ -38,21 +38,28 @@ function key32(v: Uint8Array | string | bigint, name: string): Uint8Array {
   }
 }
 
-/** `"MERCES_REPORT_V1" ‖ domain ‖ series_key ‖ period_u32 ‖ income_commitment_32 ‖ tier_u8` */
+/**
+ * `"MERCES_REPORT_V1" ‖ domain ‖ series_key ‖ period_u32 ‖ prior_income_commitment_32 ‖ income_commitment_32 ‖ tier_u8 ‖ liquidity_event_u8`
+ * (SPEC v1.1 §1.4: the attestation binds the prior commitment and the liquidity flag).
+ */
 export function reportAttestationMessage(args: {
   domain: Uint8Array | string;
   seriesKey: Uint8Array | string;
   period: number | bigint;
+  priorIncomeCommitment: Uint8Array | string | bigint;
   incomeCommitment: Uint8Array | string | bigint;
   tier: number;
+  liquidityEvent: boolean;
 }): SignedMessage {
   return message(
     "REPORT",
     key32(args.domain, "domain"),
     key32(args.seriesKey, "seriesKey"),
     u32(args.period),
+    key32(args.priorIncomeCommitment, "priorIncomeCommitment"),
     key32(args.incomeCommitment, "incomeCommitment"),
     u8(args.tier),
+    u8(args.liquidityEvent ? 1 : 0),
   );
 }
 
@@ -84,7 +91,7 @@ export function amendmentMessage(args: {
   );
 }
 
-/** `"MERCES_PAUSE_V1" ‖ domain ‖ series_key ‖ pause_nonce_u64 ‖ pause_end_u64` */
+/** `"MERCES_PAUSE_V1" ‖ domain ‖ series_key ‖ pause_nonce_u64 ‖ pause_end_u64` (the nonce identifies one request; withdrawing a request advances it) */
 export function pauseApprovalMessage(args: {
   domain: Uint8Array | string;
   seriesKey: Uint8Array | string;
@@ -114,10 +121,11 @@ export function extinguishMessage(args: {
   );
 }
 
-/** `"MERCES_TRUEUP_V1" ‖ domain ‖ series_key ‖ year_u16 ‖ adjustment_i64 ‖ attestation_ts_u64` */
+/** `"MERCES_TRUEUP_V1" ‖ domain ‖ series_key ‖ trueup_nonce_u64 ‖ year_u16 ‖ adjustment_i64 ‖ attestation_ts_u64` */
 export function trueUpMessage(args: {
   domain: Uint8Array | string;
   seriesKey: Uint8Array | string;
+  trueupNonce: bigint | number;
   year: number;
   adjustment: bigint;
   attestationTs: bigint;
@@ -126,6 +134,7 @@ export function trueUpMessage(args: {
     "TRUEUP",
     key32(args.domain, "domain"),
     key32(args.seriesKey, "seriesKey"),
+    u64(toBigInt(args.trueupNonce, "trueupNonce")),
     u16(args.year),
     i64(args.adjustment),
     u64(args.attestationTs),

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.30;
 
-/// @notice Hashing and signed-message encodings (SPEC §1.3, §1.4).
+/// @notice Hashing and signed-message encodings (SPEC v1.1 §1.3, §1.4).
 /// Integers are big-endian fixed width, 32-byte values raw, wallets are 32 bytes (an EVM address
 /// left-padded with 12 zero bytes). Digests are signed raw (no EIP-191 prefix); the magic string is
 /// the domain separation.
@@ -30,13 +30,28 @@ library MercesMessages {
         return keccak256(abi.encodePacked(price, quantity, salt, wallet32(wallet)));
     }
 
-    function reportDigest(bytes32 dom, uint256 seriesId, uint32 period, bytes32 incomeCommitment, uint8 tier)
-        internal
-        pure
-        returns (bytes32)
-    {
+    /// @dev `"MERCES_REPORT_V1" ‖ domain ‖ series_key ‖ period_u32 ‖ prior_income_commitment_32 ‖
+    /// income_commitment_32 ‖ tier_u8 ‖ liquidity_event_u8`.
+    function reportDigest(
+        bytes32 dom,
+        uint256 seriesId,
+        uint32 period,
+        bytes32 priorIncomeCommitment,
+        bytes32 incomeCommitment,
+        uint8 tier,
+        bool liquidityEvent
+    ) internal pure returns (bytes32) {
         return keccak256(
-            abi.encodePacked("MERCES_REPORT_V1", dom, seriesKey(seriesId), period, incomeCommitment, tier)
+            abi.encodePacked(
+                "MERCES_REPORT_V1",
+                dom,
+                seriesKey(seriesId),
+                period,
+                priorIncomeCommitment,
+                incomeCommitment,
+                tier,
+                liquidityEvent ? uint8(1) : uint8(0)
+            )
         );
     }
 
@@ -62,13 +77,18 @@ library MercesMessages {
         return keccak256(abi.encodePacked("MERCES_EXTINGUISH_V1", dom, seriesKey(seriesId), nonce));
     }
 
-    function trueupDigest(bytes32 dom, uint256 seriesId, uint16 year, int64 adjustment, uint64 attestationTs)
-        internal
-        pure
-        returns (bytes32)
-    {
+    /// @dev `"MERCES_TRUEUP_V1" ‖ domain ‖ series_key ‖ trueup_nonce_u64 ‖ year_u16 ‖ adjustment_i64 ‖
+    /// attestation_ts_u64`.
+    function trueupDigest(
+        bytes32 dom,
+        uint256 seriesId,
+        uint64 nonce,
+        uint16 year,
+        int64 adjustment,
+        uint64 attestationTs
+    ) internal pure returns (bytes32) {
         return keccak256(
-            abi.encodePacked("MERCES_TRUEUP_V1", dom, seriesKey(seriesId), year, adjustment, attestationTs)
+            abi.encodePacked("MERCES_TRUEUP_V1", dom, seriesKey(seriesId), nonce, year, adjustment, attestationTs)
         );
     }
 }

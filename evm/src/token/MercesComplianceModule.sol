@@ -14,20 +14,34 @@ interface IEscrowArming {
 }
 
 /// @title MercesComplianceModule
-/// @notice ERC-3643 compliance rule for sealed-bid series (SPEC §4.2, brief C10): units move only through
-/// the transfer window. `moduleCheck` is true for mints (`from == 0`, the token already requires the
-/// recipient to be verified), for burns, and for movements into or out of the series' window escrow.
-/// Every other transfer is refused, so direct wallet-to-wallet transfers always fail
-/// (`DirectTransferForbidden` on Solana; the T-REX token reverts with "Transfer not possible" here).
-/// Lockup, report acceptance, allowlist and wallet cap are enforced by `MercesWindow` itself, mirroring the
-/// Solana hook design. One module instance serves every series' compliance.
+/// @notice ERC-3643 compliance rule for sealed-bid series (SPEC v1.1 §4.2, brief C10). `moduleCheck` is true
+/// only for: mints to the auction escrow (`from == 0 && to == auction`), burns (`to == 0`), movements out of
+/// the auction or window escrows (deliveries, fills, returns — the protocol has already applied allowlist and
+/// cap rules) and armed deposits into the window escrow. Everything else is refused, so direct
+/// wallet-to-wallet transfers always fail (`DirectTransferForbidden` on Solana; the T-REX token reverts with
+/// "Transfer not possible" here). One module instance serves every series' compliance; the escrow addresses
+/// are stored per compliance by the token factory at creation.
 contract MercesComplianceModule is AbstractModule {
-    /// @notice The protocol transfer-window contract (a UUPS proxy whose address never changes).
-    address public immutable window;
+    struct Escrows {
+        address auction;
+        address window;
+    }
 
-    constructor(address window_) {
-        require(window_ != address(0), "invalid argument - zero address");
-        window = window_;
+    mapping(address => Escrows) private _escrows;
+
+    event EscrowsSet(address indexed compliance, address auction, address window);
+
+    /// @notice Per-compliance escrow addresses; called by the compliance owner (the token factory at creation)
+    /// through `ModularCompliance.callModuleFunction`.
+    function setEscrows(address auction, address window) external onlyComplianceCall {
+        require(auction != address(0) && window != address(0), "invalid argument - zero address");
+        _escrows[msg.sender] = Escrows({auction: auction, window: window});
+        emit EscrowsSet(msg.sender, auction, window);
+    }
+
+    function escrowsOf(address compliance) external view returns (address auction, address window) {
+        Escrows storage e = _escrows[compliance];
+        return (e.auction, e.window);
     }
 
     function moduleTransferAction(address, address, uint256) external override onlyComplianceCall {}
@@ -37,10 +51,17 @@ contract MercesComplianceModule is AbstractModule {
     function moduleBurnAction(address, uint256) external override onlyComplianceCall {}
 
     /// @inheritdoc IModule
-    function moduleCheck(address _from, address _to, uint256 _value, address) external view override returns (bool) {
-        if (_from == address(0) || _to == address(0)) return true; // mint / burn
-        if (_from == window) return true; // escrow → wallet (window re-checks allowlist and cap)
-        if (_to == window) return _value > 0 && IEscrowArming(window).armedDeposit(_from) == _value;
+    function moduleCheck(address _from, address _to, uint256 _value, address _compliance)
+        external
+        view
+        override
+        returns (bool)
+    {
+        Escrows storage e = _escrows[_compliance];
+        if (_from == address(0)) return _to == e.auction; // mint: to the auction escrow only
+        if (_to == address(0)) return true; // burn (never reaches the compliance in T-REX, kept for symmetry)
+        if (_from == e.auction || _from == e.window) return true; // delivery, fill or return
+        if (_to == e.window) return _value > 0 && IEscrowArming(e.window).armedDeposit(_from) == _value;
         return false; // direct transfers are forbidden at all times
     }
 

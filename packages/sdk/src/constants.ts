@@ -27,6 +27,9 @@ export interface Parameters {
   fxMaxStalenessSeconds: bigint;
   fxMaxConfBps: number;
   fxDeviationBandBps: number;
+  maxPauseSeconds: bigint;
+  maxCumulativePauseSeconds: bigint;
+  maxPauses: number;
   maxReleaseTranches: number;
 }
 
@@ -55,6 +58,9 @@ export const DEFAULT_PARAMETERS: Readonly<Parameters> = Object.freeze({
   fxMaxStalenessSeconds: HOUR,
   fxMaxConfBps: 100,
   fxDeviationBandBps: 200,
+  maxPauseSeconds: YEAR,
+  maxCumulativePauseSeconds: 2n * YEAR,
+  maxPauses: 16,
   maxReleaseTranches: 24,
 });
 
@@ -87,6 +93,10 @@ export const PARAMETER_BOUNDS: Readonly<Record<keyof Parameters, Bound>> = Objec
   fxMaxStalenessSeconds: { min: 60n, max: DAY },
   fxMaxConfBps: { min: 1n, max: 1_000n },
   fxDeviationBandBps: { min: 10n, max: 5_000n },
+  maxPauseSeconds: { min: 30n * DAY, max: 2n * YEAR },
+  /** lower bound is `max_pause_seconds` (checked in validateParameters) */
+  maxCumulativePauseSeconds: { min: 30n * DAY, max: 5n * YEAR },
+  maxPauses: { min: 16n, max: 16n },
   maxReleaseTranches: { min: 24n, max: 24n },
 });
 
@@ -100,6 +110,7 @@ export function validateParameters(p: Parameters): (keyof Parameters)[] {
     const b = PARAMETER_BOUNDS[name];
     if (v < b.min || v > b.max) bad.push(name);
   }
+  if (p.maxCumulativePauseSeconds < p.maxPauseSeconds && !bad.includes("maxCumulativePauseSeconds")) bad.push("maxCumulativePauseSeconds");
   return bad;
 }
 

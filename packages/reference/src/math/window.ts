@@ -1,13 +1,8 @@
 /**
- * Transfer window: quarterly call auction (SPEC §7, brief D9).
- *
- * The spec defines the clearing price through the *supply-limited* crossing (`d_above < S ≤ D`,
- * every unit offered at or below p* sells). That rule has no solution when sellers offer more
- * units than buyers want at every price (and `NO_MATCH` is then also invalid because
- * `max_bid ≥ min_ask`), so the reference adds the symmetric *demand-limited* branch
- * (`s_below ≤ D < S`): matched volume is `min(S, D)` and the marginal side is filled pro rata.
- * Exactly one candidate price (or `NO_MATCH`) is valid for any order book (see tests). The
- * supply-limited path is byte-for-byte the spec; see `docs/assumptions/track-a.md`.
+ * Transfer window: quarterly call auction (SPEC v1.1 §7, brief D9). Two-branch clearing
+ * (supply-limited or demand-limited) so a crossing price always exists when `max_bid ≥ min_ask`,
+ * first-come fills at the margin (ascending reveal index: exact, dust-free, always solvent), and one
+ * order per wallet.
  */
 import { BPS_DENOMINATOR, OrderSide, mulDiv } from "@merces/sdk";
 
@@ -39,13 +34,11 @@ export function requiredBidEscrow(price: bigint, quantity: bigint, windowFeeBps:
   return cost + mulDiv(cost, BigInt(windowFeeBps), BPS_DENOMINATOR);
 }
 
-/** Validity at reveal (SPEC §7 `reveal_order`). `ownerBalance` is the bidder's current unit balance. */
+/** Validity at reveal (never reverts; recorded on the order). `ownerBalance` is the bidder's unit balance. */
 export function isOrderValid(side: OrderSide, price: bigint, quantity: bigint, escrow: bigint, ownerBalance: bigint, rules: WindowRules): boolean {
   if (price < 1n || quantity < 1n) return false;
   if (side === OrderSide.Ask) return quantity <= escrow;
-  const cap = walletCapUnits(rules.unitsOutstanding, rules.walletCapBps);
-  const room = cap > ownerBalance ? cap - ownerBalance : 0n;
-  return escrow >= requiredBidEscrow(price, quantity, rules.windowFeeBps) && quantity <= room;
+  return escrow >= requiredBidEscrow(price, quantity, rules.windowFeeBps) && ownerBalance + quantity <= walletCapUnits(rules.unitsOutstanding, rules.walletCapBps);
 }
 
 export interface WindowTally {
@@ -55,14 +48,14 @@ export interface WindowTally {
   sAt: bigint;
   maxBid: bigint | null;
   minAsk: bigint | null;
-  validOrders: number;
+  validCount: number;
 }
 
 export function tallyOrders(orders: Iterable<WindowOrder>, clearingPrice: bigint | null): WindowTally {
-  const t: WindowTally = { dAbove: 0n, dAt: 0n, sBelow: 0n, sAt: 0n, maxBid: null, minAsk: null, validOrders: 0 };
+  const t: WindowTally = { dAbove: 0n, dAt: 0n, sBelow: 0n, sAt: 0n, maxBid: null, minAsk: null, validCount: 0 };
   for (const o of orders) {
     if (!o.revealed || !o.valid) continue;
-    t.validOrders++;
+    t.validCount++;
     if (o.side === OrderSide.Bid) {
       if (t.maxBid === null || o.price > t.maxBid) t.maxBid = o.price;
       if (clearingPrice !== null) {
@@ -80,51 +73,48 @@ export function tallyOrders(orders: Iterable<WindowOrder>, clearingPrice: bigint
   return t;
 }
 
-/** NO_MATCH is valid iff `max_bid < min_ask` or one side has no valid orders. */
+/** NO_MATCH is valid iff `valid_count == 0` or `max_bid < min_ask` (one side empty counts as no crossing). */
 export function isNoMatchValid(t: WindowTally): boolean {
-  return t.maxBid === null || t.minAsk === null || t.maxBid < t.minAsk;
+  return t.validCount === 0 || t.maxBid === null || t.minAsk === null || t.maxBid < t.minAsk;
 }
 
-export type ClearingKind = "supply_limited" | "demand_limited";
+export type ClearingBranch = "SupplyLimited" | "DemandLimited";
 
 /**
- * SPEC §7 supply-limited rule: `S > 0`, `d_above < S`, `S ≤ D`, and (`s_at > 0` or `d_at > 0`).
- * Reference extension (demand-limited): `D > 0`, `s_below ≤ D`, `D < S`, same revealed-price rule
- * (non-strict on `s_below` so that a book whose supply below p* exactly equals demand still clears).
+ * (A) supply-limited: `S > 0 && d_above < S && S ≤ D`; (B) demand-limited: `D > 0 && s_below ≤ D && D < S`;
+ * `p*` must be a revealed valid price (`d_at > 0 || s_at > 0`). Returns the branch or null.
  */
-export function classifyWindowPrice(t: WindowTally): ClearingKind | null {
+export function classifyWindowPrice(t: WindowTally): ClearingBranch | null {
   const S = t.sBelow + t.sAt;
   const D = t.dAbove + t.dAt;
   if (!(t.sAt > 0n || t.dAt > 0n)) return null;
-  if (S > 0n && t.dAbove < S && S <= D) return "supply_limited";
-  if (D > 0n && t.sBelow <= D && D < S) return "demand_limited";
+  if (S > 0n && t.dAbove < S && S <= D) return "SupplyLimited";
+  if (D > 0n && t.sBelow <= D && D < S) return "DemandLimited";
   return null;
-}
-
-/** The spec's rule only (used by the vectors, which stay inside the spec). */
-export function isWindowPriceValid(t: WindowTally): boolean {
-  return classifyWindowPrice(t) === "supply_limited";
 }
 
 export interface WindowClearing {
   clearingPrice: bigint;
-  kind: ClearingKind;
+  branch: ClearingBranch;
   matchedUnits: bigint;
-  /** supply-limited: units for the bids at p* (`S − d_above`); demand-limited: 0 */
-  R: bigint;
-  dAt: bigint;
-  /** demand-limited: units for the asks at p* (`D − s_below`); supply-limited: 0 */
-  Rs: bigint;
-  sAt: bigint;
+  /** units left for the marginal side (`S − d_above` in A, `D − s_below` in B) */
+  marginalRemaining: bigint;
+  S: bigint;
+  D: bigint;
 }
 
-export function finalizeWindow(t: WindowTally, clearingPrice: bigint): WindowClearing {
-  const kind = classifyWindowPrice(t);
-  if (kind === null) throw new Error("InvalidWindowPrice");
+export type WindowFinalize = { kind: "settled"; clearing: WindowClearing } | { kind: "nomatch" } | { kind: "rejected"; reason: "InvalidWindowPrice" };
+
+/** `finalize_window`: a wrong proposal is a rejection, not a revert. `clearingPrice === null` means NO_MATCH. */
+export function finalizeWindow(t: WindowTally, clearingPrice: bigint | null): WindowFinalize {
+  if (clearingPrice === null) return isNoMatchValid(t) ? { kind: "nomatch" } : { kind: "rejected", reason: "InvalidWindowPrice" };
+  const branch = classifyWindowPrice(t);
+  if (branch === null) return { kind: "rejected", reason: "InvalidWindowPrice" };
   const S = t.sBelow + t.sAt;
   const D = t.dAbove + t.dAt;
-  if (kind === "supply_limited") return { clearingPrice, kind, matchedUnits: S, R: S - t.dAbove, dAt: t.dAt, Rs: 0n, sAt: t.sAt };
-  return { clearingPrice, kind, matchedUnits: D, R: 0n, dAt: t.dAt, Rs: D - t.sBelow, sAt: t.sAt };
+  return branch === "SupplyLimited"
+    ? { kind: "settled", clearing: { clearingPrice, branch, matchedUnits: S, marginalRemaining: S - t.dAbove, S, D } }
+    : { kind: "settled", clearing: { clearingPrice, branch, matchedUnits: D, marginalRemaining: D - t.sBelow, S, D } };
 }
 
 /** The unique crossing price, or null when NO_MATCH is the right proposal. Throws if neither exists. */
@@ -146,81 +136,82 @@ export interface OrderFill {
   fee: bigint;
   /** stablecoin returned to a bidder, or units returned to an asker */
   refund: bigint;
+  /** a filled bid cancelled because the buyer was not allowlisted at fill time */
+  cancelled: boolean;
 }
 
 /**
- * Fills for every order plus the dust pass. Supply-limited (SPEC §7 `process_order`): bids above
- * p* fill fully, bids at p* get `floor(R × q / d_at)`, asks at or below p* sell everything except
- * the unmatched remainder `U`, which goes back to the asks at p* in descending reveal-index order —
- * and, when those do not hold enough units (no ask sits exactly at p*), on to the next lower ask
- * price, again in descending reveal-index order (reference generalization of the spec's rule).
- * Demand-limited (reference extension): mirror image — asks at p* get `floor(Rs × q / s_at)`,
- * bids at or above p* buy everything except `U`, which is cut from the bids at p* (then bids
- * above p*) in descending reveal-index order.
+ * Fills for every order (SPEC v1.1 §7 `process_order`): full side fills in full, losing side 0,
+ * the marginal side first-come in ascending reveal index with `fill = min(quantity, remaining)`.
+ * `isAllowed` cancels a filled bid whose buyer is no longer allowlisted (full refund); the units
+ * it would have bought stay unmatched and return to sellers, taken back from the marginal asks
+ * (descending reveal index) first, then from asks below p*.
  */
-export function computeFills(orders: WindowOrder[], c: WindowClearing, windowFeeBps: number): OrderFill[] {
+export function computeFills(orders: WindowOrder[], c: WindowClearing, windowFeeBps: number, isAllowed: (owner: string) => boolean = () => true): OrderFill[] {
   const live = (o: WindowOrder) => o.revealed && o.valid;
-  const bidFill = new Map<WindowOrder, bigint>();
-  const askFill = new Map<WindowOrder, bigint>();
+  const fillOf = new Map<WindowOrder, bigint>();
+  const supply = c.branch === "SupplyLimited";
+  // non-marginal sides
   for (const o of orders) {
+    if (!live(o)) {
+      fillOf.set(o, 0n);
+      continue;
+    }
     if (o.side === OrderSide.Bid) {
-      let f = 0n;
-      if (live(o)) {
-        if (o.price > c.clearingPrice) f = o.quantity;
-        else if (o.price === c.clearingPrice) f = c.kind === "supply_limited" ? mulDiv(c.R, o.quantity, c.dAt) : o.quantity;
-      }
-      bidFill.set(o, f);
+      if (o.price > c.clearingPrice) fillOf.set(o, o.quantity);
+      else if (o.price === c.clearingPrice) fillOf.set(o, supply ? -1n : o.quantity); // -1: marginal, decided below
+      else fillOf.set(o, 0n);
     } else {
-      let f = 0n;
-      if (live(o)) {
-        if (o.price < c.clearingPrice) f = o.quantity;
-        else if (o.price === c.clearingPrice) f = c.kind === "supply_limited" ? o.quantity : mulDiv(c.Rs, o.quantity, c.sAt);
-      }
-      askFill.set(o, f);
+      if (o.price < c.clearingPrice) fillOf.set(o, o.quantity);
+      else if (o.price === c.clearingPrice) fillOf.set(o, supply ? o.quantity : -1n);
+      else fillOf.set(o, 0n);
     }
   }
-  const sum = (m: Map<WindowOrder, bigint>) => [...m.values()].reduce((a, b) => a + b, 0n);
-  if (c.kind === "supply_limited") {
-    let U = c.matchedUnits - sum(bidFill);
-    if (U < 0n) throw new Error("bid fills exceed matched units");
-    const marginal = orders
-      .filter((o) => o.side === OrderSide.Ask && live(o) && o.price <= c.clearingPrice)
-      .sort((a, b) => (a.price > b.price ? -1 : a.price < b.price ? 1 : b.revealIndex - a.revealIndex));
-    for (const o of marginal) {
-      if (U === 0n) break;
-      const f = askFill.get(o)!;
-      const back = f < U ? f : U;
-      askFill.set(o, f - back);
-      U -= back;
-    }
-    if (U !== 0n) throw new Error("dust could not be returned");
-  } else {
-    let U = c.matchedUnits - sum(askFill);
-    if (U < 0n) throw new Error("ask fills exceed matched units");
-    const cut = orders
-      .filter((o) => o.side === OrderSide.Bid && live(o) && o.price >= c.clearingPrice)
-      .sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : b.revealIndex - a.revealIndex));
-    for (const o of cut) {
-      if (U === 0n) break;
-      const f = bidFill.get(o)!;
-      const back = f < U ? f : U;
-      bidFill.set(o, f - back);
-      U -= back;
-    }
-    if (U !== 0n) throw new Error("dust could not be returned");
+  // marginal side: first come in ascending reveal index
+  const marginalSide = supply ? OrderSide.Bid : OrderSide.Ask;
+  const marginal = orders.filter((o) => live(o) && o.side === marginalSide && o.price === c.clearingPrice).sort((a, b) => a.revealIndex - b.revealIndex);
+  let remaining = c.marginalRemaining;
+  for (const o of marginal) {
+    const f = o.quantity < remaining ? o.quantity : remaining;
+    fillOf.set(o, f);
+    remaining -= f;
   }
-  if (sum(bidFill) !== sum(askFill)) throw new Error("units bought != units sold");
-  const fills: OrderFill[] = [];
+  if (remaining !== 0n) throw new Error("marginal remainder not exhausted");
+  // allowlist re-check on buyers: cancelled fills return to sellers
+  const cancelled = new Set<WindowOrder>();
+  let returned = 0n;
   for (const o of orders) {
+    if (o.side !== OrderSide.Bid) continue;
+    const f = fillOf.get(o)!;
+    if (f > 0n && !isAllowed(o.owner)) {
+      cancelled.add(o);
+      returned += f;
+      fillOf.set(o, 0n);
+    }
+  }
+  if (returned > 0n) {
+    const takeBack = orders
+      .filter((o) => live(o) && o.side === OrderSide.Ask && o.price <= c.clearingPrice)
+      .sort((a, b) => (a.price > b.price ? -1 : a.price < b.price ? 1 : b.revealIndex - a.revealIndex));
+    for (const o of takeBack) {
+      if (returned === 0n) break;
+      const f = fillOf.get(o)!;
+      const back = f < returned ? f : returned;
+      fillOf.set(o, f - back);
+      returned -= back;
+    }
+    if (returned !== 0n) throw new Error("cancelled units could not be returned");
+  }
+  const bought = orders.filter((o) => o.side === OrderSide.Bid).reduce((a, o) => a + fillOf.get(o)!, 0n);
+  const sold = orders.filter((o) => o.side === OrderSide.Ask).reduce((a, o) => a + fillOf.get(o)!, 0n);
+  if (bought !== sold) throw new Error(`units bought ${bought} != units sold ${sold}`);
+  return orders.map((o) => {
+    const fill = fillOf.get(o)!;
     if (o.side === OrderSide.Bid) {
-      const fill = bidFill.get(o)!;
       const cost = c.clearingPrice * fill;
       const fee = mulDiv(cost, BigInt(windowFeeBps), BPS_DENOMINATOR);
-      fills.push({ owner: o.owner, side: OrderSide.Bid, fill, cost, fee, refund: o.escrow - cost - fee });
-    } else {
-      const fill = askFill.get(o)!;
-      fills.push({ owner: o.owner, side: OrderSide.Ask, fill, cost: c.clearingPrice * fill, fee: 0n, refund: o.escrow - fill });
+      return { owner: o.owner, side: o.side, fill, cost, fee, refund: o.escrow - cost - fee, cancelled: cancelled.has(o) };
     }
-  }
-  return fills;
+    return { owner: o.owner, side: o.side, fill, cost: c.clearingPrice * fill, fee: 0n, refund: o.escrow - fill, cancelled: false };
+  });
 }

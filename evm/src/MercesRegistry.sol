@@ -7,13 +7,16 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {IMercesRegistry} from "./interfaces/IMercesRegistry.sol";
 import {IIdentityRegistryLite} from "./interfaces/external/IIdentityRegistryLite.sol";
 import {IIdFactoryLite} from "./interfaces/external/IIdFactoryLite.sol";
+import {IPoseidon5} from "./interfaces/IPoseidon.sol";
 import {MercesConstants as C} from "./libraries/MercesConstants.sol";
 import {MercesMath} from "./libraries/MercesMath.sol";
 import {MercesMessages} from "./libraries/MercesMessages.sol";
+import {Periods} from "./libraries/Periods.sol";
 import {
     Flags,
     FxPairConfig,
     Issuer,
+    KeyInfo,
     Parameters,
     ProtocolContracts,
     RaiseState,
@@ -23,16 +26,20 @@ import {
     SeriesParams,
     SeriesStatus,
     SeriesTerms,
+    Tier1Terms,
     TierFlags
 } from "./types/MercesTypes.sol";
 import "./types/MercesErrors.sol";
 
 /// @title MercesRegistry
-/// @notice D1 charter & terms registry, D11 registries (allowlist, attestors, report-verifier keys) and
-/// protocol configuration (SPEC §3). Deployed once per chain, **not upgradeable**: charter data has no
-/// upgrade path. The EVM allowlist *is* T-REX identity-registry membership (SPEC §4.2): the registry is an
-/// agent of the shared `IdentityRegistry` and owns the ONCHAINID `IdFactory`, so `setAllowed` registers a
-/// wallet with a freshly deployed `Identity` (country 0) and removal is `deleteIdentity`.
+/// @notice D1 charter & terms registry, D11 registries (allowlist, attestors, report-verifier keys, FX pairs) and
+/// protocol configuration (SPEC v1.1 §3). Deployed once per chain, **not upgradeable**: charter data has no
+/// upgrade path. The protocol contracts allowed to call the narrow write interface are fixed at construction.
+///
+/// Allowlist vs identity (SPEC §4.2): `isAllowed(w)` is a Merces flag. `setAllowed(w, true)` additionally
+/// registers `w` once in the shared T-REX `IdentityRegistry` with an ONCHAINID `Identity` from the `IdFactory`
+/// (country 0); identities are never deleted, so T-REX `isVerified` stays true for every wallet that was ever
+/// allowlisted and protocol-initiated unit movements never fail on verification.
 contract MercesRegistry is IMercesRegistry {
     using MercesMath for uint256;
 
@@ -44,26 +51,30 @@ contract MercesRegistry is IMercesRegistry {
     address public override feeCollector;
     address public override earlyDrawApprover;
     uint64 public override seriesCount;
-    bool public override protocolContractsSet;
 
     bytes32 public immutable override domain;
     uint64 public immutable override chainId;
     IIdentityRegistryLite internal immutable _identityRegistry;
     IIdFactoryLite internal immutable _idFactory;
+    IPoseidon5 internal immutable _poseidon5;
 
     Flags internal _flags;
     Parameters internal _defaults;
     ProtocolContracts internal _contracts;
 
+    uint32 internal _activeAttestors;
+    uint32 internal _activeVerifiers;
+    mapping(address => KeyInfo) internal _attestors;
+    mapping(address => KeyInfo) internal _verifierKeys;
     mapping(address => Issuer) internal _issuers;
-    mapping(address => bool) internal _attestors;
-    mapping(address => bool) internal _verifierKeys;
+    mapping(address => bool) internal _allowed;
     mapping(address => bool) internal _stablecoins;
     mapping(bytes32 => FxPairConfig) internal _fxPairs;
 
     mapping(uint256 => SeriesCore) internal _cores;
     mapping(uint256 => SeriesTerms) internal _terms;
     mapping(uint256 => ReleaseTranche[]) internal _schedules;
+    mapping(uint256 => Tier1Terms) internal _tier1;
 
     // ---------------------------------------------------------------- modifiers
 
@@ -78,12 +89,12 @@ contract MercesRegistry is IMercesRegistry {
     }
 
     modifier onlyAuction() {
-        if (msg.sender != _contracts.auction || msg.sender == address(0)) revert NotProtocolContract();
+        if (msg.sender != _contracts.auction) revert NotProtocolContract();
         _;
     }
 
     modifier onlyVault() {
-        if (msg.sender != _contracts.vault || msg.sender == address(0)) revert NotProtocolContract();
+        if (msg.sender != _contracts.vault) revert NotProtocolContract();
         _;
     }
 
@@ -101,11 +112,18 @@ contract MercesRegistry is IMercesRegistry {
         uint64 chainId_,
         Parameters memory defaults_,
         address identityRegistry_,
-        address idFactory_
+        address idFactory_,
+        address poseidon5_,
+        ProtocolContracts memory contracts_
     ) {
         if (
             admin_ == address(0) || allowlistManager_ == address(0) || feeCollector_ == address(0)
-                || identityRegistry_ == address(0) || idFactory_ == address(0)
+                || identityRegistry_ == address(0) || idFactory_ == address(0) || poseidon5_ == address(0)
+        ) revert ZeroAddress();
+        if (
+            contracts_.auction == address(0) || contracts_.treasury == address(0) || contracts_.income == address(0)
+                || contracts_.vault == address(0) || contracts_.window == address(0)
+                || contracts_.tokenFactory == address(0)
         ) revert ZeroAddress();
         if (chainId_ != block.chainid) revert ChainIdMismatch(chainId_, block.chainid);
         _checkDefaults(defaults_);
@@ -115,8 +133,10 @@ contract MercesRegistry is IMercesRegistry {
         chainId = chainId_;
         domain = MercesMessages.domain(chainId_, address(this));
         _defaults = defaults_;
+        _contracts = contracts_;
         _identityRegistry = IIdentityRegistryLite(identityRegistry_);
         _idFactory = IIdFactoryLite(idFactory_);
+        _poseidon5 = IPoseidon5(poseidon5_);
         emit ProtocolInitialized(admin_, allowlistManager_, feeCollector_, chainId_, domain);
         emit DefaultsSet(defaults_);
     }
@@ -129,6 +149,10 @@ contract MercesRegistry is IMercesRegistry {
 
     function idFactory() external view override returns (address) {
         return address(_idFactory);
+    }
+
+    function poseidon5() external view override returns (address) {
+        return address(_poseidon5);
     }
 
     function getFlags() external view override returns (Flags memory) {
@@ -145,14 +169,22 @@ contract MercesRegistry is IMercesRegistry {
 
     /// @inheritdoc IMercesRegistry
     function isAllowed(address wallet) public view override returns (bool) {
-        return _identityRegistry.isVerified(wallet);
+        return _allowed[wallet];
     }
 
     function isAttestor(address key) external view override returns (bool) {
-        return _attestors[key];
+        return _attestors[key].active;
     }
 
     function isVerifierKey(address key) external view override returns (bool) {
+        return _verifierKeys[key].active;
+    }
+
+    function attestorKey(address key) external view override returns (KeyInfo memory) {
+        return _attestors[key];
+    }
+
+    function verifierKey(address key) external view override returns (KeyInfo memory) {
         return _verifierKeys[key];
     }
 
@@ -166,6 +198,11 @@ contract MercesRegistry is IMercesRegistry {
 
     function getFxPair(bytes32 pairId) external view override returns (FxPairConfig memory) {
         return _fxPairs[pairId];
+    }
+
+    /// @inheritdoc IMercesRegistry
+    function fxPairId(bytes32 feedId, bool inverted) public pure override returns (bytes32) {
+        return keccak256(abi.encodePacked(feedId, inverted ? uint8(1) : uint8(0)));
     }
 
     function getSeriesCore(uint256 seriesId) external view override seriesExists(seriesId) returns (SeriesCore memory) {
@@ -190,6 +227,10 @@ contract MercesRegistry is IMercesRegistry {
         returns (ReleaseTranche[] memory)
     {
         return _schedules[seriesId];
+    }
+
+    function getTier1Terms(uint256 seriesId) external view override seriesExists(seriesId) returns (Tier1Terms memory) {
+        return _tier1[seriesId];
     }
 
     /// @inheritdoc IMercesRegistry
@@ -237,35 +278,86 @@ contract MercesRegistry is IMercesRegistry {
     }
 
     function registerAttestor(address key) external override onlyAdmin {
-        if (key == address(0)) revert ZeroAddress();
-        _attestors[key] = true;
-        emit AttestorRegistered(key);
+        _register(_attestors, key, true);
     }
 
+    /// @inheritdoc IMercesRegistry
+    /// @dev Forward-only (SPEC §1.4): records `revokedAt`; refuses to revoke the last active key.
     function revokeAttestor(address key) external override onlyAdmin {
-        _attestors[key] = false;
-        emit AttestorRevoked(key);
+        _revoke(_attestors, key, true);
+    }
+
+    function rotateAttestor(address oldKey, address newKey) external override onlyAdmin {
+        _register(_attestors, newKey, true);
+        _revoke(_attestors, oldKey, true);
     }
 
     function registerVerifierKey(address key) external override onlyAdmin {
-        if (key == address(0)) revert ZeroAddress();
-        _verifierKeys[key] = true;
-        emit VerifierKeyRegistered(key);
+        _register(_verifierKeys, key, false);
     }
 
     function revokeVerifierKey(address key) external override onlyAdmin {
-        _verifierKeys[key] = false;
-        emit VerifierKeyRevoked(key);
+        _revoke(_verifierKeys, key, false);
     }
 
-    function setFxPair(bytes32 pairId, bytes32 feedId, bool inverted, address crosscheck, bool enabled)
-        external
-        override
-        onlyAdmin
-    {
-        if (pairId == bytes32(0)) revert UnknownFxPair(pairId);
-        _fxPairs[pairId] = FxPairConfig({feedId: feedId, inverted: inverted, crosscheck: crosscheck, enabled: enabled});
-        emit FxPairSet(pairId, feedId, inverted, crosscheck, enabled);
+    function rotateVerifierKey(address oldKey, address newKey) external override onlyAdmin {
+        _register(_verifierKeys, newKey, false);
+        _revoke(_verifierKeys, oldKey, false);
+    }
+
+    function _register(mapping(address => KeyInfo) storage keys, address key, bool attestor) internal {
+        if (key == address(0)) revert ZeroAddress();
+        KeyInfo storage k = keys[key];
+        if (k.active) revert KeyAlreadyActive(key);
+        k.registered = true;
+        k.active = true;
+        k.revokedAt = 0;
+        if (attestor) {
+            _activeAttestors += 1;
+            emit AttestorRegistered(key);
+        } else {
+            _activeVerifiers += 1;
+            emit VerifierKeyRegistered(key);
+        }
+    }
+
+    function _revoke(mapping(address => KeyInfo) storage keys, address key, bool attestor) internal {
+        KeyInfo storage k = keys[key];
+        if (!k.active) revert KeyNotRegistered(key);
+        uint32 active = attestor ? _activeAttestors : _activeVerifiers;
+        if (active == 1) revert LastActiveKey();
+        k.active = false;
+        k.revokedAt = uint64(block.timestamp);
+        if (attestor) {
+            _activeAttestors = active - 1;
+            emit AttestorRevoked(key, k.revokedAt);
+        } else {
+            _activeVerifiers = active - 1;
+            emit VerifierKeyRevoked(key, k.revokedAt);
+        }
+    }
+
+    /// @inheritdoc IMercesRegistry
+    /// @dev `pair_id = keccak256(feed_id ‖ inverted_u8)`; feed id and inversion are write-once. `enabled = false`
+    /// only stops new series from referencing the pair. A cross-check set from zero applies now; later changes
+    /// apply from the next period so a live quarter's rule never changes under an issuer.
+    function setFxPair(bytes32 feedId, bool inverted, address crosscheck, bool enabled) external override onlyAdmin {
+        if (feedId == bytes32(0)) revert UnknownFxPair(bytes32(0));
+        bytes32 pairId = fxPairId(feedId, inverted);
+        FxPairConfig storage cfg = _fxPairs[pairId];
+        uint32 nowPeriod = Periods.periodOf(block.timestamp);
+        if (!cfg.exists) {
+            cfg.exists = true;
+            cfg.feedId = feedId;
+            cfg.inverted = inverted;
+            cfg.crosscheck = crosscheck;
+            cfg.crosscheckEffectivePeriod = crosscheck != address(0) ? nowPeriod : 0;
+        } else if (crosscheck != cfg.crosscheck) {
+            cfg.crosscheckEffectivePeriod = cfg.crosscheck == address(0) ? nowPeriod : nowPeriod + 1;
+            cfg.crosscheck = crosscheck;
+        }
+        cfg.enabled = enabled;
+        emit FxPairSet(pairId, feedId, inverted, cfg.crosscheck, cfg.crosscheckEffectivePeriod, enabled);
     }
 
     /// @notice Allow or disallow a settlement stablecoin. Decimals are read from the token, never assumed.
@@ -274,20 +366,6 @@ contract MercesRegistry is IMercesRegistry {
         uint8 decimals = IERC20Metadata(token).decimals();
         _stablecoins[token] = allowed;
         emit StablecoinSet(token, allowed, decimals);
-    }
-
-    /// @notice Registers the protocol contracts allowed to call the narrow write interface. One-shot: the
-    /// money contracts are UUPS proxies whose addresses never change, so there is no reason to re-point.
-    function setProtocolContracts(ProtocolContracts calldata contracts) external override onlyAdmin {
-        if (protocolContractsSet) revert ProtocolContractsAlreadySet();
-        if (
-            contracts.auction == address(0) || contracts.treasury == address(0) || contracts.income == address(0)
-                || contracts.vault == address(0) || contracts.window == address(0)
-                || contracts.tokenFactory == address(0)
-        ) revert ZeroAddress();
-        _contracts = contracts;
-        protocolContractsSet = true;
-        emit ProtocolContractsSet(contracts);
     }
 
     function registerIssuer(address wallet) external override onlyAdmin {
@@ -318,23 +396,30 @@ contract MercesRegistry is IMercesRegistry {
         emit AdminTransferred(old, msg.sender);
     }
 
+    /// @inheritdoc IMercesRegistry
+    /// @dev The auction and the window hold units in escrow, so they need T-REX identities (SPEC §4.2). Anyone may
+    /// call; idempotent.
+    function registerProtocolIdentities() external override {
+        _ensureIdentity(_contracts.auction);
+        _ensureIdentity(_contracts.window);
+    }
+
     // ---------------------------------------------------------------- allowlist manager
 
     /// @inheritdoc IMercesRegistry
     function setAllowed(address wallet, bool allowed) external override onlyAllowlistManager {
         if (wallet == address(0)) revert ZeroAddress();
-        if (allowed) {
-            if (!_identityRegistry.contains(wallet)) {
-                address identity = _idFactory.getIdentity(wallet);
-                if (identity == address(0)) {
-                    identity = _idFactory.createIdentity(wallet, Strings.toHexString(wallet));
-                }
-                _identityRegistry.registerIdentity(wallet, identity, 0);
-            }
-        } else if (_identityRegistry.contains(wallet)) {
-            _identityRegistry.deleteIdentity(wallet);
-        }
+        _allowed[wallet] = allowed;
+        if (allowed) _ensureIdentity(wallet);
         emit AllowlistUpdated(wallet, allowed);
+    }
+
+    function _ensureIdentity(address wallet) internal {
+        if (_identityRegistry.contains(wallet)) return;
+        address identity = _idFactory.getIdentity(wallet);
+        if (identity == address(0)) identity = _idFactory.createIdentity(wallet, Strings.toHexString(wallet));
+        _identityRegistry.registerIdentity(wallet, identity, 0);
+        emit IdentityRegistered(wallet, identity);
     }
 
     // ---------------------------------------------------------------- issuer
@@ -345,16 +430,19 @@ contract MercesRegistry is IMercesRegistry {
         ReleaseTranche[] calldata releaseSchedule,
         bytes32 termsCommitment,
         uint8 tierFlags,
-        bytes32 fxPairId,
+        bytes32 fxPairId_,
         SeriesMode mode,
-        bool issuerAcceptsPublicPrice
+        bool issuerAcceptsPublicPrice,
+        Tier1Terms calldata tier1Terms
     ) external override returns (uint256 seriesId) {
-        _checkCreate(p, termsCommitment, tierFlags, fxPairId, mode);
+        _checkCreate(p, termsCommitment, tierFlags, fxPairId_, mode);
         _checkSchedule(releaseSchedule);
+        if (tierFlags & TierFlags.TIER1_SPLIT != 0) _checkTier1(p, termsCommitment, fxPairId_, tier1Terms);
 
         seriesId = ++seriesCount;
         _issuers[msg.sender].seriesCount += 1;
         _storeTerms(seriesId, p);
+        if (tierFlags & TierFlags.TIER1_SPLIT != 0) _tier1[seriesId] = tier1Terms;
 
         SeriesCore storage core = _cores[seriesId];
         core.issuer = msg.sender;
@@ -363,7 +451,7 @@ contract MercesRegistry is IMercesRegistry {
         core.stablecoinDecimals = IERC20Metadata(p.stablecoin).decimals();
         core.raiseState = RaiseState.Draft;
         core.tierFlags = tierFlags;
-        core.fxPairId = fxPairId;
+        core.fxPairId = fxPairId_;
         core.issuerAcceptsPublicPrice = issuerAcceptsPublicPrice;
         core.termsCommitment = termsCommitment;
 
@@ -373,7 +461,7 @@ contract MercesRegistry is IMercesRegistry {
         }
 
         emit SeriesCreated(
-            seriesId, msg.sender, mode, p.stablecoin, _terms[seriesId], termsCommitment, tierFlags, fxPairId
+            seriesId, msg.sender, mode, p.stablecoin, _terms[seriesId], termsCommitment, tierFlags, fxPairId_
         );
     }
 
@@ -381,13 +469,13 @@ contract MercesRegistry is IMercesRegistry {
         SeriesParams calldata p,
         bytes32 termsCommitment,
         uint8 tierFlags,
-        bytes32 fxPairId,
+        bytes32 fxPairId_,
         SeriesMode mode
     ) internal view {
         Issuer storage issuer = _issuers[msg.sender];
         if (!issuer.registered || !issuer.active) revert IssuerNotActive();
         if (issuer.issuanceStopped) revert IssuanceStoppedByIssuer();
-        if (!isAllowed(msg.sender)) revert IssuerNotAllowlisted();
+        if (!_allowed[msg.sender]) revert IssuerNotAllowlisted();
         if (mode != SeriesMode.SealedBid) revert CurveModeUnsupported();
         if (!_stablecoins[p.stablecoin]) revert StablecoinNotAllowed(p.stablecoin);
         if (p.unitsOffered < 1) revert InvalidUnitsOffered();
@@ -397,9 +485,29 @@ contract MercesRegistry is IMercesRegistry {
         maxProceeds.toU64();
         if (p.minRaise > maxProceeds) revert MinRaiseTooHigh();
         if (tierFlags == 0 || tierFlags & ~TierFlags.ALL != 0) revert InvalidTierFlags();
-        if (fxPairId != bytes32(0) && !_fxPairs[fxPairId].enabled) revert UnknownFxPair(fxPairId);
+        if (fxPairId_ != bytes32(0) && !_fxPairs[fxPairId_].enabled) revert UnknownFxPair(fxPairId_);
         if (termsCommitment == bytes32(0)) revert ParameterOutOfBounds("termsCommitment");
+        // at least one unit of wallet cap, otherwise no bid could ever be valid (SPEC §1.6)
+        if (uint256(p.unitsOffered).bpsOf(_defaults.walletCapBps) < 1) revert WalletCapTooSmall();
         _checkSeriesParams(p);
+    }
+
+    /// @dev SPEC §6.5: tier-1 plaintext terms are public and must match the Poseidon(5) commitment; the income
+    /// currency is the stablecoin; `r_wad × units_offered ≤ WAD`.
+    function _checkTier1(SeriesParams calldata p, bytes32 termsCommitment, bytes32 fxPairId_, Tier1Terms calldata t)
+        internal
+        view
+    {
+        if (fxPairId_ != bytes32(0)) revert Tier1RequiresStablecoinIncome();
+        if (uint256(t.rWad) * p.unitsOffered > C.WAD) revert Tier1RateTooHigh();
+        _checkTier1Commitment(termsCommitment, t);
+    }
+
+    function _checkTier1Commitment(bytes32 termsCommitment, Tier1Terms calldata t) internal view {
+        uint256 h = _poseidon5.poseidon(
+            [uint256(t.theta), uint256(t.rWad), uint256(t.currencyCode), uint256(t.indexingRule), t.termsSalt]
+        );
+        if (h != uint256(termsCommitment)) revert TermsCommitmentMismatch();
     }
 
     /// @dev Issuer-chosen terms are copied from `p`; market and fee parameters are copied from the protocol
@@ -451,12 +559,14 @@ contract MercesRegistry is IMercesRegistry {
 
     /// @inheritdoc IMercesRegistry
     /// @dev Issuer signs the transaction; a registered attestor signs the SPEC §1.4 amendment message over the
-    /// current nonce. The cap multiple may only decrease (brief C4).
+    /// current nonce. The cap multiple may only decrease (brief C4). Not allowed once a terminal status is set.
+    /// Tier-1 series supply the new plaintext terms, checked against the new commitment.
     function amendTerms(
         uint256 seriesId,
         bytes32 newTermsCommitment,
         uint64 newCapMultipleWad,
-        bytes calldata attestorSignature
+        bytes calldata attestorSignature,
+        Tier1Terms calldata tier1Terms
     ) external override seriesExists(seriesId) {
         SeriesCore storage core = _cores[seriesId];
         SeriesTerms storage terms = _terms[seriesId];
@@ -468,7 +578,12 @@ contract MercesRegistry is IMercesRegistry {
         uint64 nonce = core.amendmentNonce;
         bytes32 digest = MercesMessages.amendDigest(domain, seriesId, nonce, newTermsCommitment, newCapMultipleWad);
         address signer = ECDSA.recover(digest, attestorSignature);
-        if (!_attestors[signer]) revert AttestorNotRegistered(signer);
+        if (!_attestors[signer].active) revert AttestorNotRegistered(signer);
+        if (core.tierFlags & TierFlags.TIER1_SPLIT != 0) {
+            if (uint256(tier1Terms.rWad) * terms.unitsOffered > C.WAD) revert Tier1RateTooHigh();
+            _checkTier1Commitment(newTermsCommitment, tier1Terms);
+            _tier1[seriesId] = tier1Terms;
+        }
         core.amendmentNonce = nonce + 1;
         core.termsCommitment = newTermsCommitment;
         terms.capMultipleWad = newCapMultipleWad;
@@ -494,8 +609,7 @@ contract MercesRegistry is IMercesRegistry {
     }
 
     /// @inheritdoc IMercesRegistry
-    /// @dev Open → Settled / Failed / Cancelled. One correction is allowed: Settled → Settled with a lower
-    /// (exact) `unitsSold` once every winning bid has been processed (SPEC §5.2).
+    /// @dev Open → Settled / Failed / Cancelled, exact values written once (SPEC §3.2).
     function markRaiseResult(
         uint256 seriesId,
         RaiseState state,
@@ -507,16 +621,7 @@ contract MercesRegistry is IMercesRegistry {
         if (state != RaiseState.Settled && state != RaiseState.Failed && state != RaiseState.Cancelled) {
             revert InvalidRaiseTransition();
         }
-        if (core.raiseState == RaiseState.Open) {
-            // first result
-        } else if (core.raiseState == RaiseState.Settled && state == RaiseState.Settled) {
-            if (unitsSold > core.unitsSold) revert UnitsSoldIncrease();
-            if (settlementTs != core.settlementTs || clearingPrice != core.clearingPrice) {
-                revert InvalidRaiseTransition();
-            }
-        } else {
-            revert InvalidRaiseTransition();
-        }
+        if (core.raiseState != RaiseState.Open) revert InvalidRaiseTransition();
         core.raiseState = state;
         core.settlementTs = settlementTs;
         core.unitsSold = unitsSold;
@@ -525,6 +630,15 @@ contract MercesRegistry is IMercesRegistry {
     }
 
     /// @inheritdoc IMercesRegistry
+    function markMintFinalized(uint256 seriesId) external override onlyAuction seriesExists(seriesId) {
+        SeriesCore storage core = _cores[seriesId];
+        if (core.raiseState != RaiseState.Settled || core.mintFinalized) revert InvalidRaiseTransition();
+        core.mintFinalized = true;
+        emit MintFinalized(seriesId);
+    }
+
+    /// @inheritdoc IMercesRegistry
+    /// @dev none → Retired / Redeemed / Extinguished; Retired or Redeemed → Extinguished (SPEC §6.9).
     function markTerminal(uint256 seriesId, SeriesStatus status) external override onlyVault seriesExists(seriesId) {
         SeriesCore storage core = _cores[seriesId];
         if (status != SeriesStatus.Retired && status != SeriesStatus.Redeemed && status != SeriesStatus.Extinguished)
@@ -532,10 +646,9 @@ contract MercesRegistry is IMercesRegistry {
             revert InvalidTerminalStatus();
         }
         if (core.terminalStatus != 0) {
-            // a redeemed series may still be extinguished during its tail (SPEC §6.9)
-            if (
-                !(core.terminalStatus == uint8(SeriesStatus.Redeemed) && status == SeriesStatus.Extinguished)
-            ) revert AlreadyTerminal();
+            if (core.terminalStatus == uint8(SeriesStatus.Extinguished) || status != SeriesStatus.Extinguished) {
+                revert AlreadyTerminal();
+            }
         }
         core.terminalStatus = uint8(status);
         emit TerminalStatusSet(seriesId, status);
@@ -561,6 +674,8 @@ contract MercesRegistry is IMercesRegistry {
         _bound(d.fxMaxStalenessSeconds, C.FX_STALENESS_MIN, C.FX_STALENESS_MAX, "fxMaxStalenessSeconds");
         _bound(d.fxMaxConfBps, C.FX_CONF_MIN, C.FX_CONF_MAX, "fxMaxConfBps");
         _bound(d.fxDeviationBandBps, C.FX_BAND_MIN, C.FX_BAND_MAX, "fxDeviationBandBps");
+        _bound(d.maxPauseSeconds, C.MAX_PAUSE_MIN, C.MAX_PAUSE_MAX, "maxPauseSeconds");
+        _bound(d.maxCumulativePauseSeconds, d.maxPauseSeconds, C.MAX_CUMULATIVE_PAUSE_MAX, "maxCumulativePauseSeconds");
     }
 
     function _checkSeriesParams(SeriesParams calldata p) internal pure {

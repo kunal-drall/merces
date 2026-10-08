@@ -21,6 +21,8 @@ merces_hook = { path = "../programs/merces_hook", features = ["no-entrypoint"] }
 merces_protocol = { path = "../programs/merces_protocol", features = ["no-entrypoint"] }
 mock_usdg_hook = { path = "../programs/mock_usdg_hook", features = ["no-entrypoint"] }
 merces-common = { path = "../crates/merces-common" }
+merces-onchain = { path = "../crates/merces-onchain" }
+bytemuck = { version = "1", features = ["derive"] }
 solana-keccak-hasher = { workspace = true }
 spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 spl-token-interface = "2"

@@ -7,13 +7,15 @@ import {ModularComplianceProxy} from "@tokenysolutions/t-rex/contracts/proxy/Mod
 import {IModularCompliance} from "@tokenysolutions/t-rex/contracts/compliance/modular/IModularCompliance.sol";
 import {Token} from "@tokenysolutions/t-rex/contracts/token/Token.sol";
 import {ModularCompliance} from "@tokenysolutions/t-rex/contracts/compliance/modular/ModularCompliance.sol";
+import {MercesComplianceModule} from "./MercesComplianceModule.sol";
 
 /// @title MercesTokenFactory
-/// @notice Creates one ERC-3643 unit token per sealed-bid series (SPEC §4.2): a `TokenProxy` and a
-/// `ModularComplianceProxy` against the shared `TREXImplementationAuthority`, with the shared
-/// `IdentityRegistry`, `decimals = 0`, the `MercesComplianceModule` bound, the auction (mint) and the vault
-/// (burn) as token agents, the token unpaused, and ownership of both proxies handed to `tokenOwner` (the
-/// protocol timelock). Only `MercesAuction.openRaise` may call it. Non-upgradeable.
+/// @notice Creates one ERC-3643 unit token per sealed-bid series (SPEC v1.1 §4.2 "T-REX governance"): a
+/// `TokenProxy` and a `ModularComplianceProxy` against the shared `TREXImplementationAuthority`, with the shared
+/// `IdentityRegistry`, `decimals = 0`, the `MercesComplianceModule` bound and pointed at the auction and window
+/// escrows, exactly `MercesAuction`, `MercesVault` and `MercesWindow` as token agents (mint / burn / escrow
+/// movements), the token unpaused, and ownership of both proxies handed to the `MercesTokenGovernor` (a contract
+/// with no configuration surface). Only `MercesAuction.openRaise` may call it. Non-upgradeable.
 contract MercesTokenFactory {
     event UnitTokenCreated(uint256 indexed series, address indexed token, address compliance);
 
@@ -22,6 +24,7 @@ contract MercesTokenFactory {
     address public immutable complianceModule;
     address public immutable auction;
     address public immutable vault;
+    address public immutable window;
     address public immutable tokenOwner;
 
     mapping(uint256 => address) public tokenOf;
@@ -35,12 +38,13 @@ contract MercesTokenFactory {
         address complianceModule_,
         address auction_,
         address vault_,
+        address window_,
         address tokenOwner_
     ) {
         require(
             implementationAuthority_ != address(0) && identityRegistry_ != address(0)
                 && complianceModule_ != address(0) && auction_ != address(0) && vault_ != address(0)
-                && tokenOwner_ != address(0),
+                && window_ != address(0) && tokenOwner_ != address(0),
             "invalid argument - zero address"
         );
         implementationAuthority = implementationAuthority_;
@@ -48,6 +52,7 @@ contract MercesTokenFactory {
         complianceModule = complianceModule_;
         auction = auction_;
         vault = vault_;
+        window = window_;
         tokenOwner = tokenOwner_;
     }
 
@@ -68,10 +73,14 @@ contract MercesTokenFactory {
         tokenOf[seriesId] = token;
 
         IModularCompliance(compliance).addModule(complianceModule);
+        IModularCompliance(compliance).callModuleFunction(
+            abi.encodeWithSelector(MercesComplianceModule.setEscrows.selector, auction, window), complianceModule
+        );
 
         Token t = Token(token);
         t.addAgent(auction);
         t.addAgent(vault);
+        t.addAgent(window);
         t.addAgent(address(this));
         t.unpause();
         t.removeAgent(address(this));

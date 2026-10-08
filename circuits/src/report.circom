@@ -14,6 +14,11 @@ pragma circom 2.2.3;
 //     [terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd]
 //
 // Poseidon is circomlib's BN254 instance (the same parameters poseidon-lite and circomlibjs use).
+//
+// Income scale (SPEC §1.5): `theta` and `income_ytd` are amounts in the income currency expressed
+// with the stablecoin's decimals (6 for USDC/USDG); `fx_avg_wad` is the unit-less WAD ratio
+// "stablecoin units per income-currency unit" (1e18 for stablecoin income), so `payment_usd` comes
+// out directly in stablecoin base units and must fit u64.
 
 include "circomlib/circuits/poseidon.circom";
 include "circomlib/circuits/comparators.circom";
@@ -99,7 +104,7 @@ template Report() {
     priorHash.inputs[1] <== prior_salt;
     priorHash.out === prior_income_commitment;
 
-    // 3. range checks: income_ytd, prior_income_ytd, theta, r_wad, units_outstanding, fx_avg_wad < 2^64
+    // 3. range checks: income_ytd, prior_income_ytd, theta, r_wad, units_outstanding, fx_avg_wad, payment_usd < 2^64
     component incomeBits = Num2Bits(64);
     incomeBits.in <== income_ytd;
     component priorBits = Num2Bits(64);
@@ -112,6 +117,8 @@ template Report() {
     unitsBits.in <== units_outstanding;
     component fxBits = Num2Bits(64);
     fxBits.in <== fx_avg_wad;
+    component paymentUsdBits = Num2Bits(64);
+    paymentUsdBits.in <== payment_usd;
 
     //    income_ytd ≥ prior_income_ytd  (year-to-date income is monotone within a year)
     component incomeMonotone = LessThan(64);

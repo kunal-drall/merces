@@ -48,6 +48,11 @@ export function incomeCommitment(incomeYtd: bigint, incomeSalt: bigint): bigint 
   return poseidon2(incomeYtd, incomeSalt);
 }
 
+/** Tier-1 (router) income binding: `Poseidon(2)(router.ytd_at_end[period], 0)` (SPEC §1.5, §6.2 step 7). */
+export function routerIncomeCommitment(ytdAtEnd: bigint): bigint {
+  return poseidon2(ytdAtEnd, 0n);
+}
+
 /** `ZERO_INCOME_COMMITMENT = Poseidon(2)(0, 0)`: the prior commitment at the start of a reporting year. */
 export const ZERO_INCOME_COMMITMENT: bigint = poseidon2(0n, 0n);
 

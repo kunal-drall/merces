@@ -1,5 +1,5 @@
 /**
- * Treasury tranches and vesting (SPEC §5.3).
+ * Treasury tranches and vesting (SPEC v1.1 §5.3).
  */
 import { BPS_DENOMINATOR, mulDiv } from "@merces/sdk";
 
@@ -28,10 +28,7 @@ export function validateReleaseSchedule(schedule: ReleaseTranche[]): string[] {
   return errors;
 }
 
-/**
- * `tranche_amount(i) = floor(proceeds × bps_i / 10000)` for `i < last`; the last tranche takes the
- * remainder so the tranches sum exactly to `proceeds`.
- */
+/** `tranche_amount(i) = floor(proceeds × bps_i / 10000)` for `i < last`; the last tranche takes the remainder. */
 export function trancheAmounts(proceeds: bigint, schedule: ReleaseTranche[]): bigint[] {
   if (schedule.length === 0) return [];
   const out: bigint[] = [];
@@ -45,7 +42,7 @@ export function trancheAmounts(proceeds: bigint, schedule: ReleaseTranche[]): bi
   return out;
 }
 
-/** `vested(now) = Σ_{i : settlement_ts + at_offset_i ≤ now} tranche_amount(i)` */
+/** `vested(now) = Σ_{i : settlement_ts + at_offset_i ≤ now} tranche_amount(i)` (≤ proceeds). */
 export function vested(now: bigint, settlementTs: bigint, schedule: ReleaseTranche[], proceeds: bigint): bigint {
   const amounts = trancheAmounts(proceeds, schedule);
   let v = 0n;
@@ -55,9 +52,11 @@ export function vested(now: bigint, settlementTs: bigint, schedule: ReleaseTranc
   return v;
 }
 
-/** `amount = min(vested(now), proceeds) − released_total` (early draws count against vesting). */
-export function releasable(now: bigint, settlementTs: bigint, schedule: ReleaseTranche[], proceeds: bigint, releasedTotal: bigint): bigint {
-  const v = vested(now, settlementTs, schedule, proceeds);
-  const cap = v < proceeds ? v : proceeds;
+/**
+ * `claim_release` amount: `cap = extinguished_at == 0 ? vested(now) : vested(extinguished_at)`;
+ * `amount = cap > released_total ? cap − released_total : 0` (early draws count in `released_total`).
+ */
+export function releasable(now: bigint, settlementTs: bigint, schedule: ReleaseTranche[], proceeds: bigint, releasedTotal: bigint, extinguishedAt = 0n): bigint {
+  const cap = vested(extinguishedAt === 0n ? now : extinguishedAt, settlementTs, schedule, proceeds);
   return cap > releasedTotal ? cap - releasedTotal : 0n;
 }

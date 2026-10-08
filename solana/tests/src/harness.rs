@@ -349,7 +349,7 @@ impl Env {
 
     fn create_usdc_mint(&mut self) -> Pubkey {
         let mint = Keypair::new();
-        let space = spl_token_interface::state::Mint::LEN;
+        let space = spl_token_2022::state::Mint::LEN;
         let lamports = self.svm.minimum_balance_for_rent_exemption(space);
         let ixs = [
             solana_system_interface::instruction::create_account(&self.payer.pubkey(), &mint.pubkey(), lamports, space as u64, &TOKEN_CLASSIC),

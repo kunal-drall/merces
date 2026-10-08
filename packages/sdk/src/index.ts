@@ -8,3 +8,6 @@ export * from "./periods.js";
 export * from "./fixedpoint.js";
 export * from "./constants.js";
 export * from "./errors.js";
+export * from "./pauses.js";
+export * from "./yearGross.js";
+export * from "./fx.js";

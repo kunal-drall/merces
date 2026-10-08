@@ -3,6 +3,7 @@ import {
   DEFAULT_PARAMETERS,
   DEFAULT_PROTOCOL_FLAGS,
   ERRORS,
+  ERROR_ALIASES,
   ERROR_NAMES,
   PARAMETER_BOUNDS,
   PARAMETER_NAMES,
@@ -44,7 +45,10 @@ describe("parameters (SPEC §1.6)", () => {
     expect(DEFAULT_PARAMETERS.fxMaxConfBps).toBe(100);
     expect(DEFAULT_PARAMETERS.fxDeviationBandBps).toBe(200);
     expect(DEFAULT_PARAMETERS.maxReleaseTranches).toBe(24);
-    expect(PARAMETER_NAMES.length).toBe(23);
+    expect(DEFAULT_PARAMETERS.maxPauseSeconds).toBe(31_536_000n);
+    expect(DEFAULT_PARAMETERS.maxCumulativePauseSeconds).toBe(63_072_000n);
+    expect(DEFAULT_PARAMETERS.maxPauses).toBe(16);
+    expect(PARAMETER_NAMES.length).toBe(26);
   });
   it("defaults sit inside the bounds; bounds match the spec table", () => {
     expect(validateParameters(DEFAULT_PARAMETERS)).toEqual([]);
@@ -63,6 +67,10 @@ describe("parameters (SPEC §1.6)", () => {
     expect(PARAMETER_BOUNDS.fxMaxStalenessSeconds).toEqual({ min: 60n, max: 86_400n });
     expect(PARAMETER_BOUNDS.fxMaxConfBps).toEqual({ min: 1n, max: 1_000n });
     expect(PARAMETER_BOUNDS.fxDeviationBandBps).toEqual({ min: 10n, max: 5_000n });
+    expect(PARAMETER_BOUNDS.maxPauseSeconds).toEqual({ min: 2_592_000n, max: 63_072_000n });
+    expect(PARAMETER_BOUNDS.maxCumulativePauseSeconds.max).toBe(157_680_000n);
+    expect(validateParameters({ ...DEFAULT_PARAMETERS, maxCumulativePauseSeconds: 31_535_999n })).toEqual(["maxCumulativePauseSeconds"]);
+    expect(validateParameters({ ...DEFAULT_PARAMETERS, maxPauseSeconds: 2_591_999n })).toEqual(["maxPauseSeconds"]);
   });
   it("validateParameters names the offending fields", () => {
     expect(validateParameters({ ...DEFAULT_PARAMETERS, capMultipleWad: 3n * WAD + 1n, walletCapBps: 99 })).toEqual(["capMultipleWad", "walletCapBps"]);
@@ -74,7 +82,8 @@ describe("parameters (SPEC §1.6)", () => {
     expect(s["cap_multiple_wad"]).toBe("2500000000000000000");
     expect(s["payout_multiple_k"]).toBe("5");
     expect(s["fx_max_staleness_seconds"]).toBe("3600");
-    expect(Object.keys(s).length).toBe(23);
+    expect(Object.keys(s).length).toBe(26);
+    expect(s["max_pause_seconds"]).toBe("31536000");
     expect(parametersFromStrings(s)).toEqual(DEFAULT_PARAMETERS);
     expect(() => parametersFromStrings({})).toThrow(/missing parameter cap_multiple_wad/);
   });
@@ -105,10 +114,14 @@ describe("enums", () => {
   });
   it("error names are unique and include the SPEC-named ones", () => {
     expect(new Set(ERROR_NAMES).size).toBe(ERROR_NAMES.length);
-    for (const n of ["DirectTransferForbidden", "InvalidClearingPrice", "NoUnitsOutstanding", "TransferFeeNotZero", "NoTailDue"]) {
+    for (const n of ["DirectTransferForbidden", "InvalidClearingPrice", "NoUnitsOutstanding", "TransferFeeNotZero", "NoTailDue", "TallyInProgress", "ClaimMismatch", "TerminalStatus", "TailEnded", "NothingVested", "UnreportedPeriods", "RouterPeriodNotClosed", "OutOfOrder", "AmountOutOfRange", "UnarmedEscrowDeposit", "MintNotFinalized"]) {
       expect(isErrorName(n)).toBe(true);
       expect(ERRORS[n as keyof typeof ERRORS]).toBeTypeOf("string");
     }
     expect(isErrorName("Nope")).toBe(false);
+    expect(isErrorName("SeriesTerminal")).toBe(false);
+    expect(ERROR_ALIASES["SeriesTerminal"]).toBe("TerminalStatus");
+    expect(ERROR_ALIASES["TailExpired"]).toBe("TailEnded");
+    expect(ERROR_ALIASES["NothingToRelease"]).toBe("NothingVested");
   });
 });

@@ -9,6 +9,9 @@ import {
   daysFromCivil,
   daysInPeriod,
   isLeapYear,
+  isTradingDay,
+  tradingDaysInPeriod,
+  weekdayOfDays,
   periodEnd,
   periodId,
   periodLabel,
@@ -143,6 +146,30 @@ describe("periods", () => {
     expect(daysInPeriod(periodId(2026, 2))).toBe(91n);
     expect(daysInPeriod(periodId(2026, 3))).toBe(92n);
     expect(daysInPeriod(periodId(2026, 4))).toBe(92n);
+  });
+
+  it("trading days: Monday–Friday civil days of the quarter", () => {
+    expect(weekdayOfDays(0n)).toBe(4); // 1970-01-01 was a Thursday
+    expect(weekdayOfDays(daysFromCivil(2026, 1, 5))).toBe(1); // Monday
+    expect(weekdayOfDays(daysFromCivil(2026, 1, 4))).toBe(0); // Sunday
+    expect(isTradingDay(timestampFromCivil(2026, 1, 5, 12))).toBe(true);
+    expect(isTradingDay(timestampFromCivil(2026, 1, 3, 12))).toBe(false);
+    expect(isTradingDay(timestampFromCivil(2026, 1, 4, 23, 59, 59))).toBe(false);
+    // 2026 Q1: Jan 22 + Feb 20 + Mar 22 = 64; Q2: Apr 22 + May 21 + Jun 22 = 65; Q3: Jul 23 + Aug 21 + Sep 22 = 66; Q4: Oct 22 + Nov 21 + Dec 23 = 66
+    expect(tradingDaysInPeriod(periodId(2026, 1))).toBe(64n);
+    expect(tradingDaysInPeriod(periodId(2026, 2))).toBe(65n);
+    expect(tradingDaysInPeriod(periodId(2026, 3))).toBe(66n);
+    expect(tradingDaysInPeriod(periodId(2026, 4))).toBe(66n);
+    expect(tradingDaysInPeriod(periodId(2028, 1))).toBe(65n); // leap year Q1 (Jan 21, Feb 21, Mar 23)
+    // cross-check against Date for a range of quarters
+    for (let pid = periodId(2024, 1); pid <= periodId(2031, 4); pid++) {
+      let n = 0n;
+      for (let t = periodStart(pid); t < periodEnd(pid); t += DAY) {
+        const w = new Date(Number(t) * 1000).getUTCDay();
+        if (w >= 1 && w <= 5) n++;
+      }
+      expect(tradingDaysInPeriod(pid)).toBe(n);
+    }
   });
 
   it("rejects negative timestamps and bad period ids", () => {

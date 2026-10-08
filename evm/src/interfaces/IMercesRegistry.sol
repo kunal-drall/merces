@@ -5,6 +5,7 @@ import {
     Flags,
     FxPairConfig,
     Issuer,
+    KeyInfo,
     Parameters,
     ProtocolContracts,
     RaiseState,
@@ -13,10 +14,11 @@ import {
     SeriesMode,
     SeriesParams,
     SeriesStatus,
-    SeriesTerms
+    SeriesTerms,
+    Tier1Terms
 } from "../types/MercesTypes.sol";
 
-/// @notice Charter and terms registry (D1) plus the registries of D11 (SPEC §3). Non-upgradeable.
+/// @notice Charter and terms registry (D1) plus the registries of D11 (SPEC v1.1 §3). Non-upgradeable.
 interface IMercesRegistry {
     // ---- events (SPEC §10, registry) ----
     event ProtocolInitialized(
@@ -30,17 +32,24 @@ interface IMercesRegistry {
     event EarlyDrawApproverSet(address indexed earlyDrawApprover);
     event DefaultsSet(Parameters defaults);
     event AttestorRegistered(address indexed attestor);
-    event AttestorRevoked(address indexed attestor);
+    event AttestorRevoked(address indexed attestor, uint64 revokedAt);
     event VerifierKeyRegistered(address indexed verifierKey);
-    event VerifierKeyRevoked(address indexed verifierKey);
-    event FxPairSet(bytes32 indexed pairId, bytes32 feedId, bool inverted, address crosscheck, bool enabled);
+    event VerifierKeyRevoked(address indexed verifierKey, uint64 revokedAt);
+    event FxPairSet(
+        bytes32 indexed pairId,
+        bytes32 feedId,
+        bool inverted,
+        address crosscheck,
+        uint32 crosscheckEffectivePeriod,
+        bool enabled
+    );
     event StablecoinSet(address indexed stablecoin, bool allowed, uint8 decimals);
-    event ProtocolContractsSet(ProtocolContracts contracts);
     event IssuerRegistered(address indexed issuer);
     event IssuerDeactivated(address indexed issuer);
     event IssuanceStopped(address indexed issuer);
     event IssuanceResumed(address indexed issuer);
     event AllowlistUpdated(address indexed wallet, bool allowed);
+    event IdentityRegistered(address indexed wallet, address identity);
     event SeriesCreated(
         uint256 indexed series,
         address indexed issuer,
@@ -60,6 +69,7 @@ interface IMercesRegistry {
         address indexed attestor
     );
     event RaiseStateChanged(uint256 indexed series, RaiseState state);
+    event MintFinalized(uint256 indexed series);
     event TerminalStatusSet(uint256 indexed series, SeriesStatus status);
 
     // ---- config views ----
@@ -73,21 +83,25 @@ interface IMercesRegistry {
     function seriesCount() external view returns (uint64);
     function identityRegistry() external view returns (address);
     function idFactory() external view returns (address);
+    function poseidon5() external view returns (address);
     function getFlags() external view returns (Flags memory);
     function getDefaults() external view returns (Parameters memory);
     function getProtocolContracts() external view returns (ProtocolContracts memory);
-    function protocolContractsSet() external view returns (bool);
     function isAllowed(address wallet) external view returns (bool);
     function isAttestor(address key) external view returns (bool);
     function isVerifierKey(address key) external view returns (bool);
+    function attestorKey(address key) external view returns (KeyInfo memory);
+    function verifierKey(address key) external view returns (KeyInfo memory);
     function isStablecoinAllowed(address token) external view returns (bool);
     function getIssuer(address wallet) external view returns (Issuer memory);
     function getFxPair(bytes32 pairId) external view returns (FxPairConfig memory);
+    function fxPairId(bytes32 feedId, bool inverted) external pure returns (bytes32);
 
     // ---- series views ----
     function getSeriesCore(uint256 seriesId) external view returns (SeriesCore memory);
     function getSeriesTerms(uint256 seriesId) external view returns (SeriesTerms memory);
     function getReleaseSchedule(uint256 seriesId) external view returns (ReleaseTranche[] memory);
+    function getTier1Terms(uint256 seriesId) external view returns (Tier1Terms memory);
     function isTransferLocked(uint256 seriesId, uint256 timestamp) external view returns (bool);
 
     // ---- admin ----
@@ -98,15 +112,17 @@ interface IMercesRegistry {
     function setDefaults(Parameters calldata defaults) external;
     function registerAttestor(address key) external;
     function revokeAttestor(address key) external;
+    function rotateAttestor(address oldKey, address newKey) external;
     function registerVerifierKey(address key) external;
     function revokeVerifierKey(address key) external;
-    function setFxPair(bytes32 pairId, bytes32 feedId, bool inverted, address crosscheck, bool enabled) external;
+    function rotateVerifierKey(address oldKey, address newKey) external;
+    function setFxPair(bytes32 feedId, bool inverted, address crosscheck, bool enabled) external;
     function setStablecoin(address token, bool allowed) external;
-    function setProtocolContracts(ProtocolContracts calldata contracts) external;
     function registerIssuer(address wallet) external;
     function deactivateIssuer(address wallet) external;
     function transferAdmin(address newAdmin) external;
     function acceptAdmin() external;
+    function registerProtocolIdentities() external;
 
     // ---- allowlist manager ----
     function setAllowed(address wallet, bool allowed) external;
@@ -117,9 +133,10 @@ interface IMercesRegistry {
         ReleaseTranche[] calldata releaseSchedule,
         bytes32 termsCommitment,
         uint8 tierFlags,
-        bytes32 fxPairId,
+        bytes32 fxPairId_,
         SeriesMode mode,
-        bool issuerAcceptsPublicPrice
+        bool issuerAcceptsPublicPrice,
+        Tier1Terms calldata tier1Terms
     ) external returns (uint256 seriesId);
     function setContractHash(uint256 seriesId, bytes32 hash) external;
     function stopIssuance() external;
@@ -128,7 +145,8 @@ interface IMercesRegistry {
         uint256 seriesId,
         bytes32 newTermsCommitment,
         uint64 newCapMultipleWad,
-        bytes calldata attestorSignature
+        bytes calldata attestorSignature,
+        Tier1Terms calldata tier1Terms
     ) external;
 
     // ---- protocol write interface (SPEC §3.3) ----
@@ -140,5 +158,6 @@ interface IMercesRegistry {
         uint64 unitsSold,
         uint64 clearingPrice
     ) external;
+    function markMintFinalized(uint256 seriesId) external;
     function markTerminal(uint256 seriesId, SeriesStatus status) external;
 }

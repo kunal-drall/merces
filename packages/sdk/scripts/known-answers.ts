@@ -49,12 +49,24 @@ import {
   publicKeyFromPrivate,
   quarterOf,
   reportAttestationMessage,
+  routerIncomeCommitment,
   signDigest,
   snakeCase,
   termsCommitment,
   timestampFromCivil,
   toChecksumAddress,
+  tradingDaysInPeriod,
   trueUpMessage,
+  unpaused,
+  pausedWithin,
+  fxPairId,
+  normalizePythPrice,
+  invertRate,
+  yearGrossAdd,
+  yearGrossGet,
+  newYearGross,
+  settlementYear,
+  ZERO_INCOME_COMMITMENT as ZERO_IC,
   utf8,
   walletFromEvmAddress,
   walletFromSolanaPubkey,
@@ -183,6 +195,7 @@ const bidCases = [
 
 // ---- messages ---------------------------------------------------------------------------------
 const incomeC = fieldToBytes32(incomeCommitment(110_000_000_000n, deriveSalt("ka", "income-msg")));
+const priorC = fieldToBytes32(incomeCommitment(70_000_000_000n, deriveSalt("ka", "income-msg-prior")));
 const newTerms = fieldToBytes32(termsCommitment({ theta: 82_400_000_000n, rWad: 1_000_000_000_000_000n, currencyCode: 840, indexingRule: 0, termsSalt: deriveSalt("ka", "terms-amend") }));
 const messages: ReturnType<typeof msgEntry>[] = [];
 for (const d of domains) {
@@ -190,15 +203,34 @@ for (const d of domains) {
   const skNote = d.chainKind === ChainKind.Evm ? "bytes32(uint256(1))" : `series PDA base58 ${base58Encode(SOLANA_SERIES_PDA)}`;
   const common = { domain: d.domain, seriesKey: sk };
   messages.push(
-    msgEntry(d.name, skNote, { period: 8106, incomeCommitment: hex(incomeC), tier: 2 }, reportAttestationMessage({ ...common, period: 8106, incomeCommitment: incomeC, tier: 2 }), keys[2]!),
-    msgEntry(d.name, skNote, { period: 8106, incomeCommitment: hex(incomeC), tier: 3 }, reportAttestationMessage({ ...common, period: 8106, incomeCommitment: incomeC, tier: 3 }), keys[0]!),
+    msgEntry(
+      d.name,
+      skNote,
+      { period: 8106, priorIncomeCommitment: hex(priorC), incomeCommitment: hex(incomeC), tier: 2, liquidityEvent: false },
+      reportAttestationMessage({ ...common, period: 8106, priorIncomeCommitment: priorC, incomeCommitment: incomeC, tier: 2, liquidityEvent: false }),
+      keys[2]!,
+    ),
+    msgEntry(
+      d.name,
+      skNote,
+      { period: 8106, priorIncomeCommitment: hex(priorC), incomeCommitment: hex(incomeC), tier: 3, liquidityEvent: true },
+      reportAttestationMessage({ ...common, period: 8106, priorIncomeCommitment: priorC, incomeCommitment: incomeC, tier: 3, liquidityEvent: true }),
+      keys[0]!,
+    ),
+    msgEntry(
+      d.name,
+      skNote,
+      { period: 8104, priorIncomeCommitment: hex(fieldToBytes32(ZERO_IC)), incomeCommitment: hex(incomeC), tier: 2, liquidityEvent: false },
+      reportAttestationMessage({ ...common, period: 8104, priorIncomeCommitment: ZERO_IC, incomeCommitment: incomeC, tier: 2, liquidityEvent: false }),
+      keys[2]!,
+    ),
     msgEntry(d.name, skNote, { period: 8106, fxRateWad: "1083456789012345678" }, fxFallbackMessage({ ...common, period: 8106, fxRateWad: 1_083_456_789_012_345_678n }), keys[0]!),
     msgEntry(d.name, skNote, { amendmentNonce: "0", newTermsCommitment: hex(newTerms), newCapMultipleWad: dec((25n * WAD) / 10n) }, amendmentMessage({ ...common, amendmentNonce: 0n, newTermsCommitment: newTerms, newCapMultipleWad: (25n * WAD) / 10n }), keys[0]!),
     msgEntry(d.name, skNote, { pauseNonce: "0", pauseEnd: "1783209600" }, pauseApprovalMessage({ ...common, pauseNonce: 0n, pauseEnd: 1_783_209_600n }), keys[0]!),
     msgEntry(d.name, skNote, { extinguishNonce: "0" }, extinguishMessage({ ...common, extinguishNonce: 0n }), keys[0]!),
     msgEntry(d.name, skNote, { extinguishNonce: "0" }, extinguishMessage({ ...common, extinguishNonce: 0n }), keys[1]!),
-    msgEntry(d.name, skNote, { year: 2026, adjustment: "-2500000000", attestationTs: "1799000000" }, trueUpMessage({ ...common, year: 2026, adjustment: -2_500_000_000n, attestationTs: 1_799_000_000n }), keys[0]!),
-    msgEntry(d.name, skNote, { year: 2026, adjustment: "2500000000", attestationTs: "1799000000" }, trueUpMessage({ ...common, year: 2026, adjustment: 2_500_000_000n, attestationTs: 1_799_000_000n }), keys[0]!),
+    msgEntry(d.name, skNote, { trueupNonce: "0", year: 2026, adjustment: "-2500000000", attestationTs: "1799000000" }, trueUpMessage({ ...common, trueupNonce: 0n, year: 2026, adjustment: -2_500_000_000n, attestationTs: 1_799_000_000n }), keys[0]!),
+    msgEntry(d.name, skNote, { trueupNonce: "1", year: 2026, adjustment: "2500000000", attestationTs: "1799000000" }, trueUpMessage({ ...common, trueupNonce: 1n, year: 2026, adjustment: 2_500_000_000n, attestationTs: 1_799_000_000n }), keys[0]!),
   );
 }
 
@@ -248,8 +280,71 @@ const periods = periodTimestamps.map(([y, m, d, hh, mm, ss]) => {
     periodStart: dec(periodStart(pid)),
     periodEnd: dec(periodEnd(pid)),
     daysInPeriod: Number(daysInPeriod(pid)),
+    tradingDaysInPeriod: Number(tradingDaysInPeriod(pid)),
   };
 });
+
+// ---- pauses (SPEC §6.4 unpaused countdowns) ----------------------------------------------------
+const pauseList = [
+  { start: timestampFromCivil(2026, 4, 10), end: timestampFromCivil(2026, 6, 10) },
+  { start: timestampFromCivil(2026, 9, 1), end: timestampFromCivil(2026, 9, 20) },
+];
+const pauseCases = [
+  { a: timestampFromCivil(2026, 4, 1), b: timestampFromCivil(2026, 7, 10), now: timestampFromCivil(2026, 7, 10) },
+  { a: timestampFromCivil(2026, 4, 1), b: timestampFromCivil(2026, 5, 1), now: timestampFromCivil(2026, 5, 1) },
+  { a: timestampFromCivil(2026, 7, 1), b: timestampFromCivil(2026, 10, 1), now: timestampFromCivil(2026, 10, 1) },
+  { a: timestampFromCivil(2026, 4, 1), b: timestampFromCivil(2026, 5, 15), now: timestampFromCivil(2026, 5, 15) },
+].map((c) => ({
+  a: dec(c.a),
+  b: dec(c.b),
+  now: dec(c.now),
+  pausedWithin: dec(pausedWithin(pauseList, c.a, c.b, c.now)),
+  unpaused: dec(unpaused(pauseList, c.a, c.b, c.now)),
+}));
+
+// ---- year_gross ring ---------------------------------------------------------------------------
+let ring = newYearGross();
+ring = yearGrossAdd(ring, 0, 10n * WAD);
+ring = yearGrossAdd(ring, 1, 20n * WAD);
+ring = yearGrossAdd(ring, 2, 30n * WAD);
+ring = yearGrossAdd(ring, 3, 40n * WAD);
+ring = yearGrossAdd(ring, 4, 50n * WAD); // evicts year 0
+const yearGrossCase = {
+  adds: [
+    { year: 0, incWad: dec(10n * WAD) },
+    { year: 1, incWad: dec(20n * WAD) },
+    { year: 2, incWad: dec(30n * WAD) },
+    { year: 3, incWad: dec(40n * WAD) },
+    { year: 4, incWad: dec(50n * WAD) },
+  ],
+  slots: ring.map((s) => ({ year: s.year, grossWad: dec(s.grossWad) })),
+  reads: [0, 1, 2, 3, 4, 5].map((y) => ({ year: y, grossWad: dec(yearGrossGet(ring, y)) })),
+  settlementYearExamples: [
+    { ts: dec(timestampFromCivil(2027, 1, 13)), settlementTs: dec(timestampFromCivil(2026, 1, 14, 1)), year: settlementYear(timestampFromCivil(2027, 1, 13), timestampFromCivil(2026, 1, 14, 1)) },
+    { ts: dec(timestampFromCivil(2027, 1, 14, 1)), settlementTs: dec(timestampFromCivil(2026, 1, 14, 1)), year: settlementYear(timestampFromCivil(2027, 1, 14, 1), timestampFromCivil(2026, 1, 14, 1)) },
+  ],
+};
+
+// ---- fx ----------------------------------------------------------------------------------------
+const EURUSD_FEED = "0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b";
+const fxCases = {
+  pairIds: [
+    { feedId: EURUSD_FEED, inverted: false, pairId: hex(fxPairId(EURUSD_FEED, false)) },
+    { feedId: EURUSD_FEED, inverted: true, pairId: hex(fxPairId(EURUSD_FEED, true)) },
+  ],
+  normalize: [
+    { price: "108345678", expo: -8, rateWad: dec(normalizePythPrice(108_345_678n, -8)) },
+    { price: "108345", expo: -5, rateWad: dec(normalizePythPrice(108_345n, -5)) },
+    { price: "5", expo: 0, rateWad: dec(normalizePythPrice(5n, 0)) },
+    { price: "7", expo: 2, rateWad: dec(normalizePythPrice(7n, 2)) },
+    { price: "123456789012345678901", expo: -18, rateWad: dec(normalizePythPrice(123_456_789_012_345_678_901n, -18)) },
+  ],
+  invert: [
+    { rateWad: dec(150n * WAD), inverted: dec(invertRate(150n * WAD)) },
+    { rateWad: dec(2n * WAD), inverted: dec(invertRate(2n * WAD)) },
+  ],
+};
+const routerBindings = [0n, 90_000_000_000n, 180_000_000_000n].map((ytd) => ({ ytdAtEnd: dec(ytd), commitment: dec(routerIncomeCommitment(ytd)), commitmentHex: hex(fieldToBytes32(routerIncomeCommitment(ytd))) }));
 
 // ---- fixed point ------------------------------------------------------------------------------
 const fixedPoint = [
@@ -261,9 +356,10 @@ const fixedPoint = [
 ];
 
 const out = {
-  schema: 1,
+  schema: 2,
+  specVersion: "1.1",
   description:
-    "Known answers for the Merces SDK encodings (SPEC §1). Generated by packages/sdk/scripts/known-answers.ts; all integers are decimal strings, all byte strings are 0x-hex. Test keys are derived from public seeds and must never hold value.",
+    "Known answers for the Merces SDK encodings (SPEC v1.1 §1, §6.3, §6.4, §6.6). Generated by packages/sdk/scripts/known-answers.ts; all integers are decimal strings, all byte strings are 0x-hex. Test keys are derived from public seeds and must never hold value.",
   constants: {
     WAD: dec(WAD),
     DAY: "86400",
@@ -297,6 +393,10 @@ const out = {
   testKeys: keys.map((k) => ({ seed: k.seed, derivation: 'keccak256("MERCES_TEST_KEY" ‖ seed) mod (n−1) + 1', privateKey: hex(k.privateKey), publicKey: hex(k.publicKey), address: hex(k.address), addressChecksum: toChecksumAddress(k.address) })),
   messages,
   periods,
+  pauses: { pauseList: pauseList.map((p) => ({ start: dec(p.start), end: dec(p.end) })), cases: pauseCases },
+  yearGross: yearGrossCase,
+  fx: fxCases,
+  routerIncomeCommitments: routerBindings,
   fixedPoint,
   periodIdExamples: [
     { year: 2026, quarter: 1, periodId: periodId(2026, 1) },

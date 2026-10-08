@@ -35,16 +35,22 @@ describe("signed message encodings (SPEC §1.4)", () => {
     });
   });
 
-  it("report attestation: magic ‖ domain ‖ series_key ‖ period_u32 ‖ income_commitment_32 ‖ tier_u8", () => {
-    const m = reportAttestationMessage({ domain, seriesKey, period: 8104, incomeCommitment: commitment, tier: 2 });
-    const expected = concatBytes(utf8("MERCES_REPORT_V1"), domain, seriesKey, u32(8104), commitment, u8(2));
+  it("report attestation: magic ‖ domain ‖ series_key ‖ period_u32 ‖ prior_income_commitment_32 ‖ income_commitment_32 ‖ tier_u8 ‖ liquidity_event_u8", () => {
+    const prior = bytes32(0xb0n);
+    const m = reportAttestationMessage({ domain, seriesKey, period: 8104, priorIncomeCommitment: prior, incomeCommitment: commitment, tier: 2, liquidityEvent: false });
+    const expected = concatBytes(utf8("MERCES_REPORT_V1"), domain, seriesKey, u32(8104), prior, commitment, u8(2), u8(0));
     expect(m.preimage).toEqual(expected);
-    expect(m.preimage.length).toBe(16 + 32 + 32 + 4 + 32 + 1);
+    expect(m.preimage.length).toBe(16 + 32 + 32 + 4 + 32 + 32 + 1 + 1);
     expect(m.digest).toEqual(keccak256(expected));
     expect(m.kind).toBe("REPORT");
-    // bigint commitment is encoded big-endian, same as bytes
-    expect(reportAttestationMessage({ domain, seriesKey, period: 8104, incomeCommitment: 0xc0n, tier: 2 }).digest).toEqual(m.digest);
-    expect(reportAttestationMessage({ domain, seriesKey, period: 8104, incomeCommitment: commitment, tier: 3 }).digest).not.toEqual(m.digest);
+    // bigint commitments are encoded big-endian, same as bytes
+    expect(reportAttestationMessage({ domain, seriesKey, period: 8104, priorIncomeCommitment: 0xb0n, incomeCommitment: 0xc0n, tier: 2, liquidityEvent: false }).digest).toEqual(m.digest);
+    expect(reportAttestationMessage({ domain, seriesKey, period: 8104, priorIncomeCommitment: prior, incomeCommitment: commitment, tier: 3, liquidityEvent: false }).digest).not.toEqual(m.digest);
+    const liq = reportAttestationMessage({ domain, seriesKey, period: 8104, priorIncomeCommitment: prior, incomeCommitment: commitment, tier: 2, liquidityEvent: true });
+    expect(liq.preimage[liq.preimage.length - 1]).toBe(1);
+    expect(liq.digest).not.toEqual(m.digest);
+    // the prior commitment is bound: a different prior gives a different digest
+    expect(reportAttestationMessage({ domain, seriesKey, period: 8104, priorIncomeCommitment: bytes32(0xb1n), incomeCommitment: commitment, tier: 2, liquidityEvent: false }).digest).not.toEqual(m.digest);
   });
 
   it("fx fallback: magic ‖ domain ‖ series_key ‖ period_u32 ‖ fx_rate_wad_u64", () => {
@@ -71,25 +77,28 @@ describe("signed message encodings (SPEC §1.4)", () => {
     expect(m.preimage.length).toBe(20 + 32 + 32 + 8);
   });
 
-  it("true-up: magic ‖ domain ‖ series_key ‖ year_u16 ‖ adjustment_i64 ‖ attestation_ts_u64", () => {
-    const m = trueUpMessage({ domain, seriesKey, year: 2026, adjustment: -2_500_000_000n, attestationTs: 1_799_000_000n });
-    expect(m.preimage).toEqual(concatBytes(utf8("MERCES_TRUEUP_V1"), domain, seriesKey, u16(2026), i64(-2_500_000_000n), u64(1_799_000_000n)));
-    expect(m.preimage.length).toBe(16 + 32 + 32 + 2 + 8 + 8);
-    expect(bytesToHex(m.preimage.slice(16 + 64 + 2, 16 + 64 + 10))).toBe("0xffffffff6afd0700");
+  it("true-up: magic ‖ domain ‖ series_key ‖ trueup_nonce_u64 ‖ year_u16 ‖ adjustment_i64 ‖ attestation_ts_u64", () => {
+    const m = trueUpMessage({ domain, seriesKey, trueupNonce: 3n, year: 2026, adjustment: -2_500_000_000n, attestationTs: 1_799_000_000n });
+    expect(m.preimage).toEqual(concatBytes(utf8("MERCES_TRUEUP_V1"), domain, seriesKey, u64(3n), u16(2026), i64(-2_500_000_000n), u64(1_799_000_000n)));
+    expect(m.preimage.length).toBe(16 + 32 + 32 + 8 + 2 + 8 + 8);
+    expect(bytesToHex(m.preimage.slice(16 + 64 + 8 + 2, 16 + 64 + 8 + 10))).toBe("0xffffffff6afd0700");
+    expect(trueUpMessage({ domain, seriesKey, trueupNonce: 4n, year: 2026, adjustment: -2_500_000_000n, attestationTs: 1_799_000_000n }).digest).not.toEqual(m.digest);
   });
 
   it("different domains or series give different digests", () => {
-    const a = reportAttestationMessage({ domain, seriesKey, period: 1, incomeCommitment: commitment, tier: 2 });
-    const b = reportAttestationMessage({ domain: bytes32(0xd1n), seriesKey, period: 1, incomeCommitment: commitment, tier: 2 });
-    const c = reportAttestationMessage({ domain, seriesKey: bytes32(0x5fn), period: 1, incomeCommitment: commitment, tier: 2 });
+    const base = { priorIncomeCommitment: bytes32(0xb0n), incomeCommitment: commitment, tier: 2, liquidityEvent: false };
+    const a = reportAttestationMessage({ domain, seriesKey, period: 1, ...base });
+    const b = reportAttestationMessage({ domain: bytes32(0xd1n), seriesKey, period: 1, ...base });
+    const c = reportAttestationMessage({ domain, seriesKey: bytes32(0x5fn), period: 1, ...base });
     expect(a.digest).not.toEqual(b.digest);
     expect(a.digest).not.toEqual(c.digest);
   });
 
   it("rejects malformed fields", () => {
-    expect(() => reportAttestationMessage({ domain: new Uint8Array(31), seriesKey, period: 1, incomeCommitment: commitment, tier: 2 })).toThrow(RangeError);
-    expect(() => reportAttestationMessage({ domain, seriesKey, period: 1n << 32n, incomeCommitment: commitment, tier: 2 })).toThrow(RangeError);
-    expect(() => reportAttestationMessage({ domain, seriesKey, period: 1, incomeCommitment: commitment, tier: 256 })).toThrow(RangeError);
-    expect(() => trueUpMessage({ domain, seriesKey, year: 70000, adjustment: 0n, attestationTs: 0n })).toThrow(RangeError);
+    const base = { priorIncomeCommitment: bytes32(0xb0n), incomeCommitment: commitment, tier: 2, liquidityEvent: false };
+    expect(() => reportAttestationMessage({ domain: new Uint8Array(31), seriesKey, period: 1, ...base })).toThrow(RangeError);
+    expect(() => reportAttestationMessage({ domain, seriesKey, period: 1n << 32n, ...base })).toThrow(RangeError);
+    expect(() => reportAttestationMessage({ domain, seriesKey, period: 1, ...base, tier: 256 })).toThrow(RangeError);
+    expect(() => trueUpMessage({ domain, seriesKey, trueupNonce: 0n, year: 70000, adjustment: 0n, attestationTs: 0n })).toThrow(RangeError);
   });
 });

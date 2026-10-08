@@ -19,8 +19,17 @@ library MercesConstants {
     uint256 internal constant MAX_BIDS_PER_AUCTION = 4096;
     uint256 internal constant MAX_TALLY_PAGE = 200;
     uint256 internal constant MAX_ORDERS_PER_WINDOW = 4096;
+    uint256 internal constant MAX_PAUSES = 16;
+    uint256 internal constant ROUTER_CHECKPOINTS = 8;
+    uint256 internal constant YEAR_GROSS_SLOTS = 4;
 
     uint8 internal constant CHAIN_KIND_EVM = 2;
+
+    // derived seconds
+    uint256 internal constant DEADLINE_SECONDS = REPORT_DUE_DAYS * DAY;
+    uint256 internal constant GRACE_SECONDS = (REPORT_DUE_DAYS + GRACE_DAYS) * DAY;
+    uint256 internal constant NOTICE_SECONDS = FORMAL_NOTICE_DAYS * DAY;
+    uint256 internal constant TRUEUP_SECONDS = TRUEUP_DAYS * DAY;
 
     // bounds (SPEC §1.6)
     uint64 internal constant CAP_MULTIPLE_MIN = 2e18;
@@ -51,4 +60,7 @@ library MercesConstants {
     uint16 internal constant FX_CONF_MAX = 1000;
     uint16 internal constant FX_BAND_MIN = 10;
     uint16 internal constant FX_BAND_MAX = 5000;
+    uint64 internal constant MAX_PAUSE_MIN = 2_592_000; // 30 days
+    uint64 internal constant MAX_PAUSE_MAX = 63_072_000; // 2 years
+    uint64 internal constant MAX_CUMULATIVE_PAUSE_MAX = 157_680_000; // 5 years
 }

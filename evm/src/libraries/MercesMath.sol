@@ -2,7 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {AmountExceedsU64} from "../types/MercesErrors.sol";
+import {AmountOutOfRange} from "../types/MercesErrors.sol";
 
 /// @notice Arithmetic helpers (SPEC §1.1): mulDiv in 256-bit, floor division, uint64 domain checks.
 library MercesMath {
@@ -14,9 +14,9 @@ library MercesMath {
         return Math.mulDiv(a, b, c);
     }
 
-    /// @dev Reverts when `x` does not fit the shared uint64 numeric domain.
+    /// @dev Reverts when `x` does not fit the shared uint64 numeric domain (SPEC §1.1 entry-point range rule).
     function toU64(uint256 x) internal pure returns (uint64) {
-        if (x > type(uint64).max) revert AmountExceedsU64(x);
+        if (x > type(uint64).max) revert AmountOutOfRange(x);
         return uint64(x);
     }
 

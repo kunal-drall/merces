@@ -4,7 +4,7 @@
 //   1. `programs/merces_protocol/src/zk/vk.rs` — the verifying key in `groth16-solana` layout
 //      (big-endian coordinates, G2 as x_im ‖ x_re ‖ y_im ‖ y_re), and
 //   2. `tests/fixtures/zk/report_fixtures.json` — proofs for the scenarios the LiteSVM tests drive,
-//      already in the 256-byte on-chain proof layout (A un-negated, the program negates it).
+//      already in the 256-byte on-chain proof layout (A negated: x ‖ q − y, as the vectors do).
 //
 // Usage:
 //   node gen-zk-fixtures.mjs --build <dir with report_final.zkey, verification_key.json, report_js/report.wasm>
@@ -169,8 +169,12 @@ scenario("zero_year", { prevYtd: null, prevSalt: null, ytd: 0n, incomeSalt: salt
 scenario("y3_q1", { prevYtd: null, prevSalt: null, ytd: 70_000_000_000n, incomeSalt: salt(10), note: "0.1 × 10k = 1k" });
 
 // ---------------------------------------------------------------- prove
+// BN254 base field modulus q.
+const Q = 21888242871839275222246405745257275088696311157297823662689037894645226208583n;
 function proofBytes(proof) {
-  const a = be32(proof.pi_a[0]) + be32(proof.pi_a[1]);
+  // A is negated (x ‖ q − y), matching packages/vectors `proofSolana.proofA`; the program verifies as-is.
+  const ay = BigInt(proof.pi_a[1]);
+  const a = be32(proof.pi_a[0]) + be32(ay === 0n ? 0n : Q - ay);
   const b = be32(proof.pi_b[0][1]) + be32(proof.pi_b[0][0]) + be32(proof.pi_b[1][1]) + be32(proof.pi_b[1][0]);
   const c = be32(proof.pi_c[0]) + be32(proof.pi_c[1]);
   return hex(a + b + c);

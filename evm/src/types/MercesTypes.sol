@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.30;
 
-/// @notice Shared enums and structs for the Merces EVM contracts (SPEC §1.6, §1.7, §3.1).
+/// @notice Shared enums and structs for the Merces EVM contracts (SPEC v1.1 §1.6, §1.7, §3.1).
 /// All money amounts are stablecoin base units and must fit in uint64; ratios are WAD (1e18) fixed point;
 /// basis points are uint16 with 10_000 = 100%.
 
@@ -56,6 +56,8 @@ struct Parameters {
     uint64 fxMaxStalenessSeconds;
     uint16 fxMaxConfBps;
     uint16 fxDeviationBandBps;
+    uint64 maxPauseSeconds;
+    uint64 maxCumulativePauseSeconds;
 }
 
 /// @notice Issuer-chosen series parameters at creation (bounds-checked against SPEC §1.6).
@@ -72,6 +74,16 @@ struct SeriesParams {
     uint64 revealDuration;
     uint64 windowCommitDuration;
     uint64 windowRevealDuration;
+}
+
+/// @notice Plaintext terms of a tier-1 (pure on-chain income) series (SPEC §6.5). Public by the issuer's choice;
+/// checked on-chain against the Poseidon(5) terms commitment.
+struct Tier1Terms {
+    uint64 theta;
+    uint64 rWad;
+    uint32 currencyCode;
+    uint32 indexingRule;
+    uint256 termsSalt;
 }
 
 struct ReleaseTranche {
@@ -110,6 +122,7 @@ struct SeriesCore {
     uint8 terminalStatus;
     uint8 tierFlags;
     bool issuerAcceptsPublicPrice;
+    bool mintFinalized;
     address stablecoin;
     uint64 openedAt;
     address unitToken;
@@ -129,13 +142,25 @@ struct Issuer {
     uint32 seriesCount;
 }
 
+/// @notice Attestor / report-verifier key record (SPEC §1.4): revocation is forward-only with a grace window.
+struct KeyInfo {
+    bool registered;
+    bool active;
+    uint64 revokedAt;
+}
+
+/// @notice FX pair configuration (SPEC §3.1). `feedId` and `inverted` are write-once (the pair id commits to
+/// them); `crosscheck` changes take effect from `crosscheckEffectivePeriod`.
 struct FxPairConfig {
+    bool exists;
     bytes32 feedId;
     bool inverted;
     address crosscheck;
+    uint32 crosscheckEffectivePeriod;
     bool enabled;
 }
 
+/// @notice The protocol contracts allowed to call the registry's narrow write interface; fixed at init.
 struct ProtocolContracts {
     address auction;
     address treasury;
@@ -162,5 +187,10 @@ library TierFlags {
     function has(uint8 flags, uint8 tier) internal pure returns (bool) {
         if (tier == 0 || tier > 4) return false;
         return flags & (uint8(1) << (tier - 1)) != 0;
+    }
+
+    /// @dev A pure tier-1 series (SPEC §6.2 step 3): tier 1 is a report tier only when nothing else is enabled.
+    function isPureTier1(uint8 flags) internal pure returns (bool) {
+        return flags == TIER1_SPLIT;
     }
 }

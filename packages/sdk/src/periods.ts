@@ -122,6 +122,29 @@ export function daysInPeriod(pid: number): bigint {
   return (periodEnd(pid) - periodStart(pid)) / DAY;
 }
 
+/** Day of week of a days-since-epoch value: 0 = Sunday … 6 = Saturday (1970-01-01 was a Thursday). */
+export function weekdayOfDays(days: bigint): number {
+  return Number((((days + 4n) % 7n) + 7n) % 7n);
+}
+
+/** Monday–Friday civil day (UTC). */
+export function isTradingDay(ts: bigint): boolean {
+  const w = weekdayOfDays(floorDiv(ts, DAY));
+  return w >= 1 && w <= 5;
+}
+
+/** Number of Monday–Friday civil days in the quarter (SPEC §6.6 coverage base). */
+export function tradingDaysInPeriod(pid: number): bigint {
+  const start = periodStart(pid) / DAY;
+  const end = periodEnd(pid) / DAY;
+  let n = 0n;
+  for (let d = start; d < end; d++) {
+    const w = weekdayOfDays(d);
+    if (w >= 1 && w <= 5) n++;
+  }
+  return n;
+}
+
 /** `"2026Q1"` style label. */
 export function periodLabel(pid: number): string {
   return `${yearOf(pid)}Q${quarterOf(pid)}`;

@@ -40,6 +40,17 @@ import {
   walletFromSolanaPubkey,
   parametersToStrings,
   DEFAULT_PARAMETERS,
+  tradingDaysInPeriod,
+  pausedWithin,
+  unpaused,
+  newYearGross,
+  yearGrossAdd,
+  yearGrossGet,
+  settlementYear,
+  fxPairId,
+  normalizePythPrice,
+  invertRate,
+  routerIncomeCommitment,
 } from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -52,6 +63,8 @@ describe("known-answers.json", () => {
     expect(vectorsJson).toBe(sdkJson);
   });
   it("constants", () => {
+    expect(ka.schema).toBe(2);
+    expect(ka.specVersion).toBe("1.1");
     expect(ka.constants.WAD).toBe("1000000000000000000");
     expect(ka.constants.ZERO_INCOME_COMMITMENT).toBe(ZERO_INCOME_COMMITMENT.toString());
     expect(ka.constants.ZERO_INCOME_COMMITMENT_HEX).toBe(bytesToHex(fieldToBytes32(ZERO_INCOME_COMMITMENT)));
@@ -112,7 +125,7 @@ describe("known-answers.json", () => {
   it("messages: pre-images, digests and signatures", () => {
     const domains = Object.fromEntries(ka.domains.map((d: { name: string; domain: string }) => [d.name, hexToBytes(d.domain)]));
     const keys = Object.fromEntries(ka.testKeys.map((k: { seed: string; privateKey: string }) => [k.seed, hexToBytes(k.privateKey)]));
-    expect(ka.messages.length).toBe(18);
+    expect(ka.messages.length).toBe(20);
     for (const m of ka.messages) {
       const domain = domains[m.domain]!;
       const seriesKey = m.seriesKey.startsWith("bytes32") ? hexToBytes(ka.seriesKeys.evm.key) : hexToBytes(ka.seriesKeys.solana.key);
@@ -121,7 +134,7 @@ describe("known-answers.json", () => {
       let built;
       switch (m.kind) {
         case "REPORT":
-          built = reportAttestationMessage({ ...common, period: f.period, incomeCommitment: hexToBytes(f.incomeCommitment), tier: f.tier });
+          built = reportAttestationMessage({ ...common, period: f.period, priorIncomeCommitment: hexToBytes(f.priorIncomeCommitment), incomeCommitment: hexToBytes(f.incomeCommitment), tier: f.tier, liquidityEvent: f.liquidityEvent });
           break;
         case "FX":
           built = fxFallbackMessage({ ...common, period: f.period, fxRateWad: BigInt(f.fxRateWad) });
@@ -136,7 +149,7 @@ describe("known-answers.json", () => {
           built = extinguishMessage({ ...common, extinguishNonce: BigInt(f.extinguishNonce) });
           break;
         case "TRUEUP":
-          built = trueUpMessage({ ...common, year: f.year, adjustment: BigInt(f.adjustment), attestationTs: BigInt(f.attestationTs) });
+          built = trueUpMessage({ ...common, trueupNonce: BigInt(f.trueupNonce), year: f.year, adjustment: BigInt(f.adjustment), attestationTs: BigInt(f.attestationTs) });
           break;
         default:
           throw new Error(`unknown kind ${m.kind}`);
@@ -164,6 +177,26 @@ describe("known-answers.json", () => {
       expect(periodStart(p.periodId).toString()).toBe(p.periodStart);
       expect(periodEnd(p.periodId).toString()).toBe(p.periodEnd);
       expect(Number(daysInPeriod(p.periodId))).toBe(p.daysInPeriod);
+      expect(Number(tradingDaysInPeriod(p.periodId))).toBe(p.tradingDaysInPeriod);
+    }
+  });
+  it("pauses, year_gross ring, fx helpers and router bindings", () => {
+    const pauses = ka.pauses.pauseList.map((p: { start: string; end: string }) => ({ start: BigInt(p.start), end: BigInt(p.end) }));
+    for (const c of ka.pauses.cases) {
+      expect(pausedWithin(pauses, BigInt(c.a), BigInt(c.b), BigInt(c.now)).toString()).toBe(c.pausedWithin);
+      expect(unpaused(pauses, BigInt(c.a), BigInt(c.b), BigInt(c.now)).toString()).toBe(c.unpaused);
+    }
+    let ring = newYearGross();
+    for (const a of ka.yearGross.adds) ring = yearGrossAdd(ring, a.year, BigInt(a.incWad));
+    expect(ring.map((s) => ({ year: s.year, grossWad: s.grossWad.toString() }))).toEqual(ka.yearGross.slots);
+    for (const r of ka.yearGross.reads) expect(yearGrossGet(ring, r.year).toString()).toBe(r.grossWad);
+    for (const e of ka.yearGross.settlementYearExamples) expect(settlementYear(BigInt(e.ts), BigInt(e.settlementTs))).toBe(e.year);
+    for (const p of ka.fx.pairIds) expect(bytesToHex(fxPairId(p.feedId, p.inverted))).toBe(p.pairId);
+    for (const n of ka.fx.normalize) expect(normalizePythPrice(BigInt(n.price), n.expo).toString()).toBe(n.rateWad);
+    for (const i of ka.fx.invert) expect(invertRate(BigInt(i.rateWad)).toString()).toBe(i.inverted);
+    for (const r of ka.routerIncomeCommitments) {
+      expect(routerIncomeCommitment(BigInt(r.ytdAtEnd)).toString()).toBe(r.commitment);
+      expect(bytesToHex(fieldToBytes32(routerIncomeCommitment(BigInt(r.ytdAtEnd))))).toBe(r.commitmentHex);
     }
   });
   it("fixed point", () => {

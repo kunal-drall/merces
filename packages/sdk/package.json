@@ -13,7 +13,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "lint": "tsc -p tsconfig.json --noEmit",
@@ -26,6 +28,7 @@
     "poseidon-lite": "0.3.0"
   },
   "devDependencies": {
-    "circomlibjs": "0.1.7"
+    "circomlibjs": "0.1.7",
+    "fast-check": "4.10.2"
   }
 }
