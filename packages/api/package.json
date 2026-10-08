@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Merces API gateway: one chain-neutral API over both chains (Fastify, OpenAPI 3.1).",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./src/openapi/build.ts": "./src/openapi/build.ts"
   },
   "dependencies": {
     "@fastify/cors": "11.3.0",

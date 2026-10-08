@@ -1,0 +1,120 @@
+tags:
+  - { name: lifecycle, description: Treasury draws, payout claims, redemption and tail, retirement, transfer windows (R6, R13, R14, R15, R19) }
+paths:
+  /series/{seriesId}/treasury/build-draw:
+    post:
+      operationId: buildTreasuryDraw
+      x-access: issuer
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Unsigned drawRelease for every tranche that is due; no approval from anyone (C11.1), content: { application/json: { schema: { type: object } } } }, '409': { description: Paused or nothing drawable } }
+  /series/{seriesId}/treasury/build-pause:
+    post:
+      operationId: buildTreasuryPause
+      x-access: issuer
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [paused], properties: { paused: { type: boolean } } } } } }
+      responses: { '200': { description: Unsigned pauseReleases (the issuer's own pause), content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/payouts/build-claim:
+    post:
+      operationId: buildClaimPayout
+      x-access: holder
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [holder], properties: { holder: { type: string } } } } } }
+      responses: { '200': { description: Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon), content: { application/json: { schema: { type: object } } } }, '409': { description: Nothing to claim } }
+  /series/{seriesId}/redemption/quote:
+    get:
+      operationId: getRedemptionQuote
+      x-access: holder-or-issuer
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Formula price (min(C_remaining, max(P_hurdle, k × D_avg))), which term binds, deposit, tail cap and blockers, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/redemption/build-redeem:
+    post:
+      operationId: buildRedeem
+      x-access: issuer
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [maxPricePerUnit], properties: { maxPricePerUnit: { $ref: '#/components/schemas/Money' } } } } } }
+      responses: { '200': { description: Unsigned redeem (deposit = price × units outstanding; no fee), content: { application/json: { schema: { type: object } } } }, '409': { description: Lockup, status or unpaid periods block redemption } }
+  /series/{seriesId}/redemption/build-claim:
+    post:
+      operationId: buildClaimRedemption
+      x-access: holder
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [holder], properties: { holder: { type: string } } } } } }
+      responses: { '200': { description: Unsigned claimRedemption; units burn on claim, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/redemption:
+    get:
+      operationId: getRedemption
+      x-access: holder-or-issuer
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Redemption state and tail tracking (window end, per-unit cap, tail payouts so far), content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/retirement:
+    get:
+      operationId: getRetirement
+      x-access: public
+      tags: [lifecycle]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Cap progress and burn progress, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/retirement/crank-burn:
+    post:
+      operationId: crankBurn
+      x-access: admin
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Permissionless burn crank triggered for unclaimed holders, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/window:
+    get:
+      operationId: getTransferWindow
+      x-access: public
+      tags: [lifecycle]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Current transfer window, phase, flag state and market rules, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/window/build-commit:
+    post:
+      operationId: buildWindowCommit
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet, side, commitment, deposit, units], properties: { wallet: { type: string }, side: { type: string, enum: [buy, sell] }, commitment: { type: string }, deposit: { $ref: '#/components/schemas/Money' }, units: { type: string } } } } } }
+      responses: { '200': { description: Unsigned commitWindowOrder (buys need the allowlist; sells never do), content: { application/json: { schema: { type: object } } } }, '403': { description: Transfer windows are switched off } }
+  /series/{seriesId}/window/build-reveal:
+    post:
+      operationId: buildWindowReveal
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet, side, pricePerUnit, quantity, salt], properties: { wallet: { type: string }, side: { type: string }, pricePerUnit: { type: string }, quantity: { type: string }, salt: { type: string } } } } } }
+      responses: { '200': { description: Unsigned revealWindowOrder, content: { application/json: { schema: { type: object } } } }, '403': { description: Transfer windows are switched off } }
+  /series/{seriesId}/window/backup:
+    put:
+      operationId: putWindowBackup
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet, ciphertext], properties: { wallet: { type: string }, ciphertext: { type: string }, keyHint: { type: [string, 'null'] } } } } } }
+      responses: { '200': { description: Client-encrypted order backup stored, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/window/backup/{wallet}:
+    get:
+      operationId: getWindowBackup
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: wallet, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: The backup ciphertext, content: { application/json: { schema: { type: object } } } } }

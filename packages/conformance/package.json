@@ -1,0 +1,14 @@
+{
+  "name": "@merces/conformance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "H2 adapter conformance suite: behavioural tests written against ChainPort that pass on SimulatorChain today and, unchanged, on SolanaChain and EvmChain once Stage 1 lands.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/chains": "workspace:*",
+    "@merces/domain": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@merces/simulator": "workspace:*"
+  }
+}

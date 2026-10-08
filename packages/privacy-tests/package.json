@@ -1,0 +1,21 @@
+{
+  "name": "@merces/privacy-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "H3 privacy and security tests: the income canary (database, logs, queues, error reports), the access-tier matrix over every OpenAPI operation, and no-custody checks.",
+  "devDependencies": {
+    "@merces/api": "workspace:*",
+    "@merces/core": "workspace:*",
+    "@merces/db": "workspace:*",
+    "@merces/domain": "workspace:*",
+    "@merces/fixtures": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@merces/poi-device": "workspace:*",
+    "@merces/ports": "workspace:*",
+    "@merces/server": "workspace:*",
+    "@merces/services": "workspace:*",
+    "@merces/simulator": "workspace:*",
+    "yaml": "2.9.1"
+  }
+}

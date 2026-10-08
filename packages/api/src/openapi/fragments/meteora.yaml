@@ -1,0 +1,34 @@
+tags:
+  - { name: curve, description: Meteora curve-mode raises (E14, Solana only) }
+paths:
+  /series/{seriesId}/curve:
+    get:
+      operationId: getCurveStatus
+      x-access: public
+      tags: [curve]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Curve progress, spot price, graduation state and the public-price notice, content: { application/json: { schema: { type: object } } } }, '409': { description: Not a curve-mode series } }
+  /series/{seriesId}/curve/configure:
+    post:
+      operationId: configureCurve
+      x-access: issuer
+      tags: [curve]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Config generated through the Meteora port (Stage 1's oracle-driven generator) and stored, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/curve/build-buy:
+    post:
+      operationId: buildCurveBuy
+      x-access: backer
+      tags: [curve]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [buyer, amountIn], properties: { buyer: { type: string }, amountIn: { $ref: '#/components/schemas/Money' }, payIn: { type: string, enum: [USDC, USDG] }, slippageBps: { type: integer } } } } } }
+      responses: { '200': { description: Curve quote, minimum units out, an unsigned buy transaction and, when paying in USDG, the swap route to sign first, content: { application/json: { schema: { type: object } } } } }
+  /admin/curves/monitor:
+    post:
+      operationId: monitorCurves
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      responses: { '200': { description: Graduation check across curve-mode series; cranks graduation when the threshold is crossed, content: { application/json: { schema: { type: object } } } } }

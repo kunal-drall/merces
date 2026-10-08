@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Merces backend services E2\u2013E14, exposed as route registrars for the API gateway.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./src/*": "./src/*"
   },
   "dependencies": {
     "@merces/api": "workspace:*",

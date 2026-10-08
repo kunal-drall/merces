@@ -128,6 +128,21 @@ importers:
         specifier: 7.13.0
         version: 7.13.0(typescript@5.9.3)
 
+  packages/conformance:
+    dependencies:
+      '@merces/chains':
+        specifier: workspace:*
+        version: link:../chains
+      '@merces/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@merces/math':
+        specifier: workspace:*
+        version: link:../math
+      '@merces/simulator':
+        specifier: workspace:*
+        version: link:../simulator
+
   packages/core:
     dependencies:
       '@merces/db':
@@ -272,6 +287,45 @@ importers:
         specifier: workspace:*
         version: link:../simulator
 
+  packages/privacy-tests:
+    devDependencies:
+      '@merces/api':
+        specifier: workspace:*
+        version: link:../api
+      '@merces/core':
+        specifier: workspace:*
+        version: link:../core
+      '@merces/db':
+        specifier: workspace:*
+        version: link:../db
+      '@merces/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@merces/fixtures':
+        specifier: workspace:*
+        version: link:../fixtures
+      '@merces/math':
+        specifier: workspace:*
+        version: link:../math
+      '@merces/poi-device':
+        specifier: workspace:*
+        version: link:../poi-device
+      '@merces/ports':
+        specifier: workspace:*
+        version: link:../ports
+      '@merces/server':
+        specifier: workspace:*
+        version: link:../server
+      '@merces/services':
+        specifier: workspace:*
+        version: link:../services
+      '@merces/simulator':
+        specifier: workspace:*
+        version: link:../simulator
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
+
   packages/report-verifier:
     dependencies:
       '@merces/domain':
@@ -286,15 +340,39 @@ importers:
 
   packages/scenarios:
     dependencies:
+      '@merces/api':
+        specifier: workspace:*
+        version: link:../api
+      '@merces/chains':
+        specifier: workspace:*
+        version: link:../chains
+      '@merces/db':
+        specifier: workspace:*
+        version: link:../db
       '@merces/domain':
         specifier: workspace:*
         version: link:../domain
       '@merces/fixtures':
         specifier: workspace:*
         version: link:../fixtures
+      '@merces/indexer':
+        specifier: workspace:*
+        version: link:../indexer
       '@merces/math':
         specifier: workspace:*
         version: link:../math
+      '@merces/poi-device':
+        specifier: workspace:*
+        version: link:../poi-device
+      '@merces/ports':
+        specifier: workspace:*
+        version: link:../ports
+      '@merces/report-verifier':
+        specifier: workspace:*
+        version: link:../report-verifier
+      '@merces/services':
+        specifier: workspace:*
+        version: link:../services
       '@merces/simulator':
         specifier: workspace:*
         version: link:../simulator

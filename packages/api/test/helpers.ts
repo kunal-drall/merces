@@ -11,7 +11,7 @@ const GENESIS = Date.UTC(2026, 0, 1) / 1000;
 export const SECRET = 'test-secret';
 
 /** Test rig: one schema, two simulator harnesses, an indexer and the app with every route registered. */
-export async function makeRig(opts: { genesis?: number; keyPrefix?: string } = {}) {
+export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extraRoutes?: ((app: import('fastify').FastifyInstance, ctx: import('@merces/api').AppContext) => void)[] } = {}) {
   const t = await createTestSchema();
   const prefix = opts.keyPrefix ?? `t${Math.random().toString(36).slice(2, 7)}`;
   const sol = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: `solana`, genesis: opts.genesis ?? GENESIS }) });
@@ -35,7 +35,7 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string } = {
   const spki = await kms.spkiHex('report-verifier-test');
   for (const h of [sol, mon]) await h.exec(h.admin, { kind: 'registerVerifierKey', keyId: 'report-verifier-test', publicKey: spki, active: true });
   const ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: SECRET, devMode: true }), { esign, identity, zktls, kms, verifier, reportVerifierUrl: 'http://verifier.test' });
-  const app = await buildApp(ctx, serviceRoutes);
+  const app = await buildApp(ctx, [...serviceRoutes, ...(opts.extraRoutes ?? [])]);
   await app.ready();
   const token = (s: Partial<Session> & { wallets?: Session['wallets'] }) =>
     issueSession(SECRET, { accountId: s.accountId ?? 'acct', wallets: s.wallets ?? [], roles: s.roles ?? [], eligible: s.eligible ?? true, exp: Math.floor(Date.now() / 1000) + 3600 });

@@ -6,3 +6,5 @@ export * from './esign.ts';
 export * from './zktls.ts';
 export * from './prover.ts';
 export * from './price-feed.ts';
+export * from './meteora.ts';
+export * from './dex.ts';
