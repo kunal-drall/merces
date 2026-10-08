@@ -18,7 +18,7 @@ decision; the default applies until one arrives. Track-specific notes compiled f
 | A9 | Year and month lengths | `YEAR = 365 d`; 18 months = 547.875 d = 47,336,400 s | C7, C8 |
 | A10 | Wallet cap at the auction | Validated at reveal against `units_offered` (the only base known before settlement); after settlement the cap is enforced against outstanding supply on every window fill | C10 |
 | A11 | One bid per wallet per auction and per window | Simplifies cap enforcement and sybil-resistance; a wallet may still bid in every series | D3, D9 |
-| A12 | Min-raise test | Uses the upper bound `p* × (q_above + R)`; marginal rounding dust can make exact proceeds lower by less than `p* × (marginal bids − 1)` | D3 |
+| A12 | Min-raise test | Exact: the settlement proposer also claims `q_above`/`q_at`, the tally accumulates the marginal allocations, and `finalize_settlement` compares exact proceeds with `min_raise` (SPEC v1.1 §5.2; the v1.0 upper-bound rule is withdrawn) | D3 |
 | A13 | Payment timing | A report must be accepted before `pay`; `pay` pulls the full due plus accrual in one call (no partial payments); accrual counts toward the cap because it is paid into the vault | C6, C8 |
 | A14 | Late days | Counted from the end of grace in *effective* time (the clock stops during hardship pauses); `FormalNoticeDue` at `deadline + 90 d` | C8 |
 | A15 | Redemption while a payment is due | Rejected until the issuer pays (the issuer's own due, not a third-party block) | C7 |
@@ -30,6 +30,18 @@ decision; the default applies until one arrives. Track-specific notes compiled f
 | A21 | Solana FX cross-check | Chainlink cross-check is configured only on EVM in this version; on Solana the cross-check feed is unset (coverage check still applies) | C9 |
 | A22 | Tier-1 series | Hold plaintext `theta` and `r_wad` in the router (public by the issuer's explicit choice); still submit quarterly proofs; routed amounts are credited forward | D5 |
 | A23 | `DefaultAccountState = Frozen` | Not used; the hook forbids every non-window transfer, so the extension adds nothing but an extra thaw step | D2 |
+| A25 | First report of a series **(Kunal)** | The issuer supplies an *attested* prior income commitment (YTD income at the start of the first reporting period), so income earned in the settlement year before the raise is **not** owed. The alternative (zero prior → pre-raise same-year income is owed) is a who-pays-how-much choice the brief does not make; the issuer-favourable reading is in force | C3, SPEC §6.2 |
+| A26 | Amended terms mid-year | Apply to marginal income from the next accepted report; no retroactive credit for quarters already paid. Stage 2 should submit CPI amendments after the Q4 report and before Q1 | C4, SPEC §3.2 |
+| A27 | Window margin | First-come (ascending reveal index) fills at the clearing price instead of pro rata: exact, dust-free and always solvent. The brief requires pro rata rounding only for the primary auction | D9, SPEC §7 |
+| A28 | Window non-reveals | Uncharged (full escrow back). The non-reveal charge applies to the primary auction only | D9 |
+| A29 | Hardship pause while Late | A pause stops the clock but does not lift a release block already in force (`is_late_underlying`); the issuer must pay the overdue amount (no accrual accrues during the pause) before releases resume | C8, C11 §1 |
+| A30 | Tier-1 reports | Bound on-chain to the router's period checkpoint via Poseidon(2) (Solana `sol_poseidon` syscall; EVM Poseidon contract generated from circomlibjs). Tier 1 is a valid report tier only for pure tier-1 series; series with tiers 2/3/4 must report with an attested tier | D5, D6 |
+| A31 | Extinguishment and the estate | Only tranches not yet vested by the schedule go to holders; tranches vested before extinguishment remain claimable by the issuer's wallet (the estate). Counsel to confirm (H4) | C11 §6 |
+| A32 | Redemption `D_avg` bucketing | Gross payments are attributed to the settlement-year containing the period's *due date* (not the payment date), so grace-period timing cannot move a payment across a bucket; router income by receipt time | C7 |
+| A33 | Key revocation | Forward-only with a 45-day grace for already-ended periods; the last active key of a kind cannot be revoked without a replacement | C12 |
+| A34 | Pause bounds | One approval ≤ 365 days; ≤ 730 days cumulative per series; at most 16 pauses; requests can be withdrawn | C8 §5 |
+| A35 | EVM allowlist | A Merces flag; T-REX identities are registered once and never deleted so protocol-initiated unit movements never fail verification. Flag checked at bid commit, window bid commit, holder registration and the buyer side of a fill | C10, D2 |
+| A36 | Window buyer removed before fill | The fill is cancelled (full refund) and the units return to the seller; validity at reveal is otherwise what counts | C10, D9 |
 | A24 | Mock USDG | Token-2022 mint with TransferHook (mock no-op hook program), TransferFeeConfig at 0 bps / 0 max, ConfidentialTransferMint and MetadataPointer, 6 decimals — mirroring the extension set reported for USDG | M0 |
 
 ## Unverified

@@ -1,4 +1,7 @@
-# Merces Stage 1 — Normative Specification (v1.0, 7 October 2026)
+# Merces Stage 1 — Normative Specification (v1.1, 8 October 2026)
+
+> v1.1 folds in the confirmed findings of the adversarial spec audit (see §13 for the change list). Implementers on
+> v1.0 must re-read §5, §6, §7 in full.
 
 This document turns `BUILD_PROMPT.md` (the brief) into a concrete, chain-neutral design that the
 Solana programs and the EVM contracts both implement. Where this document chooses a default or
@@ -53,7 +56,9 @@ upgrade path at all. The hook is separate because Token-2022 calls it by interfa
 - Money amounts are stablecoin base units, unsigned 64-bit everywhere. EVM code uses `uint256` storage but **every amount must fit in `uint64`** (checked where values enter the system) so both stacks share one numeric domain. Intermediates: `u128` on Solana, `uint256` on EVM; the sequence of operations and the rounding points are identical.
 - Basis points (`bps`) are `u16` with `10_000 = 100%`.
 - Division always rounds **down** unless this document says `ceil`. Where the brief says rounding favours the issuer, the specific rounding is written out below; never improvise.
-- `mulDiv(a, b, c) = floor(a × b / c)` computed in 128-bit (Solana) or 256-bit (EVM) without intermediate overflow for the domain above. All arithmetic is checked; overflow reverts.
+- `mulDiv(a, b, c) = floor(a × b / c)` computed in 128-bit (Solana) or 256-bit (EVM) without intermediate overflow for the domain above. All arithmetic is checked; overflow reverts. Three-factor products are written as nested `mulDiv` with the rounding point fixed (e.g. `late_accrual = mulDiv(mulDiv(amount, hurdle_rate_wad, WAD), late_days, 365)`); both stacks use the same nesting.
+- **Entry-point range rule.** Every externally supplied amount, price, quantity, escrow, `payment_usd`, `fx_avg_wad`, adjustment and timestamp must satisfy `≤ 2^64 − 1` (`i64` for signed); the EVM reverts `AmountOutOfRange`, Solana's types enforce it. Derived dues (`due`, `due + accrual`, `deposit`) must also fit `u64` or the call reverts.
+- **Zero-amount rule.** Unit burns and unit/stablecoin transfers are issued only for amounts `> 0`; a zero amount is skipped (no call, no transfer event). A claim whose stablecoin and unit amounts are both zero succeeds as a no-op and emits its claim event with zeros (T-REX reverts zero-value compliance calls; Token-2022 does not — this rule keeps both chains identical).
 
 ### 1.2 Time, days and periods
 
@@ -78,25 +83,29 @@ Attestor and report-verifier keys are **secp256k1** keys identified by their 20-
 
 | Purpose | `msg = keccak256(` |
 | --- | --- |
-| Report attestation (tier 2 verifier key, tier 3 attestor) | `"MERCES_REPORT_V1" ‖ domain ‖ series_key ‖ period_u32 ‖ income_commitment_32 ‖ tier_u8 )` |
+| Report attestation (tier 2 verifier key, tier 3 attestor) | `"MERCES_REPORT_V1" ‖ domain ‖ series_key ‖ period_u32 ‖ prior_income_commitment_32 ‖ income_commitment_32 ‖ tier_u8 ‖ liquidity_event_u8 )` |
 | FX fallback rate (attestor) | `"MERCES_FX_V1" ‖ domain ‖ series_key ‖ period_u32 ‖ fx_rate_wad_u64 )` |
 | Favourable amendment (attestor) | `"MERCES_AMEND_V1" ‖ domain ‖ series_key ‖ amendment_nonce_u64 ‖ new_terms_commitment_32 ‖ new_cap_multiple_wad_u64 )` |
-| Hardship pause approval (attestor) | `"MERCES_PAUSE_V1" ‖ domain ‖ series_key ‖ pause_nonce_u64 ‖ pause_end_u64 )` |
+| Hardship pause approval (attestor) | `"MERCES_PAUSE_V1" ‖ domain ‖ series_key ‖ pause_nonce_u64 ‖ pause_end_u64 )` (the nonce identifies one request; withdrawing a request advances it) |
 | Extinguishment (two distinct attestors) | `"MERCES_EXTINGUISH_V1" ‖ domain ‖ series_key ‖ extinguish_nonce_u64 )` |
-| Tier 3 true-up (attestor) | `"MERCES_TRUEUP_V1" ‖ domain ‖ series_key ‖ year_u16 ‖ adjustment_i64 ‖ attestation_ts_u64 )` |
+| Tier 3 true-up (attestor) | `"MERCES_TRUEUP_V1" ‖ domain ‖ series_key ‖ trueup_nonce_u64 ‖ year_u16 ‖ adjustment_i64 ‖ attestation_ts_u64 )` |
 
-Nonces are per-series counters stored in the ledger and incremented on use, so no signature replays.
+Nonces are per-series counters stored in the ledger and incremented on use, so no signature replays (every attestor message carries one; reports are unique per `(series, period)` and bind the prior commitment, so a report attestation cannot be reused for a different proof).
 Tier 4 (self-attestation) uses the issuer's native transaction signature (Solana signer / EVM `msg.sender`) and is accepted only while the protocol flag `tier4_enabled` is true (default false).
+
+**Key revocation is forward-only.** `revoke_attestor` / `revoke_verifier_key` record `revoked_at`. A revoked key still validates a report attestation for a period with `period_end(period) ≤ revoked_at` until `revoked_at + (report_due_days + grace_days) × DAY`, so no in-flight quarter is orphaned. The registry refuses to revoke the last active key of a kind unless a replacement is registered in the same transaction. (Charter: no admin action may manufacture lateness.)
 
 ### 1.5 Commitments (off-chain and in-circuit)
 
+- **Income scale.** `theta` and `income_ytd` are amounts in the *income currency* expressed with exactly `stablecoin_decimals` fractional digits (6 for USDC/USDG) — not ISO minor units. `fx_avg_wad` is the unit-less WAD ratio "stablecoin units per one income-currency unit" (1 for stablecoin income), so `payment_usd = floor(payment × fx_avg_wad / WAD)` is directly in stablecoin base units. The Stage 2 verifier and attestors attest `income_commitment` over this representation (INTERFACES.md).
 - `terms_commitment = Poseidon(5)(theta, r_wad, currency_code, indexing_rule, terms_salt)`
-  - `theta`: annual threshold in income-currency minor units (`< 2^64`)
-  - `r_wad`: rate per unit, WAD (`< 2^64`)
+  - `theta`: annual threshold at income scale (`< 2^64`)
+  - `r_wad`: rate per unit, WAD (`< 2^64`); at series creation `r_wad × units_offered ≤ WAD` is enforced for tier-1 series (plaintext known) and is a documented obligation of the Stage 2 term builder for others
   - `currency_code`: ISO-4217 numeric code (`840` = USD); `indexing_rule`: `u32` opaque code (0 = none, 1 = CPI-indexed yearly)
   - `terms_salt`: random field element
-- `income_commitment = Poseidon(2)(income_ytd, income_salt)`; `income_ytd` in income-currency minor units.
+- `income_commitment = Poseidon(2)(income_ytd, income_salt)`; `income_ytd` at income scale. **High-water mark rule:** the attested `income_ytd` for period `q` is `max(real YTD through q, income_ytd attested for q−1 in the same year)`; verifiers and attestors enforce it so a report always exists even when a source's YTD figure falls (refunds, royalty adjustments) — such a quarter simply pays zero.
 - `ZERO_INCOME_COMMITMENT = Poseidon(2)(0, 0)` is the prior commitment at the start of every reporting year.
+- Tier-1 (router) income is public: for tier-1 reports `income_commitment` must equal `Poseidon(2)(router.ytd_at_end[period], 0)` (§6.5), checked on-chain (Solana `sol_poseidon` syscall, EVM Poseidon(2) contract generated from circomlibjs).
 
 ### 1.6 Parameters, bounds and defaults
 
@@ -123,13 +132,18 @@ Every number below is a **parameter** held in the registry's `ProtocolConfig` (e
 | `trueup_days` | `60` | fixed by brief | |
 | `tail_seconds` | `31_536_000` (12 months) | fixed by brief | |
 | `fx_min_coverage_bps` | `8000` | `[5000, 10000]` | |
-| `fx_max_staleness_seconds` | `3600` | `[60, 86400]` | age of the Pyth update at snapshot time |
+| `fx_max_staleness_seconds` | `3600` | `[60, 86400]` | age of the Pyth update at snapshot time; FX feeds publish only in market hours, so keepers snapshot inside them |
 | `fx_max_conf_bps` | `100` | `[1, 1000]` | `conf / price ≤ 1%` |
 | `fx_deviation_band_bps` | `200` | `[10, 5000]` | H2 proposed default (2%), used only when a cross-check feed is configured |
+| `max_pause_seconds` | `31_536_000` (365 d) | `[2_592_000, 63_072_000]` | one approval |
+| `max_cumulative_pause_seconds` | `63_072_000` (730 d) | `[max_pause_seconds, 157_680_000]` | per series lifetime |
+| `max_pauses` | `16` | fixed | bounded pause history |
 | `max_release_tranches` | `24` | fixed | |
 | `max_bids_per_auction` | `4096` (EVM), unbounded by PDA count (Solana) | documented | settlement is paged |
 
 Protocol flags (registry, admin-settable): `new_raises_paused` (default false), `windows_enabled` (default **false**, ships closed), `tier4_enabled` (default **false**), `early_draw_approver` (default **unset**).
+
+Series creation additionally requires `floor(units_offered × wallet_cap_bps / 10000) ≥ 1` (otherwise no bid could ever be valid).
 
 ### 1.7 Status machine (C8 §7)
 
@@ -167,13 +181,17 @@ ProtocolConfig {
   new_raises_paused: bool, windows_enabled: bool, tier4_enabled: bool,
   early_draw_approver: wallet|0,
   defaults: Parameters (all of §1.6),
-  protocol_program / protocol_contracts: addresses allowed to call the narrow write interface (§3.3),
+  protocol_program (Solana) / protocol_contracts (EVM): fixed at `init_protocol`, **no setter**; the only callers of the narrow write interface (§3.3),
   series_count: u64
 }
 Issuer { wallet, active: bool, issuance_stopped: bool, series_count: u32 }
 AllowlistEntry { wallet, allowed: bool, updated_at }
 AttestorKey { addr20, active: bool }    VerifierKey { addr20, active: bool }
-FxPairConfig { pair_id: bytes32, feed_id: bytes32, inverted: bool, crosscheck: address|0, enabled: bool }
+FxPairConfig { pair_id: bytes32 = keccak256(feed_id ‖ inverted_u8), feed_id: bytes32, inverted: bool, crosscheck: address|0, crosscheck_effective_period: u32, enabled: bool }
+  // feed_id and inverted are write-once (the pair id commits to them); `enabled = false` only stops new series from
+  // referencing the pair — snapshots stay permissionless; `crosscheck` may be set from 0 once, later changes take
+  // effect from `period_of(now) + 1` so a live quarter's rule never changes under an issuer.
+AttestorKey / VerifierKey also carry `revoked_at: u64` (0 = active), see §1.4.
 
 Series {
   // identity
@@ -193,18 +211,20 @@ Series {
   // amendable (only via amend_terms)
   terms_commitment: bytes32, amendment_nonce: u64,
   // raise results (written by the protocol via §3.3)
-  raise_state: RaiseState, opened_at: u64, settlement_ts: u64, units_sold: u64, clearing_price: u64 (P0),
-  terminal_status: u8 (0 none, else Retired/Redeemed/Extinguished mirror for the hook)
+  raise_state: RaiseState, opened_at: u64, settlement_ts: u64, units_sold: u64, clearing_price: u64 (P0), mint_finalized: bool,
+  terminal_status: u8 (0 none, else Retired/Redeemed/Extinguished mirror),
+  // Solana only: protocol escrow token accounts for the unit mint, written at open_raise (read by the hook)
+  auction_escrow_ata, window_escrow_ata
 }
 ```
 
 ### 3.2 Functions
 
-- `init_protocol(admin, allowlist_manager, fee_collector, chain_id, defaults)` once.
+- `init_protocol(admin, allowlist_manager, fee_collector, chain_id, protocol_program|protocol_contracts, defaults)` once. On Solana the write interface requires the signer `registry_authority = create_program_address([b"registry_authority", bump], protocol_program)`.
 - Admin: `set_allowlist_manager`, `set_fee_collector`, `set_flags(new_raises_paused, windows_enabled, tier4_enabled)`, `set_early_draw_approver`, `set_defaults(Parameters)` (bounds-checked), `register_attestor(addr20)`, `revoke_attestor`, `register_verifier_key`, `revoke_verifier_key`, `set_fx_pair(...)`, `register_issuer(wallet)`, `deactivate_issuer(wallet)` (blocks *new* series only), `transfer_admin` / `accept_admin` (two-step).
 - Allowlist manager: `set_allowed(wallet, bool)`.
-- Issuer: `create_series(params, release_schedule, terms_commitment, tier_flags, fx_pair_id, mode, issuer_accepts_public_price)` → Draft; requires `issuer.active && !issuer.issuance_stopped`, issuer wallet allowlisted, bounds OK, `min_raise ≤ reserve_price × units_offered`, `units_offered ≥ 1`, `reserve_price ≥ 1`. `set_contract_hash(series, hash)` (Draft only, non-zero). `stop_issuance()` / `resume_issuance()`. `amend_terms(series, new_terms_commitment, new_cap_multiple_wad, attestor_sig)`: issuer is signer; attestor signature over the §1.4 message with the current nonce; `new_cap_multiple_wad ≤ current` and within bounds; nonce++; emits `TermsAmended`. Allowed in any non-terminal state.
-- Protocol write interface (§3.3): `mark_raise_opened(series, unit_mint, opened_at)`, `mark_raise_result(series, state ∈ {Settled, Failed, Cancelled}, settlement_ts, units_sold, clearing_price)`, `mark_terminal(series, status)`. Callable only by the protocol program's signer PDA (Solana) or the registered protocol contracts (EVM).
+- Issuer: `create_series(params, release_schedule, terms_commitment, tier_flags, fx_pair_id, mode, issuer_accepts_public_price)` → Draft; requires `issuer.active && !issuer.issuance_stopped`, issuer wallet allowlisted, bounds OK, `min_raise ≤ reserve_price × units_offered`, `units_offered ≥ 1`, `reserve_price ≥ 1`. `set_contract_hash(series, hash)` (Draft only, non-zero). `stop_issuance()` / `resume_issuance()`. `amend_terms(series, new_terms_commitment, new_cap_multiple_wad, attestor_sig)`: issuer is signer; attestor signature over the §1.4 message with the current nonce; `new_cap_multiple_wad ≤ current` and within bounds; nonce++; emits `TermsAmended`. Allowed while `terminal_status == 0` (never after Retired/Redeemed/Extinguished: the tail cap is fixed at redemption). The protocol reads `cap_multiple_wad` live (§6.3 *effective cap*), so a lowered cap applies to the next distribution with no underflow; if the new cap is already met, the series retires at the next `retire_if_capped` crank or payment. Amended θ/r apply to marginal income from the next accepted report (no retroactive credit for quarters already paid — `ASSUMPTIONS.md` A26).
+- Protocol write interface (§3.3): `mark_raise_opened(series, unit_mint, opened_at, auction_escrow_ata, window_escrow_ata)`, `mark_raise_result(series, state ∈ {Settled, Failed, Cancelled}, settlement_ts, units_sold, clearing_price)` (exact values, written once), `mark_mint_finalized(series)`, `mark_terminal(series, status)`. Callable only by the protocol program's signer PDA (Solana) or the registered protocol contracts (EVM).
 - Views: everything above; `is_allowed(wallet)`, `is_attestor(addr20)`, `is_verifier_key(addr20)`, `is_transfer_locked(series, now) = raise_state != Settled || now < settlement_ts + lockup_seconds`.
 
 ### 3.3 Immutability
@@ -219,20 +239,24 @@ After `mark_raise_opened`, every field in the "charter terms" block is frozen: n
 
 - One Token-2022 mint per sealed-bid series, created by `merces_protocol::open_raise`: `decimals = 0`; extensions `TransferHook { program_id = merces_hook }`, `PermanentDelegate { delegate = vault_authority PDA of merces_protocol }`, `MetadataPointer` → the mint itself, `TokenMetadata { name = "Merces HEU <series_id>", symbol = "HEU", uri = metadata_uri from create args }`. `mint_authority = auction_authority PDA` (merces_protocol), `freeze_authority = None`. `DefaultAccountState` is **not** used (recorded assumption: the hook plus allowlist checks at mint are sufficient; adding it later is additive).
 - `open_raise` also CPIs `merces_hook::initialize_extra_account_meta_list(mint)` so Token-2022 can resolve the hook's extra accounts: `[registry ProtocolConfig, Series (by seed from mint), AllowlistEntry(source_owner), AllowlistEntry(destination_owner)]`, expressed with `spl_tlv_account_resolution` seeds (PDA seeds derived from the source/destination token-account owners read from the transfer accounts).
-- Mint authority is revoked (`set_authority(None)`) when `units_minted == units_sold` (last `claim_win`) or by `revoke_mint_authority` once every winning bid is processed.
+- Mint authority is revoked (`set_authority(None)`) inside the `process_bid` that makes `bids_processed == bid_count` (§5.2), in the same instruction that emits `RaiseMintFinalized`.
+- Protocol escrow token accounts for the unit mint, created in `open_raise` and recorded in the registry `Series`: the **auction escrow** (ATA of `auction_escrow_authority` PDA) that holds minted-but-undelivered units, and the **window escrow** (ATA of `window_escrow_authority` PDA). A small `EscrowArm` PDA of `merces_protocol` (seeds `[b"escrow_arm", mint]`, fields `armed_owner, armed_units`) is written by `commit_ask` immediately before its transfer CPI and cleared after it.
+- Extra account metas for the hook (per mint, `spl_tlv_account_resolution`): `[ProtocolConfig (literal), Series (literal; the series PDA exists before the mint), EscrowArm (external PDA of `protocol_program` with seeds [literal b"escrow_arm", AccountData{account_index: 1 (mint), data_index: 0, length: 32}])]`. The hook validates the list with `ExtraAccountMetaList::check_account_infos` and requires `series.unit_mint == mint`.
 - Hook rule (`merces_hook::execute(amount)`), evaluated on **every** transfer (mint and burn do not invoke hooks):
   1. Require the "transferring" flag set by Token-2022 on both token accounts (standard hook safety).
-  2. Load `Series` by the mint; if `series.mode == Curve` → reject (curve mints are not created with this hook anyway).
-  3. If the source **or** destination token account is the series' **window escrow** token account (owned by `window_escrow_authority` PDA of `merces_protocol`, derived from the series), the transfer is a window escrow movement: require destination owner allowlisted when the destination is not the escrow; apply the wallet cap on the destination when it is not the escrow; allow.
-  4. Otherwise (wallet-to-wallet): **always reject** (`DirectTransferForbidden`). Lockup, allowlist and cap are therefore enforced by construction: only the window module can move units, and it checks lockup, report acceptance, allowlist and cap itself.
+  2. If `series.mode == Curve` → reject (curve mints are not created with this hook anyway).
+  3. If the **source** token account is `series.auction_escrow_ata` or `series.window_escrow_ata` → allow (deliveries, fills and returns; the protocol has already applied allowlist and cap rules).
+  4. Else if the **destination** is `series.window_escrow_ata` → allow only if `EscrowArm.armed_owner == source_owner && EscrowArm.armed_units == amount` (an armed `commit_ask`), else reject `UnarmedEscrowDeposit`.
+  5. Otherwise (wallet-to-wallet, or into the auction escrow): **reject** (`DirectTransferForbidden`). Lockup, allowlist and cap are therefore enforced by construction: only the protocol moves units, and it checks lockup, report acceptance, allowlist and cap itself.
   - Burns via the permanent delegate (vault) never invoke the hook; redemption, retirement and extinguishment burns always work.
 - Wallet cap check used by the window: `destination_balance_after ≤ floor(units_outstanding × wallet_cap_bps / 10000)` where `units_outstanding = mint.supply`.
 
 ### 4.2 EVM
 
 - T-REX v4 (`@tokenysolutions/t-rex` 4.1.6, GPL-3.0) deployed by the Merces deploy script behind T-REX's own proxies/implementation authority (owner = timelock). One `Token` per sealed-bid series (`decimals = 0`), one shared `IdentityRegistry` (+ storage), `TrustedIssuersRegistry`, `ClaimTopicsRegistry` with **no required claim topics**, one `ModularCompliance` per token with the `MercesComplianceModule` bound.
-- Allowlist on EVM **is** identity-registry membership: `MercesRegistry.isAllowed(w) == identityRegistry.isVerified(w)`; the allowlist manager is an agent of the identity registry and registers each wallet with an ONCHAINID `Identity` deployed from `@onchain-id/solidity`'s `IdFactory` (country code 0). Removal = `deleteIdentity`.
-- `MercesComplianceModule.moduleCheck(from, to, value, compliance)` returns true only when `from` or `to` is the series' `MercesWindow` escrow address (window escrow movements), or `from == address(0)` (mint) with `to` verified, or `to == address(0)` (burn). Everything else is false → direct transfers revert. `MercesVault` and `MercesWindow` are token agents (needed for `burn` and for escrow bookkeeping); the window applies lockup/report/cap checks itself, mirroring Solana. Wallet cap on the window: `balanceOf(buyer) + fill ≤ totalSupply × wallet_cap_bps / 10000`.
+- **Allowlist vs identity.** `MercesRegistry.isAllowed(w)` is a Merces-maintained flag (`AllowlistEntry.allowed`) on both chains. On EVM, `set_allowed(w, true)` additionally registers `w` once in the shared T-REX `IdentityRegistry` with an ONCHAINID `Identity` from the vendored `IdFactory` (country code 0); **identities are never deleted** (`set_allowed(w, false)` only clears the flag), so T-REX `isVerified(w)` stays true for every wallet that was ever allowlisted and protocol-initiated unit movements (mint, delivery, fill, escrow return) never fail on verification. The flag is checked only where new exposure is created: `commit_bid`, window `commit_bid`, `register_holder`, and the buyer side of `process_order`.
+- `MercesComplianceModule.moduleCheck(from, to, value, compliance)` returns true only when: `from == address(0)` (mint — minted to the auction contract only), `to == address(0)` (burn), `from` is the series' `MercesAuction` or `MercesWindow` escrow (deliveries, fills, returns), or `to == MercesWindow` **and** `MercesWindow.armedDeposit(from) == value && value > 0` (a transient value set by `commit_ask` immediately before its `transferFrom` and cleared after it). Everything else is false → direct transfers revert `DirectTransferForbidden`. The module keeps its own per-compliance state (`auction`, `window`) set at token creation.
+- **T-REX governance (normative).** Per-series `TokenProxy` + `ModularComplianceProxy` are created by `MercesAuction.open_raise` through `MercesTokenFactory`, which: binds `MercesComplianceModule`; adds exactly `MercesAuction`, `MercesVault`, `MercesWindow` as token agents (mint / burn / escrow movements); calls `unpause()` (T-REX tokens initialise paused); and transfers ownership of both proxies to `MercesTokenGovernor`, a minimal non-upgradeable contract that exposes **no** `addAgent`, `removeAgent`, `setCompliance`, `setIdentityRegistry`, `addModule`, `removeModule`, `pause`, `freeze`, `forcedTransfer` or `recoveryAddress` path (its only function is to forward T-REX implementation-authority version changes from the timelock, which is the money-code upgrade path). The shared `IdentityRegistry` stack is owned by the same governor; `MercesRegistry` is its only agent. `MercesAuction` and `MercesWindow` are registered identities at deployment (they are the only contracts that hold units). The T-REX `TREXImplementationAuthority` is owned by the `TimelockController`.
 - Charter fields never live in the token.
 
 ---
@@ -244,56 +268,58 @@ After `mark_raise_opened`, every field in the "charter terms" block is frozen: n
 ```
 Auction (per series) {
   state (mirrors RaiseState), opened_at, commit_end = opened_at + commit_duration, reveal_end = commit_end + reveal_duration,
-  escrow_total: u64, bid_count: u32, revealed_count: u32,
-  // settlement proposal and tally
-  clearing_price: u64, q_above: u64, q_at: u64, tallied_count: u32, tally_round: u32,
-  // results
-  units_sold: u64, proceeds: u64, remainder_at_margin: u64 (R), units_minted: u64, bids_processed: u32,
-  mint_authority_revoked: bool
+  escrow_total: u64, bid_count: u32, revealed_count: u32, valid_count: u32,
+  // settlement proposal and tally (one round at a time)
+  tally_round: u32, round_rejected: bool,
+  clearing_price: u64, q_above_claim: u64, q_at_claim: u64, r_claim: u64,
+  q_above: u64, q_at: u64, alloc_sum: u64, min_valid_price: u64, tallied_count: u32,
+  // results (exact, written once at finalize)
+  units_sold: u64, proceeds: u64, settlement_ts: u64,
+  // processing
+  bids_processed: u32, units_minted: u64, mint_finalized: bool
 }
 Bid (per series × bidder; one bid per wallet) {
   bidder, commitment: bytes32, escrow: u64, reveal_index: u32,
   revealed: bool, valid: bool, price: u64, quantity: u64,
-  tallied_round: u32, processed: bool, allocation: u64
+  tallied_round: u32, processed: bool, allocation: u64,
+  pending_units: u64, pending_refund: u64, delivered: bool
 }
 ```
 
 ### 5.2 Functions
 
-- `open_raise(series)` — issuer; requires `raise_state == Draft`, `contract_hash != 0`, issuer allowlisted, `!new_raises_paused`, `series.mode == SealedBid`. Creates the unit mint/token (§4), sets `opened_at = now`, state `Open`; registry `mark_raise_opened`. Emits `RaiseOpened`.
+- `open_raise(series)` — issuer; requires `raise_state == Draft`, `contract_hash != 0`, issuer allowlisted, `!new_raises_paused`, `series.mode == SealedBid`. Creates the unit mint/token and the protocol escrow accounts (§4), sets `opened_at = now`, state `Open`; registry `mark_raise_opened`. Emits `RaiseOpened`.
 - `cancel_raise(series)` — issuer; requires `Open` and `bid_count == 0`. State `Cancelled`; registry updated. Emits `RaiseCancelled`.
-- `commit_bid(series, commitment, escrow)` — bidder allowlisted, `now < commit_end`, no existing bid for this wallet, `escrow > 0`. Pulls `escrow` stablecoin into the auction escrow account. Emits `BidCommitted(series, bidder, escrow)`.
-- `reveal_bid(series, price, quantity, salt)` — `commit_end ≤ now < reveal_end`, bid exists and not revealed; `keccak256(price ‖ quantity ‖ salt ‖ bidder) == commitment`. Sets `revealed = true`, `reveal_index = revealed_count++`. Validity: `valid = price ≥ reserve_price && quantity ≥ 1 && quantity ≤ wallet_cap_units_at_auction && escrow ≥ required_escrow(price, quantity)` where `wallet_cap_units_at_auction = floor(units_offered × wallet_cap_bps / 10000)` and `required_escrow(p, q) = p×q + floor(p×q × auction_fee_bps / 10000)`. Invalid reveals are refunded in full at claim time. Emits `BidRevealed(series, bidder, price, quantity, valid)`. (Assumption: validity is evaluated against `units_offered`, the only base known before settlement.)
-- `begin_settlement(series, proposed_clearing_price)` — anyone, `now ≥ reveal_end`, state `Open` or `Settling` (re-proposal allowed until finalized; starts a new `tally_round`, resets `q_above = q_at = tallied_count = 0`). State `Settling`.
-- `tally_bids(series, page)` — anyone; for each revealed bid in the page not yet tallied in this round: `if valid: if price > clearing_price: q_above += quantity; elif price == clearing_price: q_at += quantity`; mark tallied; `tallied_count++`. Solana: bids are passed as remaining accounts (≤ 24 per instruction); EVM: `tally(fromIndex, toIndex)` over the bid array (≤ 200 per call).
-- `finalize_settlement(series)` — anyone; requires `tallied_count == revealed_count`. Let `N = units_offered`, `p* = clearing_price`, `D = q_above + q_at`.
-  - Valid proposal iff (a) `q_at > 0` (some bid sits exactly at p*) and (b) `q_above < N` and (c) either `D ≥ N` (oversubscribed: p* is the lowest winning price) or (`D < N` and no valid bid has `price < p*`, i.e. p* is the lowest valid price: enforced by also tracking `min_valid_price` during tally and requiring `min_valid_price == p*`). Otherwise revert `InvalidClearingPrice` (the proposer re-proposes).
-  - `R = min(N − q_above, q_at)` (units for the marginal bids). `units_sold = q_above + Σ_marginal floor(R × q_i / q_at)` — computed exactly during claims; to know `units_sold` at finalize without a second pass, finalize stores `R` and `q_at` and computes `units_sold_upper = q_above + R`; the exact `units_sold` is accumulated during `claim_win` as `units_minted`. **Proceeds** are therefore transferred per winner at claim time (`p* × allocation` → treasury), not in bulk, so the treasury receives exactly `p* × units_sold`.
-  - Min raise: `provisional_proceeds = p* × (q_above + R)`. Because rounding down at the margin can only reduce proceeds by `< p* × (number of marginal bids)`, and the brief requires a hard test, the check is `p* × (q_above + R) ≥ min_raise` **and** marginal rounding losses are bounded: finalize computes `units_sold_exact` by a second tally pass? — **No.** To keep one pass, marginal allocations are made deterministic without needing all bids: `alloc_i = floor(R × q_i / q_at)`, and finalize stores `R, q_at`. The exact `units_sold` is only known after all marginal bids are processed. The min-raise decision uses the **upper bound** `p* × (q_above + R)` (assumption, recorded; the difference is at most `p* × (#marginal bids − 1)` units of dust). If `p* × (q_above + R) < min_raise` → state `Failed`, `FailedRaise` emitted, all escrow refundable in full, no fees, no units.
-  - Otherwise state `Settled`, `settlement_ts = now`, registry `mark_raise_result(Settled, now, units_sold_upper, p*)`; `units_sold` is finalized to the exact minted total when `bids_processed == bid_count` (`finalize_mint`), and the registry is updated again with the exact `units_sold` (registry write interface allows this one correction, only downwards and only before `finalize_mint` completes). Emits `RaiseSettled(series, p*, units_sold_upper, proceeds_upper)` and later `RaiseMintFinalized(series, units_sold, proceeds)`.
-- `claim_win(series, bid)` / `process_bid` — anyone may call for any bid (push semantics so no bidder can stall settlement); each bid processed once, after `Settled` or `Failed`:
-  - `Failed`: refund `escrow` in full (revealed or not).
-  - `Settled`, revealed & valid & `price > p*`: `alloc = quantity`.
-  - `Settled`, revealed & valid & `price == p*`: `alloc = floor(R × quantity / q_at)`.
-  - `Settled`, revealed & valid & `price < p*`: `alloc = 0`.
-  - `Settled`, revealed & invalid: `alloc = 0`.
-  - `Settled`, **unrevealed**: `alloc = 0`, `charge = floor(escrow × non_reveal_charge_bps / 10000)` → fee collector, refund `escrow − charge`. Emits `NonRevealCharged`.
-  - For `alloc > 0`: `cost = p* × alloc`; `fee = floor(cost × auction_fee_bps / 10000)`; `refund = escrow − cost − fee` (non-negative by the validity rule since `price ≥ p*`); transfer `cost` → treasury, `fee` → fee collector, `refund` → bidder; mint `alloc` units to the bidder (Solana: to the bidder's Token-2022 ATA, created if needed by the caller; EVM: `token.mint(bidder, alloc)`); `units_minted += alloc`. Emits `UnitsAllocated(series, bidder, alloc, cost, fee, refund)`.
-  - `bids_processed++`; when `bids_processed == bid_count`: `finalize_mint` semantics (exact `units_sold = units_minted`, `proceeds = p* × units_sold`, revoke mint authority, registry correction). Emits `RaiseMintFinalized`.
+- `commit_bid(series, commitment, escrow)` — bidder allowlisted (`isAllowed`), `now < commit_end`, no existing bid for this wallet, `escrow > 0`. Pulls `escrow` stablecoin into the auction stablecoin escrow. Emits `BidCommitted(series, bidder, escrow)`.
+- `reveal_bid(series, price, quantity, salt)` — `commit_end ≤ now < reveal_end`, bid exists and not revealed; `keccak256(price ‖ quantity ‖ salt ‖ bidder) == commitment`. Sets `revealed = true`, `reveal_index = revealed_count++`. Validity: `valid = price ≥ reserve_price && quantity ≥ 1 && quantity ≤ wallet_cap_units_at_auction && escrow ≥ required_escrow(price, quantity)` where `wallet_cap_units_at_auction = floor(units_offered × wallet_cap_bps / 10000)` (≥ 1 by the creation rule) and `required_escrow(p, q) = p×q + floor(p×q × auction_fee_bps / 10000)`. `valid_count++` when valid. Invalid reveals are refunded in full at processing. A reveal never reverts on a validity failure; it records `valid = false`. Emits `BidRevealed(series, bidder, price, quantity, valid)`.
+- `begin_settlement(series, clearing_price, q_above_claim, q_at_claim)` — anyone, `now ≥ reveal_end`, state `Open` or `Settling`. Allowed only when no round is in progress: `tally_round == 0 || round_rejected`. Starts round `tally_round + 1`: stores the claims, `r_claim = min(units_offered − q_above_claim, q_at_claim)` (saturating; `0` if `q_above_claim ≥ units_offered`), resets `q_above = q_at = alloc_sum = tallied_count = 0`, `min_valid_price = u64::MAX`, `round_rejected = false`. State `Settling`. Emits `SettlementProposed(series, clearing_price, round)`. While a round is incomplete, `begin_settlement` reverts `TallyInProgress` — no caller can reset a tally that honest keepers are completing.
+- `tally_bids(series, page)` — anyone; for each **revealed** bid in the page not yet tallied in this round: if `valid`: `min_valid_price = min(min_valid_price, price)`; `if price > clearing_price: q_above += quantity; elif price == clearing_price: q_at += quantity; alloc_sum += floor(r_claim × quantity / q_at_claim)` (skipped when `q_at_claim == 0`); mark tallied; `tallied_count++`. Pages: Solana ≤ 24 Bid PDAs as remaining accounts; EVM `tally(fromIndex, toIndex)` with ≤ 200 bids. Unrevealed bids are not tallied (they are counted by `bid_count − revealed_count`).
+- `finalize_settlement(series)` — anyone; requires state `Settling` and `tallied_count == revealed_count`. Never reverts on a wrong proposal: an invalid proposal sets `round_rejected = true`, emits `SettlementRejected(series, round, clearing_price, reason)` and leaves the tally in place so a new proposal can be made. Let `N = units_offered`, `p* = clearing_price`.
+  1. **No valid bids.** If `valid_count == 0`: state `Failed`, `clearing_price = 0`, `units_sold = proceeds = 0`; registry `mark_raise_result(Failed, …)`; emit `RaiseFailed(series, 0, 0, min_raise)`. (Every bid is then refunded in full under the `Failed` branch; no fee, no non-reveal charge.)
+  2. **Claims must match the tally.** `q_above == q_above_claim && q_at == q_at_claim`, else rejected (`ClaimMismatch`).
+  3. **Price validity.** Either (a) oversubscribed: `q_at > 0 && q_above < N && q_above + q_at ≥ N`, or (b) undersubscribed: `q_above + q_at < N && min_valid_price == p*` (then `q_at > 0` automatically). Else rejected (`InvalidClearingPrice`). (Proof of uniqueness: `ARCHITECTURE.md` §5.1.)
+  4. **Exact results.** `R = r_claim` (`= min(N − q_above, q_at)`); marginal bids receive `floor(R × q_i / q_at)` and their sum is `alloc_sum` from the tally, so `units_sold = q_above + alloc_sum` and `proceeds = p* × units_sold` are exact in one pass.
+  5. **Min raise.** If `proceeds < min_raise`: state `Failed`, registry `mark_raise_result(Failed, …)`, emit `RaiseFailed(series, p*, proceeds, min_raise)`. Otherwise state `Settled`, `settlement_ts = now`, registry `mark_raise_result(Settled, now, units_sold, p*)` (exact, written once), emit `RaiseSettled(series, p*, units_sold, proceeds, settlement_ts)`.
+- `process_bid(series, bid)` — anyone, once per bid, after `Settled` or `Failed`. **Never depends on the bidder being able to receive anything**: it only moves funds to protocol-owned accounts and records what the bidder is owed.
+  - `Failed`: `pending_refund = escrow`, `alloc = 0`.
+  - `Settled`, revealed & valid & `price > p*`: `alloc = quantity`. `price == p*`: `alloc = floor(R × quantity / q_at)`. `price < p*`, or revealed & invalid: `alloc = 0`, `pending_refund = escrow`.
+  - `Settled`, **unrevealed**: `alloc = 0`, `charge = floor(escrow × non_reveal_charge_bps / 10000)` → fee collector now, `pending_refund = escrow − charge`. Emits `NonRevealCharged`.
+  - For `alloc > 0`: `cost = p* × alloc`; `fee = floor(cost × auction_fee_bps / 10000)`; `pending_refund = escrow − cost − fee` (non-negative by validity); transfer `cost` → treasury (`deposit_proceeds`), `fee` → fee collector; **mint `alloc` units to the auction escrow** (Solana: `auction_escrow_ata`; EVM: `token.mint(address(auction), alloc)`); `pending_units = alloc`; `units_minted += alloc`; `register_holder(bidder)` (snapshot of all accumulators, which are still zero — §6.3). Emits `UnitsAllocated(series, bidder, alloc, cost, fee, refund = pending_refund)`.
+  - `processed = true`; `bids_processed++`. When `bids_processed == bid_count` and state is `Settled`: require `units_minted == units_sold` (invariant), set `mint_finalized = true`, revoke the mint authority (Solana `set_authority(None)`; EVM: the factory never grants a second minter and the auction's `mint` path is closed by the flag), registry `mark_mint_finalized`, store `ledger.units_outstanding = units_sold`, emit `RaiseMintFinalized(series, units_sold, proceeds)` and `MintAuthorityRevoked(series)`.
+- `deliver_bid(series, bid)` — anyone (or the bidder), after `processed`, not yet `delivered`: transfers `pending_refund` stablecoin to the bidder and moves `pending_units` from the auction escrow to the bidder's token account (hook rule 3 / compliance `from == escrow`), regardless of the bidder's *current* allowlist flag (validity was fixed at reveal; a removed wallet keeps its units and can still claim and sell in a window, C10). Sets `delivered = true`, emits `BidDelivered(series, bidder, units, refund)`. A delivery that fails for recipient-side reasons (frozen stablecoin account, missing token account) can be retried forever; it never affects counters, finalization or treasury releases. Until delivery, the units count toward the bidder's accrual weight (§6.3 `accrual_units`).
 - Maximum bids: Solana unlimited in count (each bid is a PDA; tally pages of 24; finalize O(1)); EVM `max_bids_per_auction = 4096` (array; tally pages of ≤ 200). Document CU/gas per page in `AUDIT_NOTES.md`.
 
 ### 5.3 Treasury (D4)
 
 ```
-Treasury (per series) { proceeds_received: u64, released_total: u64, issuer_paused_releases: bool,
-                        early_draw_total: u64, tranche_count: u8 }
+Treasury (per series) { proceeds: u64, released_total: u64, issuer_paused_releases: bool, tranche_count: u8, extinguished_at: u64 }
 ```
-- `deposit_proceeds` is internal (called from `claim_win`).
-- `tranche_amount(i) = floor(proceeds × bps_i / 10000)` for `i < last`; last tranche = `proceeds − Σ others`, so the tranches sum exactly to proceeds. `proceeds` here is the **final** proceeds (`p* × units_sold`); releases are blocked until `RaiseMintFinalized` (the exact proceeds must be known). `vested(now) = Σ_{i : settlement_ts + at_offset_i ≤ now} tranche_amount(i)`.
-- `claim_release(series)` — issuer; requires `!issuer_paused_releases && derive_status(now) != Late && status not Extinguished`; `amount = vested(now) + early_draw_total_consumed_adjustment − released_total` (early draws count against vesting: `amount = min(vested(now), proceeds) − released_total`, where `released_total` includes early draws); transfers `amount` to the issuer. Emits `ReleaseClaimed(series, amount, released_total)`. Retired/Redeemed series still release on schedule (the raise is the issuer's capital).
+- `deposit_proceeds` is internal (called from `process_bid`). `proceeds` is exact from `finalize_settlement`; deposits must sum to it when `mint_finalized`.
+- `tranche_amount(i) = floor(proceeds × bps_i / 10000)` for `i < last`; last tranche = `proceeds − Σ others`. `vested(now) = Σ_{i : settlement_ts + at_offset_i ≤ now} tranche_amount(i)`; `vested ≤ proceeds` always.
+- `claim_release(series)` — issuer; requires `mint_finalized`, `!issuer_paused_releases`, `derive_status(now) != Late`, and `!is_late_underlying(now)` (§6.4: a hardship pause stops the clock but does not lift a release block already in force). `cap = extinguished_at == 0 ? vested(now) : vested(extinguished_at)`; `amount = cap > released_total ? cap − released_total : 0`; require `amount > 0` (`NothingVested`); `released_total += amount`; transfer to the issuer. Emits `ReleaseClaimed(series, amount, released_total)`. Retired and Redeemed series keep releasing on schedule (the raise is the issuer's capital); after extinguishment only what had vested by `extinguished_at` remains claimable by the issuer's wallet (the estate).
 - `set_release_pause(series, bool)` — issuer only. Emits `ReleasePauseSet`.
-- `request_early_draw(series, amount)` — issuer; requires `early_draw_approver != 0`; Solana: the approver must co-sign the instruction; EVM: `IEarlyDrawApprover(approver).approveEarlyDraw(seriesId, amount, nonce) == true` (view call) — and `released_total + amount ≤ proceeds`; transfers; `released_total += amount`. Emits `EarlyDrawExecuted`. Off by default because the approver is unset.
-- On `Extinguished`: `unreleased = proceeds − released_total` is moved to the vault as a final no-fee distribution (§6.9).
+- `request_early_draw(series, amount)` — issuer; requires `mint_finalized`, `early_draw_approver != 0`; Solana: the approver co-signs; EVM: `IEarlyDrawApprover(approver).approveEarlyDraw(seriesId, amount, nonce) == true`; `released_total + amount ≤ proceeds`; transfers; `released_total += amount` (early draws are consumed by later vesting). Emits `EarlyDrawExecuted`. Off by default because the approver is unset.
+- On `Extinguished` (§6.9): `unreleased = proceeds − vested(now)` moves to the vault; `extinguished_at = now`.
 
 Stablecoin handling on Solana: every transfer uses `transfer_checked` with the mint's own token program; for Token-2022 mints the program resolves transfer-hook extra accounts via `spl_token_2022::onchain::invoke_transfer_checked` with the remaining accounts supplied by the caller, and **asserts** that if a `TransferFeeConfig` extension exists both `transfer_fee_basis_points == 0` and `maximum_fee == 0` for the current and the newer epoch config, else `TransferFeeNotZero`. `stablecoin_decimals` is read from the mint at series creation.
 
@@ -306,62 +332,71 @@ Stablecoin handling on Solana: every transfer uses `transfer_checked` with the m
 ```
 Ledger {
   status: SeriesStatus, first_period: u32, last_accepted_period: u32|none, last_paid_period: u32|none,
-  open_due_period: u32|none, open_due_amount: u64, open_due_tier: u8,
-  router_credit: u64, trueup_due: u64, trueup_deadline: u64, trueup_credit folded into router_credit,
-  // pauses
-  pause_nonce: u64, pause_requested: bool, pause_start: u64, pause_end: u64, paused_total: u64,
-  formal_notice_emitted_for: u32|none,
-  // cap and accumulators
-  cap_per_unit: u64 (= floor(cap_multiple_wad × P0 / WAD)), paid_per_unit_wad: u128, net_acc_wad: u128, carry: u64 (undistributed dust),
-  units_outstanding: u64 (mirrors supply), year_gross_wad: [u128; 64] indexed by settlement year, 
+  open_due_period: u32|none, open_due_amount: u64,
+  router_credit: u64,
+  trueup_nonce: u64, trueup_due: u64, trueup_attested_at: u64, trueup_year: u16|none, last_trueup_year: u16|none,
+  // pauses (bounded history so countdowns can exclude paused time exactly)
+  pause_nonce: u64, pause_requested: bool, pause_requested_at: u64,
+  pauses: [{ start: u64, end: u64 }; max_pauses]  (end = pause_end as approved, or the early end), pause_count: u8, paused_total: u64,
+  formal_notice_emitted_for: u32|none, trueup_notice_emitted: bool,
+  // supply and accumulators
+  units_outstanding: u64 (= units_sold at mint finalization; reduced only by burns),
+  paid_per_unit_wad: u128, net_acc_wad: u128, carry: u64,
+  year_gross: [{ year: u16, gross_wad: u128 }; 4]  (tagged ring, §6.3),
   fee_collected: u64, gross_received: u64, refunded_to_issuer: u64,
   // commitments
   last_income_commitment: bytes32, last_income_period: u32|none,
   // redemption and tail
-  redemption_ts: u64, redemption_price: u64, units_at_redemption: u64, tail_cap_per_unit: u64, tail_acc_wad: u128, tail_paid_per_unit_wad: u128,
+  redemption_ts: u64, redemption_price: u64, units_at_redemption: u64, tail_cap_per_unit: u64,
+  tail_paid_per_unit_wad: u128, tail_acc_wad: u128, tail_carry: u64, tail_exhausted: bool,
   // extinguishment
-  final_acc_wad: u128, extinguish_nonce: u64, amendment_nonce mirrored from registry
+  extinguished_at: u64, final_acc_wad: u128, final_carry: u64, final_units: u64, extinguish_nonce: u64
 }
 Holder (per series × wallet) { registered: bool, last_net_acc_wad: u128, pending: u64, redeemed_units: u64, last_tail_acc_wad: u128, last_final_acc_wad: u128 }
-Report (per series × period) { accepted_at, payment_usd, fx_avg_wad, fx_fallback: bool, tier, liquidity_event, income_commitment, accrual_paid: u64, paid_at }
+Report (per series × period) { accepted_at, payment_usd, fx_avg_wad, fx_fallback: bool, tier, liquidity_event, income_commitment, prior_income_commitment, due, accrual_paid: u64, paid_at }
 ```
 
-`units_outstanding` is `mint.supply` (Solana, read from the mint each time) / `token.totalSupply()` (EVM). First report period `first_period = period_of(settlement_ts)`.
+`units_outstanding` is **stored** at mint finalization (`= units_sold`) and decremented only by burns (retirement, redemption, extinguishment); it is the public input of every non-tail proof. `cap_per_unit` is **not stored**: `cap_per_unit() = floor(registry.cap_multiple_wad × P0 / WAD)` is read at every use so favourable amendments apply immediately. First report period `first_period = period_of(settlement_ts)`.
+
+**Accrual weight.** `accrual_units(w) = unit_balance(w) + pending auction units (undelivered, §5.2) + ask-escrow units (open or unprocessed window ask, §7)`. Every `settle_holder` uses this weight, so units sitting in a protocol escrow never strand a distribution.
+
+**Mint-finalization gate.** `submit_report`, `pay`, `pay_trueup`, `submit_trueup`, `route`/`sweep`, `redeem`, `extinguish`, `open_window` and every `vault_receive_*` revert `MintNotFinalized` until `RaiseMintFinalized`. Tier-1 income that arrives before then stays in the router's receiving account and is routed afterwards. Countdowns (§6.4) are unaffected: a period's clock starts at its `period_end` as usual, so finalization is in the keeper's interest.
 
 ### 6.2 ProofOfIncome verifier (D6)
 
-`submit_report(series, period, payment_usd, fx_avg_wad, fx_fallback_sig|none, income_commitment, tier, liquidity_event, proof, attestation_sig)`:
+`submit_report(series, period, payment_usd, fx_avg_wad, fx_fallback_sig|none, prior_income_commitment, income_commitment, tier, liquidity_event, proof, attestation_sig)`:
 
-1. Caller is the issuer (Solana signer / EVM `msg.sender`). Keepers may **not** submit reports (reports are the issuer's act; C11 §3).
-2. `status ∉ {Extinguished}`; if `status == Retired` → reports are not accepted (nothing owed). If `status == Redeemed` → accepted only when `liquidity_event == true` and `now ≤ redemption_ts + tail_seconds` (§6.8); otherwise `period == next expected period` where next = `first_period` if none accepted else `last_accepted_period + 1`; and `now ≥ period_end(period)` (no early reports) and no `open_due_amount > 0` (the previous period must be paid first).
-3. `tier` must be enabled in `series.tier_flags`; tier 4 additionally requires `tier4_enabled`.
-4. FX: if `series.fx_pair_id == 0`: `fx_avg_wad` must equal `WAD`. Else let `(ok, avg) = quarter_average(pair, period)` (§6.6): if `ok` → `fx_avg_wad == avg` and no fallback signature; if `!ok` (NeedsFallback) → a valid attestor signature over the FX message for `(series, period, fx_avg_wad)` is required and `fx_fallback = true`.
-5. Prior commitment: `prior = (last_income_period is in the same year_of(period) && last_income_period == period − 1) ? last_income_commitment : ZERO_INCOME_COMMITMENT`. (Because reports are sequential, the only other case is the first quarter of a year or the first report ever.)
-6. Groth16 verify with public inputs **in this order**: `[terms_commitment, units_outstanding, fx_avg_wad, prior, income_commitment, payment_usd]` (all as field elements, big-endian). `terms_commitment` is read from the registry.
-7. Attestation: tier 2 → signature by an active verifier key; tier 3 → by an active attestor; tier 4 → none (issuer signature is the tx); tier 1 → **none** (tier-1 series still submit the quarterly proof; the onchain router already moved money; see §6.5). Message per §1.4.
-8. Effects: store `Report`; `last_accepted_period = period`; `last_income_commitment/period` updated; `credit_used = min(router_credit, payment_usd)`; `router_credit −= credit_used`; `due = payment_usd − credit_used`; if `due == 0` → `last_paid_period = period`, emit `ReportAccepted` + `PaymentSettled(…, 0)`; else `open_due_period = period`, `open_due_amount = due`. `sync_status(now)`. Emits `ReportAccepted(series, period, payment_usd, fx_avg_wad, fx_fallback, tier, liquidity_event, income_commitment, due)`.
+1. Caller is the issuer (Solana signer / EVM `msg.sender`). Keepers may **not** submit reports (reports are the issuer's act; C11 §3). `payment_usd ≤ 2^64 − 1`, `fx_avg_wad ≤ 2^64 − 1`.
+2. Preconditions, in every status: `mint_finalized`; `status ∉ {Retired, Extinguished}` (`TerminalStatus`); `period == next expected` where next = `first_period` if none accepted else `last_accepted_period + 1`; `now ≥ period_end(period)`; `open_due_amount == 0`; `Report[period]` not yet stored. If `status == Redeemed` additionally: `period_start(period) ≤ redemption_ts + tail_seconds` (`TailEnded`); if `liquidity_event` then `tail_cap_per_unit > 0 && !tail_exhausted` (`NoTailDue`). There are no deadlines after redemption; non-liquidity tail-period reports are accepted with `due = 0` and only advance the commitment chain.
+3. `tier ∈ {1, 2, 3, 4}` must be enabled in `series.tier_flags`; tier 4 additionally requires `tier4_enabled`. **Tier 1 is only a valid report tier when `tier_flags == 0b0001`** (pure on-chain income); a series with tier 2/3/4 enabled must report with that tier so the attestation cannot be bypassed.
+4. FX: if `series.fx_pair_id == 0`: `fx_avg_wad == WAD`. Else `(ok, avg) = quarter_average(pair, period)` (§6.6): if `ok` → `fx_avg_wad == avg` and no fallback signature; if `!ok` (NeedsFallback) → a valid attestor signature over the FX message for `(series, period, fx_avg_wad)` is required and `fx_fallback = true`.
+5. Prior commitment: if `last_income_period == period − 1` and `year_of(last_income_period) == year_of(period)` → `prior_income_commitment` must equal `last_income_commitment`. Else if this is the **first report of the series** and `quarter_index(period) != 0` → the supplied `prior_income_commitment` is accepted as given (it commits to the issuer's YTD income at `period_start(first_period)`, attested together with `income_commitment` in step 7; pre-settlement income in the settlement year is therefore not owed — `ASSUMPTIONS.md` A25, Kunal). Otherwise (start of a year) → must equal `ZERO_INCOME_COMMITMENT`.
+6. Groth16 verify with public inputs **in this order**: `[terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd]`, where `units_outstanding = ledger.units_outstanding` (stored), or `units_at_redemption` when `status == Redeemed`. `terms_commitment` is read from the registry.
+7. Source binding: tier 2 → signature by an active (or grace-period, §1.4) verifier key over the §1.4 report message; tier 3 → by an attestor; tier 4 → none beyond the issuer's own signature; tier 1 → `income_commitment == Poseidon(2)(router.ytd_at_end[period], 0)` (§6.5; `RouterPeriodNotClosed` if the checkpoint is missing) and `prior_income_commitment == Poseidon(2)(router.ytd_at_end[period − 1], 0)` or `ZERO_INCOME_COMMITMENT` at a year start.
+8. Effects: store `Report`; `last_accepted_period = period`; `last_income_commitment/period` updated; `credit_used = min(router_credit, payment_usd)`; `router_credit −= credit_used`; `due = payment_usd − credit_used` (0 for non-liquidity tail reports). If `due == 0` → `last_paid_period = period`, emit `ReportAccepted` + `PaymentSettled(…, 0, …)`; else `open_due_period = period`, `open_due_amount = due`. `sync_status(now)`. Emits `ReportAccepted(series, period, payment_usd, fx_avg_wad, fx_fallback, tier, liquidity_event, income_commitment, due)`.
 
-`pay(series)` — issuer (or anyone paying on the issuer's behalf; funds come from the caller): requires `open_due_amount > 0`. `accrual = late_accrual(open_due_period, open_due_amount, now)` (§6.4). `total = open_due_amount + accrual`; pull `total` from the payer; `vault_receive_gross(total)` (§6.3); `Report.accrual_paid = accrual`; `last_paid_period = open_due_period`; clear `open_due_*`; `sync_status(now)`. Emits `PaymentSettled(series, period, gross = total, accrual, fee, accepted, refunded)`. Partial payments are not supported (assumption).
+`pay(series)` — issuer (or anyone paying on the issuer's behalf; funds come from the caller): requires `open_due_amount > 0`. `accrual = late_accrual(open_due_period, open_due_amount, now)` (§6.4; 0 while Redeemed). `total = open_due_amount + accrual` (must fit `u64`); pull `total`; if `status == Redeemed` → `vault_receive_tail(total)` (§6.8) else `vault_receive_gross(total, Payment, open_due_period)` (§6.3). `Report.accrual_paid = accrual`, `paid_at = now`; `last_paid_period = open_due_period`; clear `open_due_*`; `sync_status(now)`. Emits `PaymentSettled(series, period, gross = total, accrual, fee, accepted, refunded)`. Partial payments are not supported.
 
-Tier 3 true-up: `submit_trueup(series, year, adjustment_i64, attestation_ts, attestor_sig)` — issuer; signature per §1.4; `adjustment > 0` → `trueup_due += adjustment`, `trueup_deadline = attestation_ts + trueup_days × DAY` (no accrual before the deadline; after it, accrual as for a late payment with `grace_end := trueup_deadline`); `adjustment < 0` → `router_credit += |adjustment|` (credited forward). `pay_trueup(series)` pulls `trueup_due + accrual` into the vault like `pay`. Emits `TrueUpRecorded`, `TrueUpPaid`.
+Tier 3 true-up: `submit_trueup(series, year, adjustment_i64, attestation_ts, attestor_sig)` — issuer; `tier_flags` bit2 set; message per §1.4 with `trueup_nonce` (nonce++); at most one true-up per `year` (`last_trueup_year < year`); `year < year_of(period_of(now))` and every period of `year` from `first_period` has an accepted report; `trueup_due == 0` (pay the previous one first). `adjustment > 0` → `trueup_due = adjustment`, `trueup_attested_at = attestation_ts` (no accrual for `trueup_days` of unpaused time, then accrual as for a late payment); `adjustment < 0` → `|adjustment| ≤ Σ payment_usd accepted for that year`, `router_credit += |adjustment|` (credited forward). `pay_trueup(series)` pulls `trueup_due + late_accrual_trueup(now)` into the vault (`vault_receive_gross(…, Payment, period_of(trueup_attested_at))`) and clears it. Emits `TrueUpRecorded`, `TrueUpPaid`.
 
 ### 6.3 Payout vault accounting (D7, C6)
 
-`vault_receive_gross(G, source ∈ {Payment, Router, Tail, Final})` with `N = units_outstanding` (`> 0` required; if `N == 0` the series is already fully burned → revert `NoUnitsOutstanding`):
+`vault_receive_gross(G, source ∈ {Payment, Router}, period_for_year)` with `N = units_outstanding` (`> 0` required: `NoUnitsOutstanding`):
 
 ```
-cap_wad     = cap_per_unit × WAD
+cap_wad     = cap_per_unit() × WAD
+cap_eff_wad = max(cap_wad, paid_per_unit_wad)              // effective cap: a lowered cap never underflows
 inc_wad     = floor(G × WAD / N)
-if paid_per_unit_wad + inc_wad < cap_wad:
+if paid_per_unit_wad + inc_wad < cap_eff_wad:
     accepted = G
 else:
-    remaining_wad = cap_wad − paid_per_unit_wad
+    remaining_wad = cap_eff_wad − paid_per_unit_wad
     accepted      = floor(remaining_wad × N / WAD)
     inc_wad       = floor(accepted × WAD / N)
     refund        = G − accepted            → issuer (same tx)
-    retire()                                 // status Retired, registry.mark_terminal(Retired), emit SeriesRetired
+    retire()                                 // status Retired, registry.mark_terminal(Retired), clears open_due_* and trueup_due, emit SeriesRetired
 paid_per_unit_wad += inc_wad
-year_gross_wad[settlement_year(now)] += inc_wad          // settlement_year = floor((now − settlement_ts) / YEAR)
+year_gross.add(settlement_year(anchor), inc_wad)     // anchor = deadline(period_for_year) for Payment (the period's due date, outside issuer control), now for Router
 fee          = floor(accepted × payout_fee_bps / 10000)  → fee collector
 net          = accepted − fee + carry
 delta_acc    = floor(net × WAD / N)
@@ -371,77 +406,91 @@ net_acc_wad += delta_acc
 gross_received += accepted; fee_collected += fee
 emit PayoutDistributed(series, source, gross = G, accepted, fee, net_added = net − carry_in, delta_acc_wad, paid_per_unit_wad, retired)
 ```
-The `Tail` and `Final` sources use their own accumulators (§6.8, §6.9) and `Final` takes no fee; the pattern is the same.
+`settlement_year(ts) = floor((ts − settlement_ts) / YEAR)`. `year_gross` is a tagged 4-slot ring: slot `y % 4` is zeroed and re-tagged when its `year != y` before adding; readers treat a missing tag as 0. `retire_if_capped(series)` — anyone: if `cap_eff_wad − paid_per_unit_wad == 0` (a lowered cap already met) → `retire()`.
+
+The `Tail` (§6.8) and `Final` (§6.9) sources use their own accumulators and carries (`tail_carry`, `final_carry`); `Final` takes no fee. All three use the same `<` boundary rule.
 
 Holder functions (claim path is behind `IPayoutClaims` on EVM and a dedicated instruction set on Solana so a private implementation can replace it):
 
-- `register_holder(series, wallet)` — anyone may register any wallet that is **allowlisted now**; sets `last_net_acc_wad = net_acc_wad` (and the tail/final equivalents) if not already registered. Winners are registered automatically in `claim_win` (snapshot taken at that time; the vault has no distributions before settlement, so `last_net_acc_wad = 0`). Window buyers are registered on fill.
-- `settle_holder(series, wallet)` (internal; also callable by keepers): `pending += floor((net_acc_wad − last_net_acc_wad) × balance / WAD)`; `last_net_acc_wad = net_acc_wad`. Called before any balance change of that wallet (window fills on both sides, burns) and inside `claim`.
-- `claim(series)` — the registered holder (or anyone pushing to the holder): `settle_holder`; `amount = pending`; `pending = 0`; transfer `amount` stablecoin to the holder's wallet. If `status == Retired`, burn the holder's full balance after settling (permanent delegate / agent burn), `units_outstanding -= balance`. Emits `PayoutClaimed(series, holder, amount, burned_units)`. Claims never require the holder to be *currently* allowlisted (no stranding, C10).
-- `burn_retired(series, holder)` — anyone, `status == Retired`: `settle_holder` then burn; the holder's `pending` stays claimable. Emits `UnitsBurned(series, holder, units, reason = Retired)`.
+- `register_holder(series, wallet)` — anyone may register a wallet that is **allowlisted now**; sets `last_net_acc_wad = net_acc_wad`, `last_tail_acc_wad = tail_acc_wad`, `last_final_acc_wad = final_acc_wad` as they stand (all zero before the first distribution). Winners are registered in `process_bid`; window buyers on fill.
+- `settle_holder(series, wallet)` (internal; also callable by keepers): `pending += floor((net_acc_wad − last_net_acc_wad) × accrual_units(wallet) / WAD)`; `last_net_acc_wad = net_acc_wad`. Called before any change of that wallet's accrual units (delivery is not a change; fills, returns and burns are) and inside `claim`.
+- `claim(series)` — the registered holder (or anyone pushing to the holder): `settle_holder`; `amount = pending`; `pending = 0`; transfer `amount`. If `status == Retired` and `unit_balance > 0`, burn the balance (permanent delegate / agent burn), `units_outstanding −= balance`. Emits `PayoutClaimed(series, holder, amount, burned_units)`. Claims never require the holder to be *currently* allowlisted (no stranding, C10) and remain available in every terminal status for funds already in the vault.
+- `burn_retired(series, holder)` — anyone, `status == Retired`, balance `> 0`: `settle_holder` then burn; the holder's `pending` stays claimable. Emits `UnitsBurned(series, holder, units, reason = Retired)`.
 
-Invariants (tested): `Σ pending + Σ claimable ≤ vault stablecoin balance`; `paid_per_unit_wad ≤ cap_wad`; `fee_collected == Σ floor(accepted × bps / 10000)` per distribution.
+Invariants (tested): `Σ pending + Σ claimable ≤ vault stablecoin balance`; `paid_per_unit_wad ≤ cap_eff_wad`; `fee_collected == Σ floor(accepted × bps / 10000)` per distribution; `Σ accrual_units == units_outstanding` for non-terminal series.
 
 ### 6.4 Status derivation, deadlines and accrual
 
+Countdowns run in **unpaused time from their own start**, so a pause stops every running clock without shifting obligations that start later.
+
 ```
-pause_elapsed(now): if pause_start == 0 → 0 else (min(now, pause_end) − pause_start)   // open pause, auto-closes at pause_end
-effective_now(now) = now − paused_total − pause_elapsed(now)
-is_paused(now)     = pause_start != 0 && now < pause_end
-deadline(p)        = period_end(p) + report_due_days × DAY
-grace_end(p)       = deadline(p) + grace_days × DAY
-earliest_unpaid()  = open_due_period if open_due_amount > 0 else next expected period (first_period or last_accepted_period + 1)
+paused_within(a, b) = Σ over pauses (and the open pause, clipped at min(now, pause_end)) of |[start, end] ∩ [a, b]|
+unpaused(a, b)      = (b − a) − paused_within(a, b)                         // b ≥ a
+is_paused(now)      = an open pause exists with start ≤ now < end
+deadline_s          = report_due_days × DAY ; grace_s = (report_due_days + grace_days) × DAY ; notice_s = formal_notice_days × DAY
+countdown(p, now)   = unpaused(period_end(p), now)
+earliest_unpaid()   = open_due_period if open_due_amount > 0 else next expected period
+trueup_overdue(now) = trueup_due > 0 && unpaused(trueup_attested_at, now) > trueup_days × DAY
 
 derive_status(now):
   if status ∈ {Retired, Redeemed, Extinguished} → status
   if is_paused(now) → Paused
-  p = earliest_unpaid(); e = effective_now(now)
-  if e ≤ deadline(p) → OnTime ; elif e ≤ grace_end(p) → InGrace ; else → Late
+  if trueup_overdue(now) → Late
+  p = earliest_unpaid(); c = countdown(p, now)
+  if c ≤ deadline_s → OnTime ; elif c ≤ grace_s → InGrace ; else → Late
 
-late_days(p, now)  = max(0, floor((effective_now(now) − grace_end(p)) / DAY))
-late_accrual(p, amount, now) = floor(amount × hurdle_rate_wad × late_days(p, now) / (365 × WAD))
+is_late_underlying(now) = trueup_overdue(now) || countdown(earliest_unpaid(), now) > grace_s     // ignores Paused
+late_days(p, now)       = max(0, floor((countdown(p, now) − grace_s) / DAY))
+late_accrual(p, amount, now) = mulDiv(mulDiv(amount, hurdle_rate_wad, WAD), late_days(p, now), 365)
+late_accrual_trueup(now)     = mulDiv(mulDiv(trueup_due, hurdle_rate_wad, WAD), max(0, floor((unpaused(trueup_attested_at, now) − trueup_days × DAY) / DAY)), 365)
 ```
-`sync_status(now)`: when a pause has ended (`pause_start != 0 && now ≥ pause_end`): `paused_total += pause_end − pause_start; pause_start = pause_end = 0` (closing it). Then store `derive_status`; emit `StatusChanged(series, old, new)` on change; if `effective_now ≥ deadline(p) + formal_notice_days × DAY` and `formal_notice_emitted_for != p` → emit `FormalNoticeDue(series, p)` and record. `crank_status(series)` is the permissionless wrapper.
+`sync_status(now)`: closes an open pause whose `end ≤ now` (nothing else to do: the pause record already holds its end); stores `derive_status`; emits `StatusChanged(series, old, new)` on change; emits `FormalNoticeDue(series, p)` once per period when `countdown(p, now) ≥ notice_s`, and `FormalNoticeDue(series, trueup)` once when `unpaused(trueup_attested_at, now) ≥ trueup_days × DAY + (notice_s − grace_s)`. `crank_status(series)` is the permissionless wrapper.
 
-Hardship pause: `request_pause(series)` — issuer, sets `pause_requested = true` (emits `PauseRequested`, no reason stored); `approve_pause(series, pause_end, attestor_sig)` — anyone submits the attestor signature (§1.4 with `pause_nonce`): requires `pause_requested`, `pause_end > now`, not already paused; `pause_start = now`, `pause_end`, `pause_nonce++`, `pause_requested = false`; emits `PauseApproved(series, pause_start, pause_end)`. `end_pause(series)` — issuer may end early: `paused_total += now − pause_start`, clear; emits `PauseEnded`. Pauses do not stop treasury releases (C11 §1).
+Hardship pause: `request_pause(series)` — issuer; `pause_requested = true`, `pause_requested_at = now`, `pause_nonce++` (emits `PauseRequested(series, nonce)`); `withdraw_pause_request(series)` — issuer; clears and `pause_nonce++` (invalidating any signature). `approve_pause(series, pause_end, attestor_sig)` — anyone submits the attestor signature (§1.4 with the current nonce): requires `pause_requested`, `!is_paused(now)`, `pause_end > now`, `pause_end − now ≤ max_pause_seconds`, `paused_total + (pause_end − now) ≤ max_cumulative_pause_seconds`, `pause_count < max_pauses`; appends `{start: now, end: pause_end}`, `paused_total += pause_end − now`, `pause_requested = false`; emits `PauseApproved(series, start, end, attestor)`. `end_pause(series)` — issuer, requires `is_paused(now)`: sets the open pause's `end = now`, `paused_total −= (old_end − now)`; emits `PauseEnded`. Pauses do not stop treasury releases (C11 §1) but do not lift a release block already in force (`is_late_underlying`, §5.3).
 
 ### 6.5 Tier 1 split router (D5)
 
-Tier-1 series store plaintext `theta` and `r_wad` in the router (public by the issuer's choice). State: `Router { theta: u64, r_wad: u64, ytd_year: u16, ytd_received: u64 }`. Income arrives as stablecoin into the router's receiving account; anyone calls `route(series, amount)` (Solana: the router's token account balance is swept; EVM: payer calls `route(amount)` after approval, or `sweep()` moves tokens already sent):
+Tier-1 series store plaintext `theta` and `r_wad` in the router (public by the issuer's choice), supplied at `create_series` with the salt-free check `Poseidon(5)(theta, r_wad, currency_code, indexing_rule, terms_salt) == terms_commitment` performed off-chain by the term builder and on-chain where Poseidon(5) is available (Solana syscall; EVM Poseidon(5) contract) — recorded in `ASSUMPTIONS.md`. A tier-1 series must have `fx_pair_id == 0` (its income currency is the stablecoin) and `r_wad × units_offered ≤ WAD`.
 
 ```
-if year_of_now != ytd_year: ytd_year = year_of_now; ytd_received = 0
+Router { theta: u64, r_wad: u64, ytd_year: u16, ytd_received: u64, held_before_finalization: u64,
+         checkpoints: ring of 8 { period: u32, ytd_at_end: u64 } }
+```
+`route(series, amount)` / `sweep` — anyone; requires `mint_finalized` (before that, receipts accumulate in the receiving account):
+```
+close_period_if_needed(): if the receiving period of the last receipt < period_of(now): record checkpoint {period: p_prev, ytd_at_end: ytd_received (as of the end of p_prev)} for every period since the last checkpoint (ytd resets to 0 at a year boundary, so a Q4 checkpoint holds the year total and Q1 starts from 0)
+if year_of(period_of(now)) != ytd_year: ytd_year = …; ytd_received = 0
 below  = max(0, theta − ytd_received)
 pass_a = min(amount, below)                 // 100% to the issuer
 above  = amount − pass_a
-share  = floor(r_wad × units_outstanding × above / WAD)     // to the vault (gross)
+share  = mulDiv(above, r_wad × units_outstanding, WAD)   // r_wad × units ≤ WAD so the product fits u128
 share  = min(share, above)
 ytd_received += amount
-transfer (amount − share) → issuer ; vault_receive_gross(share, Router) ; router_credit += accepted_share
+transfer (amount − share) → issuer ; vault_receive_gross(share, Router, period_of(now)) ; router_credit += accepted_share
 emit IncomeRouted(series, amount, pass_through = amount − share, routed = share, ytd_received)
 ```
-Routed amounts are credited against the quarter's report (§6.2 step 8). A tier-1 series also submits quarterly proofs; the credit mechanism reconciles. `router_credit` carries forward indefinitely.
+`close_router_period(series, period)` — anyone, after `period_end(period)`: records the checkpoint for `period` (and any earlier missing ones) so a tier-1 report can be verified even when no receipt arrives in the following period. Routed amounts are credited against the quarter's report (§6.2 step 8); `router_credit` carries forward indefinitely.
 
 ### 6.6 Rate accumulator (C9)
 
 ```
-FxPair { pair_id, feed_id, inverted, crosscheck, sum_wad: u128, count: u32, last_day: u32,
+FxPair { pair_id, feed_id, inverted, crosscheck, crosscheck_effective_period, sum_wad: u128, count: u32, last_day: u32,
          checkpoints: map period_id → { sum_wad, count, deviation_flagged } }
 ```
 `snapshot(pair, pyth_update)` — anyone, once per UTC day (`day = now / DAY`, require `day > last_day`):
-1. Validate the Pyth price: owner/program check (Solana: `PriceUpdateV2` owned by the Pyth receiver program, `verification_level == Full`; EVM: `IPyth.getPriceNoOlderThan(feed_id, fx_max_staleness_seconds)`), `feed_id` matches, `publish_time ≥ now − fx_max_staleness_seconds`, `price > 0`, `conf × 10000 ≤ price × fx_max_conf_bps`.
-2. `rate_wad = normalize(price, expo)` = `price × 10^(18 + expo)` (expo is negative) as WAD; if `inverted`: `rate_wad = floor(WAD × WAD / rate_wad)`.
+1. Validate the Pyth price: owner/program check (Solana: `PriceUpdateV2` owned by the Pyth receiver program, `verification_level == Full`; EVM: `IPyth.getPriceNoOlderThan(feed_id, fx_max_staleness_seconds)`), `feed_id` matches, `publish_time ≥ now − fx_max_staleness_seconds`, `price > 0`, `conf × 10000 ≤ price × fx_max_conf_bps`. FX feeds publish only during market hours (Sun 22:00 UTC – Fri 22:00 UTC), so weekend snapshots fail staleness by design.
+2. `rate_wad = normalize(price, expo)`: `expo ≤ 0` → `price × 10^(18 + expo)` (requires `expo ≥ −18`), `expo > 0` → `price × 10^18 × 10^expo`; if `inverted`: `rate_wad = floor(WAD × WAD / rate_wad)`.
 3. First snapshot in a period: `checkpoints[period_of(now)] = { sum_wad, count, flagged = false }` **before** adding (this closes the previous period).
-4. Cross-check: if `crosscheck` is configured (EVM `AggregatorV3Interface.latestRoundData`, fresh within staleness), `cl_wad` normalized the same way; if `|rate_wad − cl_wad| × 10000 > cl_wad × fx_deviation_band_bps` → `checkpoints[period_of(now)].flagged = true` (set for the period being accumulated) and emit `FxDeviationFlagged`.
+4. Cross-check: if `crosscheck != 0` and `period_of(now) ≥ crosscheck_effective_period` (EVM `AggregatorV3Interface.latestRoundData`, fresh within staleness), `cl_wad` normalized the same way; if `|rate_wad − cl_wad| × 10000 > cl_wad × fx_deviation_band_bps` → `checkpoints[period_of(now)].flagged = true` and emit `FxDeviationFlagged`.
 5. `sum_wad += rate_wad; count += 1; last_day = day`. Emit `FxSnapshot(pair, day, rate_wad, sum_wad, count)`.
 
-`quarter_average(pair, p)`: requires `checkpoints[p]` and `checkpoints[p+1]` to exist, else `NeedsFallback`. `n = count_{p+1} − count_p`; `ok = n × 10000 ≥ days_in_period(p) × fx_min_coverage_bps && !flagged_p`; `avg_wad = floor((sum_{p+1} − sum_p) / n)`. Returns `(ok, avg_wad)`; `ok == false` means `NeedsFallback` and the report must carry an attestor-signed rate (§6.2 step 4).
+`quarter_average(pair, p)`: start = `checkpoints[p]` (required); end = `checkpoints[p+1]` if present, else — when `now ≥ period_end(p)` and `last_day × DAY < period_start(p+1)` (no snapshot yet in `p+1`, so the live totals are the end-of-`p` totals) — the live `(sum_wad, count)`; otherwise `NeedsFallback`. `n = count_end − count_start`; `ok = n × 10000 ≥ trading_days_in_period(p) × fx_min_coverage_bps && !flagged_p` where `trading_days_in_period(p)` counts the Monday–Friday civil days of `p`; `avg_wad = floor((sum_end − sum_start) / n)`. Returns `(ok, avg_wad)`; `ok == false` means `NeedsFallback` (§6.2 step 4).
 
-(Chainlink runs on EVM; on Solana `crosscheck` is left unset in this version and recorded as an assumption.)
+(Chainlink runs on EVM; on Solana `crosscheck` is left unset in this version — `ASSUMPTIONS.md` A21.)
 
 ### 6.7 Redemption (C7)
 
-`redeem(series)` — issuer only, `status ∈ {OnTime, InGrace, Late, Paused}` (not terminal), `now ≥ settlement_ts + lockup_seconds`, `open_due_amount == 0` (the issuer must be current — assumption: redemption while a payment is outstanding would let the issuer skip a due payment; the brief forbids blocking redemption by *others*, and this is the issuer's own due):
+`redeem(series)` — issuer only; `mint_finalized`; `derive_status(now) ∈ {OnTime, InGrace, Paused}`; `now ≥ settlement_ts + lockup_seconds`; `open_due_amount == 0 && trueup_due == 0`; and every ended period is reported: `period_of(now) − 1 < first_period || last_accepted_period ≥ period_of(now) − 1` (`UnreportedPeriods`). These are the issuer's own obligations, not a third-party block (`ASSUMPTIONS.md` A15).
 
 ```
 t          = now − settlement_ts
@@ -450,30 +499,35 @@ frac_wad   = floor((t − Y × YEAR) × WAD / YEAR)
 P_hurdle   = P0
 repeat Y times: P_hurdle = floor(P_hurdle × (WAD + h) / WAD)
 P_hurdle   = floor(P_hurdle × (WAD + floor(h × frac_wad / WAD)) / WAD)
-paid_units = ceil(paid_per_unit_wad / WAD)                 // rounds against the holders' remaining cap, i.e. favours the issuer
-C_rem      = cap_per_unit − paid_units                      // ≥ 0
-if Y ≥ 1: n = min(Y, 3); D_avg = floor(Σ_{y = Y−n}^{Y−1} year_gross_wad[y] / (n × WAD)); floor_term = max(P_hurdle, k × D_avg) else floor_term = P_hurdle
+paid_units = ceil(paid_per_unit_wad / WAD)
+C_rem      = cap_per_unit() > paid_units ? cap_per_unit() − paid_units : 0
+if Y ≥ 1: n = min(Y, 3); D_avg = floor(Σ_{y = Y−n}^{Y−1} year_gross[y] / (n × WAD)); floor_term = max(P_hurdle, k × D_avg) else floor_term = P_hurdle
 P_redeem   = min(C_rem, floor_term)
 deposit    = P_redeem × units_outstanding
 ```
-Pull `deposit` from the issuer into the vault (**no fee**). Set `status = Redeemed`, `redemption_ts = now`, `redemption_price = P_redeem`, `units_at_redemption = units_outstanding`, `tail_cap_per_unit = C_rem − P_redeem`; registry `mark_terminal(Redeemed)`. Emits `SeriesRedeemed(series, P_redeem, P_hurdle, D_avg, C_rem, units, deposit)`.
+Pull `deposit` from the issuer into the vault (**no fee**). Set `status = Redeemed`, `redemption_ts = now`, `redemption_price = P_redeem`, `units_at_redemption = units_outstanding`, `tail_cap_per_unit = C_rem − P_redeem`; registry `mark_terminal(Redeemed)`. Emits `SeriesRedeemed(series, P_redeem, P_hurdle, D_avg, C_rem, units, deposit)`. If `C_rem == 0` the series is instead retired (`retire()`), since nothing is owed either way.
 
-`claim_redemption(series)` — holder (or anyone pushing): `settle_holder`; `units = balance`; `redeemed_units = units` (recorded once); `amount = pending + P_redeem × units`; `pending = 0`; burn `units`; transfer `amount`. Emits `RedemptionClaimed(series, holder, units, amount)`.
+`claim_redemption(series)` — holder (or anyone pushing): `settle_holder`; `units = accrual_units(holder)` (deliveries pending in the auction escrow are delivered first); `redeemed_units = units` (recorded once); `amount = pending + P_redeem × units`; `pending = 0`; burn `units` (zero-amount rule); `units_outstanding −= units`; transfer `amount`. Emits `RedemptionClaimed(series, holder, units, amount)`. Available in `Redeemed` and `Extinguished`.
 
 ### 6.8 Tail clause
 
-A report accepted while `status == Redeemed` with `liquidity_event == true` and `now ≤ redemption_ts + tail_seconds` (via `submit_report`, proof and attestation as usual; `units_outstanding` public input := `units_at_redemption`) creates a due amount paid with `pay`, routed to `vault_receive_tail(G)`:
+A report accepted while `status == Redeemed` with `liquidity_event == true` (§6.2) creates a due paid with `pay`, routed to `vault_receive_tail(G)`:
 
 ```
 N = units_at_redemption; cap_wad = tail_cap_per_unit × WAD
-inc_wad = floor(G × WAD / N); if tail_paid_per_unit_wad + inc_wad > cap_wad: accepted = floor((cap_wad − tail_paid_per_unit_wad) × N / WAD); inc_wad = floor(accepted × WAD / N); refund G − accepted → issuer else accepted = G
-tail_paid_per_unit_wad += inc_wad; fee = floor(accepted × payout_fee_bps / 10000); net = accepted − fee; tail_acc_wad += floor(net × WAD / N); carry handled as in §6.3
+inc_wad = floor(G × WAD / N)
+if tail_paid_per_unit_wad + inc_wad < cap_wad: accepted = G
+else: remaining = cap_wad − tail_paid_per_unit_wad; accepted = floor(remaining × N / WAD); inc_wad = floor(accepted × WAD / N); refund = G − accepted → issuer; tail_exhausted = true
+tail_paid_per_unit_wad += inc_wad; fee = floor(accepted × payout_fee_bps / 10000); net = accepted − fee + tail_carry
+delta = floor(net × WAD / N); tail_carry = net − floor(delta × N / WAD); tail_acc_wad += delta
 ```
-`claim_tail(series)` — holder with `redeemed_units > 0`: `amount = floor((tail_acc_wad − last_tail_acc_wad) × redeemed_units / WAD)`; update; transfer. If `tail_cap_per_unit == 0` (P_redeem equalled C_rem) tail reports are rejected (`NoTailDue`). Emits `TailDistributed`, `TailClaimed`.
+`claim_tail(series)` — holder with `redeemed_units > 0` (or with units not yet redeemed: `claim_redemption` runs first): `amount = floor((tail_acc_wad − last_tail_acc_wad) × redeemed_units / WAD)`; update; transfer. Emits `TailDistributed`, `TailClaimed`.
 
 ### 6.9 Extinguishment (C11 §6)
 
-`extinguish(series, sig_a, sig_b)` — anyone submits two signatures from **two distinct** active attestors over the §1.4 message with `extinguish_nonce`; `status` not terminal (Redeemed series within the tail may also be extinguished: the tail ends). Effects: `status = Extinguished`; registry `mark_terminal`; `unreleased = proceeds − released_total` moved from the treasury to the vault with **no fee**: `final_acc_wad += floor(unreleased × WAD / N)` with `N = units_outstanding` (or `units_at_redemption` when already redeemed — then `redeemed_units` weights are used), carry as usual; all open dues are cleared (nothing else is owed). Emits `SeriesExtinguished(series, unreleased)`. `claim_final(series)` — holder: `settle_holder` (pending payouts) + `floor((final_acc_wad − last_final_acc_wad) × units / WAD)`; burn units; transfer. Emits `FinalClaimed`.
+`extinguish(series, sig_a, sig_b)` — anyone submits two signatures from **two distinct** active attestors over the §1.4 message with `extinguish_nonce`; allowed in **every** status except `Extinguished` (including Retired and Redeemed at any time), `mint_finalized`. Effects: `status = Extinguished`, `extinguished_at = now`; registry `mark_terminal`; `unreleased = proceeds − vested(now)` moves from the treasury to the vault with **no fee** (vested-but-unclaimed tranches stay claimable by the issuer's wallet, §5.3); `final_units = units_outstanding` (for a Redeemed series: `units_at_redemption`); `final_acc_wad += floor(unreleased × WAD / final_units)` with `final_carry` as usual (`unreleased == 0` or `final_units == 0` → no distribution); all open dues (`open_due_*`, `trueup_due`) are cleared; the tail ends. Emits `SeriesExtinguished(series, unreleased, attestor_a, attestor_b)`.
+
+`claim_final(series)` — holder: weight `w = redemption_ts != 0 ? redeemed_units + unit_balance (after running the `claim_redemption` body for any unredeemed balance, which pays `P_redeem × balance`) : accrual_units(holder)`; `settle_holder`; `amount = pending + floor((final_acc_wad − last_final_acc_wad) × w / WAD)`; burn any remaining balance; transfer. Emits `FinalClaimed(series, holder, units, amount)`. `claim`, `claim_redemption` and `claim_tail` also remain callable for funds already in the vault.
 
 ---
 
@@ -481,16 +535,32 @@ tail_paid_per_unit_wad += inc_wad; fee = floor(accepted × payout_fee_bps / 1000
 
 ```
 Window (per series × period) { state: Closed|Commit|Reveal|Settling|Settled|NoMatch, opens_at, commit_end, reveal_end,
-  bid_count, ask_count, revealed_bids, revealed_asks, escrow_units, escrow_stable,
-  clearing_price, d_above, d_at, s_below, s_at, max_bid, min_ask, tallied, tally_round, matched_units, processed }
-Order { owner, side: Bid|Ask, commitment, escrow (stable for bids, units for asks), reveal_index, revealed, valid, price, quantity, tallied_round, processed, fill }
+  order_count, revealed_count, valid_count, escrow_units, escrow_stable,
+  tally_round, round_rejected, clearing_price, no_match_proposed: bool,
+  d_above, d_at, s_below, s_at, max_bid, min_ask, tallied_count,
+  branch: SupplyLimited|DemandLimited, matched_units, marginal_remaining, next_marginal_reveal_index,
+  processed_count }
+Order (per window × owner; ONE order per wallet per window, on either side) { owner, side: Bid|Ask, commitment, escrow (stable for bids, units for asks),
+  reveal_index, revealed, valid, price, quantity, tallied_round, processed, fill }
 ```
-- `open_window(series, period)` — anyone; requires `windows_enabled`, `status ∈ {OnTime, InGrace}` (not Late/Paused/terminal), `now ≥ settlement_ts + lockup_seconds`, the report for `period` accepted and paid (`last_paid_period ≥ period`), `period == period_of(now) − 1` (the window follows the just-reported quarter), no window open for the series. `commit_end = now + window_commit_duration`, `reveal_end = commit_end + window_reveal_duration`. Emits `WindowOpened`.
-- `commit_ask(series, commitment, units)` — holder; `settle_holder(owner)` first; move `units` into the window escrow token account (Solana: transfer passes the hook because the destination is the escrow; EVM: `token.transferFrom` passes compliance because `to == window`); one ask per wallet. `commit_bid(series, commitment, escrow)` — allowlisted wallet; pulls stablecoin; one bid per wallet.
-- `reveal_order(series, price, quantity, salt)` — in the reveal phase; commitment check as §1.3; validity: `price ≥ 1`, `quantity ≥ 1`; asks: `quantity ≤ escrow_units`; bids: `escrow ≥ price × quantity + floor(price × quantity × window_fee_bps / 10000)` and `quantity ≤ wallet_cap_units − balance(owner)` where `wallet_cap_units = floor(units_outstanding × wallet_cap_bps / 10000)`.
-- `begin_window_settlement(series, clearing_price | NO_MATCH)`, `tally_orders(page)`: for valid revealed orders: bids `price > p*` → `d_above += q`, `== p*` → `d_at += q`, track `max_bid`; asks `price < p*` → `s_below += q`, `== p*` → `s_at += q`, track `min_ask`.
-- `finalize_window(series)`: let `S = s_below + s_at`, `D = d_above + d_at`. If proposal is `NO_MATCH`: require `max_bid < min_ask` (or no valid orders) → state `NoMatch`. Else require `d_above < S ≤ D` and `s_at > 0 || d_at > 0 at the relevant side` — precisely: `S > 0`, `d_above < S`, `S ≤ D`, and (`s_at > 0` or `d_at > 0`) so that p* is a revealed price; this p* is the unique volume-maximizing crossing (proof in `ARCHITECTURE.md`). `matched_units = S`; `R = S − d_above` for bids at p*. State `Settled`. Emits `WindowCleared(series, period, p*, matched_units)`.
-- `process_order(order)` — anyone, once per order: asks with `price ≤ p*`: `fill = quantity` (all supply at or below p* is sold), receive `p* × fill` stablecoin, and `quantity − fill` units back (asks with `price > p*`: all units back). Bids `price > p*`: `fill = quantity`; `== p*`: `fill = floor(R × quantity / d_at)`; `< p*`: 0. Buyer pays `cost = p* × fill`, `fee = floor(cost × window_fee_bps / 10000)` → fee collector, refund the rest; `settle_holder(buyer)` then units move from escrow to the buyer (hook/compliance allow escrow → wallet; cap re-checked); buyer registered as holder. Rounding: `Σ bid fills ≤ S`; the unmatched remainder `U = S − Σ fills` (fewer units than marginal bids) is returned to the asks at `p*` in **descending reveal-index order** during a final `return_dust` pass (Solana: the keeper passes the marginal asks; EVM: iterates the marginal asks from the last revealed), so every unit is accounted for. Emits `OrderFilled(series, period, owner, side, fill, price, fee, refund)`.
+- `open_window(series, period)` — anyone; requires `windows_enabled`, `mint_finalized`, `derive_status(now) ∈ {OnTime, InGrace}`, `now ≥ settlement_ts + lockup_seconds`, the report for `period` accepted and paid (`last_paid_period ≥ period`), `period == period_of(now) − 1`, no window open for the series. `commit_end = now + window_commit_duration`, `reveal_end = commit_end + window_reveal_duration`. Emits `WindowOpened`.
+- `commit_ask(series, commitment, units)` — holder; no existing order for this wallet in this window; `settle_holder(owner)` first; **arms** the escrow (`EscrowArm`/`armedDeposit(owner) = units`), moves `units` into the window escrow, clears the arm. The owner's accrual weight is unchanged (ask-escrow units count, §6.1). `commit_bid(series, commitment, escrow)` — allowlisted wallet (`isAllowed`), no existing order; pulls stablecoin.
+- `reveal_order(series, price, quantity, salt)` — in the reveal phase; commitment check as §1.3; a validity failure records `valid = false`, it never reverts. Validity: `price ≥ 1`, `quantity ≥ 1`; asks: `quantity ≤ escrow_units`; bids: `escrow ≥ price × quantity + floor(price × quantity × window_fee_bps / 10000)` and `unit_balance(owner) + quantity ≤ wallet_cap_units` where `wallet_cap_units = floor(units_outstanding × wallet_cap_bps / 10000)`. (Because a wallet has at most one order and the only unit movements during a window are this window's fills, the bound is exact and is not re-checked at fill.) Tally fields: `valid_count`, `max_bid`, `min_ask` are updated per the branch rules below only during the tally.
+- `begin_window_settlement(series, clearing_price | NO_MATCH)` — anyone, `now ≥ reveal_end`, allowed only when `tally_round == 0 || round_rejected` (`TallyInProgress` otherwise). Resets the tally fields. `tally_orders(page)`: for valid revealed orders: bids `price > p*` → `d_above += q`, `== p*` → `d_at += q`, `max_bid = max(…)`; asks `price < p*` → `s_below += q`, `== p*` → `s_at += q`, `min_ask = min(…)`.
+- `finalize_window(series)` — anyone, `tallied_count == revealed_count`; an invalid proposal does not revert: `round_rejected = true`, emit `WindowSettlementRejected(series, period, clearing_price, reason)`. Let `D = d_above + d_at`, `S = s_below + s_at`.
+  - `NO_MATCH` proposal: valid iff `valid_count == 0` or `max_bid < min_ask` → state `NoMatch`, emit `WindowNoMatch`.
+  - Otherwise `p*` must be a revealed valid price (`d_at > 0 || s_at > 0`) and exactly one branch must hold:
+    - **(A) supply-limited:** `S > 0 && d_above < S && S ≤ D` → `matched_units = S`; the *marginal side is the bids at p\**, `marginal_remaining = S − d_above`.
+    - **(B) demand-limited:** `D > 0 && s_below ≤ D && D < S` → `matched_units = D`; the *marginal side is the asks at p\**, `marginal_remaining = D − s_below`.
+    Both branches maximise matched volume and the accepted `p*` is unique when a crossing exists (`ARCHITECTURE.md` §5.2). State `Settled`, `next_marginal_reveal_index = 0`. Emits `WindowCleared(series, period, p*, matched_units, branch)`.
+- `process_order(order)` — anyone, once per order, after `Settled` or `NoMatch`. Exhaustive cases:
+  - `NoMatch`, or unrevealed, or revealed & invalid: every order gets its full escrow back (units or stablecoin), no fee, no charge (window non-reveals are uncharged — `ASSUMPTIONS.md` A28).
+  - Full side (A: bids with `price > p*`, asks with `price ≤ p*`; B: bids with `price ≥ p*`, asks with `price < p*`): `fill = quantity`.
+  - Losing side (A: bids with `price < p*`, asks with `price > p*`; B: bids `< p*`, asks `> p*`): `fill = 0`.
+  - **Marginal side** (A: bids at `p*`; B: asks at `p*`): processed **in ascending `reveal_index`** behind the cursor (`reveal_index == next_marginal_reveal_index` among marginal orders, else `OutOfOrder`): `fill = min(quantity, marginal_remaining)`, `marginal_remaining −= fill`, cursor advances to the next marginal order's index. First-come at the margin makes `Σ fills` on each side equal `matched_units` exactly, so no dust exists and the window is always solvent (the brief requires pro rata rounding only for the primary auction — `ASSUMPTIONS.md` A27).
+  - Settlement of a filled **bid**: `cost = p* × fill`, `fee = floor(cost × window_fee_bps / 10000)` → fee collector, refund `escrow − cost − fee`; if `isAllowed(buyer)` is false at fill, `fill` is cancelled for that bid (`fill = 0`, full refund) and the units stay with the marginal/other side as unmatched (they are returned through the ask settlement below); `register_holder(buyer)`; units move escrow → buyer.
+  - Settlement of a filled **ask**: receives `p* × fill` from the window stablecoin escrow; `settle_holder(seller)` before `escrow_units` leave the escrow accounting; `escrow_units − fill` units return to the seller (returns to the original owner are exempt from allowlist and cap checks: they are not acquisitions). Because buyers pay exactly `p* × Σ fills`, asks are always payable.
+  - Money conservation per window: `Σ buyer cost = p* × matched = Σ seller proceeds`; `Σ fees → collector`; all other escrow returns to its owner. Emits `OrderFilled(series, period, owner, side, fill, price, fee, refund)`.
 - Direct transfers remain impossible at all times; only this module moves units between wallets.
 
 ---
@@ -502,10 +572,10 @@ Order { owner, side: Bid|Ask, commitment, escrow (stable for bids, units for ask
 Constraints:
 1. `terms_commitment === Poseidon(5)(theta, r_wad, currency_code, indexing_rule, terms_salt)`
 2. `income_commitment === Poseidon(2)(income_ytd, income_salt)`; `prior_income_commitment === Poseidon(2)(prior_income_ytd, prior_salt)`
-3. Range checks: `income_ytd, prior_income_ytd, theta < 2^64`; `r_wad < 2^64`; `units_outstanding < 2^64`; `fx_avg_wad < 2^64`; `income_ytd ≥ prior_income_ytd`.
+3. Range checks: `income_ytd, prior_income_ytd, theta < 2^64`; `r_wad < 2^64`; `units_outstanding < 2^64`; `fx_avg_wad < 2^64`; `payment_usd < 2^64`; `income_ytd ≥ prior_income_ytd` (the high-water mark rule of §1.5 guarantees a witness exists).
 4. `excess(x) = x > theta ? x − theta : 0` (comparator + mux); `owed(x) = floor(r_wad × units_outstanding × excess(x) / WAD)` with witness quotient/remainder and `remainder < WAD`, quotient `< 2^128`.
 5. `payment = owed(income_ytd) − owed(prior_income_ytd)` (non-negative by monotonicity, enforced).
-6. `payment_usd === floor(payment × fx_avg_wad / WAD)` with the same quotient/remainder technique.
+6. `payment_usd === floor(payment × fx_avg_wad / WAD)` with the same quotient/remainder technique. Units: `payment` is at income scale (§1.5), `fx_avg_wad` is a unit-less WAD ratio, so `payment_usd` is in stablecoin base units.
 
 Deliverables: `circuits/build/report.r1cs`, `report.wasm`, `report_final.zkey`, `verification_key.json` (dev ceremony: local `powersoftau` with fixed entropy strings, **not for production**, stated in `circuits/README.md`), generated `evm/src/zk/Groth16Verifier.sol` and `solana/programs/merces_protocol/src/zk/vk.rs`. The verifier cost on each chain is measured and reported in `AUDIT_NOTES.md`.
 
@@ -521,7 +591,7 @@ Defined in `docs/research/METEORA_DBC.md` + `ARCHITECTURE.md` §Curve mode after
 
 Registry: `ProtocolInitialized`, `AdminTransferStarted`, `AdminTransferred`, `AllowlistManagerSet`, `FeeCollectorSet`, `FlagsSet`, `EarlyDrawApproverSet`, `DefaultsSet`, `AttestorRegistered`, `AttestorRevoked`, `VerifierKeyRegistered`, `VerifierKeyRevoked`, `FxPairSet`, `IssuerRegistered`, `IssuerDeactivated`, `IssuanceStopped`, `IssuanceResumed`, `AllowlistUpdated(wallet, allowed)`, `SeriesCreated(series, issuer, mode, stablecoin, units_offered, reserve_price, min_raise, cap_multiple_wad, hurdle_rate_wad, k, lockup_seconds, wallet_cap_bps, fees…, terms_commitment, tier_flags, fx_pair_id)`, `ContractHashSet(series, hash)`, `TermsAmended(series, nonce, new_terms_commitment, new_cap_multiple_wad, attestor)`, `RaiseStateChanged(series, state)`, `TerminalStatusSet(series, status)`.
 
-Protocol: `RaiseOpened(series, unit_mint, opened_at, commit_end, reveal_end)`, `RaiseCancelled`, `BidCommitted(series, bidder, escrow)`, `BidRevealed(series, bidder, price, quantity, valid)`, `SettlementProposed(series, clearing_price, round)`, `RaiseSettled(series, clearing_price, units_sold_upper, proceeds_upper, settlement_ts)`, `RaiseFailed(series, clearing_price, proceeds_upper, min_raise)`, `UnitsAllocated(series, bidder, units, cost, fee, refund)`, `BidRefunded(series, bidder, refund, charge)`, `NonRevealCharged(series, bidder, charge)`, `RaiseMintFinalized(series, units_sold, proceeds)`, `MintAuthorityRevoked(series)`, `ReleaseClaimed(series, amount, released_total)`, `ReleasePauseSet(series, paused)`, `EarlyDrawExecuted(series, amount, approver)`, `ReportAccepted(series, period, payment_usd, fx_avg_wad, fx_fallback, tier, liquidity_event, income_commitment, due)`, `PaymentSettled(series, period, gross, accrual, fee, accepted, refunded)`, `PayoutDistributed(series, source, gross, accepted, fee, net_added, delta_acc_wad, paid_per_unit_wad, retired)`, `PayoutClaimed(series, holder, amount, burned_units)`, `HolderRegistered(series, holder)`, `UnitsBurned(series, holder, units, reason)`, `SeriesRetired(series, paid_per_unit_wad, refund)`, `StatusChanged(series, old, new)`, `FormalNoticeDue(series, period)`, `PauseRequested(series)`, `PauseApproved(series, start, end, attestor)`, `PauseEnded(series, paused_total)`, `IncomeRouted(series, amount, pass_through, routed, ytd_received)`, `TrueUpRecorded(series, year, adjustment, deadline)`, `TrueUpPaid(series, amount, accrual)`, `FxSnapshot(pair, day, rate_wad, sum_wad, count)`, `FxDeviationFlagged(pair, period, rate_wad, crosscheck_wad)`, `SeriesRedeemed(series, price, hurdle, d_avg, cap_remaining, units, deposit)`, `RedemptionClaimed(series, holder, units, amount)`, `TailDistributed(series, period, gross, accepted, fee, refunded)`, `TailClaimed(series, holder, amount)`, `SeriesExtinguished(series, unreleased, attestor_a, attestor_b)`, `FinalClaimed(series, holder, units, amount)`, `WindowOpened(series, period, commit_end, reveal_end)`, `OrderCommitted(series, period, owner, side, escrow)`, `OrderRevealed(series, period, owner, side, price, quantity, valid)`, `WindowCleared(series, period, clearing_price, matched_units)`, `WindowNoMatch(series, period)`, `OrderFilled(series, period, owner, side, fill, price, fee, refund)`.
+Protocol: `RaiseOpened(series, unit_mint, opened_at, commit_end, reveal_end)`, `RaiseCancelled`, `BidCommitted(series, bidder, escrow)`, `BidRevealed(series, bidder, price, quantity, valid)`, `SettlementProposed(series, clearing_price, round)`, `SettlementRejected(series, round, clearing_price, reason)`, `RaiseSettled(series, clearing_price, units_sold, proceeds, settlement_ts)`, `RaiseFailed(series, clearing_price, proceeds, min_raise)`, `UnitsAllocated(series, bidder, units, cost, fee, refund)`, `BidDelivered(series, bidder, units, refund)`, `NonRevealCharged(series, bidder, charge)`, `RaiseMintFinalized(series, units_sold, proceeds)`, `MintAuthorityRevoked(series)`, `ReleaseClaimed(series, amount, released_total)`, `ReleasePauseSet(series, paused)`, `EarlyDrawExecuted(series, amount, approver)`, `ReportAccepted(series, period, payment_usd, fx_avg_wad, fx_fallback, tier, liquidity_event, income_commitment, due)`, `PaymentSettled(series, period, gross, accrual, fee, accepted, refunded)`, `PayoutDistributed(series, source, gross, accepted, fee, net_added, delta_acc_wad, paid_per_unit_wad, retired)`, `PayoutClaimed(series, holder, amount, burned_units)`, `HolderRegistered(series, holder)`, `UnitsBurned(series, holder, units, reason)`, `SeriesRetired(series, paid_per_unit_wad, refund)`, `StatusChanged(series, old, new)`, `FormalNoticeDue(series, period)`, `PauseRequested(series, nonce)`, `PauseRequestWithdrawn(series, nonce)`, `PauseApproved(series, start, end, attestor)`, `PauseEnded(series, paused_total)`, `IncomeRouted(series, amount, pass_through, routed, ytd_received)`, `RouterPeriodClosed(series, period, ytd_at_end)`, `TrueUpRecorded(series, year, adjustment, deadline)`, `TrueUpPaid(series, amount, accrual)`, `FxSnapshot(pair, day, rate_wad, sum_wad, count)`, `FxDeviationFlagged(pair, period, rate_wad, crosscheck_wad)`, `SeriesRedeemed(series, price, hurdle, d_avg, cap_remaining, units, deposit)`, `RedemptionClaimed(series, holder, units, amount)`, `TailDistributed(series, period, gross, accepted, fee, refunded)`, `TailClaimed(series, holder, amount)`, `SeriesExtinguished(series, unreleased, attestor_a, attestor_b)`, `FinalClaimed(series, holder, units, amount)`, `WindowOpened(series, period, commit_end, reveal_end)`, `OrderCommitted(series, period, owner, side, escrow)`, `OrderRevealed(series, period, owner, side, price, quantity, valid)`, `WindowSettlementRejected(series, period, clearing_price, reason)`, `WindowCleared(series, period, clearing_price, matched_units, branch)`, `WindowNoMatch(series, period)`, `OrderFilled(series, period, owner, side, fill, price, fee, refund)`.
 
 `EVENTS.md` documents each field for the indexer; Solana events are Anchor `#[event]`s emitted with `emit!` (CPI-less logs) and EVM events carry the same field names in camelCase.
 
@@ -562,3 +632,28 @@ All integers are decimal strings; hashes/commitments hex. `t` is the block time 
 - No admin path moves treasury/vault/escrow funds. Fee collector only receives.
 - Every state transition emits an event; every error has a distinct code.
 - Fuzz and invariant tests per F2; the invariant harness tracks ghost sums (escrow, proceeds, fees, refunds, claims).
+- Liveness: no permissionless action may reset or block another keeper's in-progress work (settlement rounds), and no recipient-side failure (allowlist removal, frozen stablecoin account, missing token account) may block finalization, treasury releases or other holders' claims.
+
+---
+
+## 13. Changes in v1.1 (8 October 2026)
+
+From the adversarial spec audit (71 findings; nine lenses). Each item names the sections changed.
+
+1. **Auction can always terminate** (§5.2): `valid_count == 0` → `Failed`; series creation requires at least one unit of wallet cap.
+2. **No settlement stalls** (§5.2, §7): a new proposal is accepted only when no round is in progress or the completed round was rejected; `finalize_*` on a wrong proposal records `round_rejected` and emits a rejection instead of reverting.
+3. **Exact one-pass settlement** (§5.2): the proposer also claims `q_above, q_at`; the tally accumulates marginal allocations against the claimed `R`, so `units_sold`, `proceeds` and the min-raise test are exact and the registry is written once. The "upper bound" rule (old A12) is gone.
+4. **Undeliverable bids can't block anything** (§5.2): `process_bid` only moves money to protocol accounts and mints to the auction escrow; `deliver_bid` pushes units/refunds to the bidder and may be retried forever. Mint finalization and releases depend only on `bids_processed`.
+5. **Nothing distributes before the mint is final** (§6.1 gate); `units_outstanding` is stored at finalization and is the proof's public input; accrual weight includes escrowed units.
+6. **Cap amendments cannot underflow or no-op** (§3.2, §6.3): the cap is read live, the effective cap is `max(cap, paid)`, `retire_if_capped` exists, no amendments after terminal status.
+7. **Income scale fixed** (§1.5, §8): θ/income at the stablecoin's decimals; `fx_avg_wad` unit-less; `payment_usd` range-checked in-circuit and on entry.
+8. **Tier rules** (§6.2 step 3/7, §6.5): tier 1 is a report tier only for pure tier-1 series and is bound to the router's period checkpoint through Poseidon; any series with tiers 2/3/4 must report with an attested tier.
+9. **First-report prior** (§6.2 step 5): attested prior commitment at the first report (Kunal, A25); attestation message binds prior commitment and liquidity flag.
+10. **Clock** (§6.4): per-obligation unpaused countdowns (bounded pause history) replace the global effective clock; pause bounds, withdrawable requests, `end_pause` only while paused; a pause never lifts a release block already in force.
+11. **True-up** (§6.2, §6.4): nonce, once per year, bounded negative adjustments, visible to the status machine, blocks redemption.
+12. **Redemption gate** (§6.7): not Late, nothing due, every ended period reported; `C_rem` saturates; `year_gross` ring indexed by the period's due date.
+13. **Tail/final consistency** (§6.8, §6.9): same `<` boundary, separate carries, `tail_exhausted`; extinguishment allowed in every status, estate keeps vested tranches, explicit weights, `claim_final` settles unclaimed redemptions first.
+14. **Window** (§7): two-branch clearing (supply- or demand-limited) so a crossing price always exists; first-come fills at the margin (no dust, always solvent); one order per wallet; exhaustive lifecycle; armed escrow deposits; buyer allowlist re-check at fill.
+15. **Hook / compliance** (§4.1, §4.2): escrow-based rules with `EscrowArm`/`armedDeposit`; resolvable extra-account list; EVM allowlist is a Merces flag and identities are never deleted; normative T-REX governance (fixed agent set, governor contract, unpause).
+16. **Registry** (§3): `protocol_program` fixed at init; FX pairs write-once with forward-only cross-check changes; key revocation forward-only with grace; `mint_finalized`.
+17. **Conventions** (§1.1): entry-point range rule, zero-amount rule, nested `mulDiv` forms.

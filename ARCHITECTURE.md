@@ -116,40 +116,52 @@ seller, never over-pay anyone.
 ### 5.1 Auction (uniform price)
 
 Let valid bids have prices `p_i` and quantities `q_i`, `N = units_offered`, and define demand
-`D(p) = Σ_{p_i ≥ p} q_i` (non-increasing in `p`). The keeper proposes `p*`; the tally computes
-`q_above = Σ_{p_i > p*} q_i`, `q_at = Σ_{p_i = p*} q_i`, and `min_valid_price`. The program accepts `p*` iff
-`q_at > 0`, `q_above < N`, and either `q_above + q_at ≥ N` or (`q_above + q_at < N` and `min_valid_price = p*`).
+`D(p) = Σ_{p_i ≥ p} q_i` (non-increasing in `p`). The keeper proposes `p*` together with the claimed tallies
+`q_above_claim`, `q_at_claim`; the program fixes `R = min(N − q_above_claim, q_at_claim)` before the tally. The tally
+then computes `q_above = Σ_{p_i > p*} q_i`, `q_at = Σ_{p_i = p*} q_i`, `min_valid_price`, `valid_count` and
+`alloc_sum = Σ_{p_i = p*} floor(R × q_i / q_at_claim)`. Finalize accepts `p*` iff the claims equal the tally and
+either `q_at > 0 ∧ q_above < N ∧ q_above + q_at ≥ N` (oversubscribed) or `q_above + q_at < N ∧ min_valid_price = p*`
+(undersubscribed); with no valid bids at all the auction fails outright.
 
 - Oversubscribed case. `q_above = D(p*+) < N ≤ D(p*)`: every bid strictly above `p*` is filled in full, the bids at
-  `p*` share the remaining `R = N − q_above` units, and no bid below `p*` wins. `p*` is therefore the lowest winning
-  price. It is unique: if `p' > p*` also satisfied the condition, then `D(p') ≥ N`, but `D(p') ≤ D(p*+) = q_above < N`.
-  If `p' < p*` satisfied it, `D(p'+) ≥ D(p*) ≥ N`, contradicting `q_above(p') < N`.
+  `p*` share `R = N − q_above` units, and no bid below `p*` wins. `p*` is therefore the lowest winning price and is
+  unique (if `p' > p*` also qualified, `D(p') ≥ N` but `D(p') ≤ D(p*+) < N`; if `p' < p*` qualified,
+  `D(p'+) ≥ D(p*) ≥ N` contradicts `q_above(p') < N`).
 - Undersubscribed case. Total valid demand `< N` and `p*` is the lowest valid price: everyone is filled in full and
   pays the lowest bid, as the brief requires.
+- Because the marginal allocations are summed during the tally against the fixed `R`, `units_sold = q_above +
+  alloc_sum` and `proceeds = p* × units_sold` are exact before any bid is processed, so the min-raise rule is applied
+  to the real proceeds and the registry is written once.
 
-Marginal allocations are `floor(R × q_i / q_at)`; the units lost to rounding stay unminted (fewer than the number of
-marginal bids), which is why the min-raise test uses `p* × (q_above + R)` as an upper bound (`ASSUMPTIONS.md` A12).
+Bid processing moves money only into protocol-owned accounts (treasury, fee collector, auction escrow) and records
+what each bidder is owed; delivery to the bidder is a separate, retryable step. Finalization of the mint and the
+start of treasury releases therefore never depend on any bidder being able to receive tokens.
 
 ### 5.2 Transfer window (call auction)
 
 Bids give demand `D(p)` (non-increasing); asks give supply `S(p) = Σ_{ask price ≤ p} q` (non-decreasing). Matched
 volume at a price `p` is `M(p) = min(D(p), S(p))`. The keeper proposes `p*`; the tally yields `d_above`, `d_at`,
-`s_below`, `s_at`. The program accepts iff `S(p*) = s_below + s_at > 0` and `d_above < S(p*) ≤ d_above + d_at = D(p*)`.
+`s_below`, `s_at` with `D = d_above + d_at = D(p*)` and `S = s_below + s_at = S(p*)`. The program accepts `p*` (a
+revealed price) iff exactly one branch holds:
 
-- Maximality. For `p > p*`: `D(p) ≤ d_above < S(p*) ≤ S(p)`, so `M(p) ≤ d_above < S(p*) = M(p*)`.
-  For `p < p*`: `S(p) ≤ S(p*)` and `D(p) ≥ D(p*) ≥ S(p*)`, so `M(p) = S(p) ≤ S(p*) = M(p*)`. Hence `p*` maximises
-  matched volume, and `M(p*) = S(p*)`: every ask at or below `p*` is sold in full.
-- Uniqueness. Suppose `p1 < p2` both satisfy the condition. Then `D(p2) ≥ S(p2) ≥ S(p1) > d_above(p1) ≥ D(p2)`
-  (the last step because every bid strictly above `p1` has price `≥ p2`), a contradiction.
-- Allocation. Bids above `p*` fill in full; bids at `p*` share `R = S(p*) − d_above` pro rata (floor). The
-  rounding remainder `U` (fewer units than marginal bids) is handed back to asks at `p*` in descending reveal order
-  so that the units sold equal the units bought exactly.
-- No crossing. If `max_bid < min_ask` the keeper proposes `NO_MATCH` and the program verifies the inequality from
-  the tally; all escrow returns.
+- **(A) supply-limited:** `S > 0 ∧ d_above < S ≤ D`. Then `M(p*) = S`. For `p > p*`: `D(p) ≤ d_above < S ≤ S(p)`, so
+  `M(p) ≤ d_above < M(p*)`. For `p < p*`: `S(p) ≤ S` and `D(p) ≥ D ≥ S`, so `M(p) = S(p) ≤ M(p*)`. Every ask at or
+  below `p*` sells in full; bids above `p*` fill in full; bids at `p*` share `S − d_above`.
+- **(B) demand-limited:** `D > 0 ∧ s_below ≤ D < S`. Then `M(p*) = D`. For `p < p*`: `S(p) ≤ s_below ≤ D ≤ D(p)`, so
+  `M(p) = S(p) ≤ M(p*)`. For `p > p*`: `D(p) ≤ D` so `M(p) ≤ M(p*)`. Every bid at or above `p*` fills in full; asks
+  below `p*` sell in full; asks at `p*` share `D − s_below`.
 
-Both tallies are paged (Solana: bid PDAs passed as remaining accounts, ≤ 24 per instruction; EVM: index ranges of
-≤ 200), each order is counted once per tally round, and a wrong proposal simply fails verification and can be
-re-proposed. Settlement therefore has no dependence on sorting on-chain and is bounded only by the number of pages.
+Hence an accepted `p*` maximises matched volume. Existence: when `max_bid ≥ min_ask` a revealed price satisfies one
+branch (the lowest revealed price with `D(p) < S(p)` satisfies B, else the highest revealed price satisfies A);
+uniqueness follows from the monotonicity of `D − S` — the reference implementation carries a property test that
+brute-forces random books to confirm both. If `max_bid < min_ask` the keeper proposes `NO_MATCH` and the program
+verifies the inequality from the tally.
+
+Marginal orders are filled first-come in ascending reveal order until the marginal remainder is exhausted, so the
+units bought equal the units sold exactly: no rounding dust, and buyers' payments always cover sellers' proceeds.
+Both tallies are paged (Solana: order PDAs as remaining accounts, ≤ 24 per instruction; EVM: index ranges of ≤ 200);
+a proposal can be replaced only after its round is complete and rejected, so no caller can reset a tally that
+honest keepers are completing.
 
 ## 6. Redemption price
 
