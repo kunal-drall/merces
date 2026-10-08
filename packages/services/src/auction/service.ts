@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AppError, enqueueOutbox } from '@merces/core';
+import { withTransaction } from '@merces/db';
 import { bidCommitment, type UnsignedTx } from '@merces/domain';
 import { bidDeposit, clearAuction, walletCapUnits } from '@merces/math';
 import type { Session } from '@merces/api';
@@ -114,47 +115,62 @@ export class AuctionService {
   }
 
   /** Keeper entry: settle every auction whose reveal phase is over. Idempotent (the chain refuses a second settlement). */
+  /**
+   * Keeper entry: settle every auction whose reveal phase is over. Chains and series are independent (one failure
+   * never stops the rest). The settled/failed notice is enqueued by the indexer from the finalized AuctionSettled /
+   * AuctionFailed event, in the same transaction that projects it.
+   */
   async settleDue(): Promise<{ settled: string[]; failed: string[] }> {
     const settled: string[] = [];
     const failed: string[] = [];
     for (const chain of this.ctx.chains.chains.values()) {
-      const now = await chain.now();
-      for (const s of await chain.listSeries()) {
-        if (s.phase !== 'Open') continue;
-        const a = await chain.getAuction(s.seriesId);
-        if (!a?.revealEndsAt || now < a.revealEndsAt) continue;
-        try {
-          const r = await chain.submit({ kind: 'settleAuction', seriesId: s.seriesId }, 'keeper');
-          settled.push(s.seriesId);
-          const ev = r.events.find((e) => e.type === 'AuctionSettled' || e.type === 'AuctionFailed');
-          await enqueueOutbox(this.ctx.pool, 'notification', { kind: ev?.type === 'AuctionSettled' ? 'auction.settled' : 'auction.failed', seriesId: s.seriesId });
-        } catch (e) {
-          failed.push(`${s.seriesId}: ${(e as Error).message}`);
+      try {
+        const now = await chain.now();
+        for (const s of await chain.listSeries()) {
+          if (s.phase !== 'Open') continue;
+          try {
+            const a = await chain.getAuction(s.seriesId);
+            if (!a?.revealEndsAt || now < a.revealEndsAt) continue;
+            await chain.submit({ kind: 'settleAuction', seriesId: s.seriesId }, 'keeper');
+            settled.push(s.seriesId);
+          } catch (e) {
+            failed.push(`${s.seriesId}: ${(e as Error).message}`);
+          }
         }
+      } catch (e) {
+        failed.push(`${chain.chain}: ${(e as Error).message}`);
       }
     }
     return { settled, failed };
   }
 
   /** Keeper entry: remind committed-but-unrevealed bidders before the reveal deadline (once per bidder per series). */
-  async revealReminders(hoursBefore = 12): Promise<number> {
+  async revealReminders(hoursBefore = 12, errors: string[] = []): Promise<number> {
     let sent = 0;
     for (const chain of this.ctx.chains.chains.values()) {
-      const now = await chain.now();
-      for (const s of await chain.listSeries()) {
-        if (s.phase !== 'Open') continue;
-        const a = await chain.getAuction(s.seriesId);
-        if (!a?.revealEndsAt || !a.commitEndsAt || now < a.commitEndsAt || now > a.revealEndsAt || a.revealEndsAt - now > hoursBefore * 3600) continue;
-        for (const b of await chain.listBids(s.seriesId)) {
-          if (b.revealed) continue;
-          const ins = await this.ctx.pool.query('insert into reminders_sent (kind, target, recipient) values ($1,$2,$3) on conflict do nothing', ['reveal', s.seriesId, b.bidder]);
-          if (ins.rowCount) {
-            await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'bid.reveal-reminder', seriesId: s.seriesId, wallet: b.bidder, revealEndsAt: a.revealEndsAt });
-            sent++;
+      try {
+        const now = await chain.now();
+        for (const s of await chain.listSeries()) {
+          if (s.phase !== 'Open') continue;
+          const a = await chain.getAuction(s.seriesId);
+          if (!a?.revealEndsAt || !a.commitEndsAt || now < a.commitEndsAt || now > a.revealEndsAt || a.revealEndsAt - now > hoursBefore * 3600) continue;
+          for (const b of await chain.listBids(s.seriesId)) {
+            if (b.revealed) continue;
+            // ledger row and notice commit together, so a crash between them can neither lose nor repeat the reminder
+            const fresh = await withTransaction(this.ctx.pool, async (db) => {
+              const ins = await db.query('insert into reminders_sent (kind, target, recipient) values ($1,$2,$3) on conflict do nothing', ['reveal', s.seriesId, b.bidder]);
+              if (!ins.rowCount) return false;
+              await enqueueOutbox(db, 'notification', { kind: 'bid.reveal-reminder', seriesId: s.seriesId, wallet: b.bidder, revealEndsAt: a.revealEndsAt });
+              return true;
+            });
+            if (fresh) sent++;
           }
         }
+      } catch (e) {
+        errors.push(`${chain.chain}: ${(e as Error).message}`);
       }
     }
     return sent;
   }
+
 }

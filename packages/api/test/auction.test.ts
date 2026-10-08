@@ -46,6 +46,10 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     // commit via builder + relay
     const commit = await rig.post(`/series/${seriesId}/bids/build-commit`, { bidder: backer.address, commitment, deposit: USDC(1010).toString() }, tok);
     expect((await rig.post('/tx/send', await backer.sign(commit.json().tx as UnsignedTx), tok)).statusCode).toBe(200);
+    // a bid alone never makes the bidder a holder: the holder list and payment views stay closed
+    await rig.sync();
+    expect((await rig.get(`/series/${seriesId}/holders`, tok)).statusCode).toBe(403);
+    expect((await rig.get(`/series/${seriesId}/reports`, tok)).statusCode).toBe(403);
     expect((await rig.post(`/series/${seriesId}/bids/precheck`, { bidder: backer.address, pricePerUnit: USDC(10).toString(), quantity: '100' }, tok)).json().issues.map((i: { code: string }) => i.code)).toEqual(['duplicate']);
     // a second bidder so the minimum raise is met
     const b2 = h.backers[1]!;
@@ -78,6 +82,8 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     expect(refund.json().refundable).toBe(USDC(1010).toString());
     expect((await rig.post('/tx/send', await backer.sign(refund.json().tx as UnsignedTx), tok)).json().events[0].type).toBe('BidRefunded');
     expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: backer.address }, tok)).statusCode).toBe(409);
+    // the notice comes from the indexer, in the transaction that projects the finalized AuctionFailed event
+    await rig.sync();
     const notified = await rig.t.pool.query("select payload->>'kind' as kind from outbox where payload->>'seriesId' = $1", [seriesId]);
     expect(notified.rows.map((r) => r.kind)).toContain('auction.failed');
   });

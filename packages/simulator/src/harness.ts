@@ -142,7 +142,7 @@ export class SimHarness {
     liquidityEvent?: boolean;
     termsCommitment: string;
     incomeSalt?: string;
-  }): { command: Extract<UserCommand, { kind: 'submitReport' }>; paymentStable: bigint } {
+  }): { command: Extract<UserCommand, { kind: 'submitReport' }>; paymentStable: bigint; /** offchain only (B7): never part of the command */ source: string } {
     const fx = params.fxAvgWad ?? WAD;
     const rate = ratePerUnit(params.privateTerms.shareRateWad, params.unitsOffered ?? params.unitsOutstanding); // r = s / N, N = units offered (C1)
     const q = quarterPayment({ ratePerUnitWad: rate, unitsOutstanding: params.unitsOutstanding, incomeYtdPrev: params.incomeYtdPrev, incomeYtdNow: params.incomeYtdNow, threshold: params.privateTerms.threshold, fxAvgWad: fx });

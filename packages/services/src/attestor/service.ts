@@ -222,8 +222,10 @@ export class AttestorService {
     const series = await chain.getSeries(seriesId);
     if (!series) throw AppError.notFound('series');
     if (!series.pause || series.pause.requestedUntil === null || series.pause.startedAt !== null) throw AppError.conflict('the issuer has not sent requestPause onchain yet (or the pause already started)');
-    await this.ctx.pool.query("update hardship_requests set state = 'approved', approved_until = $2, decision_code = 'approved', decided_by = $3, decided_at = now() where hardship_id = $1", [id, until, session.accountId]);
+    // build before recording the decision: if the build fails the request stays pending and can be decided again
     const tx = await chain.build({ kind: 'approvePause', seriesId, until }, String(h.attestor));
+    const upd = await this.ctx.pool.query("update hardship_requests set state = 'approved', approved_until = $2, decision_code = 'approved', decided_by = $3, decided_at = now() where hardship_id = $1 and state = 'pending'", [id, until, session.accountId]);
+    if (!upd.rowCount) throw AppError.conflict('hardship request was decided concurrently');
     await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'hardship.approve', target: id, detail: { seriesId, until } });
     await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'hardship.approved', seriesId, hardshipId: id, until });
     return { ...this.hardshipView(await this.hardshipRow(id), false), tx };

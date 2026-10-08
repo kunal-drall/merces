@@ -7,7 +7,7 @@ import type { AppContext } from '../context.ts';
  * Access tiers (Part F). Each route declares one; the matrix in openapi.yaml (x-access) is tested endpoint by endpoint.
  *  public    — anyone
  *  backer    — any signed-in account that passed eligibility review (disclosure of terms needs this)
- *  holder    — an account holding (or having held) units of the series in the path
+ *  holder    — an account holding (or having held) units of the series in the path (a bid alone does not count)
  *  issuer    — the issuer of the series in the path (or, for issuer-scoped routes without a series, any issuer role)
  *  attestor  — registered attestor role
  *  admin     — admin role
@@ -44,10 +44,10 @@ export async function requireTier(ctx: AppContext, req: FastifyRequest, _reply: 
   };
   const isHolderOf = async (): Promise<boolean> => {
     if (!seriesId) return false;
+    // holding (or having held) units is what counts; a bid alone never does: losing or refunded bidders see their own
+    // bids and refunds through /me, not the series' holder list or payment amounts
     const r = await ctx.pool.query('select 1 from positions where series_id = $1 and wallet = any($2) and (units > 0 or claimed_total > 0 or redeemed_units > 0 or burned_units > 0) limit 1', [seriesId, walletsOf()]);
-    if (r.rowCount) return true;
-    const b = await ctx.pool.query('select 1 from bids where series_id = $1 and bidder = any($2) limit 1', [seriesId, walletsOf()]);
-    return !!b.rowCount;
+    return !!r.rowCount;
   };
   switch (tier) {
     case 'account':

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
+import { withTransaction } from '@merces/db';
 import { addressFamily, normaliseAddress, type ChainFamily } from '@merces/domain';
 import { signInMessage, verifyWalletSignature } from '@merces/ports';
 import { issueSession, type Role, type Session } from '@merces/api';
@@ -181,14 +182,22 @@ export class IdentityService {
     if (!a) throw AppError.notFound('application');
     if (!['submitted', 'in_review'].includes(a.state)) throw AppError.conflict(`application is ${a.state}`);
     if (decision === 'approved' && a.identity_status !== 'passed') throw AppError.unprocessable('identity check has not passed');
-    await this.ctx.pool.query('update applications set state = $2, reviewer = $3, decision_reason_code = $4, decided_at = case when $2 in (\'approved\',\'rejected\') then now() else null end, updated_at = now() where application_id = $1', [id, decision, admin.accountId, reasonCode]);
-    await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: `application.${decision}`, target: id, detail: { reasonCode } });
-    if (decision === 'approved') {
-      await this.ctx.pool.query('update accounts set roles = array(select distinct unnest(roles || $2::text[])) where account_id = $1', [a.account_id, [a.kind]]);
-      await this.ctx.pool.query('insert into eligibility (chain, wallet, account_id, kind) values ($1,$2,$3,$4) on conflict (chain, wallet) do update set revoked_at = null, approved_at = now(), kind = excluded.kind', [a.chain, a.wallet, a.account_id, a.kind]);
-      await this.syncAllowlist(a.chain, a.wallet, true, admin.accountId);
-    }
-    await enqueueOutbox(this.ctx.pool, 'notification', { kind: `application.${decision}`, accountId: a.account_id, applicationId: id });
+    // The chain call goes first: setAllowlist is idempotent onchain, so if it fails nothing has been recorded, the
+    // application stays submitted/in review and the admin simply retries. Everything else commits in one transaction.
+    let allowlistTx: string | null = null;
+    if (decision === 'approved') allowlistTx = (await this.ctx.chains.get(a.chain).submit({ kind: 'setAllowlist', wallet: a.wallet, allowed: true }, 'allowlistManager')).txId;
+    await withTransaction(this.ctx.pool, async (db) => {
+      const cur = await db.query<{ state: string }>('select state from applications where application_id = $1 for update', [id]);
+      if (!['submitted', 'in_review'].includes(cur.rows[0]?.state ?? '')) throw AppError.conflict(`application is ${cur.rows[0]?.state}`);
+      await db.query('update applications set state = $2, reviewer = $3, decision_reason_code = $4, decided_at = case when $2 in (\'approved\',\'rejected\') then now() else null end, updated_at = now() where application_id = $1', [id, decision, admin.accountId, reasonCode]);
+      await audit(db, { actor: admin.accountId, actorRole: 'admin', action: `application.${decision}`, target: id, detail: { reasonCode } });
+      if (decision === 'approved') {
+        await db.query('update accounts set roles = array(select distinct unnest(roles || $2::text[])) where account_id = $1', [a.account_id, [a.kind]]);
+        await db.query('insert into eligibility (chain, wallet, account_id, kind, allowlist_synced_at, allowlist_tx) values ($1,$2,$3,$4, now(), $5) on conflict (chain, wallet) do update set revoked_at = null, approved_at = now(), kind = excluded.kind, account_id = excluded.account_id, allowlist_synced_at = now(), allowlist_tx = excluded.allowlist_tx', [a.chain, a.wallet, a.account_id, a.kind, allowlistTx]);
+        await audit(db, { actor: admin.accountId, actorRole: 'admin', action: 'allowlist.add', target: `${a.chain}:${a.wallet}`, detail: { txId: allowlistTx } });
+      }
+      await enqueueOutbox(db, 'notification', { kind: `application.${decision}`, accountId: a.account_id, applicationId: id });
+    });
     return this.getApplication(id, admin);
   }
 

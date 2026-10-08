@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { resolveSecret } from './secrets.ts';
 
 /**
  * Envelope encryption for the terms vault, attestor documents and application notes: AES-256-GCM with a
@@ -37,7 +38,8 @@ export class AesGcmVault implements VaultCrypto {
   }
 }
 
-export function vaultFromEnv(env: NodeJS.ProcessEnv = process.env): AesGcmVault {
-  const hex = env.MERCES_VAULT_KEY_HEX && env.MERCES_VAULT_KEY_HEX.length >= 32 ? env.MERCES_VAULT_KEY_HEX : 'dev-vault-key-not-for-production';
+/** The vault key comes from the environment; the dev default is accepted only while every chain is the simulator. */
+export function vaultFromEnv(env: NodeJS.ProcessEnv = process.env, opts: { simulatorOnly: boolean } = { simulatorOnly: true }): AesGcmVault {
+  const hex = resolveSecret(env, 'MERCES_VAULT_KEY_HEX', { simulatorOnly: opts.simulatorOnly, devDefault: 'dev-vault-key-not-for-production' });
   return new AesGcmVault(env.MERCES_VAULT_KEY_ID ?? 'vault-dev-1', hex);
 }

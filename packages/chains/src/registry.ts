@@ -156,7 +156,8 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
       throw new Error(`no chain of family ${family}`);
     },
     async close() {
-      /* adapters hold no sockets that need closing */
+      // live adapters hold no sockets; a persisted simulator releases its single-writer lock
+      for (const c of chains.values()) await (c as { close?: () => Promise<void> }).close?.();
     },
   };
 }
@@ -167,6 +168,7 @@ export function chainsConfigFromEnv(env: NodeJS.ProcessEnv = process.env, extra:
     solana: { mode: mode(env.MERCES_CHAIN_SOLANA_MODE), rpcUrl: env.SOLANA_RPC_URL },
     evm: { mode: mode(env.MERCES_CHAIN_EVM_MODE), chainKey: env.EVM_CHAIN_KEY ?? 'monad', chainId: env.EVM_CHAIN_ID ? Number(env.EVM_CHAIN_ID) : undefined, rpcUrl: env.EVM_RPC_URL },
     stage1Path: env.STAGE1_PATH,
+    persistKeyPrefix: env.MERCES_SIM_KEY,
     ...extra,
   };
 }

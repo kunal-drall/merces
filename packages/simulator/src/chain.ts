@@ -76,6 +76,11 @@ export class SimulatorChain implements ChainPort {
     return sim;
   }
 
+  /** Release the persisted chain (its single-writer lock) so another process may open it. */
+  async close(): Promise<void> {
+    await this.persistence?.close?.();
+  }
+
   /** Synchronous creation for tests without persistence. */
   static createSync(opts: Omit<SimulatorOptions, 'persistence'>): SimulatorChain {
     const cfg = personalityConfig(opts.personality, opts.chainKey);

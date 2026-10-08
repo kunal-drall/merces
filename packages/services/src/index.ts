@@ -1,5 +1,5 @@
 import type { AppContext } from '@merces/api';
-import { LocalKms, MockESign, MockIdentityCheck, MockProofVerifier, MockZkTls, vaultFromEnv, type ESignPort, type IdentityCheckPort, type KmsPort, type ProofVerifierPort, type VaultCrypto, type ZkTlsPort } from '@merces/ports';
+import { LocalKms, MockESign, MockIdentityCheck, MockProofVerifier, MockZkTls, resolveSecret, simulatorOnly, vaultFromEnv, type ESignPort, type IdentityCheckPort, type KmsPort, type ProofVerifierPort, type VaultCrypto, type ZkTlsPort } from '@merces/ports';
 import { HttpReportVerifierClient, ReportVerifier, type ReportVerifierPort } from '@merces/report-verifier';
 import type { ServiceContext } from './context.ts';
 import { newId } from './ids.ts';
@@ -46,8 +46,10 @@ export interface ProviderOverrides {
 /** Compose the ServiceContext over the gateway's AppContext. Providers default to mocks / local dev signer. */
 export function createServiceContext(base: AppContext, over: ProviderOverrides = {}): ServiceContext {
   const ctx = base as ServiceContext;
-  ctx.kms = over.kms ?? new LocalKms(process.env.MERCES_LOCAL_KEY_SEED ?? 'dev-seed-not-for-production');
-  ctx.vault = over.vault ?? vaultFromEnv();
+  // dev seeds and keys are accepted only while every chain is the simulator (resolveSecret refuses otherwise)
+  const simOnly = simulatorOnly(base.chains);
+  ctx.kms = over.kms ?? new LocalKms(resolveSecret(process.env, 'MERCES_LOCAL_KEY_SEED', { simulatorOnly: simOnly, devDefault: 'dev-seed-not-for-production' }));
+  ctx.vault = over.vault ?? vaultFromEnv(process.env, { simulatorOnly: simOnly });
   ctx.identity = over.identity ?? new MockIdentityCheck();
   ctx.esign = over.esign ?? new MockESign();
   ctx.zktls = over.zktls ?? new MockZkTls();

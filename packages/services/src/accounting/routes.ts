@@ -20,7 +20,7 @@ export function registerAccountingRoutes(app: FastifyInstance, base: AppContext)
     method: 'GET', url: '/admin/accounting/reconcile', access: 'admin',
     handler: async (req, _reply, session) => {
       // every call persists and audits a run; an Idempotency-Key lets a retried call replay the same run instead of adding one
-      const r = await withIdempotency(ctx.pool, 'accounting-reconcile', idem(req), {}, async () => ({ status: 200, response: await s.reconcile(session!) }));
+      const r = await withIdempotency(ctx.pool, `accounting-reconcile:${session!.accountId}`, idem(req), {}, async () => ({ status: 200, response: await s.reconcile(session!) }));
       return r.response;
     },
   });

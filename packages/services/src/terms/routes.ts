@@ -37,7 +37,7 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
     method: 'POST', url: '/drafts', access: 'issuer',
     handler: async (req, reply, session) => {
       const b = z.object({ chain: z.string(), issuer: z.string() }).parse(req.body);
-      const r = await withIdempotency(ctx.pool, 'drafts', idem(req), b, async () => ({ status: 201, response: await s.createDraft(session!, b.chain, b.issuer) }));
+      const r = await withIdempotency(ctx.pool, `drafts:${session!.accountId}`, idem(req), b, async () => ({ status: 201, response: await s.createDraft(session!, b.chain, b.issuer) }));
       reply.status(r.status);
       return r.response;
     },

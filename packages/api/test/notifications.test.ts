@@ -39,6 +39,9 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     const raise = await h.runRaise();
     seriesId = raise.seriesId;
     await rig.sync();
+    // the indexer enqueued the raise's own chain notice (auction.settled); these tests drive the handler with
+    // payloads of their own, so that row is set aside here (the indexer test covers chain-driven notices)
+    await rig.t.pool.query('update outbox set dispatched_at = now() where dispatched_at is null');
     const identity = new IdentityService(rig.ctx);
     await identity.seedAccount({ accountId: 'acct-issuer', wallets: [{ chain: 'solana', address: h.issuer.address, family: 'solana' }], roles: ['issuer'], eligible: true, kind: 'issuer' });
     await identity.seedAccount({ accountId: 'acct-holder', wallets: [{ chain: 'solana', address: h.backers[0]!.address, family: 'solana' }], roles: ['backer'], eligible: true });

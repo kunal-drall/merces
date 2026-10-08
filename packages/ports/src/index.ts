@@ -8,3 +8,4 @@ export * from './prover.ts';
 export * from './price-feed.ts';
 export * from './meteora.ts';
 export * from './dex.ts';
+export * from './secrets.ts';

@@ -14,6 +14,15 @@ Operating Merces Stage 2: processes, keys, keepers, incidents. Devnet, testnet a
 
 Migrations run at process start (`migrate()`); `pnpm db:migrate` and `pnpm db:reset` exist for manual use.
 
+**Secrets at startup.** `MERCES_SESSION_SECRET`, `MERCES_VAULT_KEY_HEX` and `MERCES_LOCAL_KEY_SEED` each need at least
+32 characters once any chain is live. While every chain runs on the simulator their published development defaults are
+accepted; with a live chain a missing, short or development value stops the process at boot with the variable's name.
+
+**One owner per simulated chain.** A persisted simulator chain (`sim_state`/`sim_events` under `MERCES_SIM_KEY`,
+default `sim`) is held by exactly one process through a Postgres advisory lock. `dev:mock` runs the indexer and
+keepers in-process for that reason; a second process on the same key refuses to start with "already open in another
+process". Run `dev:keepers` as its own process only against live chains (and set `MERCES_KEEPERS=false` on the API).
+
 ### Chain modes
 
 `MERCES_CHAIN_SOLANA_MODE` and `MERCES_CHAIN_EVM_MODE` are `mock | live | auto` (default `auto`). `auto` goes live only
@@ -34,6 +43,11 @@ reason are logged at startup and shown at `GET /health`. `live` fails loudly whe
 ## Keepers
 
 All jobs are idempotent and safe to run twice or late; each run is recorded in `keeper_runs` (`GET /admin/keepers/runs`).
+Chains and series are independent: one chain's outage or one series' error never stops the others. A chain refusal that
+only means "nothing to do" (TooEarly, WrongStatus, Duplicate …) is ignored; any other error marks the run `ok = false`
+with the chain or series and the message in `detail`, which is what to alert on. Notices for chain events (auction
+settled or failed, status changes, releases paused or resumed, pause ended, formal notice) are enqueued by the indexer
+in the transaction that projects the finalized event, not by the keepers.
 
 | Job | Interval | What it does | If it stops |
 | --- | --- | --- | --- |

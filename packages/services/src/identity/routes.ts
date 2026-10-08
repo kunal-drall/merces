@@ -41,7 +41,7 @@ export function registerIdentityRoutes(app: FastifyInstance, base: AppContext): 
     handler: async (req, reply, session) => {
       const body = applicationCreateSchema.parse(req.body);
       // replays never carry the decrypted notes: the stored copy has them nulled (GET /applications/{id} returns them)
-      const r = await withIdempotency(ctx.pool, 'applications', idem(req), body, async () => ({ status: 201, response: await s.createApplication(session!, body) }), { store: withoutNotes });
+      const r = await withIdempotency(ctx.pool, `applications:${session!.accountId}`, idem(req), body, async () => ({ status: 201, response: await s.createApplication(session!, body) }), { store: withoutNotes });
       reply.status(r.status);
       return r.response;
     },
@@ -58,7 +58,7 @@ export function registerIdentityRoutes(app: FastifyInstance, base: AppContext): 
     method: 'POST', url: '/admin/applications/:applicationId/decide', access: 'admin',
     handler: async (req, _reply, session) => {
       const b = z.object({ decision: z.enum(['approved', 'rejected', 'in_review']), reasonCode: z.string().min(1).max(64) }).parse(req.body);
-      const r = await withIdempotency(ctx.pool, 'decide', idem(req), { id: (req.params as { applicationId: string }).applicationId, ...b }, async () => ({ status: 200, response: await s.decide((req.params as { applicationId: string }).applicationId, session!, b.decision, b.reasonCode) }), { store: withoutNotes });
+      const r = await withIdempotency(ctx.pool, `decide:${session!.accountId}`, idem(req), { id: (req.params as { applicationId: string }).applicationId, ...b }, async () => ({ status: 200, response: await s.decide((req.params as { applicationId: string }).applicationId, session!, b.decision, b.reasonCode) }), { store: withoutNotes });
       return r.response;
     },
   });

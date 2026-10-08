@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { parsePeriod } from '@merces/math';
-import { SimHarness, SimulatorChain } from '@merces/simulator';
-import type { DomainEvent } from '@merces/domain';
+import { PgSimPersistence, SimHarness, SimulatorChain } from '@merces/simulator';
+import type { ChainPort, DomainEvent } from '@merces/domain';
 import { Indexer } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -90,5 +90,51 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const gap: DomainEvent = { ...fin, seq: fin.seq + 5, cursor: String(fin.seq + 5).padStart(12, '0') };
     expect(await idx.apply(key, [gap], gap.cursor)).toBe(0);
     expect((await idx.cursor(key)).lastSeq).toBe(fin.seq);
+  });
+
+  it('enqueues chain notices in the projection transaction, one per event, so repeated transitions each notify', async () => {
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'notices', genesis: GENESIS }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
+    const a = await h.runRaise();
+    await idx.catchUp();
+    const settled = await t.pool.query("select payload from outbox where payload->>'chain' = 'notices' and payload->>'kind' = 'auction.settled'");
+    expect(settled.rows).toHaveLength(1);
+    expect(settled.rows[0].payload).toMatchObject({ seriesId: a.seriesId, chain: 'notices' });
+    expect(typeof settled.rows[0].payload.seq).toBe('number');
+    // the same transition twice (OnTime → InGrace in Q1, recover, OnTime → InGrace again in Q2) gives two distinct notices
+    const q1 = parsePeriod('2026Q1');
+    const q2 = parsePeriod('2026Q2');
+    await h.sim.setTime(q1.end + 31 * 86_400);
+    await h.sim.submit({ kind: 'crankStatus', seriesId: a.seriesId }, 'keeper');
+    await h.reportAndPay(a.seriesId, '2026Q1', a.privateTerms, a.terms.termsCommitment, 0n, USDC(10_000));
+    await h.sim.setTime(q2.end + 31 * 86_400);
+    await h.sim.submit({ kind: 'crankStatus', seriesId: a.seriesId }, 'keeper');
+    await idx.catchUp();
+    const toGrace = await t.pool.query("select payload from outbox where payload->>'chain' = 'notices' and payload->>'kind' = 'series.StatusChanged' and payload->'payload'->>'to' = 'InGrace'");
+    expect(toGrace.rows.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(toGrace.rows.map((r) => r.payload.seq)).size).toBe(toGrace.rows.length);
+    // re-indexing the same events adds nothing (the outbox row commits with the projection, exactly once)
+    const before = (await t.pool.query("select count(*)::int as n from outbox where payload->>'chain' = 'notices'")).rows[0].n;
+    expect(await idx.catchUp()).toBe(0);
+    expect((await t.pool.query("select count(*)::int as n from outbox where payload->>'chain' = 'notices'")).rows[0].n).toBe(before);
+  });
+
+  it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'isolated', genesis: GENESIS }) });
+    await h.runRaise();
+    const broken = { chain: 'broken', readEvents: async () => { throw new Error('rpc 503'); } } as unknown as ChainPort;
+    const idx = new Indexer(t.pool, [broken, h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
+    await expect(idx.catchUp()).rejects.toThrow(/broken: rpc 503/);
+    const n = (await t.pool.query("select count(*)::int as n from events where chain = 'isolated'")).rows[0].n;
+    expect(n).toBeGreaterThan(5);
+  });
+
+  it('a persisted simulator chain has one owning process: a second opener is refused until the first closes', async () => {
+    const first = await SimulatorChain.create({ personality: 'solana', chainKey: 'owned', genesis: GENESIS, persistence: new PgSimPersistence(t.pool, 'test-single-writer') });
+    await expect(SimulatorChain.create({ personality: 'solana', chainKey: 'owned', genesis: GENESIS, persistence: new PgSimPersistence(t.pool, 'test-single-writer') })).rejects.toThrow(/already open in another process/);
+    await first.close();
+    const second = await SimulatorChain.create({ personality: 'solana', chainKey: 'owned', genesis: GENESIS, persistence: new PgSimPersistence(t.pool, 'test-single-writer') });
+    expect((await second.info()).chain).toBe('owned');
+    await second.close();
   });
 });

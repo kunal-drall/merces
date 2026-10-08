@@ -27,7 +27,7 @@ export function registerThresholdRoutes(app: FastifyInstance, base: AppContext):
     handler: async (req, reply, session) => {
       const k = key(req);
       const body = thresholdRowSchema.parse(req.body);
-      const r = await withIdempotency(ctx.pool, 'thresholds', idem(req), { ...k, ...body }, async () => {
+      const r = await withIdempotency(ctx.pool, `thresholds:${session!.accountId}`, idem(req), { ...k, ...body }, async () => {
         const out = await s.upsert(k.country, k.year, body, session!);
         return { status: out.created ? 201 : 200, response: out };
       });
@@ -39,7 +39,7 @@ export function registerThresholdRoutes(app: FastifyInstance, base: AppContext):
     method: 'DELETE', url: '/admin/thresholds/:country/:year', access: 'admin',
     handler: async (req, _reply, session) => {
       const k = key(req);
-      const r = await withIdempotency(ctx.pool, 'thresholds-delete', idem(req), k, async () => ({ status: 200, response: await s.remove(k.country, k.year, session!) }));
+      const r = await withIdempotency(ctx.pool, `thresholds-delete:${session!.accountId}`, idem(req), k, async () => ({ status: 200, response: await s.remove(k.country, k.year, session!) }));
       return r.response;
     },
   });
@@ -49,7 +49,7 @@ export function registerThresholdRoutes(app: FastifyInstance, base: AppContext):
     method: 'POST', url: '/admin/indexing/:year/notify', access: 'admin',
     handler: async (req, _reply, session) => {
       const y = year(req);
-      const r = await withIdempotency(ctx.pool, 'indexing-notify', idem(req), { year: y }, async () => ({ status: 200, response: await s.notifyIndexing(y, session!) }));
+      const r = await withIdempotency(ctx.pool, `indexing-notify:${session!.accountId}`, idem(req), { year: y }, async () => ({ status: 200, response: await s.notifyIndexing(y, session!) }));
       return r.response;
     },
   });

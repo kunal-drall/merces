@@ -43,9 +43,17 @@ Secrets never enter the repository: `.env.example` lists names only; development
   route and the spec disagree; the H3 matrix test calls every operation anonymously, as a backer, as an ineligible
   account and as a signed-in stranger and asserts the declared tier.
 - Admin and attestor actions are written to an append-only `audit_log` (a trigger forbids update and delete).
-- Writes accept an `Idempotency-Key`; a key replayed with a different body is a 409.
+- Writes accept an `Idempotency-Key`, scoped to the calling account: a replay only ever returns the caller's own
+  earlier response, never another account's. The key is reserved before the write runs, so a concurrent duplicate gets
+  a 409 ("still in progress") instead of executing twice; a failed write releases the key. A key replayed with a
+  different body is a 409.
   Stored replays are redacted: a response that carried decrypted vault material (application notes) is persisted
   with that field nulled, so the idempotency table never duplicates vault plaintext.
+- The `holder` tier means holding or having held units of the series (a position row); a bid alone never grants it,
+  so losing or refunded bidders do not see the holder list or payment amounts.
+- Session tokens are HMAC-signed with `MERCES_SESSION_SECRET`. The published development default is accepted only
+  while every chain is the simulator; with any live chain the API and keepers refuse to start without a strong secret
+  (the same rule covers the vault key and the local KMS seed).
 - Backer-tier access is decided by a live read of the `eligibility` table on every request, never by the session
   token's `eligible` flag: a revoke takes effect on the next request. Private terms have no admin bypass.
 

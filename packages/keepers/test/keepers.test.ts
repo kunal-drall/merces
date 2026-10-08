@@ -3,7 +3,7 @@ import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { makeContext } from '@merces/api';
 import { createServiceContext, type ServiceContext } from '@merces/services';
 import { MockChainlink, MockPyth } from '@merces/ports';
-import { parsePeriod, wadFromDecimal } from '@merces/math';
+import { parsePeriod, periodOf, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimulatorChain } from '@merces/simulator';
 import type { ChainRegistry } from '@merces/chains';
 import { KeeperScheduler, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, rateKeeperJob, statusCrankJob, burnCrankJob, outboxJob } from '../src/index.ts';
@@ -126,5 +126,29 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     expect(first['outbox.dispatch']!.actions).toBeGreaterThan(0);
     expect(seen).toContain('fx.fallback-needed');
     expect((await ob.runAll())['outbox.dispatch']!.actions).toBe(0);
+  });
+
+  it('a chain outage or an unexpected submit error marks the run failed instead of passing silently; other chains still run', async () => {
+    const a = await mon.runRaise();
+    // the shared simulator clock has moved on in earlier tests: go 31 days past the end of the current quarter
+    await mon.sim.setTime(periodOf(await mon.sim.now()).end + 31 * 86_400);
+    const broken = { chain: 'broken', mode: 'mock', now: async () => { throw new Error('rpc 503'); }, listSeries: async () => [] } as never;
+    const reg2: ChainRegistry = { chains: new Map([['broken', broken], ['monad', mon.sim]]), decisions: [], stage1: null, get: (c) => (c === 'monad' ? mon.sim : broken), byFamily: () => mon.sim, close: async () => undefined };
+    const ctx2 = createServiceContext(makeContext({ pool: t.pool, chains: reg2, log: silent, sessionSecret: 's', devMode: true }));
+    const out = await new KeeperScheduler(ctx2, [statusCrankJob]).runAll();
+    expect(out['status.crank']!.ok).toBe(false);
+    expect(out['status.crank']!.detail).toMatch(/broken: rpc 503/);
+    expect(out['status.crank']!.actions).toBeGreaterThanOrEqual(1); // monad was still cranked
+    expect((await mon.sim.getSeries(a.seriesId))!.status).not.toBe('OnTime');
+    const row = await t.pool.query("select ok, detail from keeper_runs where job = 'status.crank' order by id desc limit 1");
+    expect(row.rows[0]).toMatchObject({ ok: false });
+    // an unexpected error from submit (not a 'nothing to do' refusal) is surfaced too
+    const flaky = new Proxy(mon.sim, { get(target, k) { if (k === 'submit') return async () => { throw new Error('fee payer out of funds'); }; const v = Reflect.get(target, k); return typeof v === 'function' ? v.bind(target) : v; } });
+    const reg3: ChainRegistry = { ...reg2, chains: new Map([['monad', flaky as never]]) };
+    const ctx3 = createServiceContext(makeContext({ pool: t.pool, chains: reg3, log: silent, sessionSecret: 's', devMode: true }));
+    await mon.sim.setTime(periodOf(await mon.sim.now()).end + 50 * 86_400);
+    const out3 = await new KeeperScheduler(ctx3, [statusCrankJob]).runAll();
+    expect(out3['status.crank']!.ok).toBe(false);
+    expect(out3['status.crank']!.detail).toMatch(/fee payer out of funds/);
   });
 });

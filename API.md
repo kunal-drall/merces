@@ -19,7 +19,8 @@ explains how to use the API; the spec is the source of truth for shapes.
 - **Access tiers** (`x-access` on every operation): `public`, `account` (signed in), `backer` (passed eligibility),
   `holder` (holds or held units of that series), `issuer` (the series' issuer), `attestor`, `admin`, and the
   combinations `holder-or-issuer`, `issuer-or-attestor`.
-- **Writes** accept an `Idempotency-Key` header; the same key with the same body replays the stored response.
+- **Writes** accept an `Idempotency-Key` header, scoped to your account; the same key with the same body replays the
+  stored response, a different body is a 409, and a repeat while the first request is still running is a 409 (retry later).
 - **Transactions**: the backend never signs for a user. Builders return `{ tx: UnsignedTx }` (`chain`, `family`, `signer`,
   `coSigners`, `command`, `payload`, `encoding`, `expiresAt`). The wallet signs; `POST /tx/send` relays `{ tx, signatures }`
   and returns the canonical events the transaction emitted.

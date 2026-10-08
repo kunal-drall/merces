@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createPublicKey, verify as edVerify } from 'node:crypto';
 import { privateKeyToAccount } from 'viem/accounts';
 import { AesGcmVault, LocalKms, MockESign, MockIdentityCheck, ed25519RawToSpki, signInMessage, verifyWalletSignature } from '../src/index.ts';
+import { resolveSecret } from '../src/secrets.ts';
 
 describe('LocalKms', () => {
   it('derives stable ed25519 keys and produces verifiable signatures', async () => {
@@ -71,5 +72,17 @@ describe('mock providers', () => {
     await es.complete(env.envelopeId);
     const doc = await es.signedDocument(env.envelopeId);
     expect(doc?.body).toContain('SIGNATURE AUDIT TRAIL');
+  });
+});
+
+describe('secrets (Part I)', () => {
+  const opts = { devDefault: 'dev-session-secret-not-for-production' };
+  it('accepts the dev default only while every chain runs on the simulator', () => {
+    expect(resolveSecret({}, 'S', { ...opts, simulatorOnly: true })).toBe(opts.devDefault);
+    expect(() => resolveSecret({}, 'S', { ...opts, simulatorOnly: false })).toThrow(/must be set/);
+    expect(() => resolveSecret({ S: opts.devDefault }, 'S', { ...opts, simulatorOnly: false })).toThrow(/must be set/);
+    expect(() => resolveSecret({ S: 'short' }, 'S', { ...opts, simulatorOnly: false })).toThrow(/at least 32/);
+    const strong = 'x'.repeat(40);
+    expect(resolveSecret({ S: strong }, 'S', { ...opts, simulatorOnly: false })).toBe(strong);
   });
 });

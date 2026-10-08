@@ -29,7 +29,7 @@ export function registerPoiRoutes(app: FastifyInstance, base: AppContext): void 
     method: 'POST', url: '/series/:seriesId/reports', access: 'issuer',
     handler: async (req, reply, session) => {
       const b = assembleSchema.parse(req.body);
-      const r = await withIdempotency(ctx.pool, 'reports', idem(req), b, async () => ({ status: 201, response: await s.assemble(sid(req), session!, b) }));
+      const r = await withIdempotency(ctx.pool, `reports:${session!.accountId}`, idem(req), { seriesId: sid(req), ...b }, async () => ({ status: 201, response: await s.assemble(sid(req), session!, b) }));
       reply.status(r.status);
       return r.response;
     },

@@ -29,7 +29,7 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
     method: 'POST', url: '/admin/attestors', access: 'admin',
     handler: async (req, reply, session) => {
       const b = registerAttestorSchema.parse(req.body);
-      const r = await withIdempotency(ctx.pool, 'admin-attestors', idem(req), b, async () => ({ status: 201, response: await s.registerAttestor(b, session!) }));
+      const r = await withIdempotency(ctx.pool, `admin-attestors:${session!.accountId}`, idem(req), b, async () => ({ status: 201, response: await s.registerAttestor(b, session!) }));
       reply.status(r.status);
       return r.response;
     },
@@ -40,7 +40,7 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
     handler: async (req, _reply, session) => {
       const id = (req.params as { requestId: string }).requestId;
       const b = z.object({ txId: z.string().min(1).max(256) }).parse(req.body);
-      const r = await withIdempotency(ctx.pool, 'admin-tx-sent', idem(req), { id, ...b }, async () => ({ status: 200, response: await s.markSent(id, b.txId, session!) }));
+      const r = await withIdempotency(ctx.pool, `admin-tx-sent:${session!.accountId}`, idem(req), { id, ...b }, async () => ({ status: 200, response: await s.markSent(id, b.txId, session!) }));
       return r.response;
     },
   });
@@ -49,7 +49,7 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
     method: 'POST', url: '/admin/verifier-keys', access: 'admin',
     handler: async (req, reply, session) => {
       const b = registerVerifierKeySchema.parse(req.body);
-      const r = await withIdempotency(ctx.pool, 'admin-verifier-keys', idem(req), b, async () => ({ status: 201, response: await s.registerVerifierKey(b, session!) }));
+      const r = await withIdempotency(ctx.pool, `admin-verifier-keys:${session!.accountId}`, idem(req), b, async () => ({ status: 201, response: await s.registerVerifierKey(b, session!) }));
       reply.status(r.status);
       return r.response;
     },
@@ -60,7 +60,7 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
     method: 'POST', url: '/admin/raises/pause', access: 'admin',
     handler: async (req, reply, session) => {
       const b = pauseRaisesSchema.parse(req.body);
-      const r = await withIdempotency(ctx.pool, 'admin-raises-pause', idem(req), b, async () => ({ status: 201, response: await s.pauseNewRaises(b, session!) }));
+      const r = await withIdempotency(ctx.pool, `admin-raises-pause:${session!.accountId}`, idem(req), b, async () => ({ status: 201, response: await s.pauseNewRaises(b, session!) }));
       reply.status(r.status);
       return r.response;
     },
@@ -71,7 +71,7 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
     method: 'POST', url: '/admin/audit-samples', access: 'admin',
     handler: async (req, _reply, session) => {
       const b = auditSamplesSchema.parse(req.body);
-      const r = await withIdempotency(ctx.pool, 'admin-audit-samples', idem(req), b, async () => ({ status: 200, response: await s.drawAuditSamples(b.count, session!) }));
+      const r = await withIdempotency(ctx.pool, `admin-audit-samples:${session!.accountId}`, idem(req), b, async () => ({ status: 200, response: await s.drawAuditSamples(b.count, session!) }));
       return r.response;
     },
   });

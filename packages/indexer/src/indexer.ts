@@ -2,6 +2,7 @@ import type { Pool } from '@merces/db';
 import { createLogger, type Logger } from '@merces/core';
 import { parseDomainEvent, type ChainPort, type DomainEvent } from '@merces/domain';
 import { project } from './projections.ts';
+import { enqueueChainNotice } from './notices.ts';
 
 export interface IndexerOptions {
   batchSize?: number;
@@ -68,7 +69,10 @@ export class Indexer {
           break;
         }
         const ins = await client.query('insert into events (chain, cursor, seq, block_time, block_ref, tx_id, type, series_id, payload) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict do nothing', [e.chain, e.cursor, e.seq, e.blockTime, e.blockRef, e.txId, e.type, (e.payload as { seriesId?: string }).seriesId ?? null, JSON.stringify(e.payload)]);
-        if (ins.rowCount === 1) await project(client, e);
+        if (ins.rowCount === 1) {
+          await project(client, e);
+          await enqueueChainNotice(client, e);
+        }
         await client.query('delete from events_pending where chain = $1 and cursor = $2', [e.chain, e.cursor]);
         lastSeq = e.seq;
         lastCursor = e.cursor;
@@ -89,16 +93,28 @@ export class Indexer {
     return applied;
   }
 
-  /** Drain every chain until no new events arrive. */
+  /**
+   * Drain every chain until no new events arrive. Chains are independent: one chain's failure (RPC outage, an event
+   * that fails validation) is logged and the other chains are still indexed; the failures are rethrown together
+   * once every chain has been attempted, so the caller still sees them.
+   */
   async catchUp(): Promise<number> {
     let total = 0;
+    const failures: string[] = [];
     for (const c of this.chains) {
-      for (;;) {
-        const n = await this.runOnce(c);
-        total += n;
-        if (n === 0) break;
+      try {
+        for (;;) {
+          const n = await this.runOnce(c);
+          total += n;
+          if (n === 0) break;
+        }
+      } catch (e) {
+        const msg = (e as Error).message;
+        this.log.error({ chain: c.chain, err: msg }, 'indexing failed for this chain; other chains continue');
+        failures.push(`${c.chain}: ${msg}`);
       }
     }
+    if (failures.length) throw new Error(`indexer: ${failures.join('; ')}`);
     return total;
   }
 

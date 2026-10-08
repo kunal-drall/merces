@@ -34,6 +34,30 @@ describe.skipIf(!dbTestsEnabled())('core db primitives', () => {
     await expect(withIdempotency(t.pool, 'bids', 'k1', { x: 2 }, fn)).rejects.toThrow(/different request body/);
   });
 
+  it('idempotency: a concurrent duplicate never runs the write twice, and a failed write releases the key', async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = async () => {
+      calls++;
+      await gate;
+      return { status: 201, response: { n: calls } };
+    };
+    const first = withIdempotency(t.pool, 'apps:acct-a', 'k2', { x: 1 }, slow);
+    await new Promise((r) => setTimeout(r, 20));
+    await expect(withIdempotency(t.pool, 'apps:acct-a', 'k2', { x: 1 }, slow)).rejects.toThrow(/still in progress/);
+    release();
+    expect((await first).replayed).toBe(false);
+    expect(calls).toBe(1);
+    expect((await withIdempotency(t.pool, 'apps:acct-a', 'k2', { x: 1 }, slow)).replayed).toBe(true);
+    // another account with the same key and body gets its own write, never the first account's response
+    const other = await withIdempotency(t.pool, 'apps:acct-b', 'k2', { x: 1 }, async () => ({ status: 201, response: { n: 99 } }));
+    expect(other).toMatchObject({ replayed: false, response: { n: 99 } });
+    // a failing write leaves nothing behind: the same key can be retried
+    await expect(withIdempotency(t.pool, 'apps:acct-a', 'k3', { x: 1 }, async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    expect((await withIdempotency(t.pool, 'apps:acct-a', 'k3', { x: 1 }, async () => ({ status: 201, response: { ok: true } }))).replayed).toBe(false);
+  });
+
   it('outbox dispatches once and retries failures', async () => {
     await enqueueOutbox(t.pool, 'email', { to: 'a' });
     await enqueueOutbox(t.pool, 'email', { to: 'boom' });
