@@ -196,6 +196,37 @@ importers:
         specifier: workspace:*
         version: link:../simulator
 
+  packages/keepers:
+    dependencies:
+      '@merces/api':
+        specifier: workspace:*
+        version: link:../api
+      '@merces/chains':
+        specifier: workspace:*
+        version: link:../chains
+      '@merces/core':
+        specifier: workspace:*
+        version: link:../core
+      '@merces/db':
+        specifier: workspace:*
+        version: link:../db
+      '@merces/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@merces/math':
+        specifier: workspace:*
+        version: link:../math
+      '@merces/ports':
+        specifier: workspace:*
+        version: link:../ports
+      '@merces/services':
+        specifier: workspace:*
+        version: link:../services
+    devDependencies:
+      '@merces/simulator':
+        specifier: workspace:*
+        version: link:../simulator
+
   packages/math: {}
 
   packages/poi-device:
@@ -218,6 +249,9 @@ importers:
       '@merces/domain':
         specifier: workspace:*
         version: link:../domain
+      '@merces/math':
+        specifier: workspace:*
+        version: link:../math
       '@noble/curves':
         specifier: 2.4.0
         version: 2.4.0
@@ -285,6 +319,12 @@ importers:
       '@merces/indexer':
         specifier: workspace:*
         version: link:../indexer
+      '@merces/keepers':
+        specifier: workspace:*
+        version: link:../keepers
+      '@merces/ports':
+        specifier: workspace:*
+        version: link:../ports
       '@merces/scenarios':
         specifier: workspace:*
         version: link:../scenarios

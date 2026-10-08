@@ -5,3 +5,4 @@ export * from './identity.ts';
 export * from './esign.ts';
 export * from './zktls.ts';
 export * from './prover.ts';
+export * from './price-feed.ts';

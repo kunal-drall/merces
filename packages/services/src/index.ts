@@ -7,12 +7,14 @@ import { registerIdentityRoutes } from './identity/routes.ts';
 import { registerContractRoutes } from './contracts/routes.ts';
 import { registerTermsRoutes } from './terms/routes.ts';
 import { registerPoiRoutes } from './poi/routes.ts';
+import { registerAuctionRoutes } from './auction/routes.ts';
 
 export * from './context.ts';
 export * from './identity/service.ts';
 export * from './contracts/service.ts';
 export * from './terms/service.ts';
 export * from './poi/service.ts';
+export * from './auction/service.ts';
 
 export interface ProviderOverrides {
   kms?: KmsPort;
@@ -45,4 +47,4 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
 }
 
 /** Every service route module, in registration order. The server composes them into the gateway. */
-export const serviceRoutes: ((app: import('fastify').FastifyInstance, ctx: AppContext) => void)[] = [registerIdentityRoutes, registerContractRoutes, registerTermsRoutes, registerPoiRoutes];
+export const serviceRoutes: ((app: import('fastify').FastifyInstance, ctx: AppContext) => void)[] = [registerIdentityRoutes, registerContractRoutes, registerTermsRoutes, registerPoiRoutes, registerAuctionRoutes];

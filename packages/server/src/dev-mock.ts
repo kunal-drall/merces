@@ -6,6 +6,8 @@ import { createLogger } from '@merces/core';
 import { createPool, migrate } from '@merces/db';
 import { createChains } from '@merces/chains';
 import { Indexer } from '@merces/indexer';
+import { KeeperScheduler, standardJobs } from '@merces/keepers';
+import { MockChainlink, MockPyth } from '@merces/ports';
 import { seedCohort } from '@merces/scenarios';
 import { SimWallet, SimulatorChain, simAdminWallet } from '@merces/simulator';
 import { PILOT_COHORT } from '@merces/fixtures';
@@ -56,3 +58,6 @@ const port = Number(process.env.PORT ?? 3000);
 await app.listen({ port, host: '0.0.0.0' });
 log.info({ port }, 'dev:mock listening (simulator, both personalities)');
 void indexer.runLoop(Number(process.env.INDEXER_POLL_MS ?? 1000));
+// keepers in-process (mock Pyth prices; the outbox logs notifications until a channel is configured)
+const keepers = new KeeperScheduler(ctx, standardJobs({ pyth: new MockPyth(undefined, () => solana.clock.now()), chainlink: new MockChainlink(), outbox: async (topic, payload) => log.info({ topic, kind: payload.kind }, 'notification') }));
+if (process.env.MERCES_KEEPERS !== 'false') void keepers.start(undefined, Number(process.env.KEEPER_TICK_MS ?? 5000));

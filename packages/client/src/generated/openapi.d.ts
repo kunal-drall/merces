@@ -1200,6 +1200,134 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/series/{seriesId}/bids/precheck": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["precheckBid"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/bids/commitment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["computeBidCommitment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/bids/build-commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildCommitBid"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/bids/build-reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildRevealBid"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/bids/build-refund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildClaimRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/bids/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putBidBackup"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/bids/backup/{bidder}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getBidBackup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/auction/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAuctionPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -3377,6 +3505,261 @@ export interface operations {
         };
         responses: {
             /** @description Report marked paid once the chain shows the period settled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    precheckBid: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    bidder: string;
+                    pricePerUnit: components["schemas"]["Money"];
+                    quantity: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Allowlist */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    computeBidCommitment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    bidder: string;
+                    pricePerUnit: string;
+                    quantity: string;
+                    salt: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The commitment hash (nothing stored; prefer computing it client-side) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    buildCommitBid: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    bidder: string;
+                    commitment: string;
+                    deposit: components["schemas"]["Money"];
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned commitBid transaction */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    buildRevealBid: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    bidder: string;
+                    pricePerUnit: string;
+                    quantity: string;
+                    salt: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned revealBid transaction (values checked against the commitment) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Values do not match the committed bid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildClaimRefund: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    bidder: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned claimRefund transaction and the refundable amount */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Not settled or nothing to refund */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putBidBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    bidder: string;
+                    ciphertext: string;
+                    keyHint?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Client-encrypted reveal backup stored (the server cannot read it) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Plaintext bid fields detected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getBidBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+                bidder: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The backup ciphertext */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getAuctionPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Offchain clearing preview from revealed bids and whether settlement is due */
             200: {
                 headers: {
                     [name: string]: unknown;

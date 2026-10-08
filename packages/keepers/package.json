@@ -1,0 +1,19 @@
+{
+  "name": "@merces/keepers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "E7 keepers and scheduler (permissionless cranks, reminders, outbox dispatch) and the E8 rate keeper. Every job is idempotent and safe to run twice or late.",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@merces/api": "workspace:*",
+    "@merces/chains": "workspace:*",
+    "@merces/core": "workspace:*",
+    "@merces/db": "workspace:*",
+    "@merces/domain": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@merces/ports": "workspace:*",
+    "@merces/services": "workspace:*"
+  },
+  "devDependencies": { "@merces/simulator": "workspace:*" }
+}

@@ -18,6 +18,7 @@ tags:
   - { name: terms, description: Terms validation, disclosure and amendments (E4) }
   - { name: tx, description: Relay of user-signed transactions }
   - { name: reporting, description: ProofOfIncome (E5) }
+  - { name: bids, description: Sealed-bid auction service (E6) }
   - { name: admin }
   - { name: attestor }
   - { name: dev, description: Mock-mode only (simulator) }
@@ -772,3 +773,74 @@ paths:
       parameters: [{ name: reportId, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [txId], properties: { txId: { type: string } } } } } }
       responses: { '200': { description: Report marked paid once the chain shows the period settled, content: { application/json: { schema: { type: object } } } } }
+
+  # ---- E6 auction service
+  /series/{seriesId}/bids/precheck:
+    post:
+      operationId: precheckBid
+      x-access: backer
+      tags: [bids]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder, pricePerUnit, quantity], properties: { bidder: { type: string }, pricePerUnit: { $ref: '#/components/schemas/Money' }, quantity: { type: string } } } } } }
+      responses: { '200': { description: Allowlist, wallet-cap, phase, reserve and balance checks plus the deposit a commit locks, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/bids/commitment:
+    post:
+      operationId: computeBidCommitment
+      x-access: backer
+      tags: [bids]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder, pricePerUnit, quantity, salt], properties: { bidder: { type: string }, pricePerUnit: { type: string }, quantity: { type: string }, salt: { type: string } } } } } }
+      responses: { '200': { description: The commitment hash (nothing stored; prefer computing it client-side), content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/bids/build-commit:
+    post:
+      operationId: buildCommitBid
+      x-access: backer
+      tags: [bids]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder, commitment, deposit], properties: { bidder: { type: string }, commitment: { type: string }, deposit: { $ref: '#/components/schemas/Money' } } } } } }
+      responses: { '200': { description: Unsigned commitBid transaction, content: { application/json: { schema: { type: object } } } } }
+  /series/{seriesId}/bids/build-reveal:
+    post:
+      operationId: buildRevealBid
+      x-access: backer
+      tags: [bids]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder, pricePerUnit, quantity, salt], properties: { bidder: { type: string }, pricePerUnit: { type: string }, quantity: { type: string }, salt: { type: string } } } } } }
+      responses: { '200': { description: Unsigned revealBid transaction (values checked against the commitment), content: { application/json: { schema: { type: object } } } }, '422': { description: Values do not match the committed bid } }
+  /series/{seriesId}/bids/build-refund:
+    post:
+      operationId: buildClaimRefund
+      x-access: account
+      tags: [bids]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder], properties: { bidder: { type: string } } } } } }
+      responses: { '200': { description: Unsigned claimRefund transaction and the refundable amount, content: { application/json: { schema: { type: object } } } }, '409': { description: Not settled or nothing to refund } }
+  /series/{seriesId}/bids/backup:
+    put:
+      operationId: putBidBackup
+      x-access: backer
+      tags: [bids]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder, ciphertext], properties: { bidder: { type: string }, ciphertext: { type: string }, keyHint: { type: [string, 'null'] } } } } } }
+      responses: { '200': { description: Client-encrypted reveal backup stored (the server cannot read it), content: { application/json: { schema: { type: object } } } }, '400': { description: Plaintext bid fields detected } }
+  /series/{seriesId}/bids/backup/{bidder}:
+    get:
+      operationId: getBidBackup
+      x-access: account
+      tags: [bids]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: bidder, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: The backup ciphertext, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /series/{seriesId}/auction/preview:
+    get:
+      operationId: getAuctionPreview
+      x-access: public
+      tags: [bids]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses: { '200': { description: Offchain clearing preview from revealed bids and whether settlement is due, content: { application/json: { schema: { type: object } } } } }

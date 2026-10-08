@@ -13,7 +13,8 @@
     "bs58": "6.0.0",
     "viem": "2.57.3",
     "@noble/curves": "2.4.0",
-    "snarkjs": "0.7.6"
+    "snarkjs": "0.7.6",
+    "@merces/math": "workspace:*"
   },
   "devDependencies": {
     "@merces/simulator": "workspace:*"
