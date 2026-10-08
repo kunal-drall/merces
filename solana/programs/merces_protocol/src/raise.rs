@@ -2,7 +2,6 @@
 
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
-use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_2022::spl_token_2022::extension::ExtensionType;
 use anchor_spl::token_2022::spl_token_2022::instruction::AuthorityType;
 use anchor_spl::token_2022::spl_token_2022::state::Mint as MintState;
@@ -58,8 +57,8 @@ pub struct PrepareRaise<'info> {
     pub auction: Box<Account<'info, Auction>>,
     #[account(init, payer = issuer, space = 8 + Treasury::INIT_SPACE, seeds = [seeds::TREASURY, series.key().as_ref()], bump)]
     pub treasury: Box<Account<'info, Treasury>>,
-    #[account(init, payer = issuer, space = 8 + Ledger::INIT_SPACE, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(init, payer = issuer, space = Ledger::LEN, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(
         init,
         payer = issuer,
@@ -94,6 +93,7 @@ pub struct PrepareRaise<'info> {
 }
 
 pub fn prepare_raise(ctx: Context<PrepareRaise>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_init()?;
     let series = &ctx.accounts.series;
     require!(series.mode == MODE_SEALED_BID, ProtocolError::NotSealedBid);
     require!(series.raise_state == RAISE_DRAFT, ProtocolError::NotDraft);
@@ -105,9 +105,8 @@ pub fn prepare_raise(ctx: Context<PrepareRaise>) -> Result<()> {
     let t = &mut ctx.accounts.treasury;
     t.series = series_key;
     t.bump = ctx.bumps.treasury;
-    let l = &mut ctx.accounts.ledger;
-    l.series = series_key;
-    l.bump = ctx.bumps.ledger;
+    ledger.series = series_key;
+    ledger.bump = ctx.bumps.ledger;
     Ok(())
 }
 
@@ -157,9 +156,15 @@ pub fn open_raise(ctx: Context<OpenRaise>) -> Result<()> {
     let config = &ctx.accounts.config;
     require!(series.mode == MODE_SEALED_BID, ProtocolError::NotSealedBid);
     require!(series.raise_state == RAISE_DRAFT, ProtocolError::NotDraft);
-    require!(series.contract_hash != [0u8; 32], ProtocolError::ContractHashNotSet);
+    require!(
+        series.contract_hash != [0u8; 32],
+        ProtocolError::ContractHashNotSet
+    );
     require!(!config.new_raises_paused, ProtocolError::NewRaisesPaused);
-    require!(ctx.accounts.issuer_allowlist.allowed, ProtocolError::NotAllowlisted);
+    require!(
+        ctx.accounts.issuer_allowlist.allowed,
+        ProtocolError::NotAllowlisted
+    );
     require!(ctx.accounts.auction.state == 0, ProtocolError::RaiseNotOpen);
 
     let series_key = series.key();
@@ -627,8 +632,8 @@ pub struct FinalizeSettlement<'info> {
     pub series: Box<Account<'info, Series>>,
     #[account(mut, seeds = [seeds::AUCTION, series.key().as_ref()], bump = auction.bump)]
     pub auction: Box<Account<'info, Auction>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     /// CHECK: data-less signer PDA for the registry write interface.
     #[account(seeds = [seeds::REGISTRY_SIGNER], bump)]
     pub registry_signer: UncheckedAccount<'info>,
@@ -636,6 +641,7 @@ pub struct FinalizeSettlement<'info> {
 }
 
 pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series = &ctx.accounts.series;
     let a = &mut ctx.accounts.auction;
@@ -693,7 +699,7 @@ pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
         false,
     )?;
     let cap = cap_per_unit(series.cap_multiple_wad, a.clearing_price).map_err(math)?;
-    ctx.accounts.ledger.init_after_settlement(now, cap)?;
+    ledger.init_after_settlement(now, cap)?;
     emit!(RaiseSettled {
         series: series.key(),
         clearing_price: a.clearing_price,
@@ -720,40 +726,22 @@ pub struct ClaimWin<'info> {
     pub bid: Box<Account<'info, Bid>>,
     #[account(mut, seeds = [seeds::TREASURY, series.key().as_ref()], bump = treasury.bump)]
     pub treasury: Box<Account<'info, Treasury>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(init_if_needed, payer = payer, space = 8 + Holder::INIT_SPACE, seeds = [seeds::HOLDER, series.key().as_ref(), bidder.key().as_ref()], bump)]
     pub holder: Box<Account<'info, Holder>>,
     /// CHECK: the bid's owner; refunds and units go to its associated token accounts only.
     #[account(address = bid.bidder)]
     pub bidder: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        associated_token::mint = stablecoin_mint,
-        associated_token::authority = bidder,
-        associated_token::token_program = stablecoin_program,
-    )]
+    #[account(mut, token::mint = stablecoin_mint, token::authority = bidder, token::token_program = stablecoin_program)]
     pub bidder_stable_ata: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(
-        mut,
-        associated_token::mint = unit_mint,
-        associated_token::authority = bidder,
-        associated_token::token_program = token_2022_program,
-    )]
+    #[account(mut, token::mint = unit_mint, token::authority = bidder, token::token_program = token_2022_program)]
     pub bidder_unit_ata: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, seeds = [seeds::ESCROW_TOKEN, series.key().as_ref()], bump)]
     pub escrow_token: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, seeds = [seeds::TREASURY_TOKEN, series.key().as_ref()], bump)]
     pub treasury_token: Box<InterfaceAccount<'info, TokenAccount>>,
-    /// CHECK: the configured fee collector wallet.
-    #[account(address = config.fee_collector @ ProtocolError::FeeCollectorMismatch)]
-    pub fee_collector: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        associated_token::mint = stablecoin_mint,
-        associated_token::authority = fee_collector,
-        associated_token::token_program = stablecoin_program,
-    )]
+    #[account(mut, token::mint = stablecoin_mint, token::authority = config.fee_collector, token::token_program = stablecoin_program)]
     pub fee_collector_ata: Box<InterfaceAccount<'info, TokenAccount>>,
     /// CHECK: data-less signer PDA, auction escrow owner.
     #[account(seeds = [seeds::ESCROW_AUTH, series.key().as_ref()], bump)]
@@ -768,7 +756,6 @@ pub struct ClaimWin<'info> {
     #[account(address = series.stablecoin_program @ ProtocolError::TokenProgramMismatch)]
     pub stablecoin_program: Interface<'info, TokenInterface>,
     pub token_2022_program: Program<'info, Token2022>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
     /// CHECK: data-less signer PDA for the registry write interface.
     #[account(seeds = [seeds::REGISTRY_SIGNER], bump)]
     pub registry_signer: UncheckedAccount<'info>,
@@ -777,6 +764,7 @@ pub struct ClaimWin<'info> {
 }
 
 pub fn claim_win<'info>(ctx: Context<'info, ClaimWin<'info>>) -> Result<()> {
+    let ledger = ctx.accounts.ledger.load_mut()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
     let a = &ctx.accounts.auction;
@@ -787,6 +775,25 @@ pub fn claim_win<'info>(ctx: Context<'info, ClaimWin<'info>>) -> Result<()> {
     let escrow_bump = [ctx.bumps.escrow_auth];
     let escrow_seeds: &[&[u8]] = &[seeds::ESCROW_AUTH, series_key.as_ref(), &escrow_bump];
     let bidder = ctx.accounts.bidder.key();
+    let stable_program = ctx.accounts.stablecoin_program.key();
+    require_ata(
+        &ctx.accounts.bidder_stable_ata.to_account_info(),
+        &bidder,
+        &series.stablecoin,
+        &stable_program,
+    )?;
+    require_ata(
+        &ctx.accounts.bidder_unit_ata.to_account_info(),
+        &bidder,
+        &series.unit_mint,
+        &ctx.accounts.token_2022_program.key(),
+    )?;
+    require_ata(
+        &ctx.accounts.fee_collector_ata.to_account_info(),
+        &ctx.accounts.config.fee_collector,
+        &series.stablecoin,
+        &stable_program,
+    )?;
 
     // Compute the allocation and the money split.
     let (alloc, cost, fee, refund, charge) = if !b.revealed {
@@ -869,10 +876,9 @@ pub fn claim_win<'info>(ctx: Context<'info, ClaimWin<'info>>) -> Result<()> {
             ),
             alloc,
         )?;
-        let ledger = &ctx.accounts.ledger;
         let holder_bump = ctx.bumps.holder;
         register_holder_now(
-            ledger,
+            &ledger,
             &mut ctx.accounts.holder,
             series_key,
             bidder,
@@ -1013,12 +1019,7 @@ pub struct RefundBid<'info> {
     /// CHECK: the bid's owner; the refund goes to its associated token account only.
     #[account(address = bid.bidder)]
     pub bidder: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        associated_token::mint = stablecoin_mint,
-        associated_token::authority = bidder,
-        associated_token::token_program = stablecoin_program,
-    )]
+    #[account(mut, token::mint = stablecoin_mint, token::authority = bidder, token::token_program = stablecoin_program)]
     pub bidder_stable_ata: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, seeds = [seeds::ESCROW_TOKEN, series.key().as_ref()], bump)]
     pub escrow_token: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -1029,7 +1030,6 @@ pub struct RefundBid<'info> {
     pub stablecoin_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = series.stablecoin_program @ ProtocolError::TokenProgramMismatch)]
     pub stablecoin_program: Interface<'info, TokenInterface>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1040,6 +1040,12 @@ pub fn refund_bid<'info>(ctx: Context<'info, RefundBid<'info>>) -> Result<()> {
     require!(a.state == RAISE_FAILED, ProtocolError::NotSettledOrFailed);
     let b = &ctx.accounts.bid;
     require!(!b.processed, ProtocolError::BidAlreadyProcessed);
+    require_ata(
+        &ctx.accounts.bidder_stable_ata.to_account_info(),
+        &b.bidder,
+        &ctx.accounts.series.stablecoin,
+        &ctx.accounts.stablecoin_program.key(),
+    )?;
     let escrow_bump = [ctx.bumps.escrow_auth];
     let escrow_seeds: &[&[u8]] = &[seeds::ESCROW_AUTH, series_key.as_ref(), &escrow_bump];
     transfer_stable(

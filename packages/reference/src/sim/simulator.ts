@@ -896,11 +896,11 @@ export class Simulator {
     const fxAvgWad = B(c.fxAvgWad);
     const incomeCommitment = bytes32ToField(hexToBytes(c.incomeCommitment));
 
-    // 2. status gates
-    this.syncStatus(s);
-    if (l.status === SeriesStatus.Extinguished) fail("SeriesTerminal", "Extinguished");
-    if (l.status === SeriesStatus.Retired) fail("SeriesRetired");
-    const isTail = l.status === SeriesStatus.Redeemed;
+    // 2. status gates (derived, nothing stored until the effects phase)
+    const status = this.derivedStatus(s);
+    if (status === SeriesStatus.Extinguished) fail("SeriesTerminal", "Extinguished");
+    if (status === SeriesStatus.Retired) fail("SeriesRetired");
+    const isTail = status === SeriesStatus.Redeemed;
     if (isTail) {
       if (!c.liquidityEvent) fail("NotLiquidityEvent");
       if (this.now > l.redemptionTs + this.params.tailSeconds) fail("TailExpired");
@@ -1096,9 +1096,12 @@ export class Simulator {
   private fxSnapshot(c: Extract<Call, { op: "fx_snapshot" }>): void {
     const pair = this.fxPairs.get(c.pairId.toLowerCase());
     if (!pair) throw new Error(`unknown fx pair ${c.pairId}`);
+    // once per UTC day (the day requirement precedes the price validation in SPEC §6.6)
+    if (this.now / DAY <= pair.state.lastDay) fail("SnapshotAlreadyTaken");
     const price = { price: B(c.price), conf: B(c.conf), expo: c.expo, publishTime: B(c.publishTime) };
     const bad = M.validatePythPrice(price, this.now, this.params);
-    if (bad) fail("FxMismatch", `pyth update rejected: ${bad}`);
+    if (bad === "StalePrice" || bad === "NonPositivePrice") fail("StalePrice", bad);
+    if (bad === "ConfidenceTooWide") fail("ConfidenceTooWide");
     let rate = M.normalizePythPrice(price.price, price.expo);
     if (pair.inverted) rate = M.invertRate(rate);
     let cross: bigint | null = null;
@@ -1110,7 +1113,7 @@ export class Simulator {
     try {
       r = M.snapshot(pair.state, this.now, rate, cross, this.params);
     } catch (e) {
-      if ((e as Error).message === "SnapshotAlreadyTaken") fail("FxMismatch", "snapshot already taken today");
+      if ((e as Error).message === "SnapshotAlreadyTaken") fail("SnapshotAlreadyTaken");
       throw e;
     }
     pair.state = r.state;
@@ -1125,11 +1128,11 @@ export class Simulator {
     const s = this.getSeries(c.series);
     this.requireIssuer(s, c.actor);
     if (s.raiseState !== RaiseState.Settled) fail("RaiseNotSettled");
-    this.syncStatus(s);
     const l = s.ledger;
-    if (M.isTerminal(l.status)) fail("SeriesTerminal");
+    if (M.isTerminal(this.derivedStatus(s))) fail("SeriesTerminal");
     if (this.now < s.settlementTs + s.terms.lockupSeconds) fail("LockupActive");
     if (l.openDueAmount > 0n) fail("PaymentOutstanding");
+    this.syncStatus(s);
     const q = M.redemptionQuote({
       p0: s.clearingPrice,
       hurdleRateWad: s.terms.hurdleRateWad,
@@ -1188,13 +1191,14 @@ export class Simulator {
     this.requireActiveAttestor(a);
     this.requireActiveAttestor(b);
     if (s.raiseState !== RaiseState.Settled) fail("RaiseNotSettled");
-    this.syncStatus(s);
     const l = s.ledger;
-    if (l.status === SeriesStatus.Retired || l.status === SeriesStatus.Extinguished) fail("SeriesTerminal");
-    if (l.status === SeriesStatus.Redeemed && this.now > l.redemptionTs + this.params.tailSeconds) fail("SeriesTerminal", "tail ended");
-    const N = l.status === SeriesStatus.Redeemed ? l.unitsAtRedemption : s.supply;
+    const status = this.derivedStatus(s);
+    if (status === SeriesStatus.Retired || status === SeriesStatus.Extinguished) fail("SeriesTerminal");
+    if (status === SeriesStatus.Redeemed && this.now > l.redemptionTs + this.params.tailSeconds) fail("SeriesTerminal", "tail ended");
+    const wasRedeemed = status === SeriesStatus.Redeemed;
+    const N = wasRedeemed ? l.unitsAtRedemption : s.supply;
     const unreleased = s.treasury.proceeds - s.treasury.releasedTotal;
-    const wasRedeemed = l.status === SeriesStatus.Redeemed;
+    this.syncStatus(s);
     if (unreleased > 0n) {
       if (N === 0n) fail("NoUnitsOutstanding");
       s.treasury.balance -= unreleased;
@@ -1242,7 +1246,6 @@ export class Simulator {
     const s = this.getSeries(c.series);
     if (!this.flags.windowsEnabled) fail("WindowsDisabled");
     if (s.raiseState !== RaiseState.Settled) fail("RaiseNotSettled");
-    this.syncStatus(s);
     const status = this.derivedStatus(s);
     if (status !== SeriesStatus.OnTime && status !== SeriesStatus.InGrace) fail("WindowNotEligible", `status ${SeriesStatus[status]}`);
     if (this.now < s.settlementTs + s.terms.lockupSeconds) fail("LockupActive");
@@ -1250,6 +1253,7 @@ export class Simulator {
     if (s.ledger.lastPaidPeriod === null || s.ledger.lastPaidPeriod < period) fail("WindowNotEligible", `period ${period} not paid`);
     if (period !== periodOf(this.now) - 1) fail("WindowNotEligible", `period ${period} is not the previous quarter`);
     if (s.window && s.window.state !== "Done" && s.window.state !== "NoMatch") fail("WindowOpen");
+    this.syncStatus(s);
     s.window = {
       period,
       state: "Commit",

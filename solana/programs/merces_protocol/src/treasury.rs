@@ -20,8 +20,8 @@ pub struct ClaimRelease<'info> {
     pub series: Box<Account<'info, Series>>,
     #[account(mut, seeds = [seeds::TREASURY, series.key().as_ref()], bump = treasury.bump)]
     pub treasury: Box<Account<'info, Treasury>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(mut, seeds = [seeds::TREASURY_TOKEN, series.key().as_ref()], bump)]
     pub treasury_token: Box<InterfaceAccount<'info, TokenAccount>>,
     /// CHECK: data-less signer PDA, treasury owner.
@@ -38,6 +38,7 @@ pub struct ClaimRelease<'info> {
 /// `claim_release` (SPEC §5.3): `amount = min(vested(now), proceeds) − released_total`. Blocked
 /// only by the issuer's own pause, the derived `Late` status, or extinguishment (C11 §1).
 pub fn claim_release<'info>(ctx: Context<'info, ClaimRelease<'info>>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
@@ -47,7 +48,7 @@ pub fn claim_release<'info>(ctx: Context<'info, ClaimRelease<'info>>) -> Result<
         !t.issuer_paused_releases,
         ProtocolError::ReleasesPausedByIssuer
     );
-    let status = ctx.accounts.ledger.sync_status(now, series_key)?;
+    let status = ledger.sync_status(now, series_key)?;
     require!(
         status != SeriesStatus::Extinguished,
         ProtocolError::SeriesExtinguished
@@ -61,7 +62,7 @@ pub fn claim_release<'info>(ctx: Context<'info, ClaimRelease<'info>>) -> Result<
     let amount = claimable(
         t.proceeds,
         &schedule,
-        ctx.accounts.ledger.settlement_ts,
+        ledger.settlement_ts,
         now,
         t.released_total,
     )
@@ -122,8 +123,8 @@ pub struct RequestEarlyDraw<'info> {
     pub series: Box<Account<'info, Series>>,
     #[account(mut, seeds = [seeds::TREASURY, series.key().as_ref()], bump = treasury.bump)]
     pub treasury: Box<Account<'info, Treasury>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(mut, seeds = [seeds::TREASURY_TOKEN, series.key().as_ref()], bump)]
     pub treasury_token: Box<InterfaceAccount<'info, TokenAccount>>,
     /// CHECK: data-less signer PDA, treasury owner.
@@ -143,6 +144,7 @@ pub fn request_early_draw<'info>(
     ctx: Context<'info, RequestEarlyDraw<'info>>,
     amount: u64,
 ) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let approver = ctx.accounts.config.early_draw_approver;
@@ -159,7 +161,7 @@ pub fn request_early_draw<'info>(
     let t = &ctx.accounts.treasury;
     require!(t.finalized, ProtocolError::MintNotFinalized);
     require!(amount > 0, ProtocolError::NothingToRelease);
-    let status = ctx.accounts.ledger.sync_status(now, series_key)?;
+    let status = ledger.sync_status(now, series_key)?;
     require!(
         status != SeriesStatus::Extinguished,
         ProtocolError::SeriesExtinguished

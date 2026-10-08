@@ -1,7 +1,6 @@
 //! ProofOfIncome verifier, payments, true-ups, status crank and hardship pauses (SPEC §6.2, §6.4).
 
 use anchor_lang::prelude::*;
-use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 use merces_common::encoding::{
     fx_message, pause_message, report_message, trueup_message, u64_to_be32,
@@ -102,8 +101,8 @@ pub struct SubmitReport<'info> {
     pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(constraint = series.issuer == issuer.key() @ ProtocolError::NotIssuer)]
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(init, payer = issuer, space = 8 + Report::INIT_SPACE, seeds = [seeds::REPORT, series.key().as_ref(), args.period.to_le_bytes().as_ref()], bump)]
     pub report: Box<Account<'info, Report>>,
     #[account(address = series.unit_mint @ ProtocolError::UnitMintMismatch)]
@@ -123,11 +122,11 @@ pub struct SubmitReport<'info> {
 }
 
 pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
     let config = &ctx.accounts.config;
-    let ledger = &mut ctx.accounts.ledger;
     let status = ledger.sync_status(now, series_key)?;
 
     // 2. status and period rules
@@ -148,7 +147,7 @@ pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Resu
             .checked_add(TAIL_SECONDS)
             .ok_or(ProtocolError::MathOverflow)?;
         require!(now <= tail_end, ProtocolError::TailWindowClosed);
-        if let Some(last) = ledger.last_accepted_period {
+        if let Some(last) = ledger.last_accepted_period() {
             require!(args.period > last, ProtocolError::WrongPeriod);
         }
         require!(
@@ -241,7 +240,7 @@ pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Resu
     };
 
     // 5. prior commitment
-    let prior = match ledger.last_income_period {
+    let prior = match ledger.last_income_period() {
         Some(last)
             if last.checked_add(1) == Some(args.period)
                 && year_of(last) == year_of(args.period) =>
@@ -314,9 +313,9 @@ pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Resu
         .payment_usd
         .checked_sub(credit_used)
         .ok_or(ProtocolError::MathOverflow)?;
-    ledger.last_accepted_period = Some(args.period);
+    ledger.set_last_accepted_period(Some(args.period));
     ledger.last_income_commitment = args.income_commitment;
-    ledger.last_income_period = Some(args.period);
+    ledger.set_last_income_period(Some(args.period));
     let r = &mut ctx.accounts.report;
     r.series = series_key;
     r.period = args.period;
@@ -330,7 +329,7 @@ pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Resu
     r.due = due;
     r.bump = ctx.bumps.report;
     if due == 0 {
-        ledger.last_paid_period = Some(args.period);
+        ledger.set_last_paid_period(Some(args.period));
         r.paid_at = now;
         emit!(PaymentSettled {
             series: series_key,
@@ -342,10 +341,10 @@ pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Resu
             refunded: 0,
         });
     } else {
-        ledger.open_due_period = Some(args.period);
+        ledger.set_open_due_period(Some(args.period));
         ledger.open_due_amount = due;
         ledger.open_due_tier = args.tier;
-        ledger.open_due_is_tail = is_tail;
+        ledger.open_due_is_tail = u8::from(is_tail);
     }
     ledger.sync_status(now, series_key)?;
     emit!(ReportAccepted {
@@ -374,8 +373,8 @@ pub struct Pay<'info> {
     pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut)]
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     /// The report of the open due period (`pay` only; any report account for `pay_trueup`).
     #[account(mut, seeds = [seeds::REPORT, series.key().as_ref(), report.period.to_le_bytes().as_ref()], bump = report.bump)]
     pub report: Option<Account<'info, Report>>,
@@ -389,22 +388,9 @@ pub struct Pay<'info> {
     /// CHECK: the series issuer (refund destination owner).
     #[account(address = series.issuer @ ProtocolError::NotIssuer)]
     pub issuer: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        associated_token::mint = stablecoin_mint,
-        associated_token::authority = issuer,
-        associated_token::token_program = stablecoin_program,
-    )]
+    #[account(mut, token::mint = stablecoin_mint, token::authority = issuer, token::token_program = stablecoin_program)]
     pub issuer_stable_ata: Box<InterfaceAccount<'info, TokenAccount>>,
-    /// CHECK: the configured fee collector wallet.
-    #[account(address = config.fee_collector @ ProtocolError::FeeCollectorMismatch)]
-    pub fee_collector: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        associated_token::mint = stablecoin_mint,
-        associated_token::authority = fee_collector,
-        associated_token::token_program = stablecoin_program,
-    )]
+    #[account(mut, token::mint = stablecoin_mint, token::authority = config.fee_collector, token::token_program = stablecoin_program)]
     pub fee_collector_ata: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = series.unit_mint @ ProtocolError::UnitMintMismatch)]
     pub unit_mint: Box<InterfaceAccount<'info, Mint>>,
@@ -412,7 +398,6 @@ pub struct Pay<'info> {
     pub stablecoin_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(address = series.stablecoin_program @ ProtocolError::TokenProgramMismatch)]
     pub stablecoin_program: Interface<'info, TokenInterface>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
     /// CHECK: data-less signer PDA for the registry write interface.
     #[account(seeds = [seeds::REGISTRY_SIGNER], bump)]
     pub registry_signer: UncheckedAccount<'info>,
@@ -423,7 +408,8 @@ pub struct Pay<'info> {
 /// Pulls `total` into the vault, runs the ledger receipt and moves fee / refund. Returns the
 /// receive outcome. Handles the Retired transition (registry + event + clearing dues).
 fn settle_receipt<'info>(
-    ctx: &mut Context<'info, Pay<'info>>,
+    ctx: &Context<'info, Pay<'info>>,
+    ledger: &mut Ledger,
     total: u64,
     source: u8,
     is_tail: bool,
@@ -435,6 +421,18 @@ fn settle_receipt<'info>(
     let token_program = ctx.accounts.stablecoin_program.to_account_info();
     let mint = ctx.accounts.stablecoin_mint.to_account_info();
     let vault = ctx.accounts.vault_token.to_account_info();
+    require_ata(
+        &ctx.accounts.issuer_stable_ata.to_account_info(),
+        &ctx.accounts.series.issuer,
+        mint.key,
+        token_program.key,
+    )?;
+    require_ata(
+        &ctx.accounts.fee_collector_ata.to_account_info(),
+        &ctx.accounts.config.fee_collector,
+        mint.key,
+        token_program.key,
+    )?;
     // pull
     transfer_stable(
         &token_program,
@@ -449,13 +447,9 @@ fn settle_receipt<'info>(
     )?;
     let units = ctx.accounts.unit_mint.supply;
     let out = if is_tail {
-        ctx.accounts
-            .ledger
-            .receive_tail(total, fee_bps, series_key)?
+        ledger.receive_tail(total, fee_bps, series_key)?
     } else {
-        ctx.accounts
-            .ledger
-            .receive_gross(source, total, units, fee_bps, now, series_key)?
+        ledger.receive_gross(source, total, units, fee_bps, now, series_key)?
     };
     // fee and refund out of the vault
     let bump = [ctx.bumps.vault_auth];
@@ -484,9 +478,8 @@ fn settle_receipt<'info>(
         &[vault_seeds],
     )?;
     if out.retired {
-        let ledger = &mut ctx.accounts.ledger;
         ledger.open_due_amount = 0;
-        ledger.open_due_period = None;
+        ledger.set_open_due_period(None);
         ledger.trueup_due = 0;
         RegistryCpi {
             registry_program: ctx.accounts.registry_program.to_account_info(),
@@ -506,10 +499,11 @@ fn settle_receipt<'info>(
 }
 
 /// `pay` (SPEC §6.2): pulls the open due plus late accrual from the payer into the vault.
-pub fn pay<'info>(mut ctx: Context<'info, Pay<'info>>) -> Result<()> {
+pub fn pay<'info>(ctx: Context<'info, Pay<'info>>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
-    let status = ctx.accounts.ledger.sync_status(now, series_key)?;
+    let status = ledger.sync_status(now, series_key)?;
     require!(
         status != SeriesStatus::Extinguished,
         ProtocolError::SeriesExtinguished
@@ -518,9 +512,8 @@ pub fn pay<'info>(mut ctx: Context<'info, Pay<'info>>) -> Result<()> {
         status != SeriesStatus::Retired,
         ProtocolError::SeriesRetired
     );
-    let ledger = &ctx.accounts.ledger;
     require!(ledger.open_due_amount > 0, ProtocolError::NothingDue);
-    let period = ledger.open_due_period.ok_or(ProtocolError::NothingDue)?;
+    let period = ledger.open_due_period().ok_or(ProtocolError::NothingDue)?;
     let report = ctx
         .accounts
         .report
@@ -528,7 +521,7 @@ pub fn pay<'info>(mut ctx: Context<'info, Pay<'info>>) -> Result<()> {
         .ok_or(ProtocolError::NothingDue)?;
     require!(report.period == period, ProtocolError::WrongPeriod);
     let amount = ledger.open_due_amount;
-    let is_tail = ledger.open_due_is_tail;
+    let is_tail = ledger.is_open_due_tail();
     let eff = ledger.effective_now(now)?;
     let late_days = late_days_from(eff, grace_end(period).map_err(math)?);
     let accrual =
@@ -537,13 +530,12 @@ pub fn pay<'info>(mut ctx: Context<'info, Pay<'info>>) -> Result<()> {
         .checked_add(accrual)
         .ok_or(ProtocolError::MathOverflow)?;
 
-    let out = settle_receipt(&mut ctx, total, SOURCE_PAYMENT, is_tail, now)?;
+    let out = settle_receipt(&ctx, &mut ledger, total, SOURCE_PAYMENT, is_tail, now)?;
 
-    let ledger = &mut ctx.accounts.ledger;
-    ledger.last_paid_period = Some(period);
+    ledger.set_last_paid_period(Some(period));
     ledger.open_due_amount = 0;
-    ledger.open_due_period = None;
-    ledger.open_due_is_tail = false;
+    ledger.set_open_due_period(None);
+    ledger.open_due_is_tail = 0;
     if let Some(r) = ctx.accounts.report.as_mut() {
         r.accrual_paid = accrual;
         r.paid_at = now;
@@ -572,12 +564,12 @@ pub fn pay<'info>(mut ctx: Context<'info, Pay<'info>>) -> Result<()> {
 }
 
 /// `pay_trueup` (SPEC §6.2): pulls the true-up due plus accrual past the true-up deadline.
-pub fn pay_trueup<'info>(mut ctx: Context<'info, Pay<'info>>) -> Result<()> {
+pub fn pay_trueup<'info>(ctx: Context<'info, Pay<'info>>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
-    let status = ctx.accounts.ledger.sync_status(now, series_key)?;
+    let status = ledger.sync_status(now, series_key)?;
     require!(!status.is_terminal(), ProtocolError::SeriesTerminal);
-    let ledger = &ctx.accounts.ledger;
     require!(ledger.trueup_due > 0, ProtocolError::NoTrueUpDue);
     let amount = ledger.trueup_due;
     let eff = ledger.effective_now(now)?;
@@ -587,8 +579,7 @@ pub fn pay_trueup<'info>(mut ctx: Context<'info, Pay<'info>>) -> Result<()> {
     let total = amount
         .checked_add(accrual)
         .ok_or(ProtocolError::MathOverflow)?;
-    settle_receipt(&mut ctx, total, SOURCE_PAYMENT, false, now)?;
-    let ledger = &mut ctx.accounts.ledger;
+    settle_receipt(&ctx, &mut ledger, total, SOURCE_PAYMENT, false, now)?;
     ledger.trueup_due = 0;
     ledger.trueup_deadline = 0;
     ledger.sync_status(now, series_key)?;
@@ -609,8 +600,8 @@ pub struct SubmitTrueUp<'info> {
     pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(constraint = series.issuer == issuer.key() @ ProtocolError::NotIssuer)]
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     /// CHECK: registry `AttestorKey` PDA for `attestor_addr`; validated in the handler.
     pub attestor_key: UncheckedAccount<'info>,
 }
@@ -623,6 +614,7 @@ pub fn submit_trueup(
     attestor_addr: [u8; 20],
     attestor_sig: [u8; 65],
 ) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
@@ -631,7 +623,7 @@ pub fn submit_trueup(
         ProtocolError::TierNotEnabled
     );
     require!(adjustment != 0, ProtocolError::ZeroAdjustment);
-    let status = ctx.accounts.ledger.sync_status(now, series_key)?;
+    let status = ledger.sync_status(now, series_key)?;
     require!(!status.is_terminal(), ProtocolError::SeriesTerminal);
     let msg = keccak(&[trueup_message(
         &ctx.accounts.config.domain,
@@ -644,7 +636,6 @@ pub fn submit_trueup(
     let recovered = recover_eth_address(&msg, &attestor_sig).map_err(map_sig_error)?;
     require!(recovered == attestor_addr, ProtocolError::SignerMismatch);
     require_active_attestor(&ctx.accounts.attestor_key.to_account_info(), &attestor_addr)?;
-    let ledger = &mut ctx.accounts.ledger;
     let deadline = if adjustment > 0 {
         let add = u64::try_from(adjustment).map_err(|_| ProtocolError::MathOverflow)?;
         ledger.trueup_due = ledger
@@ -687,14 +678,15 @@ pub fn submit_trueup(
 #[derive(Accounts)]
 pub struct CrankStatus<'info> {
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
 }
 
 pub fn crank_status(ctx: Context<CrankStatus>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let key = ctx.accounts.series.key();
-    ctx.accounts.ledger.sync_status(now, key)?;
+    ledger.sync_status(now, key)?;
     Ok(())
 }
 
@@ -705,16 +697,17 @@ pub struct RequestPause<'info> {
     pub issuer: Signer<'info>,
     #[account(constraint = series.issuer == issuer.key() @ ProtocolError::NotIssuer)]
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
 }
 
 pub fn request_pause(ctx: Context<RequestPause>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let key = ctx.accounts.series.key();
-    let status = ctx.accounts.ledger.sync_status(now, key)?;
+    let status = ledger.sync_status(now, key)?;
     require!(!status.is_terminal(), ProtocolError::SeriesTerminal);
-    ctx.accounts.ledger.pause_requested = true;
+    ledger.pause_requested = 1;
     emit!(PauseRequested { series: key });
     Ok(())
 }
@@ -724,8 +717,8 @@ pub struct ApprovePause<'info> {
     #[account(seeds = [CONFIG], bump = config.bump, seeds::program = merces_registry::ID)]
     pub config: Box<Account<'info, ProtocolConfig>>,
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     /// CHECK: registry `AttestorKey` PDA for `attestor_addr`; validated in the handler.
     pub attestor_key: UncheckedAccount<'info>,
 }
@@ -737,12 +730,15 @@ pub fn approve_pause(
     attestor_addr: [u8; 20],
     attestor_sig: [u8; 65],
 ) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let key = ctx.accounts.series.key();
-    let status = ctx.accounts.ledger.sync_status(now, key)?;
+    let status = ledger.sync_status(now, key)?;
     require!(!status.is_terminal(), ProtocolError::SeriesTerminal);
-    let ledger = &ctx.accounts.ledger;
-    require!(ledger.pause_requested, ProtocolError::PauseNotRequested);
+    require!(
+        ledger.is_pause_requested(),
+        ProtocolError::PauseNotRequested
+    );
     require!(pause_end > now, ProtocolError::PauseEndInPast);
     require!(ledger.pause_start == 0, ProtocolError::AlreadyPaused);
     let msg = keccak(&[pause_message(
@@ -755,14 +751,13 @@ pub fn approve_pause(
     let recovered = recover_eth_address(&msg, &attestor_sig).map_err(map_sig_error)?;
     require!(recovered == attestor_addr, ProtocolError::SignerMismatch);
     require_active_attestor(&ctx.accounts.attestor_key.to_account_info(), &attestor_addr)?;
-    let ledger = &mut ctx.accounts.ledger;
     ledger.pause_start = now;
     ledger.pause_end = pause_end;
     ledger.pause_nonce = ledger
         .pause_nonce
         .checked_add(1)
         .ok_or(ProtocolError::MathOverflow)?;
-    ledger.pause_requested = false;
+    ledger.pause_requested = 0;
     ledger.sync_status(now, key)?;
     emit!(PauseApproved {
         series: key,
@@ -778,14 +773,14 @@ pub struct EndPause<'info> {
     pub issuer: Signer<'info>,
     #[account(constraint = series.issuer == issuer.key() @ ProtocolError::NotIssuer)]
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
 }
 
 pub fn end_pause(ctx: Context<EndPause>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let key = ctx.accounts.series.key();
-    let ledger = &mut ctx.accounts.ledger;
     // closes an already-elapsed pause first
     ledger.sync_status(now, key)?;
     require!(

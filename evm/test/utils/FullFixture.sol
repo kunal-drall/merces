@@ -100,20 +100,26 @@ abstract contract FullFixture is MercesFixture {
     /// @dev 1000 units offered at reserve 100 USDC, min raise 20,000 USDC, tier flags as given; b1..b3 each buy
     /// 100 units at the reserve so P0 = 100 USDC, 300 units, proceeds 30,000 USDC, cap 250 USDC/unit.
     function standardSeries(uint8 tierFlags, bytes32 fxPairId) internal returns (uint256 sid) {
+        return standardSeries(tierFlags, fxPairId, Proofs.q1().termsCommitment);
+    }
+
+    function standardSeries(uint8 tierFlags, bytes32 fxPairId, bytes32 termsCommitment) internal returns (uint256 sid) {
         SeriesParams memory p = defaultSeriesParams();
         p.unitsOffered = 1000;
         p.reservePrice = P0;
         p.minRaise = 20_000e6;
         vm.prank(issuer);
-        sid = registry.createSeries(
-            p, defaultSchedule(), Proofs.q1().termsCommitment, tierFlags, fxPairId, SeriesMode.SealedBid, false
-        );
+        sid = registry.createSeries(p, defaultSchedule(), termsCommitment, tierFlags, fxPairId, SeriesMode.SealedBid, false);
         vm.prank(issuer);
         registry.setContractHash(sid, keccak256("contract"));
     }
 
     function runStandardRaise(uint8 tierFlags, bytes32 fxPairId) internal returns (uint256 sid) {
-        sid = standardSeries(tierFlags, fxPairId);
+        return runStandardRaise(tierFlags, fxPairId, Proofs.q1().termsCommitment);
+    }
+
+    function runStandardRaise(uint8 tierFlags, bytes32 fxPairId, bytes32 termsCommitment) internal returns (uint256 sid) {
+        sid = standardSeries(tierFlags, fxPairId, termsCommitment);
         allow(b1);
         allow(b2);
         allow(b3);

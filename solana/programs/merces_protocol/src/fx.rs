@@ -77,7 +77,10 @@ pub fn current_period(clock: &Clock) -> Result<u32> {
 /// first snapshot of a quarter, and adds to the running sum.
 pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
     let now = now_ts()?;
-    require!(period == period_of(now).map_err(math)?, ProtocolError::WrongPeriod);
+    require!(
+        period == period_of(now).map_err(math)?,
+        ProtocolError::WrongPeriod
+    );
     let day = day_of(now);
     let defaults = ctx.accounts.config.defaults;
     let cfg = &ctx.accounts.pair_config;

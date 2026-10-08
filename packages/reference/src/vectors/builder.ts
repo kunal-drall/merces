@@ -61,6 +61,8 @@ export interface ReportArgs {
   paymentOverride?: bigint;
   /** units_outstanding public input override (to build reverts) */
   unitsOverride?: bigint;
+  /** prove the honest payment, then alter the claimed payment and public signal (→ InvalidProof) */
+  tamperPaymentUsd?: bigint;
   actor?: string;
   note?: string;
 }
@@ -196,13 +198,21 @@ export class ScenarioBuilder {
     return bytesToHex(fieldToBytes32(c));
   }
 
-  /** New terms commitment for an amendment (θ indexed up); keeps r. */
-  amendedTerms(series: string, newTheta: bigint): string {
+  /**
+   * New terms commitment for an amendment (θ indexed up, r unchanged). `apply()` switches the
+   * secrets used by later reports; until then proofs still open the old commitment.
+   */
+  prepareAmendment(series: string, newTheta: bigint): { commitment: string; apply: () => void } {
     const sec = this.secrets.get(series)!;
     const termsSalt = this.fieldSalt(`${series}:terms-salt:${sec.incomeCounter}:${newTheta}`);
     const c = termsCommitment({ theta: newTheta, rWad: sec.rWad, currencyCode: sec.currencyCode, indexingRule: sec.indexingRule, termsSalt });
-    this.secrets.set(series, { ...sec, theta: newTheta, termsSalt, termsCommitment: c });
-    return bytesToHex(fieldToBytes32(c));
+    return {
+      commitment: bytesToHex(fieldToBytes32(c)),
+      apply: () => {
+        const cur = this.secrets.get(series)!;
+        this.secrets.set(series, { ...cur, theta: newTheta, termsSalt, termsCommitment: c });
+      },
+    };
   }
 
   async createSeries(args: {
@@ -329,7 +339,8 @@ export class ScenarioBuilder {
   }
 
   /** Same as {@link report} but expected to revert; does not advance the commitment chain. */
-  async reportRevert(a: ReportArgs, error: ErrorName): Promise<void> {
+  async reportRevert(a: ReportArgs, error: ErrorName, note?: string): Promise<void> {
+    if (note) a = { ...a, note };
     const s = this.sim.series.get(a.series)!;
     const sec = this.secrets.get(a.series)!;
     const sameYearChain = sec.lastIncome !== null && Math.floor(sec.lastIncome.period / 4) === Math.floor(a.period / 4) && sec.lastIncome.period === a.period - 1;
@@ -361,13 +372,19 @@ export class ScenarioBuilder {
       prior_income_ytd: prior.ytd,
       prior_salt: prior.salt,
     };
-    const { proof, publicSignals } = await proveReport(inputs);
+    const { proof, publicSignals: honest } = await proveReport(inputs);
+    const publicSignals = [...honest];
+    let claimed = payment;
+    if (a.tamperPaymentUsd !== undefined) {
+      claimed = a.tamperPaymentUsd;
+      publicSignals[5] = claimed.toString();
+    }
     const call: Call = {
       op: "submit_report",
       actor: a.actor ?? s.issuer,
       series: a.series,
       period: a.period.toString(),
-      paymentUsd: payment.toString(),
+      paymentUsd: claimed.toString(),
       fxAvgWad: fx.toString(),
       fxFallback: a.fxFallback ? { attestor: a.fxFallback.attestor } : null,
       incomeCommitment: bytesToHex(fieldToBytes32(inputs.income_commitment)),

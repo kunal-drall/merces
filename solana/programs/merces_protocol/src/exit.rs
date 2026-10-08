@@ -26,8 +26,8 @@ pub struct Redeem<'info> {
     pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut, constraint = series.issuer == issuer.key() @ ProtocolError::NotIssuer)]
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(seeds = [seeds::TREASURY, series.key().as_ref()], bump = treasury.bump)]
     pub treasury: Box<Account<'info, Treasury>>,
     #[account(mut, token::mint = stablecoin_mint, token::authority = issuer, token::token_program = stablecoin_program)]
@@ -49,16 +49,16 @@ pub struct Redeem<'info> {
 /// `redeem` (SPEC §6.7): issuer only, after lockup, with no open due. Never blockable by anyone
 /// else (C7). No fee.
 pub fn redeem<'info>(ctx: Context<'info, Redeem<'info>>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
-    let status = ctx.accounts.ledger.sync_status(now, series_key)?;
+    let status = ledger.sync_status(now, series_key)?;
     require!(!status.is_terminal(), ProtocolError::SeriesTerminal);
     require!(
         ctx.accounts.treasury.finalized,
         ProtocolError::MintNotFinalized
     );
-    let ledger = &ctx.accounts.ledger;
     let unlock = ledger
         .settlement_ts
         .checked_add(series.lockup_seconds)
@@ -93,7 +93,6 @@ pub fn redeem<'info>(ctx: Context<'info, Redeem<'info>>) -> Result<()> {
         series.stablecoin_decimals,
         &[],
     )?;
-    let ledger = &mut ctx.accounts.ledger;
     let old = ledger.status;
     ledger.status = SeriesStatus::Redeemed as u8;
     ledger.redemption_ts = now;
@@ -138,8 +137,8 @@ pub struct Extinguish<'info> {
     pub config: Box<Account<'info, ProtocolConfig>>,
     #[account(mut)]
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(mut, seeds = [seeds::TREASURY, series.key().as_ref()], bump = treasury.bump)]
     pub treasury: Box<Account<'info, Treasury>>,
     #[account(mut, seeds = [seeds::TREASURY_TOKEN, series.key().as_ref()], bump)]
@@ -174,9 +173,10 @@ pub fn extinguish<'info>(
     attestor_b: [u8; 20],
     sig_b: [u8; 65],
 ) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
-    let status = ctx.accounts.ledger.sync_status(now, series_key)?;
+    let status = ledger.sync_status(now, series_key)?;
     require!(
         status != SeriesStatus::Extinguished && status != SeriesStatus::Retired,
         ProtocolError::SeriesTerminal
@@ -188,7 +188,7 @@ pub fn extinguish<'info>(
     let msg = keccak(&[extinguish_message(
         &ctx.accounts.config.domain,
         &series_key.to_bytes(),
-        ctx.accounts.ledger.extinguish_nonce,
+        ledger.extinguish_nonce,
     )
     .as_bytes()]);
     let rec_a = recover_eth_address(&msg, &sig_a).map_err(map_sig_error)?;
@@ -224,7 +224,6 @@ pub fn extinguish<'info>(
         ctx.accounts.series.stablecoin_decimals,
         &[auth_seeds],
     )?;
-    let ledger = &mut ctx.accounts.ledger;
     let weights = if ledger.units_at_redemption > 0 {
         ledger.units_at_redemption
     } else {
@@ -236,10 +235,10 @@ pub fn extinguish<'info>(
     let old = ledger.status;
     ledger.status = SeriesStatus::Extinguished as u8;
     ledger.open_due_amount = 0;
-    ledger.open_due_period = None;
-    ledger.open_due_is_tail = false;
+    ledger.set_open_due_period(None);
+    ledger.open_due_is_tail = 0;
     ledger.trueup_due = 0;
-    ledger.pause_requested = false;
+    ledger.pause_requested = 0;
     ledger.extinguish_nonce = ledger
         .extinguish_nonce
         .checked_add(1)

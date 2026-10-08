@@ -24,6 +24,7 @@ custom-panic = []
 [dependencies]
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 spl-token-metadata-interface = { workspace = true }
 groth16-solana = { workspace = true }
@@ -32,6 +33,9 @@ merces-common = { path = "../../crates/merces-common" }
 merces-onchain = { path = "../../crates/merces-onchain" }
 merces_registry = { path = "../merces_registry", features = ["cpi"] }
 merces_hook = { path = "../merces_hook", features = ["cpi"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

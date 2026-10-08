@@ -60,25 +60,31 @@ contract VaultTest is FullFixture {
         assertEq(l.feeCollected, 15_000);
         assertEq(l.netAccWad, 950e18);
         assertEq(l.carry, 0);
-        // a share of 1 wei-unit per 300 units: route 7 (share = floor(0.3 × 7) = 2 → fee 0 → net 2 → delta 0, carry 2)
+        // route 7: share = floor(0.3 × 7) = 2, fee 0, net 2 → delta = floor(2e18 / 300) = 6_666_666_666_666_666,
+        // distributed = floor(delta × 300 / 1e18) = 1, carry = 1 (dust stays in the vault)
         fund(keeper, 7);
         vm.startPrank(keeper);
         usdc.approve(address(income), 7);
         income.route(s, 7);
         vm.stopPrank();
         l = vault.getLedger(s);
-        assertEq(l.netAccWad, 950e18);
-        assertEq(l.carry, 2);
-        // the next distribution picks the carry up
+        assertEq(l.netAccWad, 950e18 + 6_666_666_666_666_666);
+        assertEq(l.carry, 1);
+        // the next distribution picks the carry up: share 300_000, fee 15_000, net = 285_000 + 1
         fund(keeper, 1_000_000);
         vm.startPrank(keeper);
         usdc.approve(address(income), 1_000_000);
-        income.route(s, 1_000_000); // share 300_000, fee 15_000, net 285_002 → delta floor(285_002e18/300) = 950_006_666_666_666_666_666
+        income.route(s, 1_000_000);
         vm.stopPrank();
         l = vault.getLedger(s);
-        assertEq(l.netAccWad, 950e18 + 950_006_666_666_666_666_666);
-        // distributed = floor(950_006_666_666_666_666_666 × 300 / 1e18) = 285_001 ; carry = 1
+        // delta = floor(285_001e18 / 300) = 950_003_333_333_333_333_333 ; distributed = 285_000 ; carry = 1
+        assertEq(l.netAccWad, 950e18 + 6_666_666_666_666_666 + 950_003_333_333_333_333_333);
         assertEq(l.carry, 1);
+        // Σ claimable never exceeds the vault balance
+        uint256 claimable = vault.pendingOf(s, b1) + vault.pendingOf(s, b2) + vault.pendingOf(s, b3);
+        assertLe(claimable, usdc.balanceOf(address(vault)));
+        // vault carry (1) plus per-holder floor rounding (3 × 190_000.999… → 1 more wei stays in the vault)
+        assertEq(usdc.balanceOf(address(vault)) - claimable, 2);
     }
 
     function test_capHitTruncatesRefundsRetiresAndBurns() public {
@@ -104,7 +110,7 @@ contract VaultTest is FullFixture {
         emit IMercesIncome.PaymentSettled(sid, Q1_2026 + 5, 30_000e6, 0, 150e6, 3_000e6, 27_000e6);
         income.pay(sid);
         vm.stopPrank();
-        assertEq(usdc.balanceOf(issuer), issuerBefore); // 30,000 pulled, 27,000 refunded in the same tx
+        assertEq(usdc.balanceOf(issuer), issuerBefore + 27_000e6); // 30,000 pulled, 27,000 refunded in the same tx
         assertEq(registry.getSeriesCore(sid).terminalStatus, uint8(SeriesStatus.Retired));
         assertEq(uint8(income.deriveStatus(sid)), uint8(SeriesStatus.Retired));
         IMercesVault.Ledger memory l = vault.getLedger(sid);

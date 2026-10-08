@@ -138,58 +138,130 @@ pub struct Treasury {
     pub bump: u8,
 }
 
-/// Per-series repayment ledger (`[LEDGER, series]`).
-#[account]
-#[derive(InitSpace)]
+/// Per-series repayment ledger (`[LEDGER, series]`). Zero-copy: the 64-entry `year_gross_wad`
+/// table would otherwise sit on the stack during account validation. Optional periods are encoded
+/// as `(value, has_*)` pairs; booleans as `u8`. Field order avoids padding (bytemuck `Pod`).
+#[account(zero_copy)]
+#[repr(C)]
 pub struct Ledger {
-    pub series: Pubkey,
-    pub status: u8,
+    // u128
+    pub paid_per_unit_wad: u128,
+    pub net_acc_wad: u128,
+    pub tail_acc_wad: u128,
+    pub tail_paid_per_unit_wad: u128,
+    pub final_acc_wad: u128,
+    pub year_gross_wad: [u128; MAX_YEAR_BUCKETS],
+    // u64
     pub settlement_ts: u64,
-    pub first_period: u32,
-    pub last_accepted_period: Option<u32>,
-    pub last_paid_period: Option<u32>,
-    pub open_due_period: Option<u32>,
     pub open_due_amount: u64,
-    pub open_due_tier: u8,
-    /// `true` when the open due belongs to a tail report (routes to the tail accumulators).
-    pub open_due_is_tail: bool,
     pub router_credit: u64,
     pub trueup_due: u64,
     pub trueup_deadline: u64,
-    // pauses
     pub pause_nonce: u64,
-    pub pause_requested: bool,
     pub pause_start: u64,
     pub pause_end: u64,
     pub paused_total: u64,
-    pub formal_notice_emitted_for: Option<u32>,
-    // cap and accumulators
     pub cap_per_unit: u64,
-    pub paid_per_unit_wad: u128,
-    pub net_acc_wad: u128,
     pub carry: u64,
-    pub year_gross_wad: [u128; MAX_YEAR_BUCKETS],
     pub fee_collected: u64,
     pub gross_received: u64,
     pub refunded_to_issuer: u64,
-    // commitments
-    pub last_income_commitment: [u8; 32],
-    pub last_income_period: Option<u32>,
-    // redemption and tail
     pub redemption_ts: u64,
     pub redemption_price: u64,
     pub units_at_redemption: u64,
     pub tail_cap_per_unit: u64,
-    pub tail_acc_wad: u128,
-    pub tail_paid_per_unit_wad: u128,
     pub tail_carry: u64,
-    // extinguishment
-    pub final_acc_wad: u128,
     pub final_carry: u64,
     pub extinguish_nonce: u64,
-    /// Period of the window currently in Commit/Reveal/Settling, if any (SPEC §7: one at a time).
-    pub active_window: Option<u32>,
+    // 32-byte
+    pub series: Pubkey,
+    pub last_income_commitment: [u8; 32],
+    // u32 (optional values; see the `has_*` flags)
+    pub first_period: u32,
+    pub last_accepted_period_v: u32,
+    pub last_paid_period_v: u32,
+    pub open_due_period_v: u32,
+    pub formal_notice_emitted_for_v: u32,
+    pub last_income_period_v: u32,
+    pub active_window_v: u32,
+    // u8
+    pub status: u8,
+    pub has_last_accepted_period: u8,
+    pub has_last_paid_period: u8,
+    pub has_open_due_period: u8,
+    pub has_formal_notice: u8,
+    pub has_last_income_period: u8,
+    pub has_active_window: u8,
+    pub open_due_tier: u8,
+    /// `true` when the open due belongs to a tail report (routes to the tail accumulators).
+    pub open_due_is_tail: u8,
+    pub pause_requested: u8,
     pub bump: u8,
+    pub _padding: [u8; 1],
+}
+
+impl Ledger {
+    /// Account size including the 8-byte discriminator.
+    pub const LEN: usize = 8 + core::mem::size_of::<Ledger>();
+
+    pub fn last_accepted_period(&self) -> Option<u32> {
+        (self.has_last_accepted_period != 0).then_some(self.last_accepted_period_v)
+    }
+    pub fn set_last_accepted_period(&mut self, v: Option<u32>) {
+        self.has_last_accepted_period = u8::from(v.is_some());
+        self.last_accepted_period_v = v.unwrap_or(0);
+    }
+    pub fn last_paid_period(&self) -> Option<u32> {
+        (self.has_last_paid_period != 0).then_some(self.last_paid_period_v)
+    }
+    pub fn set_last_paid_period(&mut self, v: Option<u32>) {
+        self.has_last_paid_period = u8::from(v.is_some());
+        self.last_paid_period_v = v.unwrap_or(0);
+    }
+    pub fn open_due_period(&self) -> Option<u32> {
+        (self.has_open_due_period != 0).then_some(self.open_due_period_v)
+    }
+    pub fn set_open_due_period(&mut self, v: Option<u32>) {
+        self.has_open_due_period = u8::from(v.is_some());
+        self.open_due_period_v = v.unwrap_or(0);
+    }
+    pub fn formal_notice_emitted_for(&self) -> Option<u32> {
+        (self.has_formal_notice != 0).then_some(self.formal_notice_emitted_for_v)
+    }
+    pub fn set_formal_notice_emitted_for(&mut self, v: Option<u32>) {
+        self.has_formal_notice = u8::from(v.is_some());
+        self.formal_notice_emitted_for_v = v.unwrap_or(0);
+    }
+    pub fn last_income_period(&self) -> Option<u32> {
+        (self.has_last_income_period != 0).then_some(self.last_income_period_v)
+    }
+    pub fn set_last_income_period(&mut self, v: Option<u32>) {
+        self.has_last_income_period = u8::from(v.is_some());
+        self.last_income_period_v = v.unwrap_or(0);
+    }
+    pub fn active_window(&self) -> Option<u32> {
+        (self.has_active_window != 0).then_some(self.active_window_v)
+    }
+    pub fn set_active_window(&mut self, v: Option<u32>) {
+        self.has_active_window = u8::from(v.is_some());
+        self.active_window_v = v.unwrap_or(0);
+    }
+    pub fn is_open_due_tail(&self) -> bool {
+        self.open_due_is_tail != 0
+    }
+    pub fn is_pause_requested(&self) -> bool {
+        self.pause_requested != 0
+    }
+}
+
+#[cfg(test)]
+mod ledger_layout {
+    #[test]
+    fn ledger_is_16_byte_aligned_without_padding() {
+        // 5 + 64 u128 (1104) + 21 u64 (168) + 2×32 (64) + 7 u32 (28) + 11 u8 + 1 pad = 1376
+        assert_eq!(core::mem::size_of::<super::Ledger>(), 1376);
+        assert_eq!(core::mem::size_of::<super::Ledger>() % 16, 0);
+    }
 }
 
 /// Holder record (`[HOLDER, series, wallet]`).

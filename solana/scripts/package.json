@@ -4,7 +4,12 @@
   "version": "0.1.0",
   "description": "Deployment, devnet setup and Meteora curve scripts for the Merces Solana programs.",
   "type": "module",
-  "scripts": { "build": "tsc -p tsconfig.json --noEmit", "test": "true", "lint": "tsc -p tsconfig.json --noEmit" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "true",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "zk:fixtures": "node gen-zk-fixtures.mjs"
+  },
   "dependencies": {
     "@anchor-lang/core": "1.2.1",
     "@solana/web3.js": "1.99.0",
@@ -15,5 +20,9 @@
     "@pythnetwork/hermes-client": "3.1.0",
     "bn.js": "5.2.3"
   },
-  "devDependencies": { "@types/bn.js": "5.2.0" }
+  "devDependencies": {
+    "@types/bn.js": "5.2.0",
+    "snarkjs": "0.7.6",
+    "circomlibjs": "0.1.7"
+  }
 }

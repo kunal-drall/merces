@@ -146,6 +146,23 @@ pub fn check_fee_collector_token(
     Ok(())
 }
 
+/// Requires `acc` to be the associated token account of `owner` for `mint` under `token_program`
+/// (SPEC §12: ATA derivation is validated for every payout destination).
+pub fn require_ata(
+    acc: &AccountInfo,
+    owner: &Pubkey,
+    mint: &Pubkey,
+    token_program: &Pubkey,
+) -> Result<()> {
+    let expected = anchor_spl::associated_token::get_associated_token_address_with_program_id(
+        owner,
+        mint,
+        token_program,
+    );
+    require_keys_eq!(*acc.key, expected, ProtocolError::HolderAtaMismatch);
+    Ok(())
+}
+
 /// Mint of a token account (bytes 0..32 of the base layout).
 pub fn token_account_mint(acc: &AccountInfo) -> Result<Pubkey> {
     let data = acc.try_borrow_data()?;
@@ -173,7 +190,7 @@ impl Ledger {
 
     /// `first_period` if nothing accepted, else `last_accepted_period + 1`.
     pub fn next_expected_period(&self) -> Result<u32> {
-        match self.last_accepted_period {
+        match self.last_accepted_period() {
             None => Ok(self.first_period),
             Some(p) => p.checked_add(1).ok_or(ProtocolError::MathOverflow.into()),
         }
@@ -182,7 +199,7 @@ impl Ledger {
     /// `open_due_period` if a due is open, else the next expected period.
     pub fn earliest_unpaid(&self) -> Result<u32> {
         if self.open_due_amount > 0 {
-            if let Some(p) = self.open_due_period {
+            if let Some(p) = self.open_due_period() {
                 return Ok(p);
             }
         }
@@ -235,9 +252,10 @@ impl Ledger {
         if !new.is_terminal() {
             let p = self.earliest_unpaid()?;
             let e = self.effective_now(now)?;
-            if e >= formal_notice_at(p).map_err(math)? && self.formal_notice_emitted_for != Some(p)
+            if e >= formal_notice_at(p).map_err(math)?
+                && self.formal_notice_emitted_for() != Some(p)
             {
-                self.formal_notice_emitted_for = Some(p);
+                self.set_formal_notice_emitted_for(Some(p));
                 emit!(FormalNoticeDue {
                     series: series_key,
                     period: p

@@ -107,6 +107,61 @@ pub fn verify_report_proof(
 mod tests {
     use super::*;
 
+    fn hex32(s: &str) -> [u8; 32] {
+        let b = hex_decode(s.trim_start_matches("0x"));
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&b);
+        out
+    }
+
+    fn hex_decode(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn be32_from_dec(s: &str) -> [u8; 32] {
+        let v: u128 = s.parse().unwrap();
+        let mut out = [0u8; 32];
+        out[16..].copy_from_slice(&v.to_be_bytes());
+        out
+    }
+
+    /// The generated dev verifying key verifies the committed proof fixtures on the host
+    /// (solana-bn254 runs arkworks natively off-chain), and rejects a tampered input.
+    #[test]
+    fn fixtures_verify_against_generated_vk() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/zk/report_fixtures.json"
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let fixtures = json["fixtures"].as_array().unwrap();
+        assert!(fixtures.len() >= 5);
+        for f in fixtures {
+            let p = &f["public"];
+            let inputs = [
+                hex32(p["terms_commitment"].as_str().unwrap()),
+                be32_from_dec(p["units_outstanding"].as_str().unwrap()),
+                be32_from_dec(p["fx_avg_wad"].as_str().unwrap()),
+                hex32(p["prior_income_commitment"].as_str().unwrap()),
+                hex32(p["income_commitment"].as_str().unwrap()),
+                be32_from_dec(p["payment_usd"].as_str().unwrap()),
+            ];
+            let proof_bytes = hex_decode(f["proof"].as_str().unwrap().trim_start_matches("0x"));
+            let mut proof = [0u8; 256];
+            proof.copy_from_slice(&proof_bytes);
+            verify_report_proof(&proof, &inputs)
+                .unwrap_or_else(|e| panic!("{} failed: {e:?}", f["name"]));
+            // tamper with the payment
+            let mut bad = inputs;
+            bad[5][31] ^= 1;
+            assert!(verify_report_proof(&proof, &bad).is_err());
+        }
+    }
+
     #[test]
     fn negation_roundtrip() {
         let mut p = [0u8; 64];

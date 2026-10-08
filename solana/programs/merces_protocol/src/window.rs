@@ -2,7 +2,6 @@
 //! Ships closed (`windows_enabled = false`).
 
 use anchor_lang::prelude::*;
-use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::{Mint, Token2022, TokenAccount, TokenInterface};
 use merces_common::auction::wallet_cap_units;
 use merces_common::encoding::commitment_preimage;
@@ -62,8 +61,8 @@ pub struct OpenWindow<'info> {
     #[account(seeds = [CONFIG], bump = config.bump, seeds::program = merces_registry::ID)]
     pub config: Box<Account<'info, ProtocolConfig>>,
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(init, payer = payer, space = 8 + Window::INIT_SPACE, seeds = [seeds::WINDOW, series.key().as_ref(), period.to_le_bytes().as_ref()], bump)]
     pub window: Box<Account<'info, Window>>,
     /// CHECK: data-less signer PDA owning both window escrows (the hook recognises it).
@@ -100,6 +99,7 @@ pub struct OpenWindow<'info> {
 }
 
 pub fn open_window(ctx: Context<OpenWindow>, period: u32) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
@@ -107,19 +107,18 @@ pub fn open_window(ctx: Context<OpenWindow>, period: u32) -> Result<()> {
         ctx.accounts.config.windows_enabled,
         ProtocolError::WindowsDisabled
     );
-    let status = ctx.accounts.ledger.sync_status(now, series_key)?;
+    let status = ledger.sync_status(now, series_key)?;
     require!(
         matches!(status, SeriesStatus::OnTime | SeriesStatus::InGrace),
         ProtocolError::WindowStatusNotAllowed
     );
-    let ledger = &ctx.accounts.ledger;
     let unlock = ledger
         .settlement_ts
         .checked_add(series.lockup_seconds)
         .ok_or(ProtocolError::MathOverflow)?;
     require!(now >= unlock, ProtocolError::LockupActive);
     require!(
-        matches!(ledger.last_paid_period, Some(p) if p >= period),
+        matches!(ledger.last_paid_period(), Some(p) if p >= period),
         ProtocolError::ReportNotPaid
     );
     let current = period_of(now).map_err(math)?;
@@ -128,7 +127,7 @@ pub fn open_window(ctx: Context<OpenWindow>, period: u32) -> Result<()> {
         ProtocolError::WindowWrongPeriod
     );
     require!(
-        ledger.active_window.is_none(),
+        ledger.active_window().is_none(),
         ProtocolError::WindowAlreadyOpen
     );
     let commit_end = now
@@ -146,7 +145,7 @@ pub fn open_window(ctx: Context<OpenWindow>, period: u32) -> Result<()> {
     w.reveal_end = reveal_end;
     w.min_ask = u64::MAX;
     w.bump = ctx.bumps.window;
-    ctx.accounts.ledger.active_window = Some(period);
+    ledger.set_active_window(Some(period));
     emit!(WindowOpened {
         series: series_key,
         period,
@@ -163,8 +162,8 @@ pub struct CommitAsk<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
     pub series: Box<Account<'info, Series>>,
-    #[account(seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(mut, seeds = [seeds::WINDOW, series.key().as_ref(), window.period.to_le_bytes().as_ref()], bump = window.bump)]
     pub window: Box<Account<'info, Window>>,
     #[account(init, payer = owner, space = 8 + Order::INIT_SPACE, seeds = [seeds::ORDER, series.key().as_ref(), window.period.to_le_bytes().as_ref(), owner.key().as_ref(), &[SIDE_ASK]], bump)]
@@ -187,6 +186,7 @@ pub fn commit_ask<'info>(
     commitment: [u8; 32],
     units: u64,
 ) -> Result<()> {
+    let ledger = ctx.accounts.ledger.load()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let w = &ctx.accounts.window;
@@ -201,7 +201,7 @@ pub fn commit_ask<'info>(
     );
     // settle before the balance changes
     settle_holder(
-        &ctx.accounts.ledger,
+        &ledger,
         &mut ctx.accounts.holder,
         ctx.accounts.owner_unit_ata.amount,
     )?;
@@ -231,7 +231,7 @@ pub fn commit_ask<'info>(
     o.side = SIDE_ASK;
     o.commitment = commitment;
     o.escrow = units;
-    o.net_acc_snapshot = ctx.accounts.ledger.net_acc_wad;
+    o.net_acc_snapshot = ledger.net_acc_wad;
     o.bump = ctx.bumps.order;
     emit!(OrderCommitted {
         series: series_key,
@@ -413,8 +413,8 @@ pub fn reveal_order(
 #[derive(Accounts)]
 pub struct WindowSettle<'info> {
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(mut, seeds = [seeds::WINDOW, series.key().as_ref(), window.period.to_le_bytes().as_ref()], bump = window.bump)]
     pub window: Box<Account<'info, Window>>,
 }
@@ -529,6 +529,7 @@ pub fn tally_orders<'info>(ctx: Context<'info, WindowSettle<'info>>) -> Result<(
 }
 
 pub fn finalize_window(ctx: Context<WindowSettle>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
     let series_key = ctx.accounts.series.key();
     let w = &mut ctx.accounts.window;
     require!(w.state == WINDOW_SETTLING, ProtocolError::WindowNotSettling);
@@ -570,7 +571,7 @@ pub fn finalize_window(ctx: Context<WindowSettle>) -> Result<()> {
             matched_units: c.matched_units,
         });
     }
-    ctx.accounts.ledger.active_window = None;
+    ledger.set_active_window(None);
     Ok(())
 }
 
@@ -583,8 +584,8 @@ pub struct ProcessOrder<'info> {
     #[account(seeds = [CONFIG], bump = config.bump, seeds::program = merces_registry::ID)]
     pub config: Box<Account<'info, ProtocolConfig>>,
     pub series: Box<Account<'info, Series>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump = ledger.bump)]
-    pub ledger: Box<Account<'info, Ledger>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
     #[account(mut, seeds = [seeds::WINDOW, series.key().as_ref(), window.period.to_le_bytes().as_ref()], bump = window.bump)]
     pub window: Box<Account<'info, Window>>,
     #[account(mut, seeds = [seeds::ORDER, series.key().as_ref(), window.period.to_le_bytes().as_ref(), owner.key().as_ref(), &[order.side]], bump = order.bump)]
@@ -594,19 +595,9 @@ pub struct ProcessOrder<'info> {
     pub owner: UncheckedAccount<'info>,
     #[account(init_if_needed, payer = payer, space = 8 + Holder::INIT_SPACE, seeds = [seeds::HOLDER, series.key().as_ref(), owner.key().as_ref()], bump)]
     pub holder: Box<Account<'info, Holder>>,
-    #[account(
-        mut,
-        associated_token::mint = unit_mint,
-        associated_token::authority = owner,
-        associated_token::token_program = token_2022_program,
-    )]
+    #[account(mut, token::mint = unit_mint, token::authority = owner, token::token_program = token_2022_program)]
     pub owner_unit_ata: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(
-        mut,
-        associated_token::mint = stablecoin_mint,
-        associated_token::authority = owner,
-        associated_token::token_program = stablecoin_program,
-    )]
+    #[account(mut, token::mint = stablecoin_mint, token::authority = owner, token::token_program = stablecoin_program)]
     pub owner_stable_ata: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, seeds = [seeds::WINDOW_UNITS, series.key().as_ref()], bump)]
     pub window_units: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -615,15 +606,7 @@ pub struct ProcessOrder<'info> {
     /// CHECK: data-less signer PDA owning both window escrows.
     #[account(seeds = [seeds::WINDOW_ESCROW, series.key().as_ref()], bump)]
     pub window_escrow: UncheckedAccount<'info>,
-    /// CHECK: the configured fee collector wallet.
-    #[account(address = config.fee_collector @ ProtocolError::FeeCollectorMismatch)]
-    pub fee_collector: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        associated_token::mint = stablecoin_mint,
-        associated_token::authority = fee_collector,
-        associated_token::token_program = stablecoin_program,
-    )]
+    #[account(mut, token::mint = stablecoin_mint, token::authority = config.fee_collector, token::token_program = stablecoin_program)]
     pub fee_collector_ata: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = series.unit_mint @ ProtocolError::UnitMintMismatch)]
     pub unit_mint: Box<InterfaceAccount<'info, Mint>>,
@@ -632,7 +615,6 @@ pub struct ProcessOrder<'info> {
     #[account(address = series.stablecoin_program @ ProtocolError::TokenProgramMismatch)]
     pub stablecoin_program: Interface<'info, TokenInterface>,
     pub token_2022_program: Program<'info, Token2022>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 
@@ -641,6 +623,7 @@ pub struct ProcessOrder<'info> {
 /// is refunded in full. Remaining accounts: hook extra accounts for the unit mint (and for a
 /// Token-2022 stablecoin).
 pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<()> {
+    let ledger = ctx.accounts.ledger.load_mut()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
     let w = &ctx.accounts.window;
@@ -650,6 +633,24 @@ pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<
     );
     let o = &ctx.accounts.order;
     require!(!o.processed, ProtocolError::OrderAlreadyProcessed);
+    require_ata(
+        &ctx.accounts.owner_unit_ata.to_account_info(),
+        &o.owner,
+        &series.unit_mint,
+        &ctx.accounts.token_2022_program.key(),
+    )?;
+    require_ata(
+        &ctx.accounts.owner_stable_ata.to_account_info(),
+        &o.owner,
+        &series.stablecoin,
+        &series.stablecoin_program,
+    )?;
+    require_ata(
+        &ctx.accounts.fee_collector_ata.to_account_info(),
+        &ctx.accounts.config.fee_collector,
+        &series.stablecoin,
+        &series.stablecoin_program,
+    )?;
     let decimals = series.stablecoin_decimals;
     let escrow_bump = [ctx.bumps.window_escrow];
     let escrow_seeds: &[&[u8]] = &[seeds::WINDOW_ESCROW, series_key.as_ref(), &escrow_bump];
@@ -711,15 +712,9 @@ pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<
         if fill > 0 {
             // register / settle the buyer before its balance changes
             let bump = ctx.bumps.holder;
-            if !register_holder_now(
-                &ctx.accounts.ledger,
-                &mut ctx.accounts.holder,
-                series_key,
-                owner,
-                bump,
-            )? {
+            if !register_holder_now(&ledger, &mut ctx.accounts.holder, series_key, owner, bump)? {
                 settle_holder(
-                    &ctx.accounts.ledger,
+                    &ledger,
                     &mut ctx.accounts.holder,
                     ctx.accounts.owner_unit_ata.amount,
                 )?;
@@ -776,16 +771,12 @@ pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<
             ProtocolError::HolderNotRegistered
         );
         settle_holder(
-            &ctx.accounts.ledger,
+            &ledger,
             &mut ctx.accounts.holder,
             ctx.accounts.owner_unit_ata.amount,
         )?;
-        let escrow_accrual = holder_delta(
-            ctx.accounts.ledger.net_acc_wad,
-            o.net_acc_snapshot,
-            o.escrow,
-        )
-        .map_err(math)?;
+        let escrow_accrual =
+            holder_delta(ledger.net_acc_wad, o.net_acc_snapshot, o.escrow).map_err(math)?;
         ctx.accounts.holder.pending = ctx
             .accounts
             .holder
