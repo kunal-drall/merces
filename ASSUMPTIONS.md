@@ -42,7 +42,15 @@ decision; the default applies until one arrives. Track-specific notes compiled f
 | A34 | Pause bounds | One approval ≤ 365 days; ≤ 730 days cumulative per series; at most 16 pauses; requests can be withdrawn | C8 §5 |
 | A35 | EVM allowlist | A Merces flag; T-REX identities are registered once and never deleted so protocol-initiated unit movements never fail verification. Flag checked at bid commit, window bid commit, holder registration and the buyer side of a fill | C10, D2 |
 | A36 | Window buyer removed before fill | The fill is cancelled (full refund) and the units return to the seller; validity at reveal is otherwise what counts | C10, D9 |
+| A37 | Dev trusted setup | snarkjs *beacon* contributions (SHA-256 chain over a fixed public string) for powers-of-tau and phase 2, so every circuit artefact is byte-reproducible. Not a secure ceremony; never for production | D6 |
+| A38 | Deterministic test proofs | Groth16 blinding scalars in the vector generator derive from a keccak of the (private) inputs and a nonce, so `pnpm vectors` is reproducible while proofs stay zero-knowledge; production provers use CSPRNG randomness | F1 |
+| A39 | Tier-1 proof inputs | `income_ytd = ytd_at_end(period)` with salt 0, prior = `Poseidon(2)(ytd_at_end(period−1), 0)` or the zero commitment at a year start, `fx_avg_wad = WAD`, stored `units_outstanding`; a missing checkpoint reverts and `close_router_period` creates it | D5, D6 |
+| A40 | Window buyer removed before fill | Units it would have bought are taken back from asks at `p*` in descending reveal order, then from asks below `p*`, so money is conserved exactly | D9 |
+| A41 | Error naming | Canonical v1.1 error names are exported by `@merces/sdk` (`errors.ts`) and used by the vectors' `expect_revert` steps; where several preconditions fail at once the vectors pin the SPEC's listed check order | F1 |
+| A42 | Not yet covered by a parity vector | Tier-3 true-up and the `AmountOutOfRange` entry rule are unit-tested in the reference only (vectors 20–21 planned) | F1 |
 | A24 | Mock USDG | Token-2022 mint with TransferHook (mock no-op hook program), TransferFeeConfig at 0 bps / 0 max, ConfidentialTransferMint and MetadataPointer, 6 decimals — mirroring the extension set reported for USDG | M0 |
+
+Track-level detail: `docs/assumptions/track-a.md` (reference, circuit, vectors), `docs/assumptions/track-b.md` (Solana), `docs/assumptions/track-c.md` (EVM), `docs/assumptions/track-d.md` (Meteora).
 
 ## Unverified
 
