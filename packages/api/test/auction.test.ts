@@ -25,7 +25,7 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 1000, revealEndsAt: now + 2000 });
     await rig.sync();
     const backer = h.backers[0]!;
-    const tok = rig.token({ accountId: 'b0', wallets: [{ chain: 'monad', address: backer.address }], roles: ['backer'], eligible: true });
+    const tok = await rig.grant({ accountId: 'b0', wallets: [{ chain: 'monad', address: backer.address }], roles: ['backer'], eligible: true });
     const ineligible = rig.token({ accountId: 'b9', wallets: [{ chain: 'monad', address: backer.address }], roles: ['backer'], eligible: false });
     expect((await rig.post(`/series/${seriesId}/bids/precheck`, { bidder: backer.address, pricePerUnit: USDC(10).toString(), quantity: '100' }, ineligible)).statusCode).toBe(403);
     // over the cap and below reserve
@@ -49,7 +49,7 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     expect((await rig.post(`/series/${seriesId}/bids/precheck`, { bidder: backer.address, pricePerUnit: USDC(10).toString(), quantity: '100' }, tok)).json().issues.map((i: { code: string }) => i.code)).toEqual(['duplicate']);
     // a second bidder so the minimum raise is met
     const b2 = h.backers[1]!;
-    const tok2 = rig.token({ accountId: 'b1', wallets: [{ chain: 'monad', address: b2.address }], roles: ['backer'], eligible: true });
+    const tok2 = await rig.grant({ accountId: 'b1', wallets: [{ chain: 'monad', address: b2.address }], roles: ['backer'], eligible: true });
     const salt2 = '0x' + 'ef'.repeat(32);
     const c2 = bidCommitment({ seriesId, bidder: b2.address, pricePerUnit: USDC(45), quantity: 100n, salt: salt2 });
     await h.exec(b2, { kind: 'commitBid', seriesId, commitment: c2, deposit: USDC(4545).toString() });

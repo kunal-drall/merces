@@ -165,7 +165,7 @@ export class SimEngine {
   private position(s: SimSeries, wallet: string): SimPosition {
     let p = s.positions.get(wallet);
     if (!p) {
-      p = { wallet, units: 0n, rewardDebt: 0n, pending: 0n, claimedTotal: 0n, redeemedUnits: 0n, tailDebt: 0n, redemptionClaimed: false };
+      p = { wallet, units: 0n, escrowed: 0n, rewardDebt: 0n, pending: 0n, claimedTotal: 0n, redeemedUnits: 0n, tailDebt: 0n, redemptionClaimed: false };
       s.positions.set(wallet, p);
     }
     return p;
@@ -189,7 +189,7 @@ export class SimEngine {
   private period(s: SimSeries, periodId: string): SimPeriod {
     let p = s.periods.get(periodId);
     if (!p) {
-      p = { periodId, reportAccepted: false, tier: null, paymentStable: 0n, accrual: 0n, paymentDue: 0n, paid: 0n, splitReceived: 0n, settled: false, incomeCommitment: null, liquidityEvent: false, formalNoticeEmitted: false, acceptedAt: null, isTail: false };
+      p = { periodId, reportAccepted: false, tier: null, paymentStable: 0n, outstanding: 0n, accrual: 0n, paymentDue: 0n, paid: 0n, splitReceived: 0n, settled: false, incomeCommitment: null, liquidityEvent: false, formalNoticeEmitted: false, acceptedAt: null, isTail: false };
       s.periods.set(periodId, p);
     }
     return p;
@@ -205,6 +205,10 @@ export class SimEngine {
       if (b > a) total += b - a;
     }
     return total;
+  }
+  /** Simple-interest accrual on the outstanding amount, from the end of grace to `now`; the deadlines already shift by paused seconds. */
+  accrualNow(s: SimSeries, period: Period, outstanding: bigint, now: number): bigint {
+    return lateAccrual(outstanding, s.terms.hurdleWad, daysLate(this.deadlines(s, period, now).graceEndsAt, now));
   }
   deadlines(s: SimSeries, period: Period, now: number): Deadlines {
     return deadlinesFor(period, { dueDays: s.terms.dueDays, graceDays: s.terms.graceDays, formalNoticeDays: s.terms.formalNoticeDays, pausedSeconds: this.pausedSecondsSince(s, period.end, now) });
@@ -294,6 +298,11 @@ export class SimEngine {
     if (cap.retired && s.status !== 'Retired') {
       this.setStatus(s, 'Retired', emit);
       emit('SeriesRetired', { seriesId: s.seriesId, paidPerUnitWad: str(s.paidPerUnitWad) });
+      if (s.releasesPausedLate) {
+        // nothing more is owed once the cap is reached: the Late pause ends with the obligation
+        s.releasesPausedLate = false;
+        if (!s.releasesPausedByIssuer) emit('ReleasesResumed', { seriesId: s.seriesId });
+      }
     }
     return { accepted, refunded: cap.refunded, net };
   }
@@ -431,7 +440,8 @@ export class SimEngine {
     const s = this.series(cmd.seriesId);
     if (this.auctionPhase(s, now) !== 'SettleDue') throw new ChainError('TooEarly', 'reveal phase has not ended');
     const mint = s.terms.stablecoinMint;
-    const revealed = [...s.bids.values()].filter((b) => b.revealed).map((b) => ({ bidder: b.bidder, pricePerUnit: b.revealed!.pricePerUnit, quantity: b.revealed!.quantity, order: b.order }));
+    // a bidder removed from the allowlist between commit and settlement is excluded (its deposit is refundable), never a reason to brick settlement (C10)
+    const revealed = [...s.bids.values()].filter((b) => b.revealed && this.state.allowlist.has(b.bidder)).map((b) => ({ bidder: b.bidder, pricePerUnit: b.revealed!.pricePerUnit, quantity: b.revealed!.quantity, order: b.order }));
     const res = clearAuction({ bids: revealed, unitsOffered: s.terms.unitsOffered, reservePrice: s.terms.reservePrice, minimumRaise: s.terms.minimumRaise, walletCapUnits: walletCapUnits(s.terms.unitsOffered, s.terms.walletCapBps), auctionFeeBps: s.terms.auctionFeeBps });
     if (!res.success) {
       for (const b of s.bids.values()) {
@@ -445,7 +455,6 @@ export class SimEngine {
     for (const b of s.bids.values()) {
       const alloc = res.allocations.find((a) => a.bidder === b.bidder);
       if (alloc) {
-        if (!this.state.allowlist.has(b.bidder)) throw new ChainError('NotAllowlisted', `${b.bidder} lost allowlisting before settlement`);
         b.allocatedUnits = alloc.units;
         b.refundable = b.deposit - alloc.amount - alloc.fee;
         this.credit(this.state.feeCollector, mint, alloc.fee);
@@ -519,10 +528,10 @@ export class SimEngine {
   private verifyAttestation(a: NonNullable<Extract<Command, { kind: 'submitReport' }>['attestation']>, cmd: Extract<Command, { kind: 'submitReport' }>): void {
     const key = this.state.verifierKeys.get(a.keyId);
     if (!key || !key.active) throw new ChainError('InvalidAttestation', `verifier key ${a.keyId} not registered`);
-    if (a.seriesId !== cmd.seriesId || a.periodId !== cmd.periodId || a.incomeCommitment !== cmd.incomeCommitment || a.tier !== cmd.tier || a.source !== cmd.source) {
+    if (a.seriesId !== cmd.seriesId || a.periodId !== cmd.periodId || a.incomeCommitment !== cmd.incomeCommitment || a.tier !== cmd.tier) {
       throw new ChainError('InvalidAttestation', 'attestation fields do not match the report');
     }
-    const msg = attestationMessage({ seriesId: a.seriesId, periodId: a.periodId, incomeCommitment: a.incomeCommitment, tier: a.tier, source: a.source });
+    const msg = attestationMessage({ seriesId: a.seriesId, periodId: a.periodId, incomeCommitment: a.incomeCommitment, tier: a.tier });
     let ok = false;
     try {
       const pub = createPublicKey({ key: Buffer.from(key.publicKey, 'hex'), format: 'der', type: 'spki' });
@@ -603,11 +612,12 @@ export class SimEngine {
       const perUnit = tailPayoutPerUnit(paymentStable / r.unitsAtRedemption, r.tailCapPerUnit, r.tailPaidPerUnit);
       due = perUnit * r.unitsAtRedemption;
       p.isTail = true;
+      p.outstanding = due;
     } else {
-      const outstanding = paymentStable > p.splitReceived ? paymentStable - p.splitReceived : 0n;
-      const d = this.deadlines(s, period, now);
-      accrual = s.status === 'Paused' ? 0n : lateAccrual(outstanding, s.terms.hurdleWad, daysLate(d.graceEndsAt, now));
-      due = outstanding + accrual;
+      // what is owed before lateness; accrual is recomputed at payment time (C8.3) from deadlines that freeze during a pause (C8.5)
+      p.outstanding = paymentStable > p.splitReceived ? paymentStable - p.splitReceived : 0n;
+      accrual = this.accrualNow(s, period, p.outstanding, now);
+      due = p.outstanding + accrual;
     }
     p.reportAccepted = true;
     p.tier = cmd.tier;
@@ -628,6 +638,11 @@ export class SimEngine {
     if (!p || !p.reportAccepted) throw new ChainError('NotFound', 'no accepted report for this period');
     if (p.settled) throw new ChainError('Duplicate', 'period already paid');
     const amount = big(cmd.amount);
+    if (!p.isTail) {
+      // interest runs until the payment lands, not until the report (C8.3)
+      p.accrual = this.accrualNow(s, parsePeriod(cmd.periodId), p.outstanding, now);
+      p.paymentDue = p.outstanding + p.accrual;
+    }
     const remaining = p.paymentDue - p.paid;
     if (amount !== remaining) throw new ChainError('InvalidTerms', `payIn must equal the remaining due ${remaining}`);
     if (p.isTail) {
@@ -839,6 +854,15 @@ export class SimEngine {
     this.requireAttestor(a2);
     if (s.status === 'Extinguished') throw new ChainError('Duplicate', 'already extinguished');
     let returned = 0n;
+    if (s.phase === 'Draft' || s.phase === 'Open') {
+      // an open raise ends with the issuer: every deposit becomes refundable, no fees, nothing can settle later
+      for (const b of s.bids.values()) {
+        b.refundable = b.deposit;
+        b.settled = true;
+      }
+      s.phase = s.bids.size ? 'Failed' : 'Cancelled';
+      emit(s.bids.size ? 'AuctionFailed' : 'RaiseCancelled', s.bids.size ? { seriesId: s.seriesId, reason: 'no-bids' } : { seriesId: s.seriesId });
+    }
     if (s.phase === 'Settled' && s.unitsOutstanding > 0n) {
       const unreleased = s.treasuryTotal - s.treasuryReleased;
       for (const t of s.tranches) t.drawn = true;
@@ -939,8 +963,8 @@ export class SimEngine {
       w.orders.set(signer, { wallet: signer, side: 'buy', commitment: cmd.commitment, deposit, escrowedUnits: 0n, order: w.orders.size, revealed: null });
     } else {
       const p = s.positions.get(signer);
-      if (!p || p.units < units || units <= 0n) throw new ChainError('InsufficientFunds', 'not enough units');
-      this.setUnits(s, p, p.units - units); // escrow
+      if (!p || p.units - p.escrowed < units || units <= 0n) throw new ChainError('InsufficientFunds', 'not enough free units');
+      p.escrowed += units; // units stay in the position (payouts keep accruing); they just cannot be sold twice
       w.orders.set(signer, { wallet: signer, side: 'sell', commitment: cmd.commitment, deposit: 0n, escrowedUnits: units, order: w.orders.size, revealed: null });
     }
   }
@@ -998,13 +1022,14 @@ export class SimEngine {
       const seller = this.position(s, f.seller);
       const sellOrder = w.orders.get(f.seller)!;
       sellOrder.escrowedUnits -= f.units;
+      seller.escrowed -= f.units;
+      this.setUnits(s, seller, seller.units - f.units);
       this.setUnits(s, buyer, buyer.units + f.units);
       const amount = f.units * clearing;
       const buyOrder = w.orders.get(f.buyer)!;
       buyOrder.deposit -= amount;
       this.credit(f.seller, mint, amount);
       transferred += f.units;
-      void seller;
       emit('UnitsTransferred', { seriesId: s.seriesId, from: f.seller, to: f.buyer, units: str(f.units), windowId: w.windowId });
     }
     // refunds: leftover deposits and un-sold escrowed units
@@ -1014,8 +1039,7 @@ export class SimEngine {
         o.deposit = 0n;
       }
       if (o.side === 'sell' && o.escrowedUnits > 0n) {
-        const p = this.position(s, o.wallet);
-        this.setUnits(s, p, p.units + o.escrowedUnits);
+        this.position(s, o.wallet).escrowed -= o.escrowedUnits; // release the hold; the units never left the position
         o.escrowedUnits = 0n;
       }
     }
@@ -1053,7 +1077,12 @@ export class SimEngine {
     s.settledAt = now;
     s.issuePrice = s.unitsSold > 0n ? c.raised / s.unitsSold : c.basePrice;
     s.capPerUnit = perUnitCap(s.terms.capMultipleWad, s.issuePrice);
-    s.tranches = s.terms.releaseSchedule.map((t, i) => ({ index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount: bpsOf(s.treasuryTotal, BigInt(t.bps)), drawn: false }));
+    let allocated = 0n;
+    s.tranches = s.terms.releaseSchedule.map((t, i, arr) => {
+      const amount = i === arr.length - 1 ? s.treasuryTotal - allocated : bpsOf(s.treasuryTotal, BigInt(t.bps));
+      allocated += amount;
+      return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false };
+    });
     emit('CurveGraduated', { seriesId: s.seriesId, raised: str(c.raised), unitsOutstanding: str(s.unitsOutstanding) });
   }
   private graduateCurve(cmd: Extract<Command, { kind: 'graduateCurve' }>, emit: Emit): void {

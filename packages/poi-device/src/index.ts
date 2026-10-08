@@ -35,6 +35,7 @@ export interface AssembledReport {
   seriesId: string;
   periodId: string;
   tier: 1 | 2;
+  /** which provider the device used — stays offchain (the service stores it for the issuer only) */
   source: string;
   paymentStable: string;
   incomeCommitment: string;

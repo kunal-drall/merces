@@ -234,10 +234,13 @@ export class SimulatorChain implements ChainPort {
     const d = this.engine.deadlines(x, period, now);
     const p = x.periods.get(periodId);
     const settled = !!p?.settled;
+    // interest keeps running until paid: show the live amount due
+    const liveAccrual = p && p.reportAccepted && !settled && !p.isTail ? this.engine.accrualNow(x, period, p.outstanding, now) : (p?.accrual ?? 0n);
+    const liveDue = p && p.reportAccepted && !settled && !p.isTail ? p.outstanding + liveAccrual : (p?.paymentDue ?? 0n);
     const standing: PeriodState['standing'] = x.status === 'Paused' && !settled ? 'Deferred' : periodStanding(d, now, settled);
     return {
       seriesId: x.seriesId, periodId, dueAt: d.dueAt, graceEndsAt: d.graceEndsAt, formalNoticeAt: d.formalNoticeAt, reportAccepted: !!p?.reportAccepted, tier: p?.tier ?? null,
-      paymentDue: s(p?.paymentDue ?? 0n), accrual: s(p?.accrual ?? 0n), paid: s(p?.paid ?? 0n), splitReceived: s(p?.splitReceived ?? 0n), settled, standing, incomeCommitment: p?.incomeCommitment ?? null, liquidityEvent: !!p?.liquidityEvent,
+      paymentDue: s(liveDue), accrual: s(liveAccrual), paid: s(p?.paid ?? 0n), splitReceived: s(p?.splitReceived ?? 0n), settled, standing, incomeCommitment: p?.incomeCommitment ?? null, liquidityEvent: !!p?.liquidityEvent,
     };
   }
   async getPeriod(seriesId: string, periodId: string): Promise<PeriodState | null> {

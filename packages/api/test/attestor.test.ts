@@ -128,7 +128,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(JSON.stringify(forIssuer.json())).not.toContain(docs.slice(0, 32));
 
     // the issuer assembles the tier-3 report through E5 with the attestor as co-signer, then both sign and the issuer sends
-    const rep = await rig.post(`/series/${seriesId}/reports`, { ...built.command, tier: 3 }, issuerTok, { 'idempotency-key': 't3-rep-q1' });
+    const rep = await rig.post(`/series/${seriesId}/reports`, { ...built.command, source: built.source, tier: 3 }, issuerTok, { 'idempotency-key': 't3-rep-q1' });
     expect(rep.statusCode, JSON.stringify(rep.json())).toBe(201);
     expect(rep.json()).toMatchObject({ tier: 3, verifiedOffchain: true, paymentStable: USDC(2000).toString() });
     const reportId = rep.json().reportId as string;

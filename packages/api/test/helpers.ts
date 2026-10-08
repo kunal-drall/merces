@@ -39,11 +39,16 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
   await app.ready();
   const token = (s: Partial<Session> & { wallets?: Session['wallets'] }) =>
     issueSession(SECRET, { accountId: s.accountId ?? 'acct', wallets: s.wallets ?? [], roles: s.roles ?? [], eligible: s.eligible ?? true, exp: Math.floor(Date.now() / 1000) + 3600 });
+  /** Eligibility is checked live against the `eligibility` table, so a backer-tier token also needs a row: this seeds one and returns the token. */
+  const grant = async (s: Partial<Session> & { wallets: Session['wallets'] }, kind: 'backer' | 'issuer' = 'backer') => {
+    for (const w of s.wallets) await t.pool.query('insert into eligibility (chain, wallet, account_id, kind, allowlist_synced_at) values ($1,$2,$3,$4, now()) on conflict (chain, wallet) do update set revoked_at = null', [w.chain, w.address, s.accountId ?? 'acct', kind]);
+    return token(s);
+  };
   const get = (url: string, tok?: string) => app.inject({ method: 'GET', url, headers: tok ? { authorization: `Bearer ${tok}` } : {} });
   const post = (url: string, body: unknown, tok?: string, extra: Record<string, string> = {}) => app.inject({ method: 'POST', url, payload: body as Record<string, unknown>, headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), ...extra } });
   const put = (url: string, body: unknown, tok?: string) => app.inject({ method: 'PUT', url, payload: body as Record<string, unknown>, headers: tok ? { authorization: `Bearer ${tok}` } : {} });
   return {
-    t, sol, mon, ctx, app, indexer, token, get, post, put, esign, identity, zktls, verifier, kms,
+    t, sol, mon, ctx, app, indexer, token, grant, get, post, put, esign, identity, zktls, verifier, kms,
     harness: (p: Personality) => (p === 'solana' ? sol : mon),
     async sync() {
       await indexer.catchUp();

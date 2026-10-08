@@ -43,6 +43,8 @@ export interface SimBid {
 export interface SimPosition {
   wallet: string;
   units: bigint;
+  /** units held back for an open transfer-window sell order; they stay in `units` for payout accounting */
+  escrowed: bigint;
   rewardDebt: bigint;
   /** payouts settled into a pending balance on unit changes (burn, transfer) */
   pending: bigint;
@@ -57,6 +59,8 @@ export interface SimPeriod {
   reportAccepted: boolean;
   tier: number | null;
   paymentStable: bigint;
+  /** owed before lateness (payment minus split receipts, or the tail amount) */
+  outstanding: bigint;
   accrual: bigint;
   paymentDue: bigint;
   paid: bigint;

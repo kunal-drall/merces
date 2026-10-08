@@ -6,8 +6,12 @@ import { AppError } from './errors.ts';
 /**
  * Idempotency keys on every write (Part F). The first call with a key stores the response; a repeat with the
  * same key and body replays it; a repeat with a different body is a 409.
+ *
+ * `opts.store` redacts the response before it is persisted: a replay then returns the redacted copy. Routes
+ * whose responses carry decrypted vault material (application notes, private terms) use it so the
+ * idempotency table never becomes a second, unencrypted copy of that material (Part B privacy posture).
  */
-export async function withIdempotency<T>(db: Queryable, scope: string, key: string | undefined, body: unknown, fn: () => Promise<{ status: number; response: T }>): Promise<{ status: number; response: T; replayed: boolean }> {
+export async function withIdempotency<T>(db: Queryable, scope: string, key: string | undefined, body: unknown, fn: () => Promise<{ status: number; response: T }>, opts: { store?: (response: T) => T } = {}): Promise<{ status: number; response: T; replayed: boolean }> {
   if (!key) {
     const r = await fn();
     return { ...r, replayed: false };
@@ -21,6 +25,7 @@ export async function withIdempotency<T>(db: Queryable, scope: string, key: stri
     return { status: row.status_code, response: row.response, replayed: true };
   }
   const r = await fn();
-  await db.query('insert into idempotency_keys (key, scope, request_hash, status_code, response) values ($1, $2, $3, $4, $5) on conflict (key) do nothing', [fullKey, scope, requestHash, r.status, JSON.stringify(r.response)]);
+  const stored = opts.store ? opts.store(r.response) : r.response;
+  await db.query('insert into idempotency_keys (key, scope, request_hash, status_code, response) values ($1, $2, $3, $4, $5) on conflict (key) do nothing', [fullKey, scope, requestHash, r.status, JSON.stringify(stored)]);
   return { ...r, replayed: false };
 }

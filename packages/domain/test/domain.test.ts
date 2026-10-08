@@ -28,7 +28,7 @@ describe('hashing', () => {
     expect(a).toMatch(/^0x[0-9a-f]{64}$/);
     expect(incomeCommitment({ seriesId: 's', periodId: '2026Q1', incomeYtd: 1n, salt: 'x' })).toMatch(/^0x[0-9a-f]{64}$/);
     expect(bidCommitment({ seriesId: 's', bidder: 'b', pricePerUnit: 10n, quantity: 5n, salt: 'x' })).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(attestationMessage({ seriesId: 's', periodId: '2026Q1', incomeCommitment: '0x00', tier: 2, source: 'stripe' }).length).toBeGreaterThan(10);
+    expect(attestationMessage({ seriesId: 's', periodId: '2026Q1', incomeCommitment: '0x00', tier: 2 }).length).toBeGreaterThan(10);
   });
   it('mock proofs verify against their public inputs only', () => {
     const pub = ['1', '2', '3'];

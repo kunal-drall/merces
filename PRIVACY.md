@@ -23,7 +23,7 @@ specific attestor; the server never holds the key), **hash** (a commitment or di
 | Income salt | device; sent to the verifier in memory only | none | — | — |
 | Income commitment | `reports.income_commitment`, onchain `ReportAccepted` | hash | issuer, holders, public (onchain) | — |
 | Payment amounts (gross, fee, net, accrual) | `reports`, `periods`, `money_events`, `fees_ledger`, onchain | plain (public onchain in v1) | issuer, holders, admin; never in the public activity feed | end of retention |
-| Threshold θ and rate r | `terms_vault.ciphertext`; `terms_amendments.ciphertext` | vault | issuer, eligible backers (every read logged in `terms_access_log`), admin | series end + retention |
+| Threshold θ and rate r | `terms_vault.ciphertext`; `terms_amendments.ciphertext` | vault | issuer, eligible backers (every read logged in `terms_access_log`; eligibility read live); the reviewing attestor on an amendment. No admin bypass. | series end + retention |
 | Terms commitment | `series`, `series_drafts`, onchain | hash | public | — |
 | zkTLS proof (contains the figure) | never on the server; device → verifier in memory | none | — | — |
 | Prover proof + public inputs | `reports.proof` (no witness) | plain | issuer, holders, admin | end of retention |

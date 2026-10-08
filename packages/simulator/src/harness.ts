@@ -20,9 +20,10 @@ export class LocalVerifierKey {
     this.priv = privateKey;
     this.publicKeyHex = (publicKey.export({ format: 'der', type: 'spki' }) as Buffer).toString('hex');
   }
-  attest(input: { seriesId: string; periodId: string; incomeCommitment: string; tier: 1 | 2 | 3 | 4; source: string }): VerifierAttestation {
-    const sig = edSign(null, Buffer.from(attestationMessage(input)), this.priv).toString('hex');
-    return { keyId: this.keyId, ...input, signature: '0x' + sig };
+  attest(input: { seriesId: string; periodId: string; incomeCommitment: string; tier: 1 | 2 | 3 | 4; source?: string }): VerifierAttestation {
+    const { source: _source, ...tuple } = input; // the source stays offchain (B7)
+    const sig = edSign(null, Buffer.from(attestationMessage(tuple)), this.priv).toString('hex');
+    return { keyId: this.keyId, ...tuple, signature: '0x' + sig };
   }
 }
 
@@ -150,12 +151,14 @@ export class SimHarness {
     const publicInputs = SimEngine.publicInputs({ termsCommitment: params.termsCommitment, incomeCommitment: ic, unitsOutstanding: params.unitsOutstanding, paymentStable: q.paymentStable, fxAvgWad: fx, periodId: params.periodId });
     const proof: ReportProof = { system: 'mock', proof: mockProve(publicInputs, { incomeYtd: params.incomeYtdNow.toString(), threshold: params.privateTerms.threshold.toString(), ratePerUnitWad: rate.toString(), salt }), publicInputs };
     const tier = params.tier ?? 2;
+    // the income source never goes onchain (B7): it is returned beside the command for the offchain record (E5) only
     const source = params.source ?? 'stripe';
-    const attestation = tier === 2 || tier === 1 ? this.verifier.attest({ seriesId: params.seriesId, periodId: params.periodId, incomeCommitment: ic, tier, source }) : null;
+    const attestation = tier === 2 || tier === 1 ? this.verifier.attest({ seriesId: params.seriesId, periodId: params.periodId, incomeCommitment: ic, tier }) : null;
     return {
       paymentStable: q.paymentStable,
+      source,
       command: {
-        kind: 'submitReport', seriesId: params.seriesId, periodId: params.periodId, tier, source, paymentStable: q.paymentStable.toString(), incomeCommitment: ic, termsCommitment: params.termsCommitment,
+        kind: 'submitReport', seriesId: params.seriesId, periodId: params.periodId, tier, paymentStable: q.paymentStable.toString(), incomeCommitment: ic, termsCommitment: params.termsCommitment,
         fxBasis: params.fxBasis ?? 'unity', fxAvgWad: fx.toString(), pair: params.pair ?? null, attestorRate: params.attestorRate ? { attestor: params.attestorRate.attestor, rateWad: params.attestorRate.rateWad.toString(), pair: params.attestorRate.pair } : null,
         proof, attestation, attestor: params.attestor ?? null, liquidityEvent: params.liquidityEvent ?? false,
       },

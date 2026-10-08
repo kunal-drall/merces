@@ -56,9 +56,9 @@ export function orderCommitment(input: { seriesId: string; windowId: number; wal
   return hashCanonical('order', { ...input, pricePerUnit: input.pricePerUnit.toString(), quantity: input.quantity.toString() });
 }
 
-/** The message a report verifier signs (ed25519). */
-export function attestationMessage(input: { seriesId: string; periodId: string; incomeCommitment: string; tier: number; source: string }): Uint8Array {
-  return utf8ToBytes(`merces/attestation/v0\n` + canonicalJson(input));
+/** The message a report verifier signs (ed25519). It names no income source: sources never go onchain (B7). */
+export function attestationMessage(input: { seriesId: string; periodId: string; incomeCommitment: string; tier: number }): Uint8Array {
+  return utf8ToBytes(`merces/attestation/v0\n` + canonicalJson({ seriesId: input.seriesId, periodId: input.periodId, incomeCommitment: input.incomeCommitment, tier: input.tier }));
 }
 
 /** The message an attestor signs when attesting a fallback FX rate. */

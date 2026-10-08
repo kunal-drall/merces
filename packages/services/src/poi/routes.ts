@@ -34,11 +34,11 @@ export function registerPoiRoutes(app: FastifyInstance, base: AppContext): void 
       return r.response;
     },
   });
-  defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/reports', access: 'holder-or-issuer', handler: async (req) => ({ reports: await s.listReports(sid(req)) }) });
+  defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/reports', access: 'holder-or-issuer', handler: async (req, _r, session) => ({ reports: await s.listReports(sid(req), session!) }) });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/reporting/splits/:periodId', access: 'issuer', handler: async (req, _r, session) => s.splits(sid(req), session!, (req.params as { periodId: string }).periodId) });
   defineRoute(app, ctx, { method: 'GET', url: '/reports/:reportId', access: 'account', handler: async (req, _r, session) => {
     const rep = await s.getReport(rid(req));
-    await (s as unknown as { seriesForIssuer(id: string, s: unknown): Promise<unknown> }).seriesForIssuer(String(rep.seriesId), session);
+    await (s as unknown as { seriesForIssuer(id: string, s: unknown): Promise<unknown> }).seriesForIssuer(String(rep.seriesId), session); // issuer (or admin) only
     return rep;
   } });
   defineRoute(app, ctx, { method: 'POST', url: '/reports/:reportId/build-submit', access: 'account', handler: async (req, _r, session) => s.buildSubmit(rid(req), session!) });

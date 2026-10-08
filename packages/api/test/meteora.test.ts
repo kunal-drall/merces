@@ -24,7 +24,7 @@ describe.skipIf(!dbTestsEnabled())('M6 Meteora support (E14)', () => {
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     await rig.sync();
     const issuerTok = rig.token({ accountId: 'iss', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
-    const backerTok = rig.token({ accountId: 'b0', wallets: [{ chain: 'solana', address: h.backers[0]!.address }], roles: ['backer'] });
+    const backerTok = await rig.grant({ accountId: 'b0', wallets: [{ chain: 'solana', address: h.backers[0]!.address }], roles: ['backer'] });
     const adminTok = rig.token({ accountId: 'adm', roles: ['admin'], wallets: [] });
     // monad has no curve mode
     const monSeries = (await rig.mon.runRaise()).seriesId;
@@ -56,7 +56,7 @@ describe.skipIf(!dbTestsEnabled())('M6 Meteora support (E14)', () => {
     expect(st1.json().onchain.graduated).toBe(false);
     expect(st1.json().pool.progressBps).toBe(7500);
     // second buy crosses the threshold: the simulator graduates on the buy; the monitor records it
-    const buy2 = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[1]!.address, amountIn: USDC(600).toString(), payIn: 'USDC' }, rig.token({ accountId: 'b1', wallets: [{ chain: 'solana', address: h.backers[1]!.address }], roles: ['backer'] }));
+    const buy2 = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[1]!.address, amountIn: USDC(600).toString(), payIn: 'USDC' }, await rig.grant({ accountId: 'b1', wallets: [{ chain: 'solana', address: h.backers[1]!.address }], roles: ['backer'] }));
     const sent2 = await rig.post('/tx/send', await h.backers[1]!.sign(buy2.json().tx as UnsignedTx), rig.token({ accountId: 'b1', wallets: [{ chain: 'solana', address: h.backers[1]!.address }], roles: ['backer'] }));
     expect(sent2.json().events.map((e: { type: string }) => e.type)).toContain('CurveGraduated');
     mon = await rig.post('/admin/curves/monitor', {}, adminTok);

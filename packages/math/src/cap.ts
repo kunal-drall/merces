@@ -1,4 +1,4 @@
-import { WAD, assertNonNegative, mulDiv, wadMul } from './fixed.ts';
+import { WAD, assertNonNegative, min, mulDiv, wadMul } from './fixed.ts';
 
 /**
  * C6. Cap accounting.
@@ -27,8 +27,7 @@ export interface CapResult {
  * Apply a gross payment G with N units outstanding.
  *   inc = G / N (WAD-scaled, floored)
  *   if paid_per_unit + inc < C·WAD: accept all of G
- *   else accept only G' = (C·WAD − paid_per_unit) × N / WAD (rounded UP to the base unit so holders
- *   reach exactly the cap; the issuer refund is G − G'), set Retired.
+ *   else accept only G' = floor((C·WAD − paid_per_unit) × N / WAD) (the issuer refund is G − G'), set Retired.
  * Rounding note: inc is floored, so dust (G − inc×N/WAD) stays in the vault and rolls forward (C2).
  */
 export function applyGrossPayment(gross: bigint, unitsOutstanding: bigint, paidPerUnitWad: bigint, capPerUnit: bigint): CapResult {
@@ -44,11 +43,9 @@ export function applyGrossPayment(gross: bigint, unitsOutstanding: bigint, paidP
     return { accepted: gross, refunded: 0n, paidPerUnitWad: paidPerUnitWad + incWad, retired: false };
   }
   const remainingWad = capWad - paidPerUnitWad;
-  // G' = remaining × N / WAD, rounded up so that the cap is exactly reached in base units.
-  const num = remainingWad * unitsOutstanding;
-  let acceptedCapped = num / WAD;
-  if (num % WAD !== 0n) acceptedCapped += 1n;
-  if (acceptedCapped > gross) acceptedCapped = gross;
+  // G' = (C − paid_per_unit) × N, floored: the issuer is never charged a fraction of a base unit beyond the cap (C2);
+  // the sub-unit remainder is dust holders forgo. The series retires at the cap either way.
+  const acceptedCapped = min(gross, (remainingWad * unitsOutstanding) / WAD);
   return { accepted: acceptedCapped, refunded: gross - acceptedCapped, paidPerUnitWad: capWad, retired: true };
 }
 

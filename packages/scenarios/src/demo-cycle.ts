@@ -76,7 +76,8 @@ for (const personality of ['solana', 'monad'] as Personality[]) {
       const paid = await api('POST', '/tx/send', issuerTok, await h.issuer.sign(pay.tx as UnsignedTx));
       await api('POST', `/reports/${rep.reportId}/paid`, issuerTok, { txId: paid.txId });
     }
-    say(`${q}: Stripe YTD ${(Number(ytd) / 1e6).toFixed(0)} USD → payment due ${due} base units (${(Number(due) / 1e6).toFixed(2)} USDC)`);
+    // the income figure itself is never printed: only the onchain-public payment is (Part B)
+    say(`${q}: ProofOfIncome accepted → payment due ${due} base units (${(Number(due) / 1e6).toFixed(2)} USDC)`);
   }
   await indexer.catchUp();
   const backer = h.backers[0]!;

@@ -19,6 +19,16 @@ export function sessionOf(req: FastifyRequest): Session | null {
   return (req as FastifyRequest & { session?: Session | null }).session ?? null;
 }
 
+/**
+ * Eligibility is read live from the `eligibility` table on every backer-tier request: a revoke takes effect on the
+ * next request, not when the session token expires. The `eligible` flag in the token is informational (shown by
+ * /me) and never decides access. A row counts when it is unrevoked and was approved for this account.
+ */
+export async function isEligible(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'accountId'>): Promise<boolean> {
+  const r = await ctx.pool.query('select 1 from eligibility where account_id = $1 and revoked_at is null limit 1', [s.accountId]);
+  return !!r.rowCount;
+}
+
 export async function requireTier(ctx: AppContext, req: FastifyRequest, _reply: FastifyReply, tier: AccessTier): Promise<Session | null> {
   if (tier === 'public') return sessionOf(req);
   const s = sessionOf(req);
@@ -49,7 +59,7 @@ export async function requireTier(ctx: AppContext, req: FastifyRequest, _reply: 
       if (has('attestor') || has('admin')) return s;
       break;
     case 'backer':
-      if (has('admin') || (s.eligible && (has('backer') || has('issuer')))) return s;
+      if (has('admin') || ((has('backer') || has('issuer')) && (await isEligible(ctx, s)))) return s;
       break;
     case 'issuer':
       if (has('admin') || (await isIssuerOf())) return s;

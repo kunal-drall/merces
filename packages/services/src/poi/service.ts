@@ -90,7 +90,7 @@ export class ProofOfIncomeService {
     const keys = await this.ctx.chainFor(seriesId).listVerifierKeys();
     const key = keys.find((k) => k.keyId === a.keyId);
     if (!key) throw AppError.unprocessable(`verifier key ${a.keyId} is not registered onchain`);
-    const msg = attestationMessage({ seriesId: a.seriesId, periodId: a.periodId, incomeCommitment: a.incomeCommitment, tier: a.tier, source: a.source });
+    const msg = attestationMessage({ seriesId: a.seriesId, periodId: a.periodId, incomeCommitment: a.incomeCommitment, tier: a.tier });
     let ok = false;
     try {
       ok = edVerify(null, Buffer.from(msg), createPublicKey({ key: Buffer.from(key.publicKey, 'hex'), format: 'der', type: 'spki' }), Buffer.from(a.signature.replace(/^0x/, ''), 'hex'));
@@ -141,16 +141,20 @@ export class ProofOfIncomeService {
     return { ...(await this.getReport(reportId)), tx: (await this.buildSubmit(reportId, session)).tx };
   }
 
-  async getReport(reportId: string): Promise<Record<string, unknown>> {
+  /** `source` (which income provider) is shown to the issuer and admins only — never to holders (R20, B7). */
+  async getReport(reportId: string, opts: { showSource?: boolean } = { showSource: true }): Promise<Record<string, unknown>> {
     const r = await this.ctx.pool.query('select * from reports where report_id = $1', [reportId]);
     const x = r.rows[0];
     if (!x) throw AppError.notFound('report');
-    return { reportId: x.report_id, seriesId: x.series_id, periodId: x.period_id, tier: x.tier, source: x.source, state: x.state, attestor: x.attestor ?? null, paymentStable: x.payment_stable, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment, fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, liquidityEvent: x.liquidity_event, verifiedOffchain: x.verified_offchain, submitTx: x.submit_tx, payinTx: x.payin_tx, createdAt: x.created_at };
+    return { reportId: x.report_id, seriesId: x.series_id, periodId: x.period_id, tier: x.tier, source: opts.showSource ? x.source : undefined, state: x.state, attestor: x.attestor ?? null, paymentStable: x.payment_stable, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment, fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, liquidityEvent: x.liquidity_event, verifiedOffchain: x.verified_offchain, submitTx: x.submit_tx, payinTx: x.payin_tx, createdAt: x.created_at };
   }
 
-  async listReports(seriesId: string): Promise<Record<string, unknown>[]> {
+  async listReports(seriesId: string, session: Session): Promise<Record<string, unknown>[]> {
+    const chain = this.ctx.chainFor(seriesId);
+    const s = await chain.getSeries(seriesId);
+    const isIssuer = !!s && (session.wallets.some((w) => w.chain === chain.chain && w.address === s.issuer) || session.roles.includes('admin'));
     const r = await this.ctx.pool.query('select report_id from reports where series_id = $1 order by period_id, created_at', [seriesId]);
-    return Promise.all(r.rows.map((x) => this.getReport(x.report_id)));
+    return Promise.all(r.rows.map((x) => this.getReport(x.report_id, { showSource: isIssuer })));
   }
 
   async buildSubmit(reportId: string, session: Session): Promise<{ tx: UnsignedTx }> {
@@ -159,7 +163,7 @@ export class ProofOfIncomeService {
     if (!x) throw AppError.notFound('report');
     const { chain, series } = await this.seriesForIssuer(x.series_id, session);
     const cmd: Extract<UserCommand, { kind: 'submitReport' }> = {
-      kind: 'submitReport', seriesId: x.series_id, periodId: x.period_id, tier: x.tier, source: x.source, paymentStable: x.payment_stable, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment,
+      kind: 'submitReport', seriesId: x.series_id, periodId: x.period_id, tier: x.tier, paymentStable: x.payment_stable, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment,
       fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, attestorRate: x.attestor_rate ? { attestor: x.attestor_rate.attestor, rateWad: x.attestor_rate.rateWad, pair: x.pair } : null, proof: x.proof, attestation: x.attestation,
       attestor: x.tier === 3 ? (x.attestor ?? null) : null, liquidityEvent: x.liquidity_event,
     };

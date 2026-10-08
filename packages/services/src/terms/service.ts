@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
 import { DEFAULTS, normaliseAddress, randomSalt, termsCommitment, type SeriesTerms, type UnsignedTx } from '@merces/domain';
 import { WAD, ratePerUnit, wadFromDecimal, wadToDecimal } from '@merces/math';
-import type { Session } from '@merces/api';
+import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
 /**
@@ -141,10 +141,12 @@ export class TermsService {
       : await this.ctx.pool.query('select v.*, d.account_id, d.chain, d.issuer from terms_vault v join series_drafts d on d.draft_id = v.draft_id where v.draft_id = $1', [params.draftId]);
     const v = r.rows[0];
     if (!v) throw AppError.notFound('terms');
+    // The private terms are the issuer's and the eligible backers' (Part B): there is no admin bypass. Operators
+    // read nothing beyond the commitment; the attestor review path (R33) is the only other reader and is audited.
     const isIssuer = v.account_id === session.accountId;
-    if (!isIssuer && !session.roles.includes('admin')) {
+    if (!isIssuer) {
       if (!params.seriesId) throw AppError.forbidden('drafts are visible to the issuer only');
-      if (!session.eligible) throw AppError.forbidden('terms are disclosed to eligible backers only');
+      if (!(await isEligible(this.ctx, session))) throw AppError.forbidden('terms are disclosed to eligible backers only');
     }
     const plain = JSON.parse(this.ctx.vault.decrypt(v.ciphertext, `terms:${v.draft_id}`)) as Record<string, string>;
     await this.ctx.pool.query('insert into terms_access_log (draft_id, series_id, account_id, purpose, version) values ($1,$2,$3,$4,$5)', [v.draft_id, v.series_id ?? params.seriesId ?? null, session.accountId, purpose, v.version]);

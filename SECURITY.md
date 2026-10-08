@@ -44,6 +44,10 @@ Secrets never enter the repository: `.env.example` lists names only; development
   account and as a signed-in stranger and asserts the declared tier.
 - Admin and attestor actions are written to an append-only `audit_log` (a trigger forbids update and delete).
 - Writes accept an `Idempotency-Key`; a key replayed with a different body is a 409.
+  Stored replays are redacted: a response that carried decrypted vault material (application notes) is persisted
+  with that field nulled, so the idempotency table never duplicates vault plaintext.
+- Backer-tier access is decided by a live read of the `eligibility` table on every request, never by the session
+  token's `eligible` flag: a revoke takes effect on the next request. Private terms have no admin bypass.
 
 ## The report verifier (most sensitive component)
 

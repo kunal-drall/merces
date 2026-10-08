@@ -59,8 +59,9 @@ export class ReportVerifier implements ReportVerifierPort {
     if (v.figure === null) return { ok: false, code: 'hash-only-unsupported' }; // Part J.3: hash-attesting providers need a commitment scheme agreed with Reclaim
     const expected = incomeCommitment({ seriesId: req.seriesId, periodId: req.periodId, incomeYtd: v.figure, salt: req.incomeSalt });
     if (expected !== req.incomeCommitment) return { ok: false, code: 'commitment-mismatch' };
-    const msg = attestationMessage({ seriesId: req.seriesId, periodId: req.periodId, incomeCommitment: req.incomeCommitment, tier: req.tier, source: req.source });
+    // the signed tuple names no source: the provider is checked here and stays offchain (B7)
+    const msg = attestationMessage({ seriesId: req.seriesId, periodId: req.periodId, incomeCommitment: req.incomeCommitment, tier: req.tier });
     const signature = '0x' + (await this.kms.sign(this.keyId, msg));
-    return { ok: true, attestation: { keyId: this.keyId, seriesId: req.seriesId, periodId: req.periodId, incomeCommitment: req.incomeCommitment, tier: req.tier, source: req.source, signature } };
+    return { ok: true, attestation: { keyId: this.keyId, seriesId: req.seriesId, periodId: req.periodId, incomeCommitment: req.incomeCommitment, tier: req.tier, signature } };
   }
 }

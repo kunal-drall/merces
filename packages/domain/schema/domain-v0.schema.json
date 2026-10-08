@@ -5348,9 +5348,6 @@
             }
           ]
         },
-        "source": {
-          "type": "string"
-        },
         "paymentStable": {
           "type": "string",
           "pattern": "^\\d+$"
@@ -5484,9 +5481,6 @@
                     }
                   ]
                 },
-                "source": {
-                  "type": "string"
-                },
                 "signature": {
                   "type": "string"
                 }
@@ -5497,7 +5491,6 @@
                 "periodId",
                 "incomeCommitment",
                 "tier",
-                "source",
                 "signature"
               ],
               "additionalProperties": false
@@ -5528,7 +5521,6 @@
         "seriesId",
         "periodId",
         "tier",
-        "source",
         "paymentStable",
         "incomeCommitment",
         "termsCommitment",

@@ -19,14 +19,13 @@ export const reportProofSchema = z.object({
 });
 export type ReportProof = z.infer<typeof reportProofSchema>;
 
-/** Signed by the report verifier over {seriesId, periodId, incomeCommitment, tier, source}. */
+/** Signed by the report verifier over {seriesId, periodId, incomeCommitment, tier}. The income source never goes onchain (B7). */
 export const verifierAttestationSchema = z.object({
   keyId: z.string(),
   seriesId: seriesIdSchema,
   periodId: periodIdSchema,
   incomeCommitment: hash32Schema,
   tier: tierSchema,
-  source: z.string(),
   /** hex ed25519 signature over attestationMessage() */
   signature: z.string(),
 });
@@ -50,7 +49,6 @@ export const userCommands = {
     seriesId: seriesIdSchema,
     periodId: periodIdSchema,
     tier: tierSchema,
-    source: z.string(),
     paymentStable: moneySchema,
     incomeCommitment: hash32Schema,
     termsCommitment: hash32Schema,

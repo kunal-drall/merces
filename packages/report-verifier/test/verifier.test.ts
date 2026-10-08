@@ -22,7 +22,7 @@ describe('report verifier', () => {
     expect(JSON.stringify(r)).not.toContain(figure.toString());
     const key = await verifier.publicKey();
     const pub = createPublicKey({ key: Buffer.from(key.spkiHex, 'hex'), format: 'der', type: 'spki' });
-    expect(edVerify(null, Buffer.from(attestationMessage({ seriesId, periodId, incomeCommitment: ic, tier: 2, source: 'stripe' })), pub, Buffer.from(r.attestation.signature.slice(2), 'hex'))).toBe(true);
+    expect(edVerify(null, Buffer.from(attestationMessage({ seriesId, periodId, incomeCommitment: ic, tier: 2 })), pub, Buffer.from(r.attestation.signature.slice(2), 'hex'))).toBe(true);
   });
 
   it('refuses mismatched commitments, replayed contexts, tampered proofs and foreign currencies with codes only', async () => {
