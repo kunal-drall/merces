@@ -28,6 +28,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm openapi:check
       - run: pnpm openapi:client && git diff --exit-code -- packages/client/src/generated packages/api/openapi.yaml
+      - run: pnpm docs:events && git diff --exit-code -- DOMAIN_EVENTS.md packages/domain/schema
       - run: pnpm test
       - run: pnpm test:conformance
         env: { CONFORMANCE_CHAIN: simulator }

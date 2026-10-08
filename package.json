@@ -28,7 +28,8 @@
     "stage1:sync": "tsx packages/stage1-sync/src/cli.ts",
     "openapi:client": "pnpm openapi:build && tsx packages/client/src/generate.ts",
     "openapi:check": "tsx packages/server/src/openapi-check.ts",
-    "openapi:build": "tsx packages/api/src/openapi/build.ts"
+    "openapi:build": "tsx packages/api/src/openapi/build.ts",
+    "docs:events": "tsx packages/domain/src/write-events-doc.ts && tsx packages/domain/src/write-schema.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
