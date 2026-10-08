@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '@merces/core';
-import { parsePeriod, periodStanding, deadlinesFor } from '@merces/math';
 import { defineRoute } from '../app.ts';
 import type { AppContext } from '../context.ts';
 import { seriesRow } from '../serialize.ts';
@@ -105,12 +104,9 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
       const s = r.rows[0];
       if (!s) throw AppError.notFound('series');
       const chain = ctx.chainFor(seriesId);
-      const now = await chain.now();
-      const periods = await ctx.pool.query('select period_id, report_accepted, settled, formal_notice_seq from periods where series_id = $1 order by period_id', [seriesId]);
-      const standings = periods.rows.map((p) => {
-        const d = deadlinesFor(parsePeriod(p.period_id), { dueDays: s.due_days, graceDays: s.grace_days, formalNoticeDays: s.formal_notice_days });
-        return { periodId: p.period_id, reportAccepted: p.report_accepted, settled: p.settled, standing: s.status === 'Paused' && !p.settled ? 'Deferred' : periodStanding(d, now, p.settled), dueAt: d.dueAt };
-      });
+      // live standings for every reportable quarter (statuses and dates only; amounts need the holder/issuer tier)
+      const live = await chain.listPeriods(seriesId);
+      const standings = live.map((p) => ({ periodId: p.periodId, reportAccepted: p.reportAccepted, settled: p.settled, standing: p.standing, dueAt: p.dueAt }));
       const history = await ctx.pool.query('select from_status, to_status, block_time from status_history where series_id = $1 order by seq', [seriesId]);
       return { seriesId, status: s.status, phase: s.phase, releasesPaused: s.releases_paused, periods: standings, history: history.rows.map((h) => ({ from: h.from_status, to: h.to_status, at: Number(h.block_time) })) };
     },

@@ -63,6 +63,9 @@ importers:
       '@merces/indexer':
         specifier: workspace:*
         version: link:../indexer
+      '@merces/keepers':
+        specifier: workspace:*
+        version: link:../keepers
       '@merces/poi-device':
         specifier: workspace:*
         version: link:../poi-device

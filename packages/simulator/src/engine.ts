@@ -646,10 +646,12 @@ export class SimEngine {
       s.feesTotal += fee;
       emit('PaymentReceived', { seriesId: s.seriesId, periodId: cmd.periodId, gross: str(amount), fee: str(fee), net: str(net), source: 'tail', paidPerUnitWad: str(s.paidPerUnitWad) });
       emit('TailPayout', { seriesId: s.seriesId, periodId: cmd.periodId, perUnit: str(amount / r.unitsAtRedemption), total: str(amount) });
+      p.paid += amount;
     } else {
-      this.receivePayment(s, signer, amount, cmd.periodId, 'payIn', now, emit);
+      // `paid` records what the vault accepted; a cap refund (PaymentRefunded) is not part of it (A-C6-1)
+      const r = this.receivePayment(s, signer, amount, cmd.periodId, 'payIn', now, emit);
+      p.paid += r.accepted;
     }
-    p.paid += amount;
     p.settled = true;
     this.refreshStanding(s, now, emit);
   }

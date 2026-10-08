@@ -27,6 +27,7 @@
     "@merces/ports": "workspace:*",
     "@merces/poi-device": "workspace:*",
     "@merces/report-verifier": "workspace:*",
-    "@merces/fixtures": "workspace:*"
+    "@merces/fixtures": "workspace:*",
+    "@merces/keepers": "workspace:*"
   }
 }

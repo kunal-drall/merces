@@ -37,3 +37,4 @@ much are flagged **ASK** and were not decided silently: the default is implement
 | A-REP-5 | Rate per unit | r = s / N uses N = units offered at creation (C1), not units sold; payment uses units outstanding. A half-sold raise owes half the share rate. | `@merces/poi-device`, harness | spec (clarified) |
 | A-REP-6 | Tier 1 attestation | Tier-1 reports carry the proof and, when available, a verifier attestation; the chain requires only the proof since the income is onchain. | simulator `submitReport` | default |
 | A-PRIV-2 | Verifier reachability | Devices POST zkTLS proofs directly to the report verifier; the API never receives a proof or a salt. In mock mode the verifier runs in-process with the same dev key. | E5, `@merces/server` | default |
+| A-C6-1 | Period "paid" | A period's `paid` is the gross the vault accepted; the issuer's cap refund is recorded separately (PaymentRefunded) and not counted as paid. | simulator `payIn`, indexer | default |
