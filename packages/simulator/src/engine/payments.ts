@@ -1,5 +1,5 @@
 import { ChainError, type Command } from '@merces/domain';
-import { accrueNet, applyGrossPayment, parsePeriod, payoutFee, periodOf } from '@merces/math';
+import { interim, parsePeriod, periodOf } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { burn, settlePosition } from './holders.ts';
@@ -12,19 +12,19 @@ export function receivePayment(e: EngineCore, s: SimSeries, payer: string, gross
   if (s.unitsOutstanding <= 0n) throw new ChainError('WrongStatus', 'no units outstanding');
   const mint = s.terms.stablecoinMint;
   e.debit(payer, mint, gross);
-  const cap = applyGrossPayment(gross, s.unitsOutstanding, s.paidPerUnitWad, s.capPerUnit!);
+  const cap = interim.applyGrossPayment(gross, s.unitsOutstanding, s.paidPerUnitWad, s.capPerUnit!);
   if (cap.refunded > 0n) {
     e.credit(payer, mint, cap.refunded);
     emit('PaymentRefunded', { seriesId: s.seriesId, periodId, amount: str(cap.refunded), reason: 'cap' });
   }
   const accepted = cap.accepted;
-  const { fee, net } = payoutFee(accepted, s.terms.payoutFeeBps);
+  const { fee, net } = interim.payoutFee(accepted, s.terms.payoutFeeBps);
   if (fee > 0n) {
     e.credit(e.state.feeCollector, mint, fee);
     emit('FeeTaken', { seriesId: s.seriesId, kind: 'payout', amount: str(fee), payer });
   }
   s.paidPerUnitWad = cap.paidPerUnitWad;
-  s.accNetWad = accrueNet(s.accNetWad, net, s.unitsOutstanding);
+  s.accNetWad = interim.accrueNet(s.accNetWad, net, s.unitsOutstanding);
   s.vaultBalance += net;
   s.vaultGrossTotal += accepted;
   s.vaultFeesTotal += fee;

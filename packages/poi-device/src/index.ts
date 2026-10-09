@@ -1,5 +1,5 @@
 import { incomeCommitment, mockProve, randomSalt, reportPublicInputs, type ReportProof, type VerifierAttestation } from '@merces/domain';
-import { WAD, quarterPayment, ratePerUnit } from '@merces/math';
+import { interim, WAD, ratePerUnit } from '@merces/math';
 import type { IncomeSourceKind, ZkTlsProof } from '@merces/ports';
 import type { ReportVerifierPort } from '@merces/report-verifier';
 
@@ -53,7 +53,7 @@ export interface AssembledReport {
 export async function assembleOnDevice(input: DeviceReportInput, verifier: ReportVerifierPort | null): Promise<{ assembled: AssembledReport; salt: string }> {
   const rate = input.privateTerms.ratePerUnitWad ? BigInt(input.privateTerms.ratePerUnitWad) : ratePerUnit(decimalToWad(input.privateTerms.shareRate ?? '0'), BigInt(input.unitsOffered ?? input.unitsOutstanding));
   const units = BigInt(input.unitsOutstanding);
-  const q = quarterPayment({ ratePerUnitWad: rate, unitsOutstanding: units, incomeYtdPrev: input.incomeYtdPrev, incomeYtdNow: input.incomeYtdNow, threshold: BigInt(input.privateTerms.threshold), fxAvgWad: input.fxAvgWad });
+  const q = interim.quarterPayment({ ratePerUnitWad: rate, unitsOutstanding: units, incomeYtdPrev: input.incomeYtdPrev, incomeYtdNow: input.incomeYtdNow, threshold: BigInt(input.privateTerms.threshold), fxAvgWad: input.fxAvgWad });
   const salt = input.salt ?? randomSalt();
   const ic = incomeCommitment({ seriesId: input.seriesId, periodId: input.periodId, incomeYtd: input.incomeYtdNow, salt });
   const publicInputs = reportPublicInputs({ termsCommitment: input.termsCommitment, incomeCommitment: ic, unitsOutstanding: units, paymentStable: q.paymentStable, fxAvgWad: input.fxAvgWad, periodId: input.periodId });

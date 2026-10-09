@@ -2,7 +2,7 @@ import { createPublicKey, verify as edVerify } from 'node:crypto';
 import { z } from 'zod';
 import { AppError, enqueueOutbox, getFlag } from '@merces/core';
 import { attestationMessage, reportPublicInputs, reportProofSchema, verifierAttestationSchema, type UnsignedTx, type UserCommand } from '@merces/domain';
-import { WAD, deadlinesFor, parsePeriod, periodStanding, periodsBetween } from '@merces/math';
+import { interim, WAD, parsePeriod, periodsBetween } from '@merces/math';
 import { SOURCE_DEFINITIONS, type IncomeSourceKind } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -49,7 +49,7 @@ export class ProofOfIncomeService {
     const reports = await this.ctx.pool.query('select period_id, report_id, state, tier, source from reports where series_id = $1 and state <> $2 order by created_at', [seriesId, 'superseded']);
     const byPeriod = new Map(reports.rows.map((r) => [r.period_id, r]));
     const current = parsePeriodSafe(now);
-    const upcoming = series.settledAt !== null && current && current.end > now ? { periodId: current.id, endsAt: current.end, dueAt: deadlinesFor(current, { dueDays: series.terms.dueDays, graceDays: series.terms.graceDays, formalNoticeDays: series.terms.formalNoticeDays }).dueAt } : null;
+    const upcoming = series.settledAt !== null && current && current.end > now ? { periodId: current.id, endsAt: current.end, dueAt: interim.deadlinesFor(current, { dueDays: series.terms.dueDays, graceDays: series.terms.graceDays, formalNoticeDays: series.terms.formalNoticeDays }).dueAt } : null;
     return {
       seriesId, status: series.status, now, reportingCurrency: series.terms.reportingCurrency, fxBasis: series.terms.reportingCurrency === 'USD' ? 'unity' : 'accumulator', tierFlags: series.terms.tierFlags,
       periods: live.map((p) => ({ ...p, report: byPeriod.get(p.periodId) ? { reportId: byPeriod.get(p.periodId)!.report_id, state: byPeriod.get(p.periodId)!.state } : null, nextStep: nextStep(p, byPeriod.get(p.periodId)?.state) })),
@@ -223,7 +223,7 @@ export class ProofOfIncomeService {
     const chain = this.ctx.chainFor(seriesId);
     const periods = await chain.listPeriods(seriesId);
     const now = await chain.now();
-    return periods.filter((p) => !p.settled).map((p) => ({ periodId: p.periodId, dueAt: p.dueAt, graceEndsAt: p.graceEndsAt, formalNoticeAt: p.formalNoticeAt, standing: periodStanding({ dueAt: p.dueAt, graceEndsAt: p.graceEndsAt, formalNoticeAt: p.formalNoticeAt }, now, false) }));
+    return periods.filter((p) => !p.settled).map((p) => ({ periodId: p.periodId, dueAt: p.dueAt, graceEndsAt: p.graceEndsAt, formalNoticeAt: p.formalNoticeAt, standing: interim.periodStanding({ dueAt: p.dueAt, graceEndsAt: p.graceEndsAt, formalNoticeAt: p.formalNoticeAt }, now, false) }));
   }
 }
 

@@ -1,5 +1,5 @@
 import { ChainError, type Command, type LifecycleStatus } from '@merces/domain';
-import { daysLate, deadlinesFor, lateAccrual, periodStanding, periodsBetween, type Deadlines, type Period } from '@merces/math';
+import { interim, periodsBetween, type Period } from '@merces/math';
 import type { SimPeriod, SimSeries } from '../state.ts';
 import { TERMINAL, type EngineCore, type Emit } from './core.ts';
 
@@ -30,10 +30,10 @@ export function pausedSecondsSince(s: SimSeries, from: number, now: number): num
 }
 /** Simple-interest accrual on the outstanding amount, from the end of grace to `now`; the deadlines already shift by paused seconds. */
 export function accrualNow(s: SimSeries, period: Period, outstanding: bigint, now: number): bigint {
-  return lateAccrual(outstanding, s.terms.hurdleWad, daysLate(deadlines(s, period, now).graceEndsAt, now));
+  return interim.lateAccrual(outstanding, s.terms.hurdleWad, interim.daysLate(deadlines(s, period, now).graceEndsAt, now));
 }
-export function deadlines(s: SimSeries, period: Period, now: number): Deadlines {
-  return deadlinesFor(period, { dueDays: s.terms.dueDays, graceDays: s.terms.graceDays, formalNoticeDays: s.terms.formalNoticeDays, pausedSeconds: pausedSecondsSince(s, period.end, now) });
+export function deadlines(s: SimSeries, period: Period, now: number): interim.Deadlines {
+  return interim.deadlinesFor(period, { dueDays: s.terms.dueDays, graceDays: s.terms.graceDays, formalNoticeDays: s.terms.formalNoticeDays, pausedSeconds: pausedSecondsSince(s, period.end, now) });
 }
 export function isPeriodSettled(s: SimSeries, periodId: string): boolean {
   const p = s.periods.get(periodId);
@@ -45,7 +45,7 @@ export function derivedStanding(s: SimSeries, now: number): { status: 'OnTime' |
   let worst: Period | null = null;
   for (const p of reportablePeriods(s, now)) {
     if (isPeriodSettled(s, p.id)) continue;
-    const st = periodStanding(deadlines(s, p, now), now, false);
+    const st = interim.periodStanding(deadlines(s, p, now), now, false);
     if (st === 'Late' || st === 'FormalNoticeDue') {
       status = 'Late';
       worst = worst ?? p;
@@ -119,7 +119,7 @@ export function crankStatus(e: EngineCore, cmd: Extract<Command, { kind: 'crankS
   syncStatus(e, s, now, emit);
   for (const per of reportablePeriods(s, now)) {
     if (isPeriodSettled(s, per.id)) continue;
-    const st = periodStanding(deadlines(s, per, now), now, false);
+    const st = interim.periodStanding(deadlines(s, per, now), now, false);
     const p = periodRecord(s, per.id);
     if (st === 'FormalNoticeDue' && !p.formalNoticeEmitted) {
       p.formalNoticeEmitted = true;

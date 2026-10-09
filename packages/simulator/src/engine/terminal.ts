@@ -1,5 +1,5 @@
 import { ChainError, DEFAULTS, type Command } from '@merces/domain';
-import { accrueNet, perUnitCap } from '@merces/math';
+import { interim } from '@merces/math';
 import type { SimPosition, SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { setStatus } from './status.ts';
@@ -19,7 +19,7 @@ export function amendTerms(e: EngineCore, signers: string[], cmd: Extract<Comman
   const previous = s.terms.termsCommitment;
   s.terms.termsCommitment = cmd.termsCommitment;
   s.terms.capMultipleWad = newCap;
-  if (s.issuePrice !== null) s.capPerUnit = perUnitCap(newCap, s.issuePrice);
+  if (s.issuePrice !== null) s.capPerUnit = interim.perUnitCap(newCap, s.issuePrice);
   s.amendments.push({ at: now, termsCommitment: cmd.termsCommitment, capMultipleWad: newCap, attestor: cmd.attestor });
   emit('TermsAmended', { seriesId: s.seriesId, termsCommitment: cmd.termsCommitment, previousCommitment: previous, capMultipleWad: cmd.capMultipleWad, attestor: cmd.attestor });
 }
@@ -38,7 +38,7 @@ export function extinguish(e: EngineCore, signers: string[], cmd: Extract<Comman
     s.treasuryReleased = s.treasuryTotal;
     if (unreleased > 0n) {
       // Returned to holders pro rata, no fee, outside the cap (A-C11-6).
-      s.accNetWad = accrueNet(s.accNetWad, unreleased, s.unitsOutstanding);
+      s.accNetWad = interim.accrueNet(s.accNetWad, unreleased, s.unitsOutstanding);
       s.vaultBalance += unreleased;
       returned = unreleased;
       emit('PaymentReceived', { seriesId: s.seriesId, periodId: null, gross: str(unreleased), fee: '0', net: str(unreleased), source: 'extinguishment', paidPerUnitWad: str(s.paidPerUnitWad) });

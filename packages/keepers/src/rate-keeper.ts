@@ -1,7 +1,7 @@
 import { enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import { DEFAULTS } from '@merces/domain';
-import { deviationBps, utcDayIndex } from '@merces/math';
+import { interim, utcDayIndex } from '@merces/math';
 import { parsedToWad, pythSymbolFor, type ChainlinkPort, type PythPort } from '@merces/ports';
 import type { ServiceContext } from '@merces/services';
 import { refused, type KeeperJob } from './jobs.ts';
@@ -72,7 +72,7 @@ export function rateKeeperJob(opts: RateKeeperOptions): KeeperJob {
               const cl = await opts.chainlink.latestRoundData(chain.chain, pair);
               if (cl) {
                 clRate = (cl.answer * 10n ** 18n) / 10n ** BigInt(cl.decimals);
-                dev = deviationBps(rateWad, clRate);
+                dev = interim.deviationBps(rateWad, clRate);
               }
               await ctx.pool.query('insert into fx_cross_checks (chain, pair, day_index, pyth_rate_wad, chainlink_rate_wad, deviation_bps, within_band) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing', [chain.chain, pair, day, rateWad.toString(), clRate?.toString() ?? null, dev === null ? null : Number(dev), dev === null ? null : dev <= band]);
               if (dev !== null && dev > band) {

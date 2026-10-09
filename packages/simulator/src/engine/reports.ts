@@ -1,6 +1,6 @@
 import { createPublicKey, verify as edVerify } from 'node:crypto';
 import { ChainError, attestationMessage, mockVerify, reportPublicInputs, type Command } from '@merces/domain';
-import { WAD, parsePeriod, tailPayoutPerUnit } from '@merces/math';
+import { interim, WAD, parsePeriod } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { big, str, type EngineCore, type Emit } from './core.ts';
 import { quarterRate } from './fx.ts';
@@ -91,7 +91,7 @@ export function submitReport(e: EngineCore, signers: string[], cmd: Extract<Comm
   let due: bigint;
   if (isTail) {
     const r = s.redemption!;
-    const perUnit = tailPayoutPerUnit(paymentStable / r.unitsAtRedemption, r.tailCapPerUnit, r.tailPaidPerUnit);
+    const perUnit = interim.tailPayoutPerUnit(paymentStable / r.unitsAtRedemption, r.tailCapPerUnit, r.tailPaidPerUnit);
     due = perUnit * r.unitsAtRedemption;
     p.isTail = true;
     p.outstanding = due;

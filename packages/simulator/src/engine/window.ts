@@ -1,5 +1,5 @@
 import { ChainError, orderCommitment, type Command } from '@merces/domain';
-import { min, walletCapUnits } from '@merces/math';
+import { interim } from '@merces/math';
 import type { SimSeries, SimTransferWindow } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { position, setUnits } from './holders.ts';
@@ -64,7 +64,7 @@ export function clearTransferWindow(e: EngineCore, cmd: Extract<Command, { kind:
   const mint = s.terms.stablecoinMint;
   const buys = [...w.orders.values()].filter((o) => o.side === 'buy' && o.revealed).sort((a, b) => (a.revealed!.pricePerUnit === b.revealed!.pricePerUnit ? a.order - b.order : a.revealed!.pricePerUnit > b.revealed!.pricePerUnit ? -1 : 1));
   const sells = [...w.orders.values()].filter((o) => o.side === 'sell' && o.revealed).sort((a, b) => (a.revealed!.pricePerUnit === b.revealed!.pricePerUnit ? a.order - b.order : a.revealed!.pricePerUnit < b.revealed!.pricePerUnit ? -1 : 1));
-  const cap = walletCapUnits(s.unitsOutstanding, s.terms.walletCapBps);
+  const cap = interim.walletCapUnits(s.unitsOutstanding, s.terms.walletCapBps);
   const fills: { buyer: string; seller: string; units: bigint }[] = [];
   let clearing = 0n;
   let bi = 0;
@@ -79,7 +79,7 @@ export function clearTransferWindow(e: EngineCore, cmd: Extract<Command, { kind:
     if (b.revealed!.pricePerUnit < x.revealed!.pricePerUnit) break;
     const held = (s.positions.get(b.wallet)?.units ?? 0n) + fills.filter((f) => f.buyer === b.wallet).reduce((a, f) => a + f.units, 0n);
     const room = cap > held ? cap - held : 0n;
-    const units = min(min(buyLeft[bi]!, sellLeft[si]!), room);
+    const units = interim.min(interim.min(buyLeft[bi]!, sellLeft[si]!), room);
     if (units === 0n) {
       bi++;
       continue;

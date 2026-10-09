@@ -1,71 +1,174 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { stage1Path } from '@merces/chains';
-import { interimMath, type MercesMath } from '@merces/math';
+import * as gateway from '@merces/math';
 import type { StepReport } from '../report.ts';
 import type { StepCtx } from './generate.ts';
-import { compareStage1Math, renderStage1Math } from './stage1-math.ts';
 
 /**
- * Step 4: run Stage 1's reference math against ours on every vector and report disagreement to the base unit.
- * Proven parity makes Stage 1's library eligible to replace the interim one; it does not swap anything at runtime
- * (services import the interim functions directly and this runs in the short-lived sync process).
- *
- * Stage 1's package must export an object satisfying `MercesMath` (or a `mercesMath` adapter). Vectors:
- * { "math": [ { "fn": "owedYtd", "args": ["..."], "expect": "..." }, ... ] } with bigint arguments as strings.
- * Results are compared exactly after canonicalisation, so a function returning an object needs the full expected
- * object (every field, bigints as decimal strings).
+ * The Stage 1 reference names `@merces/math` re-exports (S1 plan WP1 (c)). Each must be Stage 1's own object, not a
+ * copy: that is what makes Stage 1 the implementation rather than a reference we compare against.
  */
-export async function swapMath(ctx: StepCtx): Promise<StepReport> {
+export const REFERENCE_REEXPORTS = [
+  // status, deadlines and accrual
+  'isTerminal', 'deadlineSeconds', 'graceSeconds', 'noticeSeconds', 'countdown', 'nextExpectedPeriod', 'earliestUnpaid', 'deriveStatus', 'isLateUnderlying', 'lateDays', 'lateAccrual', 'formalNoticeDue', 'pauseApprovalError',
+  // payout vault
+  'newVaultState', 'capPerUnit', 'capEffWad', 'isCapped', 'vaultReceiveGross', 'settleHolderDelta', 'accumulate',
+  // redemption, tail and extinguishment
+  'hurdlePrice', 'averageAnnualGross', 'redemptionQuote', 'newTailState', 'tailReceive', 'newFinalState', 'finalDistribute',
+  // treasury
+  'MAX_RELEASE_TRANCHES', 'validateReleaseSchedule', 'trancheAmounts', 'vested', 'releasable',
+  // income
+  'owedYtd', 'paymentUsd',
+] as const;
+
+/**
+ * The interim (Part C) math still exported under `interim`, by family. A family is "remaining" while any of its
+ * names is still there; S1 removes all but the auction family (S2) and the FX family (S5).
+ */
+export const INTERIM_FAMILIES: { family: string; names: string[] }[] = [
+  { family: 'fixed point', names: ['WAD', 'BPS', 'assertNonNegative', 'mulDiv', 'wadMul', 'wadDiv', 'wadFromDecimal', 'wadToDecimal', 'bpsOf', 'min', 'max', 'pow', 'wadPow1p'] },
+  { family: 'time and periods', names: ['DAY', 'YEAR_DAYS', 'periodOf', 'periodFrom', 'parsePeriod', 'previousPeriod', 'nextPeriod', 'periodsBetween', 'comparePeriods', 'utcDayIndex', 'daysBetween', 'yearsSince'] },
+  { family: 'payment', names: ['ratePerUnit', 'owedYtd', 'periodPayment', 'toStablecoin', 'quarterPayment'] },
+  { family: 'vault and claims', names: ['perUnitCap', 'applyGrossPayment', 'capRemaining', 'accrueNet', 'claimable', 'rewardDebt', 'payoutFee', 'DEFAULT_PAYOUT_FEE_BPS'] },
+  { family: 'redemption and tail', names: ['hurdlePrice', 'averageAnnualPayout', 'redemptionQuote', 'tailPayoutPerUnit'] },
+  { family: 'status and lateness', names: ['DEFAULT_DUE_DAYS', 'DEFAULT_GRACE_DAYS', 'DEFAULT_FORMAL_NOTICE_DAYS', 'deadlinesFor', 'daysLate', 'lateAccrual', 'periodStanding'] },
+  { family: 'FX (S5)', names: ['DEFAULT_MIN_COVERAGE_BPS', 'quarterAverageRate', 'coverageOk', 'deviationBps', 'withinBand', 'pythToWad'] },
+  { family: 'auction (S2)', names: ['clearAuction', 'walletCapUnits', 'bidDeposit', 'auctionFee', 'DEFAULT_AUCTION_FEE_BPS'] },
+];
+
+/** Interim families with at least one name still exported, with those names; unknown names land in "unclassified". */
+export function interimRemaining(keys: readonly string[] = Object.keys(gateway.interim)): { family: string; names: string[] }[] {
+  const out: { family: string; names: string[] }[] = [];
+  const known = new Set<string>();
+  for (const f of INTERIM_FAMILIES) {
+    for (const n of f.names) known.add(n);
+    const names = f.names.filter((n) => keys.includes(n));
+    if (names.length) out.push({ family: f.family, names });
+  }
+  const other = keys.filter((k) => !known.has(k));
+  if (other.length) out.push({ family: 'unclassified', names: other });
+  return out;
+}
+
+/**
+ * Step 4: check that the math we run is Stage 1's, at the pinned commit.
+ *
+ * `@merces/math` re-exports Stage 1's functions instead of re-implementing them, so a function-by-function parity
+ * comparison would compare Stage 1 with itself (behavioural parity is the vector runner's job). What can go wrong is
+ * the pin and the wiring, and this step checks both:
+ * - the Stage 1 checkout is at the commit the manifest (`stage1.map.json`) pins;
+ * - every name in REFERENCE_REEXPORTS is the identical object exported by the checkout's math package.
+ * "ok" needs both. A drop that names no math package, pins no commit or is not a git checkout cannot be checked
+ * ("warn"); a checkout at another commit, a missing or substituted function, or an unloadable package is "fail".
+ * Writes MATH_PARITY.md (snapshot committed as docs/stage1/MATH_PARITY.md).
+ */
+export async function checkMathPin(ctx: StepCtx): Promise<StepReport> {
   const m = ctx.location.manifest;
   const details: string[] = [];
-  if (!m.math?.package) return { step: 'math', status: 'warn', summary: 'manifest has no math package; keeping the interim implementation', details };
-  const pkg = m.math.package;
+  const remaining = interimRemaining();
+  const pkg = m.math?.package;
+  if (!pkg) {
+    writeParity(ctx, { pkg: null, commit: null, verdict: 'not checked: the manifest names no math package', remaining });
+    return { step: 'math', status: 'warn', summary: 'manifest has no math package; the Stage 1 math pin cannot be checked', details };
+  }
+
+  // the pin
+  const pinned = m.commit ?? null;
+  const head = checkoutHead(ctx.location.root);
+  let pin: 'ok' | 'warn' | 'fail';
+  if (!pinned) {
+    pin = 'warn';
+    details.push('the manifest pins no commit');
+  } else if (!head) {
+    pin = 'warn';
+    details.push(`${ctx.location.root} is not a git checkout; cannot confirm it is at ${pinned}`);
+  } else if (!head.startsWith(pinned)) {
+    pin = 'fail';
+    details.push(`Stage 1 checkout is at ${head.slice(0, 7)} but ${relativeName(ctx)} pins ${pinned}`);
+  } else {
+    pin = 'ok';
+    details.push(`Stage 1 checkout at ${head.slice(0, 7)} = pinned ${pinned}`);
+  }
+
+  // the wiring
   const entry = resolveMathEntry(ctx.location.root, pkg);
-  if ('error' in entry) return { step: 'math', status: 'fail', summary: entry.error, details };
+  if ('error' in entry) {
+    writeParity(ctx, { pkg, commit: head ?? pinned, verdict: `not checked: ${entry.error}`, remaining });
+    return { step: 'math', status: 'fail', summary: entry.error, details };
+  }
   let mod: Record<string, unknown>;
   try {
     mod = (await import(entry.specifier)) as Record<string, unknown>;
   } catch (e) {
-    return { step: 'math', status: 'fail', summary: `cannot load Stage 1 math ${pkg}: ${(e as Error).message}`, details };
+    const why = `cannot load Stage 1 math ${pkg}: ${(e as Error).message}`;
+    writeParity(ctx, { pkg, commit: head ?? pinned, verdict: `not checked: ${why}`, remaining });
+    return { step: 'math', status: 'fail', summary: why, details };
   }
-  const adapter = (mod.mercesMath ?? (typeof mod.default === 'object' ? mod.default : undefined)) as MercesMath | undefined;
-  if (!adapter) return compareFunctionByFunction(ctx, pkg, mod);
-  const theirs: MercesMath = adapter;
-  const missingFns = (Object.keys(interimMath) as (keyof MercesMath)[]).filter((k) => typeof theirs[k] !== 'function');
-  if (missingFns.length) details.push(`Stage 1 math lacks: ${missingFns.join(', ')} (adapter needed)`);
+  const ours = gateway as unknown as Record<string, unknown>;
+  const missing = REFERENCE_REEXPORTS.filter((n) => !(n in mod));
+  const substituted = REFERENCE_REEXPORTS.filter((n) => n in mod && ours[n] !== mod[n]);
+  const identical = REFERENCE_REEXPORTS.length - missing.length - substituted.length;
+  details.push(`${identical}/${REFERENCE_REEXPORTS.length} re-exports are Stage 1's own objects`);
+  if (missing.length) details.push(`Stage 1 ${pkg} no longer exports: ${missing.join(', ')}`);
+  if (substituted.length) details.push(`@merces/math exports a different object than Stage 1 for: ${substituted.join(', ')}`);
+  details.push(`interim families remaining: ${remaining.map((f) => f.family).join(', ') || 'none'}`);
 
-  const vectorsPath = stage1Path(ctx.location, m.vectors);
-  let compared = 0;
-  let disagreements = 0;
-  const lines: string[] = ['# MATH_PARITY.md', '', `Stage 1 math: ${pkg}`, ''];
-  if (vectorsPath && existsSync(vectorsPath) && statSync(vectorsPath).isFile()) {
-    const raw = JSON.parse(readFileSync(vectorsPath, 'utf8')) as { math?: { fn: keyof MercesMath; args: unknown[]; expect: unknown }[] };
-    for (const v of raw.math ?? []) {
-      compared++;
-      const args = v.args.map(decodeArg);
-      const ours = safe(() => (interimMath[v.fn] as (...a: unknown[]) => unknown)(...args));
-      const stage1 = typeof theirs[v.fn] === 'function' ? safe(() => (theirs[v.fn] as (...a: unknown[]) => unknown)(...args)) : 'absent';
-      const o = canon(ours);
-      const t = canon(stage1);
-      const e = canon(v.expect);
-      if (o !== e || t !== e) {
-        disagreements++;
-        lines.push(`- DISAGREE ${String(v.fn)}(${v.args.join(', ')}): expected ${e}, interim ${o}, stage1 ${t}`);
-      }
-    }
-    lines.push('', `${compared} vector(s), ${disagreements} disagreement(s).`);
-  } else {
-    lines.push('No math vectors found; parity unproven.');
+  const wired = missing.length === 0 && substituted.length === 0;
+  const commit = (head ?? pinned ?? 'unknown').slice(0, 7);
+  writeParity(ctx, {
+    pkg,
+    commit,
+    verdict: wired ? `imported at ${commit}` : `NOT imported faithfully at ${commit} (${[...missing.map((n) => `${n} missing`), ...substituted.map((n) => `${n} substituted`)].join(', ')})`,
+    remaining,
+    identical,
+  });
+  if (!wired || pin === 'fail') {
+    return { step: 'math', status: 'fail', summary: !wired ? 'Stage 1 math is not what @merces/math re-exports (see MATH_PARITY.md)' : 'Stage 1 checkout is not at the pinned commit', details };
   }
-  writeFileSync(join(ctx.outDir, 'MATH_PARITY.md'), lines.join('\n') + '\n');
-  details.push(`${compared} vector(s) compared, ${disagreements} disagreement(s)`);
-  if (missingFns.length === 0 && compared > 0 && disagreements === 0) {
-    details.push(`${pkg} is eligible to replace the interim library; not wired at runtime (services still use the interim math)`);
-    return { step: 'math', status: 'ok', summary: 'parity proven; Stage 1 math eligible to replace the interim library (not wired at runtime)', details };
+  if (pin === 'warn') return { step: 'math', status: 'warn', summary: 'Stage 1 math wired through @merces/math; the pin could not be checked', details };
+  return { step: 'math', status: 'ok', summary: `Stage 1 math imported at ${commit}; @merces/math re-exports Stage 1's own functions`, details };
+}
+
+function relativeName(ctx: StepCtx): string {
+  return ctx.location.kind === 'map' ? 'stage1.map.json' : 'the Stage 1 manifest';
+}
+
+/** HEAD of the git checkout rooted exactly at `root` (null when `root` is not the top of a checkout, or no git). */
+function checkoutHead(root: string): string | null {
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  try {
+    if (realpathSync(git('rev-parse', '--show-toplevel')) !== realpathSync(root)) return null;
+    return git('rev-parse', 'HEAD');
+  } catch {
+    return null;
   }
-  return { step: 'math', status: disagreements > 0 ? 'fail' : 'warn', summary: disagreements > 0 ? 'math disagreement (see MATH_PARITY.md)' : 'parity unproven; interim math kept', details };
+}
+
+function writeParity(ctx: StepCtx, r: { pkg: string | null; commit: string | null; verdict: string; remaining: { family: string; names: string[] }[]; identical?: number }): void {
+  const families = r.remaining.map((f) => f.family).join(', ') || 'none';
+  const lines = [
+    '# MATH_PARITY.md',
+    '',
+    r.verdict.startsWith('imported at ') ? `Stage 1 math ${r.verdict}; interim families remaining: ${families}.` : `Stage 1 math ${r.verdict}. Interim families remaining: ${families}.`,
+    '',
+    `- Stage 1 math package: ${r.pkg ?? '(none named)'}${r.commit ? ` at ${r.commit}` : ''}.`,
+  ];
+  if (r.identical !== undefined) {
+    lines.push(`- \`@merces/math\` re-exports ${REFERENCE_REEXPORTS.length} Stage 1 reference names (status, vault, redemption, treasury, income); ${r.identical} are Stage 1's own objects. It also re-exports \`@merces/sdk\`'s fixed point, periods, pauses, year ring, parameters and error names.`);
+  }
+  lines.push(
+    '- No function-by-function comparison: the gateway runs Stage 1\'s functions, so comparing them would compare Stage 1 with itself. Behavioural parity is measured by the Stage 1 vector runner (`VECTOR_PARITY.md`). The last comparison of the interim math against Stage 1 (6 of 12 families disagreeing) is in this file\'s git history.',
+    '- The interim (Part C) math survives only under `interim.*` until each caller moves to Stage 1; S1 removes all of it except the auction family (S2) and the FX family (S5).',
+    '',
+  );
+  if (r.remaining.length) {
+    lines.push('| Interim family | Names still exported under `interim` |', '| --- | --- |');
+    for (const f of r.remaining) lines.push(`| ${f.family} | ${f.names.map((n) => `\`${n}\``).join(', ')} |`);
+    lines.push('');
+  }
+  writeFileSync(join(ctx.outDir, 'MATH_PARITY.md'), lines.join('\n'));
 }
 
 /**
@@ -90,51 +193,4 @@ export function resolveMathEntry(root: string, pkg: string): { specifier: string
     return { error: `Stage 1 math ${pj.name ?? pkg} is not built (${rel} missing): run \`pnpm install && pnpm -r --filter '${pj.name ?? pkg}...' build\` in the Stage 1 checkout` };
   }
   return { specifier: pathToFileURL(file).href };
-}
-
-/** Stage 1 ships its own function shapes, not a `MercesMath` object: compare family by family (stage1-math.ts). */
-function compareFunctionByFunction(ctx: StepCtx, pkg: string, mod: Record<string, unknown>): StepReport {
-  const r = compareStage1Math(mod);
-  writeFileSync(join(ctx.outDir, 'MATH_PARITY.md'), renderStage1Math(pkg, r));
-  const compared = r.families.filter((f) => f.cases > 0);
-  const disagreeing = compared.filter((f) => f.disagreements > 0);
-  const details = [
-    `${compared.length} function famil${compared.length === 1 ? 'y' : 'ies'} compared on ${compared.reduce((a, f) => a + f.cases, 0)} input(s); ${disagreeing.length} disagree (see MATH_PARITY.md)`,
-    ...disagreeing.map((f) => `${f.name}: ${f.disagreements}/${f.cases} disagree (ours \`${f.ours}\`, Stage 1 \`${f.stage1}\`)`),
-    ...(r.missing.length ? [`Stage 1 lacks: ${r.missing.join(', ')}`] : []),
-  ];
-  if (disagreeing.length) return { step: 'math', status: 'fail', summary: `math disagreement in ${disagreeing.length} famil${disagreeing.length === 1 ? 'y' : 'ies'} (Stage 1 wins; see MATH_PARITY.md)`, details };
-  if (r.missing.length || compared.length === 0) return { step: 'math', status: 'warn', summary: 'parity unproven; interim math kept', details };
-  return { step: 'math', status: 'ok', summary: 'every compared family agrees with Stage 1; interim math kept until the vectors replay', details };
-}
-
-/**
- * Canonical form for comparison: bigints and numbers as decimal strings, object keys sorted, arrays in order.
- * String() would turn every object into "[object Object]" and let any two objects agree.
- */
-export function canon(x: unknown): string {
-  return JSON.stringify(x, (_k, v: unknown) => {
-    if (typeof v === 'bigint' || typeof v === 'number') return v.toString();
-    if (v && typeof v === 'object' && !Array.isArray(v)) return Object.fromEntries(Object.keys(v).sort().map((k) => [k, (v as Record<string, unknown>)[k]]));
-    return v;
-  }) ?? 'undefined';
-}
-
-function safe(fn: () => unknown): unknown {
-  try {
-    return fn();
-  } catch (e) {
-    return `throws(${(e as Error).message})`;
-  }
-}
-
-/**
- * Vector arguments carry bigints as decimal strings, at any depth (clearAuction, quarterPayment and friends take
- * objects). Decode them recursively; JSON numbers stay numbers so integer-typed fields keep their type.
- */
-export function decodeArg(a: unknown): unknown {
-  if (typeof a === 'string') return /^-?\d+$/.test(a) ? BigInt(a) : a;
-  if (Array.isArray(a)) return a.map(decodeArg);
-  if (a && typeof a === 'object') return Object.fromEntries(Object.entries(a).map(([k, v]) => [k, decodeArg(v)]));
-  return a;
 }

@@ -1,5 +1,5 @@
 import { ChainError, DEFAULTS, type Command } from '@merces/domain';
-import { coverageOk, parsePeriod, quarterAverageRate, utcDayIndex } from '@merces/math';
+import { interim, parsePeriod, utcDayIndex } from '@merces/math';
 import { big, str, type EngineCore, type Emit } from './core.ts';
 
 // ------------------------------------------------------------------ rate accumulator
@@ -36,9 +36,9 @@ export function quarterRate(e: EngineCore, pair: string, periodId: string): { av
   const sumEnd = upTo?.cumSumWad ?? 0n;
   const countEnd = upTo?.cumCount ?? 0;
   const n = countEnd - countStart;
-  const cov = coverageOk(n, per.days, BigInt(DEFAULTS.minCoverageBps));
+  const cov = interim.coverageOk(n, per.days, BigInt(DEFAULTS.minCoverageBps));
   const needsFallback = !cov || flag !== null;
-  return { avgWad: n > 0 ? quarterAverageRate(sumEnd, sumStart, countEnd, countStart) : null, snapshots: n, days: per.days, coverageOk: cov, needsFallback, reason: flag ?? (cov ? null : 'coverage') };
+  return { avgWad: n > 0 ? interim.quarterAverageRate(sumEnd, sumStart, countEnd, countStart) : null, snapshots: n, days: per.days, coverageOk: cov, needsFallback, reason: flag ?? (cov ? null : 'coverage') };
 }
 export function flagFxFallback(e: EngineCore, cmd: Extract<Command, { kind: 'flagFxFallback' }>, now: number, emit: Emit): void {
   const per = parsePeriod(cmd.periodId);

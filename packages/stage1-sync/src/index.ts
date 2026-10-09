@@ -31,8 +31,8 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
   steps.push(await generateClients(ctx));
   const { diffInterfaces } = await import('./steps/diff.ts');
   steps.push(await diffInterfaces(ctx));
-  const { swapMath } = await import('./steps/math.ts');
-  steps.push(await swapMath(ctx));
+  const { checkMathPin } = await import('./steps/math.ts');
+  steps.push(await checkMathPin(ctx));
   const { replayVectors } = await import('./steps/vectors.ts');
   steps.push(await replayVectors(ctx));
   const { runConformance } = await import('./steps/conformance.ts');

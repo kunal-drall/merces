@@ -1,5 +1,5 @@
 import { AppError, audit } from '@merces/core';
-import { walletCapUnits } from '@merces/math';
+import { interim } from '@merces/math';
 import type { UnsignedTx } from '@merces/domain';
 import type { DexPort, MeteoraPort } from '@merces/ports';
 import type { Session } from '@merces/api';
@@ -16,7 +16,7 @@ export const CURVE_NOTICE =
 
 /** The bonding-phase wallet cap for a series, and whether it still applies (it ends at graduation). */
 function walletCapView(series: { status: string; phase: string; terms: { unitsOffered: string; walletCapBps: number | string } }, graduated: boolean): { bps: number; units: string; enforced: boolean; note: string } {
-  const units = walletCapUnits(BigInt(series.terms.unitsOffered), BigInt(series.terms.walletCapBps)).toString();
+  const units = interim.walletCapUnits(BigInt(series.terms.unitsOffered), BigInt(series.terms.walletCapBps)).toString();
   if (!graduated && (['Retired', 'Redeemed', 'Extinguished'].includes(series.status) || series.phase === 'Cancelled' || series.phase === 'Failed'))
     return { bps: Number(series.terms.walletCapBps), units, enforced: false, note: 'Curve buys are closed and this curve will not graduate.' };
   return {

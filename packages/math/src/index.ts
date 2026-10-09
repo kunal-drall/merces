@@ -1,99 +1,132 @@
 /**
- * @merces/math — interim reference implementation of the Mercery mechanism math (Part C).
+ * @merces/math — the one gateway to Stage 1's mechanism math (SPEC v1.1.2).
  *
- * Stage 1 will deliver its own reference math library. `stage1:sync` compares it against this one on every
- * parity vector and reports whether it is eligible to replace this one. Nothing swaps it in at runtime yet:
- * services, the simulator, the indexer and the keepers import the named functions below directly, and nothing
- * reads `math`/`selectMath()`. Wiring a replacement means routing those calls through `math` and making every
- * process select the same implementation at startup.
+ * Product code imports Stage 1 math only through the named re-exports below (`@merces/sdk` and `@merces/reference`,
+ * the `stage1` submodule's own packages): they are Stage 1's function objects, not copies, so a Stage 1 change
+ * arrives with the submodule bump. `stage1:sync`'s math step (`checkMathPin`) checks both the pin and that identity.
+ *
+ * Beside them sit the few helpers Stage 1 has no counterpart for: the `"YYYYQn"` period codec, decimal parsing, the
+ * term builder's per-unit rate, a value-free payment wrapper, deadline projection and a display cap.
+ *
+ * The interim Merces math (Part C) survives only under `interim.*` until each caller moves to Stage 1's functions;
+ * at the end of S1 it keeps only the auction family (S2) and the FX family (S5).
  */
-import * as fixed from './fixed.ts';
-import * as time from './time.ts';
-import * as payment from './payment.ts';
-import * as fees from './fees.ts';
-import * as cap from './cap.ts';
-import * as redemption from './redemption.ts';
-import * as lateness from './lateness.ts';
-import * as fx from './fx.ts';
-import * as auction from './auction.ts';
+export * as interim from './interim/index.ts';
 
-export * from './fixed.ts';
-export * from './time.ts';
-export * from './payment.ts';
-export * from './fees.ts';
-export * from './cap.ts';
-export * from './redemption.ts';
-export * from './lateness.ts';
-export * from './fx.ts';
-export * from './auction.ts';
+// ---------------------------------------------------------------- Stage 1 client helpers (@merces/sdk)
+export {
+  // fixed point (SPEC §1.1)
+  WAD,
+  BPS_DENOMINATOR,
+  mulDiv,
+  mulDivCeil,
+  ceilDiv,
+  wadMul,
+  wadDiv,
+  bpsOf,
+  // time and periods (SPEC §1.2); Stage 1's `periodOf(ts: bigint): pid` is `pidAt` here
+  DAY,
+  YEAR,
+  periodStart,
+  periodEnd,
+  quarterIndex,
+  yearOf,
+  periodLabel,
+  tradingDaysInPeriod,
+  periodOf as pidAt,
+  // hardship pauses (SPEC §6.4)
+  unpaused,
+  isPausedAt,
+  pausedWithin,
+  type Pause,
+  // tagged year_gross ring (SPEC §6.3)
+  newYearGross,
+  settlementYear,
+  yearGrossAdd,
+  yearGrossGet,
+  type YearGrossRing,
+  // parameters and enumerations (SPEC §1.6, §1.7)
+  DEFAULT_PARAMETERS,
+  PARAMETER_BOUNDS,
+  parametersFromStrings,
+  SeriesStatus,
+  RaiseState,
+  TIER_FLAG,
+  tierEnabled,
+  type Parameters,
+  // canonical error names (SPEC §11)
+  ERRORS,
+  ERROR_ALIASES,
+  isErrorName,
+  type ErrorName,
+  // other
+  U64_MAX,
+  ZERO_INCOME_COMMITMENT,
+  bytes32ToField,
+  fieldToBytes32,
+} from '@merces/sdk';
 
-/** The surface Stage 1's library must satisfy to be swapped in. Kept to the money-relevant functions. */
-export interface MercesMath {
-  ratePerUnit: typeof payment.ratePerUnit;
-  owedYtd: typeof payment.owedYtd;
-  periodPayment: typeof payment.periodPayment;
-  toStablecoin: typeof payment.toStablecoin;
-  quarterPayment: typeof payment.quarterPayment;
-  auctionFee: typeof fees.auctionFee;
-  payoutFee: typeof fees.payoutFee;
-  perUnitCap: typeof cap.perUnitCap;
-  applyGrossPayment: typeof cap.applyGrossPayment;
-  capRemaining: typeof cap.capRemaining;
-  accrueNet: typeof cap.accrueNet;
-  claimable: typeof cap.claimable;
-  rewardDebt: typeof cap.rewardDebt;
-  hurdlePrice: typeof redemption.hurdlePrice;
-  redemptionQuote: typeof redemption.redemptionQuote;
-  tailPayoutPerUnit: typeof redemption.tailPayoutPerUnit;
-  lateAccrual: typeof lateness.lateAccrual;
-  deadlinesFor: typeof lateness.deadlinesFor;
-  quarterAverageRate: typeof fx.quarterAverageRate;
-  coverageOk: typeof fx.coverageOk;
-  deviationBps: typeof fx.deviationBps;
-  clearAuction: typeof auction.clearAuction;
-  walletCapUnits: typeof auction.walletCapUnits;
-}
+// ---------------------------------------------------------------- Stage 1 reference math (@merces/reference)
+// Not re-exported: Stage 1's positional `quarterPayment(r, N, θ, x, prior)` (θ third; use `paymentStable`) and
+// `walletCapUnits` (the auction family moves in S2).
+export {
+  // status, deadlines and accrual (SPEC v1.1 §6.4)
+  isTerminal,
+  deadlineSeconds,
+  graceSeconds,
+  noticeSeconds,
+  countdown,
+  nextExpectedPeriod,
+  earliestUnpaid,
+  deriveStatus,
+  isLateUnderlying,
+  lateDays,
+  lateAccrual,
+  formalNoticeDue,
+  pauseApprovalError,
+  type StatusParams,
+  type LedgerClock,
+  type PauseBounds,
+  // payout vault (SPEC v1.1 §6.3)
+  newVaultState,
+  capPerUnit,
+  capEffWad,
+  isCapped,
+  vaultReceiveGross,
+  settleHolderDelta,
+  accumulate,
+  type VaultState,
+  type ReceiveResult,
+  // redemption, tail and extinguishment (SPEC v1.1 §6.7–§6.9)
+  hurdlePrice,
+  averageAnnualGross,
+  redemptionQuote,
+  newTailState,
+  tailReceive,
+  newFinalState,
+  finalDistribute,
+  type HurdleResult,
+  type RedemptionInputs,
+  type RedemptionQuote,
+  type TailState,
+  type TailReceiveResult,
+  type FinalState,
+  // treasury (SPEC v1.1 §5.3)
+  MAX_RELEASE_TRANCHES,
+  validateReleaseSchedule,
+  trancheAmounts,
+  vested,
+  releasable,
+  type ReleaseTranche,
+  // income (SPEC §8)
+  owedYtd,
+  paymentUsd,
+} from '@merces/reference';
 
-export const interimMath: MercesMath = {
-  ratePerUnit: payment.ratePerUnit,
-  owedYtd: payment.owedYtd,
-  periodPayment: payment.periodPayment,
-  toStablecoin: payment.toStablecoin,
-  quarterPayment: payment.quarterPayment,
-  auctionFee: fees.auctionFee,
-  payoutFee: fees.payoutFee,
-  perUnitCap: cap.perUnitCap,
-  applyGrossPayment: cap.applyGrossPayment,
-  capRemaining: cap.capRemaining,
-  accrueNet: cap.accrueNet,
-  claimable: cap.claimable,
-  rewardDebt: cap.rewardDebt,
-  hurdlePrice: redemption.hurdlePrice,
-  redemptionQuote: redemption.redemptionQuote,
-  tailPayoutPerUnit: redemption.tailPayoutPerUnit,
-  lateAccrual: lateness.lateAccrual,
-  deadlinesFor: lateness.deadlinesFor,
-  quarterAverageRate: fx.quarterAverageRate,
-  coverageOk: fx.coverageOk,
-  deviationBps: fx.deviationBps,
-  clearAuction: auction.clearAuction,
-  walletCapUnits: auction.walletCapUnits,
-};
-
-let selected: MercesMath = interimMath;
-let selectedName = 'interim';
-
-/** Swap the implementation behind `math`. Affects only `math.<fn>()` callers in this process (there are none yet). */
-export function selectMath(impl: MercesMath, name: string): void {
-  selected = impl;
-  selectedName = name;
-}
-export function selectedMathName(): string {
-  return selectedName;
-}
-/** The implementation chosen by `selectMath()` (interim by default). */
-export const math: MercesMath = new Proxy({} as MercesMath, {
-  get: (_t, prop) => (selected as unknown as Record<string | symbol, unknown>)[prop],
-}) as MercesMath;
-
-export { fixed, time };
+// ---------------------------------------------------------------- ours (no Stage 1 counterpart)
+export { type Period, periodOf, periodOfPid, periodFrom, parsePeriod, periodsBetween, toPid, fromPid } from './periods.ts';
+export { wadFromDecimal, wadToDecimal, utcDayIndex } from './decimal.ts';
+export { ratePerUnit } from './rate.ts';
+export { paymentStable, PAYMENT_RANGE_ERROR, type PaymentInputs } from './payment.ts';
+export { statusParamsOf, projectDeadlines, standingOf, type StatusTerms, type ProjectedDeadlines, type Standing } from './status.ts';
+export { capRemaining } from './cap.ts';

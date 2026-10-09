@@ -1,14 +1,14 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { adminCommands, eventPayloads, routerCommands, serviceCommands, userCommands } from '@merces/domain';
-import { interimMath, selectedMathName } from '@merces/math';
+import { interim } from '@merces/math';
 import { renderReport, runSync, verdictsFrom, type StepReport } from '../src/index.ts';
 import { renderAnchorIdl } from '../src/idl-render.ts';
-import { canon, decodeArg } from '../src/steps/math.ts';
 import { diffInterfaces } from '../src/steps/diff.ts';
-import { swapMath } from '../src/steps/math.ts';
+import { INTERIM_FAMILIES, REFERENCE_REEXPORTS, checkMathPin, interimRemaining } from '../src/steps/math.ts';
 import { locateStage1 } from '@merces/chains';
 
 /** A Stage 1 drop with only a manifest (plus extra files written by the caller). */
@@ -166,18 +166,6 @@ describe('stage1:sync', () => {
     expect(v.find((x) => x.chain === 'solana')!.blockers).toContain('conformance: did not run on solana');
   });
 
-  it('math vectors decode bigints at any depth, so object-argument functions can be compared', async () => {
-    const params = { bids: [{ bidder: 'a', pricePerUnit: 10_000_000n, quantity: 100n, order: 0 }, { bidder: 'b', pricePerUnit: 9_000_000n, quantity: 300n, order: 1 }], unitsOffered: 300n, reservePrice: 8_000_000n, minimumRaise: 1_000_000_000n, walletCapUnits: 300n, auctionFeeBps: 100n };
-    const asJson = JSON.parse(JSON.stringify(params, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))) as unknown;
-    expect(decodeArg(asJson)).toEqual(params);
-    const expected = JSON.parse(canon(interimMath.clearAuction(params))) as unknown;
-    (globalThis as Record<string, unknown>).__mercesInterimForTest = interimMath;
-    const vectors = JSON.stringify({ math: [{ fn: 'clearAuction', args: [asJson], expect: expected }] });
-    const same = drop({ math: { package: './fake-math.mjs' }, vectors: 'vectors.json' }, { 'fake-math.mjs': 'export const mercesMath = { ...globalThis.__mercesInterimForTest };', 'vectors.json': vectors });
-    const r = await swapMath(same);
-    expect(r.status, readFileSync(join(same.outDir, 'MATH_PARITY.md'), 'utf8')).toBe('ok');
-  });
-
   it('verdict is ready only when diff and conformance are ok', () => {
     const step = (name: string, status: StepReport['status'], details: string[] = []): StepReport => ({ step: name, status, summary: name, details });
     const base = [step('detect', 'ok'), step('generate', 'ok'), step('math', 'warn'), step('vectors', 'ok')];
@@ -189,26 +177,53 @@ describe('stage1:sync', () => {
     expect(verdictsFrom([...base, step('diff', 'ok')], loc)[0]!.blockers).toContain('conformance: did not run');
   });
 
-  it('math parity compares whole results, so a wrong object result is a disagreement', async () => {
-    const args = ['1000000', '100', '0', '1000000000000000000000'];
-    const expected = JSON.parse(canon(interimMath.applyGrossPayment(...(args.map(BigInt) as [bigint, bigint, bigint, bigint])))) as unknown;
-    const stage1Module = `const m = globalThis.__mercesInterimForTest;
-export const mercesMath = { ...m, applyGrossPayment: () => ({ accepted: 999999999n, refund: 0n, capReached: true }) };`;
-    (globalThis as Record<string, unknown>).__mercesInterimForTest = interimMath;
-    const vectors = JSON.stringify({ math: [{ fn: 'applyGrossPayment', args, expect: expected }] });
-    const bad = drop({ math: { package: './fake-math.mjs' }, vectors: 'vectors.json' }, { 'fake-math.mjs': stage1Module, 'vectors.json': vectors });
-    const r = await swapMath(bad);
+  it('math: ok on the pinned submodule, where every re-export is Stage 1\'s own function', async () => {
+    const location = locateStage1('stage1')!;
+    const pinned = location.manifest.commit!;
+    const outDir = mkdtempSync(join(tmpdir(), 'out-'));
+    const r = await checkMathPin({ location, outDir, generatedDir: mkdtempSync(join(tmpdir(), 'gen-')) });
+    expect(r.status, r.details.join('\n')).toBe('ok');
+    expect(r.details).toContain(`${REFERENCE_REEXPORTS.length}/${REFERENCE_REEXPORTS.length} re-exports are Stage 1's own objects`);
+    const md = readFileSync(join(outDir, 'MATH_PARITY.md'), 'utf8');
+    expect(md).toMatch(new RegExp(`^Stage 1 math imported at ${pinned}; interim families remaining: .*auction \\(S2\\)`, 'm'));
+  });
+
+  it('math: a substituted function, a missing export or another commit fails; an unpinned drop only warns', async () => {
+    // a math package whose functions are not Stage 1's own objects (a re-implementation, however faithful)
+    const fake = 'export const deriveStatus = () => 0;\nexport const owedYtd = () => 0n;\n';
+    const sub = drop({ commit: 'abc', math: { package: './fake-math.mjs' } }, { 'fake-math.mjs': fake });
+    const r = await checkMathPin(sub);
     expect(r.status).toBe('fail');
-    expect(readFileSync(join(bad.outDir, 'MATH_PARITY.md'), 'utf8')).toMatch(/DISAGREE applyGrossPayment/);
-    // the same vector against a faithful library proves parity, which is reported as eligibility, not a swap
-    const good = drop({ math: { package: './fake-math.mjs' }, vectors: 'vectors.json' }, { 'fake-math.mjs': 'export const mercesMath = { ...globalThis.__mercesInterimForTest };', 'vectors.json': vectors });
-    const ok = await swapMath(good);
-    expect(ok.status).toBe('ok');
-    expect(ok.summary).toMatch(/eligible.*not wired at runtime/);
-    expect(ok.summary).not.toMatch(/selected|switched/);
-    expect(selectedMathName()).toBe('interim');
-    expect(canon({ b: 1n, a: [2, '3'] })).toBe(canon({ a: ['2', 3n], b: '1' }));
-    expect(canon({ a: 1n })).not.toBe(canon({ a: 1n, b: 0n }));
+    expect(r.details.join('\n')).toMatch(/different object than Stage 1 for: .*deriveStatus/);
+    expect(r.details.join('\n')).toMatch(/no longer exports: .*capPerUnit/);
+    expect(r.details.join('\n')).toMatch(/not a git checkout/);
+    expect(readFileSync(join(sub.outDir, 'MATH_PARITY.md'), 'utf8')).toMatch(/NOT imported faithfully/);
+    // a git checkout at another commit than the manifest pins
+    const moved = drop({ commit: '0000000', math: { package: './fake-math.mjs' } }, { 'fake-math.mjs': fake });
+    const git = (...a: string[]) => execFileSync('git', ['-C', moved.location.root, ...a], { stdio: 'ignore' });
+    git('init', '-q');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'x');
+    const m = await checkMathPin(moved);
+    expect(m.status).toBe('fail');
+    expect(m.details.join('\n')).toMatch(/checkout is at [0-9a-f]{7} but the Stage 1 manifest pins 0000000/);
+    // nothing to check: no math package
+    const none = await checkMathPin(drop({ commit: 'abc' }));
+    expect(none.status).toBe('warn');
+  });
+
+  it('math: interim families are reported from what `interim` still exports', () => {
+    const all = interimRemaining();
+    // every interim name belongs to a family; the auction (S2) and FX (S5) families outlive S1
+    expect(all.find((f) => f.family === 'unclassified')).toBeUndefined();
+    expect(all.map((f) => f.family)).toEqual(expect.arrayContaining(['FX (S5)', 'auction (S2)']));
+    expect(INTERIM_FAMILIES.flatMap((f) => f.names).filter((n, i, a) => a.indexOf(n) !== i)).toEqual([]);
+    expect(Object.keys(interim)).toContain('clearAuction');
+    expect(interimRemaining(['clearAuction', 'pythToWad', 'min', 'somethingNew'])).toEqual([
+      { family: 'fixed point', names: ['min'] },
+      { family: 'FX (S5)', names: ['pythToWad'] },
+      { family: 'auction (S2)', names: ['clearAuction'] },
+      { family: 'unclassified', names: ['somethingNew'] },
+    ]);
   });
 
   it('renders an Anchor IDL into a typed module', () => {

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AppError, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import { ChainError, bidCommitment, type UnsignedTx } from '@merces/domain';
-import { bidDeposit, clearAuction, walletCapUnits } from '@merces/math';
+import { interim } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -34,11 +34,11 @@ export class AuctionService {
     const price = BigInt(input.pricePerUnit);
     const qty = BigInt(input.quantity);
     if (price < BigInt(s.terms.reservePrice)) issues.push({ code: 'reserve', message: `price is below the reserve ${s.terms.reservePrice}` });
-    const cap = walletCapUnits(BigInt(s.terms.unitsOffered), BigInt(s.terms.walletCapBps));
+    const cap = interim.walletCapUnits(BigInt(s.terms.unitsOffered), BigInt(s.terms.walletCapBps));
     if (qty > cap) issues.push({ code: 'wallet-cap', message: `quantity exceeds the per-wallet cap of ${cap} units (${s.terms.walletCapBps} bps)` });
     if (qty <= 0n) issues.push({ code: 'quantity', message: 'quantity must be positive' });
     if (await chain.getBid(seriesId, input.bidder)) issues.push({ code: 'duplicate', message: 'this wallet already committed a bid' });
-    const deposit = bidDeposit(price, qty, BigInt(s.terms.auctionFeeBps));
+    const deposit = interim.bidDeposit(price, qty, BigInt(s.terms.auctionFeeBps));
     const balance = BigInt(await chain.getBalance(input.bidder, s.terms.stablecoin));
     if (balance < deposit) issues.push({ code: 'balance', message: `deposit ${deposit} exceeds balance ${balance}` });
     return { ok: issues.length === 0, issues, deposit: deposit.toString(), walletCapUnits: cap.toString(), fee: (deposit - price * qty).toString(), commitEndsAt: auction?.commitEndsAt ?? null, revealEndsAt: auction?.revealEndsAt ?? null };
@@ -107,7 +107,7 @@ export class AuctionService {
     // settlement drops revealed bids whose bidder has since left the allowlist; the projection must do the same
     const allowed = await Promise.all(bids.map((b) => (b.revealed ? chain.isAllowlisted(b.bidder) : false)));
     const revealed = bids.filter((b, i) => b.revealed && allowed[i]).map((b) => ({ bidder: b.bidder, pricePerUnit: BigInt(b.revealed!.pricePerUnit), quantity: BigInt(b.revealed!.quantity), order: b.order }));
-    const res = clearAuction({ bids: revealed, unitsOffered: BigInt(s.terms.unitsOffered), reservePrice: BigInt(s.terms.reservePrice), minimumRaise: BigInt(s.terms.minimumRaise), walletCapUnits: walletCapUnits(BigInt(s.terms.unitsOffered), BigInt(s.terms.walletCapBps)), auctionFeeBps: BigInt(s.terms.auctionFeeBps) });
+    const res = interim.clearAuction({ bids: revealed, unitsOffered: BigInt(s.terms.unitsOffered), reservePrice: BigInt(s.terms.reservePrice), minimumRaise: BigInt(s.terms.minimumRaise), walletCapUnits: interim.walletCapUnits(BigInt(s.terms.unitsOffered), BigInt(s.terms.walletCapBps)), auctionFeeBps: BigInt(s.terms.auctionFeeBps) });
     const settleDue = s.phase === 'Open' && a.revealEndsAt !== null && now >= a.revealEndsAt;
     return {
       seriesId, phase: s.phase, bidCount: a.bidCount, revealedCount: a.revealedCount, settleDue,

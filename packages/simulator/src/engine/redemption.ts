@@ -1,5 +1,5 @@
 import { ChainError, DEFAULTS, type Command } from '@merces/domain';
-import { WAD, claimable, mulDiv, payoutFee, redemptionQuote, rewardDebt } from '@merces/math';
+import { interim, WAD } from '@merces/math';
 import type { SimPeriod, SimPosition, SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { burn, settlePosition } from './holders.ts';
@@ -21,7 +21,7 @@ export function annualGrossPerUnit(s: SimSeries, now: number): bigint[] {
 
 // ------------------------------------------------------------------ redemption
 export function quote(s: SimSeries, now: number) {
-  return redemptionQuote({ capPerUnit: s.capPerUnit!, paidPerUnitWad: s.paidPerUnitWad, issuePrice: s.issuePrice!, hurdleWad: s.terms.hurdleWad, payoutMultipleK: s.terms.payoutMultipleK, settlementTs: s.settledAt!, nowTs: now, annualGrossPerUnit: annualGrossPerUnit(s, now) });
+  return interim.redemptionQuote({ capPerUnit: s.capPerUnit!, paidPerUnitWad: s.paidPerUnitWad, issuePrice: s.issuePrice!, hurdleWad: s.terms.hurdleWad, payoutMultipleK: s.terms.payoutMultipleK, settlementTs: s.settledAt!, nowTs: now, annualGrossPerUnit: annualGrossPerUnit(s, now) });
 }
 export function redeem(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'redeem' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
@@ -81,12 +81,12 @@ export function payTail(e: EngineCore, s: SimSeries, signer: string, p: SimPerio
   const r = s.redemption!;
   const mint = s.terms.stablecoinMint;
   e.debit(signer, mint, amount);
-  const { fee, net } = payoutFee(amount, s.terms.payoutFeeBps);
+  const { fee, net } = interim.payoutFee(amount, s.terms.payoutFeeBps);
   if (fee > 0n) {
     e.credit(e.state.feeCollector, mint, fee);
     emit('FeeTaken', { seriesId: s.seriesId, kind: 'payout', amount: str(fee), payer: signer });
   }
-  r.accTailNetWad += mulDiv(net, WAD, r.unitsAtRedemption);
+  r.accTailNetWad += interim.mulDiv(net, WAD, r.unitsAtRedemption);
   r.tailPaidPerUnit += amount / r.unitsAtRedemption;
   s.vaultBalance += net;
   s.vaultGrossTotal += amount;
@@ -101,8 +101,8 @@ export function payTail(e: EngineCore, s: SimSeries, signer: string, p: SimPerio
 export function takeTail(_e: EngineCore, s: SimSeries, p: SimPosition): bigint {
   let amount = 0n;
   if (s.redemption && p.redeemedUnits > 0n) {
-    const tail = claimable(p.redeemedUnits, s.redemption.accTailNetWad, p.tailDebt);
-    p.tailDebt = rewardDebt(p.redeemedUnits, s.redemption.accTailNetWad);
+    const tail = interim.claimable(p.redeemedUnits, s.redemption.accTailNetWad, p.tailDebt);
+    p.tailDebt = interim.rewardDebt(p.redeemedUnits, s.redemption.accTailNetWad);
     amount += tail;
   }
   return amount;

@@ -1,4 +1,4 @@
-import { claimable, rewardDebt } from '@merces/math';
+import { interim } from '@merces/math';
 import type { SimPosition, SimSeries } from '../state.ts';
 import { str, type Emit } from './core.ts';
 
@@ -12,13 +12,13 @@ export function position(s: SimSeries, wallet: string): SimPosition {
 }
 /** Settle accrued payouts into `pending` before a unit change, then re-base the debt. */
 export function settlePosition(s: SimSeries, p: SimPosition): void {
-  p.pending += claimable(p.units, s.accNetWad, p.rewardDebt);
-  p.rewardDebt = rewardDebt(p.units, s.accNetWad);
+  p.pending += interim.claimable(p.units, s.accNetWad, p.rewardDebt);
+  p.rewardDebt = interim.rewardDebt(p.units, s.accNetWad);
 }
 export function setUnits(s: SimSeries, p: SimPosition, units: bigint): void {
   settlePosition(s, p);
   p.units = units;
-  p.rewardDebt = rewardDebt(units, s.accNetWad);
+  p.rewardDebt = interim.rewardDebt(units, s.accNetWad);
 }
 /** The units a holder's payouts accrue on. Today every unit, escrowed ones included. */
 export function accrualUnits(_s: SimSeries, p: SimPosition): bigint {

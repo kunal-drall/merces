@@ -3,7 +3,7 @@ import {
   DEFAULTS, attestationMessage, bidCommitment, incomeCommitment, mockProve, termsCommitment,
   type AdminCommand, type ChainPort, type Command, type ReportProof, type SeriesTerms, type Stablecoin, type TxResult, type UserCommand, type VerifierAttestation,
 } from '@merces/domain';
-import { WAD, quarterPayment, ratePerUnit, wadFromDecimal } from '@merces/math';
+import { interim, WAD, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimulatorChain } from './chain.ts';
 import { SimEngine } from './engine.ts';
 import { SimWallet, simAdminWallet } from './wallets.ts';
@@ -145,7 +145,7 @@ export class SimHarness {
   }): { command: Extract<UserCommand, { kind: 'submitReport' }>; paymentStable: bigint; /** offchain only (B7): never part of the command */ source: string } {
     const fx = params.fxAvgWad ?? WAD;
     const rate = ratePerUnit(params.privateTerms.shareRateWad, params.unitsOffered ?? params.unitsOutstanding); // r = s / N, N = units offered (C1)
-    const q = quarterPayment({ ratePerUnitWad: rate, unitsOutstanding: params.unitsOutstanding, incomeYtdPrev: params.incomeYtdPrev, incomeYtdNow: params.incomeYtdNow, threshold: params.privateTerms.threshold, fxAvgWad: fx });
+    const q = interim.quarterPayment({ ratePerUnitWad: rate, unitsOutstanding: params.unitsOutstanding, incomeYtdPrev: params.incomeYtdPrev, incomeYtdNow: params.incomeYtdNow, threshold: params.privateTerms.threshold, fxAvgWad: fx });
     const salt = params.incomeSalt ?? '0x' + '22'.repeat(32);
     const ic = incomeCommitment({ seriesId: params.seriesId, periodId: params.periodId, incomeYtd: params.incomeYtdNow, salt });
     const publicInputs = SimEngine.publicInputs({ termsCommitment: params.termsCommitment, incomeCommitment: ic, unitsOutstanding: params.unitsOutstanding, paymentStable: q.paymentStable, fxAvgWad: fx, periodId: params.periodId });

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_PARAMETERS } from '@merces/math';
 import {
+  DEFAULTS,
   attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseSeriesId, termsCommitment, userCommandSchema,
 } from '../src/index.ts';
@@ -59,5 +61,16 @@ describe('schemas', () => {
     const path = fileURLToPath(new URL('../schema/domain-v0.schema.json', import.meta.url));
     const committed = JSON.parse(readFileSync(path, 'utf8'));
     expect(committed).toEqual(JSON.parse(JSON.stringify(domainJsonSchema())));
+  });
+});
+
+describe('protocol defaults', () => {
+  it('take Stage 1\'s defaults where Stage 1 fixes one', () => {
+    expect(DEFAULTS.lockupSeconds).toBe(47_336_400); // 18 × 30.4375 days
+    expect(DEFAULTS.tailSeconds).toBe(31_536_000); // 365 days
+    expect(DEFAULTS.maxPauseSeconds).toBe(Number(DEFAULT_PARAMETERS.maxPauseSeconds));
+    expect(DEFAULTS.maxCumulativePauseSeconds).toBe(Number(DEFAULT_PARAMETERS.maxCumulativePauseSeconds));
+    expect(DEFAULTS.maxPauses).toBe(16);
+    expect([DEFAULTS.dueDays, DEFAULTS.graceDays, DEFAULTS.formalNoticeDays]).toEqual([DEFAULT_PARAMETERS.reportDueDays, DEFAULT_PARAMETERS.graceDays, DEFAULT_PARAMETERS.formalNoticeDays]);
   });
 });

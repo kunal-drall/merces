@@ -1,7 +1,7 @@
 import type { PoolClient } from '@merces/db';
 import type { DomainEvent, EventPayload } from '@merces/domain';
 import { DEFAULTS } from '@merces/domain';
-import { perUnitCap } from '@merces/math';
+import { interim } from '@merces/math';
 
 type P<T extends DomainEvent['type']> = EventPayload<T>;
 
@@ -106,7 +106,7 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       const p = e.payload as P<'AuctionSettled'>;
       const s = await client.query<{ cap_multiple_wad: string; lockup_seconds: string }>('select cap_multiple_wad, lockup_seconds from series where series_id = $1', [p.seriesId]);
       const row = s.rows[0];
-      const cap = row ? perUnitCap(BigInt(row.cap_multiple_wad), BigInt(p.clearingPrice)).toString() : null;
+      const cap = row ? interim.perUnitCap(BigInt(row.cap_multiple_wad), BigInt(p.clearingPrice)).toString() : null;
       await client.query(
         "update series set phase = 'Settled', settled_at = $2, issue_price = $3, units_sold = $4, units_outstanding = $4, cap_per_unit = $5, treasury_total = $6, lockup_ends_at = $2 + lockup_seconds, last_event_seq = $7 where series_id = $1",
         [p.seriesId, p.settledAt, p.clearingPrice, p.unitsSold, cap, p.proceeds, e.seq],

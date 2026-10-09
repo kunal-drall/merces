@@ -2,7 +2,7 @@ import {
   ChainError, parseSeriesId,
   type Command, type DomainEvent, type EventPayload, type EventType, type ServiceRole, type TxResult,
 } from '@merces/domain';
-import type { Deadlines, Period } from '@merces/math';
+import type { interim, Period } from '@merces/math';
 import type { SimClock } from '../clock.ts';
 import type { SimSeries, SimState } from '../state.ts';
 import { balKey, type EngineCore, type EngineOptions, type Emit } from './core.ts';
@@ -168,7 +168,7 @@ export class SimEngine implements EngineCore {
   accrualNow(s: SimSeries, period: Period, outstanding: bigint, now: number): bigint {
     return accrualNow(s, period, outstanding, now);
   }
-  deadlines(s: SimSeries, period: Period, now: number): Deadlines {
+  deadlines(s: SimSeries, period: Period, now: number): interim.Deadlines {
     return deadlines(s, period, now);
   }
   /** Derive OnTime/InGrace/Late from unsettled completed periods. */

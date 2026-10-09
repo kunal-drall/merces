@@ -1,4 +1,4 @@
-import { pythToWad } from '@merces/math';
+import { interim } from '@merces/math';
 
 /**
  * Price-feed ports (E8, C9). Pyth: shaped after the Hermes REST API / @pythnetwork/hermes-client 3.1.0
@@ -43,8 +43,8 @@ export function pythSymbolFor(pair: string): { symbol: string; inverted: boolean
 }
 
 export function parsedToWad(p: PythParsedPrice, inverted: boolean): { rateWad: bigint; confWad: bigint } {
-  const price = pythToWad(BigInt(p.price.price), p.price.expo);
-  const conf = pythToWad(BigInt(p.price.conf), p.price.expo);
+  const price = interim.pythToWad(BigInt(p.price.price), p.price.expo);
+  const conf = interim.pythToWad(BigInt(p.price.conf), p.price.expo);
   if (!inverted) return { rateWad: price, confWad: conf };
   const WAD = 10n ** 18n;
   const rateWad = (WAD * WAD) / price;

@@ -82,10 +82,15 @@ export class TermsService {
       floorPlaceholder = floor.placeholder;
     }
     if (priv) {
-      const r = units > 0n ? ratePerUnit(wadFromDecimal(priv.shareRate), units) : 0n;
-      ratePerUnitWad = r.toString();
-      if (r <= 0n) issues.push({ field: 'shareRate', code: 'positive', message: 'share rate must be positive' });
-      if (wadFromDecimal(priv.shareRate) > WAD) issues.push({ field: 'shareRate', code: 'max', message: 'share rate cannot exceed 100%' });
+      const share = wadFromDecimal(priv.shareRate);
+      if (share > WAD) {
+        // ratePerUnit enforces SPEC §1.5's r × units ≤ WAD and would refuse it: report the field instead
+        issues.push({ field: 'shareRate', code: 'max', message: 'share rate cannot exceed 100%' });
+      } else {
+        const r = units > 0n ? ratePerUnit(share, units) : 0n;
+        ratePerUnitWad = r.toString();
+        if (r <= 0n) issues.push({ field: 'shareRate', code: 'positive', message: 'share rate must be positive' });
+      }
       if (!floor) issues.push({ field: 'threshold', code: 'no-floor-data', message: `no median-income data for ${pub.country} in ${pub.reportingCurrency}; the floor cannot be checked (ask Kunal for sources)` });
       else if (BigInt(priv.threshold) < floor.floor) issues.push({ field: 'threshold', code: 'below-floor', message: `threshold must be at least the local median full-time income (${floor.floor} ${pub.reportingCurrency} base units)` });
     }

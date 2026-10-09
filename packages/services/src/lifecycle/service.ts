@@ -1,6 +1,6 @@
 import { AppError, audit, getFlag } from '@merces/core';
 import { orderCommitment, type ChainPort, type SeriesState, type UnsignedTx } from '@merces/domain';
-import { redemptionQuote, walletCapUnits } from '@merces/math';
+import { interim } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -89,7 +89,7 @@ export class LifecycleService {
     if (s.phase !== 'Settled' || s.issuePrice === null || s.capPerUnit === null) throw AppError.conflict('series has not settled');
     const now = await chain.now();
     const history = await this.annualGrossPerUnit(seriesId, s, now);
-    const q = redemptionQuote({ capPerUnit: BigInt(s.capPerUnit), paidPerUnitWad: BigInt(s.paidPerUnitWad), issuePrice: BigInt(s.issuePrice), hurdleWad: BigInt(s.terms.hurdleWad), payoutMultipleK: BigInt(s.terms.payoutMultipleK), settlementTs: s.settledAt!, nowTs: now, annualGrossPerUnit: history });
+    const q = interim.redemptionQuote({ capPerUnit: BigInt(s.capPerUnit), paidPerUnitWad: BigInt(s.paidPerUnitWad), issuePrice: BigInt(s.issuePrice), hurdleWad: BigInt(s.terms.hurdleWad), payoutMultipleK: BigInt(s.terms.payoutMultipleK), settlementTs: s.settledAt!, nowTs: now, annualGrossPerUnit: history });
     const blockers: string[] = [];
     if (s.lockupEndsAt !== null && now < s.lockupEndsAt) blockers.push(`lockup ends at ${s.lockupEndsAt}`);
     if (['Retired', 'Redeemed', 'Extinguished', 'Paused'].includes(s.status)) blockers.push(`status is ${s.status}`);
@@ -161,7 +161,7 @@ export class LifecycleService {
     const now = await chain.now();
     const enabled = await getFlag(this.ctx.pool, 'transfer_windows');
     if (s.terms.raiseStyle === 'curve') return { seriesId, enabled: false, lockupEndsAt: s.lockupEndsAt, window: null, phase: 'none', walletCapUnits: null, rules: 'Curve-mode units have no transfer windows: after graduation they trade freely on the DEX pool with no wallet cap and no allowlist (A-CURVE-2).' };
-    return { seriesId, enabled, lockupEndsAt: s.lockupEndsAt, window: w, phase: !w || w.cleared ? 'none' : now < w.commitEndsAt ? 'commit' : now < w.revealEndsAt ? 'reveal' : 'clear-due', walletCapUnits: walletCapUnits(BigInt(s.unitsOutstanding), BigInt(s.terms.walletCapBps)).toString(), rules: 'Units move only through windows; direct transfers always fail; no lending, AMMs or shorting (C10).' };
+    return { seriesId, enabled, lockupEndsAt: s.lockupEndsAt, window: w, phase: !w || w.cleared ? 'none' : now < w.commitEndsAt ? 'commit' : now < w.revealEndsAt ? 'reveal' : 'clear-due', walletCapUnits: interim.walletCapUnits(BigInt(s.unitsOutstanding), BigInt(s.terms.walletCapBps)).toString(), rules: 'Units move only through windows; direct transfers always fail; no lending, AMMs or shorting (C10).' };
   }
   async buildWindowCommit(seriesId: string, session: Session, input: { wallet: string; side: 'buy' | 'sell'; commitment: string; deposit: string; units: string }): Promise<{ tx: UnsignedTx }> {
     await this.windowsEnabled();
