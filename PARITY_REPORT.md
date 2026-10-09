@@ -5,6 +5,10 @@ LiteSVM (Solana) and Foundry's EVM (Monad settings: `cancun`, chain id 10143 in 
 testnet columns are filled when the deployment scripts are run from a machine with network access (the build
 container cannot reach either RPC; see `ASSUMPTIONS.md` U5).
 
+As of 9 October 2026: 25 shared vectors (the 14 from brief F1, 5 added by the spec audit, 4 added by the hard
+security review). All pass on the reference, on Solana local (LiteSVM, SPL USDC and Token-2022 USDG) and on
+Monad local (Foundry). Devnet/testnet columns await a networked run (RPCs blocked here; ASSUMPTIONS U5).
+
 Status legend: ✅ all `expect` steps match to the base unit · ❌ mismatch (details below) · ⏳ not yet run · — not applicable.
 
 | # | Vector | Brief F1 | Reference | Solana local | Monad local | Solana devnet | Monad testnet |
@@ -38,9 +42,9 @@ Status legend: ✅ all `expect` steps match to the base unit · ❌ mismatch (de
 | Refunds + proceeds + fees == escrow | ✅ | ✅ | ✅ |
 | No fee ever taken from an issuer | ✅ | ✅ | ✅ |
 | Charter fields immutable after open | ✅ (model level) | ✅ (byte snapshot after every vector step) | ✅ (invariant) |
-| No admin path moves treasury or vault funds | ⏳ | ✅ (roles tests) | ✅ (invariant) |
-| Sealed-bid units never move outside the window, burns and redemption | ⏳ | ✅ (hook tests) | ✅ (invariant) |
-| C11 charter rules (7 dedicated tests) | ⏳ | ✅ | ✅ (8 tests) |
+| No admin path moves treasury or vault funds | ✅ (model) | ✅ (roles tests) | ✅ (invariant) |
+| Sealed-bid units never move outside the window, burns and redemption | ✅ (model) | ✅ (hook tests) | ✅ (invariant) |
+| C11 charter rules (7 dedicated tests) | ✅ (model) | ✅ (7 tests) | ✅ (8 tests) |
 
 ## Mismatches and resolutions
 

@@ -46,7 +46,35 @@ each "can never" row.
 8. Registry write interface: only the protocol program/contracts can mark raise results and terminal statuses.
 9. Upgrade wiring: timelock ownership of UUPS proxies and the T-REX implementation authority; registry has none.
 
-## 5. Measurements *(filled by the tracks)*
+## 5. Measurements
 
-Compute units (Solana) and gas (EVM) for: tally page, finalize, verify report, pay, claim, window fill, FX snapshot.
-See `docs/solana/MEASUREMENTS.md` and `docs/evm/MEASUREMENTS.md`.
+Full tables: `docs/solana/MEASUREMENTS.md` (compute units, 8-run max) and `docs/evm/MEASUREMENTS.md` (gas, median/max).
+Headlines an auditor needs:
+
+| Operation | Solana (CU) | EVM (gas) |
+| --- | --- | --- |
+| Groth16 verify (report proof) | 102,733 | 221,384 |
+| submit_report (full) | 208,824 | ~559,000 |
+| process_bid | 203,438 | 456,000 (max) |
+| pay | 177,471 | 337,000 (max) |
+| claim | 90,654 | 262,000 (max) |
+| tally page | 73,674 (24 bids) | 514,000 (200 bids) |
+| open_raise | 183,025 | 1.45M |
+
+Solana clients must set a compute-unit limit: `submit_report` always exceeds the 200k default and `process_bid` can.
+Every EVM contract is under the 24,576-byte limit (Window 23,992 is the tightest); Monad allows 128 KB but the
+other EVM targets do not, so the 24 KB limit is the binding one.
+
+## 6. The hard security review
+
+`SECURITY_REVIEW.md` records the internal review (12 dimensions, adversarial verification): 8 confirmed findings
+(5 high, 2 medium, 1 low), all parity/money/liveness divergences, now fixed on both stacks; 3 refuted. The
+reentrancy/CEI/upgrade, Solana account-validation, and unit-custody dimensions found nothing exploitable. The one
+finding whose fix needed design (S2, curve-redemption pool sandwich) is fixed by excluding the pool vault from the
+redemption census (`ASSUMPTIONS.md` A49, `docs/assumptions/track-b.md` B-C13), with a residual flagged for counsel.
+
+## 7. Before mainnet (out of scope for Stage 1)
+
+- Replace the development trusted setup for the circuit with a real multi-party ceremony.
+- Book the two external audits (deferred by the operator instruction; the internal review stands in for now).
+- Fill the devnet/testnet parity columns from a networked run.
