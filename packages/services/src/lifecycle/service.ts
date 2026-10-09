@@ -160,11 +160,13 @@ export class LifecycleService {
     const w = await chain.getTransferWindow(seriesId);
     const now = await chain.now();
     const enabled = await getFlag(this.ctx.pool, 'transfer_windows');
+    if (s.terms.raiseStyle === 'curve') return { seriesId, enabled: false, lockupEndsAt: s.lockupEndsAt, window: null, phase: 'none', walletCapUnits: null, rules: 'Curve-mode units have no transfer windows: after graduation they trade freely on the DEX pool with no wallet cap and no allowlist (A-CURVE-2).' };
     return { seriesId, enabled, lockupEndsAt: s.lockupEndsAt, window: w, phase: !w || w.cleared ? 'none' : now < w.commitEndsAt ? 'commit' : now < w.revealEndsAt ? 'reveal' : 'clear-due', walletCapUnits: walletCapUnits(BigInt(s.unitsOutstanding), BigInt(s.terms.walletCapBps)).toString(), rules: 'Units move only through windows; direct transfers always fail; no lending, AMMs or shorting (C10).' };
   }
   async buildWindowCommit(seriesId: string, session: Session, input: { wallet: string; side: 'buy' | 'sell'; commitment: string; deposit: string; units: string }): Promise<{ tx: UnsignedTx }> {
     await this.windowsEnabled();
     const chain = this.ctx.chainFor(seriesId);
+    if ((await chain.getSeries(seriesId))?.terms.raiseStyle === 'curve') throw AppError.conflict('curve units trade on the DEX pool, not in transfer windows');
     this.requireWallet(session, chain.chain, input.wallet);
     const w = await chain.getTransferWindow(seriesId);
     if (!w || w.cleared) throw AppError.conflict('no open window');
@@ -174,6 +176,7 @@ export class LifecycleService {
   async buildWindowReveal(seriesId: string, session: Session, input: { wallet: string; side: 'buy' | 'sell'; pricePerUnit: string; quantity: string; salt: string }): Promise<{ tx: UnsignedTx }> {
     await this.windowsEnabled();
     const chain = this.ctx.chainFor(seriesId);
+    if ((await chain.getSeries(seriesId))?.terms.raiseStyle === 'curve') throw AppError.conflict('curve units trade on the DEX pool, not in transfer windows');
     this.requireWallet(session, chain.chain, input.wallet);
     const w = await chain.getTransferWindow(seriesId);
     if (!w || w.cleared) throw AppError.conflict('no open window');

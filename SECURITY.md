@@ -51,6 +51,7 @@ Secrets never enter the repository: `.env.example` lists names only; development
   with that field nulled, so the idempotency table never duplicates vault plaintext.
 - The `attestor` tier is the indexed onchain registry, read live: a wallet of the session must be registered and
   active in `attestors`. Proposing an attestor grants nothing; an indexed deactivation ends access at once (A-M5-2).
+  Each case, document or decision also requires the addressed wallet itself to be active and indexed on its chain.
 - The `holder` tier means holding or having held units of the series (a position row, so a seller can still claim what
   accrued); a bid alone never grants it, so losing or refunded bidders do not see the holder list or payment amounts.
 - Session tokens are HMAC-signed with `MERCES_SESSION_SECRET`. The published development default is accepted only

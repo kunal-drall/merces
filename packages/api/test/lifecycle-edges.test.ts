@@ -80,6 +80,8 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     const row = (await rig.t.pool.query('select status, treasury_total::text as t, treasury_released::text as r, gross_paid_total::text as g from series where series_id = $1', [seriesId])).rows[0];
     expect(row).toMatchObject({ status: 'Extinguished', t: USDC(1500).toString(), r: USDC(1500).toString(), g: '0' });
     expect((await rig.get('/admin/accounting/reconcile', adminTok)).json().checks.filter((c: { ok: boolean }) => !c.ok)).toEqual([]);
+    // the cap view says plainly that this curve is closed rather than 'until graduation'
+    expect((await rig.get(`/series/${seriesId}/curve`)).json().walletCap).toMatchObject({ enforced: false, note: 'Curve buys are closed and this curve will not graduate.' });
     // and the curve no longer builds buys (a USDG buyer would otherwise swap for real and then revert)
     const tok = await rig.grant({ accountId: 'curve-b0', wallets: [{ chain: 'solana', address: h.backers[0]!.address }], roles: ['backer'] });
     const buy = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[0]!.address, amountIn: USDC(10).toString(), payIn: 'USDG' }, tok);

@@ -4,6 +4,7 @@ import { dispatchOutbox, enqueueOutbox } from '@merces/core';
 import { IdentityService } from '@merces/services';
 import { notificationsOutboxHandler, safeData } from '@merces/services/src/notifications/service.ts';
 import type { SimHarness } from '@merces/simulator';
+import { SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
 /** The canary value the privacy suite scans for (docs/SERVICES.md): it must never reach an inbox row or an email. */
@@ -46,7 +47,10 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     await identity.seedAccount({ accountId: 'acct-issuer', wallets: [{ chain: 'solana', address: h.issuer.address, family: 'solana' }], roles: ['issuer'], eligible: true, kind: 'issuer' });
     await identity.seedAccount({ accountId: 'acct-holder', wallets: [{ chain: 'solana', address: h.backers[0]!.address, family: 'solana' }], roles: ['backer'], eligible: true });
     await identity.seedAccount({ accountId: 'acct-admin', wallets: [], roles: ['admin'], eligible: false });
-    await identity.seedAccount({ accountId: 'acct-att', wallets: [{ chain: 'solana', address: h.attestors[0]!.address, family: 'solana' }], roles: ['attestor'], eligible: false });
+    // no stored attestor role: attestor notices follow the indexed onchain registry of the account's wallets
+    await identity.seedAccount({ accountId: 'acct-att', wallets: [{ chain: 'solana', address: h.attestors[0]!.address, family: 'solana' }], roles: [], eligible: false });
+    // a stored role with a wallet the chain never registered (an old proposal-time grant) gets nothing
+    await identity.seedAccount({ accountId: 'acct-ghost-att', wallets: [{ chain: 'solana', address: new SimWallet('solana', 'ghost-attestor').address, family: 'solana' }], roles: ['attestor'], eligible: false });
     issuerTok = rig.token({ accountId: 'acct-issuer', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
     holderTok = rig.token({ accountId: 'acct-holder', wallets: [{ chain: 'solana', address: h.backers[0]!.address }], roles: ['backer'] });
     adminTok = rig.token({ accountId: 'acct-admin', wallets: [], roles: ['admin'] });
@@ -122,6 +126,7 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
 
     // admins: the review item and fx; attestors: fx.fallback-needed and the hardship naming their wallet
     expect((await inbox('acct-admin')).map((n) => n.kind).sort()).toEqual(['application.submitted', 'fx.fallback-needed']);
+    expect((await inbox('acct-ghost-att')).map((n) => n.kind)).not.toContain('fx.fallback-needed');
     const att = await inbox('acct-att');
     expect(att.map((n) => n.kind).sort()).toEqual(['fx.fallback-needed', 'hardship.requested']);
     const fx = att.find((n) => n.kind === 'fx.fallback-needed')!;

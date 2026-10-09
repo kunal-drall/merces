@@ -15,8 +15,10 @@ export const CURVE_NOTICE =
   'Curve-mode units have a live public price. While the curve is bonding, only allowlisted wallets can buy and each wallet can hold at most the wallet cap shown here (10% of the units offered by default). After graduation the units trade freely on the DEX pool: no wallet cap and no allowlist apply, and any wallet can hold any amount. The issuer accepted this by choosing a curve raise. These are not sealed-bid HEUs.';
 
 /** The bonding-phase wallet cap for a series, and whether it still applies (it ends at graduation). */
-function walletCapView(series: { terms: { unitsOffered: string; walletCapBps: number | string } }, graduated: boolean): { bps: number; units: string; enforced: boolean; note: string } {
+function walletCapView(series: { status: string; phase: string; terms: { unitsOffered: string; walletCapBps: number | string } }, graduated: boolean): { bps: number; units: string; enforced: boolean; note: string } {
   const units = walletCapUnits(BigInt(series.terms.unitsOffered), BigInt(series.terms.walletCapBps)).toString();
+  if (!graduated && (['Retired', 'Redeemed', 'Extinguished'].includes(series.status) || series.phase === 'Cancelled' || series.phase === 'Failed'))
+    return { bps: Number(series.terms.walletCapBps), units, enforced: false, note: 'Curve buys are closed and this curve will not graduate.' };
   return {
     bps: Number(series.terms.walletCapBps),
     units,

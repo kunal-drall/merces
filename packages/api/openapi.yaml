@@ -1630,6 +1630,27 @@ components:
           type:
             - integer
             - "null"
+    CurveWalletCap:
+      type: object
+      description: The wallet cap on curve buys. It applies only while the curve is bonding; after graduation units trade freely and no cap applies (A-CURVE-2).
+      required:
+        - bps
+        - units
+        - enforced
+        - note
+      properties:
+        bps:
+          type: integer
+          description: the series' wallet cap in basis points of the units offered
+        units:
+          type: string
+          description: the most units one wallet may hold before graduation
+        enforced:
+          type: boolean
+          description: true while the curve is bonding; false after graduation or once buys are closed
+        note:
+          type: string
+          description: plain-language statement of the rule for this series
     Notification:
       type: object
       required:
@@ -6011,13 +6032,16 @@ paths:
         - $ref: "#/components/parameters/seriesId"
       responses:
         "200":
-          description: Curve progress
-          spot price: null
-          graduation state and the public-price notice: null
+          description: Curve progress, spot price, graduation state, the bonding-phase wallet cap and the plain notice that no cap or allowlist applies after graduation
           content:
             application/json:
               schema:
                 type: object
+                properties:
+                  walletCap:
+                    $ref: "#/components/schemas/CurveWalletCap"
+                  notice:
+                    type: string
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -6081,6 +6105,19 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  walletCap:
+                    $ref: "#/components/schemas/CurveWalletCap"
+                  notice:
+                    type: string
+        "403":
+          description: Not an eligible backer
+          the wallet is not linked to the caller: null
+          or it is not on the chain's allowlist: null
+        "409":
+          description: The curve graduated (buy on the DEX pool), or the series or raise is closed
+        "422":
+          description: The buy would take the wallet past the bonding-phase wallet cap (the message gives the holding, the cap and the remaining allowance); not a Solana series; stablecoin unavailable
   /admin/curves/monitor:
     post:
       operationId: monitorCurves

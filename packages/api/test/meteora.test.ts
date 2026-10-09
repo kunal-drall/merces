@@ -88,6 +88,12 @@ describe.skipIf(!dbTestsEnabled())('M6 Meteora support (E14)', () => {
     // after graduation no cap holds, and the app says so
     expect(st2.json().walletCap).toMatchObject({ enforced: false });
     expect(st2.json().walletCap.note).toMatch(/no wallet cap applies/);
+    // and no transfer window ever puts a window cap or allowlist back on curve units
+    const win = (await rig.get(`/series/${seriesId}/window`)).json();
+    expect(win).toMatchObject({ window: null, walletCapUnits: null });
+    expect(win.rules).toMatch(/trade freely on the DEX pool/);
+    const now = await h.sim.now();
+    await expect(h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 }, 'keeper')).rejects.toMatchObject({ code: 'WrongPhase' });
     expect((await rig.get(`/series/${seriesId}`)).json().phase).toBe('Settled');
     expect((await rig.get(`/series/${seriesId}`)).json().curve.graduated).toBe(true);
     expect((await rig.post('/admin/curves/monitor', {}, backerTok)).statusCode).toBe(403);

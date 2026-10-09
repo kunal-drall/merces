@@ -2960,6 +2960,17 @@ export type components = {
             summary?: string;
             expiresAt?: number | null;
         };
+        /** @description The wallet cap on curve buys. It applies only while the curve is bonding; after graduation units trade freely and no cap applies (A-CURVE-2). */
+        CurveWalletCap: {
+            /** @description the series' wallet cap in basis points of the units offered */
+            bps: number;
+            /** @description the most units one wallet may hold before graduation */
+            units: string;
+            /** @description true while the curve is bonding; false after graduation or once buys are closed */
+            enforced: boolean;
+            /** @description plain-language statement of the rule for this series */
+            note: string;
+        };
         Notification: {
             notificationId: string;
             /** @description the outbox payload kind */
@@ -7278,13 +7289,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Curve progress */
+            /** @description Curve progress, spot price, graduation state, the bonding-phase wallet cap and the plain notice that no cap or allowlist applies after graduation */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        walletCap?: components["schemas"]["CurveWalletCap"];
+                        notice?: string;
+                    };
                 };
             };
             404: components["responses"]["NotFound"];
@@ -7348,8 +7362,32 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        walletCap?: components["schemas"]["CurveWalletCap"];
+                        notice?: string;
+                    };
                 };
+            };
+            /** @description Not an eligible backer */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The curve graduated (buy on the DEX pool), or the series or raise is closed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The buy would take the wallet past the bonding-phase wallet cap (the message gives the holding, the cap and the remaining allowance); not a Solana series; stablecoin unavailable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

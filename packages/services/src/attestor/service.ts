@@ -98,8 +98,23 @@ export class AttestorService {
     return { chain, series };
   }
 
+  /**
+   * The indexed onchain registry decides who is an attestor (A-M5-2): a wallet counts only while its registration is
+   * indexed and active on that chain. Work can only be addressed to such a wallet, and every read or decision on an
+   * item checks the addressed wallet itself, so another chain's registration never stands in for it.
+   */
+  private async activeIndexed(chain: string, address: string): Promise<boolean> {
+    const r = await this.ctx.pool.query('select 1 from attestors where chain = $1 and attestor = $2 and active', [chain, address]);
+    return !!r.rowCount;
+  }
+
   private async requireRegisteredAttestor(chain: ChainPort, attestor: string): Promise<void> {
-    if (!(await chain.listAttestors()).includes(attestor)) throw AppError.unprocessable(`${attestor} is not a registered attestor on ${chain.chain}`);
+    if (!(await this.activeIndexed(chain.chain, attestor))) throw AppError.unprocessable(`${attestor} is not a registered attestor on ${chain.chain}`);
+  }
+
+  /** The session holds this wallet and the wallet is an active, indexed attestor on that chain. */
+  private async actsAs(session: Session, chain: string, address: string): Promise<boolean> {
+    return this.holdsWallet(session, chain, address) && (await this.activeIndexed(chain, address));
   }
 
   /** The session's wallets that the chain has registered as attestors. */
@@ -107,7 +122,7 @@ export class AttestorService {
     const out: (WalletRef & { registeredOnchain: boolean })[] = [];
     for (const w of session.wallets) {
       const chain = this.ctx.chains.chains.get(w.chain);
-      const registeredOnchain = chain ? (await chain.listAttestors()).includes(w.address) : false;
+      const registeredOnchain = chain ? await this.activeIndexed(w.chain, w.address) : false;
       out.push({ chain: w.chain, address: w.address, registeredOnchain });
     }
     return out;
@@ -195,7 +210,7 @@ export class AttestorService {
   /** Attestor (the chosen one, or an admin): the ciphertext and the series' onchain pause state. */
   async getHardship(id: string, session: Session): Promise<Record<string, unknown>> {
     const h = await this.hardshipRow(id);
-    if (!this.holdsWallet(session, String(h.chain), String(h.attestor)) && !session.roles.includes('admin')) throw AppError.forbidden('this request was addressed to another attestor');
+    if (!(await this.actsAs(session, String(h.chain), String(h.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this request was addressed to another attestor, or your registration for that wallet is not active');
     const series = await this.ctx.chains.get(String(h.chain)).getSeries(String(h.series_id));
     return { ...this.hardshipView(h, true), seriesStatus: series?.status ?? null, pause: series?.pause ?? null };
   }
@@ -203,7 +218,7 @@ export class AttestorService {
   /** Attestor decision: approve (build approvePause for the attestor, until ≤ requested) or reject with a code. */
   async decideHardship(id: string, session: Session, input: z.infer<typeof hardshipDecideSchema>): Promise<Record<string, unknown> & { tx: UnsignedTx | null }> {
     const h = await this.hardshipRow(id);
-    if (!this.holdsWallet(session, String(h.chain), String(h.attestor))) throw AppError.forbidden('only the chosen attestor can decide this request');
+    if (!(await this.actsAs(session, String(h.chain), String(h.attestor)))) throw AppError.forbidden('only the chosen attestor, while registered, can decide this request');
     if (h.state !== 'pending') throw AppError.conflict(`hardship request is ${h.state}`);
     const chain = this.ctx.chains.get(String(h.chain));
     const seriesId = String(h.series_id);
@@ -260,8 +275,8 @@ export class AttestorService {
     };
   }
 
-  private requireCaseAttestor(session: Session, c: Record<string, unknown>): void {
-    if (!this.holdsWallet(session, String(c.chain), String(c.attestor)) && !session.roles.includes('admin')) throw AppError.forbidden('this case was addressed to another attestor');
+  private async requireCaseAttestor(session: Session, c: Record<string, unknown>): Promise<void> {
+    if (!(await this.actsAs(session, String(c.chain), String(c.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this case was addressed to another attestor, or your registration for that wallet is not active');
   }
 
   /** Issuer: open a tier-3 case for a completed quarter with E2E-encrypted documents for the attestor and the issuer's own estimate. */
@@ -287,7 +302,7 @@ export class AttestorService {
 
   async getTier3Case(id: string, session: Session): Promise<Record<string, unknown>> {
     const c = await this.caseRow(id);
-    this.requireCaseAttestor(session, c);
+    await this.requireCaseAttestor(session, c);
     const series = await this.ctx.chains.get(String(c.chain)).getSeries(String(c.series_id));
     return { ...this.caseView(c, true), reportingCurrency: series?.terms.reportingCurrency ?? null, unitsOutstanding: series?.unitsOutstanding ?? null, termsCommitment: series?.terms.termsCommitment ?? null };
   }
@@ -298,7 +313,7 @@ export class AttestorService {
    */
   async prefillSpec(id: string, session: Session): Promise<Record<string, unknown>> {
     const c = await this.caseRow(id);
-    this.requireCaseAttestor(session, c);
+    await this.requireCaseAttestor(session, c);
     const series = await this.ctx.chains.get(String(c.chain)).getSeries(String(c.series_id));
     const period = parsePeriod(String(c.period_id));
     const currency = series?.terms.reportingCurrency ?? 'USD';
@@ -338,7 +353,7 @@ export class AttestorService {
   /** Attestor: record the attested payment for the quarter; the issuer then assembles the tier-3 report (E5) with this attestor as co-signer. */
   async signTier3Case(id: string, session: Session, input: z.infer<typeof tier3SignSchema>): Promise<Record<string, unknown>> {
     const c = await this.caseRow(id);
-    if (!this.holdsWallet(session, String(c.chain), String(c.attestor))) throw AppError.forbidden('only the chosen attestor can sign this case');
+    if (!(await this.actsAs(session, String(c.chain), String(c.attestor)))) throw AppError.forbidden('only the chosen attestor, while registered, can sign this case');
     if (c.state !== 'open') throw AppError.conflict(`tier-3 case is ${c.state}`);
     await this.ctx.pool.query("update tier3_cases set state = 'signed', attested_payment_stable = $2, income_commitment = $3, liquidity_event = $4, signed_at = now() where case_id = $1", [id, input.paymentStable, input.incomeCommitment, input.liquidityEvent]);
     await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'tier3.sign', target: id, detail: { seriesId: c.series_id, periodId: c.period_id, paymentStable: input.paymentStable, liquidityEvent: input.liquidityEvent } });
@@ -390,7 +405,7 @@ export class AttestorService {
 
   async getAnnual(id: string, session: Session): Promise<Record<string, unknown>> {
     const a = await this.annualRow(id);
-    if (!this.holdsWallet(session, String(a.chain), String(a.attestor)) && !session.roles.includes('admin')) throw AppError.forbidden('this attestation was addressed to another attestor');
+    if (!(await this.actsAs(session, String(a.chain), String(a.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this attestation was addressed to another attestor, or your registration for that wallet is not active');
     return this.annualView(a, true);
   }
 
@@ -401,7 +416,7 @@ export class AttestorService {
    */
   async signAnnual(id: string, session: Session, input: z.infer<typeof tier3AnnualSignSchema>): Promise<Record<string, unknown>> {
     const a = await this.annualRow(id);
-    if (!this.holdsWallet(session, String(a.chain), String(a.attestor))) throw AppError.forbidden('only the chosen attestor can sign this attestation');
+    if (!(await this.actsAs(session, String(a.chain), String(a.attestor)))) throw AppError.forbidden('only the chosen attestor, while registered, can sign this attestation');
     if (a.state !== 'open') throw AppError.conflict(`annual attestation is ${a.state}`);
     const seriesId = String(a.series_id);
     const year = Number(a.year);
@@ -486,7 +501,7 @@ export class AttestorService {
     if (a1 === a2) throw AppError.unprocessable('two distinct attestors are required');
     await this.requireRegisteredAttestor(chain, a1);
     await this.requireRegisteredAttestor(chain, a2);
-    if (!this.holdsWallet(session, chain.chain, a1) && !this.holdsWallet(session, chain.chain, a2) && !session.roles.includes('admin')) throw AppError.forbidden('one of the attestors must be a wallet linked to your account');
+    if (!(await this.actsAs(session, chain.chain, a1)) && !(await this.actsAs(session, chain.chain, a2)) && !session.roles.includes('admin')) throw AppError.forbidden('one of the attestors must be a registered wallet linked to your account');
     assertOpaqueCiphertext(input.evidenceCiphertext, 'evidenceCiphertext');
     const id = this.ctx.newId('ext');
     await this.ctx.pool.query('insert into extinguishment_requests (request_id, series_id, chain, attestors, requested_by, evidence_ciphertext, key_hint) values ($1,$2,$3,$4,$5,$6,$7)', [id, input.seriesId, chain.chain, [a1, a2], session.accountId, input.evidenceCiphertext, input.keyHint]);
@@ -501,7 +516,9 @@ export class AttestorService {
     const e = r.rows[0];
     if (!e) throw AppError.notFound('extinguishment request');
     const attestors = e.attestors as string[];
-    if (!attestors.some((a) => this.holdsWallet(session, e.chain, a)) && !session.roles.includes('admin')) throw AppError.forbidden('this request names other attestors');
+    let named = false;
+    for (const a of attestors) if (await this.actsAs(session, e.chain, a)) named = true;
+    if (!named && !session.roles.includes('admin')) throw AppError.forbidden('this request names other attestors, or your registration is not active');
     const series = await this.ctx.chains.get(e.chain).getSeries(e.series_id);
     if (series?.status === 'Extinguished' && e.state === 'built') {
       await this.ctx.pool.query("update extinguishment_requests set state = 'sent' where request_id = $1", [id]);

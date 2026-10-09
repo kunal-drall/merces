@@ -160,7 +160,10 @@ export class NotificationsService {
       if (typeof addr === 'string') add((await this.ctx.pool.query<{ account_id: string }>('select account_id from account_wallets where address = $1 and ($2::text is null or chain = $2)', [addr, chain])).rows);
     }
     if (toAdmins(kind)) add((await this.ctx.pool.query<{ account_id: string }>("select account_id from accounts where roles @> '{admin}'")).rows);
-    if (toAttestors(kind)) add((await this.ctx.pool.query<{ account_id: string }>("select account_id from accounts where roles @> '{attestor}'")).rows);
+    // attestor work goes to accounts holding a wallet that is an active, indexed attestor on that chain (A-M5-2),
+    // never to a stored role: a proposed or deactivated attestor gets no attestor notices
+    if (toAttestors(kind))
+      add((await this.ctx.pool.query<{ account_id: string }>('select distinct w.account_id from attestors t join account_wallets w on w.chain = t.chain and w.address = t.attestor where t.active and ($1::text is null or t.chain = $1)', [chain])).rows);
     return [...out].sort();
   }
 

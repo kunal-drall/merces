@@ -195,7 +195,8 @@ export const transferWindowsJob: KeeperJob = {
         }
         return;
       }
-      if (!flagOn || ['Retired', 'Redeemed', 'Extinguished'].includes(s.status) || s.lockupEndsAt === null || now < s.lockupEndsAt) return;
+      // curve series trade on the DEX pool after graduation, never in windows (A-CURVE-2)
+      if (!flagOn || s.terms.raiseStyle === 'curve' || ['Retired', 'Redeemed', 'Extinguished'].includes(s.status) || s.lockupEndsAt === null || now < s.lockupEndsAt) return;
       // one window per quarter, opening 14 days after quarter start
       const q = periodOf(now);
       if (now < q.start + 14 * 86_400) return;

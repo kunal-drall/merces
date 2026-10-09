@@ -945,6 +945,8 @@ export class SimEngine {
   // ------------------------------------------------------------------ transfer windows (built, switched off at the service layer)
   private openTransferWindow(cmd: Extract<Command, { kind: 'openTransferWindow' }>, now: number, emit: Emit): void {
     const s = this.series(cmd.seriesId);
+    // curve units trade freely on the DEX pool after graduation (A-CURVE-2): no window, so no window cap or allowlist
+    if (s.curve) throw new ChainError('WrongPhase', 'curve units trade on the DEX pool, not in transfer windows');
     if (s.phase !== 'Settled' || TERMINAL.has(s.status)) throw new ChainError('WrongStatus', 'series cannot open a window');
     if (now < s.settledAt! + s.terms.lockupSeconds) throw new ChainError('TooEarly', 'lockup has not ended');
     if (s.transferWindows.some((w) => !w.cleared)) throw new ChainError('Duplicate', 'a window is already open');

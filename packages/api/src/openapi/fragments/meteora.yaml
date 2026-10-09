@@ -7,7 +7,7 @@ paths:
       x-access: public
       tags: [curve]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Curve progress, spot price, graduation state and the public-price notice, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' }, '409': { description: Not a curve-mode series } }
+      responses: { '200': { description: 'Curve progress, spot price, graduation state, the bonding-phase wallet cap and the plain notice that no cap or allowlist applies after graduation', content: { application/json: { schema: { type: object, properties: { walletCap: { $ref: '#/components/schemas/CurveWalletCap' }, notice: { type: string } } } } } }, '404': { $ref: '#/components/responses/NotFound' }, '409': { description: Not a curve-mode series } }
   /series/{seriesId}/curve/configure:
     post:
       operationId: configureCurve
@@ -24,7 +24,11 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [buyer, amountIn], properties: { buyer: { type: string }, amountIn: { $ref: '#/components/schemas/Money' }, payIn: { type: string, enum: [USDC, USDG] }, slippageBps: { type: integer } } } } } }
-      responses: { '200': { description: Curve quote, minimum units out, an unsigned buy transaction and, when paying in USDG, the swap route to sign first, content: { application/json: { schema: { type: object } } } } }
+      responses:
+        '200': { description: Curve quote, minimum units out, an unsigned buy transaction and, when paying in USDG, the swap route to sign first, content: { application/json: { schema: { type: object, properties: { walletCap: { $ref: '#/components/schemas/CurveWalletCap' }, notice: { type: string } } } } } }
+        '403': { description: Not an eligible backer, the wallet is not linked to the caller, or it is not on the chain's allowlist }
+        '409': { description: 'The curve graduated (buy on the DEX pool), or the series or raise is closed' }
+        '422': { description: 'The buy would take the wallet past the bonding-phase wallet cap (the message gives the holding, the cap and the remaining allowance); not a Solana series; stablecoin unavailable' }
   /admin/curves/monitor:
     post:
       operationId: monitorCurves
@@ -32,3 +36,14 @@ paths:
       tags: [admin]
       security: [{ session: [] }]
       responses: { '200': { description: Graduation check across curve-mode series; cranks graduation when the threshold is crossed, content: { application/json: { schema: { type: object } } } } }
+components:
+  schemas:
+    CurveWalletCap:
+      type: object
+      description: The wallet cap on curve buys. It applies only while the curve is bonding; after graduation units trade freely and no cap applies (A-CURVE-2).
+      required: [bps, units, enforced, note]
+      properties:
+        bps: { type: integer, description: the series' wallet cap in basis points of the units offered }
+        units: { type: string, description: the most units one wallet may hold before graduation }
+        enforced: { type: boolean, description: true while the curve is bonding; false after graduation or once buys are closed }
+        note: { type: string, description: plain-language statement of the rule for this series }

@@ -40,8 +40,13 @@ export async function isRegisteredAttestor(ctx: Pick<AppContext, 'pool'>, s: Pic
   return !!r.rowCount;
 }
 
-async function attestorPending(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'wallets' | 'accountId'>): Promise<boolean> {
-  const r = await ctx.pool.query('select 1 from attestor_proposals where active and (account_id = $1 or (chain, wallet) in (select c, w from unnest($2::text[], $3::text[]) as t(c, w))) limit 1', [s.accountId, s.wallets.map((w) => w.chain), s.wallets.map((w) => w.address)]);
+/** One of the session's wallets has an active proposal that the indexer has not seen registered yet. */
+async function attestorPending(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'wallets'>): Promise<boolean> {
+  if (!s.wallets.length) return false;
+  const r = await ctx.pool.query(
+    'select 1 from attestor_proposals p where p.active and (p.chain, p.wallet) in (select c, w from unnest($1::text[], $2::text[]) as t(c, w)) and not exists (select 1 from attestors t where t.chain = p.chain and t.attestor = p.wallet) limit 1',
+    [s.wallets.map((w) => w.chain), s.wallets.map((w) => w.address)],
+  );
   return !!r.rowCount;
 }
 

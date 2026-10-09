@@ -149,6 +149,10 @@ export class AdminService {
     if (addressFamily(wallet) !== port.family) throw AppError.badRequest(`wallet is not a ${port.family} address`);
     const acc = await this.ctx.pool.query('select 1 from accounts where account_id = $1', [input.accountId]);
     if (!acc.rowCount) throw AppError.notFound('account');
+    // the proposal names the account that will act as attestor: it must have proven it holds this wallet, or the
+    // registry would give attestor access to whoever links the wallet instead
+    const linked = await this.ctx.pool.query('select 1 from account_wallets where chain = $1 and address = $2 and account_id = $3', [input.chain, wallet, input.accountId]);
+    if (!linked.rowCount) throw AppError.unprocessable('the wallet is not linked to that account; the account must link it (sign in with it) first');
     const meta = { accountId: input.accountId, jurisdiction: input.jurisdiction ?? null, kind: input.kind ?? null };
     const r = await this.propose(input.chain, { kind: 'registerAttestor', attestor: wallet, active: input.active }, admin, meta);
     // A proposal grants nothing (A-M5-2): attestor access starts when the multisig's registerAttestor is onchain and
@@ -164,13 +168,16 @@ export class AdminService {
   /**
    * Attestor proposals and the indexed onchain registry side by side. status: 'registered' (active onchain),
    * 'pending-onchain' (proposed active, not yet indexed as active), 'deactivation-pending' (proposed inactive, still
-   * active onchain) or 'inactive'. Only an indexed active registration gives attestor access.
+   * active onchain) or 'inactive'. accountId is the account holding the wallet now (the one that gets access). Only an
+   * indexed active registration gives attestor access.
    */
   async listAttestors(): Promise<Record<string, unknown>[]> {
     const r = await this.ctx.pool.query(
-      `select coalesce(p.chain, a.chain) as chain, coalesce(p.wallet, a.attestor) as wallet, p.account_id, p.active as proposed_active,
-              p.request_id, p.proposed_by, p.proposed_at, a.active as onchain_active
-         from attestor_proposals p full outer join attestors a on a.chain = p.chain and a.attestor = p.wallet
+      `select x.chain, x.wallet, coalesce(w.account_id, x.account_id) as account_id, x.proposed_active, x.request_id, x.proposed_by, x.proposed_at, x.onchain_active
+         from (select coalesce(p.chain, a.chain) as chain, coalesce(p.wallet, a.attestor) as wallet, p.account_id, p.active as proposed_active,
+                      p.request_id, p.proposed_by, p.proposed_at, a.active as onchain_active
+                 from attestor_proposals p full outer join attestors a on a.chain = p.chain and a.attestor = p.wallet) x
+         left join account_wallets w on w.chain = x.chain and w.address = x.wallet
         order by 1, 2`,
     );
     return r.rows.map((x) => {
