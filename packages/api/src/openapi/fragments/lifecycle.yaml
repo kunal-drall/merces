@@ -67,7 +67,7 @@ paths:
       x-access: public
       tags: [lifecycle]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Cap progress and burn progress, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Cap progress and burn progress, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
   /series/{seriesId}/retirement/crank-burn:
     post:
       operationId: crankBurn
@@ -82,7 +82,7 @@ paths:
       x-access: public
       tags: [lifecycle]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Current transfer window, phase, flag state and market rules, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Current transfer window, phase, flag state and market rules, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
   /series/{seriesId}/window/build-commit:
     post:
       operationId: buildWindowCommit

@@ -3890,9 +3890,10 @@ export interface operations {
                     wallet: string;
                     /** @enum {string} */
                     stablecoin?: "USDC" | "USDG";
-                    persona?: string;
+                    /** @enum {string} */
+                    persona?: "artist" | "engineer" | "freelancer" | "founder";
                     country: string;
-                    incomeSourceKinds?: string[];
+                    incomeSourceKinds?: ("stripe" | "deel" | "distrokid" | "split" | "attestor")[];
                     notes?: string;
                 };
             };
@@ -3905,6 +3906,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation failed (unknown persona or income source kind */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -4272,6 +4282,13 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            /** @description This kind and version already exists (template versions are immutable) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     devCompleteEsign: {
@@ -4382,7 +4399,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        rows: components["schemas"]["ThresholdRow"][];
+                    };
                 };
             };
             404: components["responses"]["NotFound"];
@@ -4627,7 +4646,9 @@ export interface operations {
     prepareInflationAmendment: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
             path: {
                 /** @description <chain>:<address> */
                 seriesId: components["parameters"]["seriesId"];
@@ -4702,6 +4723,13 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
+            };
+            /** @description The attestor wallet is not linked to the caller on the series' chain */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not issuer-favourable */
             422: {
@@ -5413,6 +5441,7 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            404: components["responses"]["NotFound"];
         };
     };
     adminAccountingFees: {
@@ -7018,6 +7047,7 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            404: components["responses"]["NotFound"];
         };
     };
     crankBurn: {
@@ -7064,6 +7094,7 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            404: components["responses"]["NotFound"];
         };
     };
     buildWindowCommit: {
@@ -7223,6 +7254,7 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            404: components["responses"]["NotFound"];
             /** @description Not a curve-mode series */
             409: {
                 headers: {

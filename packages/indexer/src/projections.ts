@@ -166,7 +166,14 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     case 'PaymentReceived': {
       const p = e.payload as P<'PaymentReceived'>;
       await client.query('update series set paid_per_unit_wad = $2, gross_paid_total = gross_paid_total + $3, fees_total = fees_total + $4, last_event_seq = $5 where series_id = $1', [p.seriesId, p.paidPerUnitWad, p.gross, p.fee, e.seq]);
-      if (p.periodId && p.source === 'payIn') await client.query('insert into periods (series_id, period_id, paid, settled) values ($1,$2,$3,true) on conflict (series_id, period_id) do update set paid = periods.paid + excluded.paid, settled = true', [p.seriesId, p.periodId, p.gross]);
+      // payIn carries the due recomputed at payment time; older events without it keep the report-time figures
+      if (p.periodId && p.source === 'payIn')
+        await client.query(
+          `insert into periods (series_id, period_id, paid, settled, payment_due, accrual) values ($1,$2,$3,true, coalesce($4::numeric, 0), coalesce($5::numeric, 0))
+           on conflict (series_id, period_id) do update set paid = periods.paid + excluded.paid, settled = true,
+             payment_due = coalesce($4::numeric, periods.payment_due), accrual = coalesce($5::numeric, periods.accrual)`,
+          [p.seriesId, p.periodId, p.gross, p.paymentDue ?? null, p.accrual ?? null],
+        );
       if (p.periodId && p.source === 'tail') await client.query('insert into periods (series_id, period_id, paid, settled) values ($1,$2,$3,true) on conflict (series_id, period_id) do update set paid = periods.paid + excluded.paid, settled = true', [p.seriesId, p.periodId, p.gross]);
       await money(client, e, 'payment', p.gross, { periodId: p.periodId, detail: { fee: p.fee, net: p.net, source: p.source } });
       break;

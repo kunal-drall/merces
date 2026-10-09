@@ -49,13 +49,15 @@ interface ThresholdRow {
   updated_at: Date;
 }
 
-const isoDate = (d: Date | string): string => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+// node-pg parses a DATE column to local midnight, so the day is read with local getters (toISOString would shift it east of UTC)
+const isoDate = (d: Date | string): string =>
+  d instanceof Date ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : String(d).slice(0, 10);
 
-function publicView(r: ThresholdRow): Record<string, unknown> {
+export function thresholdPublicView(r: Pick<ThresholdRow, 'country' | 'year' | 'currency' | 'median_full_time_income' | 'inflation_index_bps' | 'source' | 'source_url' | 'retrieved_at' | 'placeholder'>): Record<string, unknown> {
   return { country: r.country, year: r.year, currency: r.currency, medianFullTimeIncome: r.median_full_time_income, inflationIndexBps: r.inflation_index_bps, source: r.source, sourceUrl: r.source_url, retrievedAt: isoDate(r.retrieved_at), placeholder: r.placeholder };
 }
 function adminView(r: ThresholdRow & { history_count?: string | number }): Record<string, unknown> {
-  return { ...publicView(r), updatedBy: r.updated_by, updatedAt: r.updated_at, historyCount: r.history_count === undefined ? undefined : Number(r.history_count) };
+  return { ...thresholdPublicView(r), updatedBy: r.updated_by, updatedAt: r.updated_at, historyCount: r.history_count === undefined ? undefined : Number(r.history_count) };
 }
 
 export class ThresholdService {
@@ -78,7 +80,7 @@ export class ThresholdService {
   /** Admin: the change history of one (country, year), oldest first. Works for deleted rows too. */
   async history(country: string, year: number): Promise<{ country: string; year: number; history: Record<string, unknown>[] }> {
     const r = await this.ctx.pool.query<ThresholdRow & { id: string; at: Date; op: string; changed_by: string }>('select * from threshold_data_history where country = $1 and year = $2 order by id', [country, year]);
-    return { country, year, history: r.rows.map((x) => ({ id: Number(x.id), at: x.at, op: x.op, ...publicView(x), changedBy: x.changed_by })) };
+    return { country, year, history: r.rows.map((x) => ({ id: Number(x.id), at: x.at, op: x.op, ...thresholdPublicView(x), changedBy: x.changed_by })) };
   }
 
   private async recordHistory(db: Queryable, op: 'insert' | 'update' | 'delete', row: ThresholdRow, by: string): Promise<void> {
@@ -103,7 +105,7 @@ export class ThresholdService {
       const row = r.rows[0]!;
       const op = before ? 'update' : 'insert';
       await this.recordHistory(c, op, row, session.accountId);
-      await audit(c, { actor: session.accountId, actorRole: 'admin', action: `threshold.${op}`, target: `${country}:${year}`, detail: { after: publicView(row), before: before ? publicView(before) : null } });
+      await audit(c, { actor: session.accountId, actorRole: 'admin', action: `threshold.${op}`, target: `${country}:${year}`, detail: { after: thresholdPublicView(row), before: before ? thresholdPublicView(before) : null } });
       this.ctx.log.info({ country, year, op, placeholder: row.placeholder }, 'threshold row written');
       return { created: !before, row: adminView(row) };
     });
@@ -116,7 +118,7 @@ export class ThresholdService {
       const row = r.rows[0];
       if (!row) throw AppError.notFound('threshold row');
       await this.recordHistory(c, 'delete', row, session.accountId);
-      await audit(c, { actor: session.accountId, actorRole: 'admin', action: 'threshold.delete', target: `${country}:${year}`, detail: { before: publicView(row) } });
+      await audit(c, { actor: session.accountId, actorRole: 'admin', action: 'threshold.delete', target: `${country}:${year}`, detail: { before: thresholdPublicView(row) } });
       this.ctx.log.info({ country, year }, 'threshold row deleted');
       return { deleted: true as const, country, year };
     });

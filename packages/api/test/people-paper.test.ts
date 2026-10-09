@@ -184,11 +184,28 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     // inflation amendment: propose → attestor attests favourability → build with co-signer → send → apply
     const attestor = rig.sol.attestors[0]!;
     const attTok = rig.token({ accountId: 'att-1', roles: ['attestor'], wallets: [{ chain: 'solana', address: attestor.address }] });
-    const prop = await rig.post(`/series/${seriesId}/amendments/inflation`, { year: 2026 }, issuerTok);
+    const prop = await rig.post(`/series/${seriesId}/amendments/inflation`, { year: 2026 }, issuerTok, { 'idempotency-key': 'k-amend' });
     expect(prop.statusCode).toBe(200);
     expect(prop.json().inflationBps).toBe(300);
     const amendmentId = prop.json().amendmentId as string;
+    // a retried proposal with the same key replays the first one instead of creating a second amendment
+    const retry = await rig.post(`/series/${seriesId}/amendments/inflation`, { year: 2026 }, issuerTok, { 'idempotency-key': 'k-amend' });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toEqual(prop.json());
+    expect((await rig.post(`/series/${seriesId}/amendments/inflation`, { year: 2027 }, issuerTok, { 'idempotency-key': 'k-amend' })).statusCode).toBe(409);
+    expect((await rig.get(`/series/${seriesId}/amendments`, issuerTok)).json().amendments.map((a: { amendmentId: string }) => a.amendmentId)).toEqual([amendmentId]);
     expect((await rig.post(`/amendments/${amendmentId}/build`, {}, issuerTok)).statusCode).toBe(409);
+    // only a wallet of the caller's, on the series' chain, that the chain has registered as an attestor may attest
+    const monAtt = rig.mon.attestors[0]!;
+    const wrongChain = rig.token({ accountId: 'att-2', roles: ['attestor'], wallets: [{ chain: 'monad', address: monAtt.address }] });
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: monAtt.address, approve: true }, wrongChain)).statusCode).toBe(403);
+    const unreg = new SimWallet('solana', 'attestor-unregistered');
+    const unregTok = rig.token({ accountId: 'att-3', roles: ['attestor'], wallets: [{ chain: 'solana', address: unreg.address }] });
+    const refused = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: unreg.address, approve: true }, unregTok);
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json().message).toContain('not a registered attestor');
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: attestor.address, approve: true }, unregTok)).statusCode).toBe(403);
+    expect((await rig.get(`/series/${seriesId}/amendments`, issuerTok)).json().amendments[0].state).toBe('proposed');
     const att = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: attestor.address, approve: true }, attTok);
     expect(att.json()).toMatchObject({ state: 'attested', favourable: true });
     const b2 = await rig.post(`/amendments/${amendmentId}/build`, {}, issuerTok);

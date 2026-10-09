@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
+import { withTransaction } from '@merces/db';
 import { DEFAULTS, normaliseAddress, randomSalt, termsCommitment, type SeriesTerms, type UnsignedTx } from '@merces/domain';
 import { WAD, ratePerUnit, wadFromDecimal, wadToDecimal } from '@merces/math';
 import { isEligible, type Session } from '@merces/api';
@@ -129,8 +130,11 @@ export class TermsService {
     const ciphertext = this.ctx.vault.encrypt(privatePayload, `terms:${draftId}`);
     // the indexing rule is a public rule name (the commitment hides θ and r, not the rule), so it is kept as metadata for the yearly indexing run (E9)
     const publicStored = { ...pub, indexingRule: priv.indexingRule, capMultipleWad: derived.capMultipleWad, capMultipleDecimal: pub.capMultiple, hurdleWad: derived.hurdleWad, thresholdFloor: derived.thresholdFloor, floorPlaceholder: derived.floorPlaceholder };
-    await this.ctx.pool.query("update series_drafts set public_terms = $2, terms_commitment = $3, state = 'terms_set', updated_at = now() where draft_id = $1", [draftId, JSON.stringify(publicStored), commitment]);
-    await this.ctx.pool.query('insert into terms_vault (draft_id, ciphertext, key_id, commitment, version) values ($1,$2,$3,$4,1) on conflict (draft_id) do update set ciphertext = excluded.ciphertext, key_id = excluded.key_id, commitment = excluded.commitment, version = terms_vault.version + 1', [draftId, ciphertext, this.ctx.vault.keyId, commitment]);
+    // the draft's commitment and the vault ciphertext must change together, or the stored terms stop matching the hash
+    await withTransaction(this.ctx.pool, async (c) => {
+      await c.query("update series_drafts set public_terms = $2, terms_commitment = $3, state = 'terms_set', updated_at = now() where draft_id = $1", [draftId, JSON.stringify(publicStored), commitment]);
+      await c.query('insert into terms_vault (draft_id, ciphertext, key_id, commitment, version) values ($1,$2,$3,$4,1) on conflict (draft_id) do update set ciphertext = excluded.ciphertext, key_id = excluded.key_id, commitment = excluded.commitment, version = terms_vault.version + 1', [draftId, ciphertext, this.ctx.vault.keyId, commitment]);
+    });
     return this.getDraft(draftId, session);
   }
 
@@ -182,7 +186,11 @@ export class TermsService {
   /** After the user signed and sent createSeries: link the draft to the series by matching the contract hash and commitment in the read model. */
   async linkCreated(draftId: string, session: Session): Promise<Record<string, unknown>> {
     const d = await this.getDraft(draftId, session);
-    if (d.seriesId) return d;
+    if (d.seriesId) {
+      // repairs a vault row left unlinked by an earlier, non-atomic link (disclosure and indexing key on it)
+      await this.ctx.pool.query('update terms_vault set series_id = $2 where draft_id = $1 and series_id is null', [draftId, d.seriesId]);
+      return d;
+    }
     const r = await this.ctx.pool.query<{ series_id: string }>('select series_id from series where chain = $1 and issuer = $2 and contract_hash = $3 and terms_commitment = $4', [d.chain, d.issuer, d.contractHash, d.termsCommitment]);
     const seriesId = r.rows[0]?.series_id;
     if (!seriesId) {
@@ -195,8 +203,11 @@ export class TermsService {
     return this.markCreated(draftId, seriesId, session);
   }
   private async markCreated(draftId: string, seriesId: string, session: Session): Promise<Record<string, unknown>> {
-    await this.ctx.pool.query("update series_drafts set series_id = $2, state = 'created', updated_at = now() where draft_id = $1", [draftId, seriesId]);
-    await this.ctx.pool.query('update terms_vault set series_id = $2 where draft_id = $1', [draftId, seriesId]);
+    // one transaction: a draft marked created with an unlinked vault would never be retried (linkCreated returns early)
+    await withTransaction(this.ctx.pool, async (c) => {
+      await c.query("update series_drafts set series_id = $2, state = 'created', updated_at = now() where draft_id = $1", [draftId, seriesId]);
+      await c.query('update terms_vault set series_id = $2 where draft_id = $1', [draftId, seriesId]);
+    });
     return this.getDraft(draftId, session);
   }
 
@@ -233,10 +244,15 @@ export class TermsService {
 
   /** Attestor review: the attestor reads old and new private terms and attests favourability (θ non-decreasing, r non-increasing, cap non-increasing). */
   async attestAmendment(amendmentId: string, attestor: Session, attestorWallet: string, approve: boolean): Promise<Record<string, unknown>> {
-    const r = await this.ctx.pool.query('select a.*, v.ciphertext as old_ciphertext, v.draft_id as vdraft from terms_amendments a join terms_vault v on v.series_id = a.series_id where a.amendment_id = $1', [amendmentId]);
+    const r = await this.ctx.pool.query('select a.*, v.ciphertext as old_ciphertext, v.draft_id as vdraft, d.chain from terms_amendments a join terms_vault v on v.series_id = a.series_id join series_drafts d on d.draft_id = a.draft_id where a.amendment_id = $1', [amendmentId]);
     const a = r.rows[0];
     if (!a) throw AppError.notFound('amendment');
     if (a.state !== 'proposed') throw AppError.conflict(`amendment is ${a.state}`);
+    // A-M5-2: an attestor acts only with a wallet of theirs on the series' chain that the multisig has registered there;
+    // otherwise amendTerms would be refused onchain after the amendment had already left 'proposed'
+    if (!attestor.wallets.some((w) => w.chain === a.chain && w.address === attestorWallet)) throw AppError.forbidden(`attestor wallet must be linked to your account on ${a.chain}`);
+    const port = this.ctx.chains.chains.get(a.chain);
+    if (!port || !(await port.listAttestors()).includes(attestorWallet)) throw AppError.unprocessable(`${attestorWallet} is not a registered attestor on ${a.chain}`);
     const oldT = JSON.parse(this.ctx.vault.decrypt(a.old_ciphertext, `terms:${a.vdraft}`)) as Record<string, string>;
     const newT = JSON.parse(this.ctx.vault.decrypt(a.ciphertext, `terms:${a.draft_id}`)) as Record<string, string>;
     const favourable = BigInt(newT.threshold!) >= BigInt(oldT.threshold!) && BigInt(newT.ratePerUnitWad!) <= BigInt(oldT.ratePerUnitWad!);

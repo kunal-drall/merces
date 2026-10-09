@@ -62,6 +62,9 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     const text = JSON.stringify(act.json());
     expect(text).toContain('Payment received for 2026Q3');
     expect(text).not.toMatch(/1500000000|1425000000|285000000/);
+    // per-series activity carries the series id like the global feed does
+    expect(act.json().activity.length).toBeGreaterThan(0);
+    expect(act.json().activity.every((a: { seriesId: string | null }) => a.seriesId === seriesId)).toBe(true);
     const global = await rig.get('/activity?limit=5');
     expect(global.json().activity).toHaveLength(5);
     // periods with amounts: anonymous 401, stranger 403, holder and issuer 200
@@ -92,6 +95,27 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     expect((await rig.get('/me/holdings')).statusCode).toBe(401);
     const mine = await rig.get('/me/bids', holderTok);
     expect(mine.json().bids[0].allocatedUnits).toBe('100');
+    // refundable excludes the allocated spend and its fee, and agrees with the refund builder:
+    // deposit 1212 USDC (100 × 12 + 1%), spent 100 × 9 = 900, fee 9 → 303 USDC
+    expect(mine.json().bids[0].refundable).toBe(USDC(303).toString());
+    const built = await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: rig.sol.backers[0]!.address }, holderTok);
+    expect(built.json().refundable).toBe(mine.json().bids[0].refundable);
+    // a bidder at the clearing price who won everything has nothing to refund
+    const lastTok = rig.token({ accountId: 'b4', wallets: [{ chain: 'solana', address: rig.sol.backers[4]!.address }], roles: ['backer'] });
+    expect((await rig.get('/me/bids', lastTok)).json().bids[0].refundable).toBe('0');
+    expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: rig.sol.backers[4]!.address }, lastTok)).statusCode).toBe(409);
+  });
+
+  it('a series id with an unknown or missing chain prefix is 404 on every series route, never 500', async () => {
+    for (const url of ['/series/nochain:0xabc/auction', '/series/abc/auction/preview', '/series/nochain:1/retirement', '/series/nochain:1/window', '/series/nochain:1/curve', '/series/:1/auction', '/series/nochain:1/status']) {
+      const r = await rig.get(url);
+      expect([url, r.statusCode]).toEqual([url, 404]);
+      expect(r.json().error).toBe('NotFound');
+    }
+    // relaying to an unconfigured chain is a client error
+    const tx = await rig.sol.sim.build({ kind: 'claimPayout', seriesId }, rig.sol.backers[0]!.address);
+    const signed = await rig.sol.backers[0]!.sign({ ...tx, chain: 'nochain' });
+    expect((await rig.post('/tx/send', signed, holderTok)).statusCode).toBe(400);
   });
 
   it('dev routes: time travel and faucet exist in mock mode', async () => {

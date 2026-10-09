@@ -7,7 +7,7 @@ paths:
       x-access: public
       tags: [curve]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Curve progress, spot price, graduation state and the public-price notice, content: { application/json: { schema: { type: object } } } }, '409': { description: Not a curve-mode series } }
+      responses: { '200': { description: Curve progress, spot price, graduation state and the public-price notice, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' }, '409': { description: Not a curve-mode series } }
   /series/{seriesId}/curve/configure:
     post:
       operationId: configureCurve

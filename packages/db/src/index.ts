@@ -21,27 +21,51 @@ export function createPool(url: string = databaseUrl(), schema?: string): pg.Poo
   return new pg.Pool({ connectionString: url, max: 8, ...(schema ? { options: `-c search_path=${schema},public` } : {}) });
 }
 
-/** Apply every migrations/*.sql not yet recorded in schema_migrations, in file order, each in a transaction. */
+/** Advisory-lock class for migrations (two-key form, so it never collides with single-key locks elsewhere). */
+const MIGRATE_LOCK_CLASS = 0x6d726373; // 'mrcs'
+
+/**
+ * Apply every migrations/*.sql not yet recorded in schema_migrations, in file order, each in a transaction.
+ * Processes that boot together (api, keepers, indexer) all call this; a session advisory lock keyed on the
+ * current schema serialises them, so the applied set is read only once the lock is held and no DDL runs twice.
+ * Session locks belong to one connection, so the whole run uses a single client.
+ */
 export async function migrate(db: Queryable, dir: string = MIGRATIONS_DIR): Promise<string[]> {
-  await db.query('create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())');
-  const applied = new Set((await db.query<{ name: string }>('select name from schema_migrations')).rows.map((r) => r.name));
-  const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
-  const done: string[] = [];
-  for (const f of files) {
-    if (applied.has(f)) continue;
-    const sql = readFileSync(join(dir, f), 'utf8');
-    await db.query('begin');
-    try {
-      await db.query(sql);
-      await db.query('insert into schema_migrations (name) values ($1)', [f]);
-      await db.query('commit');
-      done.push(f);
-    } catch (e) {
-      await db.query('rollback');
-      throw new Error(`migration ${f} failed: ${(e as Error).message}`);
+  const owned = db instanceof pg.Pool;
+  const c: pg.PoolClient = owned ? await db.connect() : (db as pg.PoolClient);
+  let locked = false;
+  try {
+    await c.query("select pg_advisory_lock($1, hashtext(coalesce(current_schema(), '')))", [MIGRATE_LOCK_CLASS]);
+    locked = true;
+    await c.query('create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())');
+    const applied = new Set((await c.query<{ name: string }>('select name from schema_migrations')).rows.map((r) => r.name));
+    const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+    const done: string[] = [];
+    for (const f of files) {
+      if (applied.has(f)) continue;
+      const sql = readFileSync(join(dir, f), 'utf8');
+      await c.query('begin');
+      try {
+        await c.query(sql);
+        await c.query('insert into schema_migrations (name) values ($1)', [f]);
+        await c.query('commit');
+        done.push(f);
+      } catch (e) {
+        await c.query('rollback').catch(() => undefined);
+        throw new Error(`migration ${f} failed: ${(e as Error).message}`);
+      }
     }
+    return done;
+  } finally {
+    let broken = false;
+    if (locked) {
+      await c.query("select pg_advisory_unlock($1, hashtext(coalesce(current_schema(), '')))", [MIGRATE_LOCK_CLASS]).catch(() => {
+        broken = true;
+      });
+    }
+    // a connection whose unlock failed may still hold the lock; destroy it rather than return it to the pool
+    if (owned) c.release(broken);
   }
-  return done;
 }
 
 export async function withTransaction<T>(pool: pg.Pool, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {

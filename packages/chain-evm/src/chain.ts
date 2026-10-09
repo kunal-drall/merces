@@ -17,7 +17,13 @@ export class EvmChain implements ChainPort {
   readonly chain: string;
   readonly client: PublicClient;
   readonly mapper: EvmEventMapper;
+  /**
+   * True only once reads, event decoding and builders are hooked to the generated Stage 1 ABIs (D6 step 4).
+   * Until then `auto` mode keeps the simulator even when health passes; explicit `live` still constructs this.
+   */
+  readonly wired: boolean = false;
   private abis: Record<string, unknown> | null = null;
+  private networkVerified: Promise<void> | null = null;
 
   constructor(readonly config: EvmChainConfig) {
     assertNotMainnet(config);
@@ -36,6 +42,21 @@ export class EvmChain implements ChainPort {
     }
   }
 
+  /**
+   * The configured chain id is allow-listed at construction; this checks the RPC actually serves it, so a
+   * mainnet endpoint behind a testnet id is refused. A success is cached, a failure is retried on the next call.
+   */
+  ensureNetwork(): Promise<void> {
+    this.networkVerified ??= (async () => {
+      const chainId = await this.client.getChainId();
+      if (chainId !== this.config.chainId) throw new ChainError('ChainSpecific', `refusing: rpc chainId ${chainId} ≠ configured ${this.config.chainId}`, { chainId });
+    })().catch((e: unknown) => {
+      this.networkVerified = null;
+      throw e;
+    });
+    return this.networkVerified;
+  }
+
   private notReady(what: string): never {
     throw new ChainError('NotImplemented', `EvmChain.${what}: Stage 1 ABIs are not generated yet (run \`pnpm stage1:sync\`)`, { contracts: this.config.contracts });
   }
@@ -49,8 +70,9 @@ export class EvmChain implements ChainPort {
   async health(): Promise<HealthReport> {
     const t0 = Date.now();
     try {
-      const [chainId, block] = await Promise.all([this.client.getChainId(), this.client.getBlock({ blockTag: this.config.finalityTag })]);
-      if (chainId !== this.config.chainId) return { ok: false, mode: 'live', latency_ms: Date.now() - t0, detail: `rpc chainId ${chainId} ≠ configured ${this.config.chainId}` };
+      await this.ensureNetwork();
+      const chainId = this.config.chainId;
+      const block = await this.client.getBlock({ blockTag: this.config.finalityTag });
       const missing: string[] = [];
       for (const [name, addr] of Object.entries(this.config.contracts)) {
         const code = await this.client.getCode({ address: getAddress(addr) });
@@ -60,11 +82,13 @@ export class EvmChain implements ChainPort {
       if (missing.length) return { ok: false, mode: 'live', latency_ms, detail: `rpc ok (block ${block.number}) but contracts missing: ${missing.join(', ')}` };
       return { ok: true, mode: 'live', latency_ms, detail: `chainId ${chainId}, ${this.config.finalityTag} block ${block.number}` };
     } catch (e) {
-      return { ok: false, mode: 'live', latency_ms: Date.now() - t0, detail: `rpc error: ${(e as Error).message}` };
+      const msg = (e as Error).message;
+      return { ok: false, mode: 'live', latency_ms: Date.now() - t0, detail: msg.startsWith('refusing:') ? msg : `rpc error: ${msg}` };
     }
   }
 
   async now(): Promise<number> {
+    await this.ensureNetwork();
     const b = await this.client.getBlock({ blockTag: this.config.finalityTag });
     return Number(b.timestamp);
   }
@@ -92,6 +116,7 @@ export class EvmChain implements ChainPort {
   async getBalance(wallet: string, stablecoin: 'USDC' | 'USDG'): Promise<string> {
     const token = this.config.stablecoins[stablecoin];
     if (!token) return '0';
+    await this.ensureNetwork();
     const bal = await this.client.readContract({ address: getAddress(token), abi: erc20Abi, functionName: 'balanceOf', args: [getAddress(wallet)], blockTag: this.config.finalityTag });
     return bal.toString();
   }

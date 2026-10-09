@@ -28,11 +28,28 @@ export const EVM_KNOWN = {
   chainlinkFxOnMonad: null,
 } as const;
 
-/** Mainnet chain ids this backend refuses to connect to. */
-const MAINNET_IDS = new Set([1, 10, 56, 137, 143, 8453, 42161, 43114]);
+/**
+ * EVM chain ids this backend may connect to. Fail closed: anything not listed is refused, so a new network needs
+ * a deliberate code change here, and only testnets belong in it. Ids checked against ethereum-lists/chains
+ * (_data/chains/eip155-<id>.json) on 2026-10-08.
+ */
+export const EVM_TESTNET_CHAIN_IDS: ReadonlyMap<number, string> = new Map([
+  [10143, 'Monad Testnet'],
+  [11155111, 'Ethereum Sepolia'],
+  [84532, 'Base Sepolia'],
+  [421614, 'Arbitrum Sepolia'],
+  [11155420, 'OP Sepolia'],
+]);
+
+/** Known mainnet ids, kept as a tripwire so a mainnet can never be added to the allow-list by mistake. */
+const KNOWN_MAINNET_IDS = new Set([1, 10, 56, 100, 137, 143, 324, 8453, 42161, 42170, 43114, 59144, 81457, 534352]);
+for (const id of EVM_TESTNET_CHAIN_IDS.keys()) if (KNOWN_MAINNET_IDS.has(id)) throw new Error(`EVM allow-list contains mainnet chain id ${id}`);
 
 export function assertNotMainnet(cfg: EvmChainConfig): void {
-  if (MAINNET_IDS.has(cfg.chainId) || /mainnet/i.test(cfg.network) || /mainnet/i.test(cfg.rpcUrl)) {
-    throw new Error(`Merces Stage 2 refuses to connect to an EVM mainnet (chainId ${cfg.chainId})`);
+  if (!EVM_TESTNET_CHAIN_IDS.has(cfg.chainId)) {
+    throw new Error(`Merces Stage 2 only connects to allow-listed EVM testnets; chainId ${cfg.chainId} is not one (ground rule: never touch mainnet)`);
+  }
+  if (/mainnet/i.test(cfg.network) || /mainnet/i.test(cfg.rpcUrl)) {
+    throw new Error(`Merces Stage 2 refuses to connect to an EVM mainnet (network ${cfg.network}, chainId ${cfg.chainId})`);
   }
 }

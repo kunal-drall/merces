@@ -87,4 +87,35 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     const notified = await rig.t.pool.query("select payload->>'kind' as kind from outbox where payload->>'seriesId' = $1", [seriesId]);
     expect(notified.rows.map((r) => r.kind)).toContain('auction.failed');
   });
+
+  it('the clearing preview leaves out a bidder removed from the allowlist, exactly as settlement does', async () => {
+    const h = rig.harness('monad');
+    const { terms } = (await import('@merces/simulator')).defaultTerms(h.sim, { unitsOffered: '1000', walletCapBps: 1000 });
+    await h.exec(h.issuer, { kind: 'registerIssuer' }).catch(() => undefined);
+    const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
+    const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
+    const now = await h.sim.now();
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 1000, revealEndsAt: now + 2000 });
+    const [lo, hi] = [h.backers[2]!, h.backers[3]!];
+    const bids = [{ w: lo, price: USDC(10), salt: '0x' + 'a1'.repeat(32) }, { w: hi, price: USDC(45), salt: '0x' + 'a2'.repeat(32) }];
+    for (const b of bids) {
+      const commitment = bidCommitment({ seriesId, bidder: b.w.address, pricePerUnit: b.price, quantity: 100n, salt: b.salt });
+      await h.exec(b.w, { kind: 'commitBid', seriesId, commitment, deposit: ((b.price * 101n) / 100n * 100n).toString() });
+    }
+    await h.sim.setTime(now + 1000);
+    for (const b of bids) await h.exec(b.w, { kind: 'revealBid', seriesId, pricePerUnit: b.price.toString(), quantity: '100', salt: b.salt });
+    // with both bids the raise clears at 10 for 200 units (2000 < 4000 minimum): projected failure
+    expect((await rig.get(`/series/${seriesId}/auction/preview`)).json().projected).toMatchObject({ success: false, unitsSold: '200' });
+    // the low bidder leaves the allowlist: the high bid alone clears at 45 for 100 units (4500 >= 4000)
+    await h.sim.submit({ kind: 'setAllowlist', wallet: lo.address, allowed: false }, 'allowlistManager');
+    await h.sim.setTime(now + 2000);
+    const pv = (await rig.get(`/series/${seriesId}/auction/preview`)).json();
+    expect(pv.projected).toMatchObject({ success: true, clearingPrice: USDC(45).toString(), unitsSold: '100' });
+    expect(pv.projected.allocations.map((a: { bidder: string }) => a.bidder)).toEqual([hi.address]);
+    await h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper');
+    const s = (await h.sim.getSeries(seriesId))!;
+    expect(s.phase).toBe('Settled');
+    expect({ clearingPrice: s.issuePrice, unitsSold: s.unitsSold }).toEqual({ clearingPrice: pv.projected.clearingPrice, unitsSold: pv.projected.unitsSold });
+    await h.sim.submit({ kind: 'setAllowlist', wallet: lo.address, allowed: true }, 'allowlistManager');
+  });
 });

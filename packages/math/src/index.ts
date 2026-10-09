@@ -2,9 +2,10 @@
  * @merces/math — interim reference implementation of the Mercery mechanism math (Part C).
  *
  * Stage 1 will deliver its own reference math library. `stage1:sync` compares it against this one on every
- * parity vector and, when they agree, switches `selectMath()` to Stage 1's implementation. Services must
- * import through `math` (the selected implementation) rather than the individual modules, so the swap
- * touches one file.
+ * parity vector and reports whether it is eligible to replace this one. Nothing swaps it in at runtime yet:
+ * services, the simulator, the indexer and the keepers import the named functions below directly, and nothing
+ * reads `math`/`selectMath()`. Wiring a replacement means routing those calls through `math` and making every
+ * process select the same implementation at startup.
  */
 import * as fixed from './fixed.ts';
 import * as time from './time.ts';
@@ -82,7 +83,7 @@ export const interimMath: MercesMath = {
 let selected: MercesMath = interimMath;
 let selectedName = 'interim';
 
-/** Swap the active implementation (used by stage1:sync after parity is proven). */
+/** Swap the implementation behind `math`. Affects only `math.<fn>()` callers in this process (there are none yet). */
 export function selectMath(impl: MercesMath, name: string): void {
   selected = impl;
   selectedName = name;
@@ -90,7 +91,7 @@ export function selectMath(impl: MercesMath, name: string): void {
 export function selectedMathName(): string {
   return selectedName;
 }
-/** The active implementation. Services call `math.<fn>()`. */
+/** The implementation chosen by `selectMath()` (interim by default). */
 export const math: MercesMath = new Proxy({} as MercesMath, {
   get: (_t, prop) => (selected as unknown as Record<string | symbol, unknown>)[prop],
 }) as MercesMath;

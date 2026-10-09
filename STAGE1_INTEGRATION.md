@@ -6,15 +6,16 @@ This file is updated at each catch-up with what matched, what changed and what i
 ## Status (2026-10-08)
 
 **Stage 1 is not present.** `pnpm stage1:sync` reports "Stage 1 not present" and every chain runs on the simulator
-(`auto` mode falls back when no manifest entry passes a health check). Everything below the "After Stage 1 lands"
-line is what will happen, not what has happened.
+(`auto` mode falls back unless a manifest entry passes its health check and the adapter is wired to the generated
+clients). Everything below the "After Stage 1 lands" line is what will happen, not what has happened.
 
 | Item | State |
 | --- | --- |
 | Canonical model v0 | `DOMAIN_EVENTS.md`, `packages/domain/schema/domain-v0.schema.json` |
 | Simulator | both personalities pass the H2 conformance suite (16 tests) and the H1 scenarios |
-| Live adapters | `SolanaChain` and `EvmChain` skeletons: health checks, mainnet guards, event mappers; reads/writes wait for generated clients |
-| Math | `@merces/math` interim; `selectMath()` swaps in Stage 1's library after vector parity |
+| Live adapters | `SolanaChain` and `EvmChain` skeletons: health checks, mainnet guards, event mappers; reads/writes wait for generated clients, so both report `wired = false` and `auto` keeps the simulator |
+| Mainnet guards | Solana: cluster must be devnet, testnet or loopback localnet, and the RPC's genesis hash must be that cluster's (mainnet-beta's is always refused). EVM: chain id must be in the testnet allow-list `EVM_TESTNET_CHAIN_IDS` (Monad testnet, Sepolia, Base/Arbitrum/OP Sepolia) and the RPC must serve it. Both fail closed |
+| Math | `@merces/math` interim everywhere. `stage1:sync` can prove vector parity and report Stage 1's library as eligible to replace it; no runtime swap is wired (services import the interim functions directly) |
 | Drift report | none yet (`INTERFACE_DRIFT.md` is written by `stage1:sync`) |
 
 ## What we expect from Stage 1
@@ -58,18 +59,25 @@ Actors: `issuer`, `backer-N`, `attestor-N`, `admin`, `keeper`, `allowlistManager
 series created in the scenario. Bigint arguments are decimal strings. Every expected balance must match the simulator
 to the base unit; a mismatch means the simulator is wrong and is fixed.
 
+Math vectors are compared exactly after canonicalisation (bigints and numbers as decimal strings, object keys sorted).
+A function that returns an object needs the whole expected object, every field included; a missing or extra field
+is a disagreement.
+
 ## `pnpm stage1:sync`
 
 1. **detect** — manifest or map through `STAGE1_PATH`; "Stage 1 not present" otherwise.
 2. **generate** — EVM ABIs → `packages/stage1-sync/generated/evm/*.ts` (`as const` for viem); Anchor IDLs →
    `generated/solana/*.ts` (built-in renderer; Codama can replace it once Stage 1 pins an IDL spec version).
 3. **diff** — `INTERFACE_DRIFT.md`: every canonical event and command, its Stage 1 counterpart, field-by-field mapping,
-   and anything missing, extra or differently shaped.
-4. **math** — Stage 1's library vs ours on every math vector (`MATH_PARITY.md` under `packages/stage1-sync/out`);
-   `selectMath()` switches only when every vector agrees.
+   and anything missing, extra or differently shaped. Only exact names (ignoring case, `_` and `-`) map; a look-alike
+   (`fee` vs `feeBps`) is listed as an unverified match, and it, extra fields/args and names-only items all count as
+   drift. The step is `ok` only when nothing is left to resolve.
+4. **math** — Stage 1's library vs ours on every math vector (`MATH_PARITY.md` under `packages/stage1-sync/out`).
+   Full agreement is reported as "eligible to replace the interim library"; it does not change what any process runs.
 5. **vectors** — scenario replay through the simulator (`VECTOR_PARITY.md`).
 6. **conformance** — the H2 suite against each live chain (`CONFORMANCE_CHAIN=solana|evm:<chain>`).
-7. **verdict** — per chain: ready for `live`, or the blockers.
+7. **verdict** — per chain: ready for `live` only when no step failed and both **diff** and **conformance** are `ok`
+   (drift left to resolve, or conformance skipped or not run, is a blocker); otherwise the blockers.
 
 It runs in CI on a six-hour schedule and whenever `stage1/**`, `stage1.map.json` or `.gitmodules` change
 (`.github/workflows/stage1-sync.yml`; set the `STAGE1_REPO` repository variable).
@@ -82,9 +90,12 @@ It runs in CI on a six-hour schedule and whenever `stage1/**`, `stage1.map.json`
 3. Where Stage 1 contradicts an assumption, Stage 1 wins for onchain behaviour: update the simulator and
    `ASSUMPTIONS.md`. Candidates already flagged: A-AUC-1 (tie-breaking), A-C8-1/2 (accrual), A-RED-1/2 (redemption
    precondition, tail fee), A-REP-2 (public input layout), A-FX-1/2 (weekends, Chainlink), A-C11-6 (extinguishment).
-4. Wire the adapters' reads, event decoding and transaction builders to the generated clients; the conformance env
-   for live chains needs funded devnet/testnet wallets (`CONFORMANCE_ISSUER_KEY`, `CONFORMANCE_BACKER_KEYS`,
+4. Wire the adapters' reads, event decoding and transaction builders to the generated clients, then set the adapter's
+   `wired` flag to `true` (until then `auto` keeps the simulator; explicit `live` is what conformance uses). The
+   conformance env for live chains needs funded devnet/testnet wallets (`CONFORMANCE_ISSUER_KEY`, `CONFORMANCE_BACKER_KEYS`,
    `CONFORMANCE_ATTESTOR_KEYS`, `CONFORMANCE_ADMIN_KEY`) and short durations in Stage 1's test deployment.
+   If math parity is proven and Stage 1's library should replace the interim one, that is its own change: route the
+   money-relevant calls through `math.<fn>()` and select the library at startup in every process.
 5. Get the conformance suite green on Solana devnet and Monad testnet.
 6. Run the full raise-to-payout cycle on both live chains (`pnpm demo:cycle` against `MERCES_CHAIN_*_MODE=live`).
 7. Flip both chains to `live` in the staging configuration; keep `mock` for local development and Stage 3.

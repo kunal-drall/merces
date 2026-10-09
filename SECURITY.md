@@ -24,7 +24,7 @@ a lender or a broker, and it is **never a custodian**:
 
 | Key | Where | Can | Cannot |
 | --- | --- | --- | --- |
-| Report-verifier ed25519 | KMS port (`LocalKms` for development; cloud KMS in production, Part J.2). Public key registered onchain by the multisig. | Sign `{series, period, income_commitment, tier, source}` after verifying a zkTLS proof | Sign anything else; the verifier has no database and no payload logs |
+| Report-verifier ed25519 | KMS port (`LocalKms` for development; cloud KMS in production, Part J.2). Public key registered onchain by the multisig. | Sign `{series, period, income_commitment, tier}` after verifying a zkTLS proof. The proof's source is checked against the request but is not signed (A-REV-1, B7) | Sign anything else; the verifier has no database and no payload logs |
 | Keeper fee payer (per chain) | KMS port | Submit permissionless cranks | Any user action |
 | Allowlist manager (per chain) | KMS port | `setAllowlist` | Freeze or seize units, block claims |
 | Session HMAC secret | environment | Sign API session tokens | — |
@@ -67,11 +67,14 @@ providers (`responseRedactions[].hash`) are adopted (Part J.3), the verifier can
 
 ## Chain safety
 
-- Live adapters refuse mainnet (Solana mainnet-beta URLs and mints; EVM chain ids 1, 10, 56, 137, 143, 8453, 42161,
-  43114) at construction time.
+- Mainnet is refused in every mode, failing closed. Solana accepts only devnet, testnet or loopback localnet and checks
+  the RPC's genesis hash against the configured cluster (the mainnet-beta hash is always refused). EVM accepts only chain
+  ids on the testnet allow-list (`EVM_TESTNET_CHAIN_IDS`) and checks the RPC serves that id; the list grows only by a
+  reviewed code change. A refusal stops the process under `live`; under `auto` the chain stays on the simulator.
 - Money-bearing reads and the event stream use finalized commitment; `confirmed` events are parked, never projected.
-- `auto` mode uses a live adapter only when a manifest entry exists and a health check (RPC reachable, programs or
-  contracts deployed) passes; otherwise the simulator. The decision is logged per chain.
+- `auto` mode uses a live adapter only when a manifest entry exists, a health check (RPC reachable, network allowed,
+  programs or contracts deployed) passes, and the adapter is wired to the generated Stage 1 clients; otherwise the
+  simulator. The decision is logged per chain.
 
 ## Privacy controls (summary; see PRIVACY.md)
 

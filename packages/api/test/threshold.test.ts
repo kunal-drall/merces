@@ -43,6 +43,23 @@ describe.skipIf(!dbTestsEnabled())('E9 threshold data service through the API', 
     expect((await rig.get('/thresholds/us')).json().rows[0].year).toBe(2026);
   });
 
+  it('retrievedAt is the stored YYYY-MM-DD date on the public and admin reads, whatever the server time zone', async () => {
+    const stored = (await rig.t.pool.query<{ d: string }>("select retrieved_at::text as d from threshold_data where country = 'US' and year = 2026")).rows[0]!.d;
+    const before = process.env.TZ;
+    try {
+      // east and west of UTC: a local-midnight Date must not be shifted to the neighbouring day
+      for (const tz of ['UTC', 'Pacific/Kiritimati', 'Europe/Berlin', 'America/Los_Angeles']) {
+        process.env.TZ = tz;
+        const pub = (await rig.get('/thresholds/US')).json().rows.find((x: { year: number }) => x.year === 2026);
+        const adm = (await rig.get('/admin/thresholds', adminTok)).json().rows.find((x: { country: string; year: number }) => x.country === 'US' && x.year === 2026);
+        expect([tz, pub.retrievedAt, adm.retrievedAt]).toEqual([tz, stored, stored]);
+      }
+    } finally {
+      if (before === undefined) delete process.env.TZ;
+      else process.env.TZ = before;
+    }
+  });
+
   it('access tiers: admin routes refuse anonymous (401) and non-admin (403) callers; the public summary needs no session', async () => {
     for (const [method, url] of [['GET', '/admin/thresholds'], ['GET', '/admin/thresholds/US/2026/history'], ['GET', '/admin/indexing/2026/candidates']] as const) {
       expect((await rig.app.inject({ method, url })).statusCode, `${method} ${url} anon`).toBe(401);

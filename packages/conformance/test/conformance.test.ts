@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bidCommitment, type DomainEvent } from '@merces/domain';
 import { WAD, parsePeriod, perUnitCap } from '@merces/math';
-import { exec, expectChainError, resolveEnv, type ConformanceEnv } from '../src/env.ts';
+import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv } from '../src/env.ts';
 
 /**
  * H2 — the behavioural contract every ChainPort implementation must satisfy. Written against the port only.
@@ -10,16 +10,19 @@ import { exec, expectChainError, resolveEnv, type ConformanceEnv } from '../src/
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const types = (evs: DomainEvent[]) => evs.map((e) => e.type);
 
-let envs: ConformanceEnv[] = [];
-beforeAll(async () => {
-  envs = await resolveEnv();
-});
-afterAll(async () => {
-  for (const e of envs) await e.close();
-});
-
-describe.each(envs.length ? envs.map((e) => [e.name]) : [['simulator:solana'], ['simulator:monad']])('ChainPort conformance on %s', (name) => {
-  const env = () => envs.find((e) => e.name === name) ?? envs[0]!;
+// Targets are known at collection time; each describe builds its own env, so a single-chain target runs once.
+describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
+  let current: ConformanceEnv | undefined;
+  beforeAll(async () => {
+    current = await envFor(name);
+  });
+  afterAll(async () => {
+    await current?.close();
+  });
+  const env = (): ConformanceEnv => {
+    if (!current) throw new Error(`conformance env ${name} was not created`);
+    return current;
+  };
   let seriesId: string;
   let clearing: bigint;
 

@@ -37,7 +37,7 @@ export interface ReportVerifierPort {
  * The verifier core. It unavoidably sees the attested figure in memory; it must therefore:
  *  - keep no state beyond the signing key handle,
  *  - never log a request body, a figure or a salt (callers log only the returned code),
- *  - sign only the tuple {series, period, income_commitment, tier, source}.
+ *  - sign only the tuple {series, period, income_commitment, tier}; the source is checked against the proof but never signed (B7).
  */
 export class ReportVerifier implements ReportVerifierPort {
   constructor(

@@ -392,8 +392,8 @@ paths:
       tags: [applications]
       security: [{ session: [] }]
       parameters: [{ name: Idempotency-Key, in: header, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kind, chain, wallet, country], properties: { kind: { type: string, enum: [issuer, backer] }, chain: { type: string }, wallet: { type: string }, stablecoin: { type: string, enum: [USDC, USDG] }, persona: { type: string }, country: { type: string }, incomeSourceKinds: { type: array, items: { type: string } }, notes: { type: string } } } } } }
-      responses: { '201': { description: Application, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kind, chain, wallet, country], properties: { kind: { type: string, enum: [issuer, backer] }, chain: { type: string }, wallet: { type: string }, stablecoin: { type: string, enum: [USDC, USDG] }, persona: { type: string, enum: [artist, engineer, freelancer, founder] }, country: { type: string, minLength: 2, maxLength: 2 }, incomeSourceKinds: { type: array, items: { type: string, enum: [stripe, deel, distrokid, split, attestor] } }, notes: { type: string, maxLength: 4000 } } } } } }
+      responses: { '201': { description: Application, content: { application/json: { schema: { type: object } } } }, '400': { description: Validation failed (unknown persona or income source kind, country not two letters), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
   /applications/mine:
     get:
       operationId: listMyApplications
@@ -507,7 +507,7 @@ paths:
       tags: [admin]
       security: [{ session: [] }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [kind, version, body], properties: { kind: { type: string, enum: [heu, charter] }, version: { type: string }, body: { type: string } } } } } }
-      responses: { '200': { description: Template stored, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Template stored, content: { application/json: { schema: { type: object } } } }, '409': { description: This kind and version already exists (template versions are immutable) } }
   /dev/esign/complete:
     post:
       operationId: devCompleteEsign
@@ -538,7 +538,7 @@ paths:
       x-access: public
       tags: [terms]
       parameters: [{ name: country, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: Median income and inflation rows with sources (placeholders flagged), content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+      responses: { '200': { description: Median income and inflation rows with sources (placeholders flagged), content: { application/json: { schema: { type: object, required: [rows], properties: { rows: { type: array, items: { $ref: '#/components/schemas/ThresholdRow' } } } } } } }, '404': { $ref: '#/components/responses/NotFound' } }
   /drafts:
     post:
       operationId: createDraft
@@ -618,7 +618,7 @@ paths:
       x-access: issuer
       tags: [terms]
       security: [{ session: [] }]
-      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: Idempotency-Key, in: header, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [year], properties: { year: { type: integer } } } } } }
       responses: { '200': { description: Proposed amendment awaiting an attestor, content: { application/json: { schema: { type: object } } } } }
   /series/{seriesId}/amendments:
@@ -637,7 +637,7 @@ paths:
       security: [{ session: [] }]
       parameters: [{ name: amendmentId, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [attestorWallet, approve], properties: { attestorWallet: { type: string }, approve: { type: boolean } } } } } }
-      responses: { '200': { description: Attested or rejected (only issuer-favourable changes can be attested), content: { application/json: { schema: { type: object } } } }, '422': { description: Not issuer-favourable } }
+      responses: { '200': { description: Attested or rejected (only issuer-favourable changes can be attested), content: { application/json: { schema: { type: object } } } }, '403': { description: The attestor wallet is not linked to the caller on the series' chain }, '422': { description: Not issuer-favourable, or the wallet is not a registered attestor on the series' chain } }
   /amendments/{amendmentId}/build:
     post:
       operationId: buildAmendTerms
@@ -843,4 +843,4 @@ paths:
       x-access: public
       tags: [bids]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Offchain clearing preview from revealed bids and whether settlement is due, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Offchain clearing preview from revealed bids and whether settlement is due, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }

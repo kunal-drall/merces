@@ -1543,6 +1543,14 @@
               "paidPerUnitWad": {
                 "type": "string",
                 "pattern": "^\\d+$"
+              },
+              "paymentDue": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "accrual": {
+                "type": "string",
+                "pattern": "^\\d+$"
               }
             },
             "required": [
@@ -4193,6 +4201,14 @@
           ]
         },
         "paidPerUnitWad": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "paymentDue": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "accrual": {
           "type": "string",
           "pattern": "^\\d+$"
         }

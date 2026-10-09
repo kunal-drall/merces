@@ -36,14 +36,18 @@ explains how to use the API; the spec is the source of truth for shapes.
 raise (chain `openRaise`) → draw treasury (`POST /series/{id}/treasury/build-draw`) → each quarter: `GET
 /series/{id}/reporting/schedule`, `POST …/reporting/zktls-session`, the device proves and gets an attestation from the
 report verifier (`GET /reporting/verifier`), `POST /series/{id}/reports` (returns the `submitReport` tx), `POST
-/reports/{id}/build-payin` → hardship (`POST /series/{id}/hardship`) or redemption (`GET /series/{id}/redemption/quote`,
+/reports/{id}/build-payin` (the exact remaining due: a late period accrues per day, so a pay-in built on one day of
+lateness is refused onchain after the next day boundary; rebuild it) → hardship (`POST /series/{id}/hardship`) or redemption (`GET /series/{id}/redemption/quote`,
 `POST …/redemption/build-redeem`).
 
 **Backer**: apply → `GET /arena`, `GET /series/{id}`, `GET /series/{id}/terms` (eligible backers only, logged) →
 `POST /series/{id}/bids/precheck` → compute the commitment client-side (or `POST …/bids/commitment`) → `POST
 …/bids/build-commit` → keep an encrypted backup (`PUT …/bids/backup`) → reveal (`POST …/bids/build-reveal`) → refunds
 (`POST …/bids/build-refund`) → `GET /me/holdings`, `GET /series/{id}/payouts`, claims (`POST
-/series/{id}/payouts/build-claim`), redemption claims.
+/series/{id}/payouts/build-claim`), redemption claims. Curve-mode buys (`POST /series/{id}/curve/build-buy`) need a wallet on that
+chain's allowlist (403 otherwise). The auction preview leaves out bidders no longer allowlisted, as settlement does.
+`GET /me/bids` shows `refundable` as what `claimRefund` would pay now: 0 before settlement, then the deposit less the
+allocated spend, its auction fee and anything already refunded.
 
 **Attestor**: `GET /attestor/queue` → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
 attestations, extinguishment transactions (two signers).

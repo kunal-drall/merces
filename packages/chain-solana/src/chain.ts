@@ -3,7 +3,7 @@ import {
   ChainError, type AdminCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
   type TxResult, type UnsignedTx, type UserCommand,
 } from '@merces/domain';
-import { assertNotMainnet, type SolanaChainConfig } from './config.ts';
+import { assertNotMainnet, checkGenesis, type SolanaChainConfig } from './config.ts';
 import { SolanaEventMapper } from './mapping.ts';
 
 /**
@@ -20,7 +20,13 @@ export class SolanaChain implements ChainPort {
   readonly chain: string;
   readonly connection: Connection;
   readonly mapper: SolanaEventMapper;
+  /**
+   * True only once reads, event decoding and builders are hooked to the generated Stage 1 clients (D6 step 4).
+   * Until then `auto` mode keeps the simulator even when health passes; explicit `live` still constructs this.
+   */
+  readonly wired: boolean = false;
   private clients: Record<string, unknown> | null = null;
+  private networkVerified: Promise<void> | null = null;
 
   constructor(readonly config: SolanaChainConfig) {
     assertNotMainnet(config);
@@ -41,6 +47,22 @@ export class SolanaChain implements ChainPort {
     }
   }
 
+  /**
+   * Fails closed unless the RPC's genesis hash is the configured cluster's. Every RPC use goes through this; a
+   * success is cached, a failure is retried on the next call.
+   */
+  ensureNetwork(): Promise<void> {
+    this.networkVerified ??= (async () => {
+      const hash = await this.connection.getGenesisHash();
+      const refusal = checkGenesis(this.config.cluster, hash);
+      if (refusal) throw new ChainError('ChainSpecific', refusal, { cluster: this.config.cluster });
+    })().catch((e: unknown) => {
+      this.networkVerified = null;
+      throw e;
+    });
+    return this.networkVerified;
+  }
+
   private notReady(what: string): never {
     throw new ChainError('NotImplemented', `SolanaChain.${what}: Stage 1 clients are not generated yet (run \`pnpm stage1:sync\`)`, { programs: this.config.programs });
   }
@@ -54,13 +76,15 @@ export class SolanaChain implements ChainPort {
   async health(): Promise<HealthReport> {
     const t0 = Date.now();
     try {
+      await this.ensureNetwork();
       const [slot, version] = await Promise.all([this.connection.getSlot('finalized'), this.connection.getVersion()]);
       const programsOk = await this.programsDeployed();
       const latency_ms = Date.now() - t0;
       if (!programsOk.ok) return { ok: false, mode: 'live', latency_ms, detail: `rpc ok (slot ${slot}, ${version['solana-core']}) but programs missing: ${programsOk.missing.join(', ')}` };
       return { ok: true, mode: 'live', latency_ms, detail: `slot ${slot}, solana-core ${version['solana-core']}, ${Object.keys(this.config.programs).length} programs deployed` };
     } catch (e) {
-      return { ok: false, mode: 'live', latency_ms: Date.now() - t0, detail: `rpc error: ${(e as Error).message}` };
+      const msg = (e as Error).message;
+      return { ok: false, mode: 'live', latency_ms: Date.now() - t0, detail: msg.startsWith('refusing:') ? msg : `rpc error: ${msg}` };
     }
   }
 
@@ -78,6 +102,7 @@ export class SolanaChain implements ChainPort {
   }
 
   async now(): Promise<number> {
+    await this.ensureNetwork();
     const slot = await this.connection.getSlot('finalized');
     const t = await this.connection.getBlockTime(slot);
     if (t === null) throw new ChainError('ChainSpecific', 'no block time for finalized slot');
@@ -108,6 +133,7 @@ export class SolanaChain implements ChainPort {
   async getBalance(wallet: string, stablecoin: 'USDC' | 'USDG'): Promise<string> {
     const mint = this.config.stablecoins[stablecoin];
     if (!mint) return '0';
+    await this.ensureNetwork();
     const res = await this.connection.getParsedTokenAccountsByOwner(new PublicKey(wallet), { mint: new PublicKey(mint) }, 'finalized');
     let total = 0n;
     for (const acc of res.value) {

@@ -68,4 +68,27 @@ describe.skipIf(!dbTestsEnabled())('M6 Meteora support (E14)', () => {
     expect((await rig.get(`/series/${seriesId}`)).json().curve.graduated).toBe(true);
     expect((await rig.post('/admin/curves/monitor', {}, backerTok)).statusCode).toBe(403);
   });
+
+  it('refuses to build a curve buy for a wallet that is not allowlisted on that chain, even when the account is eligible elsewhere', async () => {
+    const h = rig.sol;
+    await h.exec(h.issuer, { kind: 'registerIssuer' }).catch(() => undefined);
+    const { terms } = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' });
+    const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
+    const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
+    await rig.sync();
+    // eligible through a monad wallet; the solana wallet was never approved
+    const fresh = h.sim.address('wallet:never-approved');
+    await rig.grant({ accountId: 'b-mixed', wallets: [{ chain: 'monad', address: rig.mon.backers[3]!.address }], roles: ['backer'] });
+    const mixed = rig.token({ accountId: 'b-mixed', wallets: [{ chain: 'monad', address: rig.mon.backers[3]!.address }, { chain: 'solana', address: fresh }], roles: ['backer'] });
+    const r = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: fresh, amountIn: USDC(100).toString(), payIn: 'USDC' }, mixed);
+    expect(r.statusCode).toBe(403);
+    expect(r.json().tx).toBeUndefined();
+    // a wallet removed from the allowlist is refused too; restoring it lets the build through
+    const w = h.backers[3]!;
+    const tok = await rig.grant({ accountId: 'b-revoked', wallets: [{ chain: 'solana', address: w.address }], roles: ['backer'] });
+    await h.sim.submit({ kind: 'setAllowlist', wallet: w.address, allowed: false }, 'allowlistManager');
+    expect((await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: w.address, amountIn: USDC(100).toString(), payIn: 'USDC' }, tok)).statusCode).toBe(403);
+    await h.sim.submit({ kind: 'setAllowlist', wallet: w.address, allowed: true }, 'allowlistManager');
+    expect((await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: w.address, amountIn: USDC(100).toString(), payIn: 'USDC' }, tok)).statusCode).toBe(200);
+  });
 });

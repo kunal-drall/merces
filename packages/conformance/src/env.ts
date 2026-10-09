@@ -81,12 +81,26 @@ export async function liveEnv(target: 'solana' | `evm:${string}`): Promise<Confo
   throw new Error(`live conformance env for ${target} needs funded test wallets (CONFORMANCE_ISSUER_KEY, CONFORMANCE_BACKER_KEYS, CONFORMANCE_ATTESTOR_KEYS, CONFORMANCE_ADMIN_KEY) and a live-wallet signer; chain=${chain.chain} manifest=${loc?.path ?? 'none'} — see STAGE1_INTEGRATION.md`);
 }
 
+/**
+ * Target names for a CONFORMANCE_CHAIN value, resolved synchronously so the suite can declare one describe block
+ * per target at collection time: `simulator` (default) is both personalities, anything else is that one target.
+ */
+export function conformanceTargets(target: string = process.env.CONFORMANCE_CHAIN ?? 'simulator'): string[] {
+  return target === 'simulator' ? ['simulator:solana', 'simulator:monad'] : [target];
+}
+
+/** Builds a fresh env for one target name from `conformanceTargets`. */
+export async function envFor(name: string): Promise<ConformanceEnv> {
+  if (name === 'simulator:solana') return simulatorEnv('solana');
+  if (name === 'simulator:monad') return simulatorEnv('monad');
+  if (name === 'solana' || /^evm:.+/.test(name)) return liveEnv(name as 'solana' | `evm:${string}`);
+  throw new Error(`unknown CONFORMANCE_CHAIN target '${name}' (simulator, simulator:solana, simulator:monad, solana, evm:<chain>)`);
+}
+
 export async function resolveEnv(): Promise<ConformanceEnv[]> {
-  const target = process.env.CONFORMANCE_CHAIN ?? 'simulator';
-  if (target === 'simulator') return [await simulatorEnv('solana'), await simulatorEnv('monad')];
-  if (target === 'simulator:solana') return [await simulatorEnv('solana')];
-  if (target === 'simulator:monad') return [await simulatorEnv('monad')];
-  return [await liveEnv(target as 'solana')];
+  const out: ConformanceEnv[] = [];
+  for (const name of conformanceTargets()) out.push(await envFor(name));
+  return out;
 }
 
 export { SimWallet, SimulatorChain };

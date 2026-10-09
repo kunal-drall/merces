@@ -270,7 +270,7 @@ export class SimEngine {
   }
 
   /** Common path for money entering the vault: fee, cap, accumulator, events. Returns accepted gross. */
-  private receivePayment(s: SimSeries, payer: string, gross: bigint, periodId: string | null, source: 'payIn' | 'split' | 'tail', now: number, emit: Emit): { accepted: bigint; refunded: bigint; net: bigint } {
+  private receivePayment(s: SimSeries, payer: string, gross: bigint, periodId: string | null, source: 'payIn' | 'split' | 'tail', now: number, emit: Emit, due?: { paymentDue: bigint; accrual: bigint }): { accepted: bigint; refunded: bigint; net: bigint } {
     if (s.unitsOutstanding <= 0n) throw new ChainError('WrongStatus', 'no units outstanding');
     const mint = s.terms.stablecoinMint;
     this.debit(payer, mint, gross);
@@ -294,7 +294,7 @@ export class SimEngine {
     s.feesTotal += fee;
     const y = this.yearIndex(s, now);
     s.grossByYear.set(y, (s.grossByYear.get(y) ?? 0n) + accepted);
-    emit('PaymentReceived', { seriesId: s.seriesId, periodId, gross: str(accepted), fee: str(fee), net: str(net), source, paidPerUnitWad: str(s.paidPerUnitWad) });
+    emit('PaymentReceived', { seriesId: s.seriesId, periodId, gross: str(accepted), fee: str(fee), net: str(net), source, paidPerUnitWad: str(s.paidPerUnitWad), ...(due ? { paymentDue: str(due.paymentDue), accrual: str(due.accrual) } : {}) });
     if (cap.retired && s.status !== 'Retired') {
       this.setStatus(s, 'Retired', emit);
       emit('SeriesRetired', { seriesId: s.seriesId, paidPerUnitWad: str(s.paidPerUnitWad) });
@@ -666,7 +666,8 @@ export class SimEngine {
       p.paid += amount;
     } else {
       // `paid` records what the vault accepted; a cap refund (PaymentRefunded) is not part of it (A-C6-1)
-      const r = this.receivePayment(s, signer, amount, cmd.periodId, 'payIn', now, emit);
+      // publish the due recomputed at payment time so read models do not keep the report-time figures
+      const r = this.receivePayment(s, signer, amount, cmd.periodId, 'payIn', now, emit, { paymentDue: p.paymentDue, accrual: p.accrual });
       p.paid += r.accepted;
     }
     p.settled = true;
@@ -854,16 +855,7 @@ export class SimEngine {
     this.requireAttestor(a2);
     if (s.status === 'Extinguished') throw new ChainError('Duplicate', 'already extinguished');
     let returned = 0n;
-    if (s.phase === 'Draft' || s.phase === 'Open') {
-      // an open raise ends with the issuer: every deposit becomes refundable, no fees, nothing can settle later
-      for (const b of s.bids.values()) {
-        b.refundable = b.deposit;
-        b.settled = true;
-      }
-      s.phase = s.bids.size ? 'Failed' : 'Cancelled';
-      emit(s.bids.size ? 'AuctionFailed' : 'RaiseCancelled', s.bids.size ? { seriesId: s.seriesId, reason: 'no-bids' } : { seriesId: s.seriesId });
-    }
-    if (s.phase === 'Settled' && s.unitsOutstanding > 0n) {
+    const returnTreasury = (): void => {
       const unreleased = s.treasuryTotal - s.treasuryReleased;
       for (const t of s.tranches) t.drawn = true;
       s.treasuryReleased = s.treasuryTotal;
@@ -874,7 +866,21 @@ export class SimEngine {
         returned = unreleased;
         emit('PaymentReceived', { seriesId: s.seriesId, periodId: null, gross: str(unreleased), fee: '0', net: str(unreleased), source: 'extinguishment', paidPerUnitWad: str(s.paidPerUnitWad) });
       }
+    };
+    if (s.curve && !s.curve.graduated && s.unitsOutstanding > 0n) {
+      // curve buyers already hold units and their USDC sits in the treasury: there is no raise to cancel, so the
+      // whole treasury goes back to them through the payout accumulator (claimPayout), like a settled series
+      returnTreasury();
+    } else if (s.phase === 'Draft' || s.phase === 'Open') {
+      // an open raise ends with the issuer: every deposit becomes refundable, no fees, nothing can settle later
+      for (const b of s.bids.values()) {
+        b.refundable = b.deposit;
+        b.settled = true;
+      }
+      s.phase = s.bids.size ? 'Failed' : 'Cancelled';
+      emit(s.bids.size ? 'AuctionFailed' : 'RaiseCancelled', s.bids.size ? { seriesId: s.seriesId, reason: 'no-bids' } : { seriesId: s.seriesId });
     }
+    if (s.phase === 'Settled' && s.unitsOutstanding > 0n) returnTreasury();
     s.extinguishedAt = now;
     s.pause = null;
     emit('SeriesExtinguished', { seriesId: s.seriesId, attestors: [a1, a2], returnedToHolders: str(returned) });
@@ -998,7 +1004,9 @@ export class SimEngine {
     let si = 0;
     const buyLeft = buys.map((b) => b.revealed!.quantity);
     const sellLeft = sells.map((x) => x.revealed!.quantity);
-    while (bi < buys.length && si < sells.length) {
+    // escrowed units stay in the position, so a redemption, retirement or extinguishment during the window may
+    // already have burned them: a terminal series only refunds deposits and releases escrow
+    while (!TERMINAL.has(s.status) && bi < buys.length && si < sells.length) {
       const b = buys[bi]!;
       const x = sells[si]!;
       if (b.revealed!.pricePerUnit < x.revealed!.pricePerUnit) break;
@@ -1007,6 +1015,12 @@ export class SimEngine {
       const units = min(min(buyLeft[bi]!, sellLeft[si]!), room);
       if (units === 0n) {
         bi++;
+        continue;
+      }
+      const sold = fills.filter((f) => f.seller === x.wallet).reduce((a, f) => a + f.units, 0n);
+      if ((s.positions.get(x.wallet)?.units ?? 0n) - sold < units) {
+        // never sell units the seller no longer holds; its order is skipped and the escrow released below
+        si++;
         continue;
       }
       fills.push({ buyer: b.wallet, seller: x.wallet, units });
@@ -1054,6 +1068,9 @@ export class SimEngine {
     const c = s.curve;
     if (!c) throw new ChainError('WrongPhase', 'not a curve-mode series');
     if (c.graduated) throw new ChainError('WrongPhase', 'curve graduated; trade on the DEX');
+    if (TERMINAL.has(s.status)) throw new ChainError('WrongStatus', `cannot buy while ${s.status}`);
+    // pre-graduation units are sealed-style holdings: only approved wallets may mint them (C10)
+    this.requireAllowlisted(signer);
     const amountIn = big(cmd.amountIn);
     if (amountIn <= 0n) throw new ChainError('InvalidTerms', 'amountIn must be positive');
     const spot = c.basePrice + mulDiv(c.basePrice, c.slopeWad * s.unitsOutstanding, WAD);
@@ -1088,6 +1105,7 @@ export class SimEngine {
   private graduateCurve(cmd: Extract<Command, { kind: 'graduateCurve' }>, emit: Emit): void {
     const s = this.series(cmd.seriesId);
     if (!s.curve || s.curve.graduated) throw new ChainError('WrongPhase', 'not graduatable');
+    if (TERMINAL.has(s.status)) throw new ChainError('WrongStatus', `cannot graduate while ${s.status}`);
     if (s.curve.raised < s.curve.graduationThreshold) throw new ChainError('TooEarly', 'threshold not reached');
     this.graduate(s, this.clock.now(), emit);
   }

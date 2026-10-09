@@ -21,7 +21,12 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
     chains: new Map([[sol.sim.chain, sol.sim], [mon.sim.chain, mon.sim]]),
     decisions: [],
     stage1: null,
-    get: (c) => (c === sol.sim.chain ? sol.sim : mon.sim),
+    // throws on an unknown key, like the production registry, so tests see the real error path
+    get: (c) => {
+      if (c === sol.sim.chain) return sol.sim;
+      if (c === mon.sim.chain) return mon.sim;
+      throw new Error(`unknown chain ${c}`);
+    },
     byFamily: (f) => (f === 'solana' ? sol.sim : mon.sim),
     close: async () => undefined,
   };

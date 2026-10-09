@@ -14,6 +14,8 @@ Readers: **owner** (the account the data belongs to), **issuer** (of the series)
 **backer** (eligible), **attestor** (the chosen attestor), **admin**, **public**, **nobody** (ciphertext the server cannot
 decrypt). Storage: **plain**, **vault** (AES-256-GCM under the server's vault key), **e2e** (encrypted on the client for a
 specific attestor; the server never holds the key), **hash** (a commitment or digest), **none** (never stored).
+An **e2e** row lists who can decrypt it. Admins can also fetch e2e ciphertext through the attestor routes (to route or
+reassign a case) but hold no key, so they cannot read it.
 
 ## Income and the things derived from it
 
@@ -31,6 +33,8 @@ specific attestor; the server never holds the key), **hash** (a commitment or di
 | Tier-3 documents (tax returns, accounting exports) | `tier3_cases.documents_ciphertext`, `tier3_annual.documents_ciphertext` | e2e | the chosen attestor only (client-side decryption); server: nobody | case closed + retention |
 | Tier-3 attested payment | `tier3_cases`, `tier3_annual` (amounts only) | plain | issuer, attestor, admin | end of retention |
 | Income source kinds (stripe/deel/…) | `applications.income_source_kinds`, `income_sources.kind` | plain | owner, admin | account deletion |
+| Report source kind (stripe/deel/…) | `reports.source` (never in the verifier attestation or onchain) | plain | issuer, admin (holders get report rows without it) | end of retention |
+| zkTLS session source kind | `zktls_sessions.source` | plain | nobody through the API (written at session start, never served) | end of retention |
 | Source credentials / API keys | never (zkTLS sessions run on the device with the provider) | none | — | — |
 
 ## Hardship and personal circumstances

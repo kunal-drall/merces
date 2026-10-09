@@ -26,8 +26,16 @@ process". Run `dev:keepers` as its own process only against live chains (and set
 ### Chain modes
 
 `MERCES_CHAIN_SOLANA_MODE` and `MERCES_CHAIN_EVM_MODE` are `mock | live | auto` (default `auto`). `auto` goes live only
-when `STAGE1_PATH` points at a valid manifest entry for that chain and its health check passes; the chosen mode and
-reason are logged at startup and shown at `GET /health`. `live` fails loudly when the adapter is unavailable.
+when `STAGE1_PATH` points at a valid manifest entry for that chain, its health check passes and the adapter is wired
+to the generated Stage 1 clients (today neither is, so `auto` stays on the simulator with "not wired" as the reason);
+the chosen mode and reason are logged at startup and shown at `GET /health`. `live` fails loudly when the adapter is
+unavailable.
+
+Mainnet is refused in every mode. Solana accepts only devnet, testnet or loopback localnet, and checks the RPC's
+genesis hash against the configured cluster; EVM accepts only chain ids in the testnet allow-list
+(`EVM_TESTNET_CHAIN_IDS` in `packages/chain-evm/src/config.ts`) and checks the RPC serves that id. A refused config or
+RPC stops the process under `live`; under `auto` the chain falls back to the simulator and the refusal is the logged
+reason. A new testnet is added to the allow-list in code, never through configuration.
 
 ## Keys
 
@@ -84,7 +92,9 @@ pause approved by an attestor (C8.5). Do not ask for an admin override: none exi
 **Suspected income leak.** Run `pnpm test:canary`. Check `audit_log` for `contract.read` and `terms_access_log` for
 disclosure reads. The logger redacts income-bearing keys; a leak would have to bypass the logger.
 
-**Mainnet configured by mistake.** Adapters refuse mainnet at construction; the process does not start.
+**Mainnet configured by mistake.** Adapters refuse it (cluster or chain-id config at construction, the RPC's genesis
+hash or chain id at the first call). Under `live` the process does not start; under `auto` the chain stays on the
+simulator and `GET /health` shows the refusal as the reason.
 
 ## Backups and retention
 

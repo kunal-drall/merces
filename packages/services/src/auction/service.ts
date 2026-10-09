@@ -104,7 +104,9 @@ export class AuctionService {
     const a = (await chain.getAuction(seriesId))!;
     const now = await chain.now();
     const bids = await chain.listBids(seriesId);
-    const revealed = bids.filter((b) => b.revealed).map((b) => ({ bidder: b.bidder, pricePerUnit: BigInt(b.revealed!.pricePerUnit), quantity: BigInt(b.revealed!.quantity), order: b.order }));
+    // settlement drops revealed bids whose bidder has since left the allowlist; the projection must do the same
+    const allowed = await Promise.all(bids.map((b) => (b.revealed ? chain.isAllowlisted(b.bidder) : false)));
+    const revealed = bids.filter((b, i) => b.revealed && allowed[i]).map((b) => ({ bidder: b.bidder, pricePerUnit: BigInt(b.revealed!.pricePerUnit), quantity: BigInt(b.revealed!.quantity), order: b.order }));
     const res = clearAuction({ bids: revealed, unitsOffered: BigInt(s.terms.unitsOffered), reservePrice: BigInt(s.terms.reservePrice), minimumRaise: BigInt(s.terms.minimumRaise), walletCapUnits: walletCapUnits(BigInt(s.terms.unitsOffered), BigInt(s.terms.walletCapBps)), auctionFeeBps: BigInt(s.terms.auctionFeeBps) });
     const settleDue = s.phase === 'Open' && a.revealEndsAt !== null && now >= a.revealEndsAt;
     return {

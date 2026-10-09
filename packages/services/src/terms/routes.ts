@@ -4,6 +4,7 @@ import { defineRoute, type AppContext } from '@merces/api';
 import { AppError, withIdempotency } from '@merces/core';
 import { termsCommitment, type SignedTx } from '@merces/domain';
 import { svc } from '../context.ts';
+import { thresholdPublicView } from '../threshold/service.ts';
 import { TermsService, privateTermsSchema, publicTermsSchema } from './service.ts';
 
 export function registerTermsRoutes(app: FastifyInstance, base: AppContext): void {
@@ -30,7 +31,8 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
     const { country } = req.params as { country: string };
     const r = await ctx.pool.query('select country, year, currency, median_full_time_income, inflation_index_bps, source, source_url, retrieved_at, placeholder from threshold_data where country = $1 order by year desc', [country.toUpperCase()]);
     if (!r.rows.length) throw AppError.notFound('threshold data');
-    return { rows: r.rows.map((x) => ({ country: x.country, year: x.year, currency: x.currency, medianFullTimeIncome: x.median_full_time_income, inflationIndexBps: x.inflation_index_bps, source: x.source, sourceUrl: x.source_url, retrievedAt: x.retrieved_at, placeholder: x.placeholder })) };
+    // same view as the threshold service, so retrievedAt is a YYYY-MM-DD date on every endpoint
+    return { rows: r.rows.map(thresholdPublicView) };
   } });
 
   defineRoute(app, ctx, {
@@ -59,9 +61,13 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/terms/access-log', access: 'issuer', handler: async (req) => ({ accesses: await s.accessLog((req.params as { seriesId: string }).seriesId) }) });
   defineRoute(app, ctx, {
     method: 'POST', url: '/series/:seriesId/amendments/inflation', access: 'issuer',
-    handler: async (req, _reply, session) => {
+    handler: async (req, reply, session) => {
+      const seriesId = (req.params as { seriesId: string }).seriesId;
       const b = z.object({ year: z.number().int().min(2026).max(2100) }).parse(req.body);
-      return s.prepareInflationAmendment((req.params as { seriesId: string }).seriesId, session!, b.year);
+      // seriesId is part of the hashed body so reusing a key on another series is a 409, not a replay
+      const r = await withIdempotency(ctx.pool, `amend-inflation:${session!.accountId}`, idem(req), { seriesId, ...b }, async () => ({ status: 200, response: await s.prepareInflationAmendment(seriesId, session!, b.year) }));
+      reply.status(r.status);
+      return r.response;
     },
   });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/amendments', access: 'issuer-or-attestor', handler: async (req) => ({ amendments: await s.listAmendments((req.params as { seriesId: string }).seriesId) }) });
@@ -69,7 +75,6 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
     method: 'POST', url: '/attestor/amendments/:amendmentId/attest', access: 'attestor',
     handler: async (req, _reply, session) => {
       const b = z.object({ attestorWallet: z.string(), approve: z.boolean() }).parse(req.body);
-      if (!session!.wallets.some((w) => w.address === b.attestorWallet)) throw AppError.forbidden('attestor wallet must be linked to your account');
       return s.attestAmendment((req.params as { amendmentId: string }).amendmentId, session!, b.attestorWallet, b.approve);
     },
   });
@@ -86,6 +91,7 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
       const signed = req.body as SignedTx;
       if (!signed?.tx?.chain || !signed.signatures) throw AppError.badRequest('signed transaction required');
       if (!session!.wallets.some((w) => w.address === signed.tx.signer) && !session!.roles.includes('admin')) throw AppError.forbidden('signer is not one of your wallets');
+      if (!ctx.chains.chains.has(signed.tx.chain)) throw AppError.badRequest(`unknown chain ${signed.tx.chain}`);
       const res = await ctx.chains.get(signed.tx.chain).send(signed);
       return { txId: res.txId, blockTime: res.blockTime, events: res.events.map((e) => ({ type: e.type, seq: e.seq, payload: e.payload })) };
     },

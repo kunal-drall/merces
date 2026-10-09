@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import type { ChainPort } from '@merces/domain';
 import { EVM_KNOWN, EvmChain, type EvmChainConfig } from '@merces/chain-evm';
-import { SOLANA_KNOWN, SolanaChain, type SolanaChainConfig } from '@merces/chain-solana';
+import { SOLANA_KNOWN, SolanaChain, normalizeCluster, type SolanaChainConfig } from '@merces/chain-solana';
 import { PgSimPersistence, SimulatorChain } from '@merces/simulator';
 import { locateStage1, stage1Path, type Stage1Location } from './manifest.ts';
 
@@ -40,7 +40,8 @@ export function solanaConfigFrom(loc: Stage1Location | null, over: { rpcUrl?: st
   const coins = loc!.manifest.stablecoins?.solana ?? {};
   return {
     chain: 'solana',
-    cluster: (s.cluster as SolanaChainConfig['cluster']) ?? 'devnet',
+    // an unknown cluster name is passed through unchanged so the adapter's guard refuses it
+    cluster: s.cluster ? (normalizeCluster(s.cluster) ?? (s.cluster as SolanaChainConfig['cluster'])) : 'devnet',
     rpcUrl: over.rpcUrl ?? s.rpcUrl ?? SOLANA_KNOWN.devnetRpc,
     programs: s.programs,
     idlDir: stage1Path(loc!, s.idlDir),
@@ -74,7 +75,10 @@ export function evmConfigFrom(loc: Stage1Location | null, chainKey: string, over
 
 /**
  * D4 mode selection. `auto` (default): use the live adapter only when a valid manifest entry exists for the
- * chain AND its health check passes; otherwise the simulator. Each chain decides independently.
+ * chain, its health check passes AND the adapter is wired to the generated Stage 1 clients (`wired`); otherwise
+ * the simulator, with the reason logged. `live` skips the wiring check (conformance drives unwired adapters on
+ * purpose) but still fails loudly on a missing entry, a refused network or a failed health check. Each chain
+ * decides independently.
  */
 export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
   const log = cfg.log ?? ((m: string) => console.log(`[chains] ${m}`));
@@ -96,6 +100,7 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
       if (!l) return { error: stage1 ? `no Stage 1 entry for ${chain} in ${stage1.path}` : 'Stage 1 not present (STAGE1_PATH unset or empty)' };
       const h = await l.health();
       if (!h.ok) return { error: `health check failed: ${h.detail}` };
+      if (requested === 'auto' && (l as { wired?: boolean }).wired !== true) return { error: `live adapter not wired to the Stage 1 clients yet (D6 step 4); health: ${h.detail}` };
       return { port: l, detail: h.detail };
     };
     if (requested === 'mock') {

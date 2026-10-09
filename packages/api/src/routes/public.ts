@@ -117,7 +117,7 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
     handler: async (req) => {
       const { seriesId } = req.params as { seriesId: string };
       const q = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), before: z.coerce.number().int().optional() }).parse(req.query);
-      const r = await ctx.pool.query('select chain, seq, kind, summary, block_time from activity where series_id = $1 and ($2::bigint is null or seq < $2) order by seq desc limit $3', [seriesId, q.before ?? null, q.limit]);
+      const r = await ctx.pool.query('select chain, seq, series_id, kind, summary, block_time from activity where series_id = $1 and ($2::bigint is null or seq < $2) order by seq desc limit $3', [seriesId, q.before ?? null, q.limit]);
       return { activity: r.rows.map(activityRow) };
     },
   });

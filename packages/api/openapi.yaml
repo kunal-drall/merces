@@ -2698,14 +2698,28 @@ paths:
                     - USDG
                 persona:
                   type: string
+                  enum:
+                    - artist
+                    - engineer
+                    - freelancer
+                    - founder
                 country:
                   type: string
+                  minLength: 2
+                  maxLength: 2
                 incomeSourceKinds:
                   type: array
                   items:
                     type: string
+                    enum:
+                      - stripe
+                      - deel
+                      - distrokid
+                      - split
+                      - attestor
                 notes:
                   type: string
+                  maxLength: 4000
       responses:
         "201":
           description: Application
@@ -2713,6 +2727,13 @@ paths:
             application/json:
               schema:
                 type: object
+        "400":
+          description: Validation failed (unknown persona or income source kind
+          country not two letters): null
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "401":
           $ref: "#/components/responses/Unauthorized"
   /applications/mine:
@@ -3084,6 +3105,8 @@ paths:
             application/json:
               schema:
                 type: object
+        "409":
+          description: This kind and version already exists (template versions are immutable)
   /dev/esign/complete:
     post:
       operationId: devCompleteEsign
@@ -3212,6 +3235,13 @@ paths:
             application/json:
               schema:
                 type: object
+                required:
+                  - rows
+                properties:
+                  rows:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ThresholdRow"
         "404":
           $ref: "#/components/responses/NotFound"
   /drafts:
@@ -3438,6 +3468,10 @@ paths:
         - session: []
       parameters:
         - $ref: "#/components/parameters/seriesId"
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -3508,8 +3542,11 @@ paths:
             application/json:
               schema:
                 type: object
+        "403":
+          description: The attestor wallet is not linked to the caller on the series' chain
         "422":
           description: Not issuer-favourable
+          or the wallet is not a registered attestor on the series' chain: null
   /amendments/{amendmentId}/build:
     post:
       operationId: buildAmendTerms
@@ -4202,6 +4239,8 @@ paths:
             application/json:
               schema:
                 type: object
+        "404":
+          $ref: "#/components/responses/NotFound"
   /admin/accounting/fees:
     get:
       operationId: adminAccountingFees
@@ -5727,6 +5766,8 @@ paths:
             application/json:
               schema:
                 type: object
+        "404":
+          $ref: "#/components/responses/NotFound"
   /series/{seriesId}/retirement/crank-burn:
     post:
       operationId: crankBurn
@@ -5761,6 +5802,8 @@ paths:
             application/json:
               schema:
                 type: object
+        "404":
+          $ref: "#/components/responses/NotFound"
   /series/{seriesId}/window/build-commit:
     post:
       operationId: buildWindowCommit
@@ -5922,6 +5965,8 @@ paths:
             application/json:
               schema:
                 type: object
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           description: Not a curve-mode series
   /series/{seriesId}/curve/configure:

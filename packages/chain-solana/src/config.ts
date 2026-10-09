@@ -32,12 +32,63 @@ export const SOLANA_KNOWN = {
   meteoraDbcProgram: 'dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN',
 } as const;
 
+/**
+ * Cluster genesis hashes, from the official Solana cluster docs (solana-labs/solana docs/src/clusters/available.md,
+ * the `--expected-genesis-hash` value for each cluster). The RPC URL says nothing reliable about which cluster it
+ * serves; the genesis hash does.
+ */
+export const SOLANA_GENESIS = {
+  devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+  testnet: '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY',
+  /** listed only so the guard can name the refusal */
+  mainnetBeta: '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d',
+} as const;
+
+const ALLOWED_CLUSTERS = ['devnet', 'testnet', 'localnet'] as const;
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+export function normalizeCluster(cluster: string): SolanaChainConfig['cluster'] | null {
+  const c = String(cluster).trim().toLowerCase();
+  return (ALLOWED_CLUSTERS as readonly string[]).includes(c) ? (c as SolanaChainConfig['cluster']) : null;
+}
+
+/**
+ * Static half of the mainnet guard (runs at construction). Fails closed: only devnet, testnet and localnet are
+ * accepted, and localnet only on a loopback RPC (a local validator has its own random genesis, so the URL is the
+ * only thing that can pin it). The genesis-hash half runs against the RPC in `checkGenesis`.
+ */
 export function assertNotMainnet(cfg: SolanaChainConfig): void {
-  const url = cfg.rpcUrl.toLowerCase();
-  if (url.includes('mainnet') || (cfg.cluster as string) === 'mainnet-beta' || (cfg.cluster as string) === 'mainnet') {
-    throw new Error('Merces Stage 2 refuses to connect to Solana mainnet (ground rule: never touch mainnet)');
+  const refuse = (why: string) => {
+    throw new Error(`Merces Stage 2 refuses this Solana configuration (ground rule: never touch mainnet): ${why}`);
+  };
+  const cluster = normalizeCluster(cfg.cluster);
+  if (!cluster) refuse(`cluster '${String(cfg.cluster)}' is not one of ${ALLOWED_CLUSTERS.join(', ')}`);
+  let url: URL;
+  try {
+    url = new URL(cfg.rpcUrl);
+  } catch {
+    return refuse(`rpcUrl is not a valid URL`);
   }
+  if (url.href.toLowerCase().includes('mainnet')) refuse('rpcUrl names mainnet');
+  if (cluster === 'localnet' && !LOOPBACK_HOSTS.has(url.hostname.toLowerCase())) refuse('localnet must use a loopback RPC');
   for (const m of Object.values(cfg.stablecoins)) {
-    if (m === SOLANA_KNOWN.usdcMainnet || m === SOLANA_KNOWN.usdgMainnet) throw new Error('mainnet stablecoin mint in config; refusing');
+    if (m === SOLANA_KNOWN.usdcMainnet || m === SOLANA_KNOWN.usdgMainnet) refuse('mainnet stablecoin mint in config');
   }
+}
+
+/**
+ * Dynamic half of the mainnet guard: the RPC's genesis hash must be the configured cluster's. Returns the refusal
+ * reason, or null when the hash is acceptable. The mainnet-beta hash is refused for every cluster, localnet included.
+ */
+export function checkGenesis(cluster: string, genesisHash: string): string | null {
+  if (genesisHash === SOLANA_GENESIS.mainnetBeta) return 'refusing: RPC is Solana mainnet-beta (genesis hash)';
+  const c = normalizeCluster(cluster);
+  if (c === 'devnet' || c === 'testnet') {
+    return genesisHash === SOLANA_GENESIS[c] ? null : `refusing: RPC genesis hash ${genesisHash} is not ${c}'s`;
+  }
+  if (c === 'localnet') {
+    // a local validator must not be a public cluster under another name
+    return genesisHash === SOLANA_GENESIS.devnet || genesisHash === SOLANA_GENESIS.testnet ? `refusing: localnet RPC serves a public cluster (genesis ${genesisHash})` : null;
+  }
+  return `refusing: cluster '${cluster}' is not allowed`;
 }

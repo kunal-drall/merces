@@ -62,6 +62,8 @@ export class MeteoraService {
   async buildBuy(seriesId: string, session: Session, buyer: string, amountIn: string, payIn: 'USDC' | 'USDG', slippageBps: number): Promise<Record<string, unknown>> {
     const { chain, series } = await this.curveSeries(seriesId);
     if (!session.wallets.some((w) => w.chain === chain.chain && w.address === buyer) && !session.roles.includes('admin')) throw AppError.forbidden('wallet is not linked to your account');
+    // the backer tier passes on any eligible wallet of the account; the buying wallet itself must be approved on this chain
+    if (!(await chain.isAllowlisted(buyer))) throw AppError.forbidden('buyers must be allowlisted');
     const info = await chain.info();
     const usdc = info.stablecoins.USDC!.mint;
     let swap: Record<string, unknown> | null = null;

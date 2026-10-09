@@ -43,8 +43,14 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
   return report;
 }
 
-function verdictsFrom(steps: StepReport[], location: { manifest: { solana?: unknown; evm?: unknown[] } }): ChainVerdict[] {
-  const blockersAll = steps.filter((s) => s.status === 'fail').map((s) => `${s.step}: ${s.summary}`);
+/** Steps whose 'ok' is required for live: unresolved drift or unproven conformance is not ready (D5/D6). */
+const MUST_BE_OK = new Set(['diff', 'conformance']);
+
+export function verdictsFrom(steps: StepReport[], location: { manifest: { solana?: unknown; evm?: unknown[] } }): ChainVerdict[] {
+  const blockersAll = steps
+    .filter((s) => s.status === 'fail' || (MUST_BE_OK.has(s.step) && s.status !== 'ok'))
+    .map((s) => `${s.step}: ${s.status === 'fail' ? '' : `${s.status}, `}${s.summary}`);
+  for (const step of MUST_BE_OK) if (!steps.some((s) => s.step === step)) blockersAll.push(`${step}: did not run`);
   const out: ChainVerdict[] = [];
   const chains: string[] = [];
   if (location.manifest.solana) chains.push('solana');

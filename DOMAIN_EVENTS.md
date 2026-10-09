@@ -126,6 +126,8 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `net`: decimal string (base units / WAD / units)
 - `source`: `payIn` \| `split` \| `redemption` \| `tail` \| `extinguishment`
 - `paidPerUnitWad`: decimal string (base units / WAD / units)
+- `paymentDue?`: decimal string (base units / WAD / units)
+- `accrual?`: decimal string (base units / WAD / units)
 
 ### PaymentRefunded (amount-bearing)
 

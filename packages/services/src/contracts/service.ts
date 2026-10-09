@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
+import { withTransaction } from '@merces/db';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 import { PLACEHOLDER_CHARTER_TEMPLATE, PLACEHOLDER_HEU_TEMPLATE, render } from './templates.ts';
@@ -31,7 +32,9 @@ export class ContractService {
   /** Counsel-supplied templates are loaded by an admin; the previous version stays for existing sessions. */
   async addTemplate(kind: 'heu' | 'charter', version: string, body: string, by: string): Promise<{ templateId: string }> {
     const templateId = `${kind}-${version}`;
-    await this.ctx.pool.query('insert into contract_templates (template_id, kind, version, body, body_hash) values ($1,$2,$3,$4,$5)', [templateId, kind, version, body, sha(body)]);
+    // versions are immutable (existing sessions reference them): a repeat is a conflict, never an overwrite
+    const ins = await this.ctx.pool.query('insert into contract_templates (template_id, kind, version, body, body_hash) values ($1,$2,$3,$4,$5) on conflict (template_id) do nothing', [templateId, kind, version, body, sha(body)]);
+    if (!ins.rowCount) throw AppError.conflict(`template ${templateId} already exists`);
     await audit(this.ctx.pool, { actor: by, actorRole: 'admin', action: 'contract.template.add', target: templateId, detail: { kind, version, bodyHash: sha(body) } });
     return { templateId };
   }
@@ -75,9 +78,13 @@ export class ContractService {
       if (!doc) throw AppError.conflict('provider reports signed but returned no document');
       const signedHash = '0x' + sha(doc.body);
       const enc = this.ctx.vault.encrypt(doc.body, `contract:${sessionId}`);
-      await this.ctx.pool.query("update contract_sessions set state = 'signed', signed_hash = $2, signed_document_encrypted = $3, signed_at = $4 where session_id = $1", [sessionId, signedHash, enc, doc.completedAt]);
-      await this.ctx.pool.query("update series_drafts set state = 'contract_signed', contract_hash = $2, updated_at = now() where draft_id = $1 and state = 'terms_set'", [cs.draft_id, signedHash]);
-      await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'contract.signed', accountId: cs.account_id, draftId: cs.draft_id });
+      // one transaction: a session marked signed with the draft still terms_set is never revisited (refresh returns early)
+      await withTransaction(this.ctx.pool, async (c) => {
+        const upd = await c.query("update contract_sessions set state = 'signed', signed_hash = $2, signed_document_encrypted = $3, signed_at = $4 where session_id = $1 and state <> 'signed'", [sessionId, signedHash, enc, doc.completedAt]);
+        if (!upd.rowCount) return; // a concurrent refresh (webhook vs poll) already recorded it
+        await c.query("update series_drafts set state = 'contract_signed', contract_hash = $2, updated_at = now() where draft_id = $1 and state = 'terms_set'", [cs.draft_id, signedHash]);
+        await enqueueOutbox(c, 'notification', { kind: 'contract.signed', accountId: cs.account_id, draftId: cs.draft_id });
+      });
     } else if (st !== 'sent') {
       await this.ctx.pool.query('update contract_sessions set state = $2 where session_id = $1', [sessionId, st]);
       await this.ctx.pool.query("update series_drafts set state = 'terms_set' where draft_id = $1 and state = 'terms_set'", [cs.draft_id]);

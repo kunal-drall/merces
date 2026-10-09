@@ -119,6 +119,28 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect((await t.pool.query("select count(*)::int as n from outbox where payload->>'chain' = 'notices'")).rows[0].n).toBe(before);
   });
 
+  it('projects the due and accrual recomputed at payment time, not the report-time figures', async () => {
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'late-pay', genesis: GENESIS }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
+    const a = await h.runRaise();
+    const q1 = parsePeriod('2026Q1');
+    // report 10 days after grace, pay 40 days after grace: interest keeps running in between
+    await h.sim.setTime(q1.end + 55 * 86_400);
+    const { command } = h.buildReport({ seriesId: a.seriesId, periodId: '2026Q1', unitsOutstanding: 500n, privateTerms: a.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(100_000), termsCommitment: a.terms.termsCommitment });
+    const accepted = (await h.exec(h.issuer, command)).events.find((e) => e.type === 'ReportAccepted')!.payload as { paymentDue: string; accrual: string };
+    await idx.catchUp();
+    await h.sim.setTime(q1.end + 85 * 86_400);
+    const live = (await h.sim.getPeriod(a.seriesId, '2026Q1'))!;
+    expect(BigInt(live.paymentDue)).toBeGreaterThan(BigInt(accepted.paymentDue));
+    const paid = await h.exec(h.issuer, { kind: 'payIn', seriesId: a.seriesId, periodId: '2026Q1', amount: live.paymentDue });
+    expect(paid.events.find((e) => e.type === 'PaymentReceived')!.payload).toMatchObject({ source: 'payIn', paymentDue: live.paymentDue, accrual: live.accrual });
+    await idx.catchUp();
+    const chain = (await h.sim.getPeriod(a.seriesId, '2026Q1'))!;
+    const row = (await t.pool.query('select payment_due::text, accrual::text, paid::text, settled from periods where series_id = $1 and period_id = $2', [a.seriesId, '2026Q1'])).rows[0];
+    expect(row).toEqual({ payment_due: chain.paymentDue, accrual: chain.accrual, paid: chain.paid, settled: true });
+    expect(row.payment_due).toBe(live.paymentDue);
+  });
+
   it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {
     const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'isolated', genesis: GENESIS }) });
     await h.runRaise();
