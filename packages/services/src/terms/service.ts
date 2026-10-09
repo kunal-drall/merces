@@ -248,16 +248,19 @@ export class TermsService {
     const a = r.rows[0];
     if (!a) throw AppError.notFound('amendment');
     if (a.state !== 'proposed') throw AppError.conflict(`amendment is ${a.state}`);
-    // A-M5-2: an attestor acts only with a wallet of theirs on the series' chain that the multisig has registered there;
-    // otherwise amendTerms would be refused onchain after the amendment had already left 'proposed'
-    if (!attestor.wallets.some((w) => w.chain === a.chain && w.address === attestorWallet)) throw AppError.forbidden(`attestor wallet must be linked to your account on ${a.chain}`);
+    // A-M5-2: an attestor acts only with a wallet of theirs on the series' chain whose registration is onchain AND
+    // indexed (the same registry every attestor path uses); the admin role does not stand in for it
     const port = this.ctx.chains.chains.get(a.chain);
-    if (!port || !(await port.listAttestors()).includes(attestorWallet)) throw AppError.unprocessable(`${attestorWallet} is not a registered attestor on ${a.chain}`);
+    if (!port) throw AppError.unprocessable(`unknown chain ${a.chain}`);
+    const wallet = normaliseAddress(attestorWallet, port.family);
+    if (!attestor.wallets.some((w) => w.chain === a.chain && w.address === wallet)) throw AppError.forbidden(`attestor wallet must be linked to your account on ${a.chain}`);
+    const indexed = await this.ctx.pool.query('select 1 from attestors where chain = $1 and attestor = $2 and active', [a.chain, wallet]);
+    if (!indexed.rowCount) throw AppError.unprocessable(`${wallet} is not a registered attestor on ${a.chain}`);
     const oldT = JSON.parse(this.ctx.vault.decrypt(a.old_ciphertext, `terms:${a.vdraft}`)) as Record<string, string>;
     const newT = JSON.parse(this.ctx.vault.decrypt(a.ciphertext, `terms:${a.draft_id}`)) as Record<string, string>;
     const favourable = BigInt(newT.threshold!) >= BigInt(oldT.threshold!) && BigInt(newT.ratePerUnitWad!) <= BigInt(oldT.ratePerUnitWad!);
     if (approve && !favourable) throw AppError.unprocessable('amendment is not issuer-favourable; refusing to attest');
-    const upd = await this.ctx.pool.query("update terms_amendments set state = $2, attestor = $3 where amendment_id = $1 and state = 'proposed'", [amendmentId, approve ? 'attested' : 'rejected', attestorWallet]);
+    const upd = await this.ctx.pool.query("update terms_amendments set state = $2, attestor = $3 where amendment_id = $1 and state = 'proposed'", [amendmentId, approve ? 'attested' : 'rejected', wallet]);
     if (!upd.rowCount) throw AppError.conflict('amendment was decided concurrently');
     await audit(this.ctx.pool, { actor: attestor.accountId, actorRole: 'attestor', action: approve ? 'amendment.attest' : 'amendment.reject', target: amendmentId, detail: { favourable } });
     return { amendmentId, state: approve ? 'attested' : 'rejected', favourable };

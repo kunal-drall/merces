@@ -1,7 +1,8 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { IdentityService } from '@merces/services';
+import { dispatchOutbox, enqueueOutbox } from '@merces/core';
+import { IdentityService, notificationsOutboxHandler } from '@merces/services';
 import { SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
@@ -52,5 +53,57 @@ describe.skipIf(!dbTestsEnabled())('attestor access follows the indexed registry
     const r = await rig.post('/admin/attestors', { chain: 'solana', wallet: w.address, accountId: 'acct-a', active: true }, adminTok);
     expect(r.statusCode).toBe(422);
     expect(r.json().message).toMatch(/not linked/);
+  });
+
+  /** An inflation amendment awaiting an attestor, seeded directly (the people-paper test covers the full flow). */
+  async function seedAmendment(chain: 'monad' | 'solana', seriesId: string, issuer: string, id: string): Promise<void> {
+    const draftId = `draft-${id}`;
+    await rig.t.pool.query("insert into series_drafts (draft_id, account_id, chain, issuer, public_terms, series_id, state) values ($1,'iss-acct',$2,$3,'{}',$4,'created')", [draftId, chain, issuer, seriesId]);
+    const oldT = { threshold: '65000000000', ratePerUnitWad: '100000000000000', reportingCurrency: 'USD', indexingRule: 'cpi-annual', salt: '0x' + '11'.repeat(32) };
+    const newT = { ...oldT, threshold: '66950000000' };
+    await rig.t.pool.query("insert into terms_vault (draft_id, series_id, ciphertext, key_id, commitment) values ($1,$2,$3,'k','0xold')", [draftId, seriesId, rig.ctx.vault.encrypt(JSON.stringify(oldT), `terms:${draftId}`)]);
+    await rig.t.pool.query("insert into terms_amendments (amendment_id, series_id, draft_id, kind, new_commitment, new_cap_multiple_wad, ciphertext, version, rationale_code) values ($1,$2,$3,'inflation-index','0xnew',2500000000000000000,$4,2,'cpi-2026-300bps')", [id, seriesId, draftId, rig.ctx.vault.encrypt(JSON.stringify(newT), `terms:${draftId}`)]);
+  }
+
+  it('amendments: a wallet registered onchain but not yet indexed cannot attest or reject, not even with the admin role', async () => {
+    const m = rig.mon;
+    const { seriesId } = await m.runRaise();
+    await rig.sync();
+    await seedAmendment('monad', seriesId, m.issuer.address, 'amend-late');
+    const late = new SimWallet('evm', 'late-attestor');
+    await m.exec(m.admin, { kind: 'registerAttestor', attestor: late.address, active: true }); // onchain, not indexed yet
+    const viaSolana = rig.token({ accountId: 'att-late', roles: [], wallets: [{ chain: 'solana', address: rig.sol.attestors[0]!.address }, { chain: 'monad', address: late.address }] });
+    expect((await rig.post('/attestor/amendments/amend-late/attest', { attestorWallet: late.address, approve: true }, viaSolana)).statusCode).toBe(422);
+    const admin = rig.token({ accountId: 'adm-att', roles: ['admin'], wallets: [{ chain: 'monad', address: late.address }] });
+    expect((await rig.post('/attestor/amendments/amend-late/attest', { attestorWallet: late.address, approve: false }, admin)).statusCode).toBe(422);
+    expect((await rig.t.pool.query("select state from terms_amendments where amendment_id = 'amend-late'")).rows[0].state).toBe('proposed');
+    // once indexed it may attest
+    await rig.sync();
+    expect((await rig.post('/attestor/amendments/amend-late/attest', { attestorWallet: late.address, approve: true }, viaSolana)).json()).toMatchObject({ state: 'attested' });
+  });
+
+  it("amendment lists and attestor notices follow the registry of the series' chain", async () => {
+    const m = rig.mon;
+    const { seriesId } = await m.runRaise();
+    await rig.sync();
+    await seedAmendment('monad', seriesId, m.issuer.address, 'amend-list');
+    const monAtt = m.attestors[1]!.address;
+    await new IdentityService(rig.ctx).seedAccount({ accountId: 'att-y', wallets: [{ chain: 'solana', address: rig.sol.attestors[1]!.address, family: 'solana' }, { chain: 'monad', address: monAtt, family: 'evm' }], roles: [], eligible: false });
+    const tok = rig.token({ accountId: 'att-y', roles: [], wallets: [{ chain: 'solana', address: rig.sol.attestors[1]!.address }, { chain: 'monad', address: monAtt }] });
+    expect((await rig.get(`/series/${seriesId}/amendments`, tok)).statusCode).toBe(200);
+    await m.exec(m.admin, { kind: 'registerAttestor', attestor: monAtt, active: false });
+    await rig.sync();
+    // the solana registration no longer opens the monad series' amendments
+    expect((await rig.get(`/series/${seriesId}/amendments`, tok)).statusCode).toBe(403);
+    // and a notice addressed to the deactivated monad wallet does not reach the account
+    await rig.t.pool.query('update outbox set dispatched_at = now() where dispatched_at is null');
+    await enqueueOutbox(rig.t.pool, 'notification', { kind: 'hardship.requested', seriesId, hardshipId: 'hs-deact', attestor: monAtt });
+    const client = await rig.t.pool.connect();
+    try {
+      await dispatchOutbox(client, notificationsOutboxHandler(rig.ctx));
+    } finally {
+      client.release();
+    }
+    expect((await rig.t.pool.query("select 1 from notifications where account_id = 'att-y' and kind = 'hardship.requested'")).rowCount).toBe(0);
   });
 });

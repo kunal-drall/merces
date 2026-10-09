@@ -155,10 +155,11 @@ export class NotificationsService {
         )).rows);
       }
     }
-    for (const key of ['wallet', 'attestor'] as const) {
-      const addr = payload[key];
-      if (typeof addr === 'string') add((await this.ctx.pool.query<{ account_id: string }>('select account_id from account_wallets where address = $1 and ($2::text is null or chain = $2)', [addr, chain])).rows);
-    }
+    if (typeof payload.wallet === 'string') add((await this.ctx.pool.query<{ account_id: string }>('select account_id from account_wallets where address = $1 and ($2::text is null or chain = $2)', [payload.wallet, chain])).rows);
+    // a notice addressed to an attestor wallet reaches its account only while that wallet is an active, indexed
+    // attestor (A-M5-2): a deactivated or not-yet-indexed wallet gets no inbox row or email
+    if (typeof payload.attestor === 'string')
+      add((await this.ctx.pool.query<{ account_id: string }>('select distinct w.account_id from attestors t join account_wallets w on w.chain = t.chain and w.address = t.attestor where t.active and t.attestor = $1 and ($2::text is null or t.chain = $2)', [payload.attestor, chain])).rows);
     if (toAdmins(kind)) add((await this.ctx.pool.query<{ account_id: string }>("select account_id from accounts where roles @> '{admin}'")).rows);
     // attestor work goes to accounts holding a wallet that is an active, indexed attestor on that chain (A-M5-2),
     // never to a stored role: a proposed or deactivated attestor gets no attestor notices

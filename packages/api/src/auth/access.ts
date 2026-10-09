@@ -34,9 +34,10 @@ export async function isEligible(ctx: Pick<AppContext, 'pool'>, s: Pick<Session,
  * must be registered and active in `attestors`. A proposal alone grants nothing, and an indexed deactivation ends
  * access at once, whatever role an older session token carries.
  */
-export async function isRegisteredAttestor(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'wallets'>): Promise<boolean> {
-  if (!s.wallets.length) return false;
-  const r = await ctx.pool.query('select 1 from attestors where active and (chain, attestor) in (select c, w from unnest($1::text[], $2::text[]) as t(c, w)) limit 1', [s.wallets.map((w) => w.chain), s.wallets.map((w) => w.address)]);
+export async function isRegisteredAttestor(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'wallets'>, onChain?: string): Promise<boolean> {
+  const wallets = s.wallets.filter((w) => !onChain || w.chain === onChain);
+  if (!wallets.length) return false;
+  const r = await ctx.pool.query('select 1 from attestors where active and (chain, attestor) in (select c, w from unnest($1::text[], $2::text[]) as t(c, w)) limit 1', [wallets.map((w) => w.chain), wallets.map((w) => w.address)]);
   return !!r.rowCount;
 }
 
@@ -94,7 +95,8 @@ export async function requireTier(ctx: AppContext, req: FastifyRequest, _reply: 
       if (has('admin') || (await isHolderOf()) || (await isIssuerOf())) return s;
       break;
     case 'issuer-or-attestor':
-      if (has('admin') || (await isIssuerOf()) || (await isRegisteredAttestor(ctx, s))) return s;
+      // for a series, only an attestor registered on that series' chain counts (another chain's registration never stands in)
+      if (has('admin') || (await isIssuerOf()) || (await isRegisteredAttestor(ctx, s, seriesId ? seriesId.slice(0, seriesId.indexOf(':')) : undefined))) return s;
       break;
   }
   throw AppError.forbidden(`requires ${tier}`);
