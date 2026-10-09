@@ -1,29 +1,30 @@
-import { mockVerify } from '@merces/domain';
+import { REPORT_PUBLIC_INPUT_NAMES, mockVerify, type ReportProof } from '@merces/domain';
 
 /**
- * Proof-system port (R11). The device generates a Groth16 proof with the prover artifacts we serve; the services
- * verify it offchain before submission. Until Stage 1's circuit exists the mock system is used end to end.
+ * Proof-system port (R11). The device generates a proof of Stage 1's ProofOfIncome circuit; the services verify it
+ * offchain before submission. The proof is the command's `proof.proof`: snarkjs Groth16 JSON, or the mock digest.
  */
 export interface ProofVerifierPort {
   readonly system: 'groth16-bn254' | 'mock';
-  verify(proof: string, publicInputs: string[]): Promise<boolean>;
+  verify(proof: ReportProof['proof'], publicInputs: string[]): Promise<boolean>;
 }
 
+/** The mock system (a digest over Stage 1's six public signals): simulator-only, it proves nothing. */
 export class MockProofVerifier implements ProofVerifierPort {
   readonly system = 'mock' as const;
-  async verify(proof: string, publicInputs: string[]): Promise<boolean> {
+  async verify(proof: ReportProof['proof'], publicInputs: string[]): Promise<boolean> {
     return mockVerify(proof, publicInputs);
   }
 }
 
-/** snarkjs 0.7.6: groth16.verify(vkey, publicSignals, proof). The proof is passed as base64 JSON of {pi_a, pi_b, pi_c, protocol, curve}. */
+/** snarkjs 0.7.6: groth16.verify(vkey, publicSignals, proof), with the proof as snarkjs JSON {pi_a, pi_b, pi_c, protocol, curve}. */
 export class SnarkjsGroth16Verifier implements ProofVerifierPort {
   readonly system = 'groth16-bn254' as const;
   constructor(private readonly vkey: Record<string, unknown>) {}
-  async verify(proof: string, publicInputs: string[]): Promise<boolean> {
+  async verify(proof: ReportProof['proof'], publicInputs: string[]): Promise<boolean> {
+    if (typeof proof === 'string') return false;
     const snarkjs = (await import('snarkjs')) as unknown as { groth16: { verify(vk: unknown, pub: string[], proof: unknown): Promise<boolean> } };
-    const obj = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
-    return snarkjs.groth16.verify(this.vkey, publicInputs, obj);
+    return snarkjs.groth16.verify(this.vkey, publicInputs, proof);
   }
 }
 
@@ -41,11 +42,11 @@ export interface ProverArtifacts {
 
 export const PLACEHOLDER_ARTIFACTS: ProverArtifacts = {
   circuitId: 'merces-proof-of-income',
-  version: '0.0.0-mock',
+  version: '0.1.0-mock',
   system: 'mock',
-  publicInputLayout: ['termsCommitment', 'incomeCommitment', 'unitsOutstanding', 'paymentStable', 'fxAvgWad', 'periodIndex'],
+  publicInputLayout: [...REPORT_PUBLIC_INPUT_NAMES],
   wasmUrl: null,
   zkeyUrl: null,
   vkey: null,
-  notes: 'Stage 1 has not published the Groth16 circuit. Devices use the mock system (a digest over the public inputs and a witness digest) so the full flow runs; stage1:sync swaps in the real artifacts.',
+  notes: 'The public inputs follow Stage 1\'s ProofOfIncome circuit (stage1/circuits). Until the services verify Groth16 (S1 WP10), devices use the mock system: a digest over the six public inputs, accepted only by a simulator configured for it.',
 };

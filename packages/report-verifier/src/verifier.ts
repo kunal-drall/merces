@@ -4,7 +4,9 @@ import type { KmsPort, ZkTlsPort, ZkTlsProof } from '@merces/ports';
 
 /**
  * The attestation request a device sends. The zkTLS proof carries the attested figure (unless the provider hashed
- * it); the salt lets the verifier recompute the commitment the device computed. Both exist only in memory here.
+ * it); the salt (a field element, decimal) lets the verifier recompute the Poseidon commitment the device computed.
+ * Both exist only in memory here. The prior commitment and the liquidity flag are signed as the device declares them
+ * (S1 WP10 adds the prior opening, the high-water rule and the prior-authenticity check).
  */
 export const attestRequestSchema = z.object({
   seriesId: z.string(),
@@ -13,10 +15,12 @@ export const attestRequestSchema = z.object({
   source: z.enum(['stripe', 'deel', 'distrokid']),
   reportingCurrency: z.string().regex(/^[A-Z]{3}$/),
   zktlsProof: z.unknown(),
-  incomeSalt: z.string().min(8),
+  incomeSalt: z.string().regex(/^\d{1,78}$/),
   incomeCommitment: z.string().regex(/^0x[0-9a-f]{64}$/),
+  priorIncomeCommitment: z.string().regex(/^0x[0-9a-f]{64}$/),
+  liquidityEvent: z.boolean().default(false),
 });
-export type AttestRequest = z.infer<typeof attestRequestSchema>;
+export type AttestRequest = z.input<typeof attestRequestSchema>;
 
 export interface AttestResult {
   ok: true;
@@ -25,7 +29,7 @@ export interface AttestResult {
 export interface AttestFailure {
   ok: false;
   /** a code, never the figure or any payload */
-  code: 'bad-proof' | 'wrong-context' | 'currency-mismatch' | 'commitment-mismatch' | 'hash-only-unsupported';
+  code: 'bad-proof' | 'wrong-context' | 'currency-mismatch' | 'commitment-mismatch' | 'hash-only-unsupported' | 'not-field';
 }
 
 export interface ReportVerifierPort {
@@ -37,7 +41,8 @@ export interface ReportVerifierPort {
  * The verifier core. It unavoidably sees the attested figure in memory; it must therefore:
  *  - keep no state beyond the signing key handle,
  *  - never log a request body, a figure or a salt (callers log only the returned code),
- *  - sign only the tuple {series, period, income_commitment, tier}; the source is checked against the proof but never signed (B7).
+ *  - sign only attestation v1 {series, period, prior and income commitments, tier, liquidity event}; the source is checked
+ *    against the proof but never signed (B7).
  */
 export class ReportVerifier implements ReportVerifierPort {
   constructor(
@@ -57,11 +62,16 @@ export class ReportVerifier implements ReportVerifierPort {
     if (v.source !== req.source) return { ok: false, code: 'bad-proof' };
     if (v.currency.toUpperCase() !== req.reportingCurrency && !(v.currency.toUpperCase() === 'USD')) return { ok: false, code: 'currency-mismatch' }; // A-REP-4: sources must be in the reporting currency or USD
     if (v.figure === null) return { ok: false, code: 'hash-only-unsupported' }; // Part J.3: hash-attesting providers need a commitment scheme agreed with Reclaim
-    const expected = incomeCommitment({ seriesId: req.seriesId, periodId: req.periodId, incomeYtd: v.figure, salt: req.incomeSalt });
+    let expected: string;
+    try {
+      expected = incomeCommitment(v.figure, req.incomeSalt); // Poseidon(2)(ytd, salt), SPEC §1.5
+    } catch {
+      return { ok: false, code: 'not-field' }; // the salt is not a field element, or the figure is out of the u64 range
+    }
     if (expected !== req.incomeCommitment) return { ok: false, code: 'commitment-mismatch' };
     // the signed tuple names no source: the provider is checked here and stays offchain (B7)
-    const msg = attestationMessage({ seriesId: req.seriesId, periodId: req.periodId, incomeCommitment: req.incomeCommitment, tier: req.tier });
-    const signature = '0x' + (await this.kms.sign(this.keyId, msg));
-    return { ok: true, attestation: { keyId: this.keyId, seriesId: req.seriesId, periodId: req.periodId, incomeCommitment: req.incomeCommitment, tier: req.tier, signature } };
+    const tuple = { seriesId: req.seriesId, periodId: req.periodId, priorIncomeCommitment: req.priorIncomeCommitment, incomeCommitment: req.incomeCommitment, tier: req.tier, liquidityEvent: req.liquidityEvent ?? false };
+    const signature = '0x' + (await this.kms.sign(this.keyId, attestationMessage(tuple)));
+    return { ok: true, attestation: { keyId: this.keyId, ...tuple, signature } };
   }
 }

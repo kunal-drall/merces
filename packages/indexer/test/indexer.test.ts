@@ -67,7 +67,7 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
 
   it('survives duplicate, out-of-order and confirmed-only delivery (reorg safety)', async () => {
     const key = 'monad-reorg-test';
-    const h = await SimHarness.create('monad', { genesis: GENESIS, sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS }) });
+    const h = await SimHarness.create('monad', { genesis: GENESIS, sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
     const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
     await h.exec(h.issuer, { kind: 'registerIssuer' });
     const all = (await h.sim.readEvents(null, 1000)).events; // includes bootstrap events
@@ -93,7 +93,7 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
   });
 
   it('enqueues chain notices in the projection transaction, one per event, so repeated transitions each notify', async () => {
-    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'notices', genesis: GENESIS }) });
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'notices', genesis: GENESIS, acceptMockProofs: true }) });
     const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
     const a = await h.runRaise();
     await idx.catchUp();
@@ -120,13 +120,13 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
   });
 
   it('projects the due and accrual recomputed at payment time, not the report-time figures', async () => {
-    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'late-pay', genesis: GENESIS }) });
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'late-pay', genesis: GENESIS, acceptMockProofs: true }) });
     const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
     const a = await h.runRaise();
     const q1 = parsePeriod('2026Q1');
     // report 10 days after grace, pay 40 days after grace: interest keeps running in between
     await h.sim.setTime(q1.end + 55 * 86_400);
-    const { command } = h.buildReport({ seriesId: a.seriesId, periodId: '2026Q1', unitsOutstanding: 500n, privateTerms: a.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(100_000), termsCommitment: a.terms.termsCommitment });
+    const { command } = await h.buildReport({ seriesId: a.seriesId, periodId: '2026Q1', unitsOutstanding: 500n, privateTerms: a.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(100_000), termsCommitment: a.terms.termsCommitment });
     const accepted = (await h.exec(h.issuer, command)).events.find((e) => e.type === 'ReportAccepted')!.payload as { paymentDue: string; accrual: string };
     await idx.catchUp();
     await h.sim.setTime(q1.end + 85 * 86_400);
@@ -142,7 +142,7 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
   });
 
   it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {
-    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'isolated', genesis: GENESIS }) });
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'isolated', genesis: GENESIS, acceptMockProofs: true }) });
     await h.runRaise();
     const broken = { chain: 'broken', readEvents: async () => { throw new Error('rpc 503'); } } as unknown as ChainPort;
     const idx = new Indexer(t.pool, [broken, h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });

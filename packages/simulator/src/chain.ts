@@ -1,7 +1,7 @@
 import {
   ChainError, adminCommandSchema, serviceCommandSchema, userCommandSchema,
   type AdminCommand, type AuctionState, type BidState, type ChainInfo, type ChainPort, type CurveState, type DomainEvent, type HealthReport,
-  type IssuerState, type PeriodState, type PositionState, type QuarterRateState, type RateAccumulatorState, type RedemptionState, type SeriesState,
+  type Groth16ProofJson, type IssuerState, type PeriodState, type PositionState, type QuarterRateState, type RateAccumulatorState, type RedemptionState, type SeriesState,
   type ServiceCommand, type ServiceRole, type SignedTx, type Stablecoin, type TransferWindowState, type TreasuryState, type TxResult, type UnsignedTx,
   type UserCommand, type VaultState,
 } from '@merces/domain';
@@ -23,6 +23,11 @@ import { toTreasuryState } from './reads/treasury.ts';
 import { toVaultState } from './reads/vault.ts';
 import { toTransferWindow } from './reads/window.ts';
 
+/**
+ * `acceptMockProofs` (default false) and `reportProofVerifier` come from `EngineOptions`: a simulator accepts mock
+ * report proofs only when told to, and verifies Groth16 proofs only with a verifier. They are process configuration,
+ * never persisted with the chain state.
+ */
 export interface SimulatorOptions extends EngineOptions {
   personality: Personality;
   /** chain key used in ids (defaults to the personality name) */
@@ -51,7 +56,7 @@ export class SimulatorChain implements ChainPort {
     this.family = cfg.family;
     this.chain = cfg.chain;
     this.clock = clock;
-    this.engine = new SimEngine(state, clock, { groth16Verifier: opts.groth16Verifier });
+    this.engine = new SimEngine(state, clock, { acceptMockProofs: opts.acceptMockProofs ?? false, reportProofVerifier: opts.reportProofVerifier });
     this.engine.events = events;
     this.persistence = opts.persistence ?? null;
   }
@@ -291,7 +296,21 @@ export class SimulatorChain implements ChainPort {
     for (const who of [tx.signer, ...tx.coSigners]) {
       if (signed.signatures[who] !== `sim:${who}`) throw new ChainError('Unauthorized', `missing or invalid signature for ${who}`);
     }
-    return this.run(() => this.engine.execute(tx.command, { kind: 'user', signers: [tx.signer, ...tx.coSigners] }));
+    // Groth16 verification is asynchronous and the engine is not: verify outside the write queue and hand the verdict
+    // in. Sound because the engine still checks the public signals against its own state before it uses the verdict.
+    const cmd = tx.command;
+    const proofVerdict = cmd.kind === 'submitReport' && cmd.proof?.system === 'groth16-bn254' ? await this.verifyReportProof(cmd.proof.proof, cmd.proof.publicInputs) : undefined;
+    return this.run(() => this.engine.execute(cmd, { kind: 'user', signers: [tx.signer, ...tx.coSigners] }, { proofVerdict }));
+  }
+  /** The configured verifier's verdict; undefined without a verifier, false when it throws (malformed proof or signals). */
+  private async verifyReportProof(proof: Groth16ProofJson, publicInputs: string[]): Promise<boolean | undefined> {
+    const v = this.engine.opts.reportProofVerifier;
+    if (!v) return undefined;
+    try {
+      return (await v.verify(proof, [...publicInputs])) === true;
+    } catch {
+      return false;
+    }
   }
   async submit(command: ServiceCommand, role: ServiceRole): Promise<TxResult> {
     const parsed = serviceCommandSchema.parse(command) as ServiceCommand;

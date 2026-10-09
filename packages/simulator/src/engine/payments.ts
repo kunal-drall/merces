@@ -46,6 +46,12 @@ export function receivePayment(e: EngineCore, s: SimSeries, payer: string, gross
 }
 
 // ------------------------------------------------------------------ paying in
+/**
+ * The issuer pays the open due. WP5 replaces the body with Stage 1's vault path (`pay`, SIM:1151-1185); until then it
+ * keeps the version-1 money path and, like Stage 1, closes the ledger's open due when the period settles
+ * (`openDuePeriod`/`openDueAmount` cleared, `lastPaidPeriod` set), so the next report is not refused as
+ * PaymentOutstanding.
+ */
 export function payIn(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'payIn' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
   e.requireIssuer(s, signer);
@@ -61,14 +67,29 @@ export function payIn(e: EngineCore, signer: string, cmd: Extract<Command, { kin
   const remaining = p.paymentDue - p.paid;
   if (amount !== remaining) throw new ChainError('InvalidTerms', `payIn must equal the remaining due ${remaining}`);
   if (p.isTail) {
-    payTail(e, s, signer, p, amount, now, emit);
+    // the tail cap applies when the money lands (Stage 1 `tailReceive`), no longer at the report: the payer is charged
+    // the accepted part only and `PaymentRefunded` records the excess. WP6 moves this onto Stage 1's tail state.
+    const r = s.redemption!;
+    const perUnit = interim.tailPayoutPerUnit(amount / r.unitsAtRedemption, r.tailCapPerUnit, r.tailPaidPerUnit);
+    const accepted = perUnit * r.unitsAtRedemption;
+    if (accepted > 0n) payTail(e, s, signer, p, accepted, now, emit);
+    if (amount > accepted) emit('PaymentRefunded', { seriesId: s.seriesId, periodId: p.periodId, amount: str(amount - accepted), reason: 'cap' });
   } else {
     // `paid` records what the vault accepted; a cap refund (PaymentRefunded) is not part of it (A-C6-1)
     // publish the due recomputed at payment time so read models do not keep the report-time figures
     const r = receivePayment(e, s, signer, amount, cmd.periodId, 'payIn', now, emit, { paymentDue: p.paymentDue, accrual: p.accrual });
     p.paid += r.accepted;
+    p.accrualPaid = p.accrual;
   }
   p.settled = true;
+  p.paidAt = now;
+  // close the ledger's open due (SIM:1177-1180, 1162-1164)
+  const l = s.ledger;
+  l.lastPaidPeriod = p.pid;
+  if (l.openDuePeriod === p.pid) {
+    l.openDuePeriod = null;
+    l.openDueAmount = 0n;
+  }
   syncStatus(e, s, now, emit);
 }
 export function postSplitReceipt(e: EngineCore, router: string, cmd: Extract<Command, { kind: 'postSplitReceipt' }>, now: number, emit: Emit): void {

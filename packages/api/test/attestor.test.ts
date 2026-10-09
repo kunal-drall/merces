@@ -2,7 +2,7 @@ import { createCipheriv, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { fxAttestationMessage, type UnsignedTx } from '@merces/domain';
-import { parsePeriod, periodOf, wadFromDecimal } from '@merces/math';
+import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import type { SimHarness } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
@@ -115,7 +115,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(fields).toEqual(expect.arrayContaining(['grossReceipts', 'w2Wages', 'form1099Totals', 'royalties']));
 
     // attestor device: extract, compute the payment and the commitment (the harness plays the device; nothing private reaches the API)
-    const built = h.buildReport({ seriesId, periodId, unitsOutstanding: 500n, unitsOffered: 500n, privateTerms: raise.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(80_000), termsCommitment: raise.terms.termsCommitment, tier: 3, source: 'attestor', attestor: att.address });
+    const built = await h.buildReport({ seriesId, periodId, unitsOutstanding: 500n, privateTerms: raise.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(80_000), termsCommitment: raise.terms.termsCommitment, tier: 3, source: 'attestor', attestor: att.address });
     expect(built.paymentStable).toBe(USDC(2000));
     expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { paymentStable: built.command.paymentStable, incomeCommitment: built.command.incomeCommitment }, att1Tok)).statusCode).toBe(403);
     const signed = await rig.post(`/attestor/tier3/${caseId}/sign`, { paymentStable: built.command.paymentStable, incomeCommitment: built.command.incomeCommitment, liquidityEvent: false }, attTok, { 'idempotency-key': 't3-sign-q1' });
@@ -172,7 +172,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
 
   it('FX fallback: the keeper opens a request, an attestor signs the rate client-side, the issuer reads it for assembly', async () => {
     const att = h.attestors[1]!;
-    const eur = await h.runRaise({ privateTerms: { threshold: 50_000_000_000n, shareRateWad: wadFromDecimal('0.10'), reportingCurrency: 'EUR', indexingRule: 'cpi-annual', salt: '0x' + '55'.repeat(32) }, terms: { reportingCurrency: 'EUR' } });
+    const eur = await h.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '55'.repeat(31)) }, terms: { reportingCurrency: 'EUR' } });
     const q = periodOf(await h.sim.now());
     await h.sim.setTime(q.end + DAY);
     await rig.sync();

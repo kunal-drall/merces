@@ -1,10 +1,30 @@
-import type { EventPayload, EventType, LifecycleStatus } from '@merces/domain';
+import type { EventPayload, EventType, Groth16ProofJson, LifecycleStatus } from '@merces/domain';
 import type { SimClock } from '../clock.ts';
 import type { SimSeries, SimState } from '../state.ts';
 
+/** Checks a Groth16 report proof against its six public signals (Stage 1's verifier, `@merces/circuits` `verifyReport`). */
+export interface ReportProofVerifier {
+  verify(proof: Groth16ProofJson, publicInputs: string[]): Promise<boolean>;
+}
+
 export interface EngineOptions {
-  /** Optional real Groth16 verifier (wired once Stage 1's circuit exists). */
-  groth16Verifier?: (proof: string, publicInputs: string[]) => boolean;
+  /**
+   * Accept `mock` report proofs (a digest over the public signals: anyone can compute one). Off by default; the
+   * tests, the harness and the vector runner opt in. Never enable it for a chain that stands in for a live one.
+   */
+  acceptMockProofs?: boolean;
+  /**
+   * Verifies `groth16-bn254` report proofs. Verification is asynchronous, so `SimulatorChain.send` runs it before the
+   * (synchronous) engine and hands the verdict in through `ExecContext.proofVerdict`. Without one, every Groth16
+   * report is refused.
+   */
+  reportProofVerifier?: ReportProofVerifier;
+}
+
+/** Facts established outside the synchronous engine for one transaction. */
+export interface ExecContext {
+  /** the Groth16 verifier's verdict on the command's (proof, public signals); undefined when none ran */
+  proofVerdict?: boolean;
 }
 
 /**

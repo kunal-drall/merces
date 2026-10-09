@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parsePeriod } from '@merces/math';
 import { SimHarness } from '../src/index.ts';
-import { GENESIS, USDC, expectChainError, types } from './helpers.ts';
+import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './helpers.ts';
 
 describe('redemption and tail', () => {
   it('quotes the formula price, blocks before lockup, pays holders and burns, then honours the tail', async () => {
@@ -36,10 +36,13 @@ describe('redemption and tail', () => {
     expect(types(c.events)).toEqual(['PayoutClaimed', 'UnitsBurned', 'RedemptionClaimed']);
     const after = BigInt(await h.sim.getBalance(h.backers[0]!.address, 'USDC'));
     expect(after - before).toBe(USDC(1850) + (USDC(2000 * 0.95) / 5n));
-    // tail: price equalled C_remaining → no tail due even on a liquidity event
+    // tail: price equalled C_remaining → no tail is owed: a liquidity-event report is refused (Stage 1 NoTailDue), and an
+    // ordinary report is accepted with nothing due, only advancing the commitment chain
     await h.sim.setTime(parsePeriod('2027Q1').end + 86_400);
-    const tail = await h.reportAndPay(seriesId, '2027Q1', privateTerms, terms.termsCommitment, 0n, USDC(1_000_000), { liquidityEvent: true });
+    await expectStage1Error(h.reportAndPay(seriesId, '2027Q1', privateTerms, terms.termsCommitment, 0n, USDC(1_000_000), { liquidityEvent: true }), 'NoTailDue');
+    const tail = await h.reportAndPay(seriesId, '2027Q1', privateTerms, terms.termsCommitment, 0n, USDC(1_000_000));
     expect(tail.due).toBe(0n);
+    expect(tail.paid).toBe(0n);
   });
   it('pays a capped tail when redemption was bound by the hurdle', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
@@ -55,15 +58,20 @@ describe('redemption and tail', () => {
     expect(tailCap).toBe(USDC(22.5) - BigInt(opened.pricePerUnit));
     // Q2 liquidity event: 10% × (2M − 60k) ≈ 194,000 → 388/unit, capped at tailCap per unit
     await h.sim.setTime(parsePeriod('2026Q2').end + 86_400);
+    // the report opens the full payment as due (Stage 1 `Report.due`); the cap applies when it is paid, and the excess
+    // goes back to the issuer
     const tail = await h.reportAndPay(seriesId, '2026Q2', privateTerms, terms.termsCommitment, USDC(10_000), USDC(2_000_000), { liquidityEvent: true });
-    expect(tail.due).toBe(tailCap * 500n);
-    expect(types(tail.events)).toContain('TailPayout');
+    expect(tail.due).toBe(tail.paymentStable);
+    expect(tail.due).toBeGreaterThan(tailCap * 500n);
+    const payout = tail.events.find((e) => e.type === 'TailPayout')!.payload as { total: string };
+    expect(BigInt(payout.total)).toBe(tailCap * 500n);
+    const refund = tail.events.find((e) => e.type === 'PaymentRefunded')!.payload as { amount: string; reason: string };
+    expect([BigInt(refund.amount), refund.reason]).toEqual([tail.due - tailCap * 500n, 'cap']);
     const pos = (await h.sim.getPosition(seriesId, h.backers[0]!.address))!;
     expect(BigInt(pos.tailClaimable)).toBe((tailCap * 500n * 95n / 100n) / 5n);
     await h.exec(h.backers[0]!, { kind: 'claimPayout', seriesId });
-    // a second tail report cannot exceed the cap
+    // the cap is used up: a second liquidity-event report is refused (Stage 1 NoTailDue)
     await h.sim.setTime(parsePeriod('2026Q3').end + 86_400);
-    const tail2 = await h.reportAndPay(seriesId, '2026Q3', privateTerms, terms.termsCommitment, USDC(2_000_000), USDC(3_000_000), { liquidityEvent: true });
-    expect(tail2.due).toBe(0n);
+    await expectStage1Error(h.reportAndPay(seriesId, '2026Q3', privateTerms, terms.termsCommitment, USDC(2_000_000), USDC(3_000_000), { liquidityEvent: true }), 'NoTailDue');
   });
 });

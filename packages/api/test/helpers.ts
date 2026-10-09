@@ -14,8 +14,9 @@ export const SECRET = 'test-secret';
 export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extraRoutes?: ((app: import('fastify').FastifyInstance, ctx: import('@merces/api').AppContext) => void)[] } = {}) {
   const t = await createTestSchema();
   const prefix = opts.keyPrefix ?? `t${Math.random().toString(36).slice(2, 7)}`;
-  const sol = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: `solana`, genesis: opts.genesis ?? GENESIS }) });
-  const mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: `monad`, genesis: opts.genesis ?? GENESIS }) });
+  // the harness and the device build mock proofs (S1 WP10 moves the device to Groth16): these chains accept them
+  const sol = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: `solana`, genesis: opts.genesis ?? GENESIS, acceptMockProofs: true }) });
+  const mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: `monad`, genesis: opts.genesis ?? GENESIS, acceptMockProofs: true }) });
   void prefix;
   const chains: ChainRegistry = {
     chains: new Map([[sol.sim.chain, sol.sim], [mon.sim.chain, mon.sim]]),

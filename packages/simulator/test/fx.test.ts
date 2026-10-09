@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { WAD, parsePeriod, wadFromDecimal } from '@merces/math';
+import { WAD, parsePeriod, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimHarness } from '../src/index.ts';
 import { GENESIS, expectChainError, types } from './helpers.ts';
 
 describe('rate accumulator and FX fallback', () => {
   it('snapshots once per day, averages the quarter, flags low coverage and requires an attestor rate', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    const { seriesId, terms, privateTerms } = await h.runRaise({ privateTerms: { threshold: 50_000_000_000n, shareRateWad: wadFromDecimal('0.10'), reportingCurrency: 'EUR', indexingRule: 'hicp-annual', salt: '0x' + '33'.repeat(32) }, terms: { reportingCurrency: 'EUR' } });
+    const { seriesId, terms, privateTerms } = await h.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '33'.repeat(31)) }, terms: { reportingCurrency: 'EUR' } });
     const q1 = parsePeriod('2026Q1');
     // snapshot every day of Q1 at 1.08 then 1.10 (sim time is already past the auction; go to Q1 start)
     let t = Math.max(await h.sim.now(), q1.start);

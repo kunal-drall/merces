@@ -4,7 +4,7 @@ import { makeContext } from '@merces/api';
 import { KeeperScheduler, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, statusCrankJob, transferWindowsJob } from '@merces/keepers';
 import { setFlag } from '@merces/core';
 import { orderCommitment, type UnsignedTx } from '@merces/domain';
-import { parsePeriod, wadFromDecimal } from '@merces/math';
+import { parsePeriod, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { makeRig } from './helpers.ts';
 
 /**
@@ -90,11 +90,15 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     expect(q1View.standing).toBe('FormalNoticeDue');
     expect(q1View.nextStep).toBe('assemble-report');
     // pay 76 days after grace: accrual 4000 × 8% × 76/365
-    const { command } = h.buildReport({ seriesId, periodId: '2026Q1', unitsOutstanding: 500n, unitsOffered: 500n, privateTerms: raise.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(100_000), termsCommitment: raise.terms.termsCommitment });
+    const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', unitsOutstanding: 500n, privateTerms: raise.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(100_000), termsCommitment: raise.terms.termsCommitment });
     const acc = await send(h.issuer, await h.sim.build(command, h.issuer.address), issuerTok);
-    const accrual = BigInt(acc.events[0]!.payload.accrual!);
+    // the report opens the due without accrual (Stage 1 `Report.due`); accrual runs until the payment lands
+    expect([acc.events[0]!.payload.paymentDue, acc.events[0]!.payload.accrual]).toEqual([USDC(4000).toString(), '0']);
+    const live = (await h.sim.getPeriod(seriesId, '2026Q1'))!;
+    const accrual = BigInt(live.accrual);
     expect(accrual).toBe((USDC(4000) * wadFromDecimal('0.08') * 76n) / (10n ** 18n * 365n));
-    const pay = await send(h.issuer, await h.sim.build({ kind: 'payIn', seriesId, periodId: '2026Q1', amount: acc.events[0]!.payload.paymentDue! }, h.issuer.address), issuerTok);
+    expect(BigInt(live.paymentDue)).toBe(USDC(4000) + accrual);
+    const pay = await send(h.issuer, await h.sim.build({ kind: 'payIn', seriesId, periodId: '2026Q1', amount: live.paymentDue }, h.issuer.address), issuerTok);
     expect(pay.events.map((e) => e.type)).toContain('ReleasesResumed');
     await rig.sync();
     const periods = await rig.get(`/series/${seriesId}/periods`, issuerTok);
@@ -170,7 +174,10 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     const period = parsePeriod(nextQ?.periodId ?? `${q.year}Q${q.quarter === 4 ? 1 : q.quarter + 1}`);
     await h.sim.setTime(Math.max(await h.sim.now(), period.end + 86_400));
     const tail = await h.reportAndPay(seriesId, period.id, raise.privateTerms, raise.terms.termsCommitment, USDC(10_000), USDC(5_000_000), { liquidityEvent: true });
-    expect(tail.due).toBe(BigInt(quote.json().tailCapPerUnit) * 500n);
+    // the report opens the full payment; the cap applies when it is paid (Stage 1 `tailReceive`), the rest is refunded
+    expect(tail.due).toBe(tail.paymentStable);
+    const payout = tail.events.find((e) => e.type === 'TailPayout')!.payload as { total: string };
+    expect(BigInt(payout.total)).toBe(BigInt(quote.json().tailCapPerUnit) * 500n);
     await rig.sync();
     view = await rig.get(`/series/${seriesId}/redemption`, holderTok);
     expect(view.json().tail.open).toBe(false);
@@ -203,7 +210,8 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
 
   it('multi-series issuer with tier-1 reconciliation: split receipts reduce the quarterly payment due', async () => {
     const h = rig.sol;
-    const a = await h.runRaise();
+    // tier 1 is a report tier only on a pure tier-1 series (Stage 1)
+    const a = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
     const b = await h.runRaise({ terms: { unitsOffered: '300' }, bids: [{ backer: 0, price: USDC(15), qty: 60n }, { backer: 1, price: USDC(15), qty: 60n }, { backer: 2, price: USDC(15), qty: 60n }, { backer: 3, price: USDC(15), qty: 60n }, { backer: 4, price: USDC(15), qty: 60n }] });
     await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId: a.seriesId, router: h.router });
     const issuerTok = rig.token({ accountId: 'ms-iss', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
@@ -272,7 +280,7 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
 
   it('FX fallback: a non-USD series with no snapshots is flagged by the keeper; the fx endpoint says an attestor rate is required', async () => {
     const h = rig.sol;
-    const raise = await h.runRaise({ privateTerms: { threshold: 50_000_000_000n, shareRateWad: wadFromDecimal('0.10'), reportingCurrency: 'GBP', indexingRule: 'cpi-annual', salt: '0x' + '99'.repeat(32) }, terms: { reportingCurrency: 'GBP' } });
+    const raise = await h.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'GBP', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '99'.repeat(31)) }, terms: { reportingCurrency: 'GBP' } });
     const issuerTok = rig.token({ accountId: 'fx-iss', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
     const settledAt = (await h.sim.getSeries(raise.seriesId))!.settledAt!;
     const q = parsePeriod(`${new Date(settledAt * 1000).getUTCFullYear()}Q${Math.floor(new Date(settledAt * 1000).getUTCMonth() / 3) + 1}`);

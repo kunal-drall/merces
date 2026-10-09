@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { stripeFixtureFor, stripeGrossUntil } from '@merces/fixtures';
-import { parsePeriod, wadFromDecimal } from '@merces/math';
-import { assembleOnDevice } from '@merces/poi-device';
+import { parsePeriod, ratePerUnit, wadFromDecimal } from '@merces/math';
+import { assembleOnDevice, type IncomeOpening } from '@merces/poi-device';
 import type { UnsignedTx } from '@merces/domain';
 import { makeRig } from './helpers.ts';
 
@@ -24,7 +24,7 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
       const seriesId = raise.seriesId;
       const issuerTok = rig.token({ accountId: `iss-${personality}`, wallets: [{ chain: h.sim.chain, address: h.issuer.address }], roles: ['issuer'] });
       // the device's view of the private terms (as disclosed by E4)
-      const privateTerms = { threshold: raise.privateTerms.threshold.toString(), shareRate: '0.10', reportingCurrency: 'USD' };
+      const privateTerms = { threshold: raise.privateTerms.theta.toString(), shareRate: '0.10', reportingCurrency: 'USD' };
       const fixture = stripeFixtureFor(`iss-${personality}`, 2026, [USDC(25_000), USDC(50_000), USDC(75_000), USDC(100_000)]);
       // Q3 is over
       await h.sim.setTime(parsePeriod('2026Q3').end + 86_400);
@@ -37,7 +37,8 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
       expect(sources.json().sources.map((s: { kind: string }) => s.kind)).toEqual(['stripe', 'deel', 'distrokid']);
       expect((await rig.get('/prover/artifacts')).json().publicInputLayout).toHaveLength(6);
 
-      let prev = 0n;
+      // the device keeps its last income opening for the next quarter's prior (it never reaches the API)
+      let prior: IncomeOpening | null = null;
       for (const q of ['2026Q1', '2026Q2', '2026Q3']) {
         const period = parsePeriod(q);
         // 1. zkTLS session (device completes it with the provider; here the mock proves from the Stripe fixture)
@@ -48,8 +49,8 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
         const ytd = ytdCents * 10_000n;
         const zktlsProof = rig.zktls.prove({ source: 'stripe', seriesId, periodId: q, figure: ytd, currency: 'USD', coversUntil: period.end, owner: h.issuer.address, sessionId: sess.json().sessionId });
         // 2. device: commitment + proof + attestation from the verifier (direct, not via the API)
-        const { assembled } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, incomeYtdPrev: prev, incomeYtdNow: ytd, fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof }, rig.verifier);
-        prev = ytd;
+        const { assembled, opening } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, prior, incomeYtdNow: ytd, fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof }, rig.verifier);
+        prior = opening;
         expect(JSON.stringify(assembled)).not.toContain(ytd.toString());
         // 3. assemble through the API (offchain verification) → unsigned submitReport
         const rep = await rig.post(`/series/${seriesId}/reports`, assembled, issuerTok, { 'idempotency-key': `rep-${personality}-${q}` });
@@ -100,7 +101,7 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
 
   it('rejects bad attestations, wrong public inputs, tier 4, and demands an attestor rate when FX is flagged', async () => {
     const h = rig.harness('solana');
-    const raise = await h.runRaise({ privateTerms: { threshold: 50_000_000_000n, shareRateWad: wadFromDecimal('0.10'), reportingCurrency: 'EUR', indexingRule: 'cpi-annual', salt: '0x' + '55'.repeat(32) }, terms: { reportingCurrency: 'EUR' } });
+    const raise = await h.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '55'.repeat(31)) }, terms: { reportingCurrency: 'EUR' } });
     const seriesId = raise.seriesId;
     const issuerTok = rig.token({ accountId: 'iss-eur', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
     // the shared simulator is already past 2026Q3 (previous test); this raise settles in Q4, so Q4 is its first reportable quarter
@@ -113,7 +114,7 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     const ytd = 70_000_000_000n;
     const zktlsProof = rig.zktls.prove({ source: 'deel', seriesId, periodId: q, figure: ytd, currency: 'EUR', coversUntil: parsePeriod(q).end, owner: h.issuer.address });
     const rate = wadFromDecimal('1.08');
-    const { assembled } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, incomeYtdPrev: 0n, incomeYtdNow: ytd, fxAvgWad: rate, tier: 2, source: 'deel', zktlsProof }, rig.verifier);
+    const { assembled } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, prior: null, incomeYtdNow: ytd, fxAvgWad: rate, tier: 2, source: 'deel', zktlsProof }, rig.verifier);
     // no attestor rate → 422 with the fx detail
     const noRate = await rig.post(`/series/${seriesId}/reports`, assembled, issuerTok);
     expect(noRate.statusCode).toBe(422);

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { logCapture, createLogger } from '@merces/core';
-import { parsePeriod } from '@merces/math';
+import { parsePeriod, ratePerUnit } from '@merces/math';
 import { assembleOnDevice } from '@merces/poi-device';
 import { SimWallet } from '@merces/simulator';
 import type { UnsignedTx } from '@merces/domain';
@@ -39,7 +39,7 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
 
   it('runs the income flows with canary values and finds none at rest, in logs, queues or error reports', async () => {
     const h = rig.sol;
-    const privateTerms = { threshold: CANARY_THRESHOLD, shareRateWad: 10n ** 17n, reportingCurrency: 'USD', indexingRule: 'cpi-annual' as const, salt: '0x' + '77'.repeat(32) };
+    const privateTerms = { theta: CANARY_THRESHOLD, rWad: ratePerUnit(10n ** 17n, 500n), currency: 'USD', indexingRule: 'cpi-annual' as const, termsSalt: BigInt('0x' + '77'.repeat(31)) };
     const raise = await h.runRaise({ privateTerms });
     const seriesId = raise.seriesId;
     await rig.sync();
@@ -48,7 +48,7 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     const q = '2026Q1';
     await h.sim.setTime(parsePeriod(q).end + 86_400);
     const proof = rig.zktls.prove({ source: 'stripe', seriesId, periodId: q, figure: CANARY_INCOME, currency: 'USD', coversUntil: parsePeriod(q).end, owner: h.issuer.address });
-    const { assembled } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms: { threshold: CANARY_THRESHOLD.toString(), shareRate: '0.10', reportingCurrency: 'USD' }, incomeYtdPrev: 0n, incomeYtdNow: CANARY_INCOME, fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof: proof }, rig.verifier);
+    const { assembled } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms: { threshold: CANARY_THRESHOLD.toString(), shareRate: '0.10', reportingCurrency: 'USD' }, prior: null, incomeYtdNow: CANARY_INCOME, fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof: proof }, rig.verifier);
     const rep = await rig.post(`/series/${seriesId}/reports`, assembled, issuerTok);
     expect(rep.statusCode, JSON.stringify(rep.json())).toBe(201);
     const sent = await rig.post('/tx/send', await h.issuer.sign(rep.json().tx as UnsignedTx), issuerTok);
@@ -63,7 +63,7 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     const badRes = await rig.post(`/series/${seriesId}/reports`, bad, issuerTok);
     expect(badRes.statusCode).toBe(422);
     errorReports.push(JSON.stringify(badRes.json()));
-    const refused = await rig.verifier.attest({ seriesId, periodId: q, tier: 2, source: 'stripe', reportingCurrency: 'USD', zktlsProof: proof, incomeSalt: '0x' + '00'.repeat(8), incomeCommitment: assembled.incomeCommitment });
+    const refused = await rig.verifier.attest({ seriesId, periodId: q, tier: 2, source: 'stripe', reportingCurrency: 'USD', zktlsProof: proof, incomeSalt: '1', incomeCommitment: assembled.incomeCommitment, priorIncomeCommitment: assembled.priorIncomeCommitment });
     errorReports.push(JSON.stringify(refused));
     // 3. the private terms vault path (E4) with the canary threshold
     const issuerApp = new SimWallet('solana', 'canary-draft-issuer');

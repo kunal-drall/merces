@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { DEFAULTS, normaliseAddress, randomSalt, termsCommitment, type SeriesTerms, type UnsignedTx } from '@merces/domain';
+import { DEFAULTS, currencyCodeOf, normaliseAddress, randomFieldSalt, termsCommitment, type SeriesTerms, type UnsignedTx } from '@merces/domain';
 import { WAD, ratePerUnit, wadFromDecimal, wadToDecimal } from '@merces/math';
 import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -38,6 +38,42 @@ export const privateTermsSchema = z.object({
   indexingRule: z.enum(['cpi-annual', 'none']).default('cpi-annual'),
 });
 
+/** The terms commitment scheme the vault payload records (Stage 1, SPEC §1.5). */
+export const TERMS_SCHEME = 'poseidon5-v1';
+
+/** The fields the vault payload and `POST /terms/commitment` carry, as stored (decimal strings, the salt a field element). */
+export interface DisclosedTermsFields {
+  threshold: string;
+  ratePerUnitWad: string;
+  reportingCurrency: string;
+  indexingRule: string;
+  salt: string;
+}
+
+/** Whether a reporting currency has a code in Stage 1's terms commitment (`CURRENCY_CODES`). */
+function isCommitmentCurrency(alpha: string): boolean {
+  try {
+    currencyCodeOf(alpha);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Stage 1's terms commitment of the disclosed fields. Throws a value-free `AppError` (422) when they cannot form one: a
+ * currency Stage 1 does not list, an unknown indexing rule, θ or r out of the u64 range, a salt that is not a field
+ * element (a terms record from before the Poseidon scheme).
+ */
+export function commitTerms(f: DisclosedTermsFields): string {
+  if (f.indexingRule !== 'none' && f.indexingRule !== 'cpi-annual') throw AppError.unprocessable('unknown indexing rule');
+  try {
+    return termsCommitment({ theta: f.threshold, rWad: f.ratePerUnitWad, currency: f.reportingCurrency, indexingRule: f.indexingRule, termsSalt: f.salt });
+  } catch (e) {
+    throw AppError.unprocessable(`the terms cannot form a commitment: ${(e as Error).message}`);
+  }
+}
+
 export interface ValidationIssue {
   field: string;
   code: string;
@@ -72,6 +108,7 @@ export class TermsService {
     if (BigInt(pub.reservePrice) <= 0n) issues.push({ field: 'reservePrice', code: 'positive', message: 'reserve price must be positive' });
     if (BigInt(pub.minimumRaise) > units * BigInt(pub.reservePrice)) issues.push({ field: 'minimumRaise', code: 'unreachable', message: 'minimum raise exceeds units × reserve price' });
     if (pub.tierFlags.tier4) issues.push({ field: 'tierFlags.tier4', code: 'switched-off', message: 'tier 4 self-attestation is switched off' });
+    if (!isCommitmentCurrency(pub.reportingCurrency)) issues.push({ field: 'reportingCurrency', code: 'unsupported', message: `${pub.reportingCurrency} has no ISO-4217 numeric code in Stage 1's terms commitment` });
     if (!pub.tierFlags.tier1 && !pub.tierFlags.tier2 && !pub.tierFlags.tier3) issues.push({ field: 'tierFlags', code: 'none', message: 'at least one verification tier is required' });
     let ratePerUnitWad: string | null = null;
     let floorStr: string | null = null;
@@ -129,9 +166,11 @@ export class TermsService {
     const year = new Date(this.ctx.wallClock() * 1000).getUTCFullYear();
     const { issues, derived } = await this.validate(String(d.chain), pub, priv, year);
     if (issues.length) throw AppError.unprocessable('terms invalid', { issues });
-    const salt = randomSalt();
-    const commitment = termsCommitment({ threshold: priv.threshold, ratePerUnitWad: derived.ratePerUnitWad!, reportingCurrency: pub.reportingCurrency, indexingRule: priv.indexingRule, salt });
-    const privatePayload = JSON.stringify({ threshold: priv.threshold, shareRate: priv.shareRate, ratePerUnitWad: derived.ratePerUnitWad, reportingCurrency: pub.reportingCurrency, indexingRule: priv.indexingRule, salt });
+    // Stage 1's terms commitment: Poseidon(5)(θ, r, ISO-4217 numeric currency, indexing rule code, field salt). The salt
+    // is a field element, stored as a decimal string; `scheme` names the commitment for readers of the vault payload.
+    const salt = randomFieldSalt().toString();
+    const commitment = commitTerms({ threshold: priv.threshold, ratePerUnitWad: derived.ratePerUnitWad!, reportingCurrency: pub.reportingCurrency, indexingRule: priv.indexingRule, salt });
+    const privatePayload = JSON.stringify({ threshold: priv.threshold, shareRate: priv.shareRate, ratePerUnitWad: derived.ratePerUnitWad, reportingCurrency: pub.reportingCurrency, indexingRule: priv.indexingRule, salt, scheme: TERMS_SCHEME });
     const ciphertext = this.ctx.vault.encrypt(privatePayload, `terms:${draftId}`);
     // the indexing rule is a public rule name (the commitment hides θ and r, not the rule), so it is kept as metadata for the yearly indexing run (E9)
     const publicStored = { ...pub, indexingRule: priv.indexingRule, capMultipleWad: derived.capMultipleWad, capMultipleDecimal: pub.capMultiple, hurdleWad: derived.hurdleWad, thresholdFloor: derived.thresholdFloor, floorPlaceholder: derived.floorPlaceholder };
@@ -231,10 +270,10 @@ export class TermsService {
     const series = await this.ctx.chains.get(row.chain).getSeries(seriesId);
     if (!series) throw AppError.notFound('series');
     const newThreshold = (BigInt(plain.threshold!) * BigInt(10_000 + ix.inflation_index_bps)) / 10_000n;
-    const salt = randomSalt();
-    const newCommitment = termsCommitment({ threshold: newThreshold, ratePerUnitWad: plain.ratePerUnitWad!, reportingCurrency: plain.reportingCurrency!, indexingRule: plain.indexingRule!, salt });
+    const salt = randomFieldSalt().toString();
+    const newCommitment = commitTerms({ threshold: newThreshold.toString(), ratePerUnitWad: plain.ratePerUnitWad!, reportingCurrency: plain.reportingCurrency!, indexingRule: plain.indexingRule!, salt });
     const amendmentId = this.ctx.newId('amend');
-    const newPlain = { ...plain, threshold: newThreshold.toString(), salt, indexedYear: year };
+    const newPlain = { ...plain, threshold: newThreshold.toString(), salt, scheme: TERMS_SCHEME, indexedYear: year };
     await this.ctx.pool.query(
       'insert into terms_amendments (amendment_id, series_id, draft_id, kind, new_commitment, new_cap_multiple_wad, ciphertext, version, rationale_code) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
       [amendmentId, seriesId, row.draft_id, 'inflation-index', newCommitment, series.terms.capMultipleWad, this.ctx.vault.encrypt(JSON.stringify(newPlain), `terms:${row.draft_id}`), Number(row.version) + 1, `cpi-${year}-${ix.inflation_index_bps}bps`],

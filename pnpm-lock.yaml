@@ -477,6 +477,9 @@ importers:
 
   packages/simulator:
     dependencies:
+      '@merces/circuits':
+        specifier: workspace:*
+        version: link:../../stage1/circuits
       '@merces/db':
         specifier: workspace:*
         version: link:../db

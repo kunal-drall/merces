@@ -225,7 +225,7 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     const after = (await rig.get(`/series/${seriesId}/terms`, bTok2)).json();
     expect(after.terms.threshold).toBe('66950000000');
     expect(after.version).toBe(2);
-    expect(after.commitment).toBe(termsCommitment({ threshold: '66950000000', ratePerUnitWad: after.terms.ratePerUnitWad, reportingCurrency: 'USD', indexingRule: 'cpi-annual', salt: after.terms.salt }));
+    expect(after.commitment).toBe(termsCommitment({ theta: '66950000000', rWad: after.terms.ratePerUnitWad, currency: 'USD', indexingRule: 'cpi-annual', termsSalt: after.terms.salt }));
     expect((await rig.get(`/series/${seriesId}`)).json().terms.termsCommitment).toBe(after.commitment);
   });
 });

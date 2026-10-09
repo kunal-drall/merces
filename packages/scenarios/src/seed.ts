@@ -1,8 +1,7 @@
-import { bidCommitment, type SeriesTerms } from '@merces/domain';
+import { bidCommitment, termsCommitment, type SeriesTerms } from '@merces/domain';
 import { PILOT_COHORT, stripeFixtureFor, stripeGrossUntil, type SyntheticIssuer } from '@merces/fixtures';
 import { parsePeriod, periodsBetween, ratePerUnit, wadFromDecimal } from '@merces/math';
-import { SimHarness, SimWallet, SimulatorChain, defaultTerms, type PrivateTerms } from '@merces/simulator';
-import { termsCommitment } from '@merces/domain';
+import { SimHarness, SimWallet, SimulatorChain, defaultTerms, harnessFieldSalt, type PrivateTerms } from '@merces/simulator';
 
 export interface SeededIssuer {
   issuer: SyntheticIssuer;
@@ -47,9 +46,8 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
     const wallet = new SimWallet(sim.family, `issuer:${issuer.handle}`);
     await sim.submit({ kind: 'setAllowlist', wallet: wallet.address, allowed: true }, 'allowlistManager');
     await sim.fund(wallet.address, issuer.stablecoin, 10_000_000_000_000n);
-    const privateTerms: PrivateTerms = { threshold: issuer.threshold, shareRateWad: issuer.shareRateWad, reportingCurrency: issuer.reportingCurrency, indexingRule: 'cpi-annual', salt: '0x' + (0x40 + i).toString(16).padStart(2, '0').repeat(32) };
-    const r = ratePerUnit(issuer.shareRateWad, issuer.unitsOffered);
-    const commitment = termsCommitment({ threshold: privateTerms.threshold, ratePerUnitWad: r, reportingCurrency: issuer.reportingCurrency, indexingRule: 'cpi-annual', salt: privateTerms.salt });
+    const privateTerms: PrivateTerms = { theta: issuer.threshold, rWad: ratePerUnit(issuer.shareRateWad, issuer.unitsOffered), currency: issuer.reportingCurrency, indexingRule: 'cpi-annual', termsSalt: harnessFieldSalt(`seed:${issuer.handle}:terms`) };
+    const commitment = termsCommitment(privateTerms);
     const { terms } = defaultTerms(sim, {
       stablecoin: issuer.stablecoin, stablecoinMint: sim.mintOf(issuer.stablecoin), unitsOffered: issuer.unitsOffered.toString(), reservePrice: issuer.reservePrice.toString(), minimumRaise: issuer.minimumRaise.toString(),
       reportingCurrency: issuer.reportingCurrency, termsCommitment: commitment, contractHash: '0x' + (0x80 + i).toString(16).padStart(2, '0').repeat(32),
@@ -105,8 +103,8 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
       const pair = fxBasis === 'unity' ? null : `${s.issuer.reportingCurrency}/USD`;
       const rate = fxBasis === 'unity' ? undefined : wadFromDecimal(FX_PLACEHOLDER[s.issuer.reportingCurrency] ?? '1');
       const series = (await h.sim.getSeries(s.seriesId))!;
-      const { command } = h.buildReport({
-        seriesId: s.seriesId, periodId, unitsOutstanding: BigInt(series.unitsOutstanding), unitsOffered: s.issuer.unitsOffered, privateTerms: s.privateTerms, incomeYtdPrev: ytdPrev, incomeYtdNow: ytdNow, termsCommitment: s.terms.termsCommitment,
+      const { command } = await h.buildReport({
+        seriesId: s.seriesId, periodId, unitsOutstanding: BigInt(series.unitsOutstanding), privateTerms: s.privateTerms, incomeYtdPrev: ytdPrev, incomeYtdNow: ytdNow, termsCommitment: s.terms.termsCommitment,
         tier: s.issuer.tier, source: s.issuer.source, attestor: s.issuer.tier === 3 ? h.attestors[0]!.address : null,
         fxBasis, pair, fxAvgWad: rate, attestorRate: rate ? { attestor: h.attestors[1]!.address, rateWad: rate, pair: pair! } : null,
         liquidityEvent: s.issuer.handle === 'mesh-mika' && q === 3,

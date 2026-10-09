@@ -1,8 +1,8 @@
 import { createPublicKey, verify as edVerify } from 'node:crypto';
 import { z } from 'zod';
 import { AppError, enqueueOutbox, getFlag } from '@merces/core';
-import { attestationMessage, reportPublicInputs, reportProofSchema, verifierAttestationSchema, type UnsignedTx, type UserCommand } from '@merces/domain';
-import { interim, WAD, parsePeriod, periodsBetween } from '@merces/math';
+import { attestationMessage, expectedPrior, fieldToHex32, reportPublicInputs, reportProofSchema, verifierAttestationSchema, type UnsignedTx, type UserCommand } from '@merces/domain';
+import { interim, WAD, parsePeriod, periodsBetween, toPid } from '@merces/math';
 import { SOURCE_DEFINITIONS, type IncomeSourceKind } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -20,6 +20,8 @@ export const assembleSchema = z.object({
   tier: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   source: z.string().min(1),
   paymentStable: z.string().regex(/^\d+$/),
+  /** the income commitment this report chains from (Stage 1 prior chain; ZERO at a year start) */
+  priorIncomeCommitment: z.string().regex(/^0x[0-9a-f]{64}$/),
   incomeCommitment: z.string().regex(/^0x[0-9a-f]{64}$/),
   proof: reportProofSchema,
   attestation: verifierAttestationSchema.nullable().default(null),
@@ -90,7 +92,7 @@ export class ProofOfIncomeService {
     const keys = await this.ctx.chainFor(seriesId).listVerifierKeys();
     const key = keys.find((k) => k.keyId === a.keyId);
     if (!key) throw AppError.unprocessable(`verifier key ${a.keyId} is not registered onchain`);
-    const msg = attestationMessage({ seriesId: a.seriesId, periodId: a.periodId, incomeCommitment: a.incomeCommitment, tier: a.tier });
+    const msg = attestationMessage({ seriesId: a.seriesId, periodId: a.periodId, priorIncomeCommitment: a.priorIncomeCommitment, incomeCommitment: a.incomeCommitment, tier: a.tier, liquidityEvent: a.liquidityEvent });
     let ok = false;
     try {
       ok = edVerify(null, Buffer.from(msg), createPublicKey({ key: Buffer.from(key.publicKey, 'hex'), format: 'der', type: 'spki' }), Buffer.from(a.signature.replace(/^0x/, ''), 'hex'));
@@ -118,13 +120,24 @@ export class ProofOfIncomeService {
       fxAvgWad = input.attestorRate.rateWad;
     } else fxAvgWad = fx.fxAvgWad!;
     const units = series.redemption ? series.redemption.unitsAtRedemption : series.unitsOutstanding;
-    const expectedInputs = reportPublicInputs({ termsCommitment: series.terms.termsCommitment, incomeCommitment: input.incomeCommitment, unitsOutstanding: units, paymentStable: input.paymentStable, fxAvgWad, periodId: input.periodId });
-    if (expectedInputs.join(',') !== input.proof.publicInputs.join(',')) throw AppError.unprocessable('public inputs do not match the series terms, units, payment or FX basis', { expected: expectedInputs });
+    // the prior the chain will require (SPEC §6.2 step 5), from the series' reporting ledger
+    const rep = series.reporting;
+    const pidOrNull = (p: string | null) => (p === null ? null : toPid(p));
+    const prior = expectedPrior({ lastAcceptedPeriod: pidOrNull(rep.lastAcceptedPeriod), lastIncomePeriod: pidOrNull(rep.lastIncomePeriod), lastIncomeCommitment: rep.lastIncomeCommitment }, toPid(input.periodId), input.priorIncomeCommitment);
+    if (prior !== input.priorIncomeCommitment) throw AppError.unprocessable('the prior income commitment does not chain from the last accepted report', { expectedPrior: prior });
+    let expectedInputs: string[];
+    try {
+      expectedInputs = reportPublicInputs({ termsCommitment: series.terms.termsCommitment, unitsOutstanding: units, fxAvgWad, priorIncomeCommitment: prior, incomeCommitment: input.incomeCommitment, paymentStable: input.paymentStable });
+    } catch {
+      throw AppError.unprocessable('the report does not fit the circuit: the series terms commitment is not a Poseidon commitment, or an amount is out of range');
+    }
+    if (expectedInputs.join(',') !== input.proof.publicInputs.join(',')) throw AppError.unprocessable('public inputs do not match the series terms, units, prior, payment or FX basis', { expected: expectedInputs });
     if (input.proof.system !== this.ctx.proofVerifier.system) throw AppError.unprocessable(`proof system ${input.proof.system} is not accepted (verifier runs ${this.ctx.proofVerifier.system})`);
     if (!(await this.ctx.proofVerifier.verify(input.proof.proof, input.proof.publicInputs))) throw AppError.unprocessable('proof does not verify');
     if (input.tier === 2) {
       if (!input.attestation) throw AppError.unprocessable('tier 2 needs a report-verifier attestation');
-      if (input.attestation.seriesId !== seriesId || input.attestation.periodId !== input.periodId || input.attestation.incomeCommitment !== input.incomeCommitment) throw AppError.unprocessable('attestation does not match the report');
+      const a = input.attestation;
+      if (a.seriesId !== seriesId || a.periodId !== input.periodId || a.priorIncomeCommitment !== prior || a.incomeCommitment !== input.incomeCommitment || a.tier !== input.tier || a.liquidityEvent !== input.liquidityEvent) throw AppError.unprocessable('attestation does not match the report');
       await this.verifyAttestation(seriesId, input.attestation);
     }
     if (input.tier === 3 && !input.attestor) throw AppError.unprocessable('tier 3 needs the attestor who will co-sign');
@@ -162,8 +175,10 @@ export class ProofOfIncomeService {
     const x = r.rows[0];
     if (!x) throw AppError.notFound('report');
     const { chain, series } = await this.seriesForIssuer(x.series_id, session);
+    // the prior is public input 3 of the stored proof (S1 WP10 stores it in its own column)
+    const priorIncomeCommitment = fieldToHex32(BigInt((x.proof as { publicInputs: string[] }).publicInputs[3]!));
     const cmd: Extract<UserCommand, { kind: 'submitReport' }> = {
-      kind: 'submitReport', seriesId: x.series_id, periodId: x.period_id, tier: x.tier, paymentStable: x.payment_stable, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment,
+      kind: 'submitReport', seriesId: x.series_id, periodId: x.period_id, tier: x.tier, paymentStable: x.payment_stable, priorIncomeCommitment, incomeCommitment: x.income_commitment,
       fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, attestorRate: x.attestor_rate ? { attestor: x.attestor_rate.attestor, rateWad: x.attestor_rate.rateWad, pair: x.pair } : null, proof: x.proof, attestation: x.attestation,
       attestor: x.tier === 3 ? (x.attestor ?? null) : null, liquidityEvent: x.liquidity_event,
     };

@@ -9,6 +9,7 @@
     "sim:reset": "tsx src/reset-cli.ts"
   },
   "dependencies": {
+    "@merces/circuits": "workspace:*",
     "@merces/db": "workspace:*",
     "@merces/domain": "workspace:*",
     "@merces/math": "workspace:*",

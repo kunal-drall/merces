@@ -108,25 +108,27 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     await exec(e, e.issuer, { kind: 'pauseReleases', seriesId, paused: false });
   });
 
-  it('accepts a zero report, a paying report with the 5% fee and reward-per-share claims; refuses bad proofs and commitments', async () => {
+  it('accepts a zero report, a paying report with the 5% fee and reward-per-share claims; refuses bad proofs, other terms and replays', async () => {
     const e = env();
     const s = (await e.chain.getSeries(seriesId))!;
     const settledAt = s.settledAt!;
     const q = parsePeriod(`${new Date(settledAt * 1000).getUTCFullYear()}Q${Math.floor(new Date(settledAt * 1000).getUTCMonth() / 3) + 1}`);
     await e.waitUntil(q.end + e.durations.reportLead);
-    const zero = e.buildReport({ seriesId, periodId: q.id, unitsOutstanding: 500n, unitsOffered: 500n, privateTerms: e.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: 0n, termsCommitment: s.terms.termsCommitment });
+    const zero = await e.buildReport({ seriesId, periodId: q.id, unitsOutstanding: 500n, privateTerms: e.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: 0n, termsCommitment: s.terms.termsCommitment });
     const z = await exec(e, e.issuer, zero.command);
     expect((z.events[0]!.payload as { paymentDue: string }).paymentDue).toBe('0');
     expect((await e.chain.getPeriod(seriesId, q.id))!.settled).toBe(true);
-    await expectChainError(exec(e, e.issuer, zero.command), 'Duplicate');
+    // the same report again: the period is no longer the next one (Stage 1 WrongPeriod)
+    await expectChainError(exec(e, e.issuer, zero.command), 'WrongPhase');
     // next quarter: 75k income on a 60k threshold → 10% × 15k = 1500 gross
     const q2 = parsePeriod(q.quarter === 4 ? `${q.year + 1}Q1` : `${q.year}Q${q.quarter + 1}`);
     await e.waitUntil(q2.end + e.durations.reportLead);
-    const good = e.buildReport({ seriesId, periodId: q2.id, unitsOutstanding: 500n, unitsOffered: 500n, privateTerms: e.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(75_000), termsCommitment: s.terms.termsCommitment });
+    const good = await e.buildReport({ seriesId, periodId: q2.id, unitsOutstanding: 500n, privateTerms: e.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(75_000), termsCommitment: s.terms.termsCommitment });
     const tampered = { ...good.command, paymentStable: '1' };
     await expectChainError(exec(e, e.issuer, tampered), 'InvalidProof');
-    const wrongCommitment = { ...good.command, termsCommitment: '0x' + '11'.repeat(32) };
-    await expectChainError(exec(e, e.issuer, wrongCommitment), 'InvalidTerms');
+    // a proof over other terms than the series' live commitment (Stage 1 vector 14)
+    const otherTerms = await e.buildReport({ seriesId, periodId: q2.id, unitsOutstanding: 500n, privateTerms: { ...e.privateTerms, termsSalt: e.privateTerms.termsSalt + 1n }, incomeYtdNow: USDC(75_000) });
+    await expectChainError(exec(e, e.issuer, otherTerms.command), 'InvalidProof');
     const forged = { ...good.command, attestation: { ...good.command.attestation!, signature: '0x' + '22'.repeat(64) } };
     await expectChainError(exec(e, e.issuer, forged), 'InvalidAttestation');
     const acc = await exec(e, e.issuer, good.command);
@@ -191,7 +193,7 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     // any completed quarter must be reported first (A-RED-1)
     for (const p of await e.chain.listPeriods(seriesId)) {
       if (p.settled) continue;
-      const rep = e.buildReport({ seriesId, periodId: p.periodId, unitsOutstanding: 500n, unitsOffered: 500n, privateTerms: e.privateTerms, incomeYtdPrev: USDC(75_000), incomeYtdNow: USDC(75_000), termsCommitment: s.terms.termsCommitment });
+      const rep = await e.buildReport({ seriesId, periodId: p.periodId, unitsOutstanding: 500n, privateTerms: e.privateTerms, incomeYtdPrev: USDC(75_000), incomeYtdNow: USDC(75_000), termsCommitment: s.terms.termsCommitment });
       await exec(e, e.issuer, rep.command);
     }
     const r = await exec(e, e.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(100).toString() });

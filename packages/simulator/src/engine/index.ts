@@ -5,7 +5,7 @@ import {
 import type { interim, Period } from '@merces/math';
 import type { SimClock } from '../clock.ts';
 import type { SimSeries, SimState } from '../state.ts';
-import { balKey, type EngineCore, type EngineOptions, type Emit } from './core.ts';
+import { balKey, type EngineCore, type EngineOptions, type Emit, type ExecContext } from './core.ts';
 import { fail } from './errors.ts';
 import { auctionPhase, cancelRaise, claimRefund, commitBid, openRaise, revealBid, settleAuction } from './auction.ts';
 import { buyCurve, graduateCurve } from './curve.ts';
@@ -13,13 +13,13 @@ import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
 import { claimPayout, crankBurn, payIn, postSplitReceipt } from './payments.ts';
 import { annualGrossPerUnit, claimRedemption, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
-import { publicInputs, submitReport } from './reports.ts';
+import { submitReport } from './reports.ts';
 import { accrualNow, approvePause, crankPause, crankStatus, deadlines, derivedStanding, pausedSecondsSince, reportablePeriods, requestPause } from './status.ts';
 import { amendTerms, extinguish } from './terminal.ts';
 import { drawRelease, pauseReleases } from './treasury.ts';
 import { clearTransferWindow, commitWindowOrder, openTransferWindow, revealWindowOrder } from './window.ts';
 
-export type { EngineOptions } from './core.ts';
+export type { EngineOptions, ExecContext, ReportProofVerifier } from './core.ts';
 
 export type Actor = { kind: 'user'; signers: string[] } | { kind: 'service'; role: ServiceRole } | { kind: 'router'; router: string };
 
@@ -38,7 +38,8 @@ export class SimEngine implements EngineCore {
   ) {}
 
   // ------------------------------------------------------------------ tx plumbing
-  execute(cmd: Command, actor: Actor): TxResult {
+  /** `ctx` carries what was established outside the engine for this transaction (the Groth16 verdict, ExecContext). */
+  execute(cmd: Command, actor: Actor, ctx: ExecContext = {}): TxResult {
     const backup = structuredClone(this.state);
     const now = this.clock.now();
     const txIndex = this.state.txCount + 1;
@@ -49,7 +50,7 @@ export class SimEngine implements EngineCore {
       emitted.push({ chain: this.state.config.chain, cursor: seq.toString().padStart(12, '0'), seq, blockTime: now, blockRef: String(txIndex), txId, finality: 'finalized', type, payload });
     };
     try {
-      this.dispatch(cmd, actor, now, emit);
+      this.dispatch(cmd, actor, now, emit, ctx);
       this.state.txCount = txIndex;
       this.events.push(...emitted);
       return { txId, blockTime: now, blockRef: String(txIndex), events: emitted };
@@ -59,7 +60,7 @@ export class SimEngine implements EngineCore {
     }
   }
 
-  private dispatch(cmd: Command, actor: Actor, now: number, emit: Emit): void {
+  private dispatch(cmd: Command, actor: Actor, now: number, emit: Emit, ctx: ExecContext): void {
     const user = (): string => {
       if (actor.kind !== 'user') throw new ChainError('Unauthorized', `${cmd.kind} must be signed by a wallet`);
       const s = actor.signers[0];
@@ -86,7 +87,7 @@ export class SimEngine implements EngineCore {
       case 'claimRefund': return claimRefund(this, user(), cmd, emit);
       case 'drawRelease': return drawRelease(this, user(), cmd, now, emit);
       case 'pauseReleases': return pauseReleases(this, user(), cmd, emit);
-      case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit);
+      case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit, ctx);
       case 'payIn': return payIn(this, user(), cmd, now, emit);
       case 'claimPayout': return claimPayout(this, user(), cmd, emit);
       case 'crankBurn': service('any'); return crankBurn(this, cmd, emit);
@@ -183,10 +184,6 @@ export class SimEngine implements EngineCore {
   /** The reveal phase is time-derived: commitEndsAt ≤ now < revealEndsAt. */
   auctionPhase(s: SimSeries, now: number): 'Draft' | 'Open' | 'Reveal' | 'SettleDue' | 'Settled' | 'Failed' | 'Cancelled' {
     return auctionPhase(s, now);
-  }
-  /** Public input layout v0 — see reportPublicInputs() in @merces/domain. */
-  static publicInputs(p: { termsCommitment: string; incomeCommitment: string; unitsOutstanding: bigint; paymentStable: bigint; fxAvgWad: bigint; periodId: string }): string[] {
-    return publicInputs(p);
   }
   quote(s: SimSeries, now: number): ReturnType<typeof quote> {
     return quote(s, now);

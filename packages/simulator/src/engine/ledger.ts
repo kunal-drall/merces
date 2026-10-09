@@ -1,7 +1,7 @@
 import type { LifecycleStatus } from '@merces/domain';
-import { DEFAULTS } from '@merces/domain';
+import { DEFAULTS, ZERO_INCOME_COMMITMENT, fieldToHex32 } from '@merces/domain';
 import {
-  SeriesStatus, ZERO_INCOME_COMMITMENT, capPerUnit, deriveStatus, fieldToBytes32, fromPid, pidAt, statusParamsOf, toPid,
+  SeriesStatus, capPerUnit, deriveStatus, fromPid, pidAt, statusParamsOf, toPid,
   type LedgerClock, type PauseBounds, type StatusParams,
 } from '@merces/math';
 import type { SimLedger, SimSeries } from '../state.ts';
@@ -16,13 +16,11 @@ import type { EngineCore, Emit } from './core.ts';
  * Stage 1's own functions.
  */
 
-/** A 32-byte field element as the 0x-prefixed lowercase hex the canonical model carries (Stage 1's chain encoding). */
-export function fieldHex(f: bigint): string {
-  return '0x' + Buffer.from(fieldToBytes32(f)).toString('hex');
-}
+/** A 32-byte field element as the 0x-prefixed lowercase hex the canonical model carries (`@merces/domain` `fieldToHex32`). */
+export const fieldHex = fieldToHex32;
 
-/** `Poseidon(0, 0)`: the prior income commitment at the start of a reporting year (Stage 1 `ZERO_INCOME_COMMITMENT`). */
-export const ZERO_INCOME_COMMITMENT_HEX = fieldHex(ZERO_INCOME_COMMITMENT);
+/** `Poseidon(0, 0)`: the prior income commitment at the start of a reporting year (`@merces/domain` `ZERO_INCOME_COMMITMENT`). */
+export const ZERO_INCOME_COMMITMENT_HEX = ZERO_INCOME_COMMITMENT;
 
 /** A fresh ledger (Stage 1 initial values, SIM:811-841). */
 export function newLedger(): SimLedger {

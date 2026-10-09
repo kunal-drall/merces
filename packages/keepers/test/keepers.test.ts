@@ -3,7 +3,7 @@ import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { makeContext } from '@merces/api';
 import { createServiceContext, type ServiceContext } from '@merces/services';
 import { MockChainlink, MockPyth } from '@merces/ports';
-import { parsePeriod, periodOf, wadFromDecimal } from '@merces/math';
+import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimulatorChain } from '@merces/simulator';
 import type { ChainRegistry } from '@merces/chains';
 import { KeeperScheduler, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, rateKeeperJob, statusCrankJob, burnCrankJob, outboxJob } from '../src/index.ts';
@@ -19,8 +19,8 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
   const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return silent; } } as never;
   beforeAll(async () => {
     t = await createTestSchema();
-    sol = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'solana', genesis: GENESIS }) });
-    mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'monad', genesis: GENESIS }) });
+    sol = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'solana', genesis: GENESIS, acceptMockProofs: true }) });
+    mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'monad', genesis: GENESIS, acceptMockProofs: true }) });
     const chains: ChainRegistry = { chains: new Map([['solana', sol.sim], ['monad', mon.sim]]), decisions: [], stage1: null, get: (c) => (c === 'solana' ? sol.sim : mon.sim), byFamily: (f) => (f === 'solana' ? sol.sim : mon.sim), close: async () => undefined };
     ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: 's', devMode: true }));
   });
@@ -67,7 +67,7 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
   });
 
   it('rate keeper snapshots once per day per pair per chain, resolves feed ids, cross-checks Chainlink and flags deviation', async () => {
-    const eur = await mon.runRaise({ privateTerms: { threshold: 50_000_000_000n, shareRateWad: wadFromDecimal('0.10'), reportingCurrency: 'EUR', indexingRule: 'cpi-annual', salt: '0x' + '66'.repeat(32) }, terms: { reportingCurrency: 'EUR' } });
+    const eur = await mon.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '66'.repeat(31)) }, terms: { reportingCurrency: 'EUR' } });
     const pyth = new MockPyth({ 'FX.EUR/USD': { price: '1.08' }, 'FX.USD/INR': { price: '83.5' } }, () => mon.sim.clock.now());
     const chainlink = new MockChainlink({ 'monad:EUR/USD': { answer: '1.0805', decimals: 8 } });
     const job = rateKeeperJob({ pyth, chainlink, deviationBandBps: 100 });
