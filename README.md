@@ -25,6 +25,7 @@ pnpm test:conformance                    # H2: the ChainPort behavioural suite o
 pnpm test:canary                         # H3: income canary and access-tier matrix
 pnpm demo:cycle                          # one raise → treasury → 3 quarterly ProofOfIncome reports (Stripe data) → payouts, on Solana and Monad personalities
 pnpm stage1:sync                         # "Stage 1 not present" today; the full catch-up pipeline once STAGE1_PATH points at Stage 1
+pnpm stage1:vectors --backend reference  # replay Stage 1's 25 parity vectors (reference backend = Stage 1's own simulator)
 pnpm openapi:check                       # routes ⇄ openapi.yaml ⇄ access tiers
 ```
 

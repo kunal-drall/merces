@@ -2,20 +2,24 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from '
 import { join, relative } from 'node:path';
 import { stage1Path } from '@merces/chains';
 import { SimHarness, SimulatorChain, type Personality } from '@merces/simulator';
-import type { StepReport } from '../report.ts';
+import type { StepReport, StepStatus } from '../report.ts';
 import type { StepCtx } from './generate.ts';
 import { replayScenario, type ParityScenario } from '../vectors.ts';
 
 /**
- * Step 5: replay Stage 1's parity vectors through the simulator. Every expected balance must match.
- * If it does not, the simulator is wrong and must be fixed (everything was tested against it).
+ * Step 5: replay Stage 1's parity vectors.
+ *
+ * Stage 1 ships a directory of vectors in its own format (`NN_name.json`, SPEC ops and `expect` checks); the Stage 1
+ * vector runner (`../stage1-vectors`, S1 plan §5) replays them on the reference backend (Stage 1's own simulator: all
+ * must pass, or the runner or the checkout is broken) and on the merces backend (our simulator: each S1 target must be
+ * at its expected status). A single JSON file of `scenarios` is the earlier Merces format, replayed through the harness.
+ * If our simulator disagrees, the simulator is wrong and must be fixed (everything was tested against it).
  */
 export async function replayVectors(ctx: StepCtx): Promise<StepReport> {
   const m = ctx.location.manifest;
   const vectorsPath = stage1Path(ctx.location, m.vectors);
   if (!vectorsPath || !existsSync(vectorsPath)) return { step: 'vectors', status: 'warn', summary: 'no parity vectors in the manifest', details: [] };
-  // Stage 1 ships a directory of vectors in its own format (one file per vector, SPEC-named ops and expects)
-  if (statSync(vectorsPath).isDirectory()) return inventoryStage1Vectors(vectorsPath, ctx);
+  if (statSync(vectorsPath).isDirectory()) return replayStage1Vectors(vectorsPath, ctx);
   const raw = JSON.parse(readFileSync(vectorsPath, 'utf8')) as { scenarios?: ParityScenario[] };
   const scenarios = raw.scenarios ?? [];
   if (scenarios.length === 0) return { step: 'vectors', status: 'warn', summary: 'vectors file has no scenarios', details: [] };
@@ -39,78 +43,91 @@ export async function replayVectors(ctx: StepCtx): Promise<StepReport> {
 }
 
 /**
- * How each Stage 1 vector op maps onto the canonical command set (packages/domain/src/commands.ts) as of the
- * Stage 1 integration review. `direct`: one canonical command with the same meaning; `reshaped`: the canonical
- * model does the job in a different shape (one step where Stage 1 has several, or fields differ), so the runner needs
- * a model change or an adapter; `missing`: no canonical counterpart; `harness`: test scaffolding, not a protocol op.
+ * How each Stage 1 vector op runs on the merces backend in S1 (S1 plan §5.3; the rows live in
+ * `../stage1-vectors/shims.ts`):
+ * - `direct`: one canonical command with the same meaning;
+ * - `shim`: a canonical command of another shape (`shim` names the row); executed and checked, but not parity;
+ * - `blocked`: no canonical command yet; not run (waived where §5.6 says so);
+ * - `n/a`: meaningless for the canonical model; not run;
+ * - `not-in-s1`: used only by vectors outside the S1 set (`milestone` brings it);
+ * - `harness`: test scaffolding, not a protocol op.
  */
-export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: 'direct' | 'reshaped' | 'missing' | 'harness' }> = {
+export type OpKind = 'direct' | 'shim' | 'blocked' | 'n/a' | 'not-in-s1' | 'harness';
+export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: OpKind; shim?: string; milestone?: string }> = {
   fund: { canonical: 'simulator fund (test faucet)', kind: 'harness' },
   expect: { canonical: 'runner assertion', kind: 'harness' },
   expect_revert: { canonical: 'runner assertion (canonical error names)', kind: 'harness' },
-  register_issuer: { canonical: 'registerIssuer', kind: 'direct' },
-  create_series: { canonical: 'createSeries (Stage 1 adds tier_flags, fx_pair_id, mode, release schedule, k, fee bps per series)', kind: 'reshaped' },
-  open_raise: { canonical: 'openRaise', kind: 'direct' },
-  cancel_raise: { canonical: 'cancelRaise', kind: 'direct' },
+  register_issuer: { canonical: 'registerIssuer signed by the wallet (Stage 1: admin-only)', kind: 'shim', shim: 'SH-REG-1' },
+  create_series: { canonical: 'createSeries (durations, window fee and non-reveal bps held by the runner)', kind: 'shim', shim: 'SH-REG-4' },
+  open_raise: { canonical: 'openRaise with the runner-held durations', kind: 'shim', shim: 'SH-AUC-1' },
+  cancel_raise: { canonical: 'cancelRaise', kind: 'not-in-s1', milestone: 'S2' },
   allowlist: { canonical: 'setAllowlist', kind: 'direct' },
-  register_attestor: { canonical: 'registerAttestor', kind: 'direct' },
-  revoke_attestor: { canonical: 'registerAttestor(active=false) (Stage 1: forward-only with a 45-day grace)', kind: 'reshaped' },
-  register_verifier_key: { canonical: 'registerVerifierKey', kind: 'direct' },
-  commit_bid: { canonical: 'commitBid', kind: 'direct' },
+  register_attestor: { canonical: 'registerAttestor', kind: 'shim', shim: 'SH-REG-2' },
+  revoke_attestor: { canonical: 'registerAttestor(active=false) (Stage 1: forward-only with a 45-day grace)', kind: 'shim', shim: 'SH-REG-2' },
+  register_verifier_key: { canonical: 'registerVerifierKey (ed25519; Stage 1: secp256k1)', kind: 'shim', shim: 'SH-REG-3' },
+  commit_bid: { canonical: 'commitBid (our commitment recomputed from the plaintext)', kind: 'shim', shim: 'SH-AUC-2' },
   reveal_bid: { canonical: 'revealBid', kind: 'direct' },
-  begin_settlement: { canonical: 'settleAuction (one step; Stage 1 is proposer claims + paged tally + finalize)', kind: 'reshaped' },
-  finalize_settlement: { canonical: 'settleAuction', kind: 'reshaped' },
-  process_bid: { canonical: 'none (canonical settlement mints and refunds inside settleAuction / claimRefund)', kind: 'missing' },
-  deliver_bid: { canonical: 'claimRefund for losers; none for winners', kind: 'reshaped' },
-  submit_report: { canonical: 'submitReport', kind: 'direct' },
-  pay: { canonical: 'payIn', kind: 'direct' },
-  claim: { canonical: 'claimPayout', kind: 'direct' },
+  begin_settlement: { canonical: 'settleAuction (one step; Stage 1 is proposer claims + paged tally + finalize)', kind: 'shim', shim: 'SH-AUC-3' },
+  finalize_settlement: { canonical: 'none (settled inside settleAuction)', kind: 'shim', shim: 'SH-AUC-4' },
+  process_bid: { canonical: 'none (canonical settlement mints inside settleAuction)', kind: 'shim', shim: 'SH-AUC-5' },
+  deliver_bid: { canonical: 'claimRefund for losers; none for winners', kind: 'shim', shim: 'SH-AUC-6' },
+  submit_report: { canonical: 'submitReport (Groth16 proof; attestation signed by the runner)', kind: 'shim', shim: 'SH-REP-1' },
+  pay: { canonical: 'payIn (period and amount supplied by the runner)', kind: 'shim', shim: 'SH-PAY-1' },
+  claim: { canonical: 'claimPayout', kind: 'shim', shim: 'SH-CLM-1' },
   claim_release: { canonical: 'drawRelease', kind: 'direct' },
   crank_status: { canonical: 'crankStatus', kind: 'direct' },
-  burn_retired: { canonical: 'crankBurn', kind: 'direct' },
-  request_pause: { canonical: 'requestPause', kind: 'direct' },
-  withdraw_pause_request: { canonical: 'none', kind: 'missing' },
-  approve_pause: { canonical: 'approvePause', kind: 'direct' },
-  end_pause: { canonical: 'crankPause', kind: 'reshaped' },
-  redeem: { canonical: 'redeem', kind: 'direct' },
+  burn_retired: { canonical: 'crankBurn', kind: 'shim', shim: 'SH-BRN-1' },
+  request_pause: { canonical: 'requestPause (until supplied by the runner)', kind: 'shim', shim: 'SH-PAU-1' },
+  withdraw_pause_request: { canonical: 'none', kind: 'not-in-s1', milestone: 'S5' },
+  approve_pause: { canonical: 'approvePause sent by the attestor wallet', kind: 'shim', shim: 'SH-PAU-2' },
+  end_pause: { canonical: 'none (crankPause ends a pause at its end only)', kind: 'not-in-s1', milestone: 'S5' },
+  redeem: { canonical: 'redeem (no slippage bound)', kind: 'shim', shim: 'SH-RED-1' },
   claim_redemption: { canonical: 'claimRedemption', kind: 'direct' },
-  claim_tail: { canonical: 'none (canonical tail pays through the payout accumulator)', kind: 'missing' },
-  claim_final: { canonical: 'none (canonical extinguishment pays through the payout accumulator)', kind: 'missing' },
-  extinguish: { canonical: 'extinguish', kind: 'direct' },
-  amend_terms: { canonical: 'amendTerms (Stage 1 carries tier-1 θ/r plaintext)', kind: 'reshaped' },
-  fx_snapshot: { canonical: 'snapshotRate', kind: 'direct' },
-  set_fx_pair: { canonical: 'none (admin FX pair configuration)', kind: 'missing' },
-  open_window: { canonical: 'openTransferWindow', kind: 'direct' },
-  window_commit_bid: { canonical: 'commitWindowOrder(side=bid)', kind: 'direct' },
-  commit_ask: { canonical: 'commitWindowOrder(side=ask)', kind: 'direct' },
-  reveal_order: { canonical: 'revealWindowOrder', kind: 'direct' },
-  begin_window_settlement: { canonical: 'clearTransferWindow (one step; Stage 1 is proposer + tally + finalize)', kind: 'reshaped' },
-  finalize_window: { canonical: 'clearTransferWindow', kind: 'reshaped' },
-  process_orders: { canonical: 'none (canonical clearing delivers inside clearTransferWindow)', kind: 'missing' },
-  route_income: { canonical: 'postSplitReceipt', kind: 'reshaped' },
-  close_router_period: { canonical: 'none', kind: 'missing' },
-  submit_trueup: { canonical: 'none (tier-3 true-up)', kind: 'missing' },
-  pay_trueup: { canonical: 'none (tier-3 true-up)', kind: 'missing' },
-  set_flags: { canonical: 'pauseNewRaises (Stage 1 also has windows_enabled)', kind: 'reshaped' },
-  stop_issuance: { canonical: 'stopIssuance', kind: 'direct' },
-  resume_issuance: { canonical: 'none', kind: 'missing' },
-  retire_if_capped: { canonical: 'none (canonical retirement happens inside payIn; Stage 1 also retires after a cap-lowering amendment)', kind: 'missing' },
-  register_holder: { canonical: 'none (canonical holders are implicit in positions)', kind: 'missing' },
-  transfer_units: { canonical: 'none: a direct unit transfer, used only inside expect_revert (DirectTransferForbidden); the canonical model has no transfer to refuse', kind: 'harness' },
+  claim_tail: { canonical: 'none (claimRedemption if needed, then claimPayout)', kind: 'shim', shim: 'SH-CLM-2' },
+  claim_final: { canonical: 'none (claimPayout)', kind: 'shim', shim: 'SH-CLM-3' },
+  extinguish: { canonical: 'extinguish with a co-signing attestor', kind: 'shim', shim: 'SH-EXT-1' },
+  amend_terms: { canonical: 'amendTerms with a co-signing attestor', kind: 'shim', shim: 'SH-AMD-1' },
+  fx_snapshot: { canonical: 'snapshotRate', kind: 'not-in-s1', milestone: 'S5' },
+  set_fx_pair: { canonical: 'none (admin FX pair configuration)', kind: 'not-in-s1', milestone: 'S5' },
+  open_window: { canonical: 'openTransferWindow (period kept by the runner)', kind: 'shim', shim: 'SH-WIN-1' },
+  window_commit_bid: { canonical: 'commitWindowOrder(side=buy)', kind: 'shim', shim: 'SH-WIN-3' },
+  commit_ask: { canonical: 'commitWindowOrder(side=sell)', kind: 'shim', shim: 'SH-WIN-2' },
+  reveal_order: { canonical: 'revealWindowOrder', kind: 'shim', shim: 'SH-WIN-4' },
+  begin_window_settlement: { canonical: 'none (recorded; clearTransferWindow is one step)', kind: 'shim', shim: 'SH-WIN-5' },
+  finalize_window: { canonical: 'clearTransferWindow', kind: 'shim', shim: 'SH-WIN-6' },
+  process_orders: { canonical: 'none (canonical clearing delivers inside clearTransferWindow)', kind: 'shim', shim: 'SH-WIN-7' },
+  route_income: { canonical: 'postSplitReceipt', kind: 'not-in-s1', milestone: 'S5' },
+  close_router_period: { canonical: 'none', kind: 'not-in-s1', milestone: 'S5' },
+  submit_trueup: { canonical: 'none (tier-3 true-up)', kind: 'not-in-s1', milestone: 'S5' },
+  pay_trueup: { canonical: 'none (tier-3 true-up)', kind: 'not-in-s1', milestone: 'S5' },
+  set_flags: { canonical: 'pauseNewRaises (Stage 1 also has windows_enabled)', kind: 'not-in-s1', milestone: 'S5' },
+  stop_issuance: { canonical: 'stopIssuance', kind: 'not-in-s1', milestone: 'S5' },
+  resume_issuance: { canonical: 'none', kind: 'not-in-s1', milestone: 'S5' },
+  retire_if_capped: { canonical: 'none (canonical retirement happens inside payIn; Stage 1 also retires after a cap-lowering amendment)', kind: 'blocked', shim: 'BLK-1' },
+  register_holder: { canonical: 'none (canonical holders are implicit in positions)', kind: 'not-in-s1', milestone: 'S3' },
+  transfer_units: { canonical: 'none: a direct unit transfer, used only inside expect_revert (DirectTransferForbidden); the canonical model has no transfer to refuse', kind: 'n/a', shim: 'NA-1' },
+  deactivate_issuer: { canonical: 'none', kind: 'not-in-s1', milestone: 'S5' },
+  revoke_verifier_key: { canonical: 'registerVerifierKey(active=false)', kind: 'not-in-s1', milestone: 'S4' },
+  set_contract_hash: { canonical: 'none', kind: 'not-in-s1', milestone: 'S5' },
+  set_release_pause: { canonical: 'none', kind: 'not-in-s1', milestone: 'S5' },
 };
 
-/**
- * Stage 1's own vector format (a directory of NN_name.json files with `steps` of SPEC ops and `expect` checks). Until
- * the Stage 1 vector runner exists this step inventories them (ops, expects, reverts per vector) so the drift review can
- * see what replaying them needs; it never claims parity it has not checked.
- */
-function inventoryStage1Vectors(dir: string, ctx: StepCtx): StepReport {
+interface Inventory {
+  files: number;
+  steps: number;
+  reverts: number;
+  ops: number;
+  lines: string[];
+}
+
+/** The ops, expects and reverts of each Stage 1 vector, and how each op runs in S1 (the `VECTOR_PARITY.md` appendix). */
+export function inventoryStage1Vectors(dir: string): Inventory {
   const files = readdirSync(dir).filter((f) => /^\d\d_.*\.json$/.test(f)).sort();
   const ops = new Map<string, number>();
   const expects = new Map<string, number>();
   let totalSteps = 0;
   let totalReverts = 0;
-  const lines: string[] = ['# VECTOR_PARITY.md', '', `Stage 1 vectors in ${dir.startsWith(ctx.location.root + '/') ? `$STAGE1_PATH/${relative(ctx.location.root, dir)}` : dir}${ctx.location.manifest.commit ? ` at ${ctx.location.manifest.commit}` : ''} (Stage 1 format). Replay through the Stage 1 vector runner is pending; inventory only.`, '', '| Vector | Steps | Expect checks | Expected reverts | Ops without a direct counterpart |', '| --- | --- | --- | --- | --- |'];
+  const lines: string[] = ['## Inventory', '', '| Vector | Steps | Expect checks | Expected reverts | Ops the merces backend shims, blocks or lacks in S1 |', '| --- | --- | --- | --- | --- |'];
   for (const f of files) {
     const v = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { steps?: { op?: string; call?: { op?: string }; [k: string]: unknown }[] };
     const steps = v.steps ?? [];
@@ -139,13 +156,72 @@ function inventoryStage1Vectors(dir: string, ctx: StepCtx): StepReport {
     }
     lines.push(`| ${f} | ${steps.length} | ${nExpect} | ${nRevert} | ${gaps.size ? [...gaps].sort().map((g) => `\`${g}\``).join(', ') : 'none'} |`);
   }
+  const how = (k: string) => {
+    const e = STAGE1_OP_MAP[k];
+    if (!e) return '**unmapped**';
+    return e.kind === 'not-in-s1' ? `not in S1 (${e.milestone})` : `${e.kind}${e.shim ? ` (${e.shim})` : ''}`;
+  };
   lines.push(
     '',
-    '## Ops used and their canonical counterpart',
+    '### Ops used and how they run on the merces backend in S1',
     '',
     '| Op | Uses | Canonical | Kind |',
     '| --- | --- | --- | --- |',
-    ...[...ops].sort((a, b) => b[1] - a[1]).map(([k, n]) => `| \`${k}\` | ${n} | ${STAGE1_OP_MAP[k]?.canonical ?? 'unknown'} | ${STAGE1_OP_MAP[k]?.kind ?? '**unmapped**'} |`), '', '## Expect fields', '', ...[...expects].sort((a, b) => b[1] - a[1]).map(([k, n]) => `- \`${k}\` × ${n}`));
-  writeFileSync(join(ctx.outDir, 'VECTOR_PARITY.md'), lines.join('\n') + '\n');
-  return { step: 'vectors', status: 'warn', summary: `${files.length} Stage 1 vectors found (Stage 1 format, ${ops.size} distinct ops); not replayed yet: the Stage 1 vector runner is pending the canonical-model review`, details: [`${files.length} vectors, ${totalSteps} steps (${totalReverts} expected reverts), ${ops.size} distinct ops counting the calls inside reverts; see VECTOR_PARITY.md`] };
+    ...[...ops].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([k, n]) => `| \`${k}\` | ${n} | ${STAGE1_OP_MAP[k]?.canonical ?? 'unknown'} | ${how(k)} |`),
+    '',
+    '### Expect fields',
+    '',
+    ...[...expects].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([k, n]) => `- \`${k}\` × ${n}`),
+  );
+  return { files: files.length, steps: totalSteps, reverts: totalReverts, ops: ops.size, lines };
+}
+
+/**
+ * Stage 1 format: run the vector runner on the reference backend (every vector) and, once it exists (S1 WP9b), on the
+ * merces backend (the S1 targets, both personalities). Status: `ok` iff every target is at its expected status;
+ * `warn` while the merces backend is missing; `fail` when a target is not at its expected status or the reference
+ * backend does not replay a vector (the runner or the Stage 1 checkout is broken).
+ */
+async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepReport> {
+  const inv = inventoryStage1Vectors(dir);
+  const runner = await import('../stage1-vectors/index.ts');
+  const label = dir.startsWith(ctx.location.root + '/') ? `$STAGE1_PATH/${relative(ctx.location.root, dir)}` : dir;
+  const source = { dir: label, ...(ctx.location.manifest.commit ? { commit: ctx.location.manifest.commit } : {}) };
+  const details: string[] = [];
+  const notes: string[] = [];
+  const reports: Awaited<ReturnType<typeof runner.runStage1Vectors>>[] = [];
+  let status: StepStatus;
+  let summary: string;
+  try {
+    const reference = await runner.runStage1Vectors({ dir, backend: 'reference' });
+    reports.push(reference);
+    const refPass = reference.runs.filter((r) => r.status === 'PASS').length;
+    const refLine = `reference backend (Stage 1's own simulator): ${refPass}/${reference.runs.length} PASS, proofs verified (${reference.proofs.verified} distinct, ${reference.proofs.invalid} invalid)`;
+    details.push(refLine);
+    for (const r of reference.runs.filter((x) => !x.atExpected)) details.push(`reference ${r.vector}: ${r.status}${r.issues[0] ? ` at #${r.issues[0].index} ${r.issues[0].op}: ${r.issues[0].message}` : ''}`);
+    if (!reference.ok) {
+      status = 'fail';
+      summary = `the reference backend does not replay ${reference.runs.length - refPass} Stage 1 vector(s): the runner or the Stage 1 checkout is broken`;
+    } else if (!runner.backendAvailable('merces')) {
+      status = 'warn';
+      summary = `${refLine}; our simulator is not replayed yet (the merces backend arrives with S1 WP9b)`;
+      notes.push("The merces backend (our `SimulatorChain` through the S1 shims) arrives with S1 WP9b. Until then only the reference backend runs: it checks the runner and the Stage 1 checkout, not our simulator.");
+    } else {
+      const merces = await runner.runStage1Vectors({ dir, backend: 'merces' });
+      reports.push(merces);
+      const at = merces.runs.filter((r) => r.atExpected).length;
+      details.push(`merces backend: ${at}/${merces.runs.length} target run(s) at expected status (${runner.TARGETS_S1.length} targets × personalities)`);
+      for (const r of merces.runs.filter((x) => !x.atExpected)) details.push(`merces ${r.vector} [${r.world}]: ${r.status}, expected ${runner.describeExpected(r.expected)}`);
+      status = merces.ok ? 'ok' : 'fail';
+      summary = merces.ok ? `every S1 target is at its expected status on both personalities; ${refLine}` : `${merces.runs.length - at} target run(s) below their expected status: our simulator disagrees with Stage 1`;
+    }
+  } catch (e) {
+    status = 'fail';
+    summary = `the vector runner failed: ${e instanceof runner.RunnerError ? e.message : e instanceof Error ? e.constructor.name : typeof e}`;
+  } finally {
+    await runner.shutdown();
+  }
+  runner.writeParity(ctx.outDir, reports, source, { notes, appendix: inv.lines });
+  details.push(`${inv.files} vectors, ${inv.steps} steps (${inv.reverts} expected reverts), ${inv.ops} distinct ops counting the calls inside reverts; see VECTOR_PARITY.md`);
+  return { step: 'vectors', status, summary, details };
 }

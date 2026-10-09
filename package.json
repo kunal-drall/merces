@@ -26,6 +26,7 @@
     "dev:verifier": "tsx packages/report-verifier/src/main.ts",
     "demo:cycle": "tsx packages/scenarios/src/demo-cycle.ts",
     "stage1:sync": "tsx packages/stage1-sync/src/cli.ts",
+    "stage1:vectors": "tsx packages/stage1-sync/src/stage1-vectors/cli.ts",
     "openapi:client": "pnpm openapi:build && tsx packages/client/src/generate.ts",
     "openapi:check": "tsx packages/server/src/openapi-check.ts",
     "openapi:build": "tsx packages/api/src/openapi/build.ts",

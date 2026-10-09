@@ -204,8 +204,12 @@ is a disagreement.
 4. **math** — Stage 1's library vs ours on every math vector, or, when Stage 1 exports its own function shapes,
    family by family on deterministic inputs (`MATH_PARITY.md` under `packages/stage1-sync/out`; A-MATH-2).
    Full agreement is reported as "eligible to replace the interim library"; it does not change what any process runs.
-5. **vectors** — scenario replay through the simulator (`VECTOR_PARITY.md`). Stage 1's own vector directory is
-   inventoried op by op against the canonical commands until the Stage 1 op runner exists.
+5. **vectors** — Stage 1's own vector directory is replayed by the Stage 1 vector runner (`pnpm stage1:vectors`,
+   `packages/stage1-sync/src/stage1-vectors`): on the reference backend (Stage 1's own simulator; all 25 must pass,
+   proofs verified, or the runner or the checkout is broken) and, from S1 WP9b, on the merces backend (our simulator,
+   the S1 target vectors on both personalities, each at its expected status). `VECTOR_PARITY.md` lists the results,
+   the findings with leaf-path diffs, waived steps, the shims used ("not parity") and the op inventory. A single JSON
+   file of `scenarios` (the earlier Merces format) is replayed through the harness.
 6. **conformance** — the H2 suite against each live chain (`CONFORMANCE_CHAIN=solana|evm:<chain>`).
 7. **verdict** — per chain: ready for `live` only when no step failed and both **diff** and **conformance** are `ok`
    (drift left to resolve, or conformance skipped or not run, is a blocker); otherwise the blockers.

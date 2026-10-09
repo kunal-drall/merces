@@ -1,0 +1,112 @@
+#!/usr/bin/env tsx
+/**
+ * pnpm stage1:vectors [--backend merces|reference|lockstep] [--only 01,04] [--personality solana,monad]
+ *                     [--until <step index, inclusive>] [--stop-before <op>] [--out <dir>] [--dir <vectors dir>] [--json]
+ *
+ * Replays Stage 1's parity vectors (S1 plan §5). The vectors directory defaults to the one the Stage 1 checkout's
+ * manifest names (STAGE1_PATH, else the pinned `stage1` submodule). Exit code 0 when every run is at its expected
+ * status, 1 when one is not, 2 on a usage or runner error.
+ */
+import { existsSync } from 'node:fs';
+import { relative } from 'node:path';
+import { locateStage1, stage1Path } from '@merces/chains';
+import { RunnerError, runStage1Vectors, renderSummary, shutdown, writeParity, PERSONALITIES, type BackendChoice, type VectorPersonality } from './index.ts';
+
+const USAGE = 'usage: stage1:vectors [--backend merces|reference|lockstep] [--only 01,04] [--personality solana,monad] [--until <idx>] [--stop-before <op>] [--out <dir>] [--dir <vectors dir>] [--json]';
+
+interface Args {
+  backend: BackendChoice;
+  only?: string[];
+  personalities?: VectorPersonality[];
+  until?: number;
+  stopBefore?: string;
+  out?: string;
+  dir?: string;
+  json: boolean;
+}
+
+function parseArgs(argv: string[]): Args {
+  const a: Args = { backend: 'merces', json: false };
+  const list = (v: string) => v.split(',').map((x) => x.trim()).filter(Boolean);
+  for (let i = 0; i < argv.length; i++) {
+    const flag = argv[i]!;
+    if (flag === '--') continue;
+    if (flag === '--json') {
+      a.json = true;
+      continue;
+    }
+    if (flag === '--help' || flag === '-h') throw new RunnerError(USAGE);
+    const eq = flag.indexOf('=');
+    const name = eq > 0 ? flag.slice(0, eq) : flag;
+    const value = eq > 0 ? flag.slice(eq + 1) : argv[++i];
+    if (value === undefined) throw new RunnerError(`${name} needs a value\n${USAGE}`);
+    switch (name) {
+      case '--backend':
+        if (value !== 'merces' && value !== 'reference' && value !== 'lockstep') throw new RunnerError(`unknown backend ${value}\n${USAGE}`);
+        a.backend = value;
+        break;
+      case '--only':
+        a.only = list(value);
+        break;
+      case '--personality': {
+        const ps = list(value);
+        const bad = ps.filter((p) => !(PERSONALITIES as readonly string[]).includes(p));
+        if (bad.length) throw new RunnerError(`unknown personality ${bad.join(', ')} (solana, monad)`);
+        a.personalities = ps as VectorPersonality[];
+        break;
+      }
+      case '--until':
+        if (!/^\d+$/.test(value)) throw new RunnerError(`--until takes a step index\n${USAGE}`);
+        a.until = Number(value);
+        break;
+      case '--stop-before':
+        a.stopBefore = value;
+        break;
+      case '--out':
+        a.out = value;
+        break;
+      case '--dir':
+        a.dir = value;
+        break;
+      default:
+        throw new RunnerError(`unknown option ${name}\n${USAGE}`);
+    }
+  }
+  return a;
+}
+
+function vectorsDir(explicit: string | undefined): { dir: string; label: string; commit?: string } {
+  if (explicit) return { dir: explicit, label: explicit };
+  const loc = locateStage1(process.env.STAGE1_PATH ?? (existsSync('stage1/SPEC.md') ? 'stage1' : undefined));
+  if (!loc) throw new RunnerError('Stage 1 not present: set STAGE1_PATH, check out the stage1 submodule, or pass --dir');
+  const dir = stage1Path(loc, loc.manifest.vectors);
+  if (!dir || !existsSync(dir)) throw new RunnerError(`the Stage 1 manifest at ${loc.path} names no vectors directory`);
+  return { dir, label: `$STAGE1_PATH/${relative(loc.root, dir)}`, ...(loc.manifest.commit ? { commit: loc.manifest.commit } : {}) };
+}
+
+let code = 2;
+try {
+  const args = parseArgs(process.argv.slice(2));
+  const src = vectorsDir(args.dir);
+  const report = await runStage1Vectors({
+    dir: src.dir,
+    backend: args.backend,
+    ...(args.only ? { only: args.only } : {}),
+    ...(args.personalities ? { personalities: args.personalities } : {}),
+    ...(args.until !== undefined ? { until: args.until } : {}),
+    ...(args.stopBefore ? { stopBefore: args.stopBefore } : {}),
+  });
+  if (args.json) console.log(JSON.stringify(report, (_k, v: unknown) => (typeof v === 'bigint' ? v.toString() : v), 2));
+  else console.log(renderSummary([report]));
+  if (args.out) console.log(`wrote ${writeParity(args.out, [report], { dir: src.label, ...(src.commit ? { commit: src.commit } : {}) })}`);
+  const pass = report.runs.filter((r) => r.status === 'PASS').length;
+  if (!args.json) console.log(`${report.ok ? 'OK' : 'NOT OK'}: ${pass}/${report.runs.length} PASS, ${report.runs.filter((r) => r.atExpected).length}/${report.runs.length} at expected status`);
+  code = report.ok ? 0 : 1;
+} catch (e) {
+  // runner errors carry public facts only; anything else is reported by class
+  console.error(e instanceof RunnerError ? e.message : `stage1:vectors failed: ${e instanceof Error ? e.constructor.name : typeof e}`);
+  code = 2;
+} finally {
+  await shutdown();
+}
+process.exit(code);

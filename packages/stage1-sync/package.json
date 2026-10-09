@@ -8,8 +8,11 @@
   "bin": { "stage1-sync": "./src/cli.ts" },
   "dependencies": {
     "@merces/chains": "workspace:*",
+    "@merces/circuits": "workspace:*",
     "@merces/domain": "workspace:*",
     "@merces/math": "workspace:*",
+    "@merces/reference": "workspace:*",
+    "@merces/sdk": "workspace:*",
     "@merces/simulator": "workspace:*"
   }
 }

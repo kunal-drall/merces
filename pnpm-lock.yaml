@@ -505,12 +505,21 @@ importers:
       '@merces/chains':
         specifier: workspace:*
         version: link:../chains
+      '@merces/circuits':
+        specifier: workspace:*
+        version: link:../../stage1/circuits
       '@merces/domain':
         specifier: workspace:*
         version: link:../domain
       '@merces/math':
         specifier: workspace:*
         version: link:../math
+      '@merces/reference':
+        specifier: workspace:*
+        version: link:../../stage1/packages/reference
+      '@merces/sdk':
+        specifier: workspace:*
+        version: link:../../stage1/packages/sdk
       '@merces/simulator':
         specifier: workspace:*
         version: link:../simulator
