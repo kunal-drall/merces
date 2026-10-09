@@ -250,23 +250,19 @@ proptest! {
         prop_assert!(avg <= *rates.iter().max().unwrap());
     }
 
-    /// Normalisation is exact when the WAD rate fits u64 (and an error otherwise, SPEC §1.1), and
-    /// inversion is the floor of `WAD² / rate`.
+    /// Normalisation keeps the exact WAD rate as a u128 (S4; the u64 cap is downstream), and
+    /// inversion is the floor of `WAD² / rate`, erroring only when that floor exceeds u64.
     #[test]
     fn fx_normalisation(price in 1i64..10_000_000_000, expo in -18i32..=0) {
         let exact = price as u128 * 10u128.pow((18 + expo) as u32);
-        match normalize(price, expo) {
-            Ok(r) => {
-                prop_assert_eq!(u128::from(r), exact);
-                match invert(r) {
-                    Ok(inv) => {
-                        prop_assert!(u128::from(inv) * u128::from(r) <= WAD * WAD);
-                        prop_assert!((u128::from(inv) + 1) * u128::from(r) > WAD * WAD);
-                    }
-                    Err(_) => prop_assert!(WAD * WAD / u128::from(r) > u128::from(u64::MAX)),
-                }
+        let r = normalize(price, expo).unwrap();
+        prop_assert_eq!(r, exact);
+        match invert(r) {
+            Ok(inv) => {
+                prop_assert!(u128::from(inv) * r <= WAD * WAD);
+                prop_assert!((u128::from(inv) + 1) * r > WAD * WAD);
             }
-            Err(_) => prop_assert!(exact > u128::from(u64::MAX)),
+            Err(_) => prop_assert!(WAD * WAD / r > u128::from(u64::MAX)),
         }
     }
 

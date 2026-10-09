@@ -156,6 +156,16 @@ export type MercesRegistry = {
           "type": "u64"
         },
         {
+          "name": "newTier1Terms",
+          "type": {
+            "option": {
+              "defined": {
+                "name": "tier1Terms"
+              }
+            }
+          }
+        },
+        {
           "name": "attestorAddr",
           "type": {
             "array": [

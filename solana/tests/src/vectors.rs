@@ -509,6 +509,18 @@ impl Runner {
             r.stable = r.env.usdg;
         }
         let steps = r.vector["steps"].as_array().unwrap().clone();
+        // The transfer window ships disabled (`windows_enabled = false`); the reference does not
+        // model that deployment gate, so a vector that uses a window without toggling the flag
+        // itself needs it enabled here (the flag is not part of the scenario). Vectors that set the
+        // flag themselves (10, 16) are left to drive it.
+        let op_is = |s: &Value, op: &str| s.get("op").and_then(|o| o.as_str()) == Some(op);
+        let uses_window = steps.iter().any(|s| op_is(s, "open_window"));
+        let toggles_flags = steps.iter().any(|s| op_is(s, "set_flags"));
+        if uses_window && !toggles_flags {
+            r.env
+                .set_flags(false, true, false)
+                .expect("enable transfer windows for a window vector");
+        }
         for (i, step) in steps.iter().enumerate() {
             if upto.is_some_and(|u| i > u) {
                 break;
@@ -1085,11 +1097,42 @@ impl Runner {
                 )
                 .as_bytes()]);
                 let sig = signer.sign(&msg);
+                // tier-1 amendments carry the new plaintext θ / r (S5); other series pass none
+                let new_tier1_terms = c.get("router").filter(|r| !r.is_null()).map(|r| {
+                    let plain = &self.vector["seriesPrivate"][c["series"].as_str().unwrap()]
+                        ["amendedTermsPlain"];
+                    let num = |k: &str, default: u64| {
+                        plain
+                            .get(k)
+                            .filter(|v| !v.is_null())
+                            .map(num_u64)
+                            .unwrap_or(default)
+                    };
+                    let salt = plain
+                        .get("termsSalt")
+                        .and_then(|v| v.as_str())
+                        .map(dec_be32)
+                        .unwrap_or([0u8; 32]);
+                    Env::tier1_terms(
+                        dec_u64(&r["theta"]),
+                        dec_u64(&r["rWad"]),
+                        num("currencyCode", 0) as u32,
+                        num("indexingRule", 0) as u32,
+                        salt,
+                    )
+                });
                 ok(
                     &mut self.cu,
                     op,
-                    self.env
-                        .amend_terms(&issuer, &series, new_tc, new_cap, signer.addr, sig),
+                    self.env.amend_terms(
+                        &issuer,
+                        &series,
+                        new_tc,
+                        new_cap,
+                        new_tier1_terms,
+                        signer.addr,
+                        sig,
+                    ),
                 )
             }
             "open_window" => {

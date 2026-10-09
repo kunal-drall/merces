@@ -8,7 +8,7 @@ use merces_common::encoding::{
     amend_message, commitment_preimage, domain_preimage, extinguish_message, fx_message,
     fx_pair_id_preimage, pause_message, report_message, trueup_message, u64_to_be32,
 };
-use merces_common::fx::normalize;
+use merces_common::fx::{invert, normalize};
 use merces_common::redemption::{year_gross_add, year_gross_at, YearGross};
 use merces_common::status::{paused_within, unpaused, Pause};
 use merces_common::time::{
@@ -326,15 +326,22 @@ fn periods_pauses_year_ring_fx_and_fixed_point() {
         let expo = i32::try_from(n["expo"].as_i64().unwrap()).unwrap();
         let expected = n.get("rateWad").and_then(|r| r.as_str());
         match (i64::try_from(price), expected) {
-            (Ok(p), Some(rate)) => match rate.parse::<u64>() {
-                Ok(r) => assert_eq!(normalize(p, expo).unwrap(), r, "normalize {price}e{expo}"),
-                // a rate above u64 cannot be a valid `fx_avg_wad` (SPEC §1.1)
-                Err(_) => assert!(normalize(p, expo).is_err()),
-            },
+            // normalize keeps the intermediate in u128 (S4), so a rate above u64 is a value, not an
+            // error; the u64 cap is the caller's (non-inverted) or `invert`'s (inverted)
+            (Ok(p), Some(rate)) => assert_eq!(
+                normalize(p, expo).unwrap(),
+                rate.parse::<u128>().unwrap(),
+                "normalize {price}e{expo}"
+            ),
             // a Pyth price is an i64; anything larger is unrepresentable on Solana
             (Err(_), _) => {}
             (Ok(p), None) => assert!(normalize(p, expo).is_err()),
         }
+    }
+    for iv in k["fx"]["invert"].as_array().unwrap() {
+        let rate: u128 = s(&iv["rateWad"]).parse().unwrap();
+        let inverted: u64 = s(&iv["inverted"]).parse().unwrap();
+        assert_eq!(invert(rate).unwrap(), inverted, "invert {rate}");
     }
     for f in k["fixedPoint"].as_array().unwrap() {
         let (a, b, c) = (

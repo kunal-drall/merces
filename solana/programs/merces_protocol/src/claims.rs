@@ -319,9 +319,17 @@ fn redemption_body(
     let redemption = price
         .checked_mul(balance)
         .ok_or(ProtocolError::MathOverflow)?;
+    // Tail catch-up (S6 / C-S21): units redeemed after this holder already claimed tail (they came
+    // back from, or were bought in, a window that cleared before redemption) are owed the tail that
+    // accrued before that claim — `last_tail_acc_wad × balance / WAD`. The cursor is NOT reset, so
+    // the later `claim_tail` delta `(tail_acc − last_tail) × redeemed_units` continues from it; the
+    // two together pay each unit the full `tail_acc × units / WAD`. For a first redemption the
+    // cursor is 0 (S1), so this term is 0. Matches EVM `MercesVault._redemptionBody`.
+    let tail_catch_up = holder_delta(holder.last_tail_acc_wad, 0, balance).map_err(math)?;
     let amount = holder
         .pending
         .checked_add(redemption)
+        .and_then(|v| v.checked_add(tail_catch_up))
         .ok_or(ProtocolError::MathOverflow)?;
     holder.pending = 0;
     burn.burn(ledger, balance, BURN_REDEEMED)?;

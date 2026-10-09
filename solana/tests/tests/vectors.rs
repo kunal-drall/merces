@@ -106,3 +106,23 @@ fn v20_tier3_trueup() {
 fn v21_entry_rules() {
     run_vector("21_entry_rules.json");
 }
+
+#[test]
+fn v22_late_holder_tail_final() {
+    run_vector("22_late_holder_tail_final.json");
+}
+
+#[test]
+fn v23_redeem_twice_with_tail() {
+    run_vector("23_redeem_twice_with_tail.json");
+}
+
+#[test]
+fn v24_inverted_fx() {
+    run_vector("24_inverted_fx.json");
+}
+
+#[test]
+fn v25_window_on_terminal() {
+    run_vector("25_window_on_terminal.json");
+}

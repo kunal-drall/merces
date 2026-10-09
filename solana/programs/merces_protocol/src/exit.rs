@@ -86,7 +86,9 @@ pub fn redeem<'info>(ctx: Context<'info, Redeem<'info>>) -> Result<()> {
             ProtocolError::CurveAccountsMissing
         );
         let a = crate::curve::CurveUnitAccounts::from_slice(ctx.remaining_accounts)?;
-        let u = crate::curve::compute_curve_units(series, &ledger, &a)?;
+        // S2 / B-C13: exclude the DAMM v2 pool base vault so the redemption deposit covers an upper
+        // bound on tenderable units the issuer cannot deflate by sandwiching the pool.
+        let u = crate::curve::compute_curve_units(series, &ledger, &a, true)?;
         crate::curve::store_curve_units(&mut ledger, u, now, series_key)?;
         &[]
     } else {

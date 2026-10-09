@@ -54,4 +54,8 @@ usdg_vectors! {
     usdg_19_pause_while_late => "19_pause_while_late.json",
     usdg_20_tier3_trueup => "20_tier3_trueup.json",
     usdg_21_entry_rules => "21_entry_rules.json",
+    usdg_22_late_holder_tail_final => "22_late_holder_tail_final.json",
+    usdg_23_redeem_twice_with_tail => "23_redeem_twice_with_tail.json",
+    usdg_24_inverted_fx => "24_inverted_fx.json",
+    usdg_25_window_on_terminal => "25_window_on_terminal.json",
 }

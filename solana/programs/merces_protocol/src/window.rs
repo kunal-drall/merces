@@ -633,6 +633,23 @@ pub fn finalize_window(ctx: Context<WindowSettle>) -> Result<()> {
             reason,
         });
     };
+    // S3 / C-S5: a terminal series (Retired / Redeemed / Extinguished) can no longer trade. A
+    // window that is mid-settlement when the series goes terminal is forced to NoMatch regardless
+    // of the proposal — no clearing is accepted and no NoMatch proposal is rejected — so a keeper
+    // cannot push a non-consensual transfer. Escrowed units and bids come back through
+    // `process_order` / `deliver_order` as on any NoMatch window. Matches EVM `MercesWindow`.
+    if ledger.is_terminal() {
+        w.state = WINDOW_NO_MATCH;
+        emit!(WindowNoMatch {
+            series: series_key,
+            period: w.period,
+        });
+        if w.order_count == 0 && ledger.active_window() == Some(w.period) {
+            ledger.set_active_window(None);
+            ledger.clear_window_cleared();
+        }
+        return Ok(());
+    }
     if w.no_match_proposed {
         if !no_match_is_valid(&tally) {
             reject(w, NO_MATCH_PRICE, WINDOW_REJECT_NO_MATCH_INVALID);

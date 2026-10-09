@@ -188,10 +188,12 @@ pub fn route<'info>(ctx: Context<'info, Route<'info>>) -> Result<()> {
         router.ytd_received = 0;
     }
     let units = ledger.units_outstanding;
+    // read θ / r live from the series so a tier-1 amendment takes effect on the next receipt (S5,
+    // matches EVM); `Router.theta` / `r_wad` are the creation-time snapshot kept for reference.
     let mut out = route_math(
         amount,
-        router.theta,
-        router.r_wad,
+        series.router_theta,
+        series.router_r_wad,
         units,
         router.ytd_received,
     )

@@ -942,8 +942,13 @@ pub fn register_holder_now(
     holder.wallet = wallet;
     holder.registered = true;
     holder.last_net_acc_wad = ledger.net_acc_wad;
-    holder.last_tail_acc_wad = ledger.tail_acc_wad;
-    holder.last_final_acc_wad = ledger.final_acc_wad;
+    // Tail and final pools are owed per unit that existed at redemption / extinguishment. A wallet
+    // that registers later can only hold such units (bought in a window that cleared before the
+    // terminal event), so it is owed their whole share: the cursors start at 0, not the live
+    // accumulators (S1 / C-S20; matches EVM `MercesVault.registerHolder`). The net cursor stays at
+    // the live accumulator — ongoing payouts accrue only from registration.
+    holder.last_tail_acc_wad = 0;
+    holder.last_final_acc_wad = 0;
     holder.pending = 0;
     holder.redeemed_units = 0;
     holder.undelivered_units = 0;

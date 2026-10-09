@@ -3,6 +3,7 @@
 use anchor_lang::prelude::*;
 use merces_common::fx::{conf_ok, deviates, invert, normalize};
 use merces_common::time::{day_of, period_of};
+use merces_common::to_u64;
 use merces_onchain::seeds::{CONFIG, FX};
 use merces_registry::state::{FxPairConfig, ProtocolConfig};
 use pyth_solana_receiver_sdk::price_update::{PriceUpdateV2, VerificationLevel};
@@ -106,11 +107,14 @@ pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
         ProtocolError::ConfidenceTooWide
     );
 
-    // 2. normalise
-    let mut rate_wad = normalize(msg.price, msg.exponent).map_err(math)?;
-    if cfg.inverted {
-        rate_wad = invert(rate_wad).map_err(math)?;
-    }
+    // 2. normalise. The intermediate stays u128; the u64 cap applies to the final rate, so an
+    //    inverted major-currency pair (pre-inversion > u64::MAX) still accumulates (S4).
+    let norm = normalize(msg.price, msg.exponent).map_err(math)?;
+    let rate_wad: u64 = if cfg.inverted {
+        invert(norm).map_err(math)?
+    } else {
+        to_u64(norm).map_err(math)?
+    };
 
     // 3. checkpoint before adding (first snapshot in the period closes the previous one)
     let cp = &mut ctx.accounts.checkpoint;
@@ -154,10 +158,12 @@ pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
             ProtocolError::PriceStale
         );
         require!(m.price > 0, ProtocolError::PriceNotPositive);
-        let mut cl_wad = normalize(m.price, m.exponent).map_err(math)?;
-        if cfg.inverted {
-            cl_wad = invert(cl_wad).map_err(math)?;
-        }
+        let cl_norm = normalize(m.price, m.exponent).map_err(math)?;
+        let cl_wad: u64 = if cfg.inverted {
+            invert(cl_norm).map_err(math)?
+        } else {
+            to_u64(cl_norm).map_err(math)?
+        };
         if deviates(rate_wad, cl_wad, defaults.fx_deviation_band_bps).map_err(math)? {
             cp.flagged = true;
             emit!(FxDeviationFlagged {

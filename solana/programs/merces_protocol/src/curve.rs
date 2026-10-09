@@ -336,10 +336,22 @@ pub struct CurveUnits {
 ///
 /// Accounts that do not exist yet count 0. The stake vault is not protocol-held: staked units are
 /// the holders'. The result never falls below the staked total.
+///
+/// `exclude_damm_pool` drops the DAMM v2 base vault from the subtraction (S2, B-C13): at
+/// **redemption** the deposit must cover every tenderable unit, but the pool's base vault is an AMM
+/// balance the issuer can inflate in one transaction (swap base in → redeem → swap out) to deflate
+/// the count and under-deposit. Because base is conserved (`supply = wallets + pool + dbc + locker
+/// + leftover`), not subtracting the pool makes the count `wallets + pool`, an upper bound on what
+/// holders can tender (wallets + stake) that the issuer can only *raise* by parking base (which
+/// raises their own deposit), never lower. The pool's locked-LP share is never tendered and stays
+/// as vault dust (C2). The honest over-count is the real pool base (≈ `migration_base_threshold`,
+/// « `swap_base_amount` by construction). The regular `sync_curve_units` keeps the full census
+/// (`exclude_damm_pool = false`): there `units_outstanding` cancels in the per-unit income math.
 pub fn compute_curve_units(
     series: &Series,
     ledger: &Ledger,
     a: &CurveUnitAccounts<'_, '_>,
+    exclude_damm_pool: bool,
 ) -> Result<CurveUnits> {
     let base_mint = series.base_mint;
     require_keys_eq!(*a.base_mint.key, base_mint, ProtocolError::UnitMintMismatch);
@@ -457,7 +469,10 @@ pub fn compute_curve_units(
         ProtocolError::LeftoverAccountMismatch
     );
     let leftover = optional_token_amount(a.leftover_token, &base_mint)?;
-    let held = [dbc_vault, damm_vault, locker, leftover];
+    // S2 / B-C13: the pool's base vault is excluded at redemption (not subtracted) so the issuer
+    // cannot deflate the tenderable count by transiently parking base in the pool.
+    let counted_damm = if exclude_damm_pool { 0 } else { damm_vault };
+    let held = [dbc_vault, counted_damm, locker, leftover];
     let outstanding = units_outstanding(supply, &held)
         .map_err(|_| error!(ProtocolError::CurveUnitsInconsistent))?;
     require!(
@@ -941,7 +956,9 @@ pub fn sync_curve_units(ctx: Context<SyncCurveUnits>) -> Result<()> {
         locker_escrow_token: ctx.accounts.locker_escrow_token.as_ref(),
         leftover_token: ctx.accounts.leftover_token.as_ref(),
     };
-    let u = compute_curve_units(series, &ledger, &a)?;
+    // the crank keeps the full census (the pool share is not held by holders); the income math is
+    // invariant to it (see `compute_curve_units`), and redemption uses the robust variant
+    let u = compute_curve_units(series, &ledger, &a, false)?;
     store_curve_units(&mut ledger, u, now, series.key())
 }
 

@@ -1208,12 +1208,14 @@ impl Env {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn amend_terms(
         &mut self,
         issuer: &Keypair,
         series: &Pubkey,
         new_tc: [u8; 32],
         new_cap: u64,
+        new_tier1_terms: Option<Tier1Terms>,
         attestor_addr: [u8; 20],
         sig: [u8; 65],
     ) -> TxResult {
@@ -1228,6 +1230,7 @@ impl Env {
             merces_registry::instruction::AmendTerms {
                 new_terms_commitment: new_tc,
                 new_cap_multiple_wad: new_cap,
+                new_tier1_terms,
                 attestor_addr,
                 attestor_sig: sig,
             }

@@ -150,6 +150,16 @@
           "type": "u64"
         },
         {
+          "name": "new_tier1_terms",
+          "type": {
+            "option": {
+              "defined": {
+                "name": "Tier1Terms"
+              }
+            }
+          }
+        },
+        {
           "name": "attestor_addr",
           "type": {
             "array": [

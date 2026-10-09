@@ -753,6 +753,7 @@ pub mod merces_registry {
         ctx: Context<AmendTerms>,
         new_terms_commitment: [u8; 32],
         new_cap_multiple_wad: u64,
+        new_tier1_terms: Option<Tier1Terms>,
         attestor_addr: [u8; 20],
         attestor_sig: [u8; 65],
     ) -> Result<()> {
@@ -782,6 +783,40 @@ pub mod merces_registry {
         .as_bytes()]);
         let recovered = recover_eth_address(&msg, &attestor_sig).map_err(map_sig_error)?;
         require!(recovered == attestor_addr, RegistryError::AttestorMismatch);
+        // Tier-1 (split-router): the new θ / r are public and Poseidon(5)-bound to the attestor-
+        // signed commitment, re-checked against §6.5 exactly as `create_series`; `route` reads
+        // them live from the series, so an amended share takes effect on the next receipt (S5,
+        // matches EVM). Non-tier-1 series must not carry tier-1 terms.
+        if s.tier_flags & TIER_FLAG_SPLIT != 0 {
+            let t = new_tier1_terms.ok_or(RegistryError::Tier1TermsRequired)?;
+            let offered = if s.mode == MODE_CURVE {
+                u128::from(s.units_offered)
+                    .checked_mul(u128::from(CURVE_UNIT_SCALE))
+                    .ok_or(RegistryError::MathOverflow)?
+            } else {
+                u128::from(s.units_offered)
+            };
+            let share = u128::from(t.r_wad)
+                .checked_mul(offered)
+                .ok_or(RegistryError::MathOverflow)?;
+            require!(share <= WAD, RegistryError::Tier1ShareTooLarge);
+            let h = poseidon5(&[
+                u64_field(t.theta),
+                u64_field(t.r_wad),
+                u64_field(u64::from(t.currency_code)),
+                u64_field(u64::from(t.indexing_rule)),
+                t.terms_salt,
+            ])
+            .map_err(|_| RegistryError::PoseidonFailed)?;
+            require!(h == new_terms_commitment, RegistryError::Tier1TermsMismatch);
+            s.router_theta = t.theta;
+            s.router_r_wad = t.r_wad;
+        } else {
+            require!(
+                new_tier1_terms.is_none(),
+                RegistryError::Tier1TermsUnexpected
+            );
+        }
         let nonce = s.amendment_nonce;
         s.terms_commitment = new_terms_commitment;
         s.cap_multiple_wad = new_cap_multiple_wad;
@@ -1175,7 +1210,7 @@ pub struct IssuerSelf<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(new_terms_commitment: [u8; 32], new_cap_multiple_wad: u64, attestor_addr: [u8; 20])]
+#[instruction(new_terms_commitment: [u8; 32], new_cap_multiple_wad: u64, new_tier1_terms: Option<Tier1Terms>, attestor_addr: [u8; 20])]
 pub struct AmendTerms<'info> {
     #[account(seeds = [CONFIG], bump = config.bump)]
     pub config: Box<Account<'info, ProtocolConfig>>,
