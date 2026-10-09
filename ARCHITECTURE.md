@@ -29,8 +29,10 @@ written to `INTERFACE_DRIFT.md`.
 ## The simulator
 
 `SimEngine` implements Part C in TypeScript with `bigint` only, one `execute(command, actor)` per transaction with
-snapshot-and-rollback, and exactly the canonical events. State is a plain object (serialisable for the Postgres
-persistent mode). Two personalities differ only in address format and stablecoin catalogue. Time is a controllable clock
+snapshot-and-rollback, and exactly the canonical events. Its commands live in one module per area under
+`packages/simulator/src/engine/` (registry, auction, treasury, reports, payments, holders, status, redemption, terminal,
+fx, window, curve), each a set of functions over the shared `EngineCore`; the `ChainPort` read mappers live in
+`src/reads/`. State is a plain object (serialisable for the Postgres persistent mode). Two personalities differ only in address format and stablecoin catalogue. Time is a controllable clock
 (`advanceTime`, `setTime`) exposed in mock mode through `/dev/advance-time`. The pure arithmetic lives in `@merces/math`
 behind a `MercesMath` interface so `stage1:sync` can swap in Stage 1's reference library after vector parity.
 

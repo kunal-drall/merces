@@ -5,12 +5,22 @@ import {
   type ServiceCommand, type ServiceRole, type SignedTx, type Stablecoin, type TransferWindowState, type TreasuryState, type TxResult, type UnsignedTx,
   type UserCommand, type VaultState,
 } from '@merces/domain';
-import { claimable, parsePeriod, periodStanding, wadToDecimal } from '@merces/math';
+import { wadToDecimal } from '@merces/math';
 import { DEFAULT_GENESIS, SimClock } from './clock.ts';
 import { deriveAddress, personalityConfig, type Personality } from './addresses.ts';
 import { SimEngine, type EngineOptions } from './engine.ts';
-import type { SimSeries, SimState } from './state.ts';
+import type { SimState } from './state.ts';
 import type { SimPersistence } from './persistence.ts';
+import { toAuctionState, toBid } from './reads/auction.ts';
+import { toCurveState } from './reads/curve.ts';
+import { toQuarterRate, toRateAccumulator } from './reads/fx.ts';
+import { listPeriodStates, toPeriodState } from './reads/periods.ts';
+import { listPositionStates, toPosition } from './reads/positions.ts';
+import { toRedemption } from './reads/redemption.ts';
+import { toIssuerState, toSeriesState } from './reads/series.ts';
+import { toTreasuryState } from './reads/treasury.ts';
+import { toVaultState } from './reads/vault.ts';
+import { toTransferWindow } from './reads/window.ts';
 
 export interface SimulatorOptions extends EngineOptions {
   personality: Personality;
@@ -158,125 +168,73 @@ export class SimulatorChain implements ChainPort {
     return this.clock.now();
   }
 
-  // ---------------------------------------------------------------- reads
+  // ---------------------------------------------------------------- reads (the mappers live in ./reads/)
   async getIssuer(issuer: string): Promise<IssuerState | null> {
     const i = this.state.issuers.get(issuer);
-    return i ? { issuer: i.issuer, registeredAt: i.registeredAt, issuanceStopped: i.issuanceStopped, seriesIds: [...i.seriesIds] } : null;
-  }
-  private toSeriesState(x: SimSeries): SeriesState {
-    const t = x.terms;
-    return {
-      seriesId: x.seriesId, chain: this.chain, issuer: x.issuer,
-      terms: {
-        stablecoin: t.stablecoin, stablecoinMint: t.stablecoinMint, unitsOffered: s(t.unitsOffered), reservePrice: s(t.reservePrice), minimumRaise: s(t.minimumRaise), capMultipleWad: s(t.capMultipleWad), lockupSeconds: t.lockupSeconds,
-        releaseSchedule: t.releaseSchedule.map((r) => ({ ...r })), auctionFeeBps: Number(t.auctionFeeBps), payoutFeeBps: Number(t.payoutFeeBps), hurdleWad: s(t.hurdleWad), payoutMultipleK: Number(t.payoutMultipleK), walletCapBps: Number(t.walletCapBps),
-        dueDays: t.dueDays, graceDays: t.graceDays, formalNoticeDays: t.formalNoticeDays, contractHash: t.contractHash, termsCommitment: t.termsCommitment, tierFlags: { ...t.tierFlags }, reportingCurrency: t.reportingCurrency, raiseStyle: t.raiseStyle,
-      },
-      phase: x.phase, status: x.status, createdAt: x.createdAt, openedAt: x.openedAt, settledAt: x.settledAt, issuePrice: x.issuePrice === null ? null : s(x.issuePrice), unitsSold: s(x.unitsSold), unitsOutstanding: s(x.unitsOutstanding),
-      capPerUnit: x.capPerUnit === null ? null : s(x.capPerUnit), paidPerUnitWad: s(x.paidPerUnitWad), accNetWad: s(x.accNetWad), lockupEndsAt: x.settledAt === null ? null : x.settledAt + t.lockupSeconds,
-      releasesPaused: x.releasesPausedLate || x.releasesPausedByIssuer, releasesPausedByIssuer: x.releasesPausedByIssuer, pause: x.pause ? { ...x.pause } : null, pausedSecondsTotal: x.pausedSecondsTotal,
-      redemption: x.redemption ? this.toRedemption(x) : null, extinguishedAt: x.extinguishedAt, grossPaidTotal: s(x.grossPaidTotal), feesTotal: s(x.feesTotal),
-    };
-  }
-  private toRedemption(x: SimSeries): RedemptionState {
-    const r = x.redemption!;
-    return { openedAt: r.openedAt, pricePerUnit: s(r.pricePerUnit), unitsAtRedemption: s(r.unitsAtRedemption), deposit: s(r.deposit), claimed: s(r.claimed), tailCapPerUnit: s(r.tailCapPerUnit), tailEndsAt: r.tailEndsAt, tailPaidPerUnit: s(r.tailPaidPerUnit) };
+    return i ? toIssuerState(i) : null;
   }
   async listSeries(): Promise<SeriesState[]> {
-    return [...this.state.series.values()].map((x) => this.toSeriesState(x));
+    return [...this.state.series.values()].map((x) => toSeriesState(this.chain, x));
   }
   async getSeries(seriesId: string): Promise<SeriesState | null> {
     const x = this.state.series.get(seriesId);
-    return x ? this.toSeriesState(x) : null;
+    return x ? toSeriesState(this.chain, x) : null;
   }
   async getAuction(seriesId: string): Promise<AuctionState | null> {
     const x = this.state.series.get(seriesId);
     if (!x) return null;
-    const phase = this.engine.auctionPhase(x, this.clock.now());
-    return {
-      seriesId, phase: phase === 'SettleDue' ? 'Reveal' : phase, commitEndsAt: x.commitEndsAt, revealEndsAt: x.revealEndsAt, bidCount: x.bids.size, revealedCount: [...x.bids.values()].filter((b) => b.revealed).length,
-      clearingPrice: x.phase === 'Settled' && x.issuePrice !== null ? s(x.issuePrice) : null, unitsSold: s(x.unitsSold), proceeds: s(x.treasuryTotal),
-    };
-  }
-  private toBid(seriesId: string, b: SimSeries['bids'] extends Map<string, infer B> ? B : never): BidState {
-    return { seriesId, bidder: b.bidder, commitment: b.commitment, deposit: s(b.deposit), order: b.order, revealed: b.revealed ? { pricePerUnit: s(b.revealed.pricePerUnit), quantity: s(b.revealed.quantity) } : null, allocatedUnits: s(b.allocatedUnits), refunded: s(b.refunded), settled: b.settled };
+    return toAuctionState(seriesId, x, this.clock.now());
   }
   async getBid(seriesId: string, bidder: string): Promise<BidState | null> {
     const b = this.state.series.get(seriesId)?.bids.get(bidder);
-    return b ? this.toBid(seriesId, b) : null;
+    return b ? toBid(seriesId, b) : null;
   }
   async listBids(seriesId: string): Promise<BidState[]> {
     const x = this.state.series.get(seriesId);
-    return x ? [...x.bids.values()].map((b) => this.toBid(seriesId, b)) : [];
+    return x ? [...x.bids.values()].map((b) => toBid(seriesId, b)) : [];
   }
   async getTreasury(seriesId: string): Promise<TreasuryState | null> {
     const x = this.state.series.get(seriesId);
     if (!x) return null;
-    return {
-      seriesId, total: s(x.treasuryTotal), released: s(x.treasuryReleased), balance: s(x.treasuryTotal - x.treasuryReleased), paused: x.releasesPausedLate || x.releasesPausedByIssuer,
-      tranches: x.tranches.map((t) => ({ index: t.index, afterSeconds: t.afterSeconds, bps: t.bps, amount: s(t.amount), drawableAt: x.settledAt === null ? null : x.settledAt + t.afterSeconds, drawn: t.drawn })),
-    };
+    return toTreasuryState(seriesId, x);
   }
   async getVault(seriesId: string): Promise<VaultState | null> {
     const x = this.state.series.get(seriesId);
     if (!x) return null;
-    const entitled = [...x.positions.values()].reduce((a, p) => a + claimable(p.units, x.accNetWad, p.rewardDebt) + p.pending, 0n);
-    return { seriesId, balance: s(x.vaultBalance), accNetWad: s(x.accNetWad), grossTotal: s(x.vaultGrossTotal), feesTotal: s(x.vaultFeesTotal), dust: s(x.vaultBalance - entitled < 0n ? 0n : x.vaultBalance - entitled) };
-  }
-  private toPosition(x: SimSeries, p: NonNullable<ReturnType<SimSeries['positions']['get']>>): PositionState {
-    const tail = x.redemption && p.redeemedUnits > 0n ? claimable(p.redeemedUnits, x.redemption.accTailNetWad, p.tailDebt) : 0n;
-    return { seriesId: x.seriesId, wallet: p.wallet, units: s(p.units), rewardDebt: s(p.rewardDebt), claimable: s(claimable(p.units, x.accNetWad, p.rewardDebt) + p.pending), claimedTotal: s(p.claimedTotal), redeemedUnits: s(p.redeemedUnits), tailClaimable: s(tail) };
+    return toVaultState(seriesId, x);
   }
   async getPosition(seriesId: string, wallet: string): Promise<PositionState | null> {
     const x = this.state.series.get(seriesId);
     const p = x?.positions.get(wallet);
-    return x && p ? this.toPosition(x, p) : null;
+    return x && p ? toPosition(x, p) : null;
   }
   async listPositions(seriesId: string): Promise<PositionState[]> {
     const x = this.state.series.get(seriesId);
-    return x ? [...x.positions.values()].filter((p) => p.units > 0n || p.pending > 0n || p.redeemedUnits > 0n).map((p) => this.toPosition(x, p)) : [];
-  }
-  private toPeriodState(x: SimSeries, periodId: string, now: number): PeriodState {
-    const period = parsePeriod(periodId);
-    const d = this.engine.deadlines(x, period, now);
-    const p = x.periods.get(periodId);
-    const settled = !!p?.settled;
-    // interest keeps running until paid: show the live amount due
-    const liveAccrual = p && p.reportAccepted && !settled && !p.isTail ? this.engine.accrualNow(x, period, p.outstanding, now) : (p?.accrual ?? 0n);
-    const liveDue = p && p.reportAccepted && !settled && !p.isTail ? p.outstanding + liveAccrual : (p?.paymentDue ?? 0n);
-    const standing: PeriodState['standing'] = x.status === 'Paused' && !settled ? 'Deferred' : periodStanding(d, now, settled);
-    return {
-      seriesId: x.seriesId, periodId, dueAt: d.dueAt, graceEndsAt: d.graceEndsAt, formalNoticeAt: d.formalNoticeAt, reportAccepted: !!p?.reportAccepted, tier: p?.tier ?? null,
-      paymentDue: s(liveDue), accrual: s(liveAccrual), paid: s(p?.paid ?? 0n), splitReceived: s(p?.splitReceived ?? 0n), settled, standing, incomeCommitment: p?.incomeCommitment ?? null, liquidityEvent: !!p?.liquidityEvent,
-    };
+    return x ? listPositionStates(x) : [];
   }
   async getPeriod(seriesId: string, periodId: string): Promise<PeriodState | null> {
     const x = this.state.series.get(seriesId);
     if (!x || x.settledAt === null) return null;
-    return this.toPeriodState(x, periodId, this.clock.now());
+    return toPeriodState(x, periodId, this.clock.now());
   }
   async listPeriods(seriesId: string): Promise<PeriodState[]> {
     const x = this.state.series.get(seriesId);
     if (!x || x.settledAt === null) return [];
-    const now = this.clock.now();
-    const ids = new Set<string>(this.engine.reportablePeriods(x, now).map((p) => p.id));
-    for (const k of x.periods.keys()) ids.add(k);
-    return [...ids].sort().map((id) => this.toPeriodState(x, id, now));
+    return listPeriodStates(x, this.clock.now());
   }
   async getRedemption(seriesId: string): Promise<RedemptionState | null> {
     const x = this.state.series.get(seriesId);
-    return x?.redemption ? this.toRedemption(x) : null;
+    return x?.redemption ? toRedemption(x) : null;
   }
   async getRateAccumulator(pair: string): Promise<RateAccumulatorState | null> {
     const a = this.state.rates.get(pair);
     if (!a) return null;
-    const last = a.days.at(-1);
-    return { pair, sumWad: s(a.sumWad), count: a.count, lastDayIndex: last?.dayIndex ?? null, lastRateWad: last ? s(last.rateWad) : null };
+    return toRateAccumulator(pair, a);
   }
   async getQuarterRate(pair: string, periodId: string): Promise<QuarterRateState | null> {
     const q = this.engine.quarterRate(pair, periodId);
     if (!q) return null;
-    return { pair, periodId, avgWad: q.avgWad === null ? null : s(q.avgWad), snapshots: q.snapshots, daysInQuarter: q.days, coverageOk: q.coverageOk, needsFallback: q.needsFallback, fallbackReason: q.reason };
+    return toQuarterRate(pair, periodId, q);
   }
   async isAllowlisted(wallet: string): Promise<boolean> {
     return this.state.allowlist.has(wallet);
@@ -289,14 +247,12 @@ export class SimulatorChain implements ChainPort {
   }
   async getTransferWindow(seriesId: string): Promise<TransferWindowState | null> {
     const w = this.state.series.get(seriesId)?.transferWindows.at(-1);
-    return w ? { seriesId, windowId: w.windowId, commitEndsAt: w.commitEndsAt, revealEndsAt: w.revealEndsAt, cleared: w.cleared, clearingPrice: w.clearingPrice === null ? null : s(w.clearingPrice), orderCount: w.orders.size } : null;
+    return w ? toTransferWindow(seriesId, w) : null;
   }
   async getCurve(seriesId: string): Promise<CurveState | null> {
     const x = this.state.series.get(seriesId);
     if (!x?.curve) return null;
-    const c = x.curve;
-    const spot = c.basePrice + (c.basePrice * c.slopeWad * x.unitsOutstanding) / 10n ** 18n;
-    return { seriesId, quoteStablecoin: c.quoteStablecoin, raised: s(c.raised), unitsOutstanding: s(x.unitsOutstanding), spotPrice: s(spot), graduationThreshold: s(c.graduationThreshold), graduated: c.graduated };
+    return toCurveState(seriesId, x);
   }
   async getBalance(wallet: string, stablecoin: Stablecoin): Promise<string> {
     const c = this.state.config.stablecoins[stablecoin];

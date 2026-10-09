@@ -1,0 +1,56 @@
+import { describe, expect, it } from 'vitest';
+import { bidCommitment } from '@merces/domain';
+import { SimHarness, defaultTerms } from '../src/index.ts';
+import { USDC, expectChainError, types } from './helpers.ts';
+
+describe('auction edge cases', () => {
+  it('fails below the minimum raise and refunds everyone without fees', async () => {
+    const h = await SimHarness.create('solana');
+    const { seriesId } = await h.runRaise({ bids: [{ backer: 0, price: USDC(10), qty: 10n }] });
+    const s = (await h.sim.getSeries(seriesId))!;
+    expect(s.phase).toBe('Failed');
+    await h.exec(h.backers[0]!, { kind: 'claimRefund', seriesId });
+    expect(await h.sim.getBalance(h.backers[0]!.address, 'USDC')).toBe('1000000000000');
+    expect(await h.sim.getBalance(h.sim.state.feeCollector, 'USDC')).toBe('0');
+  });
+  it('enforces allowlist, one bid per wallet, commitment integrity and the wallet cap', async () => {
+    const h = await SimHarness.create('solana');
+    const { terms } = defaultTerms(h.sim);
+    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    const r = await h.exec(h.issuer, { kind: 'createSeries', terms });
+    const seriesId = (r.events[0]!.payload as { seriesId: string }).seriesId;
+    const now = await h.sim.now();
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 });
+    const stranger = h.sim.address('wallet:stranger');
+    await h.sim.fund(stranger, 'USDC', USDC(1000));
+    const tx = await h.sim.build({ kind: 'commitBid', seriesId, commitment: '0x' + '00'.repeat(32), deposit: '1' }, stranger);
+    await expectChainError(h.sim.send({ tx, signatures: { [stranger]: `sim:${stranger}` } }), 'NotAllowlisted');
+    const w = h.backers[0]!;
+    const salt = '0x' + 'aa'.repeat(32);
+    const c = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: USDC(10), quantity: 300n, salt });
+    await h.exec(w, { kind: 'commitBid', seriesId, commitment: c, deposit: USDC(3030).toString() });
+    await expectChainError(h.exec(w, { kind: 'commitBid', seriesId, commitment: c, deposit: '1' }), 'Duplicate');
+    await expectChainError(h.exec(h.issuer, { kind: 'cancelRaise', seriesId }), 'TooLate');
+    await h.sim.setTime(now + 100);
+    await expectChainError(h.exec(w, { kind: 'revealBid', seriesId, pricePerUnit: USDC(10).toString(), quantity: '299', salt }), 'InvalidCommitment');
+    await h.exec(w, { kind: 'revealBid', seriesId, pricePerUnit: USDC(10).toString(), quantity: '300', salt });
+    await expectChainError(h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper'), 'TooEarly');
+    await h.sim.setTime(now + 200);
+    await h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper');
+    // wallet cap: 20% of 500 = 100 units; 100 × 10 = 1000 < min raise 4000 → fails
+    expect((await h.sim.getSeries(seriesId))!.phase).toBe('Failed');
+  });
+  it('the issuer can cancel before bids and cannot open while new raises are paused', async () => {
+    const h = await SimHarness.create('monad');
+    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    const r = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
+    const seriesId = (r.events[0]!.payload as { seriesId: string }).seriesId;
+    await h.exec(h.admin, { kind: 'pauseNewRaises', paused: true });
+    const now = await h.sim.now();
+    await expectChainError(h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 10, revealEndsAt: now + 20 }), 'Paused');
+    await h.exec(h.admin, { kind: 'pauseNewRaises', paused: false });
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 10, revealEndsAt: now + 20 });
+    const c = await h.exec(h.issuer, { kind: 'cancelRaise', seriesId });
+    expect(types(c.events)).toEqual(['RaiseCancelled']);
+  });
+});
