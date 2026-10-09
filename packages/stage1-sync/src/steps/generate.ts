@@ -8,6 +8,8 @@ export interface StepCtx {
   location: Stage1Location;
   outDir: string;
   generatedDir: string;
+  /** where the repository copy of INTERFACE_DRIFT.md is written (default: ./INTERFACE_DRIFT.md, the committed report) */
+  driftFile?: string;
 }
 
 /**

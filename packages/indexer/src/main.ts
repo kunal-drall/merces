@@ -6,7 +6,8 @@ import { Indexer } from './indexer.ts';
 const log = createLogger('indexer');
 const pool = createPool();
 await migrate(pool);
-const registry = await createChains(chainsConfigFromEnv(process.env, { pool, log: (m: string) => log.info(m) }));
+// live chains only: a simulated chain is owned, indexed and cranked by the API process (one writer per chain)
+const registry = await createChains(chainsConfigFromEnv(process.env, { pool, simulators: 'skip', log: (m: string) => log.info(m) }));
 const indexer = new Indexer(pool, [...registry.chains.values()], { logger: log });
-log.info('indexer started');
+log.info({ chains: [...registry.chains.keys()] }, registry.chains.size ? 'indexer started' : 'indexer started with no live chains (simulated chains are indexed by the API process)');
 await indexer.runLoop(Number(process.env.INDEXER_POLL_MS ?? 2000));

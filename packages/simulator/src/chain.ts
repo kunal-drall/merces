@@ -78,6 +78,8 @@ export class SimulatorChain implements ChainPort {
 
   /** Release the persisted chain (its single-writer lock) so another process may open it. */
   async close(): Promise<void> {
+    // let an in-flight write finish its save before the lock is released
+    await this.chainQueue;
     await this.persistence?.close?.();
   }
 

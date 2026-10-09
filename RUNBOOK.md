@@ -6,9 +6,9 @@ Operating Merces Stage 2: processes, keys, keepers, incidents. Devnet, testnet a
 
 | Process | Command | Needs |
 | --- | --- | --- |
-| API gateway | `pnpm dev:api` | Postgres (`DATABASE_URL`), chain modes, session secret, vault key |
-| Indexer | `pnpm dev:indexer` | Postgres, chains |
-| Keepers | `pnpm dev:keepers` | Postgres, chains, keeper key (KMS), Pyth/Chainlink config |
+| API gateway | `pnpm dev:api` | Postgres (`DATABASE_URL`), chain modes, session secret, vault key; also indexes and cranks every simulated chain in-process |
+| Indexer | `pnpm dev:indexer` | Postgres, live chains (simulated chains are skipped) |
+| Keepers | `pnpm dev:keepers` | Postgres, live chains (simulated chains are skipped), keeper key (KMS), Pyth/Chainlink config; dispatches notifications |
 | Report verifier | `pnpm dev:verifier` | KMS key only (no database) |
 | Everything on the simulator | `pnpm dev:mock` | Postgres (`docker compose up`) |
 
@@ -19,9 +19,11 @@ Migrations run at process start (`migrate()`); `pnpm db:migrate` and `pnpm db:re
 accepted; with a live chain a missing, short or development value stops the process at boot with the variable's name.
 
 **One owner per simulated chain.** A persisted simulator chain (`sim_state`/`sim_events` under `MERCES_SIM_KEY`,
-default `sim`) is held by exactly one process through a Postgres advisory lock. `dev:mock` runs the indexer and
-keepers in-process for that reason; a second process on the same key refuses to start with "already open in another
-process". Run `dev:keepers` as its own process only against live chains (and set `MERCES_KEEPERS=false` on the API).
+default `sim`) is held by exactly one process through a Postgres advisory lock, and that process is the API (`dev:api`
+or `dev:mock`). The API therefore indexes its simulated chains and runs their keepers in-process
+(`MERCES_KEEPERS=false` turns the keepers off); `dev:indexer` and `dev:keepers` open live chains only and skip any
+chain that resolves to the simulator, so the documented three-process layout works in every mode. If the lock's
+connection drops, the API stops writing that chain (writes fail with "lost its single-writer lock") until restarted.
 
 ### Chain modes
 

@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createChains, locateStage1 } from '../src/index.ts';
+import { createChains, evmConfigFrom, locateStage1 } from '../src/index.ts';
 import { evmRpc, fakeRpc } from './fake-rpc.ts';
 
 describe('mode selection (D4)', () => {
@@ -59,5 +59,22 @@ describe('mode selection (D4)', () => {
     writeFileSync(join(dir, 'handoff', 'manifest.json'), JSON.stringify({ evm: 'nope' }));
     const loc = locateStage1(dir)!;
     expect(loc.problems.length).toBeGreaterThan(0);
+  });
+
+  it('picks the exact EVM manifest entry before any prefix match', () => {
+    const root = mkdtempSync(join(tmpdir(), 'stage1-'));
+    mkdirSync(join(root, 'handoff'));
+    const entry = (chain: string, addr: string) => ({ chain, chainId: 10143, contracts: { Series: addr } });
+    writeFileSync(join(root, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', evm: [entry('monad-testnet-v2', '0x' + '22'.repeat(20)), entry('monad-testnet', '0x' + '11'.repeat(20))] }));
+    const loc = locateStage1(root)!;
+    expect(evmConfigFrom(loc, 'monad-testnet')!.network).toBe('monad-testnet');
+    expect(evmConfigFrom(loc, 'monad')!.network).toBe('monad-testnet-v2'); // no exact entry: chain id, then prefix
+  });
+
+  it("simulators: 'skip' leaves simulated chains out of a process that does not own them", async () => {
+    const reg = await createChains({ solana: { mode: 'mock' }, evm: { mode: 'auto', chainKey: 'monad' }, stage1Path: undefined, simulators: 'skip', log: () => undefined });
+    expect(reg.chains.size).toBe(0);
+    expect(reg.decisions.map((d) => [d.chain, d.chosen])).toEqual([['solana', 'mock'], ['monad', 'mock']]);
+    expect(reg.decisions.every((d) => /not opened here/.test(d.reason))).toBe(true);
   });
 });

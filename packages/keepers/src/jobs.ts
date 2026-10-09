@@ -177,11 +177,12 @@ export const transferWindowsJob: KeeperJob = {
   name: 'transfer.windows',
   intervalSeconds: 3600,
   async run(ctx) {
-    if (!(await getFlag(ctx.pool, 'transfer_windows'))) return { actions: 0, detail: 'flag off' };
+    const flagOn = await getFlag(ctx.pool, 'transfer_windows');
     let actions = 0;
     const errors: string[] = [];
     await forEachSettled(ctx, errors, async (chain, s, now) => {
-      if (['Retired', 'Redeemed', 'Extinguished'].includes(s.status) || s.lockupEndsAt === null || now < s.lockupEndsAt) return;
+      // An open window is always cleared once its reveal phase is over, whatever the series' status and even with the
+      // flag switched off, so buy deposits and sell escrow are never left locked (A-REV-16). Only opening is gated.
       const w = await chain.getTransferWindow(s.seriesId);
       if (w && !w.cleared) {
         if (now >= w.revealEndsAt) {
@@ -194,6 +195,7 @@ export const transferWindowsJob: KeeperJob = {
         }
         return;
       }
+      if (!flagOn || ['Retired', 'Redeemed', 'Extinguished'].includes(s.status) || s.lockupEndsAt === null || now < s.lockupEndsAt) return;
       // one window per quarter, opening 14 days after quarter start
       const q = periodOf(now);
       if (now < q.start + 14 * 86_400) return;
@@ -206,7 +208,7 @@ export const transferWindowsJob: KeeperJob = {
         if (!refused(e, ['Duplicate', 'TooEarly', 'WrongStatus'])) throw e;
       }
     });
-    return { actions, errors };
+    return { actions, errors, detail: flagOn ? undefined : 'flag off: open windows are cleared, none opened' };
   },
 };
 

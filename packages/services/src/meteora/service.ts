@@ -64,6 +64,9 @@ export class MeteoraService {
     if (!session.wallets.some((w) => w.chain === chain.chain && w.address === buyer) && !session.roles.includes('admin')) throw AppError.forbidden('wallet is not linked to your account');
     // the backer tier passes on any eligible wallet of the account; the buying wallet itself must be approved on this chain
     if (!(await chain.isAllowlisted(buyer))) throw AppError.forbidden('buyers must be allowlisted');
+    // refuse before any swap is built: a USDG buyer would otherwise swap for real and then have the buy revert
+    if (['Retired', 'Redeemed', 'Extinguished'].includes(series.status)) throw AppError.conflict(`series is ${series.status}; curve buys are closed`);
+    if ((await chain.getCurve(seriesId))?.graduated) throw AppError.conflict('the curve has graduated; buy on the DEX pool');
     const info = await chain.info();
     const usdc = info.stablecoins.USDC!.mint;
     let swap: Record<string, unknown> | null = null;

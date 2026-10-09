@@ -132,8 +132,13 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       );
       break;
     }
-    case 'TreasuryFunded':
-      break; // proceeds already recorded on AuctionSettled / curve buys (treasury_total)
+    case 'TreasuryFunded': {
+      // an auction's proceeds are recorded on AuctionSettled; a curve funds its treasury buy by buy before graduation
+      // (CurveGraduated then sets the same total), so only an ungraduated curve adds here
+      const p = e.payload as P<'TreasuryFunded'>;
+      await client.query("update series set treasury_total = treasury_total + $2, last_event_seq = $3 where series_id = $1 and raise_style = 'curve' and phase <> 'Settled'", [p.seriesId, p.amount, e.seq]);
+      break;
+    }
     case 'FundsReleased': {
       const p = e.payload as P<'FundsReleased'>;
       await client.query('update series set treasury_released = treasury_released + $2, last_event_seq = $3 where series_id = $1', [p.seriesId, p.amount, e.seq]);
@@ -165,7 +170,10 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     }
     case 'PaymentReceived': {
       const p = e.payload as P<'PaymentReceived'>;
-      await client.query('update series set paid_per_unit_wad = $2, gross_paid_total = gross_paid_total + $3, fees_total = fees_total + $4, last_event_seq = $5 where series_id = $1', [p.seriesId, p.paidPerUnitWad, p.gross, p.fee, e.seq]);
+      // gross_paid_total is what the issuer paid in (the chain's vault gross); an extinguishment returns the treasury
+      // to holders through the same accumulator but is not an issuer payment, so only the per-unit figure moves
+      const issuerGross = p.source === 'extinguishment' ? '0' : p.gross;
+      await client.query('update series set paid_per_unit_wad = $2, gross_paid_total = gross_paid_total + $3, fees_total = fees_total + $4, last_event_seq = $5 where series_id = $1', [p.seriesId, p.paidPerUnitWad, issuerGross, p.fee, e.seq]);
       // payIn carries the due recomputed at payment time; older events without it keep the report-time figures
       if (p.periodId && p.source === 'payIn')
         await client.query(
@@ -240,7 +248,8 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     }
     case 'SeriesExtinguished': {
       const p = e.payload as P<'SeriesExtinguished'>;
-      await client.query('update series set extinguished_at = $2, last_event_seq = $3 where series_id = $1', [p.seriesId, e.blockTime, e.seq]);
+      // the chain marks the whole treasury released when it returns the unreleased part to holders
+      await client.query('update series set extinguished_at = $2, treasury_released = treasury_total, last_event_seq = $3 where series_id = $1', [p.seriesId, e.blockTime, e.seq]);
       await money(client, e, 'extinguishment', p.returnedToHolders, { detail: { attestors: p.attestors } });
       break;
     }

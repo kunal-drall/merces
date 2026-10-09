@@ -10,6 +10,8 @@ export interface SyncOptions {
   generatedDir: string;
   runConformance: boolean;
   json: boolean;
+  /** repository copy of INTERFACE_DRIFT.md (default ./INTERFACE_DRIFT.md); tests point it elsewhere */
+  driftFile?: string;
 }
 
 /**
@@ -23,7 +25,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
     return { present: false, location: null, steps, verdicts: [] };
   }
   mkdirSync(opts.outDir, { recursive: true });
-  const ctx = { location, outDir: opts.outDir, generatedDir: opts.generatedDir };
+  const ctx = { location, outDir: opts.outDir, generatedDir: opts.generatedDir, driftFile: opts.driftFile };
 
   const { generateClients } = await import('./steps/generate.ts');
   steps.push(await generateClients(ctx));
@@ -55,8 +57,11 @@ export function verdictsFrom(steps: StepReport[], location: { manifest: { solana
   const chains: string[] = [];
   if (location.manifest.solana) chains.push('solana');
   for (const e of (location.manifest.evm as { chain: string }[] | undefined) ?? []) chains.push(e.chain);
+  const conformance = steps.find((s) => s.step === 'conformance');
   for (const c of chains) {
     const own = steps.flatMap((s) => s.details.filter((d) => d.startsWith(`[${c}]`) && /fail|blocker/i.test(d)));
+    // a green conformance step proves only the chains it ran on (a Solana entry without programs is not a target)
+    if (conformance && conformance.status === 'ok' && !conformance.details.includes(`[${c}] conformance passed`)) own.push(`conformance: did not run on ${c}`);
     const blockers = [...blockersAll, ...own];
     out.push({ chain: c, ready: blockers.length === 0, blockers });
   }

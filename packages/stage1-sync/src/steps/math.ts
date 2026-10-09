@@ -40,7 +40,7 @@ export async function swapMath(ctx: StepCtx): Promise<StepReport> {
     const raw = JSON.parse(readFileSync(vectorsPath, 'utf8')) as { math?: { fn: keyof MercesMath; args: unknown[]; expect: unknown }[] };
     for (const v of raw.math ?? []) {
       compared++;
-      const args = v.args.map((a) => (typeof a === 'string' && /^-?\d+$/.test(a) ? BigInt(a) : a));
+      const args = v.args.map(decodeArg);
       const ours = safe(() => (interimMath[v.fn] as (...a: unknown[]) => unknown)(...args));
       const stage1 = typeof theirs[v.fn] === 'function' ? safe(() => (theirs[v.fn] as (...a: unknown[]) => unknown)(...args)) : 'absent';
       const o = canon(ours);
@@ -82,4 +82,15 @@ function safe(fn: () => unknown): unknown {
   } catch (e) {
     return `throws(${(e as Error).message})`;
   }
+}
+
+/**
+ * Vector arguments carry bigints as decimal strings, at any depth (clearAuction, quarterPayment and friends take
+ * objects). Decode them recursively; JSON numbers stay numbers so integer-typed fields keep their type.
+ */
+export function decodeArg(a: unknown): unknown {
+  if (typeof a === 'string') return /^-?\d+$/.test(a) ? BigInt(a) : a;
+  if (Array.isArray(a)) return a.map(decodeArg);
+  if (a && typeof a === 'object') return Object.fromEntries(Object.entries(a).map(([k, v]) => [k, decodeArg(v)]));
+  return a;
 }

@@ -11,7 +11,9 @@ import { standardJobs } from './index.ts';
 const log = createLogger('keepers');
 const pool = createPool();
 await migrate(pool);
-const chains = await createChains(chainsConfigFromEnv(process.env, { pool, log: (m: string) => log.info(m) }));
+// live chains only: simulated chains are cranked by the API process that owns them; jobs that need no chain
+// (notification dispatch) still run here
+const chains = await createChains(chainsConfigFromEnv(process.env, { pool, simulators: 'skip', log: (m: string) => log.info(m) }));
 const devMode = [...chains.chains.values()].every((c) => c.mode === 'mock');
 const sessionSecret = resolveSecret(process.env, 'MERCES_SESSION_SECRET', { simulatorOnly: simulatorOnly(chains), devDefault: 'dev-session-secret-not-for-production' });
 const ctx = createServiceContext(makeContext({ pool, chains, log, sessionSecret, devMode }));

@@ -398,7 +398,10 @@ export class SimEngine {
     const s = this.series(cmd.seriesId);
     this.requireIssuer(s, signer);
     if (s.phase !== 'Open' && s.phase !== 'Draft') throw new ChainError('WrongPhase', `series is ${s.phase}`);
+    if (TERMINAL.has(s.status)) throw new ChainError('WrongStatus', `series is ${s.status}`);
     if (s.bids.size > 0) throw new ChainError('TooLate', 'bids exist; the raise can no longer be cancelled');
+    // curve buyers already hold units backed by the treasury: cancelling would strand them (A-CURVE-3)
+    if (s.curve && s.unitsOutstanding > 0n) throw new ChainError('TooLate', 'curve units exist; the raise can no longer be cancelled');
     s.phase = 'Cancelled';
     emit('RaiseCancelled', { seriesId: s.seriesId });
   }

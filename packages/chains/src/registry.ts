@@ -16,6 +16,12 @@ export interface ChainsConfig {
   persistKeyPrefix?: string;
   generatedDir?: string;
   log?: (msg: string) => void;
+  /**
+   * 'own' (default) opens the simulator for chains that resolve to it. 'skip' leaves them out of this registry: a
+   * persisted simulator has exactly one owning process (the API, which indexes and cranks it in-process), so the
+   * standalone indexer and keeper processes handle live chains only.
+   */
+  simulators?: 'own' | 'skip';
 }
 
 export interface ChainDecision {
@@ -54,7 +60,10 @@ export function solanaConfigFrom(loc: Stage1Location | null, over: { rpcUrl?: st
 }
 
 export function evmConfigFrom(loc: Stage1Location | null, chainKey: string, over: { rpcUrl?: string; chainId?: number; generatedDir?: string } = {}): EvmChainConfig | null {
-  const entry = loc?.manifest.evm?.find((e) => e.chain === chainKey || e.chain.startsWith(chainKey) || (over.chainId !== undefined && e.chainId === over.chainId));
+  // exact name first, then the configured chain id, and only then a prefix ('monad' for 'monad-testnet'): a prefix
+  // must never pick 'monad-testnet-v2' when 'monad-testnet' itself is listed
+  const evm = loc?.manifest.evm ?? [];
+  const entry = evm.find((e) => e.chain === chainKey) ?? evm.find((e) => over.chainId !== undefined && e.chainId === over.chainId) ?? evm.find((e) => e.chain.startsWith(chainKey));
   if (!entry || !entry.contracts || Object.keys(entry.contracts).length === 0) return null;
   const coins = loc!.manifest.stablecoins?.[entry.chain] ?? loc!.manifest.stablecoins?.[chainKey] ?? {};
   return {
@@ -103,24 +112,30 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
       if (requested === 'auto' && (l as { wired?: boolean }).wired !== true) return { error: `live adapter not wired to the Stage 1 clients yet (D6 step 4); health: ${h.detail}` };
       return { port: l, detail: h.detail };
     };
+    let livePort: ChainPort | null = null;
     if (requested === 'mock') {
-      port = await mock();
       chosen = 'mock';
       reason = 'configured mock';
     } else {
       const r = await tryLive();
       if ('port' in r) {
-        port = r.port;
+        livePort = r.port;
         chosen = 'live';
         reason = r.detail;
       } else if (requested === 'live') {
         throw new Error(`${chain}: mode=live but the live adapter is unavailable: ${r.error}`);
       } else {
-        port = await mock();
         chosen = 'mock';
         reason = `auto → simulator (${r.error})`;
       }
     }
+    if (chosen === 'mock' && cfg.simulators === 'skip') {
+      reason = `${reason}; not opened here (the API process owns the simulator)`;
+      decisions.push({ chain, requested, chosen, reason });
+      log(`${chain}: requested=${requested} chosen=${chosen} — ${reason}`);
+      return;
+    }
+    port = livePort ?? (await mock());
     chains.set(chain, port);
     decisions.push({ chain, requested, chosen, reason });
     log(`${chain}: requested=${requested} chosen=${chosen} — ${reason}`);
@@ -175,5 +190,25 @@ export function chainsConfigFromEnv(env: NodeJS.ProcessEnv = process.env, extra:
     stage1Path: env.STAGE1_PATH,
     persistKeyPrefix: env.MERCES_SIM_KEY,
     ...extra,
+  };
+}
+
+/** A view of a registry restricted to some of its chains (for example the simulated ones a process owns). */
+export function subsetRegistry(reg: ChainRegistry, keep: (c: ChainPort) => boolean): ChainRegistry {
+  const chains = new Map([...reg.chains].filter(([, c]) => keep(c)));
+  return {
+    chains,
+    decisions: reg.decisions.filter((d) => chains.has(d.chain)),
+    stage1: reg.stage1,
+    get(chain) {
+      const c = chains.get(chain);
+      if (!c) throw new Error(`unknown chain ${chain}`);
+      return c;
+    },
+    byFamily(family) {
+      for (const c of chains.values()) if (c.family === family) return c;
+      throw new Error(`no chain of family ${family}`);
+    },
+    close: () => reg.close(),
   };
 }

@@ -6,7 +6,7 @@ import { adminCommands, eventPayloads, routerCommands, serviceCommands, userComm
 import { interimMath, selectedMathName } from '@merces/math';
 import { renderReport, runSync, verdictsFrom, type StepReport } from '../src/index.ts';
 import { renderAnchorIdl } from '../src/idl-render.ts';
-import { canon } from '../src/steps/math.ts';
+import { canon, decodeArg } from '../src/steps/math.ts';
 import { diffInterfaces } from '../src/steps/diff.ts';
 import { swapMath } from '../src/steps/math.ts';
 import { locateStage1 } from '@merces/chains';
@@ -18,7 +18,9 @@ function drop(manifest: Record<string, unknown>, files: Record<string, string> =
   for (const [f, c] of Object.entries(files)) writeFileSync(join(root, f), c);
   writeFileSync(join(root, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', ...manifest }));
   const location = locateStage1(root)!;
-  return { location, outDir: mkdtempSync(join(tmpdir(), 'out-')), generatedDir: mkdtempSync(join(tmpdir(), 'gen-')) };
+  const outDir = mkdtempSync(join(tmpdir(), 'out-'));
+  // the repository copy of the drift report is never touched by tests
+  return { location, outDir, generatedDir: mkdtempSync(join(tmpdir(), 'gen-')), driftFile: join(outDir, 'repo-INTERFACE_DRIFT.md') };
 }
 
 /** A JSON events schema that mirrors the canonical vocabulary exactly. */
@@ -40,7 +42,6 @@ describe('stage1:sync', () => {
     expect(r2.present).toBe(false);
   });
 
-  // runs before the drop test below so the repository's INTERFACE_DRIFT.md ends up from that fixture
   it('interface diff is ok only for exact matches; extra args and look-alike names are drift', async () => {
     const schema = canonicalSchema();
     const exact = drop({ events: { schema: 'events.schema.json' } }, { 'events.schema.json': JSON.stringify(schema) });
@@ -78,7 +79,7 @@ describe('stage1:sync', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'out-'));
     const generatedDir = mkdtempSync(join(tmpdir(), 'gen-'));
     const cwd = process.cwd();
-    const r = await runSync({ stage1Path: root, outDir, generatedDir, runConformance: false, json: false });
+    const r = await runSync({ stage1Path: root, outDir, generatedDir, runConformance: false, json: false, driftFile: join(outDir, 'repo-INTERFACE_DRIFT.md') });
     expect(r.present).toBe(true);
     const by = Object.fromEntries(r.steps.map((s) => [s.step, s]));
     expect(by.generate!.status).toBe('ok');
@@ -102,11 +103,59 @@ describe('stage1:sync', () => {
     expect(process.cwd()).toBe(cwd);
   });
 
+  it('extra Stage 1 items, names-only sources and disagreeing sources are drift', async () => {
+    const schema = canonicalSchema();
+    const extra = structuredClone(schema) as { events: Record<string, { properties: Record<string, unknown> }>; commands: Record<string, { properties: Record<string, unknown> }> };
+    extra.commands.adminSweep = { properties: { to: {}, amount: {} } };
+    extra.events.AdminSweep = { properties: { to: {}, amount: {} } };
+    const withExtra = drop({ events: { schema: 'events.schema.json' } }, { 'events.schema.json': JSON.stringify(extra) });
+    const r = await diffInterfaces(withExtra);
+    expect(r.status).toBe('warn');
+    expect(r.details[0]).toMatch(/2 extra Stage 1 item/);
+    // a names-only Solana IDL and an ABI with fields for the same names: the item stays unverified, never 'ok'
+    const d = drop({});
+    mkdirSync(join(d.generatedDir, 'solana'));
+    mkdirSync(join(d.generatedDir, 'evm'));
+    writeFileSync(join(d.generatedDir, 'solana', 'series.ts'), 'export const instructions = {\n  openRaise: { discriminator: [1] },\n};\nexport const events = {\n  RaiseOpened: { discriminator: [2] },\n};\nexport const accounts = {};\n');
+    writeFileSync(join(d.generatedDir, 'evm', 'Series.ts'), 'export const SeriesAbi = ' + JSON.stringify([{ type: 'event', name: 'RaiseOpened', inputs: [{ name: 'seriesId' }] }, { type: 'function', name: 'openRaise', stateMutability: 'nonpayable', inputs: [{ name: 'seriesId' }] }, { type: 'function', name: 'getSeries', stateMutability: 'view', inputs: [{ name: 'seriesId' }] }]) + ' as const;\n');
+    const n = await diffInterfaces(d);
+    const md = readFileSync(join(d.outDir, 'INTERFACE_DRIFT.md'), 'utf8');
+    expect(md).toMatch(/\| RaiseOpened \| RaiseOpened \| fields unknown/);
+    expect(md).toMatch(/\| openRaise \| openRaise \| fields unknown/);
+    expect(md).not.toContain('getSeries'); // view functions are reads, not instructions
+    expect(n.status).toBe('warn');
+    // the test never wrote the committed report
+    expect(readFileSync('INTERFACE_DRIFT.md', 'utf8')).toContain('Stage 1 is not present yet');
+  });
+
+  it('a chain is not ready when conformance passed on other chains but never ran on it', () => {
+    const step = (name: string, status: StepReport['status'], details: string[] = []): StepReport => ({ step: name, status, summary: name, details });
+    const base = [step('detect', 'ok'), step('generate', 'ok'), step('diff', 'ok'), step('math', 'warn'), step('vectors', 'ok')];
+    const loc = { manifest: { solana: { cluster: 'devnet' }, evm: [{ chain: 'monad-testnet' }] } };
+    const v = verdictsFrom([...base, step('conformance', 'ok', ['[monad-testnet] conformance passed'])], loc);
+    expect(v.find((x) => x.chain === 'monad-testnet')!.ready).toBe(true);
+    expect(v.find((x) => x.chain === 'solana')!.ready).toBe(false);
+    expect(v.find((x) => x.chain === 'solana')!.blockers).toContain('conformance: did not run on solana');
+  });
+
+  it('math vectors decode bigints at any depth, so object-argument functions can be compared', async () => {
+    const params = { bids: [{ bidder: 'a', pricePerUnit: 10_000_000n, quantity: 100n, order: 0 }, { bidder: 'b', pricePerUnit: 9_000_000n, quantity: 300n, order: 1 }], unitsOffered: 300n, reservePrice: 8_000_000n, minimumRaise: 1_000_000_000n, walletCapUnits: 300n, auctionFeeBps: 100n };
+    const asJson = JSON.parse(JSON.stringify(params, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))) as unknown;
+    expect(decodeArg(asJson)).toEqual(params);
+    const expected = JSON.parse(canon(interimMath.clearAuction(params))) as unknown;
+    (globalThis as Record<string, unknown>).__mercesInterimForTest = interimMath;
+    const vectors = JSON.stringify({ math: [{ fn: 'clearAuction', args: [asJson], expect: expected }] });
+    const same = drop({ math: { package: './fake-math.mjs' }, vectors: 'vectors.json' }, { 'fake-math.mjs': 'export const mercesMath = { ...globalThis.__mercesInterimForTest };', 'vectors.json': vectors });
+    const r = await swapMath(same);
+    expect(r.status, readFileSync(join(same.outDir, 'MATH_PARITY.md'), 'utf8')).toBe('ok');
+  });
+
   it('verdict is ready only when diff and conformance are ok', () => {
-    const step = (name: string, status: StepReport['status']): StepReport => ({ step: name, status, summary: name, details: [] });
+    const step = (name: string, status: StepReport['status'], details: string[] = []): StepReport => ({ step: name, status, summary: name, details });
     const base = [step('detect', 'ok'), step('generate', 'ok'), step('math', 'warn'), step('vectors', 'ok')];
     const loc = { manifest: { solana: {}, evm: [{ chain: 'monad-testnet' }] } };
-    expect(verdictsFrom([...base, step('diff', 'ok'), step('conformance', 'ok')], loc).every((v) => v.ready)).toBe(true);
+    const passedBoth = ['[solana] conformance passed', '[monad-testnet] conformance passed'];
+    expect(verdictsFrom([...base, step('diff', 'ok'), step('conformance', 'ok', passedBoth)], loc).every((v) => v.ready)).toBe(true);
     expect(verdictsFrom([...base, step('diff', 'warn'), step('conformance', 'ok')], loc).some((v) => v.ready)).toBe(false);
     expect(verdictsFrom([...base, step('diff', 'ok'), step('conformance', 'skipped')], loc).some((v) => v.ready)).toBe(false);
     expect(verdictsFrom([...base, step('diff', 'ok')], loc)[0]!.blockers).toContain('conformance: did not run');

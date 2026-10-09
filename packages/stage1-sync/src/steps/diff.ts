@@ -20,6 +20,28 @@ export async function diffInterfaces(ctx: StepCtx): Promise<StepReport> {
   const stage1Events = new Map<string, Set<string> | null>();
   const stage1Commands = new Map<string, Set<string> | null>();
   let source = 'none';
+  const conflicts: string[] = [];
+  /**
+   * Record an item seen in one source. Sources never overwrite each other: a names-only source (an IDL without the
+   * schema file) leaves the item unverified even when another source has fields, and two sources that disagree on
+   * the field set (two chains, or two ABIs with the same function name) make it unverified and are listed.
+   */
+  const put = (map: Map<string, Set<string> | null>, name: string, fields: Set<string> | null): void => {
+    if (!map.has(name)) {
+      map.set(name, fields);
+      return;
+    }
+    const prev = map.get(name) ?? null;
+    if (prev === null || fields === null) {
+      map.set(name, null);
+      return;
+    }
+    const same = prev.size === fields.size && [...prev].every((f) => fields.has(f));
+    if (!same) {
+      conflicts.push(`${name}: sources disagree on fields ({${[...prev].join(', ')}} vs {${[...fields].join(', ')}})`);
+      map.set(name, null);
+    }
+  };
 
   if (schemaPath && existsSync(schemaPath)) {
     source = schemaPath;
@@ -36,17 +58,18 @@ export async function diffInterfaces(ctx: StepCtx): Promise<StepReport> {
         const src = readFileSync(join(genSol, f), 'utf8');
         for (const mm of src.matchAll(/^  (\w+): \{ discriminator/gm)) {
           const name = mm[1]!;
-          if (src.indexOf(`export const events = {`) < src.indexOf(mm[0]) && src.indexOf(mm[0]) < src.indexOf('export const accounts')) stage1Events.set(name, null);
-          else if (src.indexOf(mm[0]) < src.indexOf('export const events')) stage1Commands.set(name, null);
+          if (src.indexOf(`export const events = {`) < src.indexOf(mm[0]) && src.indexOf(mm[0]) < src.indexOf('export const accounts')) put(stage1Events, name, null);
+          else if (src.indexOf(mm[0]) < src.indexOf('export const events')) put(stage1Commands, name, null);
         }
       }
     }
     if (existsSync(genEvm)) {
       for (const f of (await import('node:fs')).readdirSync(genEvm).filter((x) => x.endsWith('.ts') && x !== 'index.ts')) {
-        const abi = JSON.parse(readFileSync(join(genEvm, f), 'utf8').replace(/^[^[]*/, '').replace(/ as const;\s*$/, '')) as { type: string; name?: string; inputs?: { name: string }[] }[];
+        const abi = JSON.parse(readFileSync(join(genEvm, f), 'utf8').replace(/^[^[]*/, '').replace(/ as const;\s*$/, '')) as { type: string; name?: string; stateMutability?: string; inputs?: { name: string }[] }[];
         for (const item of abi) {
-          if (item.type === 'event' && item.name) stage1Events.set(item.name, new Set((item.inputs ?? []).map((i) => i.name)));
-          if (item.type === 'function' && item.name) stage1Commands.set(item.name, new Set((item.inputs ?? []).map((i) => i.name)));
+          if (item.type === 'event' && item.name) put(stage1Events, item.name, new Set((item.inputs ?? []).map((i) => i.name)));
+          // view and pure functions are reads, not instructions: only state-changing functions are compared
+          if (item.type === 'function' && item.name && item.stateMutability !== 'view' && item.stateMutability !== 'pure') put(stage1Commands, item.name, new Set((item.inputs ?? []).map((i) => i.name)));
         }
       }
     }
@@ -84,6 +107,7 @@ export async function diffInterfaces(ctx: StepCtx): Promise<StepReport> {
   let missing = 0;
   let mismatched = 0;
   let unverified = 0;
+  let extra = 0;
   const matchedStage1 = new Set<string>();
   for (const [name, schema] of Object.entries(eventPayloads)) {
     const ours = Object.keys((schema as unknown as { shape: Record<string, unknown> }).shape);
@@ -107,7 +131,11 @@ export async function diffInterfaces(ctx: StepCtx): Promise<StepReport> {
     mismatched += count;
     md.push(`| ${name} | ${counterpart} | ${mapping.join(', ') || '—'} | ${[...nameDrift, ...drift].join('; ') || 'none'} |`);
   }
-  for (const k of stage1Events.keys()) if (!matchedStage1.has(k)) md.push(`| — | ${k} | — | extra Stage 1 event, not in the canonical model |`);
+  for (const k of stage1Events.keys()) {
+    if (matchedStage1.has(k)) continue;
+    extra++;
+    md.push(`| — | ${k} | — | extra Stage 1 event, not in the canonical model |`);
+  }
 
   md.push('', '## Commands', '', '| Canonical command | Stage 1 counterpart | Field mapping | Drift |', '| --- | --- | --- | --- |');
   const matchedCmd = new Set<string>();
@@ -135,11 +163,18 @@ export async function diffInterfaces(ctx: StepCtx): Promise<StepReport> {
       md.push(`| ${name} | ${counterpart} | ${mapping.join(', ') || '—'} | ${[...nameDrift, ...drift].join('; ') || 'none'} |`);
     }
   }
-  for (const k of stage1Commands.keys()) if (!matchedCmd.has(k)) md.push(`| — | ${k} | — | extra Stage 1 instruction, not in the canonical model |`);
+  for (const k of stage1Commands.keys()) {
+    if (matchedCmd.has(k)) continue;
+    extra++;
+    md.push(`| — | ${k} | — | extra Stage 1 instruction, not in the canonical model |`);
+  }
+  if (conflicts.length) md.push('', '## Sources that disagree', '', ...conflicts.map((c) => `- ${c}`));
 
-  writeFileSync('INTERFACE_DRIFT.md', md.join('\n') + '\n');
+  writeFileSync(ctx.driftFile ?? 'INTERFACE_DRIFT.md', md.join('\n') + '\n');
   writeFileSync(join(ctx.outDir, 'INTERFACE_DRIFT.md'), md.join('\n') + '\n');
-  const status: StepReport['status'] = stage1Events.size === 0 && stage1Commands.size === 0 ? 'fail' : missing + mismatched + unverified > 0 ? 'warn' : 'ok';
-  details.push(`${missing} canonical item(s) without counterpart, ${mismatched} field mismatch(es), ${unverified} unverified match(es); ${stage1Events.size} Stage 1 events, ${stage1Commands.size} instructions/functions seen`);
+  // every kind of unresolved drift keeps the step from 'ok' (A-SYNC-1), extra Stage 1 items included
+  const status: StepReport['status'] = stage1Events.size === 0 && stage1Commands.size === 0 ? 'fail' : missing + mismatched + unverified + extra > 0 ? 'warn' : 'ok';
+  details.push(`${missing} canonical item(s) without counterpart, ${mismatched} field mismatch(es), ${unverified} unverified match(es), ${extra} extra Stage 1 item(s); ${stage1Events.size} Stage 1 events, ${stage1Commands.size} instructions/functions seen`);
+  for (const c of conflicts) details.push(`conflict: ${c}`);
   return { step: 'diff', status, summary: status === 'fail' ? 'no Stage 1 interface information found' : 'INTERFACE_DRIFT.md written', details };
 }
