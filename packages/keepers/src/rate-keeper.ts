@@ -12,6 +12,9 @@ import { refused, type KeeperJob } from './jobs.ts';
  * Feed ids beyond the confirmed ones are resolved from Hermes at runtime and the pair fails closed when missing.
  * Chainlink has no FX feeds on Monad (verified 2026-10-07), so there the cross-check is recorded as unavailable (A-FX-2).
  */
+/** A closed FX market (weekend, holiday) is an expected condition, not a keeper failure. */
+class MarketClosed extends Error {}
+
 export interface RateKeeperOptions {
   pyth: PythPort;
   chainlink: ChainlinkPort;
@@ -61,7 +64,7 @@ export function rateKeeperJob(opts: RateKeeperOptions): KeeperJob {
               const upd = await opts.pyth.getLatestPriceUpdates([feedId]);
               const parsed = upd.parsed.find((p) => '0x' + p.id.replace(/^0x/, '') === feedId);
               if (!parsed) throw new Error(`Hermes returned no price for ${symbol}`);
-              if (now - parsed.price.publish_time > DEFAULTS.maxRateAgeSeconds) throw new Error(`stale price for ${symbol} (published ${now - parsed.price.publish_time}s ago; FX market closed?)`);
+              if (now - parsed.price.publish_time > DEFAULTS.maxRateAgeSeconds) throw new MarketClosed(`stale price for ${symbol} (published ${now - parsed.price.publish_time}s ago; FX market closed?)`);
               const { rateWad, confWad } = parsedToWad(parsed, inverted);
               // Chainlink cross-check where a feed exists
               let clRate: bigint | null = null;
@@ -92,7 +95,9 @@ export function rateKeeperJob(opts: RateKeeperOptions): KeeperJob {
               actions++;
             } catch (e) {
               await ctx.pool.query('update rate_pairs set last_error = $3, updated_at = now() where chain = $1 and pair = $2', [chain.chain, pair, String((e as Error).message).slice(0, 300)]);
-              details.push(`${chain.chain} ${pair}: ${(e as Error).message}`);
+              // a closed market is routine; a missing feed, a Hermes outage or a failed submit marks the run failed (A-REV-14)
+              if (e instanceof MarketClosed) details.push(`${chain.chain} ${pair}: ${(e as Error).message}`);
+              else errors.push(`${chain.chain} ${pair}: ${String((e as Error).message).slice(0, 200)}`);
             }
           }
         } catch (e) {

@@ -136,8 +136,12 @@ export class AuctionService {
             await chain.submit({ kind: 'settleAuction', seriesId: s.seriesId }, 'keeper');
             settled.push(s.seriesId);
           } catch (e) {
-            // settled or cancelled between the listing and the submit (anyone may settle): nothing to do, not a failure
-            if (e instanceof ChainError && (e.code === 'WrongPhase' || e.code === 'Duplicate')) continue;
+            // settled or ended between the listing and the submit (anyone may settle): nothing to do, not a failure.
+            // Decided by re-reading the series, not by the refusal code, which differs between chains.
+            if (e instanceof ChainError) {
+              const fresh = await chain.getSeries(s.seriesId).catch(() => null);
+              if (fresh && fresh.phase !== 'Open') continue;
+            }
             failed.push(`${s.seriesId}: ${(e as Error).message}`);
           }
         }

@@ -17,6 +17,8 @@ Migrations run at process start (`migrate()`); `pnpm db:migrate` and `pnpm db:re
 **Secrets at startup.** `MERCES_SESSION_SECRET`, `MERCES_VAULT_KEY_HEX` and `MERCES_LOCAL_KEY_SEED` each need at least
 32 characters once any chain is live. While every chain runs on the simulator their published development defaults are
 accepted; with a live chain a missing, short or development value stops the process at boot with the variable's name.
+The report verifier signs with the key the multisig registers onchain, so it refuses the development seed unless
+`MERCES_VERIFIER_DEV=true` is set (docker-compose sets it for local development only).
 
 **One owner per simulated chain.** A persisted simulator chain (`sim_state`/`sim_events` under `MERCES_SIM_KEY`,
 default `sim`) is held by exactly one process through a Postgres advisory lock, and that process is the API (`dev:api`

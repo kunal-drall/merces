@@ -21,7 +21,10 @@ export class KeeperScheduler {
   async runJob(job: KeeperJob): Promise<RunResult> {
     let id: string | null = null;
     try {
-      const started = await this.ctx.pool.query<{ id: string }>('insert into keeper_runs (job) values ($1) returning id', [job.name]);
+      // the chains this scheduler serves: the API (simulated chains) and dev:keepers (live chains) run the same job
+      // names, so the admin view keeps each one's latest run, failures and staleness apart
+      const chains = [...this.ctx.chains.chains.keys()].sort().join(',') || null;
+      const started = await this.ctx.pool.query<{ id: string }>('insert into keeper_runs (job, chain) values ($1, $2) returning id', [job.name, chains]);
       id = started.rows[0]?.id ?? null;
     } catch (e) {
       this.ctx.log.error({ job: job.name, err: (e as Error).message }, 'could not record keeper run start');

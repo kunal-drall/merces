@@ -36,7 +36,8 @@ services:
     environment:
       REPORT_VERIFIER_PORT: 3100
       MERCES_KMS_PROVIDER: local
-      MERCES_LOCAL_KEY_SEED: dev-seed-not-for-production
+      # development only: accept the published dev seed (the verifier refuses it otherwise)
+      MERCES_VERIFIER_DEV: 'true'
     ports: ['3100:3100']
 
 volumes:

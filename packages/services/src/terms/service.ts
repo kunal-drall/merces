@@ -257,7 +257,8 @@ export class TermsService {
     const newT = JSON.parse(this.ctx.vault.decrypt(a.ciphertext, `terms:${a.draft_id}`)) as Record<string, string>;
     const favourable = BigInt(newT.threshold!) >= BigInt(oldT.threshold!) && BigInt(newT.ratePerUnitWad!) <= BigInt(oldT.ratePerUnitWad!);
     if (approve && !favourable) throw AppError.unprocessable('amendment is not issuer-favourable; refusing to attest');
-    await this.ctx.pool.query('update terms_amendments set state = $2, attestor = $3 where amendment_id = $1', [amendmentId, approve ? 'attested' : 'rejected', attestorWallet]);
+    const upd = await this.ctx.pool.query("update terms_amendments set state = $2, attestor = $3 where amendment_id = $1 and state = 'proposed'", [amendmentId, approve ? 'attested' : 'rejected', attestorWallet]);
+    if (!upd.rowCount) throw AppError.conflict('amendment was decided concurrently');
     await audit(this.ctx.pool, { actor: attestor.accountId, actorRole: 'attestor', action: approve ? 'amendment.attest' : 'amendment.reject', target: amendmentId, detail: { favourable } });
     return { amendmentId, state: approve ? 'attested' : 'rejected', favourable };
   }

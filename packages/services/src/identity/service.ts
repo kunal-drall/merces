@@ -182,23 +182,42 @@ export class IdentityService {
     if (!a) throw AppError.notFound('application');
     if (!['submitted', 'in_review'].includes(a.state)) throw AppError.conflict(`application is ${a.state}`);
     if (decision === 'approved' && a.identity_status !== 'passed') throw AppError.unprocessable('identity check has not passed');
-    // The chain call goes first: setAllowlist is idempotent onchain, so if it fails nothing has been recorded, the
-    // application stays submitted/in review and the admin simply retries. Everything else commits in one transaction.
+    // The application row is locked first, so a concurrent decision waits and then gets a 409. setAllowlist runs
+    // inside that transaction (idempotent onchain): if it fails, nothing is recorded and the admin retries. If the
+    // chain call succeeded but the decision then fails to commit, the allowlist addition is undone unless the
+    // wallet is eligible anyway, so a wallet is never left allowlisted without an approved decision behind it.
     let allowlistTx: string | null = null;
-    if (decision === 'approved') allowlistTx = (await this.ctx.chains.get(a.chain).submit({ kind: 'setAllowlist', wallet: a.wallet, allowed: true }, 'allowlistManager')).txId;
-    await withTransaction(this.ctx.pool, async (db) => {
-      const cur = await db.query<{ state: string }>('select state from applications where application_id = $1 for update', [id]);
-      if (!['submitted', 'in_review'].includes(cur.rows[0]?.state ?? '')) throw AppError.conflict(`application is ${cur.rows[0]?.state}`);
-      await db.query('update applications set state = $2, reviewer = $3, decision_reason_code = $4, decided_at = case when $2 in (\'approved\',\'rejected\') then now() else null end, updated_at = now() where application_id = $1', [id, decision, admin.accountId, reasonCode]);
-      await audit(db, { actor: admin.accountId, actorRole: 'admin', action: `application.${decision}`, target: id, detail: { reasonCode } });
-      if (decision === 'approved') {
-        await db.query('update accounts set roles = array(select distinct unnest(roles || $2::text[])) where account_id = $1', [a.account_id, [a.kind]]);
-        await db.query('insert into eligibility (chain, wallet, account_id, kind, allowlist_synced_at, allowlist_tx) values ($1,$2,$3,$4, now(), $5) on conflict (chain, wallet) do update set revoked_at = null, approved_at = now(), kind = excluded.kind, account_id = excluded.account_id, allowlist_synced_at = now(), allowlist_tx = excluded.allowlist_tx', [a.chain, a.wallet, a.account_id, a.kind, allowlistTx]);
-        await audit(db, { actor: admin.accountId, actorRole: 'admin', action: 'allowlist.add', target: `${a.chain}:${a.wallet}`, detail: { txId: allowlistTx } });
-      }
-      await enqueueOutbox(db, 'notification', { kind: `application.${decision}`, accountId: a.account_id, applicationId: id });
-    });
+    try {
+      await withTransaction(this.ctx.pool, async (db) => {
+        const cur = await db.query<{ state: string }>('select state from applications where application_id = $1 for update', [id]);
+        if (!['submitted', 'in_review'].includes(cur.rows[0]?.state ?? '')) throw AppError.conflict(`application is ${cur.rows[0]?.state}`);
+        if (decision === 'approved') allowlistTx = (await this.ctx.chains.get(a.chain).submit({ kind: 'setAllowlist', wallet: a.wallet, allowed: true }, 'allowlistManager')).txId;
+        await db.query('update applications set state = $2, reviewer = $3, decision_reason_code = $4, decided_at = case when $2 in (\'approved\',\'rejected\') then now() else null end, updated_at = now() where application_id = $1', [id, decision, admin.accountId, reasonCode]);
+        await audit(db, { actor: admin.accountId, actorRole: 'admin', action: `application.${decision}`, target: id, detail: { reasonCode } });
+        if (decision === 'approved') {
+          await db.query('update accounts set roles = array(select distinct unnest(roles || $2::text[])) where account_id = $1', [a.account_id, [a.kind]]);
+          await db.query('insert into eligibility (chain, wallet, account_id, kind, allowlist_synced_at, allowlist_tx) values ($1,$2,$3,$4, now(), $5) on conflict (chain, wallet) do update set revoked_at = null, approved_at = now(), kind = excluded.kind, account_id = excluded.account_id, allowlist_synced_at = now(), allowlist_tx = excluded.allowlist_tx', [a.chain, a.wallet, a.account_id, a.kind, allowlistTx]);
+          await audit(db, { actor: admin.accountId, actorRole: 'admin', action: 'allowlist.add', target: `${a.chain}:${a.wallet}`, detail: { txId: allowlistTx } });
+        }
+        await enqueueOutbox(db, 'notification', { kind: `application.${decision}`, accountId: a.account_id, applicationId: id });
+      });
+    } catch (e) {
+      if (allowlistTx) await this.undoAllowlist(a.chain, a.wallet, admin.accountId, allowlistTx);
+      throw e;
+    }
     return this.getApplication(id, admin);
+  }
+
+  /** Compensation for a decision that did not commit after its setAllowlist landed (best effort, audited). */
+  private async undoAllowlist(chain: string, wallet: string, by: string, addTx: string): Promise<void> {
+    const still = await this.ctx.pool.query('select 1 from eligibility where chain = $1 and wallet = $2 and revoked_at is null', [chain, wallet]).catch(() => null);
+    if (still?.rowCount) return;
+    try {
+      const res = await this.ctx.chains.get(chain).submit({ kind: 'setAllowlist', wallet, allowed: false }, 'allowlistManager');
+      await audit(this.ctx.pool, { actor: by, actorRole: 'admin', action: 'allowlist.remove', target: `${chain}:${wallet}`, detail: { txId: res.txId, reason: 'decision-not-committed', undoes: addTx } });
+    } catch (err) {
+      this.ctx.log.error({ chain, wallet, err: (err as Error).message }, 'could not undo allowlist addition after a failed decision; remove it by hand');
+    }
   }
 
   /** Uses the allowlist-manager service role on the right chain. Removal never strands value (the chain guarantees claims and sells). */

@@ -1072,6 +1072,7 @@ export class SimEngine {
     if (!c) throw new ChainError('WrongPhase', 'not a curve-mode series');
     if (c.graduated) throw new ChainError('WrongPhase', 'curve graduated; trade on the DEX');
     if (TERMINAL.has(s.status)) throw new ChainError('WrongStatus', `cannot buy while ${s.status}`);
+    if (s.phase === 'Cancelled' || s.phase === 'Failed') throw new ChainError('WrongPhase', `raise is ${s.phase}`);
     // pre-graduation units are sealed-style holdings: only approved wallets may mint them (C10)
     this.requireAllowlisted(signer);
     const amountIn = big(cmd.amountIn);
@@ -1109,6 +1110,7 @@ export class SimEngine {
     const s = this.series(cmd.seriesId);
     if (!s.curve || s.curve.graduated) throw new ChainError('WrongPhase', 'not graduatable');
     if (TERMINAL.has(s.status)) throw new ChainError('WrongStatus', `cannot graduate while ${s.status}`);
+    if (s.phase === 'Cancelled' || s.phase === 'Failed') throw new ChainError('WrongPhase', `raise is ${s.phase}`);
     if (s.curve.raised < s.curve.graduationThreshold) throw new ChainError('TooEarly', 'threshold not reached');
     this.graduate(s, this.clock.now(), emit);
   }

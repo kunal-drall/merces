@@ -27,7 +27,9 @@ if (sims.chains.size) {
   void new Indexer(pool, [...sims.chains.values()], { logger: log }).runLoop(Number(process.env.INDEXER_POLL_MS ?? 2000));
   if (process.env.MERCES_KEEPERS !== 'false') {
     const kctx = createServiceContext(makeContext({ pool, chains: sims, log, sessionSecret, devMode }));
-    const pyth = (process.env.MERCES_PRICE_FEED_PROVIDER ?? 'mock') === 'pyth' ? new HermesPyth(process.env.PYTH_HERMES_URL) : new MockPyth();
+    // a mock feed publishes at the simulator's time (it time-travels), or every snapshot would be refused as stale
+    const simClock = ([...sims.chains.values()][0] as unknown as { clock: { now(): number } }).clock;
+    const pyth = (process.env.MERCES_PRICE_FEED_PROVIDER ?? 'mock') === 'pyth' ? new HermesPyth(process.env.PYTH_HERMES_URL) : new MockPyth(undefined, () => simClock.now());
     void new KeeperScheduler(kctx, standardJobs({ pyth, chainlink: new MockChainlink(), outbox: notificationsOutboxHandler(kctx) })).start();
   }
   log.info({ chains: [...sims.chains.keys()], keepers: process.env.MERCES_KEEPERS !== 'false' }, 'simulated chains indexed and cranked in-process');

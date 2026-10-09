@@ -66,6 +66,7 @@ export class MeteoraService {
     if (!(await chain.isAllowlisted(buyer))) throw AppError.forbidden('buyers must be allowlisted');
     // refuse before any swap is built: a USDG buyer would otherwise swap for real and then have the buy revert
     if (['Retired', 'Redeemed', 'Extinguished'].includes(series.status)) throw AppError.conflict(`series is ${series.status}; curve buys are closed`);
+    if (series.phase === 'Cancelled' || series.phase === 'Failed') throw AppError.conflict(`raise is ${series.phase}; curve buys are closed`);
     if ((await chain.getCurve(seriesId))?.graduated) throw AppError.conflict('the curve has graduated; buy on the DEX pool');
     const info = await chain.info();
     const usdc = info.stablecoins.USDC!.mint;

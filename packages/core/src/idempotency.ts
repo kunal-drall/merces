@@ -1,5 +1,5 @@
 import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
+import { bytesToHex, randomBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import type { Queryable } from '@merces/db';
 import { AppError } from './errors.ts';
 
@@ -25,14 +25,16 @@ export async function withIdempotency<T>(db: Queryable, scope: string, key: stri
   }
   const requestHash = bytesToHex(sha256(utf8ToBytes(JSON.stringify(body ?? null))));
   const fullKey = `${scope}:${key}`;
-  const reserved = await db.query("insert into idempotency_keys (key, scope, request_hash, state) values ($1, $2, $3, 'pending') on conflict (key) do nothing", [fullKey, scope, requestHash]);
+  // this request's ownership of the reservation; release and completion apply only while it still owns the row
+  const owner = bytesToHex(randomBytes(16));
+  const reserved = await db.query("insert into idempotency_keys (key, scope, request_hash, state, owner) values ($1, $2, $3, 'pending', $4) on conflict (key) do nothing", [fullKey, scope, requestHash, owner]);
   if (!reserved.rowCount) {
     const existing = await db.query<{ request_hash: string; status_code: number | null; response: T | null; state: string }>('select request_hash, status_code, response, state from idempotency_keys where key = $1', [fullKey]);
     const row = existing.rows[0];
     if (!row) throw AppError.conflict('idempotency key was released concurrently; retry the request');
     if (row.request_hash !== requestHash) throw AppError.conflict('idempotency key reused with a different request body');
     if (row.state === 'pending') {
-      const takeover = await db.query(`update idempotency_keys set created_at = now() where key = $1 and state = 'pending' and created_at < now() - interval '${STALE_RESERVATION_SECONDS} seconds'`, [fullKey]);
+      const takeover = await db.query(`update idempotency_keys set created_at = now(), owner = $2 where key = $1 and state = 'pending' and created_at < now() - interval '${STALE_RESERVATION_SECONDS} seconds'`, [fullKey, owner]);
       if (!takeover.rowCount) throw AppError.conflict('a request with this idempotency key is still in progress');
     } else {
       return { status: row.status_code ?? 200, response: row.response as T, replayed: true };
@@ -43,10 +45,11 @@ export async function withIdempotency<T>(db: Queryable, scope: string, key: stri
     r = await fn();
   } catch (e) {
     // the write failed: release the reservation so the client can retry with the same key
-    await db.query("delete from idempotency_keys where key = $1 and state = 'pending'", [fullKey]);
+    await db.query("delete from idempotency_keys where key = $1 and state = 'pending' and owner = $2", [fullKey, owner]);
     throw e;
   }
   const stored = opts.store ? opts.store(r.response) : r.response;
-  await db.query("update idempotency_keys set state = 'done', status_code = $2, response = $3 where key = $1", [fullKey, r.status, JSON.stringify(stored)]);
+  // if a takeover happened meanwhile, the new owner's result is the one stored; this caller still gets its own
+  await db.query("update idempotency_keys set state = 'done', status_code = $2, response = $3 where key = $1 and state = 'pending' and owner = $4", [fullKey, r.status, JSON.stringify(stored), owner]);
   return { ...r, replayed: false };
 }

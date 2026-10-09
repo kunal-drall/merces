@@ -89,7 +89,7 @@ export class AdminService {
       });
     }
     const [lastRuns, failures, outbox, applications, txRequests, flags] = await Promise.all([
-      this.ctx.pool.query('select distinct on (job) id, job, chain, started_at, finished_at, ok, actions, detail from keeper_runs order by job, started_at desc, id desc'),
+      this.ctx.pool.query('select distinct on (job, chain) id, job, chain, started_at, finished_at, ok, actions, detail from keeper_runs order by job, chain, started_at desc, id desc'),
       this.ctx.pool.query('select id, job, chain, started_at, finished_at, ok, actions, detail from keeper_runs where ok = false order by started_at desc, id desc limit 20'),
       this.ctx.pool.query<{ pending: number; failed: number }>('select count(*) filter (where dispatched_at is null)::int as pending, count(*) filter (where dispatched_at is null and last_error is not null)::int as failed from outbox'),
       this.ctx.pool.query<{ open: number; submitted: number; in_review: number }>("select count(*)::int as open, count(*) filter (where state = 'submitted')::int as submitted, count(*) filter (where state = 'in_review')::int as in_review from applications where state in ('submitted','in_review')"),

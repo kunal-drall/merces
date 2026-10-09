@@ -209,7 +209,8 @@ export class AttestorService {
     const seriesId = String(h.series_id);
     if (!input.approve) {
       const decisionCode = input.decisionCode ?? 'declined';
-      await this.ctx.pool.query("update hardship_requests set state = 'rejected', decision_code = $2, decided_by = $3, decided_at = now() where hardship_id = $1", [id, decisionCode, session.accountId]);
+      const upd = await this.ctx.pool.query("update hardship_requests set state = 'rejected', decision_code = $2, decided_by = $3, decided_at = now() where hardship_id = $1 and state = 'pending'", [id, decisionCode, session.accountId]);
+      if (!upd.rowCount) throw AppError.conflict('hardship request was decided concurrently');
       await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'hardship.reject', target: id, detail: { seriesId, decisionCode } });
       await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'hardship.rejected', seriesId, hardshipId: id });
       return { ...this.hardshipView(await this.hardshipRow(id), false), tx: null };

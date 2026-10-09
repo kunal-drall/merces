@@ -58,6 +58,32 @@ describe.skipIf(!dbTestsEnabled())('core db primitives', () => {
     expect((await withIdempotency(t.pool, 'apps:acct-a', 'k3', { x: 1 }, async () => ({ status: 201, response: { ok: true } }))).replayed).toBe(false);
   });
 
+  it('idempotency: after a stale takeover the original request can neither release nor overwrite the new owner', async () => {
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((r) => (releaseA = r));
+    const a = withIdempotency(t.pool, 'apps:acct-a', 'k4', { x: 1 }, async () => {
+      await gateA;
+      throw new Error('A failed late');
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    // A's process looks dead: its reservation is older than the takeover window
+    await t.pool.query("update idempotency_keys set created_at = now() - interval '10 minutes' where key = 'apps:acct-a:k4'");
+    let releaseB!: () => void;
+    const gateB = new Promise<void>((r) => (releaseB = r));
+    const b = withIdempotency(t.pool, 'apps:acct-a', 'k4', { x: 1 }, async () => {
+      await gateB;
+      return { status: 201, response: { by: 'B' } };
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    releaseA();
+    await expect(a).rejects.toThrow('A failed late');
+    // B still owns the reservation: a third request waits instead of running the write again
+    await expect(withIdempotency(t.pool, 'apps:acct-a', 'k4', { x: 1 }, async () => ({ status: 201, response: { by: 'C' } }))).rejects.toThrow(/still in progress/);
+    releaseB();
+    expect((await b).response).toEqual({ by: 'B' });
+    expect((await withIdempotency(t.pool, 'apps:acct-a', 'k4', { x: 1 }, async () => ({ status: 201, response: { by: 'D' } }))).response).toEqual({ by: 'B' });
+  });
+
   it('outbox dispatches once and retries failures', async () => {
     await enqueueOutbox(t.pool, 'email', { to: 'a' });
     await enqueueOutbox(t.pool, 'email', { to: 'boom' });

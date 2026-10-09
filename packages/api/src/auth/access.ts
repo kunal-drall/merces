@@ -44,9 +44,10 @@ export async function requireTier(ctx: AppContext, req: FastifyRequest, _reply: 
   };
   const isHolderOf = async (): Promise<boolean> => {
     if (!seriesId) return false;
-    // holding (or having held) units is what counts; a bid alone never does: losing or refunded bidders see their own
-    // bids and refunds through /me, not the series' holder list or payment amounts
-    const r = await ctx.pool.query('select 1 from positions where series_id = $1 and wallet = any($2) and (units > 0 or claimed_total > 0 or redeemed_units > 0 or burned_units > 0) limit 1', [seriesId, walletsOf()]);
+    // holding or having held units is what counts. A position row exists only once a wallet was minted units,
+    // received them in a window or claimed, so a seller who sold everything keeps access to claim what accrued;
+    // a bid alone never creates one (losing or refunded bidders see their bids and refunds through /me)
+    const r = await ctx.pool.query('select 1 from positions where series_id = $1 and wallet = any($2) limit 1', [seriesId, walletsOf()]);
     return !!r.rowCount;
   };
   switch (tier) {

@@ -77,6 +77,7 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     // EUR (from the live series) and INR snapshot; JPY has no feed → fails closed with an error recorded
     expect(r1['rate.snapshot']!.actions).toBe(2);
     expect(r1['rate.snapshot']!.detail).toContain('no Pyth feed for FX.USD/JPY');
+    expect(r1['rate.snapshot']!.ok).toBe(false); // a missing feed is a failure to alert on, not a routine skip
     const pairs = await t.pool.query("select pair, pyth_feed_id, last_error from rate_pairs where chain = 'monad' order by pair");
     expect(pairs.rows.find((p) => p.pair === 'EUR/USD').pyth_feed_id).toBe('0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b');
     expect(pairs.rows.find((p) => p.pair === 'JPY/USD').last_error).toContain('failing closed');
@@ -107,6 +108,8 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     await mon.sim.advanceTime(86_400);
     const r4 = await new KeeperScheduler(ctx, [rateKeeperJob({ pyth: stalePyth, chainlink })]).runAll();
     expect(r4['rate.snapshot']!.detail).toContain('stale');
+    // a closed FX market is routine, not a failure (the JPY pair without a feed still is one)
+    expect(r4['rate.snapshot']!.detail!.split('errors:')[1] ?? '').not.toContain('stale');
     void eur;
   });
 

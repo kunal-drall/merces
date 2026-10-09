@@ -49,11 +49,12 @@ Secrets never enter the repository: `.env.example` lists names only; development
   different body is a 409.
   Stored replays are redacted: a response that carried decrypted vault material (application notes) is persisted
   with that field nulled, so the idempotency table never duplicates vault plaintext.
-- The `holder` tier means holding or having held units of the series (a position row); a bid alone never grants it,
-  so losing or refunded bidders do not see the holder list or payment amounts.
+- The `holder` tier means holding or having held units of the series (a position row, so a seller can still claim what
+  accrued); a bid alone never grants it, so losing or refunded bidders do not see the holder list or payment amounts.
 - Session tokens are HMAC-signed with `MERCES_SESSION_SECRET`. The published development default is accepted only
   while every chain is the simulator; with any live chain the API and keepers refuse to start without a strong secret
-  (the same rule covers the vault key and the local KMS seed).
+  (the same rule covers the vault key and the local KMS seed). The report verifier refuses the dev seed unless
+  `MERCES_VERIFIER_DEV=true` is set explicitly, because its key is the one registered onchain.
 - Backer-tier access is decided by a live read of the `eligibility` table on every request, never by the session
   token's `eligible` flag: a revoke takes effect on the next request. Private terms have no admin bypass.
 
