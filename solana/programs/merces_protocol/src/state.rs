@@ -173,12 +173,17 @@ pub struct EscrowArm {
 #[account(zero_copy)]
 #[repr(C)]
 pub struct Ledger {
-    // u128 (9 × 16 = 144)
+    // u128 (10 × 16 = 160)
     pub paid_per_unit_wad: u128,
     pub net_acc_wad: u128,
     pub tail_acc_wad: u128,
     pub tail_paid_per_unit_wad: u128,
     pub final_acc_wad: u128,
+    /// `net_acc_wad` snapshot at the active window's clearing (C-S4): once a window has cleared, a
+    /// matched ask's escrow earns through its holder weight only up to this point; the rest is
+    /// credited to the buyer of a sold unit and the seller of an unsold one at processing. 0 while
+    /// no cleared, unprocessed window exists (`window_cleared == 0`).
+    pub window_acc_at_clear: u128,
     pub year_gross_wad: [u128; YEAR_RING],
     // u64 (27 + 4 + 16 + 16 = 63 × 8 = 504)
     pub settlement_ts: u64,
@@ -234,7 +239,7 @@ pub struct Ledger {
     pub year_pay_tag: [u32; YEAR_RING],
     pub trueup_year_v: u32,
     pub last_trueup_year_v: u32,
-    // u8 (15 + 4 + 4 + 1 + 1 = 25) + padding 11 → 816 total
+    // u8 (15 + 4 + 4 + 1 + 1 + 1 = 26) + padding 10 → 832 total
     pub status: u8,
     pub has_last_accepted_period: u8,
     pub has_last_paid_period: u8,
@@ -255,7 +260,11 @@ pub struct Ledger {
     pub bump: u8,
     /// 1 for a curve-mode series (SPEC §9).
     pub curve: u8,
-    pub _padding: [u8; 11],
+    /// 1 while the active window has cleared (a priced match) but not every order is processed
+    /// (C-S4); gates the ask-escrow earning cap in `settle_holder`. Never set for a `NoMatch`
+    /// window (no sold units, so the escrow earns in full until it is returned).
+    pub window_cleared: u8,
+    pub _padding: [u8; 10],
 }
 
 impl Ledger {
@@ -315,6 +324,21 @@ impl Ledger {
     pub fn set_active_window(&mut self, v: Option<u32>) {
         self.has_active_window = u8::from(v.is_some());
         self.active_window_v = v.unwrap_or(0);
+    }
+    /// The active window has cleared (priced match) with orders still unprocessed: a matched ask's
+    /// escrow earns only up to `window_acc_at_clear` from here on (C-S4).
+    pub fn window_cleared(&self) -> bool {
+        self.window_cleared != 0
+    }
+    /// Snapshot `net_acc_wad` at a window's clearing; cleared once per active window.
+    pub fn set_window_cleared(&mut self, acc_at_clear: u128) {
+        self.window_cleared = 1;
+        self.window_acc_at_clear = acc_at_clear;
+    }
+    /// Reset when the last order of a cleared window is processed (or the window is abandoned).
+    pub fn clear_window_cleared(&mut self) {
+        self.window_cleared = 0;
+        self.window_acc_at_clear = 0;
     }
     pub fn trueup_year(&self) -> Option<u32> {
         (self.has_trueup_year != 0).then_some(self.trueup_year_v)
@@ -550,7 +574,7 @@ pub struct Order {
 mod ledger_layout {
     #[test]
     fn ledger_is_16_byte_aligned_without_padding() {
-        assert_eq!(core::mem::size_of::<super::Ledger>(), 816);
+        assert_eq!(core::mem::size_of::<super::Ledger>(), 832);
         assert_eq!(core::mem::size_of::<super::Ledger>() % 16, 0);
     }
 }

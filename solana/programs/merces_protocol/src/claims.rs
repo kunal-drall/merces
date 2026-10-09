@@ -302,9 +302,13 @@ fn redemption_body(
         holder.undelivered_units == 0 && holder.window_pending_units == 0,
         ProtocolError::DeliverFirst
     );
+    // a cleared, unprocessed ask must be processed first — its units are split between the buyer
+    // (sold) and the seller (returned), so the holder's true kept units are not yet known. An
+    // uncleared (or NoMatch) ask is still wholly the holder's: it stays escrowed and is redeemed
+    // when its units come back, so it does not block (C-S4, align to EVM).
     require!(
-        holder.ask_escrow_units == 0,
-        ProtocolError::AskEscrowOutstanding
+        !(holder.ask_escrow_units > 0 && ledger.window_cleared()),
+        ProtocolError::DeliverFirst
     );
     settle_holder(ledger, holder, balance)?;
     let price = ledger.redemption_price;
@@ -440,6 +444,24 @@ pub fn claim_final<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()>
     }
     let burn = ctx.accounts.burn_ctx(ctx.bumps.vault_auth);
     let balance = ctx.accounts.holder_unit_ata.amount;
+    // Guards apply to both branches: window units awaiting delivery must reach the wallet first
+    // (B-S13), and a cleared, unprocessed ask must be processed first — its units are split
+    // between buyer and seller, so the holder's true final weight is not yet known (C-S4). An
+    // uncleared (or NoMatch) ask's units are still wholly the holder's and carry their final share
+    // now, like every unit that existed at extinguishment (align to EVM); they are redeemed/burned
+    // when they come back.
+    {
+        let holder = &ctx.accounts.holder;
+        require!(
+            holder.undelivered_units == 0 && holder.window_pending_units == 0,
+            ProtocolError::DeliverFirst
+        );
+        require!(
+            !(holder.ask_escrow_units > 0 && ledger.window_cleared()),
+            ProtocolError::DeliverFirst
+        );
+    }
+    let escrow = ctx.accounts.holder.ask_escrow_units;
     let weight = if ledger.redemption_ts != 0 {
         if balance > 0 {
             let (units, redeemed) =
@@ -453,23 +475,20 @@ pub fn claim_final<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()>
                 amount: redeemed,
             });
         }
-        ctx.accounts.holder.redeemed_units
+        ctx.accounts
+            .holder
+            .redeemed_units
+            .checked_add(escrow)
+            .ok_or(ProtocolError::MathOverflow)?
     } else {
-        let holder = &ctx.accounts.holder;
-        require!(
-            holder.undelivered_units == 0 && holder.window_pending_units == 0,
-            ProtocolError::DeliverFirst
-        );
-        require!(
-            holder.ask_escrow_units == 0,
-            ProtocolError::AskEscrowOutstanding
-        );
         settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
         amount = ctx.accounts.holder.pending;
         ctx.accounts.holder.pending = 0;
         burned = balance;
         burn.burn(&mut ledger, balance, BURN_EXTINGUISHED)?;
         balance
+            .checked_add(escrow)
+            .ok_or(ProtocolError::MathOverflow)?
     };
     let holder = &mut ctx.accounts.holder;
     let final_share =

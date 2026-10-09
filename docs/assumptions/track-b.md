@@ -8,7 +8,7 @@ v1.1 is listed here with the section it concerns. "Vectors" says which parity ve
 
 ## Status against SPEC v1.1 §13 (after the rework, 9 Oct 2026)
 
-All 21 parity vectors pass on the SPL mock USDC **and** on the Token-2022 mock USDG; 161 tests in
+All 21 parity vectors pass on the SPL mock USDC **and** on the Token-2022 mock USDG; 162 tests in
 total (see "Verified by"); build, fmt and clippy clean; no stack-frame warnings. Curve mode (SPEC §9,
 `docs/meteora/CURVE_MODE.md`) is implemented in the follow-up of the same day (section "Curve mode"
 below, items B-C1 to B-C12).
@@ -28,7 +28,7 @@ below, items B-C1 to B-C12).
 | 11 true-up | implemented | nonce, once per year, bounded negatives, zero adjustment, vacuous complete-year rule (B-S20), cleared on pay / retire / extinguish. Vector 20 |
 | 12 redemption gate | implemented | distinct `TerminalStatus`, `SeriesLate`, `DueOutstanding`, `TrueUpOutstanding`, `UnreportedPeriods`; `C_rem` saturates; due-date year ring. Vectors 06, 09 |
 | 13 tail/final | implemented | shared `<` boundary, separate carries, `tail_exhausted`, extinguishment in every status. Vectors 09, 11 |
-| 14 window | implemented | two branches, first-come margins, one order per wallet, armed deposits, buyer re-check with a required allowlist account, reference take-back order with a paged threshold (B-S12), two-step settlement (B-S13), `WindowSettlementProposed`, no new window until every order is processed. Vectors 10, 16; `window_settlement.rs` |
+| 14 window | implemented | two branches, first-come margins, one order per wallet, armed deposits, buyer re-check with a required allowlist account, reference take-back order with a paged threshold (B-S12), two-step settlement (B-S13), the clearing-snapshot accrual cap (B-S24), `WindowSettlementProposed`, no new window until every order is processed. Vectors 10, 16; `window_settlement.rs` |
 | 15 hook / compliance | implemented | escrow rules, `EscrowArm`, three literal extra accounts (B-S2). Vectors 10, 16, 17; `charter.rs::hook_rejects_unarmed_and_direct_transfers` |
 | 16 registry | implemented | `protocol_program` fixed, write-once FX pairs + `set_fx_crosscheck` (B-S10), forward-only key revocation with grace, `mark_mint_finalized` for Settled and Failed. Vector 13; `fx_paths.rs` |
 | 17 conventions | implemented | range rule, nested `mulDiv`, zero-amount transfers skipped, `burn_retired` no-op (B-22). Vector 21 |
@@ -105,6 +105,8 @@ below, items B-C1 to B-C12).
 | B-S21 | §6.5 / §13.8 `init_router` timing | Not specified; requiring it before settlement (the predecessor's reading) strands a tier-1 series whose router nobody created in time. | `init_router` works at any time; `Router.init_period` records its creation period and every earlier period's checkpoint reads exactly 0 (no income can reach the receiving account before it exists). | 12 |
 | B-S22 | §6.6 `quarter_average` start checkpoint "(required)" | Ambiguous whether a missing start checkpoint reverts or needs the fallback. | `NeedsFallback` (an attestor-signed rate), so a quarter without a single snapshot can still be reported; the FX accounts are passed at their PDA addresses and read only when they exist. | 13; `fx_paths.rs` |
 | B-S23 | §10 (v1.1.1) window events | The new §10 names carry shorter field lists than the implemented events: `WindowSettlementProposed(series, period, clearing_price, round)`, `WindowTakebackProposed(series, period, threshold)`, `WindowTakebackRejected(series, period, threshold, reason)`, `WindowTakebackSettled(series, period, cancelled_units)`. | Unchanged (fields in `docs/solana/EVENTS.md`): the proposal also carries `no_match`; the take-back threshold is `(price, reveal_index)` with the `round`; a rejection has a single cause; the settlement adds `below_units, price, reveal_index, partial`. The lead decides whether the SPEC lists or the events change. | 10, 16 (events only) |
+| B-S24 | §6.1 / §7 window accrual (money safety, EVM track C-S4) | Because `process_order` runs one order at a time with bids before asks (B-S9), a payout (`route`, `pay` across a quarter end, `pay_trueup`, `extinguish`) landing **between** a matched bid's processing and the matching ask's processing was earned twice on the sold units — the buyer's `window_pending_units` and the seller's still-escrowed `ask_escrow_units` — and the vault could go insolvent. | SPEC §7 fix (EVM `creditWindowAccrual`): at `finalize_window` with a cleared price, snapshot `net_acc_wad` on the ledger (`window_cleared`, `window_acc_at_clear`); from then a matched ask's escrow earns only up to that point (`settle_holder`). At `process_order` the buyer of each sold unit (at its bid) and the seller of each unsold one (at its ask) are credited the payouts since the snapshot (`credit_window_accrual`), then the units count as window-pending. So every unit earns for exactly one wallet at every instant. A single ledger slot suffices because only one window is active at a time; no window account is needed in `claim`. The common case (no payout in the gap — every vector) is unchanged. | 10, 16; `window_settlement.rs::window_payout_in_the_gap_keeps_the_vault_solvent` |
+| B-S25 | §6.7 / §6.9 redemption / final vs an outstanding ask | The predecessor refused `claim_redemption` / `claim_final` while **any** ask escrow was outstanding (`AskEscrowOutstanding`), stranding a holder whose window had not cleared. | Align to EVM: only a **cleared, unprocessed** ask blocks (`DeliverFirst`; its units are split buyer/seller, so the kept units are unknown — process the order first). An **uncleared** (or `NoMatch`) ask's units are still wholly the holder's: they stay escrowed, count in the holder's redemption/final weight now, and are redeemed/burned when they come back. (Solana conservatism: a cleared window whose own order filled 0 is also processed first rather than counted directly; same totals, one extra permissionless `process_order`.) The vector runner maps the SDK's `BidsNotProcessed` and `DeliverFirst` error names (`AskEscrowOutstanding` kept as a legacy alias). | 10, 16 |
 
 ## Curve mode (SPEC §9, follow-up of 9 Oct 2026)
 
@@ -142,7 +144,7 @@ escrow token account).
 | B-5 | §5.2 `process_bid` | Moves money only into protocol accounts and mints to the auction escrow; the `Holder` account is created (or a prefunded PDA adopted) only when units are allocated, with `undelivered_units += alloc`. The non-reveal charge goes to the fee collector immediately. The last `process_bid` finalises the mint (B-S17 for failed raises): settled raises check `units_minted == units_sold` and `proceeds_received == proceeds`, store `units_outstanding` and set the gates. |
 | B-6 | §5.2 `deliver_bid` | Creates the bidder's unit and stablecoin ATAs idempotently; the `Holder` account is optional (absent for refund-only bids); `pending_units/pending_refund` are zeroed on delivery. |
 | B-7 | §5.3 | `claim_release` cap = `min(vested(at), proceeds)` with `at = extinguished_at` once extinguished; blocked by the issuer's pause, derived `Late`, or `is_late_underlying`. Extinguished series keep releasing what had vested. |
-| B-8 | §6.1 `accrual_units` | `balance + undelivered_units + ask_escrow_units + window_pending_units` per holder. `claim_redemption` and `claim_final` (non-redeemed series) require the escrowed and pending units to be zero (`DeliverFirst`, `AskEscrowOutstanding`): the permissionless `deliver_bid` / `process_order` / `deliver_order` return them first, so nothing is stranded. |
+| B-8 | §6.1 `accrual_units` | `balance + undelivered_units + ask_escrow_units + window_pending_units` per holder; the ask-escrow weight earns the regular accumulator in full only until its window clears, then only up to `window_acc_at_clear` (B-S24). `claim_redemption` / `claim_final` require window-pending and undelivered units to be delivered first (`DeliverFirst`) and block a **cleared** unprocessed ask (process it first); an **uncleared** (or `NoMatch`) ask's units stay the holder's and count in the redemption/final weight (B-S25). |
 | B-9 | §6.2 key grace | The §1.4 grace applies to tier 2 / tier 3 report attestations and to the FX fallback signature of a report; pause, extinguishment, true-up and amendment signatures need an active key. |
 | B-10 | §6.2 tier 1 | `income_commitment = Poseidon(2)(ytd_at_end[period], 0)`, `prior = Poseidon(2)(ytd_at_end[period − 1], 0)` except at a year start; missing checkpoints revert `RouterPeriodNotClosed`; periods before `Router.init_period` read 0 (B-S21). |
 | B-11 | §6.2 true-up | `submit_trueup` checks, in order: mint finalised, not terminal, tier 3 enabled, attestor active, signature with the stored `trueup_nonce` (then incremented), `attestation_ts ≤ now`, `TrueUpOutstanding`, `TrueUpYearUsed`, `TrueUpYearNotEnded`, unreported periods of the year (vacuous rule, B-S20), `TrueUpExceedsYear` for negatives (tagged 4-slot ring of Σ `payment_usd` per calendar year). Anchor of the payment: B-S14. |
@@ -169,7 +171,7 @@ escrow token account).
 | Parity | `tests/vectors.rs` (21 vectors, USDC) and `tests/token2022_stablecoin.rs` (21 vectors, Token-2022 USDG with transfer hook), SPEC §3.3 charter byte snapshot after every step |
 | Charter | `tests/charter.rs` (5), `tests/charter_c11.rs` (7, one per C11 rule; the holder-signed set includes `stake_units`, `unstake_units`, `tender_units`) |
 | Curve mode | `tests/curve_mode.rs` (7) against the real DBC program: lifecycle activate → swaps → complete → collect → sync → report (real Groth16 proof on base-lamport units) → gated claims → redeem → tender; activation validation (every config / pool / mint rule); census before and after a byte-exact mocked migration; staking rules and closed sealed-bid paths; extinguishment paying stakers; retirement without burns; PDA creator collecting both fee shares. `merces-common` curve properties (B-C1, B-C7) |
-| Scenarios | `tests/raise_paths.rs` (5), `tests/window_settlement.rs` (3), `tests/fx_paths.rs` (2), `tests/roles.rs` (3), `tests/known_answers.rs` (5) |
+| Scenarios | `tests/raise_paths.rs` (5), `tests/window_settlement.rs` (4), `tests/fx_paths.rs` (2), `tests/roles.rs` (3), `tests/known_answers.rs` (5) |
 | Measurements | `tests/measure.rs` → `docs/solana/MEASUREMENTS.md`; every transaction asserted ≤ 1,232 bytes |
 | IDLs | `tests/idl_export.rs` (committed `solana/idls/` equal the build) |
 | Deployment | `scripts/deploy.sh localnet` + `scripts/smoke.ts` against `solana-test-validator` 3.1.10 (`solana/deployments/localnet.json`) |
@@ -190,7 +192,12 @@ escrow token account).
 - Devnet: the RPC was unreachable from the build environment, so only
   `solana/deployments/localnet.json` exists; `scripts/deploy.sh devnet` is the same procedure.
 - B-S11: VERSIONS.md should say rustc 1.97.1 for `solana/`.
-- B-S23: SPEC v1.1.1 §10 field lists of the window take-back events vs the implementation.
+- B-S23: SPEC v1.1.1 §10 field lists of the window take-back events vs the implementation (EVM now
+  carries `noMatch` and `below_units` too, so the chains agree on those; the remaining Solana-only
+  fields are `round`, `price`, `reveal_index`, `partial`).
+- B-S24 / B-S25 (money safety, EVM track C-S4): the window clearing-snapshot accrual cap and the
+  redemption/final alignment to an uncleared ask. The lead should fold C-S4 into SPEC §7 (already
+  committed) and note the staking-free window accrual in the reference/EVM parity list.
 - **Curve mode, for Kunal:** Q3 creator / migration-fee route (B-C4 enforces the partner route or the
   PDA creator; the generator default A3 is refused at activation), B-C11 (unstaked shares stay in the
   vault), issuer-held units counting as outstanding (B-C5), B-C12 (creator trading-fee share).

@@ -247,6 +247,8 @@ pub fn codes_for(name: &str) -> Vec<u32> {
         "WindowsDisabled" => vec![p(P::WindowsDisabled)],
         "WrongPeriod" => vec![p(P::WrongPeriod)],
         "OutOfOrder" => vec![p(P::OutOfOrder)],
+        "BidsNotProcessed" => vec![p(P::BidsNotProcessed)],
+        "DeliverFirst" => vec![p(P::DeliverFirst), p(P::AskEscrowOutstanding)],
         "ZeroEscrow" => vec![p(P::ZeroEscrow)],
         "TrueUpOutstanding" => vec![p(P::TrueUpOutstanding)],
         "TrueUpYearInvalid" => vec![

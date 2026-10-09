@@ -10,6 +10,7 @@
 //! invalid: above the wallet cap).
 
 use anchor_lang::prelude::Pubkey;
+use merces_common::vault::holder_delta;
 use merces_protocol::error::ProtocolError;
 use merces_protocol::state::WINDOW_SETTLED;
 use merces_tests::harness::*;
@@ -266,6 +267,96 @@ fn frozen_recipient_never_blocks_other_orders() {
     r.env.deliver_order(&s1, PERIOD, &b1).unwrap();
     assert_eq!(r.env.balance_of(&b1, &usdc), b1_before + 20 * P);
     assert_eq!(r.env.token_balance(&p.window_stable), 0);
+}
+
+/// C-S4 (money safety): a payout that lands between a matched bid's processing and the matching
+/// ask's processing must not be earned twice on the sold units — once by the buyer's pending units,
+/// once by the seller's still-escrowed units — or the vault goes insolvent. The window clears
+/// (matched 35 @ 125), the winning bids are processed (the buyers now hold the sold units as
+/// window-pending), a report is paid into the gap, and then every holder must be able to claim
+/// without draining the vault: the seller's cleared escrow earns only up to the clearing snapshot,
+/// so the gap payout on the sold units is the buyers' alone. Then the asks are processed (the
+/// returned units carry their gap share to the sellers) and, once everyone has claimed, only
+/// rounding dust is left.
+#[test]
+fn window_payout_in_the_gap_keeps_the_vault_solvent() {
+    let mut r = settled_window();
+    let s1 = r.series_pubkey("S1").unwrap();
+    let p = pdas(s1);
+    let usdc = r.env.usdc;
+    let holders: Vec<Pubkey> = ["b1", "b2", "b3", "b4", "b5", "b6"]
+        .iter()
+        .map(|n| who(&r, n))
+        .collect();
+    let (b1, b2, b3) = (who(&r, "b1"), who(&r, "b2"), who(&r, "b3"));
+    let (b5, b6, b7) = (who(&r, "b5"), who(&r, "b6"), who(&r, "b7"));
+
+    // the winning bids are processed: the buyers now hold the 35 sold units as window-pending
+    for b in [b5, b6, b7] {
+        r.env.process_order(&s1, PERIOD, &b).unwrap();
+    }
+
+    // a report is paid while the matching asks are still escrowed — the C-S4 gap
+    let steps = r.vector()["steps"].as_array().unwrap().clone();
+    let net_before = r.env.ledger(&s1).unwrap().net_acc_wad;
+    r.step(82, &steps[82]); // submit_report(8110)
+    r.step(83, &steps[83]); // pay
+    let l = r.env.ledger(&s1).unwrap();
+    assert!(
+        l.net_acc_wad > net_before,
+        "the gap payout must advance the accumulator"
+    );
+    assert!(
+        l.window_cleared(),
+        "the cleared window is still unprocessed, so the escrow cap is live"
+    );
+    let vault_mid = r.env.token_balance(&p.vault_token);
+
+    // solvency across the gap: every holder can claim right now and the total never exceeds the
+    // vault (without the cap the sold units would pay both buyer and seller and a claim would fail)
+    let mut paid = 0u64;
+    for w in &holders {
+        let before = r.env.balance_of(w, &usdc);
+        r.env.claim(&s1, w).unwrap();
+        paid += r.env.balance_of(w, &usdc) - before;
+    }
+    assert!(
+        paid <= vault_mid,
+        "gap claims {paid} exceeded the vault {vault_mid} (double-counted sold units)"
+    );
+
+    // the asks are processed and everything is delivered: the returned units carry their gap share
+    // to the sellers, the sold units stay with the buyers, and the window closes
+    for a in [b1, b2, b3] {
+        r.env.process_order(&s1, PERIOD, &a).unwrap();
+    }
+    assert_eq!(r.env.ledger(&s1).unwrap().active_window(), None);
+    assert!(!r.env.ledger(&s1).unwrap().window_cleared());
+    for o in [b1, b2, b3, b5, b6, b7] {
+        r.env.deliver_order(&s1, PERIOD, &o).unwrap();
+    }
+
+    // a final claim settles the credited returns; afterwards nothing is owed and the vault holds
+    // only the exact WAD carry dust
+    for w in &holders {
+        r.env.claim(&s1, w).unwrap();
+    }
+    let l = r.env.ledger(&s1).unwrap();
+    let mut claimable = 0u128;
+    for w in &holders {
+        let balance = r.env.token_balance(&ata(w, &p.unit_mint, &TOKEN_2022));
+        let h = r.env.holder(&s1, w).unwrap();
+        assert_eq!(h.ask_escrow_units, 0);
+        assert_eq!(h.window_pending_units, 0);
+        claimable += u128::from(h.pending)
+            + u128::from(holder_delta(l.net_acc_wad, h.last_net_acc_wad, balance).unwrap());
+    }
+    assert_eq!(claimable, 0, "every payout is claimed");
+    let vault_end = r.env.token_balance(&p.vault_token);
+    assert!(
+        u128::from(vault_end) < u128::from(l.units_outstanding),
+        "only rounding dust remains, got {vault_end}"
+    );
 }
 
 trait PubkeyOf {

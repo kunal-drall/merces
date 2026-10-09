@@ -656,6 +656,11 @@ pub fn finalize_window(ctx: Context<WindowSettle>) -> Result<()> {
                 w.cancelled_units = 0;
                 w.next_bid_index = 0;
                 w.next_ask_index = 0;
+                // C-S4: from this instant a matched ask's escrow stops earning (snapshot on the
+                // ledger, read by every `settle_holder`); the sold units are credited to the buyer
+                // and the unsold ones to the seller from here on, at `process_order`.
+                let acc_at_clear = ledger.net_acc_wad;
+                ledger.set_window_cleared(acc_at_clear);
                 emit!(WindowCleared {
                     series: series_key,
                     period: w.period,
@@ -674,6 +679,7 @@ pub fn finalize_window(ctx: Context<WindowSettle>) -> Result<()> {
     // a window without orders is done right away; otherwise the last processed order closes it
     if w.order_count == 0 && ledger.active_window() == Some(w.period) {
         ledger.set_active_window(None);
+        ledger.clear_window_cleared();
     }
     Ok(())
 }
@@ -832,6 +838,10 @@ pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<
             if !register_holder_now(&ledger, &mut h, series_key, owner, ctx.bumps.holder)? {
                 settle_holder(&ledger, &mut h, balance)?;
             }
+            // the buyer owns the sold units from the clearing point (C-S4): the payouts since then
+            // are credited now (the seller's escrow stopped earning them at `acc_at_clear`), then
+            // the units count as window-pending and earn forward like any held unit
+            credit_window_accrual(&ledger, &mut h, fill, ledger.window_acc_at_clear)?;
             h.window_pending_units = h
                 .window_pending_units
                 .checked_add(fill)
@@ -906,9 +916,15 @@ pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<
             .escrow
             .checked_sub(fill)
             .ok_or(ProtocolError::MathOverflow)?;
-        // seller: settle at the current weight, then move the escrow units to "pending delivery"
+        // seller: settle while the escrow still counts (capped at `acc_at_clear` for a cleared
+        // window, C-S4), then move the escrow units to "pending delivery"
         let mut h = read_holder(&holder_info)?.ok_or(ProtocolError::HolderNotRegistered)?;
         settle_holder(&ledger, &mut h, balance)?;
+        // the unsold units coming back are the seller's from the clearing point: credit the
+        // payouts since then (the sold units' share went to the buyers), then count them pending
+        if !no_match {
+            credit_window_accrual(&ledger, &mut h, units_back, ledger.window_acc_at_clear)?;
+        }
         h.ask_escrow_units = h
             .ask_escrow_units
             .checked_sub(o.escrow)
@@ -942,6 +958,7 @@ pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<
         .ok_or(ProtocolError::MathOverflow)?;
     if w.processed_count == w.order_count && ledger.active_window() == Some(w.period) {
         ledger.set_active_window(None);
+        ledger.clear_window_cleared();
     }
     let o = &mut ctx.accounts.order;
     o.processed = true;

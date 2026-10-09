@@ -86,6 +86,8 @@ External trust:
 
 ## Arithmetic
 
+The window's two-step settlement caps a matched ask's escrow accrual at the clearing snapshot and credits the buyer (sold units) and seller (returned units) the payouts since then, so the sold units are never earned twice between a bid's and the matching ask's processing (C-S4, `docs/assumptions/track-b.md` B-S24).
+
 Checked arithmetic everywhere (`checked_*` with `MathOverflow`, plus `overflow-checks` in release),
 `u128` intermediates for every product, nested `mul_div` forms as SPEC §1.1, exact WAD carries
 (`carry_wad`, `tail_carry_wad`, `final_carry_wad`, each `< N`). The pure math lives in
@@ -113,6 +115,7 @@ were not staked anyway; it never lets payouts exceed a receipt.
 | A keeper resets or blocks a settlement in progress | a new proposal is accepted only when no round is open or the last round was rejected; `finalize_*` never reverts on a wrong proposal (rejection events); applies to the auction, the window clearing price and the window take-back threshold |
 | A bidder's account blocks the raise | `process_bid` only moves money into protocol accounts (treasury, fee collector, auction escrow); `deliver_bid` pushes to the bidder and may fail and be retried forever; mint finalisation depends only on every bid being processed (`raise_paths.rs::undeliverable_winner_blocks_nothing`) |
 | A window participant blocks the window | `process_order` is accounting plus the fee; `deliver_order` pushes units and stablecoin, per order, retryable (`window_settlement.rs::frozen_recipient_never_blocks_other_orders`) |
+| A payout lands between a matched bid's and the matching ask's processing | the sold units would be earned twice (buyer pending + seller escrow) and the vault could go insolvent; at clearing the ledger snapshots `net_acc_wad` and a matched ask's escrow then earns only up to it, with the buyer and seller credited the rest at processing, so every unit earns for exactly one wallet (C-S4; `window_settlement.rs::window_payout_in_the_gap_keeps_the_vault_solvent`) |
 | Allowlist omission griefing | the buyer's `AllowlistEntry` PDA is a required, address-checked account (a missing entry reads as not allowed), so a keeper can neither cancel nor force a fill by omitting it |
 | Unbounded loops | every per-order/per-bid pass is paged (≤ 24 accounts per instruction); the take-back below `p*` uses a keeper-proposed threshold verified by a paged tally instead of sorting on chain |
 | FX data missing | reports for a quarter without snapshots go through the attestor fallback; the end-of-quarter totals cannot be hidden (the end checkpoint is read whenever it exists) |
@@ -136,7 +139,7 @@ were not staked anyway; it never lets payouts exceed a receipt.
 | `tests/curve_mode.rs` | 7 | curve mode against the real DBC program: full lifecycle (activate → complete → collect → sync → report with a real proof → gated claims → redeem → tender), activation validation, census before/after a byte-exact mocked migration, staking rules, extinguishment, retirement without burns, PDA creator |
 | `tests/known_answers.rs` | 5 | SPEC §1.4 known answers (keccak, Poseidon, domains, commitments, signatures incl. low-s, periods, year ring, fixed point) |
 | `tests/raise_paths.rs` | 5 | no-bid failure, cancellation, undeliverable winner, early draw, dead-raise router |
-| `tests/window_settlement.rs` | 3 | take-back below / at `p*`, frozen recipient liveness |
+| `tests/window_settlement.rs` | 4 | take-back below / at `p*`, frozen recipient liveness, a payout in the clearing gap keeps the vault solvent (C-S4) |
 | `tests/fx_paths.rs` | 2 | cross-check change semantics (incl. disabled pair), quarter without snapshots |
 | `tests/roles.rs` | 3 | two-step admin transfer, role rotation, issuer release pause |
 | `tests/idl_export.rs` | 1 | committed IDLs equal the build |

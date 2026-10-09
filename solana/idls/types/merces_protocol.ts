@@ -11505,6 +11505,16 @@ export type MercesProtocol = {
             "type": "u128"
           },
           {
+            "name": "windowAccAtClear",
+            "docs": [
+              "`net_acc_wad` snapshot at the active window's clearing (C-S4): once a window has cleared, a",
+              "matched ask's escrow earns through its holder weight only up to this point; the rest is",
+              "credited to the buyer of a sold unit and the seller of an unsold one at processing. 0 while",
+              "no cleared, unprocessed window exists (`window_cleared == 0`)."
+            ],
+            "type": "u128"
+          },
+          {
             "name": "yearGrossWad",
             "type": {
               "array": [
@@ -11827,11 +11837,20 @@ export type MercesProtocol = {
             "type": "u8"
           },
           {
+            "name": "windowCleared",
+            "docs": [
+              "1 while the active window has cleared (a priced match) but not every order is processed",
+              "(C-S4); gates the ask-escrow earning cap in `settle_holder`. Never set for a `NoMatch`",
+              "window (no sold units, so the escrow earns in full until it is returned)."
+            ],
+            "type": "u8"
+          },
+          {
             "name": "padding",
             "type": {
               "array": [
                 "u8",
-                11
+                10
               ]
             }
           }

@@ -89,6 +89,7 @@
     "tail_acc_wad",
     "tail_paid_per_unit_wad",
     "final_acc_wad",
+    "window_acc_at_clear",
     "year_gross_wad",
     "settlement_ts",
     "open_due_amount",
@@ -152,6 +153,7 @@
     "year_pay_set",
     "bump",
     "curve",
+    "window_cleared",
     "_padding"
   ],
   "merces_protocol::Order": [

@@ -697,16 +697,24 @@ pub fn retire(
 
 // ------------------------------------------------------------------------------------ holders
 
-/// `accrual_units(w) = unit_balance + undelivered auction units + ask-escrow units` (SPEC §6.1),
-/// plus window units processed for the holder and not yet delivered (Solana's two-step window
-/// settlement keeps them in the window escrow until `deliver_order`), plus — curve mode — the
-/// staked units (curve callers pass `balance = 0`: wallet balances never earn there).
-pub fn accrual_units(holder: &Holder, balance: u64) -> Result<u64> {
+/// The holder's accrual weight that always earns the regular accumulator in full: unit balance,
+/// undelivered auction units, window units awaiting delivery and — curve mode — staked units. It
+/// excludes the ask-escrow units, which earn only while their window has not cleared (see
+/// [`settle_holder`]); curve callers pass `balance = 0` (wallet balances never earn there).
+pub fn base_units(holder: &Holder, balance: u64) -> Result<u64> {
     balance
         .checked_add(holder.undelivered_units)
-        .and_then(|v| v.checked_add(holder.ask_escrow_units))
         .and_then(|v| v.checked_add(holder.window_pending_units))
         .and_then(|v| v.checked_add(holder.staked_units))
+        .ok_or(ProtocolError::MathOverflow.into())
+}
+
+/// `accrual_units(w) = base weight + ask-escrow units` (SPEC §6.1). The ask-escrow units count in
+/// full only before their window clears; once it clears they earn only up to `window_acc_at_clear`
+/// (C-S4), which [`settle_holder`] enforces — so this is the weight for an open or `NoMatch` window.
+pub fn accrual_units(holder: &Holder, balance: u64) -> Result<u64> {
+    base_units(holder, balance)?
+        .checked_add(holder.ask_escrow_units)
         .ok_or(ProtocolError::MathOverflow.into())
 }
 
@@ -852,15 +860,69 @@ pub fn is_allowlisted(acc: &AccountInfo, wallet: &Pubkey) -> Result<bool> {
 
 /// `settle_holder` (SPEC §6.3): credits the pending payout for the holder's accrual weight since
 /// the last snapshot and moves the snapshot forward.
+///
+/// Ask-escrow units earn the regular accumulator in full only while their window has not cleared.
+/// Once the active window clears (C-S4, `ledger.window_cleared()`), a matched ask's escrow earns
+/// only up to `window_acc_at_clear`; the payouts after clearing are credited to the buyer of each
+/// sold unit and the seller of each unsold one at processing (`credit_window_accrual`), so between
+/// a bid's processing and the matching ask's every unit earns for exactly one wallet and the vault
+/// stays solvent. A holder's ask escrow always belongs to the one active window, so the ledger's
+/// single snapshot is enough and no window account is needed here.
 pub fn settle_holder(ledger: &Ledger, holder: &mut Holder, balance: u64) -> Result<()> {
     require!(holder.registered, ProtocolError::HolderNotRegistered);
-    let weight = accrual_units(holder, balance)?;
-    let delta = holder_delta(ledger.net_acc_wad, holder.last_net_acc_wad, weight).map_err(math)?;
+    let acc = ledger.net_acc_wad;
+    let last = holder.last_net_acc_wad;
+    let base = base_units(holder, balance)?;
+    let escrow = holder.ask_escrow_units;
+    let delta = if escrow == 0 || !ledger.window_cleared() {
+        // open or NoMatch window (or no escrow): the escrow earns the whole range
+        let weight = base
+            .checked_add(escrow)
+            .ok_or(ProtocolError::MathOverflow)?;
+        holder_delta(acc, last, weight).map_err(math)?
+    } else {
+        // cleared window: the escrow earns only up to the clearing snapshot
+        let snap = ledger.window_acc_at_clear;
+        if last < snap {
+            let weight = base
+                .checked_add(escrow)
+                .ok_or(ProtocolError::MathOverflow)?;
+            let before = holder_delta(snap, last, weight).map_err(math)?;
+            let after = holder_delta(acc, snap, base).map_err(math)?;
+            before
+                .checked_add(after)
+                .ok_or(ProtocolError::MathOverflow)?
+        } else {
+            holder_delta(acc, last, base).map_err(math)?
+        }
+    };
     holder.pending = holder
         .pending
         .checked_add(delta)
         .ok_or(ProtocolError::MathOverflow)?;
-    holder.last_net_acc_wad = ledger.net_acc_wad;
+    holder.last_net_acc_wad = acc;
+    Ok(())
+}
+
+/// Credits `wallet` the regular accumulator earned on `units` since `from_acc_wad` (C-S4): used at
+/// `process_order` to pay the buyer of each sold unit and the seller of each unsold one for the
+/// window payouts between clearing and processing, the span a matched ask's escrow stopped earning.
+/// The holder must already be settled to the current `net_acc_wad` (so the credited units are not
+/// double-counted going forward, once they become window-pending). Rounding only lowers the credit.
+pub fn credit_window_accrual(
+    ledger: &Ledger,
+    holder: &mut Holder,
+    units: u64,
+    from_acc_wad: u128,
+) -> Result<()> {
+    if units == 0 || ledger.net_acc_wad <= from_acc_wad {
+        return Ok(());
+    }
+    let add = holder_delta(ledger.net_acc_wad, from_acc_wad, units).map_err(math)?;
+    holder.pending = holder
+        .pending
+        .checked_add(add)
+        .ok_or(ProtocolError::MathOverflow)?;
     Ok(())
 }
 

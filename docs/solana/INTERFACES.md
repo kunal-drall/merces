@@ -132,7 +132,15 @@ Repayment (§6):
 
 Holders (§6.3, §6.7–§6.9): `register_holder(wallet)` (allowlisted wallet), `claim`,
 `claim_redemption`, `claim_tail`, `claim_final` — permissionless pushes to the holder's ATAs
-(`HolderClaim` accounts; stablecoin hook accounts as remaining accounts). `burn_retired` takes
+(`HolderClaim` accounts; stablecoin hook accounts as remaining accounts). A holder's accrual weight
+is its unit balance plus undelivered auction units, window-pending units and ask-escrow units; once
+the active window clears (a priced match) the ask-escrow earns the regular accumulator only up to
+the ledger's clearing snapshot, and the payouts after it are credited to the buyer of each sold unit
+and the seller of each unsold one at `process_order` (C-S4) — so `claim` reads only the ledger and
+never double-pays a sold unit. `claim_redemption` / `claim_final` require window-pending and
+undelivered units to be delivered first (`DeliverFirst`) and a **cleared** unprocessed ask to be
+processed first (`DeliverFirst`); an **uncleared** (or `NoMatch`) ask's units stay the holder's and
+count in the redemption/final weight. `burn_retired` takes
 `[series, ledger, holder, holder_wallet, holder_unit_ata, vault_auth, unit_mint,
 token_2022_program]` (no payer, no stablecoin) and is a no-op emitting `UnitsBurned(0)` for a wallet
 without units.
@@ -162,8 +170,8 @@ Window (§7), all permissionless except commits and reveals:
 | `reveal_order(price, quantity, salt)` | owner | the owner's `Holder` (may not exist) and unit ATA are read for the wallet cap |
 | `begin_window_settlement(clearing_price, no_match)` | anyone | `TallyInProgress` while a round is open; emits `WindowSettlementProposed` |
 | `tally_orders` | anyone | ≤ 24 `Order` PDAs (writable) |
-| `finalize_window` | anyone | never reverts on a wrong proposal |
-| `process_order` | anyone | accounting only (the window fee is paid here): revealed bids in reveal order first (`OutOfOrder`), then revealed asks in reveal order (`BidsNotProcessed` until every revealed bid is done); unrevealed / invalid orders and NO_MATCH windows in any order. The owner's `AllowlistEntry` PDA is always passed (a missing entry reads as not allowed); a buyer no longer allowlisted is cancelled. Stablecoin hook accounts |
+| `finalize_window` | anyone | never reverts on a wrong proposal; on a priced clearing it snapshots `net_acc_wad` on the ledger (`window_cleared`, `window_acc_at_clear`) so a matched ask's escrow stops earning there (C-S4) |
+| `process_order` | anyone | accounting only (the window fee is paid here): revealed bids in reveal order first (`OutOfOrder`), then revealed asks in reveal order (`BidsNotProcessed` until every revealed bid is done); unrevealed / invalid orders and NO_MATCH windows in any order. The owner's `AllowlistEntry` PDA is always passed (a missing entry reads as not allowed); a buyer no longer allowlisted is cancelled. The buyer of a sold unit and the seller of a returned one are credited the payouts since the clearing snapshot (C-S4), then the units count as window-pending. Stablecoin hook accounts |
 | `begin_takeback(price, reveal_index)` | anyone | only when cancelled buyers' units exceed the at-`p*` ask group; proposes the threshold ask below `p*` |
 | `tally_takeback` | anyone | ≤ 24 `Order` PDAs; every revealed ask once per round |
 | `finalize_takeback` | anyone | accepts iff `Σ_{key > k} q < R ≤ Σ_{key ≥ k} q` (unique); otherwise `WindowTakebackRejected` and a new round may start. Asks below `p*` revert `TakebackRequired` until a threshold is settled |

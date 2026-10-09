@@ -155,13 +155,12 @@ through the Token-2022 CPI.
   `OrderDelivered` (two-step window settlement, B-S13). The EVM contracts have their own
   chain-specific events (`PaymentDeferred`, `OwedWithdrawn`) for the same liveness requirement.
 - SPEC v1.1.1 §10 (item 19) added these names with shorter field lists than the implementation
-  above: `WindowSettlementProposed(series, period, clearing_price, round)` (Solana and EVM also carry
-  `no_match`), `WindowTakebackProposed(series, period, threshold)` (Solana: the threshold is
-  `price, reveal_index`, plus `round`), `WindowTakebackRejected(series, period, threshold, reason)`
-  (Solana: `round`; a rejection has one cause, the tally disproving the threshold) and
-  `WindowTakebackSettled(series, period, cancelled_units)` (Solana adds `below_units, price,
-  reveal_index, partial`). Recorded as B-S23; the lead decides whether the SPEC lists or the events
-  change.
+  above: `WindowSettlementProposed(series, period, clearing_price, round)`, `WindowTakebackProposed(
+  series, period, threshold)`, `WindowTakebackRejected(series, period, threshold, reason)` and
+  `WindowTakebackSettled(series, period, cancelled_units)`. Both chains carry `no_match` on
+  `WindowSettlementProposed` and `below_units` on `WindowTakebackSettled`, so an indexer sees those
+  on both; the remaining Solana-only fields are the take-back `round`, `price`, `reveal_index` and
+  `partial`. Recorded as B-S23; the lead decides whether the SPEC lists or the events change.
 - Curve mode (§9 lists no events): `CurveActivated` gains `dbc_creator` (the DBC pool creator, issuer
   wallet or `curve_authority`, CURVE_MODE §6); `CurveUnitsSynced`, `CurveProceedsCollected`,
   `UnitsStaked`, `UnitsUnstaked` are Solana-only (B-C1, B-C4, B-C5 in `docs/assumptions/track-b.md`).
