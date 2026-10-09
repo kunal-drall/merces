@@ -23,9 +23,7 @@ use anchor_spl::token_interface::{Mint, Token2022, TokenAccount};
 use merces_onchain::seeds::{CONFIG, ESCROW_ARM};
 use merces_registry::state::{ProtocolConfig, Series, MODE_SEALED_BID};
 use spl_discriminator::SplDiscriminate;
-use spl_tlv_account_resolution::{
-    account::ExtraAccountMeta, seeds::Seed, state::ExtraAccountMetaList,
-};
+use spl_tlv_account_resolution::{account::ExtraAccountMeta, state::ExtraAccountMetaList};
 use spl_transfer_hook_interface::instruction::{
     ExecuteInstruction, InitializeExtraAccountMetaListInstruction,
 };
@@ -35,9 +33,11 @@ declare_id!("2PuKMkGkGLCwsDMLCmm2bcbzjxtabvt9LVJni154ezRt");
 /// Seed of the extra-account-metas PDA, fixed by the transfer-hook interface.
 pub const EXTRA_ACCOUNT_METAS_SEED: &[u8] = b"extra-account-metas";
 
-/// Extra accounts appended to every `Execute`: ProtocolConfig, Series, the protocol program (needed
-/// to resolve the external PDA) and the `EscrowArm` PDA of the protocol program for this mint.
-pub const EXTRA_ACCOUNT_COUNT: usize = 4;
+/// Extra accounts appended to every `Execute` (SPEC §4.1): ProtocolConfig, Series and the
+/// protocol's `EscrowArm` PDA for this mint — all three fixed for the mint's lifetime, so the
+/// per-mint list stores them as literals (the `EscrowArm` address `PDA(protocol, [b"escrow_arm",
+/// mint])` is derived once, when the list is created).
+pub const EXTRA_ACCOUNT_COUNT: usize = 3;
 
 /// Byte offsets inside the protocol's `EscrowArm` account (8-byte Anchor discriminator first).
 const ARM_OWNER_OFFSET: usize = 8;
@@ -66,31 +66,21 @@ pub enum HookError {
     ExtraAccountsMismatch,
 }
 
-/// The extra account metas for a mint, in order (indices 5..=8 of the `Execute` instruction).
-pub fn extra_account_metas(
-    series: &Pubkey,
-    protocol_program: &Pubkey,
-) -> Result<Vec<ExtraAccountMeta>> {
+/// The protocol's `EscrowArm` PDA for `mint`: `PDA(protocol_program, [b"escrow_arm", mint])`.
+pub fn escrow_arm_address(protocol_program: &Pubkey, mint: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[ESCROW_ARM, mint.as_ref()], protocol_program).0
+}
+
+/// The extra account metas for a mint, in order (indices 5..=7 of the `Execute` instruction).
+pub fn extra_account_metas(series: &Pubkey, escrow_arm: &Pubkey) -> Result<Vec<ExtraAccountMeta>> {
     let (config, _) = Pubkey::find_program_address(&[CONFIG], &merces_registry::ID);
     Ok(vec![
         // 5: ProtocolConfig
         ExtraAccountMeta::new_with_pubkey(&config, false, false)?,
-        // 6: Series (literal; the series PDA exists before the mint)
+        // 6: Series (the series PDA exists before the mint)
         ExtraAccountMeta::new_with_pubkey(series, false, false)?,
-        // 7: merces_protocol program (the program of the external PDA below)
-        ExtraAccountMeta::new_with_pubkey(protocol_program, false, false)?,
-        // 8: EscrowArm = PDA(protocol_program, [ESCROW_ARM, mint]) — mint is account index 1
-        ExtraAccountMeta::new_external_pda_with_seeds(
-            7,
-            &[
-                Seed::Literal {
-                    bytes: ESCROW_ARM.to_vec(),
-                },
-                Seed::AccountKey { index: 1 },
-            ],
-            false,
-            false,
-        )?,
+        // 7: EscrowArm of this mint
+        ExtraAccountMeta::new_with_pubkey(escrow_arm, false, false)?,
     ])
 }
 
@@ -115,10 +105,11 @@ pub mod merces_hook {
             ctx.accounts.mint.key(),
             HookError::SeriesMintMismatch
         );
-        let metas = extra_account_metas(
-            &ctx.accounts.series.key(),
+        let escrow_arm = escrow_arm_address(
             &ctx.accounts.config.protocol_program,
-        )?;
+            &ctx.accounts.mint.key(),
+        );
+        let metas = extra_account_metas(&ctx.accounts.series.key(), &escrow_arm)?;
         let mut data = ctx.accounts.extra_account_meta_list.try_borrow_mut_data()?;
         ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &metas)?;
         Ok(())
@@ -196,10 +187,9 @@ fn is_transferring(acc: &AccountInfo) -> Result<bool> {
 }
 
 /// Validates the `EscrowArm` PDA (owner = protocol program, seeds `[ESCROW_ARM, mint]`) and reads
-/// `(armed_owner, armed_units)`.
+/// `(armed_owner, armed_units)`. The address is also pinned by the extra-account list.
 fn read_arm(arm: &AccountInfo, protocol_program: &Pubkey, mint: &Pubkey) -> Result<(Pubkey, u64)> {
-    let (expected, _) =
-        Pubkey::find_program_address(&[ESCROW_ARM, mint.as_ref()], protocol_program);
+    let expected = escrow_arm_address(protocol_program, mint);
     require_keys_eq!(*arm.key, expected, HookError::EscrowArmMismatch);
     require_keys_eq!(*arm.owner, *protocol_program, HookError::EscrowArmMismatch);
     let data = arm.try_borrow_data()?;
@@ -251,9 +241,7 @@ pub struct Execute<'info> {
     #[account(seeds = [CONFIG], bump = config.bump, seeds::program = merces_registry::ID)]
     pub config: Box<Account<'info, ProtocolConfig>>,
     pub series: Box<Account<'info, Series>>,
-    /// CHECK: the protocol program id, pinned to the registry configuration.
-    #[account(address = config.protocol_program @ HookError::EscrowArmMismatch)]
-    pub protocol_program: UncheckedAccount<'info>,
-    /// CHECK: the protocol's `EscrowArm` PDA for this mint; validated in `read_arm`.
+    /// CHECK: the protocol's `EscrowArm` PDA for this mint; pinned by the extra-account list and
+    /// validated (address, owner) in `read_arm`.
     pub escrow_arm: UncheckedAccount<'info>,
 }

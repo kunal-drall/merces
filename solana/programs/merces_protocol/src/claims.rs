@@ -176,10 +176,9 @@ impl<'info> HolderClaim<'info> {
 /// Retired. Never requires current allowlist membership (C10).
 pub fn claim<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
-    let now = now_ts()?;
     ctx.accounts.check_atas()?;
     let series_key = ctx.accounts.series.key();
-    let status = ledger.sync_status(now, series_key)?;
+    let status = ledger.stored_status();
     let balance = ctx.accounts.holder_unit_ata.amount;
     settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
     let amount = ctx.accounts.holder.pending;
@@ -203,20 +202,74 @@ pub fn claim<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     Ok(())
 }
 
-/// `burn_retired` (SPEC §6.3): permissionless burn after retirement; `pending` stays claimable.
-/// A zero balance is a no-op (zero-amount rule).
-pub fn burn_retired<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
+/// Accounts of `burn_retired`. The holder record and the unit account may not exist: a wallet
+/// that never held units is a no-op (SPEC §1.1 zero-amount rule).
+#[derive(Accounts)]
+pub struct BurnRetired<'info> {
+    pub series: Box<Account<'info, Series>>,
+    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    pub ledger: AccountLoader<'info, Ledger>,
+    /// CHECK: the wallet's `Holder` PDA (address checked by the seeds; read only when it exists).
+    #[account(mut, seeds = [seeds::HOLDER, series.key().as_ref(), holder_wallet.key().as_ref()], bump)]
+    pub holder: UncheckedAccount<'info>,
+    /// CHECK: the holder's wallet (only its key is used).
+    pub holder_wallet: UncheckedAccount<'info>,
+    /// CHECK: the wallet's unit ATA (derivation checked in the handler; may not exist).
+    #[account(mut)]
+    pub holder_unit_ata: UncheckedAccount<'info>,
+    /// CHECK: data-less signer PDA, permanent delegate.
+    #[account(seeds = [seeds::VAULT_AUTH, series.key().as_ref()], bump)]
+    pub vault_auth: UncheckedAccount<'info>,
+    /// CHECK: the unit mint recorded in the registry.
+    #[account(mut, address = series.unit_mint @ ProtocolError::UnitMintMismatch)]
+    pub unit_mint: UncheckedAccount<'info>,
+    pub token_2022_program: Program<'info, Token2022>,
+}
+
+/// `burn_retired` (SPEC §6.3): permissionless burn after retirement; `pending` stays claimable. A
+/// zero balance (or a wallet that never held units) is a no-op that still emits
+/// `UnitsBurned(units = 0)`, as on EVM.
+pub fn burn_retired(ctx: Context<BurnRetired>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
-    let now = now_ts()?;
-    ctx.accounts.check_atas()?;
     let series_key = ctx.accounts.series.key();
-    let status = ledger.sync_status(now, series_key)?;
-    require!(status == SeriesStatus::Retired, ProtocolError::NotRetired);
-    let balance = ctx.accounts.holder_unit_ata.amount;
-    settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
-    ctx.accounts
-        .burn_ctx(ctx.bumps.vault_auth)
-        .burn(&mut ledger, balance, BURN_RETIRED)
+    let wallet = ctx.accounts.holder_wallet.key();
+    let status = ledger.stored_status();
+    require!(
+        status == SeriesStatus::Retired,
+        ProtocolError::TerminalStatus
+    );
+    let t22 = ctx.accounts.token_2022_program.key();
+    let ata_info = ctx.accounts.holder_unit_ata.to_account_info();
+    require_ata(&ata_info, &wallet, &ctx.accounts.series.unit_mint, &t22)?;
+    let balance = if *ata_info.owner == t22 && !ata_info.data_is_empty() {
+        token_account_amount(&ata_info)?
+    } else {
+        0
+    };
+    if balance == 0 {
+        emit!(UnitsBurned {
+            series: series_key,
+            holder: wallet,
+            units: 0,
+            reason: BURN_RETIRED,
+        });
+        return Ok(());
+    }
+    // a wallet with units was registered when it received them (process_bid / window fill)
+    let holder_info = ctx.accounts.holder.to_account_info();
+    let mut holder = read_holder(&holder_info)?.ok_or(ProtocolError::HolderNotRegistered)?;
+    settle_holder(&ledger, &mut holder, balance)?;
+    store_holder(&holder_info, &holder)?;
+    BurnCtx {
+        series_key,
+        holder_wallet: wallet,
+        token_2022: ctx.accounts.token_2022_program.to_account_info(),
+        unit_mint: ctx.accounts.unit_mint.to_account_info(),
+        from: ata_info,
+        vault_auth: ctx.accounts.vault_auth.to_account_info(),
+        bump: ctx.bumps.vault_auth,
+    }
+    .burn(&mut ledger, balance, BURN_RETIRED)
 }
 
 /// The `claim_redemption` body (SPEC §6.7): settles, records `redeemed_units`, burns the balance
@@ -228,7 +281,10 @@ fn redemption_body(
     ledger: &mut Ledger,
 ) -> Result<(u64, u64)> {
     require!(ledger.redemption_ts != 0, ProtocolError::NotRedeemed);
-    require!(holder.undelivered_units == 0, ProtocolError::DeliverFirst);
+    require!(
+        holder.undelivered_units == 0 && holder.window_pending_units == 0,
+        ProtocolError::DeliverFirst
+    );
     require!(
         holder.ask_escrow_units == 0,
         ProtocolError::AskEscrowOutstanding
@@ -254,10 +310,8 @@ fn redemption_body(
 /// `claim_redemption` (SPEC §6.7). Available in `Redeemed` and `Extinguished`.
 pub fn claim_redemption<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
-    let now = now_ts()?;
     ctx.accounts.check_atas()?;
     let series_key = ctx.accounts.series.key();
-    ledger.sync_status(now, series_key)?;
     let burn = ctx.accounts.burn_ctx(ctx.bumps.vault_auth);
     let balance = ctx.accounts.holder_unit_ata.amount;
     let (units, amount) = redemption_body(&burn, &mut ctx.accounts.holder, balance, &mut ledger)?;
@@ -276,10 +330,8 @@ pub fn claim_redemption<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Resul
 /// redeemed first.
 pub fn claim_tail<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
-    let now = now_ts()?;
     ctx.accounts.check_atas()?;
     let series_key = ctx.accounts.series.key();
-    ledger.sync_status(now, series_key)?;
     require!(ledger.redemption_ts != 0, ProtocolError::NotRedeemed);
     let mut total = 0u64;
     let balance = ctx.accounts.holder_unit_ata.amount;
@@ -320,10 +372,9 @@ pub fn claim_tail<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> 
 /// series, else the holder's accrual units.
 pub fn claim_final<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
-    let now = now_ts()?;
     ctx.accounts.check_atas()?;
     let series_key = ctx.accounts.series.key();
-    let status = ledger.sync_status(now, series_key)?;
+    let status = ledger.stored_status();
     require!(
         status == SeriesStatus::Extinguished,
         ProtocolError::NotExtinguished
@@ -348,7 +399,10 @@ pub fn claim_final<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()>
         ctx.accounts.holder.redeemed_units
     } else {
         let holder = &ctx.accounts.holder;
-        require!(holder.undelivered_units == 0, ProtocolError::DeliverFirst);
+        require!(
+            holder.undelivered_units == 0 && holder.window_pending_units == 0,
+            ProtocolError::DeliverFirst
+        );
         require!(
             holder.ask_escrow_units == 0,
             ProtocolError::AskEscrowOutstanding

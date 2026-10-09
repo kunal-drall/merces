@@ -360,6 +360,62 @@ pub struct OrderRevealed {
     pub valid: bool,
 }
 
+/// Window settlement proposal (Solana addition mirroring the auction's `SettlementProposed`;
+/// SPEC §12: every state transition emits an event). `no_match = true` proposes `NO_MATCH`
+/// (`clearing_price` is then `u64::MAX`).
+#[event]
+pub struct WindowSettlementProposed {
+    pub series: Pubkey,
+    pub period: u32,
+    pub clearing_price: u64,
+    pub no_match: bool,
+    pub round: u32,
+}
+
+/// Take-back threshold proposal (Solana addition, SPEC §7 cancelled-buyer take-back from the asks
+/// below `p*`): the order with key `(price, reveal_index)` is proposed as the last one cut.
+#[event]
+pub struct WindowTakebackProposed {
+    pub series: Pubkey,
+    pub period: u32,
+    pub price: u64,
+    pub reveal_index: u32,
+    pub round: u32,
+}
+
+/// A take-back proposal that failed the tally check (never a revert).
+#[event]
+pub struct WindowTakebackRejected {
+    pub series: Pubkey,
+    pub period: u32,
+    pub round: u32,
+}
+
+/// The take-back threshold is settled: `below_units` units come off the asks below `p*`.
+#[event]
+pub struct WindowTakebackSettled {
+    pub series: Pubkey,
+    pub period: u32,
+    pub cancelled_units: u64,
+    pub below_units: u64,
+    pub price: u64,
+    pub reveal_index: u32,
+    pub partial: u64,
+}
+
+/// `deliver_order` paid what a processed window order owes its owner (Solana addition mirroring
+/// `BidDelivered`): `units` (bid fill or ask return) and `amount` of stablecoin (bid refund or ask
+/// proceeds).
+#[event]
+pub struct OrderDelivered {
+    pub series: Pubkey,
+    pub period: u32,
+    pub owner: Pubkey,
+    pub side: u8,
+    pub units: u64,
+    pub amount: u64,
+}
+
 /// `reason`: 1 = NoMatchInvalid, 2 = PriceNotRevealed, 3 = NoCrossing. `clearing_price` is
 /// `u64::MAX` for a rejected `NO_MATCH` proposal.
 #[event]

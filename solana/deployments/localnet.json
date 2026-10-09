@@ -1,0 +1,54 @@
+{
+  "cluster": "localnet",
+  "rpc": "http://127.0.0.1:8899",
+  "chainId": 104,
+  "deployer": "FL9gd3hnNCNzeoTpNUuckqtNz8cse5LaWoa8wVDHuW7S",
+  "initializedAt": "2026-10-09T08:25:57.781Z",
+  "programs": {
+    "merces_registry": {
+      "id": "GigVSncHHvrt8kZVHcdZWULqUE52aAZn7GzGaBNVznSi",
+      "upgradeAuthority": null,
+      "soSha256": "eb0cb7be821e484e5d0569ac0741fec3d242253ad8189bef27bcb2f3e083ee43"
+    },
+    "merces_hook": {
+      "id": "2PuKMkGkGLCwsDMLCmm2bcbzjxtabvt9LVJni154ezRt",
+      "upgradeAuthority": "FtqLL6xSJAURTFHAtgWQgGLb7qKh8Gg7AU4bgYpM3gon",
+      "soSha256": "0795e111f413577da5ff339b27d6676bf907501f06e1aed9c34e749b62bf5066"
+    },
+    "merces_protocol": {
+      "id": "EuaPg2nTXsf3CmmeJMfdiQb4C2hU7AfLfFyDLpD69six",
+      "upgradeAuthority": "FtqLL6xSJAURTFHAtgWQgGLb7qKh8Gg7AU4bgYpM3gon",
+      "soSha256": "9f939fbfff72ba691bfd5b18962bcf5e399e9eaa6cfecc4f56ba48a5d80c03a9"
+    },
+    "mock_usdg_hook": {
+      "id": "ALQgHjCyfNAtP5mWxYny5i2eW61pK6etSC8Vx6PpgHhA",
+      "upgradeAuthority": "FL9gd3hnNCNzeoTpNUuckqtNz8cse5LaWoa8wVDHuW7S",
+      "soSha256": "d30b97ae2b82cc7a63cafb2d9c6bc12babb9f3ed21b9680270099c4b3f4aa541"
+    }
+  },
+  "registry": {
+    "config": "ENofSwepewq5q3EU8kKodncy54KzkKvF6Q7Dpb7MCiQo",
+    "registryAuthority": "BmfQsBtwNkFzE5B7gtdPm69cLkVH5xeM1Qj8eFmWTTPu",
+    "domain": "0xb8bbbc3c69b1bb5e991b504bae97803fa905f02b558f3b77be43a54999260c42",
+    "admin": "FL9gd3hnNCNzeoTpNUuckqtNz8cse5LaWoa8wVDHuW7S",
+    "allowlistManager": "FL9gd3hnNCNzeoTpNUuckqtNz8cse5LaWoa8wVDHuW7S",
+    "feeCollector": "FL9gd3hnNCNzeoTpNUuckqtNz8cse5LaWoa8wVDHuW7S"
+  },
+  "stablecoins": {
+    "usdc": {
+      "mint": "7dGiih1CuW5wdbYDzS4dWYRcXTwF5dCiDXhK4ybjn6Ns",
+      "program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "decimals": 6,
+      "mintAuthority": "FL9gd3hnNCNzeoTpNUuckqtNz8cse5LaWoa8wVDHuW7S",
+      "feeCollectorAccount": "CJGbvtSVBh5SiXkFUcRrcFDvv8jeF54NfdMWFa1Rg6zE"
+    },
+    "usdg": {
+      "mint": "3B9642qZbXuu8ScRywSGzJ9vAtGAxs32BDg9wBjdnu4m",
+      "program": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "decimals": 6,
+      "mintAuthority": "FL9gd3hnNCNzeoTpNUuckqtNz8cse5LaWoa8wVDHuW7S",
+      "feeCollectorAccount": "E59LCzthkFJ6tRryd1qfa4XdLW2A3mmzYbArCaysskGX"
+    }
+  },
+  "verifiedAt": "2026-10-09T08:26:01.347Z"
+}

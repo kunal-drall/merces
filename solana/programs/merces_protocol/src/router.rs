@@ -7,7 +7,9 @@ use merces_common::router::route as route_math;
 use merces_common::time::{period_end, period_of, year_of};
 use merces_onchain::seeds::CONFIG;
 use merces_registry::program::MercesRegistry;
-use merces_registry::state::{ProtocolConfig, Series, RAISE_SETTLED, TIER_FLAG_SPLIT};
+use merces_registry::state::{
+    ProtocolConfig, Series, RAISE_CANCELLED, RAISE_FAILED, TIER_FLAG_SPLIT,
+};
 
 use crate::common::*;
 use crate::error::{math, ProtocolError};
@@ -68,18 +70,16 @@ pub struct InitRouter<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Creates the router from the series' plaintext tier-1 terms (anyone may pay). Must happen
-/// before settlement so a checkpoint exists for every reportable period.
+/// Creates the router and its receiving account from the series' plaintext tier-1 terms (anyone
+/// may pay, at any time — normally right after `create_series`). No income can reach the router
+/// before its receiving account exists, so every period before `init_period` has `ytd_at_end = 0`
+/// exactly and a tier-1 report for it binds to `Poseidon(2)(0, 0)`.
 pub fn init_router(ctx: Context<InitRouter>) -> Result<()> {
     let now = now_ts()?;
     let series = &ctx.accounts.series;
     require!(
         series.tier_flags & TIER_FLAG_SPLIT != 0,
         ProtocolError::NotTierOne
-    );
-    require!(
-        series.raise_state < RAISE_SETTLED,
-        ProtocolError::RouterTooLate
     );
     let current = period_of(now).map_err(math)?;
     let prev = current.checked_sub(1).ok_or(ProtocolError::MathOverflow)?;
@@ -91,6 +91,7 @@ pub fn init_router(ctx: Context<InitRouter>) -> Result<()> {
     r.ytd_received = 0;
     r.last_receipt_period = current;
     r.last_checkpoint_period = prev;
+    r.init_period = current;
     r.set_checkpoint(prev, 0);
     r.bump = ctx.bumps.router;
     Ok(())
@@ -138,13 +139,23 @@ pub struct Route<'info> {
 
 /// `route` / `sweep` (SPEC §6.5): sweeps the router's receiving account. Income below the annual
 /// threshold passes through; above it `r × units_outstanding` of each receipt goes to the vault and
-/// is credited against the quarter's report. In a terminal status everything passes through.
+/// is credited against the quarter's report. Before mint finalisation receipts stay in the
+/// receiving account (`MintNotFinalized`). In a terminal status, and for a raise that failed or
+/// was cancelled (no units exist), everything passes through to the issuer, so the issuer's income
+/// is never stranded in the router.
 pub fn route<'info>(ctx: Context<'info, Route<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
-    let status = ledger.sync_status(now, series_key)?;
-    require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
+    let raise_dead = matches!(
+        ctx.accounts.series.raise_state,
+        RAISE_FAILED | RAISE_CANCELLED
+    );
+    let status = ledger.derived_status(now)?;
+    require!(
+        raise_dead || ledger.is_mint_finalized(),
+        ProtocolError::MintNotFinalized
+    );
     let amount = ctx.accounts.router_token.amount;
     require!(amount > 0, ProtocolError::NothingToRoute);
     let series = &ctx.accounts.series;
@@ -185,7 +196,7 @@ pub fn route<'info>(ctx: Context<'info, Route<'info>>) -> Result<()> {
         router.ytd_received,
     )
     .map_err(math)?;
-    if status.is_terminal() {
+    if status.is_terminal() || raise_dead {
         out.routed = 0;
         out.pass_through = amount;
     }
@@ -275,6 +286,7 @@ pub fn route<'info>(ctx: Context<'info, Route<'info>>) -> Result<()> {
         routed: out.routed,
         ytd_received: out.ytd_received,
     });
+    ledger.sync_status(now, series_key)?;
     Ok(())
 }
 

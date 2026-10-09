@@ -35,7 +35,7 @@ interface IMercesRouter {
     function createRouterReceiver(uint256 seriesId) external returns (address receiver);
     /// @notice Pulls `amount` from the caller and splits it (together with anything held in the receiving
     /// account). Before mint finalization the amount is held in the receiving account instead.
-    function route(uint256 seriesId, uint64 amount) external;
+    function route(uint256 seriesId, uint256 amount) external;
     function sweep(uint256 seriesId) external;
     function closeRouterPeriod(uint256 seriesId, uint32 period) external;
 

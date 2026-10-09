@@ -18,7 +18,7 @@ contract ExitTest is FullFixture {
     uint64 internal constant YEAR = 31_536_000;
 
     function _redeem(uint256 s) internal returns (uint64 deposit) {
-        (,,,, deposit) = vault.previewRedemption(s, block.timestamp);
+        (,,,, deposit) = vault.previewRedemption(s, vm.getBlockTimestamp());
         fund(issuer, deposit);
         vm.startPrank(issuer);
         usdc.approve(address(vault), deposit);
@@ -48,9 +48,10 @@ contract ExitTest is FullFixture {
         vm.prank(issuer);
         vm.expectRevert(LockupActive.selector);
         vault.redeem(sid);
+        // Late (nothing reported) is checked before the lockup, as in the reference
         vm.warp(settlementTs(sid) + LOCKUP - 1);
         vm.prank(issuer);
-        vm.expectRevert(LockupActive.selector);
+        vm.expectRevert(SeriesLate.selector);
         vault.redeem(sid);
         uint256 draft = createSeries(keccak256("d"));
         vm.prank(issuer);
@@ -89,7 +90,7 @@ contract ExitTest is FullFixture {
         // no payments, t = 73 days = 0.2 year: P_hurdle = floor(100 × (1 + 0.08 × 0.2)) = 101.6 USDC
         vm.warp(settlementTs(s) + 73 days);
         (uint64 price, uint64 hurdle, uint64 dAvg, uint64 capRemaining, uint64 deposit) =
-            vault.previewRedemption(s, block.timestamp);
+            vault.previewRedemption(s, vm.getBlockTimestamp());
         assertEq(hurdle, 101_600_000);
         assertEq(dAvg, 0);
         assertEq(capRemaining, 250e6);
@@ -137,7 +138,8 @@ contract ExitTest is FullFixture {
         uint256 s = _openSeries(300e6);
         _payYear2026(s);
         vm.warp(settlementTs(s) + YEAR);
-        (uint64 price, uint64 hurdle, uint64 dAvg, uint64 capRemaining,) = vault.previewRedemption(s, block.timestamp);
+        (uint64 price, uint64 hurdle, uint64 dAvg, uint64 capRemaining,) =
+            vault.previewRedemption(s, vm.getBlockTimestamp());
         assertEq(hurdle, 324e6);
         assertEq(dAvg, 80e6);
         assertEq(capRemaining, 530e6);
@@ -156,7 +158,7 @@ contract ExitTest is FullFixture {
         uint256 s = _openSeries(P0);
         _payYear2026(s); // 220 USDC/unit paid of a 250 cap
         vm.warp(settlementTs(s) + YEAR);
-        (uint64 price, uint64 hurdle,, uint64 capRemaining,) = vault.previewRedemption(s, block.timestamp);
+        (uint64 price, uint64 hurdle,, uint64 capRemaining,) = vault.previewRedemption(s, vm.getBlockTimestamp());
         assertEq(hurdle, 108e6);
         assertEq(capRemaining, 30e6);
         assertEq(price, 30e6);
@@ -179,7 +181,7 @@ contract ExitTest is FullFixture {
         router.route(s, 4); // share = floor(0.3 × 4) = 1
         vm.stopPrank();
         assertEq(vault.getLedger(s).paidPerUnitWad, uint256(1e18) / 300);
-        (,,, uint64 capRemaining,) = vault.previewRedemption(s, block.timestamp);
+        (,,, uint64 capRemaining,) = vault.previewRedemption(s, vm.getBlockTimestamp());
         assertEq(capRemaining, 250e6 - 1);
     }
 
@@ -206,7 +208,7 @@ contract ExitTest is FullFixture {
         (uint64 due,) = income.openDue(s);
         assertEq(due, 30_000e6);
         // paid long after the deadline: no accrual while Redeemed
-        vm.warp(block.timestamp + 200 days);
+        vm.warp(vm.getBlockTimestamp() + 200 days);
         assertEq(uint8(income.deriveStatus(s)), uint8(SeriesStatus.Redeemed));
         fund(issuer, 30_000e6);
         vm.startPrank(issuer);
@@ -298,10 +300,13 @@ contract ExitTest is FullFixture {
         assertEq(l.unreleasedReceived, 15_000e6);
         assertEq(l.finalUnits, 300);
         assertEq(l.finalAccWad, 50e6 * 1e18); // 15,000 / 300, no fee
-        assertEq(l.extinguishedAt, block.timestamp);
+        assertEq(l.extinguishedAt, vm.getBlockTimestamp());
         assertEq(usdc.balanceOf(address(treasury)), 0);
-        vm.expectRevert(TerminalStatus.selector); // no replay, no second extinguishment
+        vm.expectRevert(); // no replay: the nonce moved on, the old signatures recover strangers
         vault.extinguish(sid, a, b);
+        (bytes memory a2, bytes memory b2sig) = extinguishSigs(sid, 1);
+        vm.expectRevert(TerminalStatus.selector); // and no second extinguishment
+        vault.extinguish(sid, a2, b2sig);
         // holders claim pending payouts + their share of the unreleased funds; units burn
         assertEq(vault.claimableFinal(sid, b1), 5_000e6);
         vm.prank(b1);
@@ -317,7 +322,7 @@ contract ExitTest is FullFixture {
         assertEq(unitToken(sid).totalSupply(), 0);
         assertEq(vault.unitsOutstanding(sid), 0);
         // releases, reports and redemption are over; the estate keeps what had vested
-        vm.warp(block.timestamp + 365 days);
+        vm.warp(vm.getBlockTimestamp() + 365 days);
         vm.prank(issuer);
         vm.expectRevert(NothingVested.selector);
         treasury.claimRelease(sid);
@@ -349,7 +354,7 @@ contract ExitTest is FullFixture {
         vm.expectEmit(true, true, false, true);
         emit IPayoutClaims.RedemptionClaimed(s, b2, 100, 101_600_000 * 100);
         vm.expectEmit(true, true, false, true);
-        emit IPayoutClaims.FinalClaimed(s, b2, 100, 101_600_000 * 100 + 7_500e6);
+        emit IPayoutClaims.FinalClaimed(s, b2, 100, 7_500e6); // the redemption was paid by its own claim
         vault.claimFinal(s);
         assertEq(unitToken(s).balanceOf(b2), 0);
         // b1 already redeemed: only the final share, weighted by its redeemed units
@@ -364,7 +369,7 @@ contract ExitTest is FullFixture {
         vm.prank(issuer);
         treasury.claimRelease(s);
         assertEq(usdc.balanceOf(issuer), 7_500e6);
-        vm.warp(block.timestamp + 2 * YEAR);
+        vm.warp(vm.getBlockTimestamp() + 2 * YEAR);
         vm.prank(issuer);
         vm.expectRevert(NothingVested.selector);
         treasury.claimRelease(s);

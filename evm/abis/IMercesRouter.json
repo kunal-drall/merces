@@ -1,0 +1,326 @@
+[
+  {
+    "type": "function",
+    "name": "closeRouterPeriod",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "period",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "createRouterReceiver",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "receiver",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getRouter",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct IMercesRouter.Router",
+        "components": [
+          {
+            "name": "receiverDeployed",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "receiver",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "heldBeforeFinalization",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "ytdYear",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "ytdReceived",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "hasReceipt",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "lastReceiptPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "hasCheckpoint",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "lastCheckpointPeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "routedTotal",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "passedThroughTotal",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "income",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "route",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "routerReceiver",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "sweep",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "ytdAtEnd",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "period",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "exists",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "ytd",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "IncomeHeld",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "amount",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "held",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "IncomeRouted",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "amount",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "passThrough",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "routed",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "ytdReceived",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "IncomeSet",
+    "inputs": [
+      {
+        "name": "income",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RouterPeriodClosed",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "period",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      },
+      {
+        "name": "ytdAtEnd",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RouterReceiverCreated",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "receiver",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  }
+]

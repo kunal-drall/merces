@@ -28,6 +28,9 @@ interface IMercesVault is IPayoutClaims {
         uint256 tailAccWad;
         uint256 tailCarryWad;
         bool tailExhausted;
+        uint64 tailGrossReceived;
+        uint64 tailFeeCollected;
+        uint64 tailRefunded;
         // extinguishment
         uint64 extinguishedAt;
         uint256 finalAccWad;
@@ -50,10 +53,10 @@ interface IMercesVault is IPayoutClaims {
 
     struct Holder {
         bool registered;
-        uint256 lastNetAccWad;
+        bool finalClaimed;
         uint64 pending;
         uint64 redeemedUnits;
-        bool redemptionSettled;
+        uint256 lastNetAccWad;
         uint256 lastTailAccWad;
         uint256 lastFinalAccWad;
     }
@@ -92,6 +95,11 @@ interface IMercesVault is IPayoutClaims {
     function receiveGross(uint256 seriesId, uint64 amount, PayoutSource source, uint32 period)
         external
         returns (uint64 accepted, uint64 fee, uint64 refunded);
+    /// @dev Window only (docs/assumptions/track-c.md C-S4): credits `wallet` with the payout accrued since the
+    /// window cleared (`net_acc_wad − fromAccWad`) on `units` that sat in the window escrow — the units a buyer
+    /// receives at its fill and the unsold units a seller gets back. Escrowed ask units stop earning for the seller
+    /// at clearing (`askAccrual`), so every unit earns for exactly one wallet at every moment.
+    function creditWindowAccrual(uint256 seriesId, address wallet, uint64 units, uint256 fromAccWad) external;
     /// @notice Anyone: retires a series whose (possibly lowered) cap is already met (SPEC §6.3).
     function retireIfCapped(uint256 seriesId) external;
     function redeem(uint256 seriesId) external;
@@ -100,6 +108,7 @@ interface IMercesVault is IPayoutClaims {
     function getLedger(uint256 seriesId) external view returns (Ledger memory);
     function getHolder(uint256 seriesId, address holder) external view returns (Holder memory);
     function unitsOutstanding(uint256 seriesId) external view returns (uint64);
+    function netAccWad(uint256 seriesId) external view returns (uint256);
     /// @notice `unit_balance + pending auction units + ask-escrow units` (SPEC §6.1 accrual weight).
     function accrualUnits(uint256 seriesId, address wallet) external view returns (uint256);
     function capPerUnit(uint256 seriesId) external view returns (uint64);

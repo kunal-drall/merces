@@ -30,7 +30,7 @@ interface IMercesTreasury {
     function confirmDeposits(uint256 seriesId) external;
     function claimRelease(uint256 seriesId) external;
     function setReleasePause(uint256 seriesId, bool paused) external;
-    function requestEarlyDraw(uint256 seriesId, uint64 amount) external;
+    function requestEarlyDraw(uint256 seriesId, uint256 amount) external;
     /// @dev Vault only, on extinguishment: `proceeds − vested(now)` (capped by the balance) moves to the vault.
     function moveUnreleasedToVault(uint256 seriesId) external returns (uint64 unreleased);
 

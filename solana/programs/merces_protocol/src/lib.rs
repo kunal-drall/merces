@@ -155,7 +155,7 @@ pub mod merces_protocol {
     pub fn claim<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
         claims::claim(ctx)
     }
-    pub fn burn_retired<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
+    pub fn burn_retired(ctx: Context<BurnRetired>) -> Result<()> {
         claims::burn_retired(ctx)
     }
     pub fn claim_redemption<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
@@ -242,5 +242,21 @@ pub mod merces_protocol {
     }
     pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<()> {
         window::process_order(ctx)
+    }
+    pub fn begin_takeback(
+        ctx: Context<WindowTakeback>,
+        price: u64,
+        reveal_index: u32,
+    ) -> Result<()> {
+        window::begin_takeback(ctx, price, reveal_index)
+    }
+    pub fn tally_takeback<'info>(ctx: Context<'info, WindowTakeback<'info>>) -> Result<()> {
+        window::tally_takeback(ctx)
+    }
+    pub fn finalize_takeback(ctx: Context<WindowTakeback>) -> Result<()> {
+        window::finalize_takeback(ctx)
+    }
+    pub fn deliver_order<'info>(ctx: Context<'info, DeliverOrder<'info>>) -> Result<()> {
+        window::deliver_order(ctx)
     }
 }

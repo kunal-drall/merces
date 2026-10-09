@@ -28,7 +28,7 @@ fs_permissions = [{ access = "read", path = "../packages/vectors" }, { access = 
 ffi = false
 # Tests that fill an auction to max_bids_per_auction (4096 wallets) need more than the default 2^30 gas.
 gas_limit = "18446744073709551615"
-gas_reports = ["MercesRegistry", "MercesAuction", "MercesTreasury", "MercesIncome", "MercesVault", "MercesWindow", "Groth16Verifier"]
+gas_reports = ["MercesRegistry", "MercesAuction", "MercesTreasury", "MercesIncome", "MercesVault", "MercesWindow", "MercesRouter", "MercesFxAccumulator", "FeeCollector", "Groth16Verifier"]
 remappings = [
   "forge-std/=lib/forge-std/src/",
   "@openzeppelin/contracts/=lib/openzeppelin-contracts/",
@@ -63,6 +63,8 @@ fuzz = { runs = 4096 }
 invariant = { runs = 512, depth = 128 }
 
 [lint]
+# `forge lint` is run explicitly (CI); keep `forge build` output to compiler diagnostics.
+lint_on_build = false
 # Narrowing casts in the Merces libraries are deliberate and range-checked (uint64 money domain, period ids);
 # every phase boundary in SPEC is defined on block time, so block.timestamp comparisons are intended.
 exclude_lints = ["unsafe-typecast", "block-timestamp"]

@@ -5,7 +5,7 @@ use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 use merces_common::status::SeriesStatus;
 use merces_common::treasury::vested;
 use merces_onchain::seeds::CONFIG;
-use merces_registry::state::{ProtocolConfig, Series};
+use merces_registry::state::{ProtocolConfig, Series, RAISE_SETTLED};
 
 use crate::common::*;
 use crate::error::{math, ProtocolError};
@@ -44,12 +44,17 @@ pub fn claim_release<'info>(ctx: Context<'info, ClaimRelease<'info>>) -> Result<
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
     let t = &ctx.accounts.treasury;
+    require!(
+        series.raise_state == RAISE_SETTLED,
+        ProtocolError::RaiseNotSettled
+    );
     require!(t.mint_finalized, ProtocolError::MintNotFinalized);
     require!(
         !t.issuer_paused_releases,
         ProtocolError::ReleasesPausedByIssuer
     );
-    let status = ledger.sync_status(now, series_key)?;
+    // preconditions read the derived status; the stored status is synced after the release
+    let status = ledger.derived_status(now)?;
     require!(status != SeriesStatus::Late, ProtocolError::SeriesLate);
     require!(!ledger.is_late_underlying(now)?, ProtocolError::SeriesLate);
     let schedule = schedule_of(series);
@@ -87,6 +92,7 @@ pub fn claim_release<'info>(ctx: Context<'info, ClaimRelease<'info>>) -> Result<
         amount,
         released_total: t.released_total,
     });
+    ledger.sync_status(now, series_key)?;
     Ok(())
 }
 
@@ -119,7 +125,7 @@ pub struct RequestEarlyDraw<'info> {
     pub series: Box<Account<'info, Series>>,
     #[account(mut, seeds = [seeds::TREASURY, series.key().as_ref()], bump = treasury.bump)]
     pub treasury: Box<Account<'info, Treasury>>,
-    #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
+    #[account(seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
     pub ledger: AccountLoader<'info, Ledger>,
     #[account(mut, seeds = [seeds::TREASURY_TOKEN, series.key().as_ref()], bump)]
     pub treasury_token: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -141,7 +147,7 @@ pub fn request_early_draw<'info>(
     ctx: Context<'info, RequestEarlyDraw<'info>>,
     amount: u64,
 ) -> Result<()> {
-    let mut ledger = ctx.accounts.ledger.load_mut()?;
+    let ledger = ctx.accounts.ledger.load()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let approver = ctx.accounts.config.early_draw_approver;
@@ -156,9 +162,13 @@ pub fn request_early_draw<'info>(
         ProtocolError::EarlyDrawApproverMismatch
     );
     let t = &ctx.accounts.treasury;
+    require!(
+        ctx.accounts.series.raise_state == RAISE_SETTLED,
+        ProtocolError::RaiseNotSettled
+    );
     require!(t.mint_finalized, ProtocolError::MintNotFinalized);
     require!(amount > 0, ProtocolError::NothingVested);
-    let status = ledger.sync_status(now, series_key)?;
+    let status = ledger.derived_status(now)?;
     require!(
         status != SeriesStatus::Extinguished,
         ProtocolError::SeriesExtinguished

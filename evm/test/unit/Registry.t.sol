@@ -18,6 +18,7 @@ import {
     ProtocolContracts,
     RaiseState,
     ReleaseTranche,
+    RouterTerms,
     SeriesCore,
     SeriesMode,
     SeriesParams,
@@ -156,7 +157,11 @@ contract RegistryTest is MercesFixture {
         vm.expectRevert(NotAdmin.selector);
         registry.rotateVerifierKey(verifier, stranger);
         vm.expectRevert(NotAdmin.selector);
-        registry.setFxPair(FEED, false, address(0), true);
+        registry.setFxPair(FEED, false, address(0));
+        vm.expectRevert(NotAdmin.selector);
+        registry.setFxPairEnabled(bytes32(0), true);
+        vm.expectRevert(NotAdmin.selector);
+        registry.setFxPairCrosscheck(bytes32(0), address(0));
         vm.expectRevert(NotAdmin.selector);
         registry.setStablecoin(address(usdc), false);
         vm.expectRevert(NotAdmin.selector);
@@ -205,7 +210,7 @@ contract RegistryTest is MercesFixture {
         assertTrue(registry.isAttestor(attestor));
         vm.warp(T0 + 5 days);
         vm.expectEmit(true, false, false, true);
-        emit IMercesRegistry.AttestorRevoked(attestor, uint64(block.timestamp));
+        emit IMercesRegistry.AttestorRevoked(attestor, uint64(vm.getBlockTimestamp()));
         registry.revokeAttestor(attestor);
         assertFalse(registry.isAttestor(attestor));
         KeyInfo memory k = registry.attestorKey(attestor);
@@ -234,7 +239,7 @@ contract RegistryTest is MercesFixture {
         registry.rotateVerifierKey(verifier, v2);
         assertFalse(registry.isVerifierKey(verifier));
         assertTrue(registry.isVerifierKey(v2));
-        assertEq(registry.verifierKey(verifier).revokedAt, block.timestamp);
+        assertEq(registry.verifierKey(verifier).revokedAt, vm.getBlockTimestamp());
         vm.expectRevert(ZeroAddress.selector);
         registry.registerVerifierKey(address(0));
         vm.stopPrank();
@@ -248,27 +253,33 @@ contract RegistryTest is MercesFixture {
         assertTrue(registry.fxPairId(FEED, true) != pair);
         vm.startPrank(admin);
         vm.expectRevert(abi.encodeWithSelector(UnknownFxPair.selector, bytes32(0)));
-        registry.setFxPair(bytes32(0), false, address(0), true);
+        registry.setFxPair(bytes32(0), false, address(0));
         vm.expectEmit(true, false, false, true);
         emit IMercesRegistry.FxPairSet(pair, FEED, false, address(0), 0, true);
-        registry.setFxPair(FEED, false, address(0), true);
+        assertEq(registry.setFxPair(FEED, false, address(0)), pair);
         FxPairConfig memory c = registry.getFxPair(pair);
         assertTrue(c.exists && c.enabled && !c.inverted);
         assertEq(c.feedId, FEED);
         assertEq(c.crosscheck, address(0));
+        // feed id and direction are write-once
+        vm.expectRevert(abi.encodeWithSelector(FxPairExists.selector, pair));
+        registry.setFxPair(FEED, false, stranger);
         // a cross-check set from zero applies now
-        uint32 nowPeriod = Periods.periodOf(block.timestamp);
-        registry.setFxPair(FEED, false, stranger, true);
+        uint32 nowPeriod = Periods.periodOf(vm.getBlockTimestamp());
+        registry.setFxPairCrosscheck(pair, stranger);
         c = registry.getFxPair(pair);
         assertEq(c.crosscheck, stranger);
         assertEq(c.crosscheckEffectivePeriod, nowPeriod);
         // changing it later applies from the next period
-        registry.setFxPair(FEED, false, admin, true);
+        registry.setFxPairCrosscheck(pair, admin);
         c = registry.getFxPair(pair);
         assertEq(c.crosscheck, admin);
         assertEq(c.crosscheckEffectivePeriod, nowPeriod + 1);
+        // removing it is a change too (next period)
+        registry.setFxPairCrosscheck(pair, address(0));
+        assertEq(registry.getFxPair(pair).crosscheckEffectivePeriod, nowPeriod + 1);
         // disabling only blocks new series
-        registry.setFxPair(FEED, false, admin, false);
+        registry.setFxPairEnabled(pair, false);
         assertFalse(registry.getFxPair(pair).enabled);
         vm.stopPrank();
         SeriesParams memory p = defaultSeriesParams();
@@ -276,7 +287,7 @@ contract RegistryTest is MercesFixture {
         vm.expectRevert(abi.encodeWithSelector(UnknownFxPair.selector, pair));
         _create(p, defaultSchedule(), keccak256("t"), 2, pair);
         vm.prank(admin);
-        registry.setFxPair(FEED, false, admin, true);
+        registry.setFxPairEnabled(pair, true);
         vm.prank(issuer);
         uint256 id = _create(p, defaultSchedule(), keccak256("t"), 2, pair);
         assertEq(registry.getSeriesCore(id).fxPairId, pair);
@@ -352,7 +363,7 @@ contract RegistryTest is MercesFixture {
         assertEq(s.length, 4);
         assertEq(s[3].atOffsetSeconds, 270 days);
         assertEq(registry.getIssuer(issuer).seriesCount, 1);
-        assertTrue(registry.isTransferLocked(id, block.timestamp));
+        assertTrue(registry.isTransferLocked(id, vm.getBlockTimestamp()));
     }
 
     function test_createSeriesGuards() public {
@@ -375,14 +386,14 @@ contract RegistryTest is MercesFixture {
         vm.prank(issuer);
         registry.stopIssuance();
         vm.prank(issuer);
-        vm.expectRevert(IssuerIssuanceStopped.selector);
+        vm.expectRevert(RegistryErrors.IssuanceStopped.selector);
         _create(p, s, tc, 2, bytes32(0));
         vm.prank(issuer);
         registry.resumeIssuance();
 
         disallow(issuer);
         vm.prank(issuer);
-        vm.expectRevert(IssuerNotAllowlisted.selector);
+        vm.expectRevert(abi.encodeWithSelector(NotAllowlisted.selector, issuer));
         _create(p, s, tc, 2, bytes32(0));
         allow(issuer);
 
@@ -508,10 +519,9 @@ contract RegistryTest is MercesFixture {
         bytes32 tc = Proofs.q1().termsCommitment;
         Tier1Terms memory t = proofTier1Terms();
         vm.prank(admin);
-        registry.setFxPair(FEED, false, address(0), true);
-        bytes32 pair = registry.fxPairId(FEED, false);
+        bytes32 pair = registry.setFxPair(FEED, false, address(0));
         vm.startPrank(issuer);
-        vm.expectRevert(Tier1RequiresStablecoinIncome.selector);
+        vm.expectRevert(abi.encodeWithSelector(InvalidTerms.selector, bytes32("tier1Fx")));
         registry.createSeries(p, defaultSchedule(), tc, 1, pair, SeriesMode.SealedBid, false, t);
         p.unitsOffered = 1001; // r × units = 1.001 WAD
         vm.expectRevert(abi.encodeWithSelector(InvalidTerms.selector, bytes32("tier1Rate")));
@@ -526,17 +536,22 @@ contract RegistryTest is MercesFixture {
         t = proofTier1Terms();
         // tier 1 combined with another tier still stores the plaintext terms
         uint256 id = registry.createSeries(p, defaultSchedule(), tc, 1 | 2, bytes32(0), SeriesMode.SealedBid, false, t);
+        // router terms without the tier-1 flag are refused too
+        vm.expectRevert(RouterNotEnabled.selector);
+        registry.createSeries(p, defaultSchedule(), tc, 2, bytes32(0), SeriesMode.SealedBid, false, t);
+        // θ and r must fit uint64
+        t.rWad = uint256(1) << 64;
+        vm.expectRevert(abi.encodeWithSelector(AmountOutOfRange.selector, uint256(1) << 64));
+        registry.createSeries(p, defaultSchedule(), tc, 1, bytes32(0), SeriesMode.SealedBid, false, t);
         vm.stopPrank();
-        Tier1Terms memory stored = registry.getTier1Terms(id);
+        RouterTerms memory stored = registry.getRouterTerms(id);
         assertEq(stored.theta, 80_000e6);
         assertEq(stored.rWad, 1e15);
-        assertEq(stored.currencyCode, 840);
-        // a non-tier-1 series ignores the plaintext
         uint256 id2 = createSeries(keccak256("x"));
-        assertEq(registry.getTier1Terms(id2).rWad, 0);
+        assertEq(registry.getRouterTerms(id2).rWad, 0);
     }
 
-    function test_feesAndWalletCapCopiedFromDefaults() public {
+    function test_feesFromDefaultsWalletCapFromTerms() public {
         Parameters memory d = defaultParameters();
         d.auctionFeeBps = 250;
         d.payoutFeeBps = 750;
@@ -544,11 +559,18 @@ contract RegistryTest is MercesFixture {
         d.maxPauseSeconds = 2_592_000;
         vm.prank(admin);
         registry.setDefaults(d);
-        uint256 id = createSeries(keccak256("terms"));
+        SeriesParams memory p = defaultSeriesParams();
+        p.walletCapBps = 3334; // the issuer's choice within [100, 10000] (vector 03)
+        vm.prank(issuer);
+        uint256 id = _create(p, defaultSchedule(), keccak256("terms"), 2, bytes32(0));
         SeriesTerms memory t = registry.getSeriesTerms(id);
         assertEq(t.auctionFeeBps, 250);
         assertEq(t.payoutFeeBps, 750);
-        assertEq(t.walletCapBps, 500);
+        assertEq(t.walletCapBps, 3334);
+        p.walletCapBps = 99;
+        vm.prank(issuer);
+        vm.expectRevert(abi.encodeWithSelector(ParameterOutOfBounds.selector, bytes32("walletCapBps")));
+        _create(p, defaultSchedule(), keccak256("terms"), 2, bytes32(0));
         assertEq(t.maxPauseSeconds, 2_592_000);
         d.payoutFeeBps = 100;
         vm.prank(admin);
@@ -563,7 +585,7 @@ contract RegistryTest is MercesFixture {
         vm.expectRevert(NotIssuer.selector);
         registry.setContractHash(id, keccak256("x"));
         vm.prank(issuer);
-        vm.expectRevert(ContractHashZero.selector);
+        vm.expectRevert(ContractHashMissing.selector);
         registry.setContractHash(id, bytes32(0));
         vm.prank(issuer);
         vm.expectEmit(true, false, false, true);
@@ -571,7 +593,7 @@ contract RegistryTest is MercesFixture {
         registry.setContractHash(id, keccak256("x"));
         assertEq(registry.getSeriesCore(id).contractHash, keccak256("x"));
         vm.prank(address(auction));
-        registry.markRaiseOpened(id, makeAddr("token"), uint64(block.timestamp));
+        registry.markRaiseOpened(id, makeAddr("token"), uint64(vm.getBlockTimestamp()));
         vm.prank(issuer);
         vm.expectRevert(SeriesNotDraft.selector);
         registry.setContractHash(id, keccak256("y"));
@@ -632,7 +654,7 @@ contract RegistryTest is MercesFixture {
         registry.amendTerms(id, newTc, 2.5e18, sig, proofTier1Terms());
         vm.prank(issuer);
         registry.amendTerms(id, newTc, 2.5e18, sig, t);
-        assertEq(registry.getTier1Terms(id).theta, 90_000e6);
+        assertEq(registry.getRouterTerms(id).theta, 90_000e6);
         assertEq(registry.getSeriesCore(id).termsCommitment, newTc);
     }
 
@@ -785,10 +807,10 @@ contract RegistryTest is MercesFixture {
     function test_charterTermsFrozenAfterOpen() public {
         uint256 id = createSeries(keccak256("terms"));
         vm.prank(address(auction));
-        registry.markRaiseOpened(id, makeAddr("token"), uint64(block.timestamp));
+        registry.markRaiseOpened(id, makeAddr("token"), uint64(vm.getBlockTimestamp()));
         bytes32 before = keccak256(abi.encode(registry.getSeriesTerms(id), registry.getReleaseSchedule(id)));
         vm.startPrank(address(auction));
-        registry.markRaiseResult(id, RaiseState.Settled, uint64(block.timestamp), 900, 1e6);
+        registry.markRaiseResult(id, RaiseState.Settled, uint64(vm.getBlockTimestamp()), 900, 1e6);
         registry.markMintFinalized(id);
         vm.stopPrank();
         vm.prank(address(vault));
@@ -797,7 +819,7 @@ contract RegistryTest is MercesFixture {
         registry.setDefaults(defaultParameters());
         registry.setFlags(true, true, true);
         registry.deactivateIssuer(issuer);
-        registry.setFxPair(FEED, true, stranger, true);
+        registry.setFxPair(FEED, true, stranger);
         vm.stopPrank();
         vm.prank(issuer);
         registry.stopIssuance();
@@ -806,7 +828,7 @@ contract RegistryTest is MercesFixture {
 
     function test_issuanceStopResume() public {
         vm.prank(stranger);
-        vm.expectRevert(NotIssuer.selector);
+        vm.expectRevert(IssuerInactive.selector);
         registry.stopIssuance();
         vm.prank(issuer);
         vm.expectEmit(true, false, false, true);

@@ -51,14 +51,10 @@ contract RouterTest is FullFixture {
         uint256 nonTier1 = runStandardRaise(TierFlags.TIER2_ZKTLS, bytes32(0));
         vm.expectRevert(RouterNotEnabled.selector);
         router.route(nonTier1, 1);
-        uint256 draft = createSeriesWith(
-            defaultSeriesParams(), defaultSchedule(), Proofs.q1().termsCommitment, 1, bytes32(0), proofTier1Terms()
-        );
-        vm.expectRevert(RaiseNotSettled.selector);
-        router.route(draft, 1);
-        vm.expectRevert(ZeroAmount.selector);
-        router.route(sid, 0);
-        vm.expectRevert(RouterNotConfigured.selector);
+        vm.expectRevert(abi.encodeWithSelector(AmountOutOfRange.selector, uint256(1) << 64));
+        router.route(sid, uint256(1) << 64);
+        router.route(sid, 0); // zero-amount rule: nothing moves
+        vm.expectRevert(ZeroAmount.selector); // nothing held
         router.sweep(sid);
         router.createRouterReceiver(sid);
         vm.expectRevert(ZeroAmount.selector);
@@ -101,7 +97,7 @@ contract RouterTest is FullFixture {
         vm.prank(issuer);
         vm.expectRevert(abi.encodeWithSelector(RouterPeriodNotClosed.selector, Q1_2026));
         income.submitReport(r1);
-        vm.expectRevert(abi.encodeWithSelector(PeriodNotEndedYet.selector, Q1_2026 + 1));
+        vm.expectRevert(ReportTooEarly.selector);
         router.closeRouterPeriod(sid, Q1_2026 + 1);
         vm.prank(keeper);
         vm.expectEmit(true, false, false, true);
@@ -113,7 +109,7 @@ contract RouterTest is FullFixture {
         router.closeRouterPeriod(sid, Q1_2026); // idempotent
         // a salted (tier 2 style) commitment does not match the public YTD
         vm.prank(issuer);
-        vm.expectRevert(IncomeCommitmentMismatch.selector);
+        vm.expectRevert(InvalidProof.selector);
         income.submitReport(reportInput(sid, Q1_2026, Proofs.q1(), 1, false));
         // the pure tier-1 report needs no signature and is fully covered by the routed credit
         vm.prank(issuer);
@@ -215,13 +211,9 @@ contract RouterTest is FullFixture {
 
     function test_incomeBeforeFinalizationWaitsInReceiver() public {
         uint256 s = standardSeries(TierFlags.TIER1_SPLIT, bytes32(0));
-        // before settlement the raise may still fail: nothing is accepted
-        fund(payer, 1);
-        vm.startPrank(payer);
-        usdc.approve(address(router), 1);
+        // a Draft series cannot close router periods (no first period yet)
         vm.expectRevert(RaiseNotSettled.selector);
-        router.route(s, 1);
-        vm.stopPrank();
+        router.closeRouterPeriod(s, Q1_2026);
         allow(b1);
         allow(b2);
         allow(b3);
@@ -261,7 +253,27 @@ contract RouterTest is FullFixture {
         router.route(s, 60_000e6);
         vm.stopPrank();
         assertEq(usdc.balanceOf(receiver), 0);
+        assertEq(router.getRouter(s).heldBeforeFinalization, 0);
         assertEq(vault.getLedger(s).grossReceived, 3_000e6);
+    }
+
+    function test_failedRaiseIncomePassesToTheIssuer() public {
+        uint256 s = standardSeries(TierFlags.TIER1_SPLIT, bytes32(0));
+        // income routed before the raise settles waits in the receiving account
+        _route(s, 5_000e6);
+        address receiver = router.routerReceiver(s);
+        assertEq(usdc.balanceOf(receiver), 5_000e6);
+        openRaise(s);
+        warpToSettle(s);
+        settle(s, P0, 0, 0); // no bids → failed
+        // a failed raise has no holders: held income and new receipts go to the issuer
+        uint256 before = usdc.balanceOf(issuer);
+        vm.prank(keeper);
+        router.sweep(s);
+        assertEq(usdc.balanceOf(issuer), before + 5_000e6);
+        _route(s, 1_000e6);
+        assertEq(usdc.balanceOf(issuer), before + 6_000e6);
+        assertEq(usdc.balanceOf(address(vault)), 0);
     }
 
     function test_retiredSeriesPassesEverythingThrough() public {

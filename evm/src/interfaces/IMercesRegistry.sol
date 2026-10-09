@@ -10,6 +10,7 @@ import {
     ProtocolContracts,
     RaiseState,
     ReleaseTranche,
+    RouterTerms,
     SeriesCore,
     SeriesMode,
     SeriesParams,
@@ -49,7 +50,11 @@ interface IMercesRegistry {
     event IssuanceStopped(address indexed issuer);
     event IssuanceResumed(address indexed issuer);
     event AllowlistUpdated(address indexed wallet, bool allowed);
+    /// @dev EVM-only: the wallet's ONCHAINID identity was registered in the shared T-REX `IdentityRegistry`.
     event IdentityRegistered(address indexed wallet, address identity);
+    /// @dev SPEC §10 `SeriesCreated(series, issuer, mode, stablecoin, units_offered, reserve_price, min_raise,
+    /// cap_multiple_wad, hurdle_rate_wad, k, lockup_seconds, wallet_cap_bps, fees…, terms_commitment, tier_flags,
+    /// fx_pair_id)`: the charter terms travel as the `terms` tuple (named components, k = `payoutMultipleK`).
     event SeriesCreated(
         uint256 indexed series,
         address indexed issuer,
@@ -69,6 +74,7 @@ interface IMercesRegistry {
         address indexed attestor
     );
     event RaiseStateChanged(uint256 indexed series, RaiseState state);
+    /// @dev EVM-only mirror of the protocol's `RaiseMintFinalized`, written through the narrow interface.
     event MintFinalized(uint256 indexed series);
     event TerminalStatusSet(uint256 indexed series, SeriesStatus status);
 
@@ -101,7 +107,8 @@ interface IMercesRegistry {
     function getSeriesCore(uint256 seriesId) external view returns (SeriesCore memory);
     function getSeriesTerms(uint256 seriesId) external view returns (SeriesTerms memory);
     function getReleaseSchedule(uint256 seriesId) external view returns (ReleaseTranche[] memory);
-    function getTier1Terms(uint256 seriesId) external view returns (Tier1Terms memory);
+    /// @notice Plaintext θ / r of a tier-1 series (zero for other series).
+    function getRouterTerms(uint256 seriesId) external view returns (RouterTerms memory);
     function isTransferLocked(uint256 seriesId, uint256 timestamp) external view returns (bool);
 
     // ---- admin ----
@@ -116,7 +123,13 @@ interface IMercesRegistry {
     function registerVerifierKey(address key) external;
     function revokeVerifierKey(address key) external;
     function rotateVerifierKey(address oldKey, address newKey) external;
-    function setFxPair(bytes32 feedId, bool inverted, address crosscheck, bool enabled) external;
+    /// @notice Registers a new FX pair (write-once: `FxPairExists` for a known `(feed_id, inverted)`).
+    function setFxPair(bytes32 feedId, bool inverted, address crosscheck) external returns (bytes32 pairId);
+    /// @notice `enabled = false` only stops new series from referencing the pair; snapshots stay permissionless.
+    function setFxPairEnabled(bytes32 pairId, bool enabled) external;
+    /// @notice Sets or changes the Chainlink cross-check feed: from zero it applies now, later changes apply from
+    /// the next period (a live quarter's rule never changes under an issuer).
+    function setFxPairCrosscheck(bytes32 pairId, address crosscheck) external;
     function setStablecoin(address token, bool allowed) external;
     function registerIssuer(address wallet) external;
     function deactivateIssuer(address wallet) external;
@@ -144,7 +157,7 @@ interface IMercesRegistry {
     function amendTerms(
         uint256 seriesId,
         bytes32 newTermsCommitment,
-        uint64 newCapMultipleWad,
+        uint256 newCapMultipleWad,
         bytes calldata attestorSignature,
         Tier1Terms calldata tier1Terms
     ) external;

@@ -5,6 +5,7 @@ import {FullFixture} from "../utils/FullFixture.sol";
 import {IERC3643Token} from "../../src/interfaces/external/IERC3643Token.sol";
 import {IAgentRole} from "../../src/interfaces/external/IAgentRole.sol";
 import {IIdentityRegistryLite} from "../../src/interfaces/external/IIdentityRegistryLite.sol";
+import {DirectTransferForbidden, UnarmedEscrowDeposit} from "../../src/types/MercesErrors.sol";
 
 interface IModularComplianceLite {
     function getModules() external view returns (address[] memory);
@@ -80,47 +81,62 @@ contract TokenUnitTest is FullFixture {
         token.mint(b1, 1);
         // an agent may only mint to the auction escrow (compliance rule 1)
         vm.prank(address(vault));
-        vm.expectRevert(bytes("Compliance not followed"));
+        vm.expectRevert(DirectTransferForbidden.selector);
         token.mint(b1, 1);
         vm.prank(address(vault));
         token.mint(address(auction), 1);
         assertEq(token.balanceOf(address(auction)), 1);
     }
 
+    /// @dev The module reverts with the Solana hook's error names, so a forbidden transfer between verified
+    /// wallets surfaces `DirectTransferForbidden` / `UnarmedEscrowDeposit` (vectors' canonical names) through
+    /// `ModularCompliance.canTransfer` and the T-REX `Token`.
     function test_directTransfersAlwaysFail() public {
         assertEq(token.balanceOf(b1), 100);
-        assertFalse(IModularComplianceLite(compliance).canTransfer(b1, b2, 1));
+        vm.expectRevert(DirectTransferForbidden.selector);
+        IModularComplianceLite(compliance).canTransfer(b1, b2, 1);
         vm.prank(b1);
-        vm.expectRevert(bytes("Transfer not possible"));
+        vm.expectRevert(DirectTransferForbidden.selector);
         token.transfer(b2, 1);
         vm.prank(b1);
         token.approve(b2, 5);
         vm.prank(b2);
-        vm.expectRevert(bytes("Transfer not possible"));
+        vm.expectRevert(DirectTransferForbidden.selector);
         token.transferFrom(b1, b2, 1);
         // even after the lockup would have passed — the token never allows wallet-to-wallet moves
-        vm.warp(block.timestamp + 10 * 365 days);
+        vm.warp(vm.getBlockTimestamp() + 10 * 365 days);
         vm.prank(b1);
-        vm.expectRevert(bytes("Transfer not possible"));
+        vm.expectRevert(DirectTransferForbidden.selector);
         token.transfer(b2, 1);
         // nor a push into the auction escrow
         vm.prank(b1);
-        vm.expectRevert(bytes("Transfer not possible"));
+        vm.expectRevert(DirectTransferForbidden.selector);
         token.transfer(address(auction), 1);
+        // nor an unarmed push into the window escrow
+        vm.prank(b1);
+        vm.expectRevert(UnarmedEscrowDeposit.selector);
+        token.transfer(address(window), 1);
+        // a destination that never had an identity fails T-REX's own verification first
+        vm.prank(b1);
+        vm.expectRevert(bytes("Transfer not possible"));
+        token.transfer(stranger, 1);
     }
 
-    function test_escrowRules() public view {
+    function test_escrowRules() public {
         IModularComplianceLite c = IModularComplianceLite(compliance);
         // mint: only to the auction escrow
         assertTrue(c.canTransfer(address(0), address(auction), 5));
-        assertFalse(c.canTransfer(address(0), b1, 5));
-        assertFalse(c.canTransfer(address(0), address(window), 5));
+        vm.expectRevert(DirectTransferForbidden.selector);
+        c.canTransfer(address(0), b1, 5);
+        vm.expectRevert(DirectTransferForbidden.selector);
+        c.canTransfer(address(0), address(window), 5);
         // out of either escrow: always (deliveries, fills, returns)
         assertTrue(c.canTransfer(address(auction), b1, 5));
         assertTrue(c.canTransfer(address(window), b1, 5));
         assertTrue(c.canTransfer(address(window), stranger, 5));
         // into the window escrow: only when armed for exactly that amount
-        assertFalse(c.canTransfer(b1, address(window), 5));
+        vm.expectRevert(UnarmedEscrowDeposit.selector);
+        c.canTransfer(b1, address(window), 5);
         assertEq(window.armedDeposit(b1), 0);
     }
 

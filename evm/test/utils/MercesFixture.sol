@@ -155,6 +155,7 @@ abstract contract MercesFixture is Test {
             hurdleRateWad: 0.08e18,
             payoutMultipleK: 5,
             lockupSeconds: 47_336_400,
+            walletCapBps: 1000,
             commitDuration: 7 days,
             revealDuration: 2 days,
             windowCommitDuration: 3 days,

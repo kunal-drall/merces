@@ -55,6 +55,8 @@ pub enum ProtocolError {
     TallyIncomplete,
     #[msg("Auction has not settled or failed")]
     NotSettledOrFailed,
+    #[msg("The raise is not Settled")]
+    RaiseNotSettled,
     #[msg("Bid already processed")]
     BidAlreadyProcessed,
     #[msg("Bid has not been processed yet")]
@@ -159,8 +161,6 @@ pub enum ProtocolError {
     #[msg("Units outstanding is zero")]
     NoUnitsOutstanding,
     // ---- true-ups
-    #[msg("True-up adjustment must be non-zero")]
-    ZeroAdjustment,
     #[msg("A true-up was already recorded for this year")]
     TrueUpYearUsed,
     #[msg("True-up year has not ended")]
@@ -188,7 +188,7 @@ pub enum ProtocolError {
     LockupActive,
     #[msg("Holder has no redeemed units")]
     NoRedeemedUnits,
-    #[msg("Pending auction units must be delivered before redemption")]
+    #[msg("Pending auction or window units must be delivered first (deliver_bid / deliver_order)")]
     DeliverFirst,
     #[msg("Units escrowed in a window must be processed before redemption")]
     AskEscrowOutstanding,
@@ -210,8 +210,6 @@ pub enum ProtocolError {
     #[msg("Pause history is full")]
     TooManyPauses,
     // ---- redemption / extinguishment
-    #[msg("Series status does not allow redemption")]
-    RedemptionStatusNotAllowed,
     #[msg("Ended periods are unreported")]
     UnreportedPeriods,
     #[msg("The two extinguishment attestors must be distinct")]
@@ -221,8 +219,6 @@ pub enum ProtocolError {
     // ---- router
     #[msg("Series is not a tier 1 (split) series")]
     NotTierOne,
-    #[msg("Router may only be initialised before settlement")]
-    RouterTooLate,
     #[msg("Nothing to route")]
     NothingToRoute,
     #[msg("Router period has not ended")]
@@ -230,8 +226,6 @@ pub enum ProtocolError {
     #[msg("Router period already closed")]
     RouterPeriodAlreadyClosed,
     // ---- fx
-    #[msg("FX pair is disabled in the registry")]
-    FxPairDisabled,
     #[msg("A snapshot was already taken today")]
     SnapshotAlreadyTaken,
     #[msg("Pyth price feed id mismatch")]
@@ -245,7 +239,8 @@ pub enum ProtocolError {
     #[msg("Pyth price update is not fully verified")]
     InsufficientVerification,
     #[msg("The pair's cross-check price update is required for this period")]
-    CrosscheckRequired, // ---- window
+    CrosscheckRequired,
+    // ---- window
     #[msg("Transfer windows are disabled")]
     WindowsDisabled,
     #[msg("Series status does not allow a window")]
@@ -278,6 +273,22 @@ pub enum ProtocolError {
     WrongSide,
     #[msg("Escrow arm is busy")]
     EscrowArmBusy,
+    #[msg("Order has not been processed yet")]
+    OrderNotProcessed,
+    #[msg("Order already delivered")]
+    OrderAlreadyDelivered,
+    #[msg("Cancelled buyer units exceed the at-price asks: a take-back threshold must be settled first")]
+    TakebackRequired,
+    #[msg("No take-back threshold is needed for this window")]
+    TakebackNotRequired,
+    #[msg("A take-back round is in progress; it cannot be reset")]
+    TakebackInProgress,
+    #[msg("No take-back round is being tallied")]
+    TakebackNotTallying,
+    #[msg("The take-back threshold is already settled")]
+    TakebackAlreadySettled,
+    #[msg("Every revealed bid must be processed before asks and take-back rounds")]
+    BidsNotProcessed,
 }
 
 impl From<merces_common::MathError> for ProtocolError {

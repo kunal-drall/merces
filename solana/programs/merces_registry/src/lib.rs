@@ -296,12 +296,10 @@ pub mod merces_registry {
         Ok(())
     }
 
-    /// FX pair configuration (SPEC §3.1): `pair_id = keccak256(feed_id ‖ inverted)`; `feed_id` and
-    /// `inverted` are write-once; `crosscheck` may be set from zero once (effective now), later
-    /// changes apply from the next period; `enabled` only gates new series.
-    /// Registers an FX pair, write-once: `pair_id = keccak256(feed_id ‖ inverted)` commits to the
-    /// feed and its direction, and a pair can never be re-registered (SPEC §3.1). The cross-check
-    /// feed is recorded with its effective period; on Solana it stays unset in this version (A21).
+    /// Registers an FX pair, write-once (SPEC §3.1): `pair_id = keccak256(feed_id ‖ inverted)`
+    /// commits to the feed and its direction, and a pair can never be re-registered
+    /// (`FxPairImmutable`). A cross-check feed given here applies from the current period; later
+    /// changes go through `set_fx_crosscheck`. `enabled` only gates new series.
     pub fn set_fx_pair(
         ctx: Context<SetFxPair>,
         pair_id: [u8; 32],
@@ -326,6 +324,7 @@ pub mod merces_registry {
         } else {
             current_period
         };
+        p.prev_crosscheck = Pubkey::default();
         p.enabled = enabled;
         p.bump = ctx.bumps.fx_pair;
         emit!(FxPairSet {
@@ -351,6 +350,44 @@ pub mod merces_registry {
             crosscheck: p.crosscheck,
             crosscheck_effective_period: p.crosscheck_effective_period,
             enabled,
+        });
+        Ok(())
+    }
+
+    /// Changes a pair's cross-check feed (SPEC §3.1). Setting it from zero applies from the current
+    /// period (nothing was checked before); any later change — a new feed or removal — applies from
+    /// `period_of(now) + 1`, and the feed in force for the running period is kept in
+    /// `prev_crosscheck`, so a live quarter's rule never changes under an issuer.
+    pub fn set_fx_crosscheck(ctx: Context<SetFxPairEnabled>, crosscheck: Pubkey) -> Result<()> {
+        let now = now_u64()?;
+        let current_period = period_of(now).map_err(|_| RegistryError::MathOverflow)?;
+        let p = &mut ctx.accounts.fx_pair;
+        require!(
+            crosscheck != p.crosscheck,
+            RegistryError::CrosscheckUnchanged
+        );
+        let in_force = if current_period >= p.crosscheck_effective_period {
+            p.crosscheck
+        } else {
+            p.prev_crosscheck
+        };
+        if p.crosscheck == Pubkey::default() && in_force == Pubkey::default() {
+            p.prev_crosscheck = Pubkey::default();
+            p.crosscheck_effective_period = current_period;
+        } else {
+            p.prev_crosscheck = in_force;
+            p.crosscheck_effective_period = current_period
+                .checked_add(1)
+                .ok_or(RegistryError::MathOverflow)?;
+        }
+        p.crosscheck = crosscheck;
+        emit!(FxPairSet {
+            pair_id: p.pair_id,
+            feed_id: p.feed_id,
+            inverted: p.inverted,
+            crosscheck: p.crosscheck,
+            crosscheck_effective_period: p.crosscheck_effective_period,
+            enabled: p.enabled,
         });
         Ok(())
     }
@@ -796,11 +833,12 @@ pub mod merces_registry {
         Ok(())
     }
 
-    /// Settled → mint finalised (every bid processed, mint authority revoked).
+    /// Mint finalised: every bid of a Settled or Failed raise processed and the mint authority
+    /// revoked (a failed raise finalises an empty mint, so nothing can ever be minted for it).
     pub fn mark_mint_finalized(ctx: Context<MarkRaiseResult>) -> Result<()> {
         let s = &mut ctx.accounts.series;
         require!(
-            s.raise_state == RAISE_SETTLED,
+            s.raise_state == RAISE_SETTLED || s.raise_state == RAISE_FAILED,
             RegistryError::InvalidRaiseTransition
         );
         require!(!s.mint_finalized, RegistryError::MintAlreadyFinalized);

@@ -60,27 +60,31 @@ struct Parameters {
     uint64 maxCumulativePauseSeconds;
 }
 
-/// @notice Issuer-chosen series parameters at creation (bounds-checked against SPEC §1.6).
+/// @notice Issuer-chosen series parameters at creation (SPEC §3.2 `create_series`). Every field is a full word so
+/// out-of-domain inputs revert with the canonical error (`AmountOutOfRange` for the money amounts, bounds for the
+/// rest, SPEC §1.1 / §1.6) instead of failing ABI decoding. Fee rates, the non-reveal charge and the pause
+/// limits are protocol economics and are copied from the registry defaults in force at creation.
 struct SeriesParams {
     address stablecoin;
-    uint64 unitsOffered;
-    uint64 reservePrice;
-    uint64 minRaise;
-    uint64 capMultipleWad;
-    uint64 hurdleRateWad;
-    uint16 payoutMultipleK;
-    uint64 lockupSeconds;
-    uint64 commitDuration;
-    uint64 revealDuration;
-    uint64 windowCommitDuration;
-    uint64 windowRevealDuration;
+    uint256 unitsOffered;
+    uint256 reservePrice;
+    uint256 minRaise;
+    uint256 capMultipleWad;
+    uint256 hurdleRateWad;
+    uint256 payoutMultipleK;
+    uint256 lockupSeconds;
+    uint256 walletCapBps;
+    uint256 commitDuration;
+    uint256 revealDuration;
+    uint256 windowCommitDuration;
+    uint256 windowRevealDuration;
 }
 
-/// @notice Plaintext terms of a tier-1 (pure on-chain income) series (SPEC §6.5). Public by the issuer's choice;
-/// checked on-chain against the Poseidon(5) terms commitment.
+/// @notice Plaintext terms of a tier-1 (on-chain income) series (SPEC §6.5). Public by the issuer's choice;
+/// checked on-chain against the Poseidon(5) terms commitment. `theta` and `rWad` must fit uint64.
 struct Tier1Terms {
-    uint64 theta;
-    uint64 rWad;
+    uint256 theta;
+    uint256 rWad;
     uint32 currencyCode;
     uint32 indexingRule;
     uint256 termsSalt;
@@ -89,6 +93,12 @@ struct Tier1Terms {
 struct ReleaseTranche {
     uint64 atOffsetSeconds;
     uint16 bps;
+}
+
+/// @notice Router terms as stored (range-checked from `Tier1Terms`).
+struct RouterTerms {
+    uint64 theta;
+    uint64 rWad;
 }
 
 /// @notice Charter terms of a series. Immutable once the raise opens (SPEC §3.3), except `capMultipleWad`

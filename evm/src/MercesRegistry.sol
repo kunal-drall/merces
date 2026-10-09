@@ -21,6 +21,7 @@ import {
     ProtocolContracts,
     RaiseState,
     ReleaseTranche,
+    RouterTerms,
     SeriesCore,
     SeriesMode,
     SeriesParams,
@@ -74,7 +75,7 @@ contract MercesRegistry is IMercesRegistry {
     mapping(uint256 => SeriesCore) internal _cores;
     mapping(uint256 => SeriesTerms) internal _terms;
     mapping(uint256 => ReleaseTranche[]) internal _schedules;
-    mapping(uint256 => Tier1Terms) internal _tier1;
+    mapping(uint256 => RouterTerms) internal _router;
 
     // ---------------------------------------------------------------- modifiers
 
@@ -229,8 +230,14 @@ contract MercesRegistry is IMercesRegistry {
         return _schedules[seriesId];
     }
 
-    function getTier1Terms(uint256 seriesId) external view override seriesExists(seriesId) returns (Tier1Terms memory) {
-        return _tier1[seriesId];
+    function getRouterTerms(uint256 seriesId)
+        external
+        view
+        override
+        seriesExists(seriesId)
+        returns (RouterTerms memory)
+    {
+        return _router[seriesId];
     }
 
     /// @inheritdoc IMercesRegistry
@@ -338,26 +345,51 @@ contract MercesRegistry is IMercesRegistry {
     }
 
     /// @inheritdoc IMercesRegistry
-    /// @dev `pair_id = keccak256(feed_id ‖ inverted_u8)`; feed id and inversion are write-once. `enabled = false`
-    /// only stops new series from referencing the pair. A cross-check set from zero applies now; later changes
-    /// apply from the next period so a live quarter's rule never changes under an issuer.
-    function setFxPair(bytes32 feedId, bool inverted, address crosscheck, bool enabled) external override onlyAdmin {
+    /// @dev `pair_id = keccak256(feed_id ‖ inverted_u8)`: feed id and inversion are write-once (SPEC §3.1). The
+    /// pair starts enabled; a cross-check set at registration applies from the current period.
+    function setFxPair(bytes32 feedId, bool inverted, address crosscheck)
+        external
+        override
+        onlyAdmin
+        returns (bytes32 pairId)
+    {
         if (feedId == bytes32(0)) revert UnknownFxPair(bytes32(0));
-        bytes32 pairId = fxPairId(feedId, inverted);
+        pairId = fxPairId(feedId, inverted);
         FxPairConfig storage cfg = _fxPairs[pairId];
-        uint32 nowPeriod = Periods.periodOf(block.timestamp);
-        if (!cfg.exists) {
-            cfg.exists = true;
-            cfg.feedId = feedId;
-            cfg.inverted = inverted;
-            cfg.crosscheck = crosscheck;
-            cfg.crosscheckEffectivePeriod = crosscheck != address(0) ? nowPeriod : 0;
-        } else if (crosscheck != cfg.crosscheck) {
-            cfg.crosscheckEffectivePeriod = cfg.crosscheck == address(0) ? nowPeriod : nowPeriod + 1;
-            cfg.crosscheck = crosscheck;
-        }
+        if (cfg.exists) revert FxPairExists(pairId);
+        cfg.exists = true;
+        cfg.feedId = feedId;
+        cfg.inverted = inverted;
+        cfg.crosscheck = crosscheck;
+        cfg.crosscheckEffectivePeriod = crosscheck != address(0) ? Periods.periodOf(block.timestamp) : 0;
+        cfg.enabled = true;
+        _emitFxPair(pairId, cfg);
+    }
+
+    /// @inheritdoc IMercesRegistry
+    function setFxPairEnabled(bytes32 pairId, bool enabled) external override onlyAdmin {
+        FxPairConfig storage cfg = _fxPairs[pairId];
+        if (!cfg.exists) revert UnknownFxPair(pairId);
         cfg.enabled = enabled;
-        emit FxPairSet(pairId, feedId, inverted, cfg.crosscheck, cfg.crosscheckEffectivePeriod, enabled);
+        _emitFxPair(pairId, cfg);
+    }
+
+    /// @inheritdoc IMercesRegistry
+    /// @dev SPEC §3.1: `crosscheck` may be set from 0 once (effective now); later changes, including removal, take
+    /// effect from `period_of(now) + 1`. Until then the accumulator keeps applying the rule recorded for the live
+    /// period (`crosscheck_effective_period` is compared with the snapshot's period).
+    function setFxPairCrosscheck(bytes32 pairId, address crosscheck) external override onlyAdmin {
+        FxPairConfig storage cfg = _fxPairs[pairId];
+        if (!cfg.exists) revert UnknownFxPair(pairId);
+        if (crosscheck == cfg.crosscheck) revert CrosscheckUnchanged(pairId);
+        uint32 nowPeriod = Periods.periodOf(block.timestamp);
+        cfg.crosscheckEffectivePeriod = cfg.crosscheck == address(0) ? nowPeriod : nowPeriod + 1;
+        cfg.crosscheck = crosscheck;
+        _emitFxPair(pairId, cfg);
+    }
+
+    function _emitFxPair(bytes32 pairId, FxPairConfig storage cfg) internal {
+        emit FxPairSet(pairId, cfg.feedId, cfg.inverted, cfg.crosscheck, cfg.crosscheckEffectivePeriod, cfg.enabled);
     }
 
     /// @notice Allow or disallow a settlement stablecoin. Decimals are read from the token, never assumed.
@@ -425,6 +457,9 @@ contract MercesRegistry is IMercesRegistry {
     // ---------------------------------------------------------------- issuer
 
     /// @inheritdoc IMercesRegistry
+    /// @dev Checks in the SPEC §3.2 order (issuer gate, allowlist, money ranges, bounds, terms, schedule, tiers,
+    /// FX pair). Fee rates, the non-reveal charge and the pause limits are protocol economics copied from the
+    /// defaults in force; every other term is the issuer's choice within the §1.6 bounds.
     function createSeries(
         SeriesParams calldata p,
         ReleaseTranche[] calldata releaseSchedule,
@@ -435,103 +470,128 @@ contract MercesRegistry is IMercesRegistry {
         bool issuerAcceptsPublicPrice,
         Tier1Terms calldata tier1Terms
     ) external override returns (uint256 seriesId) {
-        _checkCreate(p, termsCommitment, tierFlags, fxPairId_, mode);
+        _checkIssuer();
+        if (mode != SeriesMode.SealedBid) revert CurveModeUnsupported();
+        if (!_stablecoins[p.stablecoin]) revert StablecoinNotAllowed(p.stablecoin);
+        _checkTerms(p);
         _checkSchedule(releaseSchedule);
-        if (tierFlags & TierFlags.TIER1_SPLIT != 0) _checkTier1(p, termsCommitment, fxPairId_, tier1Terms);
+        if (tierFlags == 0 || tierFlags & ~TierFlags.ALL != 0) revert InvalidTierFlags();
+        bool tier1 = tierFlags & TierFlags.TIER1_SPLIT != 0;
+        if (tier1 != _routerGiven(tier1Terms)) revert RouterNotEnabled();
+        if (tier1) _checkTier1(p.unitsOffered, fxPairId_, tier1Terms);
+        if (fxPairId_ != bytes32(0) && !_fxPairs[fxPairId_].enabled) revert UnknownFxPair(fxPairId_);
+        if (termsCommitment == bytes32(0)) revert ParameterOutOfBounds("termsCommitment");
+        if (tier1) _checkTier1Commitment(termsCommitment, tier1Terms);
 
         seriesId = ++seriesCount;
         _issuers[msg.sender].seriesCount += 1;
         _storeTerms(seriesId, p);
-        if (tierFlags & TierFlags.TIER1_SPLIT != 0) _tier1[seriesId] = tier1Terms;
-
-        SeriesCore storage core = _cores[seriesId];
-        core.issuer = msg.sender;
-        core.mode = mode;
-        core.stablecoin = p.stablecoin;
-        core.stablecoinDecimals = IERC20Metadata(p.stablecoin).decimals();
-        core.raiseState = RaiseState.Draft;
-        core.tierFlags = tierFlags;
-        core.fxPairId = fxPairId_;
-        core.issuerAcceptsPublicPrice = issuerAcceptsPublicPrice;
-        core.termsCommitment = termsCommitment;
-
+        if (tier1) _router[seriesId] = RouterTerms({theta: uint64(tier1Terms.theta), rWad: uint64(tier1Terms.rWad)});
+        _storeCore(seriesId, p.stablecoin, mode, tierFlags, fxPairId_, issuerAcceptsPublicPrice, termsCommitment);
         ReleaseTranche[] storage schedule = _schedules[seriesId];
         for (uint256 i = 0; i < releaseSchedule.length; i++) {
             schedule.push(releaseSchedule[i]);
         }
-
         emit SeriesCreated(
             seriesId, msg.sender, mode, p.stablecoin, _terms[seriesId], termsCommitment, tierFlags, fxPairId_
         );
     }
 
-    function _checkCreate(
-        SeriesParams calldata p,
-        bytes32 termsCommitment,
+    function _storeCore(
+        uint256 seriesId,
+        address stablecoin,
+        SeriesMode mode,
         uint8 tierFlags,
         bytes32 fxPairId_,
-        SeriesMode mode
-    ) internal view {
+        bool issuerAcceptsPublicPrice,
+        bytes32 termsCommitment
+    ) internal {
+        SeriesCore storage core = _cores[seriesId];
+        core.issuer = msg.sender;
+        core.mode = mode;
+        core.stablecoin = stablecoin;
+        core.stablecoinDecimals = IERC20Metadata(stablecoin).decimals();
+        core.raiseState = RaiseState.Draft;
+        core.tierFlags = tierFlags;
+        core.fxPairId = fxPairId_;
+        core.issuerAcceptsPublicPrice = issuerAcceptsPublicPrice;
+        core.termsCommitment = termsCommitment;
+    }
+
+    /// @dev `issuer.active && !issuer.issuance_stopped` and the issuer wallet allowlisted.
+    function _checkIssuer() internal view {
         Issuer storage issuer = _issuers[msg.sender];
         if (!issuer.registered || !issuer.active) revert IssuerInactive();
-        if (issuer.issuanceStopped) revert IssuerIssuanceStopped();
-        if (!_allowed[msg.sender]) revert IssuerNotAllowlisted();
-        if (mode != SeriesMode.SealedBid) revert CurveModeUnsupported();
-        if (!_stablecoins[p.stablecoin]) revert StablecoinNotAllowed(p.stablecoin);
-        if (p.unitsOffered < 1) revert InvalidTerms("unitsOffered");
-        if (p.reservePrice < 1) revert InvalidTerms("reservePrice");
-        // reserve × units must stay in the shared uint64 money domain, and bounds the minimum raise
-        uint256 maxProceeds = uint256(p.reservePrice) * p.unitsOffered;
-        maxProceeds.toU64();
-        if (p.minRaise > maxProceeds) revert InvalidTerms("minRaise");
-        if (tierFlags == 0 || tierFlags & ~TierFlags.ALL != 0) revert InvalidTierFlags();
-        if (fxPairId_ != bytes32(0) && !_fxPairs[fxPairId_].enabled) revert UnknownFxPair(fxPairId_);
-        if (termsCommitment == bytes32(0)) revert ParameterOutOfBounds("termsCommitment");
-        // at least one unit of wallet cap, otherwise no bid could ever be valid (SPEC §1.6)
-        if (uint256(p.unitsOffered).bpsOf(_defaults.walletCapBps) < 1) revert InvalidTerms("walletCap");
-        _checkSeriesParams(p);
+        if (issuer.issuanceStopped) revert RegistryErrors.IssuanceStopped();
+        if (!_allowed[msg.sender]) revert NotAllowlisted(msg.sender);
     }
 
-    /// @dev SPEC §6.5: tier-1 plaintext terms are public and must match the Poseidon(5) commitment; the income
-    /// currency is the stablecoin; `r_wad × units_offered ≤ WAD`.
-    function _checkTier1(SeriesParams calldata p, bytes32 termsCommitment, bytes32 fxPairId_, Tier1Terms calldata t)
-        internal
-        view
-    {
-        if (fxPairId_ != bytes32(0)) revert Tier1RequiresStablecoinIncome();
-        if (t.rWad == 0) revert RouterNotEnabled(); // a tier-1 flag needs router terms
-        if (uint256(t.rWad) * p.unitsOffered > C.WAD) revert InvalidTerms("tier1Rate");
-        _checkTier1Commitment(termsCommitment, t);
+    /// @dev Money ranges (§1.1), parameter bounds (§1.6), then `units_offered ≥ 1`, `reserve_price ≥ 1`,
+    /// `min_raise ≤ reserve_price × units_offered` and at least one unit of wallet cap (§3.2, §1.6).
+    function _checkTerms(SeriesParams calldata p) internal pure {
+        uint256 units = p.unitsOffered.toU64();
+        uint256 reserve = p.reservePrice.toU64();
+        uint256 minRaise = p.minRaise.toU64();
+        _bound(p.capMultipleWad, C.CAP_MULTIPLE_MIN, C.CAP_MULTIPLE_MAX, "capMultipleWad");
+        _bound(p.hurdleRateWad, 0, C.HURDLE_MAX, "hurdleRateWad");
+        _bound(p.payoutMultipleK, C.K_MIN, C.K_MAX, "payoutMultipleK");
+        _bound(p.lockupSeconds, 0, C.LOCKUP_MAX, "lockupSeconds");
+        _bound(p.walletCapBps, C.WALLET_CAP_MIN, C.WALLET_CAP_MAX, "walletCapBps");
+        _bound(p.commitDuration, C.COMMIT_MIN, C.COMMIT_MAX, "commitDuration");
+        _bound(p.revealDuration, C.REVEAL_MIN, C.REVEAL_MAX, "revealDuration");
+        _bound(p.windowCommitDuration, C.WINDOW_COMMIT_MIN, C.WINDOW_COMMIT_MAX, "windowCommitDuration");
+        _bound(p.windowRevealDuration, C.WINDOW_REVEAL_MIN, C.WINDOW_REVEAL_MAX, "windowRevealDuration");
+        if (units < 1) revert InvalidTerms("unitsOffered");
+        if (reserve < 1) revert InvalidTerms("reservePrice");
+        // reserve × units must stay in the shared uint64 money domain; it also bounds the minimum raise
+        uint256 maxProceeds = reserve * units;
+        if (maxProceeds > type(uint64).max) revert AmountOutOfRange(maxProceeds);
+        if (minRaise > maxProceeds) revert InvalidTerms("minRaise");
+        if (units.bpsOf(p.walletCapBps) < 1) revert InvalidTerms("walletCap");
     }
 
+    /// @dev A router is "given" when any tier-1 term is set; the tier-1 flag and router terms go together.
+    function _routerGiven(Tier1Terms calldata t) internal pure returns (bool) {
+        return t.theta != 0 || t.rWad != 0 || t.termsSalt != 0 || t.currencyCode != 0 || t.indexingRule != 0;
+    }
+
+    /// @dev SPEC §6.5: the income currency of a tier-1 series is the stablecoin, `r_wad × units_offered ≤ WAD`,
+    /// θ and r fit uint64.
+    function _checkTier1(uint256 unitsOffered, bytes32 fxPairId_, Tier1Terms calldata t) internal pure {
+        if (fxPairId_ != bytes32(0)) revert InvalidTerms("tier1Fx");
+        t.theta.toU64();
+        uint256 rWad = t.rWad.toU64();
+        if (rWad * unitsOffered > C.WAD) revert InvalidTerms("tier1Rate");
+    }
+
+    /// @dev The plaintext tier-1 terms must open the Poseidon(5) terms commitment (SPEC §6.5).
     function _checkTier1Commitment(bytes32 termsCommitment, Tier1Terms calldata t) internal view {
-        uint256 h = _poseidon5.poseidon(
-            [uint256(t.theta), uint256(t.rWad), uint256(t.currencyCode), uint256(t.indexingRule), t.termsSalt]
-        );
+        uint256 h =
+            _poseidon5.poseidon([t.theta, t.rWad, uint256(t.currencyCode), uint256(t.indexingRule), t.termsSalt]);
         if (h != uint256(termsCommitment)) revert TermsCommitmentMismatch();
     }
 
-    /// @dev Issuer-chosen terms are copied from `p`; market and fee parameters are copied from the protocol
-    /// defaults in force at creation (they are protocol economics, not issuer choices).
+    /// @dev Issuer-chosen terms are copied from `p` (bounded by `_checkTerms`); fee and pause parameters are
+    /// copied from the protocol defaults in force at creation.
     function _storeTerms(uint256 seriesId, SeriesParams calldata p) internal {
         Parameters storage d = _defaults;
         SeriesTerms storage t = _terms[seriesId];
-        t.unitsOffered = p.unitsOffered;
-        t.reservePrice = p.reservePrice;
-        t.minRaise = p.minRaise;
-        t.capMultipleWad = p.capMultipleWad;
-        t.hurdleRateWad = p.hurdleRateWad;
-        t.payoutMultipleK = p.payoutMultipleK;
-        t.lockupSeconds = p.lockupSeconds;
-        t.walletCapBps = d.walletCapBps;
+        t.unitsOffered = uint64(p.unitsOffered);
+        t.reservePrice = uint64(p.reservePrice);
+        t.minRaise = uint64(p.minRaise);
+        t.capMultipleWad = uint64(p.capMultipleWad);
+        t.hurdleRateWad = uint64(p.hurdleRateWad);
+        t.payoutMultipleK = uint16(p.payoutMultipleK);
+        t.lockupSeconds = uint64(p.lockupSeconds);
+        t.walletCapBps = uint16(p.walletCapBps);
         t.auctionFeeBps = d.auctionFeeBps;
         t.payoutFeeBps = d.payoutFeeBps;
         t.windowFeeBps = d.windowFeeBps;
         t.nonRevealChargeBps = d.nonRevealChargeBps;
-        t.commitDuration = p.commitDuration;
-        t.revealDuration = p.revealDuration;
-        t.windowCommitDuration = p.windowCommitDuration;
-        t.windowRevealDuration = p.windowRevealDuration;
+        t.commitDuration = uint64(p.commitDuration);
+        t.revealDuration = uint64(p.revealDuration);
+        t.windowCommitDuration = uint64(p.windowCommitDuration);
+        t.windowRevealDuration = uint64(p.windowRevealDuration);
         t.maxPauseSeconds = d.maxPauseSeconds;
         t.maxCumulativePauseSeconds = d.maxCumulativePauseSeconds;
     }
@@ -541,33 +601,33 @@ contract MercesRegistry is IMercesRegistry {
         SeriesCore storage core = _cores[seriesId];
         if (msg.sender != core.issuer) revert NotIssuer();
         if (core.raiseState != RaiseState.Draft) revert SeriesNotDraft();
-        if (hash == bytes32(0)) revert ContractHashZero();
+        if (hash == bytes32(0)) revert ContractHashMissing();
         core.contractHash = hash;
         emit ContractHashSet(seriesId, hash);
     }
 
     function stopIssuance() external override {
         Issuer storage issuer = _issuers[msg.sender];
-        if (!issuer.registered) revert NotIssuer();
+        if (!issuer.registered) revert IssuerInactive();
         issuer.issuanceStopped = true;
         emit IssuanceStopped(msg.sender);
     }
 
     function resumeIssuance() external override {
         Issuer storage issuer = _issuers[msg.sender];
-        if (!issuer.registered) revert NotIssuer();
+        if (!issuer.registered) revert IssuerInactive();
         issuer.issuanceStopped = false;
         emit IssuanceResumed(msg.sender);
     }
 
     /// @inheritdoc IMercesRegistry
     /// @dev Issuer signs the transaction; a registered attestor signs the SPEC §1.4 amendment message over the
-    /// current nonce. The cap multiple may only decrease (brief C4). Not allowed once a terminal status is set.
-    /// Tier-1 series supply the new plaintext terms, checked against the new commitment.
+    /// current nonce. The cap multiple may only decrease and stays within bounds (brief C4). Not allowed once a
+    /// terminal status is set. Tier-1 series supply the new plaintext terms, checked against the new commitment.
     function amendTerms(
         uint256 seriesId,
         bytes32 newTermsCommitment,
-        uint64 newCapMultipleWad,
+        uint256 newCapMultipleWad,
         bytes calldata attestorSignature,
         Tier1Terms calldata tier1Terms
     ) external override seriesExists(seriesId) {
@@ -575,24 +635,22 @@ contract MercesRegistry is IMercesRegistry {
         SeriesTerms storage terms = _terms[seriesId];
         if (msg.sender != core.issuer) revert NotIssuer();
         if (core.terminalStatus != 0) revert AmendmentAfterTerminal();
-        if (newTermsCommitment == bytes32(0)) revert ParameterOutOfBounds("termsCommitment");
-        if (newCapMultipleWad > terms.capMultipleWad || newCapMultipleWad < C.CAP_MULTIPLE_MIN) {
-            revert UnfavourableAmendment();
-        }
+        uint64 newCap = newCapMultipleWad.toU64();
         uint64 nonce = core.amendmentNonce;
-        bytes32 digest = MercesMessages.amendDigest(domain, seriesId, nonce, newTermsCommitment, newCapMultipleWad);
+        bytes32 digest = MercesMessages.amendDigest(domain, seriesId, nonce, newTermsCommitment, newCap);
         address signer = ECDSA.recover(digest, attestorSignature);
         if (!_attestors[signer].active) revert InvalidAttestorSignature(signer);
+        if (newCap > terms.capMultipleWad || newCap < C.CAP_MULTIPLE_MIN) revert UnfavourableAmendment();
+        if (newTermsCommitment == bytes32(0)) revert ParameterOutOfBounds("termsCommitment");
         if (core.tierFlags & TierFlags.TIER1_SPLIT != 0) {
-            if (tier1Terms.rWad == 0) revert RouterNotEnabled();
-            if (uint256(tier1Terms.rWad) * terms.unitsOffered > C.WAD) revert InvalidTerms("tier1Rate");
+            _checkTier1(terms.unitsOffered, bytes32(0), tier1Terms);
             _checkTier1Commitment(newTermsCommitment, tier1Terms);
-            _tier1[seriesId] = tier1Terms;
+            _router[seriesId] = RouterTerms({theta: uint64(tier1Terms.theta), rWad: uint64(tier1Terms.rWad)});
         }
         core.amendmentNonce = nonce + 1;
         core.termsCommitment = newTermsCommitment;
-        terms.capMultipleWad = newCapMultipleWad;
-        emit TermsAmended(seriesId, nonce, newTermsCommitment, newCapMultipleWad, signer);
+        terms.capMultipleWad = newCap;
+        emit TermsAmended(seriesId, nonce, newTermsCommitment, newCap, signer);
     }
 
     // ---------------------------------------------------------------- protocol write interface
@@ -680,17 +738,6 @@ contract MercesRegistry is IMercesRegistry {
         _bound(d.fxDeviationBandBps, C.FX_BAND_MIN, C.FX_BAND_MAX, "fxDeviationBandBps");
         _bound(d.maxPauseSeconds, C.MAX_PAUSE_MIN, C.MAX_PAUSE_MAX, "maxPauseSeconds");
         _bound(d.maxCumulativePauseSeconds, d.maxPauseSeconds, C.MAX_CUMULATIVE_PAUSE_MAX, "maxCumulativePauseSeconds");
-    }
-
-    function _checkSeriesParams(SeriesParams calldata p) internal pure {
-        _bound(p.capMultipleWad, C.CAP_MULTIPLE_MIN, C.CAP_MULTIPLE_MAX, "capMultipleWad");
-        _bound(p.hurdleRateWad, 0, C.HURDLE_MAX, "hurdleRateWad");
-        _bound(p.payoutMultipleK, C.K_MIN, C.K_MAX, "payoutMultipleK");
-        _bound(p.lockupSeconds, 0, C.LOCKUP_MAX, "lockupSeconds");
-        _bound(p.commitDuration, C.COMMIT_MIN, C.COMMIT_MAX, "commitDuration");
-        _bound(p.revealDuration, C.REVEAL_MIN, C.REVEAL_MAX, "revealDuration");
-        _bound(p.windowCommitDuration, C.WINDOW_COMMIT_MIN, C.WINDOW_COMMIT_MAX, "windowCommitDuration");
-        _bound(p.windowRevealDuration, C.WINDOW_REVEAL_MIN, C.WINDOW_REVEAL_MAX, "windowRevealDuration");
     }
 
     function _checkSchedule(ReleaseTranche[] calldata schedule) internal pure {

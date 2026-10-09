@@ -34,6 +34,9 @@ use crate::sig::keccak;
 
 pub type TxResult = Result<TransactionMetadata, FailedTransactionMetadata>;
 
+/// Maximum serialized transaction size (one network packet, IPv6 MTU minus headers).
+pub const PACKET_DATA_SIZE: usize = 1232;
+
 /// 2026-01-01T00:00:00Z — every test starts here (SPEC §1.2 example period 8104).
 pub const START_TS: u64 = 1_767_225_600;
 pub const CHAIN_ID_LOCALNET: u64 = 104;
@@ -359,8 +362,30 @@ impl Env {
             &keypairs,
             self.svm.latest_blockhash(),
         );
+        // every transaction the harness sends must fit one packet as a legacy transaction
+        // (signature count + signatures + message), the size real clients are limited to
+        let size = 1 + 64 * tx.signatures.len() + tx.message.serialize().len();
+        crate::events::record_tx_size(&tx.message, size);
+        assert!(
+            size <= PACKET_DATA_SIZE,
+            "transaction of {size} bytes ({} keys, instructions {:?}) exceeds the \
+             {PACKET_DATA_SIZE}-byte packet limit",
+            tx.message.account_keys.len(),
+            tx.message
+                .instructions
+                .iter()
+                .map(|ix| (
+                    tx.message.account_keys[ix.program_id_index as usize].to_string(),
+                    ix.accounts.len(),
+                    ix.data.get(..8).map(hex::encode)
+                ))
+                .collect::<Vec<_>>()
+        );
         let res = self.svm.send_transaction(tx);
         self.svm.expire_blockhash();
+        if let Ok(meta) = &res {
+            crate::events::record_instruction_cu(&meta.logs);
+        }
         res
     }
 
@@ -708,7 +733,6 @@ impl Env {
             AccountMeta::new_readonly(p.extra_metas, false),
             AccountMeta::new_readonly(p.config, false),
             AccountMeta::new_readonly(*series, false),
-            AccountMeta::new_readonly(merces_protocol::ID, false),
             AccountMeta::new_readonly(p.escrow_arm, false),
         ]
     }
@@ -847,6 +871,49 @@ impl Env {
 
     pub fn set_defaults(&mut self, defaults: ParametersData) -> TxResult {
         let ix = self.admin_only_ix(merces_registry::instruction::SetDefaults { defaults }.data());
+        self.send_admin(ix)
+    }
+
+    /// An `AdminOnly` registry instruction naming `admin` as the admin signer (any key: the
+    /// program checks it against `ProtocolConfig.admin`).
+    pub fn admin_ix_by(admin: &Pubkey, data: Vec<u8>) -> Instruction {
+        Self::rix(
+            merces_registry::accounts::AdminOnly {
+                config: config_pda(),
+                admin: *admin,
+            }
+            .to_account_metas(None),
+            data,
+        )
+    }
+
+    pub fn transfer_admin(&mut self, new_admin: Pubkey) -> TxResult {
+        let ix =
+            self.admin_only_ix(merces_registry::instruction::TransferAdmin { new_admin }.data());
+        self.send_admin(ix)
+    }
+
+    /// `accept_admin` signed by `pending`; on success the harness uses `pending` as the admin.
+    pub fn accept_admin(&mut self, pending: &Keypair) -> TxResult {
+        let ix = Self::rix(
+            merces_registry::accounts::AcceptAdmin {
+                config: config_pda(),
+                pending_admin: pending.pubkey(),
+            }
+            .to_account_metas(None),
+            merces_registry::instruction::AcceptAdmin {}.data(),
+        );
+        let res = self.send(&[ix], &[pending]);
+        if res.is_ok() {
+            self.admin = pending.insecure_clone();
+        }
+        res
+    }
+
+    pub fn set_allowlist_manager(&mut self, new_manager: Pubkey) -> TxResult {
+        let ix = self.admin_only_ix(
+            merces_registry::instruction::SetAllowlistManager { new_manager }.data(),
+        );
         self.send_admin(ix)
     }
 
@@ -1251,15 +1318,15 @@ impl Env {
         )
     }
 
-    /// `prepare_raise` + `open_raise` in one transaction (the second alone when the first ran).
+    /// `prepare_raise` (when it has not run yet) and `open_raise`, as two transactions: together
+    /// they exceed the 1,232-byte packet limit, so clients send them separately too.
     pub fn open_raise(&mut self, issuer: &Keypair, series: &Pubkey) -> TxResult {
-        let b = self.open_raise_ix(&issuer.pubkey(), series);
-        if self.exists(&pdas(*series).auction) {
-            self.send(&[b], &[issuer])
-        } else {
+        if !self.exists(&pdas(*series).auction) {
             let a = self.prepare_raise_ix(&issuer.pubkey(), series);
-            self.send(&[a, b], &[issuer])
+            self.send(&[a], &[issuer])?;
         }
+        let b = self.open_raise_ix(&issuer.pubkey(), series);
+        self.send(&[b], &[issuer])
     }
 
     pub fn cancel_raise(&mut self, issuer: &Keypair, series: &Pubkey) -> TxResult {
@@ -1270,6 +1337,9 @@ impl Env {
                 config: p.config,
                 series: *series,
                 auction: p.auction,
+                unit_mint: p.unit_mint,
+                auction_auth: p.auction_auth,
+                token_2022_program: TOKEN_2022,
                 registry_authority: p.registry_authority,
                 registry_program: merces_registry::ID,
             }
@@ -1385,6 +1455,9 @@ impl Env {
                 auction: p.auction,
                 treasury: p.treasury,
                 ledger: p.ledger,
+                unit_mint: p.unit_mint,
+                auction_auth: p.auction_auth,
+                token_2022_program: TOKEN_2022,
                 registry_authority: p.registry_authority,
                 registry_program: merces_registry::ID,
             }
@@ -1585,17 +1658,13 @@ impl Env {
     ) -> Instruction {
         let s = self.series(series);
         let p = pdas(*series);
-        let (fx_pair, fx_start, fx_end) = if s.fx_pair_id != [0u8; 32] {
-            let pair = s.fx_pair_id;
-            let end = fx_checkpoint_pda(&pair, args.period + 1);
-            (
-                Some(fx_pair_pda(&pair)),
-                Some(fx_checkpoint_pda(&pair, args.period)),
-                if self.exists(&end) { Some(end) } else { None },
-            )
-        } else {
-            (None, None, None)
-        };
+        // the FX accounts are always passed at their PDA addresses (read only when they exist)
+        let pair = s.fx_pair_id;
+        let (fx_pair, fx_start, fx_end) = (
+            fx_pair_pda(&pair),
+            fx_checkpoint_pda(&pair, args.period),
+            fx_checkpoint_pda(&pair, args.period.saturating_add(1)),
+        );
         let router = if self.exists(&p.router) {
             Some(p.router)
         } else {
@@ -1883,12 +1952,22 @@ impl Env {
         self.send(&ixs, &[])
     }
     pub fn burn_retired(&mut self, series: &Pubkey, holder: &Pubkey) -> TxResult {
-        let ixs = self.holder_claim_ixs(
-            series,
-            holder,
+        let p = pdas(*series);
+        let ix = Self::pix(
+            merces_protocol::accounts::BurnRetired {
+                series: *series,
+                ledger: p.ledger,
+                holder: holder_pda(series, holder),
+                holder_wallet: *holder,
+                holder_unit_ata: ata(holder, &p.unit_mint, &TOKEN_2022),
+                vault_auth: p.vault_auth,
+                unit_mint: p.unit_mint,
+                token_2022_program: TOKEN_2022,
+            }
+            .to_account_metas(None),
             merces_protocol::instruction::BurnRetired {}.data(),
         );
-        self.send(&ixs, &[])
+        self.send(&[ix], &[])
     }
     pub fn claim_redemption(&mut self, series: &Pubkey, holder: &Pubkey) -> TxResult {
         let ixs = self.holder_claim_ixs(
@@ -2191,6 +2270,7 @@ impl Env {
                 window: window_pda(series, period),
                 order: order_pda(series, period, &owner.pubkey()),
                 owner_unit_ata: ata(&owner.pubkey(), &p.unit_mint, &TOKEN_2022),
+                holder: holder_pda(series, &owner.pubkey()),
                 token_2022_program: TOKEN_2022,
             }
             .to_account_metas(None),
@@ -2262,7 +2342,6 @@ impl Env {
         let s = self.series(series);
         let p = pdas(*series);
         let create_fee = self.create_ata_ix(&self.fee_collector.pubkey(), &s.stablecoin);
-        let allow = allow_pda(owner);
         let mut ix = Self::pix(
             merces_protocol::accounts::ProcessOrder {
                 payer: self.payer.pubkey(),
@@ -2273,17 +2352,39 @@ impl Env {
                 order: order_pda(series, period, owner),
                 owner: *owner,
                 holder: holder_pda(series, owner),
-                owner_allowlist: if self.exists(&allow) {
-                    Some(allow)
-                } else {
-                    None
-                },
+                owner_allowlist: allow_pda(owner),
+                owner_unit_ata: ata(owner, &p.unit_mint, &TOKEN_2022),
+                window_stable: p.window_stable,
+                window_escrow_auth: p.window_escrow_auth,
+                fee_collector_ata: self.ata_of(&self.fee_collector.pubkey(), &s.stablecoin),
+                stablecoin_mint: s.stablecoin,
+                stablecoin_program: s.stablecoin_program,
+                token_2022_program: TOKEN_2022,
+                system_program: SYSTEM_PROGRAM,
+            }
+            .to_account_metas(None),
+            merces_protocol::instruction::ProcessOrder {}.data(),
+        );
+        ix.accounts.extend(self.stable_hook_accounts(&s.stablecoin));
+        self.send(&[create_fee, ix], &[])
+    }
+
+    pub fn deliver_order(&mut self, series: &Pubkey, period: u32, owner: &Pubkey) -> TxResult {
+        let s = self.series(series);
+        let p = pdas(*series);
+        let mut ix = Self::pix(
+            merces_protocol::accounts::DeliverOrder {
+                payer: self.payer.pubkey(),
+                series: *series,
+                window: window_pda(series, period),
+                order: order_pda(series, period, owner),
+                owner: *owner,
+                holder: holder_pda(series, owner),
                 owner_unit_ata: ata(owner, &p.unit_mint, &TOKEN_2022),
                 owner_stable_ata: self.ata_of(owner, &s.stablecoin),
                 window_escrow_ata: p.window_escrow_ata,
                 window_stable: p.window_stable,
                 window_escrow_auth: p.window_escrow_auth,
-                fee_collector_ata: self.ata_of(&self.fee_collector.pubkey(), &s.stablecoin),
                 unit_mint: p.unit_mint,
                 stablecoin_mint: s.stablecoin,
                 stablecoin_program: s.stablecoin_program,
@@ -2292,10 +2393,94 @@ impl Env {
                 system_program: SYSTEM_PROGRAM,
             }
             .to_account_metas(None),
-            merces_protocol::instruction::ProcessOrder {}.data(),
+            merces_protocol::instruction::DeliverOrder {}.data(),
         );
         ix.accounts.extend(self.unit_hook_accounts(series));
         ix.accounts.extend(self.stable_hook_accounts(&s.stablecoin));
-        self.send(&[create_fee, ix], &[])
+        self.send(&[ix], &[])
+    }
+
+    fn takeback_ix(&self, series: &Pubkey, period: u32, data: Vec<u8>) -> Instruction {
+        Self::pix(
+            merces_protocol::accounts::WindowTakeback {
+                series: *series,
+                window: window_pda(series, period),
+            }
+            .to_account_metas(None),
+            data,
+        )
+    }
+
+    pub fn begin_takeback(
+        &mut self,
+        series: &Pubkey,
+        period: u32,
+        price: u64,
+        reveal_index: u32,
+    ) -> TxResult {
+        let ix = self.takeback_ix(
+            series,
+            period,
+            merces_protocol::instruction::BeginTakeback {
+                price,
+                reveal_index,
+            }
+            .data(),
+        );
+        self.send(&[ix], &[])
+    }
+
+    pub fn tally_takeback(&mut self, series: &Pubkey, period: u32, owners: &[Pubkey]) -> TxResult {
+        let mut ix = self.takeback_ix(
+            series,
+            period,
+            merces_protocol::instruction::TallyTakeback {}.data(),
+        );
+        for owner in owners {
+            ix.accounts
+                .push(AccountMeta::new(order_pda(series, period, owner), false));
+        }
+        self.send(&[ix], &[])
+    }
+
+    pub fn finalize_takeback(&mut self, series: &Pubkey, period: u32) -> TxResult {
+        let ix = self.takeback_ix(
+            series,
+            period,
+            merces_protocol::instruction::FinalizeTakeback {}.data(),
+        );
+        self.send(&[ix], &[])
+    }
+
+    /// Admin: enables or disables an FX pair for new series (registry `set_fx_pair_enabled`).
+    pub fn set_fx_pair_enabled(&mut self, pair: [u8; 32], enabled: bool) -> TxResult {
+        let ix = Instruction {
+            program_id: merces_registry::ID,
+            accounts: merces_registry::accounts::SetFxPairEnabled {
+                config: config_pda(),
+                admin: self.admin.pubkey(),
+                fx_pair: fx_config_pda(&pair),
+            }
+            .to_account_metas(None),
+            data: merces_registry::instruction::SetFxPairEnabled { enabled }.data(),
+        };
+        let admin = self.admin.insecure_clone();
+        self.send(&[ix], &[&admin])
+    }
+
+    /// Admin: changes an FX pair's cross-check feed (registry `set_fx_crosscheck`).
+    pub fn set_fx_crosscheck(&mut self, pair: [u8; 32], crosscheck: Pubkey) -> TxResult {
+        let ix = Instruction {
+            program_id: merces_registry::ID,
+            accounts: merces_registry::accounts::SetFxPairEnabled {
+                config: config_pda(),
+                admin: self.admin.pubkey(),
+                fx_pair: fx_config_pda(&pair),
+            }
+            .to_account_metas(None),
+            data: merces_registry::instruction::SetFxCrosscheck { crosscheck }.data(),
+        };
+        let admin = self.admin.insecure_clone();
+        self.send(&[ix], &[&admin])
     }
 }

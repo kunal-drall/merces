@@ -9,7 +9,7 @@ Recorded on 7 October 2026. Every version below was observed from the package it
 | --- | --- | --- |
 | Node.js | 22.22.0 | container |
 | pnpm | 10.28.0 | container (`packageManager` in `package.json`) |
-| Rust (host) | 1.97.0 (2d8144b78 2026-07-07) | rustup stable |
+| Rust (host) | 1.97.1 (pinned in `solana/rust-toolchain.toml`; LiteSVM 0.17's Agave dependencies require it) | rustup |
 | Agave / Solana CLI | 3.1.10 (src:7bc9c805) | `solanafoundation/anchor:v1.0.2` Docker image, binaries copied to the host |
 | Solana platform-tools | v1.52 (rustc 1.89.0, targets `sbpf-solana-solana` v0..v2) | same image |
 | Anchor CLI | 1.2.1 | `cargo install anchor-cli --version 1.2.1 --locked` |

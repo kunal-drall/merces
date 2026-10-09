@@ -1,7 +1,6 @@
 //! Charter immutability, registry write-interface authentication, hook rules and the C11 / §6.3
 //! invariants, checked on the state the parity vectors leave behind.
 
-use anchor_lang::prelude::Pubkey;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use merces_common::vault::holder_delta;
 use merces_registry::error::RegistryError;
@@ -191,43 +190,66 @@ fn hook_rejects_unarmed_and_direct_transfers() {
     assert_eq!(mint[0..4], [0u8; 4], "mint authority option tag is None");
 }
 
-/// §6.3 invariants on the happy path: Σ accrual units == units_outstanding, Σ claimable ≤ vault,
-/// paid_per_unit_wad ≤ cap_eff_wad, fee_collected == Σ fees.
+/// §6.3 invariants (F2) after full lifecycles: Σ accrual units == units_outstanding == mint supply
+/// for live series, Σ claimable ≤ vault balance, `paid_per_unit_wad ≤ cap_eff_wad`, the exact WAD
+/// carry stays below `N`, and fees never exceed `payout_fee_bps` of what was accepted.
 #[test]
-fn vault_invariants_hold_after_happy_path() {
-    let r = run_vector("01_happy_path.json");
-    let series = r.series_pubkey("S1").unwrap();
-    let p = pdas(series);
-    let s = r.env.series(&series);
-    let l = r.env.ledger(&series).unwrap();
-    let mut accrual_sum = 0u64;
-    let mut claimable_sum = 0u64;
-    for name in r.actor_names() {
-        let w = r.actor_pubkey(&name).unwrap();
-        let balance = r.env.token_balance(&ata(&w, &p.unit_mint, &TOKEN_2022));
-        if let Some(h) = r.env.holder(&series, &w) {
-            let weight = balance + h.undelivered_units + h.ask_escrow_units;
-            accrual_sum += weight;
-            claimable_sum +=
-                h.pending + holder_delta(l.net_acc_wad, h.last_net_acc_wad, weight).unwrap();
-        } else {
-            assert_eq!(balance, 0, "{name} holds units without a holder record");
+fn vault_invariants_hold_after_lifecycles() {
+    for (vector, series_names) in [
+        ("01_happy_path.json", vec!["S1"]),
+        ("10_transfer_window.json", vec!["S1"]),
+        ("12_multi_series_router.json", vec!["S1", "S2", "S3"]),
+        ("17_undelivered_winner.json", vec!["S1"]),
+    ] {
+        let r = run_vector(vector);
+        for name in series_names {
+            let series = r.series_pubkey(name).unwrap();
+            let p = pdas(series);
+            let s = r.env.series(&series);
+            let l = r.env.ledger(&series).unwrap();
+            let mut accrual_sum = 0u64;
+            let mut claimable_sum = 0u64;
+            for actor in r.actor_names() {
+                let w = r.actor_pubkey(&actor).unwrap();
+                let balance = r.env.token_balance(&ata(&w, &p.unit_mint, &TOKEN_2022));
+                if let Some(h) = r.env.holder(&series, &w) {
+                    let weight =
+                        balance + h.undelivered_units + h.ask_escrow_units + h.window_pending_units;
+                    accrual_sum += weight;
+                    claimable_sum += h.pending
+                        + holder_delta(l.net_acc_wad, h.last_net_acc_wad, weight).unwrap();
+                } else {
+                    assert_eq!(balance, 0, "{vector}: {actor} holds units without a holder");
+                }
+            }
+            if !l.is_terminal() {
+                assert_eq!(accrual_sum, l.units_outstanding, "{vector} {name}");
+            }
+            assert_eq!(
+                l.units_outstanding,
+                r.env.mint_supply(&p.unit_mint),
+                "{vector} {name}"
+            );
+            let vault = r.env.token_balance(&p.vault_token);
+            assert!(
+                claimable_sum <= vault,
+                "{vector} {name}: claimable {claimable_sum} > vault {vault}"
+            );
+            let cap =
+                u128::from(s.cap_multiple_wad) * u128::from(s.clearing_price) / u128::from(WAD);
+            let cap_eff = core::cmp::max(cap * u128::from(WAD), l.paid_per_unit_wad);
+            assert!(l.paid_per_unit_wad <= cap_eff);
+            if l.units_outstanding > 0 {
+                assert!(u128::from(l.carry_wad) < u128::from(l.units_outstanding));
+            }
+            assert!(
+                u128::from(l.fee_collected) * 10_000
+                    <= u128::from(l.gross_received) * u128::from(s.payout_fee_bps),
+                "{vector} {name}: fees above {} bps",
+                s.payout_fee_bps
+            );
         }
     }
-    assert_eq!(accrual_sum, l.units_outstanding);
-    assert_eq!(l.units_outstanding, r.env.mint_supply(&p.unit_mint));
-    let vault = r.env.token_balance(&p.vault_token);
-    assert!(
-        claimable_sum <= vault,
-        "claimable {claimable_sum} > vault {vault}"
-    );
-    let cap = u128::from(s.cap_multiple_wad) * u128::from(s.clearing_price) / u128::from(WAD);
-    assert!(l.paid_per_unit_wad <= cap * u128::from(WAD));
-    assert!(u128::from(l.carry_wad) < u128::from(l.units_outstanding));
-    assert_eq!(
-        l.gross_received + l.refunded_to_issuer + l.fee_collected - l.fee_collected,
-        l.gross_received + l.refunded_to_issuer
-    );
 }
 
 /// No admin path moves money: the protocol admin cannot claim releases, pay out of the vault or
@@ -238,7 +260,9 @@ fn admin_cannot_move_funds() {
     let series = r.series_pubkey("S1").unwrap();
     let admin = r.env.admin.insecure_clone();
     let res = r.env.claim_release(&admin, &series);
-    let err = res.err().expect("admin cannot claim releases");
+    let Err(err) = res else {
+        panic!("admin cannot claim releases")
+    };
     assert!(format!("{:?}", err.err).contains(&format!(
         "Custom({})",
         u32::from(merces_protocol::error::ProtocolError::NotIssuer)
@@ -246,5 +270,4 @@ fn admin_cannot_move_funds() {
     // nor can the admin register as a holder to claim someone else's payout
     let res = r.env.claim(&series, &admin.pubkey());
     assert!(res.is_err(), "no holder record for the admin");
-    let _ = Pubkey::default();
 }

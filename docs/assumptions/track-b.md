@@ -6,96 +6,157 @@ and `crates/merces-onchain` (syscall glue), the LiteSVM test harness, the SPEC �
 measurements and deploy scripts. Every reading, default and defect found while implementing SPEC.md
 v1.1 is listed here with the section it concerns. "Vectors" says which parity vector pins it.
 
-## Gap list against SPEC v1.1 §13 (assessment at hand-over, 9 Oct 2026)
+## Status against SPEC v1.1 §13 (after the rework, 9 Oct 2026)
 
-State found: `anchor build` green (no stack-frame warnings), the shared crate and the three programs
-already rewritten for v1.1, but the test crate did **not compile** (`SnapshotFx.crosscheck_update` was
-added to the program without updating the harness), so none of the 21 vectors had been replayed against
-the current programs. Audit of every module against §13, before any code change:
+All 21 parity vectors pass on the SPL mock USDC **and** on the Token-2022 mock USDG; 145 tests in
+total (see "Verified by"); build, fmt and clippy clean; no stack-frame warnings.
 
-| §13 item | Status found | Gap / action |
+| §13 item | Status | Where / pinned by |
 | --- | --- | --- |
-| 1 auction always terminates | implemented (`valid_count == 0 → Failed`, `WalletCapTooSmall`) | verify with vectors 02, 15 |
-| 2 no settlement stalls | implemented (`TallyInProgress`, `round_rejected`, `SettlementRejected` / `WindowSettlementRejected`) | — |
-| 3 exact one-pass settlement | implemented (claims, `alloc_sum`, registry written once) | — |
-| 4 undeliverable bids | implemented (`process_bid` / `deliver_bid`) | **partial**: a `Failed` raise never reaches `mint_finalized` (vectors 02/15 expect it after the last `process_bid`, A-7) |
-| 5 mint-finalization gate | implemented (`MintNotFinalized` first in every money path; stored `units_outstanding`; `accrual_units`) | add an explicit `RaiseNotSettled` guard so a finalised *failed* raise cannot enter the repayment path |
-| 6 cap amendments | implemented (live cap, `cap_eff`, `retire_if_capped`, no amendment after terminal) | — |
-| 7 income scale | implemented (Borsh `u64` arguments, proof public inputs) | — |
-| 8 tier rules | implemented (`Tier1NotExclusive`, Poseidon(2) binding, `close_router_period`) | — |
-| 9 first-report prior | implemented | — |
-| 10 clock | implemented (bounded pause list, `is_late_underlying`, withdraw, `end_pause`) | — |
-| 11 true-up | implemented (nonce, once per year, bounded negatives, Late, blocks redemption) | — |
-| 12 redemption gate | implemented (`C_rem` saturates, due-date year ring) | — |
-| 13 tail/final | implemented (shared `receive_capped`, separate carries, `tail_exhausted`, estate) | — |
-| 14 window | implemented (two branches, first-come margin, one order per wallet, armed deposits, buyer re-check) | — |
-| 15 hook | implemented (escrow rules, `EscrowArm`, 4-entry resolvable list) | — |
-| 16 registry | implemented (`protocol_program` at init, write-once FX pairs, forward-only revocation with grace, `mint_finalized`) | `mark_mint_finalized` must also accept a `Failed` raise (item 4) |
-| 17 conventions | implemented (zero-amount no-ops, nested `mulDiv`) | — |
-| 18 WAD carry | implemented (`carry_wad`, `tail_carry_wad`, `final_carry_wad`) | — |
+| 1 auction always terminates | implemented | `valid_count == 0 → Failed`; failed raises finalise an empty mint (B-S17); `WalletCapTooSmall` at `create_series`. Vectors 02, 15; `raise_paths.rs` |
+| 2 no settlement stalls | implemented | round guard + never-reverting finalisation for the auction, the window price and the window take-back threshold (B-S12). Vectors 03, 10, 16; `window_settlement.rs` |
+| 3 exact one-pass settlement | implemented | claims `q_above, q_at`, `alloc_sum`, registry written once. Vectors 01, 03 |
+| 4 undeliverable bids | implemented | `process_bid` → protocol accounts only, holder created only on allocation; `deliver_bid` retryable. Vector 17; `raise_paths.rs::undeliverable_winner_blocks_nothing` |
+| 5 mint-finalization gate | implemented | `MintNotFinalized` / `RaiseNotSettled` first in money paths; stored `units_outstanding`; accrual weight includes auction escrow, ask escrow and window-pending units. Vector 18 |
+| 6 cap amendments | implemented | live cap, `cap_eff`, `retire_if_capped`, no amendment after terminal status. Vectors 05, 14 |
+| 7 income scale | implemented | `u64` Borsh arguments, proof public inputs. Every report vector |
+| 8 tier rules | implemented | `Tier1NotExclusive`, Poseidon(2) binding, `init_router` at any time (B-S21). Vector 12 |
+| 9 first-report prior | implemented | Vectors 01, 20 |
+| 10 clock | implemented | bounded pause list, unpaused countdowns, `withdraw_pause_request`, `end_pause`. Vectors 07, 08, 19 |
+| 11 true-up | implemented | nonce, once per year, bounded negatives, zero adjustment, vacuous complete-year rule (B-S20), cleared on pay / retire / extinguish. Vector 20 |
+| 12 redemption gate | implemented | distinct `TerminalStatus`, `SeriesLate`, `DueOutstanding`, `TrueUpOutstanding`, `UnreportedPeriods`; `C_rem` saturates; due-date year ring. Vectors 06, 09 |
+| 13 tail/final | implemented | shared `<` boundary, separate carries, `tail_exhausted`, extinguishment in every status. Vectors 09, 11 |
+| 14 window | implemented | two branches, first-come margins, one order per wallet, armed deposits, buyer re-check with a required allowlist account, reference take-back order with a paged threshold (B-S12), two-step settlement (B-S13), `WindowSettlementProposed`, no new window until every order is processed. Vectors 10, 16; `window_settlement.rs` |
+| 15 hook / compliance | implemented | escrow rules, `EscrowArm`, three literal extra accounts (B-S2). Vectors 10, 16, 17; `charter.rs::hook_rejects_unarmed_and_direct_transfers` |
+| 16 registry | implemented | `protocol_program` fixed, write-once FX pairs + `set_fx_crosscheck` (B-S10), forward-only key revocation with grace, `mark_mint_finalized` for Settled and Failed. Vector 13; `fx_paths.rs` |
+| 17 conventions | implemented | range rule, nested `mulDiv`, zero-amount transfers skipped, `burn_retired` no-op (B-22). Vector 21 |
+| 18 WAD carry | implemented | `carry_wad`, `tail_carry_wad`, `final_carry_wad`; vault invariants over four lifecycles (`charter.rs`) |
 
-Harness / tests: the vector runner read `ledger.proceeds` from the auction (the would-be proceeds of a
-failed raise) instead of the treasury; the FX harness ignored the vectors' cross-check prices
-(`crosscheck: true` pairs, vector 13). Missing deliverables: C11 charter tests (one per rule), the
-charter byte-snapshot test, the §1.4 known-answer test, `docs/solana/MEASUREMENTS.md`,
-`docs/solana/AUDIT-NOTES.md`, `solana/idls/`, `solana/scripts/deploy*`, `solana/deployments/`.
+## Take-over gap list against SPEC v1.1 §13 (9 Oct 2026, before any code change)
+
+**State found.** `bash solana/scripts/build.sh` green with no "overwrites values in the frame" warning;
+`merces-common` 50/50 unit + proptest tests green; the test crate compiles; **13 of 21 vectors pass**
+(01, 04, 05, 06, 07, 08, 09, 11, 13, 14, 16, 17, 19); 8 fail (02, 03, 10, 12, 15, 18, 20, 21);
+`charter.rs` 4/5 (one test replays vector 02); `measure.rs` fails (replays vector 03). Every module under
+`programs/*/src`, `crates/*` and `tests/src` was read against SPEC v1.1 and the reference simulator
+(`packages/reference/src/sim/simulator.ts`, which generated the vectors).
+
+| §13 item | Status | Gap found (→ action) |
+| --- | --- | --- |
+| 1 auction always terminates | partial | `valid_count == 0 → Failed` and `WalletCapTooSmall` exist. A **failed** raise never reaches `mint_finalized` (reference: the last `process_bid` — or `finalize_settlement` when there is no bid — finalises an empty mint; vectors 02, 15) and its mint authority is never revoked → finalise failed raises too (no units, authority revoked, registry `mark_mint_finalized` accepts `Failed`). |
+| 2 no settlement stalls | implemented | `TallyInProgress`, `round_rejected`, `SettlementRejected` / `WindowSettlementRejected`. |
+| 3 exact one-pass settlement | implemented | claims, `alloc_sum`, registry written once. |
+| 4 undeliverable bids | partial | `process_bid` / `deliver_bid` split exists, but `process_bid` creates an **empty `Holder` account** (`init_if_needed`) for every losing or unrevealed bidder; `process_order` does the same for every order owner. Such half-initialised holders break later claims (`ConstraintSeeds` instead of `HolderNotRegistered`, vector 10) → create holder accounts only when units are allocated / filled, always fully initialised. |
+| 5 mint-finalization gate | partial | `MintNotFinalized` first in every money path; stored `units_outstanding`; `accrual_units`. Once failed raises finalise (item 1) the repayment path needs an explicit `RaiseNotSettled` guard. `request_pause` lacks the settled check. |
+| 6 cap amendments | implemented | live cap, `cap_eff`, `retire_if_capped`, no amendment after terminal status. |
+| 7 income scale | implemented | Borsh `u64` arguments and proof public inputs. |
+| 8 tier rules | implemented | `Tier1NotExclusive`, Poseidon(2) binding, `close_router_period`. `init_router` must precede settlement (`RouterTooLate`): if nobody calls it in time a tier-1 series can never route → remove the trap (checkpoints before the router existed are exactly 0). |
+| 9 first-report prior | implemented | — |
+| 10 clock | implemented | bounded pause list, `is_late_underlying`, withdraw, `end_pause`, pause bounds. |
+| 11 true-up | partial | nonce, once per year, bounded negatives, status, redemption block exist. `pay_trueup`, `retire` and `extinguish` do not clear `trueup_attested_at` (reference does; vector 20). A zero adjustment is rejected (`ZeroAdjustment`) although the reference records it (nonce++, year used). The year-complete rule refuses a year that ended before `first_period` (reference: vacuous). |
+| 12 redemption gate | partial | `C_rem` saturates, due-date year ring. `redeem` reports one code for terminal and Late statuses and one for open due / open true-up; the canonical errors are `TerminalStatus`, `SeriesLate`, `PaymentOutstanding`, `TrueUpOutstanding` → split. |
+| 13 tail/final | implemented | shared `receive_capped` (`<` boundary), separate WAD carries, `tail_exhausted`, extinguishment in every status, estate keeps vested tranches, explicit weights, unclaimed redemption settled first. |
+| 14 window | partial | Two branches, first-come margin, one order per wallet, armed deposits exist. (a) **Take-back order deviates**: a cancelled buyer's units are cut from the last-processed asks in reveal order, the SPEC/reference take them from asks at `p*` in descending reveal index, then from asks below `p*` (price descending, reveal index descending). (b) **Griefing hole**: the buyer's allowlist entry is an optional account, so a keeper can cancel any buyer's fill by omitting it. (c) A new window can open while the previous one still has unprocessed orders (reference: `WindowOpen` until the window is done). (d) `begin_window_settlement` emits no event (§12: every transition emits one). |
+| 15 hook / compliance | implemented | escrow rules, `EscrowArm`, resolvable extra-account list (four entries, B-S2). |
+| 16 registry | partial | `protocol_program` fixed at init, write-once FX pairs, forward-only revocation with grace exist. `mark_mint_finalized` refuses `Failed` (item 1). The cross-check feed can never be added or changed after `set_fx_pair` (SPEC: settable from zero once, later changes from the next period); the registry is immutable, so this must ship now → `set_fx_crosscheck` with `prev_crosscheck` kept for the running period. |
+| 17 conventions | partial | Range rule via Borsh `u64`/`i64`, nested `mulDiv`, zero-amount transfers skipped. `burn_retired` on a wallet that never held units reverts (`AccountNotInitialized`) instead of being a no-op (vector 21). |
+| 18 WAD carry | implemented | `carry_wad`, `tail_carry_wad`, `final_carry_wad` (`u64`, `< N`). |
+
+**Further findings (not §13 items).**
+
+- Liveness: `submit_report` requires the FX start checkpoint as a typed optional account, so a quarter with
+  **no snapshot at all** can never be reported, not even with an attestor fallback rate; the end checkpoint
+  is optional too, so a caller could hide an existing `p+1` checkpoint → both become address-checked
+  accounts read only when initialised (missing start ⇒ `NeedsFallback`).
+- Harness: actors without a stablecoin account (vector 03), tier-1 routers never initialised (vector 12),
+  `ledger.proceeds` must be the deposited proceeds (`proceeds_received`, vector 18), `raiseState` during the
+  reveal phase is `Open` (vector 15).
+- Missing deliverables: C11 charter tests (one per rule), charter byte-snapshot test, §1.4 known-answer
+  test, fuzz/property tests at program level, `docs/solana/MEASUREMENTS.md`, `docs/solana/AUDIT-NOTES.md`,
+  `solana/idls/`, `solana/scripts/deploy*`, `solana/deployments/`, local-validator rehearsal.
 
 ## SPEC defects and gaps
 
 | # | Section | Defect / gap | What Solana does | Vectors |
 | --- | --- | --- | --- | --- |
 | B-S1 | §6.3, §6.8, §6.9 carry | Fixed by the lead on 8 Oct (exact WAD remainder, Track A defect S1). The ledger fields are `carry_wad`, `tail_carry_wad`, `final_carry_wad` as `u64` (the remainder is `< N ≤ 2^64`), not `u128`. | `num = net × WAD + carry_wad; delta = num / N; carry_wad = num mod N`, one per accumulator; `net_added = accepted − fee`. | every paying vector (`carryWad`) |
-| B-S2 | §4.1 extra account metas | The list names three accounts and derives `EscrowArm` from `AccountData{account_index: 1, data_index: 0, length: 32}`; the mint is an *account key* (index 1 of `Execute`), not data inside an account, and the external PDA needs its program as an account to resolve. | Four entries: `[ProtocolConfig (literal), Series (literal), merces_protocol (literal), EscrowArm = external PDA(merces_protocol, [b"escrow_arm", AccountKey{index: 1}])]`; `check_account_infos` validates the list. | 10, 16, 17 (hook paths) |
+| B-S2 | §4.1 extra account metas | The list derives `EscrowArm` from `AccountData{account_index: 1, data_index: 0, length: 32}`; the mint is an *account key* (index 1 of `Execute`), not data inside an account, so the seed cannot be resolved as written. | The three accounts are fixed for a mint's lifetime, so the list stores them as **literals**: `[ProtocolConfig, Series, EscrowArm = PDA(merces_protocol, [b"escrow_arm", mint])]`, computed once in `initialize_extra_account_meta_list`; `execute` re-checks the resolved accounts with `check_account_infos` and validates `EscrowArm` by address and owner. | 10, 16, 17 |
 | B-S3 | §6.4 `FormalNoticeDue(series, trueup)` | The true-up notice does not fit the §10 signature `FormalNoticeDue(series, period)`. | Field `trueup: bool` added; `period` carries the true-up's calendar year when `trueup = true`. | 20 (event only) |
-| B-S4 | §5.2 step 4/5 | `units_sold = q_above + alloc_sum` can be 0 with marginal shares below one unit (`N − q_above < #marginal bidders`); `mark_raise_result(Settled, …)` requires `units_sold ≥ 1`. | Treated as `Failed` (`RaiseFailed(series, p*, 0, min_raise)`); only reachable when `min_raise == 0`. | — |
+| B-S4 | §5.2 step 4/5 | `units_sold = q_above + alloc_sum` can be 0 with marginal shares below one unit; `mark_raise_result(Settled, …)` requires `units_sold ≥ 1`. | Treated as `Failed` (`RaiseFailed(series, p*, 0, min_raise)`); only reachable when `min_raise == 0`. | — |
 | B-S5 | §5.3 `request_early_draw` after extinguishment | Not addressed. `released_total + amount ≤ proceeds` could draw funds that moved to the vault. | Early draws revert `SeriesExtinguished` once the estate is fixed. | — |
-| B-S6 | §6.9 `unreleased = proceeds − vested(now)` | With early draws `released_total` may exceed `vested(now)`; the treasury then holds less than `proceeds − vested(now)`. | `unreleased = proceeds − max(vested(now), released_total)`; the estate's `claim_release` cap is `vested(extinguished_at)` so it reads 0 after such draws. | 11 (no early draw) |
-| B-S7 | §6.5 ring of 8 checkpoints | A tier-1 issuer more than 8 quarters behind loses the checkpoints of its next expected period (ring overwrite) and can no longer report tier 1. | Kept as specified (ring of 8, SPEC text); such a series is at least 7 quarters Late. Flag for the lead: a per-period checkpoint PDA would remove the limit. | 12 |
-| B-S8 | §6.6 staleness/confidence parameters | `fx_max_staleness_seconds` and `fx_max_conf_bps` are per-series parameters, but a pair's accumulator is shared by every series of the pair. | Snapshots use the protocol defaults in force (`ProtocolConfig.defaults`). | 13 |
-| B-S9 | §7 `process_order` ordering | SPEC orders only the marginal side, but a cancelled buyer (allowlist removed at fill) changes the asks' budget, so asks cannot be paid before every bid is processed. | Revealed bids in ascending reveal index, then revealed asks in ascending reveal index (`OutOfOrder` otherwise); unrevealed orders and NO_MATCH windows in any order. Marginal fills first-come inside that order. | 10, 16 |
-| B-S10 | §3.1 FX pairs | "write-once" vs admin "configure cross-check feeds": a second `set_fx_pair` of the same `(feed_id, inverted)` must revert (vector 13). | `set_fx_pair` is create-only (`FxPairImmutable`); `set_fx_pair_enabled` toggles `enabled`; the cross-check feed is unset on Solana (ASSUMPTIONS A21) and cannot be changed in this version. | 13 |
-| B-S11 | VERSIONS.md rustc | LiteSVM 0.17's Agave dependencies require rustc 1.97.1 (`solana/rust-toolchain.toml`); VERSIONS.md still says 1.97.0. | Lead to update VERSIONS.md. | — |
+| B-S6 | §6.9 `unreleased = proceeds − vested(now)` | With early draws `released_total` may exceed `vested(now)`; the treasury then holds less than `proceeds − vested(now)`. | `unreleased = proceeds − max(vested(now), released_total)`; the estate's `claim_release` cap is `vested(extinguished_at)`. | 11 |
+| B-S7 | §6.5 ring of 8 checkpoints | A tier-1 issuer more than 8 quarters behind loses the checkpoints of its next expected period and can no longer report tier 1. | Kept as specified; such a series is at least 7 quarters Late. A per-period checkpoint PDA would remove the limit. | 12 |
+| B-S8 | §6.6 staleness/confidence parameters | Per-series parameters, but a pair's accumulator is shared by every series of the pair. | Snapshots use the protocol defaults in force (`ProtocolConfig.defaults`). | 13 |
+| B-S9 | §7 `process_order` ordering | SPEC orders only the marginal side, but a cancelled buyer changes the asks' fills, so asks cannot be settled before every bid is processed. | Revealed bids in ascending reveal index, then revealed asks in ascending reveal index (`OutOfOrder`, `BidsNotProcessed`); unrevealed orders and NO_MATCH windows in any order. Same as the EVM contracts. | 10, 16 |
+| B-S10 | §3.1, §6.6 cross-check feed | §6.6 says Solana leaves `crosscheck` unset (A21), but §3.1 requires a cross-check settable from zero once and changeable forward-only, and the registry is immutable: without an instruction now, the capability could never be added. | `set_fx_pair` is create-only (`FxPairImmutable`, vector 13); `set_fx_crosscheck(pair, feed)`: from zero with nothing in force → effective in the current period; otherwise effective from the next period while the feed in force (`prev_crosscheck`) keeps applying to the running period. On Solana the cross-check is a second Pyth feed id read from `crosscheck_update`. EVM difference: `setFxPairCrosscheck` keeps no previous feed, so in the period of a change no cross-check applies there. | 13; `fx_paths.rs` |
+| B-S11 | VERSIONS.md rustc | LiteSVM 0.17's Agave dependencies require rustc 1.97.1 (`solana/rust-toolchain.toml`); VERSIONS.md says 1.97.0. | Lead to update VERSIONS.md. | — |
+| B-S12 | §7 take-back below `p*` | "then from asks below `p*`" gives no order, and taking back in any order needs the asks sorted, which cannot be done in bounded compute on chain. | Order of the reference simulator (`computeFills`), also used by the EVM contracts: at-`p*` asks give back in descending reveal index (= first-come against `ask_at_total − cancelled_units`), then asks below `p*` in descending `(price, reveal_index)`. On chain the cut below `p*` is a keeper-proposed threshold `k` with `Σ_{key>k} q < R ≤ Σ_{key≥k} q` (`R = cancelled − ask_at_total`), verified by a paged tally over every revealed ask (`begin_takeback` / `tally_takeback` / `finalize_takeback`, events `WindowTakebackProposed/Rejected/Settled`); a wrong proposal is rejected without reverting and rounds cannot be reset while running. Asks below `p*` revert `TakebackRequired` until the threshold is settled. Proven equal to the reference on 40,000 random books (`merces-common` model tests) and on chain (`window_settlement.rs`). | 10, 16 |
+| B-S13 | §7 `process_order` pushes, §12 liveness | §7 moves units to the buyer and stablecoin to the seller inside `process_order`; with the mandatory processing order, one frozen or closed recipient account would block every later order of the window. | Two steps: `process_order` does the accounting and pays the window fee (protocol accounts only); `deliver_order` pushes the recorded units and stablecoin to the owner's ATAs, once, retryable forever (event `OrderDelivered`). `Holder.window_pending_units` keeps the accrual weight of units awaiting delivery; `claim_redemption` / `claim_final` require it to be zero (`DeliverFirst`). | 10, 16; `window_settlement.rs::frozen_recipient_never_blocks_other_orders` |
+| B-S14 | §6.2 / §6.3 true-up year anchor | SPEC: `pay_trueup` receives as `Payment` for `period_of(trueup_attested_at)`, whose anchor is that period's `deadline`; the reference (Track A A-22) anchors at `trueup_attested_at` itself. The two differ when the attestation falls in the last `report_due_days` before a settlement anniversary. | SPEC reading: `anchor = deadline(period_of(trueup_attested_at))` (the EVM contracts do the same). No vector distinguishes them; the lead should align the reference or the SPEC. | 20 (not distinguishing) |
+| B-S15 | §1.7 "every write path calls `sync_status`" | The reference simulator (and the vectors' `formalNoticeEmittedFor` / stored `status`) sync only in the income-module paths; syncing in claims or the window would emit notices at other times (vector 20 fails). | Sync points as the reference and the EVM contracts: `submit_report`, `pay`, `pay_trueup`, `submit_trueup`, `route`, `claim_release`, `crank_status`, `approve_pause`, `end_pause`, `open_window`, `redeem`, `extinguish`. Preconditions read the derived status without storing it; holder claims use the stored status. | 07, 08, 19, 20 |
+| B-S16 | §6.5 router after a dead raise or a terminal status | Not specified; the reference reverts, which would strand tier-1 income paid to the receiving account. | `route` passes every receipt through to the issuer when the raise failed or was cancelled and after Retired / Redeemed / Extinguished. | — (`raise_paths.rs`) |
+| B-S17 | §5.2 / §13.1 failed raise and the mint | Mint finalisation is specified for settled raises only; the vectors expect `mintFinalized` for failed raises (02, 15). | The last `process_bid` of a failed raise — or `finalize_settlement` when there was no bid — revokes the mint authority, calls `mark_mint_finalized` (accepted for Failed) and emits `RaiseMintFinalized(series, 0, 0)`. The repayment path still refuses with `RaiseNotSettled`. | 02, 15 |
+| B-S18 | §5.2 `cancel_raise` | Silent about the mint authority of a cancelled raise. | Revoked in `cancel_raise` (`MintAuthorityRevoked`), so no units can ever exist. | — (`raise_paths.rs`) |
+| B-S19 | §7 wallet cap at reveal | `unit_balance(owner) + quantity ≤ wallet_cap_units` ignores units the owner already owns but has not received (undelivered auction units, ask escrow, window units pending delivery). | The cap counts owned units: balance + `undelivered_units` + `ask_escrow_units` + `window_pending_units`. | 10 |
+| B-S20 | §6.2 true-up edge cases | A zero adjustment and a year that ended before `first_period` are not addressed. | As the reference: a zero adjustment is a valid true-up (nonce and year consumed, nothing due); the "every period of the year reported" rule is vacuous when the year's last period is before `first_period`. | 20 |
+| B-S21 | §6.5 / §13.8 `init_router` timing | Not specified; requiring it before settlement (the predecessor's reading) strands a tier-1 series whose router nobody created in time. | `init_router` works at any time; `Router.init_period` records its creation period and every earlier period's checkpoint reads exactly 0 (no income can reach the receiving account before it exists). | 12 |
+| B-S22 | §6.6 `quarter_average` start checkpoint "(required)" | Ambiguous whether a missing start checkpoint reverts or needs the fallback. | `NeedsFallback` (an attestor-signed rate), so a quarter without a single snapshot can still be reported; the FX accounts are passed at their PDA addresses and read only when they exist. | 13; `fx_paths.rs` |
 
 ## Interpretations and defaults
 
 | # | Section | Reading |
 | --- | --- | --- |
-| B-1 | §0 one program | `merces_protocol` is one program with one zero-copy `Ledger` per series (784 bytes); the registry and the hook read it only through its byte layout (`EscrowArm` at offsets 8..48 for the hook). Cross-program reads use the `merces_registry` crate types (`cpi` / `no-entrypoint` features), not `declare_program!`. |
-| B-2 | §3.2 write interface | `registry_authority = PDA(["registry_authority"], merces_protocol)`, stored at `init_protocol` from `protocol_program`; `mark_raise_result` is written once (Open/Settling → Settled/Failed; Open → Cancelled), `mark_mint_finalized` once, `mark_terminal` only forward (Retired/Redeemed → Extinguished). |
-| B-3 | §4.1 mint | `open_raise` creates the mint with `TransferHook` (authority None, immutable hook), `PermanentDelegate = vault_auth`, `MetadataPointer → self`, `TokenMetadata { "Merces HEU <id>", "HEU", metadata_uri }`; the two unit escrows are ATAs of the `auction_escrow` / `window_escrow` PDAs created in the same instruction, after the registry has mapped the mint (the hook's `initialize_extra_account_meta_list` requires `Series.unit_mint == mint`). `prepare_raise` precedes it (stack-frame limit): Auction, Treasury, Ledger, EscrowArm and the four stablecoin PDAs. |
-| B-4 | §4.1 hook rule 4 | `commit_ask` writes `EscrowArm{owner, units}` and serialises it before the transfer CPI, then clears it in the same instruction; a non-zero arm left by a failed instruction is impossible (atomic), and `EscrowArmBusy` guards a reentrant arm. |
-| B-5 | §5.2 `process_bid` | Mints to the auction escrow ATA and registers the holder with `undelivered_units += alloc` (accrual weight, §6.1); the non-reveal charge goes to the fee collector immediately. The last `process_bid` of a settled raise checks `units_minted == units_sold` and `treasury.proceeds_received == proceeds`, revokes the mint authority, calls `mark_mint_finalized`, stores `units_outstanding` and sets the treasury's `mint_finalized`. A failed raise never finalises a mint (nothing was minted). |
-| B-6 | §5.2 `deliver_bid` | Creates the bidder's unit and stablecoin ATAs idempotently (payer funds them) so delivery cannot be blocked by a missing account; the `Holder` account is optional (absent for refund-only bids); `pending_units/pending_refund` are zeroed on delivery (the event carries the amounts). |
-| B-7 | §5.3 | `claim_release` cap = `min(vested(at), proceeds)` with `at = extinguished_at` once extinguished; blocked by the issuer's pause, derived `Late`, or `is_late_underlying`. Extinguished series keep releasing what had vested (the estate). |
-| B-8 | §6.1 `accrual_units` | `Holder.undelivered_units` (auction escrow) and `Holder.ask_escrow_units` (window escrow) are stored per holder; `settle_holder` uses `balance + undelivered + ask_escrow`. `claim_redemption` and `claim_final` (non-redeemed series) require both to be zero (`DeliverFirst`, `AskEscrowOutstanding`): escrowed units are returned by the permissionless `deliver_bid` / `process_order` first, so nothing is stranded. |
-| B-9 | §6.2 key grace | The §1.4 grace (`period_end(period) ≤ revoked_at && now ≤ revoked_at + 45 d`) applies to tier 2 / tier 3 report attestations and to the FX fallback signature of a report; pause, extinguishment, true-up and amendment signatures need an active key. |
-| B-10 | §6.2 tier 1 | `income_commitment = Poseidon(2)(ytd_at_end[period], 0)`, `prior = Poseidon(2)(ytd_at_end[period − 1], 0)` except at a year start (ZERO commitment, already enforced by step 5); missing checkpoints revert `RouterPeriodNotClosed`. `init_router` is permissionless, reads `theta / r_wad` from the Series and is allowed only before settlement so a checkpoint exists for every reportable period (`RouterTooLate`). |
-| B-11 | §6.2 true-up | `submit_trueup` requires `attestation_ts ≤ now`; the message carries the stored `trueup_nonce` (then incremented); `year < year_of(period_of(now))`, `last_trueup_year < year`, `first_period ≤ year·4+3 ≤ last_accepted_period`; negative adjustments are bounded by a tagged 4-slot ring of Σ `payment_usd` per calendar year (`TrueUpExceedsYear`). The payment's year-gross anchor is `deadline(period_of(trueup_attested_at))`. |
-| B-12 | §6.3 year ring | `year_gross.add(settlement_year(anchor))` with `anchor = deadline(period) = period_end + 30 d` for payments and `now` for router receipts; an anchor before `settlement_ts` reads as year 0. |
-| B-13 | §6.4 pauses | Up to 16 `{start, end}` pauses stored inline in the ledger; `paused_total` is the approved span, reduced by `end_pause`. `request_pause` increments the nonce; `withdraw_pause_request` increments it again; `approve_pause` consumes the request without touching the nonce (the request flag prevents replay). |
-| B-14 | §6.5 terminal statuses | After Retired / Redeemed / Extinguished, `route` passes everything through to the issuer (the vault takes nothing); routed income of a Redeemed series is the issuer's to report as a tail liquidity event. |
-| B-15 | §6.6 | One snapshot per UTC day per pair; the first snapshot of a period writes that period's checkpoint PDA; `quarter_average` reads checkpoint `p+1` or the live totals when `last_day × DAY < period_start(p+1)` and `now ≥ period_end(p)` (`FxPair` passed to `submit_report`). Pyth accounts must be `PriceUpdateV2` owned by the receiver program with `VerificationLevel::Full`. |
-| B-16 | §6.7 | `redeem` requires status ∈ {OnTime, InGrace, Paused}, lockup over, `open_due_amount == 0 && trueup_due == 0`, every ended period reported, and `C_rem > 0` (else `retire()`); `claim_redemption` adds any `pending` to `P_redeem × units`; `claim_tail` / `claim_final` redeem an unredeemed balance first. |
-| B-17 | §6.9 | `extinguish` is allowed in every status but Extinguished (including Retired and Redeemed); `final_units = units_at_redemption` for redeemed series else `units_outstanding`; `unreleased == 0` or `final_units == 0` → no distribution. |
-| B-18 | §7 | `open_window` needs the window escrows that `prepare_raise` / `open_raise` created; the wallet-cap check at reveal uses `Ledger.units_outstanding` (= mint supply after finalisation). A buyer whose allowlist entry is missing or `allowed = false` at fill is cancelled (full refund) and the asks' budget shrinks accordingly; sellers are settled before their escrow accounting changes. |
-| B-19 | Tests | The mock USDG mint carries `TransferHook` (no-op hook), `TransferFeeConfig` (0/0) and `MetadataPointer`; Token-2022 refuses `ConfidentialTransferMint` next to a transfer-fee config without a confidential-fee config, so that extension is left out (ASSUMPTIONS A24 otherwise holds). The parity vectors run on the SPL mock USDC. |
-| B-20 | §11 runner | Canonical error names map to sets of Anchor error codes (`solana/tests/src/vectors.rs::codes_for`); account-existence failures (`BidExists`, `OrderExists`) and bound violations at `create_series` (`InvalidTerms`, `UnknownFxPair`, `RouterNotEnabled`) are accepted as any failure; `AmountOutOfRange` cases are values that Borsh cannot encode into a `u64`/`i64`, so the runner asserts them without a transaction. `expect.ledger.status` is the derived status computed off-chain from the ledger with the step's `t`. |
+| B-1 | §0 one program | `merces_protocol` is one program with one zero-copy `Ledger` per series (784 bytes); the registry and the hook read it only through its byte layout (`EscrowArm` at offsets 8..48 for the hook). Cross-program reads use the `merces_registry` crate types (`cpi` / `no-entrypoint` features). |
+| B-2 | §3.2 write interface | `registry_authority = PDA(["registry_authority"], merces_protocol)`, stored at `init_protocol` from `protocol_program`; `mark_raise_result` is written once (Open/Settling → Settled/Failed; Open → Cancelled), `mark_mint_finalized` once (Settled or Failed), `mark_terminal` only forward (Retired/Redeemed → Extinguished). |
+| B-3 | §4.1 mint | `open_raise` creates the mint with `TransferHook` (authority None), `PermanentDelegate = vault_auth`, `MetadataPointer → self`, `TokenMetadata { "Merces HEU <id>", "HEU", metadata_uri }`; the two unit escrows are ATAs of the `auction_escrow` / `window_escrow` PDAs created in the same instruction after the registry has mapped the mint. `prepare_raise` precedes it in its own transaction (stack-frame limit; together they exceed the packet size). |
+| B-4 | §4.1 hook rule 4 | `commit_ask` writes `EscrowArm{owner, units}` before the transfer CPI and clears it in the same instruction; `EscrowArmBusy` guards a reentrant arm. |
+| B-5 | §5.2 `process_bid` | Moves money only into protocol accounts and mints to the auction escrow; the `Holder` account is created (or a prefunded PDA adopted) only when units are allocated, with `undelivered_units += alloc`. The non-reveal charge goes to the fee collector immediately. The last `process_bid` finalises the mint (B-S17 for failed raises): settled raises check `units_minted == units_sold` and `proceeds_received == proceeds`, store `units_outstanding` and set the gates. |
+| B-6 | §5.2 `deliver_bid` | Creates the bidder's unit and stablecoin ATAs idempotently; the `Holder` account is optional (absent for refund-only bids); `pending_units/pending_refund` are zeroed on delivery. |
+| B-7 | §5.3 | `claim_release` cap = `min(vested(at), proceeds)` with `at = extinguished_at` once extinguished; blocked by the issuer's pause, derived `Late`, or `is_late_underlying`. Extinguished series keep releasing what had vested. |
+| B-8 | §6.1 `accrual_units` | `balance + undelivered_units + ask_escrow_units + window_pending_units` per holder. `claim_redemption` and `claim_final` (non-redeemed series) require the escrowed and pending units to be zero (`DeliverFirst`, `AskEscrowOutstanding`): the permissionless `deliver_bid` / `process_order` / `deliver_order` return them first, so nothing is stranded. |
+| B-9 | §6.2 key grace | The §1.4 grace applies to tier 2 / tier 3 report attestations and to the FX fallback signature of a report; pause, extinguishment, true-up and amendment signatures need an active key. |
+| B-10 | §6.2 tier 1 | `income_commitment = Poseidon(2)(ytd_at_end[period], 0)`, `prior = Poseidon(2)(ytd_at_end[period − 1], 0)` except at a year start; missing checkpoints revert `RouterPeriodNotClosed`; periods before `Router.init_period` read 0 (B-S21). |
+| B-11 | §6.2 true-up | `submit_trueup` checks, in order: mint finalised, not terminal, tier 3 enabled, attestor active, signature with the stored `trueup_nonce` (then incremented), `attestation_ts ≤ now`, `TrueUpOutstanding`, `TrueUpYearUsed`, `TrueUpYearNotEnded`, unreported periods of the year (vacuous rule, B-S20), `TrueUpExceedsYear` for negatives (tagged 4-slot ring of Σ `payment_usd` per calendar year). Anchor of the payment: B-S14. |
+| B-12 | §6.3 year ring | `year_gross.add(settlement_year(anchor))` with `anchor = deadline(period)` for payments and `now` for router receipts; an anchor before `settlement_ts` reads as year 0. |
+| B-13 | §6.4 pauses | Up to 16 `{start, end}` pauses inline in the ledger; `request_pause` increments the nonce, `withdraw_pause_request` increments it again, `approve_pause` consumes the request without touching the nonce. |
+| B-14 | §6.5 terminal statuses | After Retired / Redeemed / Extinguished (and for failed or cancelled raises, B-S16) `route` passes everything through to the issuer. |
+| B-15 | §6.6 | One snapshot per UTC day per pair; the first snapshot of a period writes that period's checkpoint PDA; `quarter_average` reads checkpoint `p+1` or the live totals when `last_day × DAY < period_start(p+1)` and `now ≥ period_end(p)`. Pyth accounts must be `PriceUpdateV2` owned by the receiver program with `VerificationLevel::Full`. Snapshots stay permissionless for a disabled pair (`enabled` gates new series only, §3.1). |
+| B-16 | §6.7 | `redeem` requires (distinct errors, in order) a settled raise, a finalised mint, no terminal status, not Late, lockup over, no open due, no open true-up, every ended period reported, and `C_rem > 0` (else `retire()`). |
+| B-17 | §6.9 | `extinguish` checks distinct attestors, both active, both signatures, settled raise, finalised mint, not Extinguished (Retired and Redeemed allowed); `final_units = units_at_redemption` for redeemed series else `units_outstanding`. |
+| B-18 | §7 | `open_window` needs every order of the previous window processed; a buyer whose allowlist entry is missing or `allowed = false` at fill is cancelled (full refund) and its units are taken back from the asks (B-S12); the owner's `AllowlistEntry` PDA is a required, address-checked account so the re-check cannot be bypassed or forced by omission. |
+| B-19 | Tests | The mock USDG mint carries `TransferHook` (no-op hook), `TransferFeeConfig` (0/0) and `MetadataPointer`; Token-2022 refuses `ConfidentialTransferMint` next to a transfer-fee config without a confidential-fee config, so that extension is left out (ASSUMPTIONS A24 otherwise holds). |
+| B-20 | §11 runner | Canonical error names map to sets of Anchor error codes (`solana/tests/src/vectors.rs::codes_for`); account-existence failures and bound violations at `create_series` are accepted as any failure; `AmountOutOfRange` cases are values Borsh cannot encode, asserted without a transaction. `expect.ledger.status` is the derived status at the step's `t`. The runner replays every vector on USDC and on USDG. |
+| B-21 | §1.7 status | Derived status for preconditions (read-only), stored status for holder claims, `sync_status` only at the B-S15 sync points; `sync_status` is a no-op before settlement. |
+| B-22 | §6.3 `burn_retired` | A wallet without units (or never registered) is a no-op that emits `UnitsBurned(units = 0)`, as on EVM; any other status than Retired reverts `TerminalStatus`. |
+| B-23 | §12 compute and size | `submit_report` needs about 209k CU (clients set a compute limit); every instruction fits a legacy transaction (asserted by the harness on every send). |
+| B-24 | §0 upgrade authorities | Registry: none (revoked by the deploy script). Protocol and hook: the multisig + timelock; the hook carries the transfer rules, which on EVM are upgraded through the same timelock (T-REX implementation authority). |
 
 ## Verified by
 
 | What | How |
 | --- | --- |
-| Pure math (`merces-common`) | unit + proptest tests (`cargo test -p merces-common`) |
-| Verifying key and proofs | `zk::tests::vector_proofs_verify_against_vk` (host arkworks), every vector report on-chain |
-| Programs | `solana/tests/tests/vectors.rs` (21 parity vectors), `charter.rs` (immutability, write-interface authentication, hook rules, §6.3 invariants, no admin money path), `measure.rs` (compute units) |
-| Build hygiene | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `anchor build` with no stack-frame warnings |
+| Pure math (`merces-common`) | 66 unit + property tests (`cargo test --release -p merces-common`), incl. the incremental window settlement against a port of the reference `computeFills` |
+| Verifying key and proofs | `zk::tests::vector_proofs_verify_against_vk` (host); every vector report verified on chain; the three vector-01 proofs verified on `solana-test-validator` (`MEASUREMENTS.md`) |
+| Parity | `tests/vectors.rs` (21 vectors, USDC) and `tests/token2022_stablecoin.rs` (21 vectors, Token-2022 USDG with transfer hook), SPEC §3.3 charter byte snapshot after every step |
+| Charter | `tests/charter.rs` (5), `tests/charter_c11.rs` (7, one per C11 rule) |
+| Scenarios | `tests/raise_paths.rs` (5), `tests/window_settlement.rs` (3), `tests/fx_paths.rs` (2), `tests/roles.rs` (3), `tests/known_answers.rs` (5) |
+| Measurements | `tests/measure.rs` → `docs/solana/MEASUREMENTS.md`; every transaction asserted ≤ 1,232 bytes |
+| IDLs | `tests/idl_export.rs` (committed `solana/idls/` equal the build) |
+| Deployment | `scripts/deploy.sh localnet` + `scripts/smoke.ts` against `solana-test-validator` 3.1.10 (`solana/deployments/localnet.json`) |
+| Build hygiene | `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `anchor build` with no stack-frame warnings |
 
 ## Open items for the lead
 
-- B-S7 (router ring of 8) and B-S10 (`set_fx_pair` create-only) are the only places where the
-  Solana behaviour narrows the SPEC text; both follow the vectors.
-- `FormalNoticeDue.trueup` (B-S3) should be mirrored by the EVM event or the SPEC §10 signature
-  amended.
-- Devnet deployment is scripted (`solana/scripts/deploy.ts`) and exercised against
-  `solana-test-validator`; the devnet RPC was unreachable from the build environment, so no devnet
-  addresses are recorded in `solana/deployments/`.
+- **EVM / reference parity to decide:** B-S14 (true-up year anchor: SPEC vs reference A-22),
+  B-S10 (Solana keeps the previous cross-check feed for the running period; EVM applies none),
+  B-S3 (`FormalNoticeDue.trueup` field) and the Solana-only events of B-S12 / B-S13
+  (`EVENTS.md`). SPEC §10 could list `WindowSettlementProposed` and `MintFinalized`.
+- B-S7 (router ring of 8) narrows the SPEC text as written; a per-period checkpoint PDA would
+  remove the limit (protocol upgrade, no registry change).
+- Groth16 verifying key is from the development ceremony; replace before mainnet.
+- Compute-unit variance from PDA bump searches (`MEASUREMENTS.md`); storing canonical bumps would
+  make costs nearly constant.
+- `Bid` / `Order` / `Report` / `Holder` accounts are never closed (rent stays locked).
+- Devnet: the RPC was unreachable from the build environment, so only
+  `solana/deployments/localnet.json` exists; `scripts/deploy.sh devnet` is the same procedure.
+- B-S11: VERSIONS.md should say rustc 1.97.1 for `solana/`.

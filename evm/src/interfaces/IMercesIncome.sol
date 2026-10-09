@@ -71,11 +71,12 @@ interface IMercesIncome {
         uint256[2] c;
     }
 
+    /// @dev `paymentUsd` and `fxAvgWad` are full words so a value ≥ 2^64 reverts `AmountOutOfRange` (SPEC §1.1).
     struct ReportInput {
         uint256 seriesId;
         uint32 period;
-        uint64 paymentUsd;
-        uint64 fxAvgWad;
+        uint256 paymentUsd;
+        uint256 fxAvgWad;
         bytes fxFallbackSignature;
         bytes32 priorIncomeCommitment;
         bytes32 incomeCommitment;
@@ -121,7 +122,7 @@ interface IMercesIncome {
     // ---- reports and payments ----
     function submitReport(ReportInput calldata input) external;
     function pay(uint256 seriesId) external;
-    function submitTrueUp(uint256 seriesId, uint16 year, int64 adjustment, uint64 attestationTs, bytes calldata sig)
+    function submitTrueUp(uint256 seriesId, uint16 year, int256 adjustment, uint256 attestationTs, bytes calldata sig)
         external;
     function payTrueUp(uint256 seriesId) external;
 
@@ -129,13 +130,13 @@ interface IMercesIncome {
     function crankStatus(uint256 seriesId) external;
     function requestPause(uint256 seriesId) external;
     function withdrawPauseRequest(uint256 seriesId) external;
-    function approvePause(uint256 seriesId, uint64 pauseEnd, bytes calldata attestorSignature) external;
+    function approvePause(uint256 seriesId, uint256 pauseEnd, bytes calldata attestorSignature) external;
     function endPause(uint256 seriesId) external;
 
     // ---- protocol ----
     /// @dev Router only, after it has transferred `share` stablecoin to the vault: credits the accepted part.
     function receiveRouterShare(uint256 seriesId, uint64 share) external returns (uint64 accepted);
-    /// @dev Vault only (retirement, extinguishment): clears every open due.
+    /// @dev Vault only (retirement, extinguishment): clears every open due, including the true-up.
     function clearDues(uint256 seriesId) external;
 
     // ---- views ----

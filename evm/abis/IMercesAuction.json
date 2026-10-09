@@ -1,0 +1,1091 @@
+[
+  {
+    "type": "function",
+    "name": "beginSettlement",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "clearingPrice",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "qAboveClaim",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "qAtClaim",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "bidCommitment",
+    "inputs": [
+      {
+        "name": "price",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "quantity",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "cancelRaise",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "commitBid",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "commitment",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "escrow",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "deliverBid",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "finalizeSettlement",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getAuction",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct IMercesAuction.Auction",
+        "components": [
+          {
+            "name": "state",
+            "type": "uint8",
+            "internalType": "enum RaiseState"
+          },
+          {
+            "name": "unitToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "openedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "commitEnd",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "revealEnd",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "escrowTotal",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "bidCount",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "revealedCount",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "validCount",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "tallyRound",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "roundRejected",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "rejectionReason",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "proposedPrice",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "qAboveClaim",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "qAtClaim",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "rClaim",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "qAbove",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "qAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "allocSum",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "minValidPrice",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "talliedCount",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "clearingPrice",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "R",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "unitsSold",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "proceeds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "settlementTs",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "bidsProcessed",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "unitsMinted",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "escrowUnits",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "mintFinalized",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "proceedsTransferred",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "feesTotal",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "chargesTotal",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "refundsDelivered",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getBid",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct IMercesAuction.Bid",
+        "components": [
+          {
+            "name": "bidder",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "commitment",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "escrow",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "revealIndex",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "revealed",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "valid",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "price",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "quantity",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "talliedRound",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "processed",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "allocation",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "pendingUnits",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "pendingRefund",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "delivered",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getBidAt",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "index",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct IMercesAuction.Bid",
+        "components": [
+          {
+            "name": "bidder",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "commitment",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "escrow",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "revealIndex",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "revealed",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "valid",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "price",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "quantity",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "talliedRound",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "processed",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "allocation",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "pendingUnits",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "pendingRefund",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "delivered",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "mintFinalized",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "openRaise",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "pendingUnitsOf",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "processBid",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "requiredEscrow",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "price",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "quantity",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "revealBid",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "price",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "quantity",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "tallyBids",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "fromIndex",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "toIndex",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "walletCapUnitsAtAuction",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "BidCommitted",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "escrow",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "BidDelivered",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "units",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "refund",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "BidProcessed",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "units",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "refund",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "BidRevealed",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "price",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "quantity",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "valid",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MintAuthorityRevoked",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "NonRevealCharged",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "charge",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RaiseCancelled",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RaiseFailed",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "clearingPrice",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "proceeds",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "minRaise",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RaiseMintFinalized",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "unitsSold",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "proceeds",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RaiseOpened",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "unitMint",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "openedAt",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "commitEnd",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "revealEnd",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RaiseSettled",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "clearingPrice",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "unitsSold",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "proceeds",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "settlementTs",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "SettlementProposed",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "clearingPrice",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "round",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "SettlementRejected",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "round",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      },
+      {
+        "name": "clearingPrice",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "reason",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "UnitsAllocated",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidder",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "units",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "cost",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "fee",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "refund",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  }
+]

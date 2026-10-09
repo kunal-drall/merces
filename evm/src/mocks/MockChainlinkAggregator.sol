@@ -5,7 +5,7 @@ import {AggregatorV3Interface} from "../interfaces/external/AggregatorV3Interfac
 
 /// @notice Minimal Chainlink aggregator stand-in for the FX cross-check in tests and local deployments.
 contract MockChainlinkAggregator is AggregatorV3Interface {
-    uint8 internal immutable _decimals;
+    uint8 internal _decimals;
     string internal _description;
     int256 internal _answer;
     uint256 internal _updatedAt;
@@ -14,6 +14,11 @@ contract MockChainlinkAggregator is AggregatorV3Interface {
     constructor(uint8 decimals_, string memory description_) {
         _decimals = decimals_;
         _description = description_;
+    }
+
+    /// @dev Test helper: feeds quoted with another exponent (vector cross-check prices carry their own exponent).
+    function setDecimals(uint8 decimals_) external {
+        _decimals = decimals_;
     }
 
     function setAnswer(int256 answer, uint256 updatedAt) external {

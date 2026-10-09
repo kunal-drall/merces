@@ -10,7 +10,7 @@ use merces_common::treasury::vested;
 use merces_onchain::keccak;
 use merces_onchain::seeds::CONFIG;
 use merces_registry::program::MercesRegistry;
-use merces_registry::state::{ProtocolConfig, Series};
+use merces_registry::state::{ProtocolConfig, Series, RAISE_SETTLED};
 
 use crate::common::*;
 use crate::error::{math, ProtocolError};
@@ -51,24 +51,22 @@ pub fn redeem<'info>(ctx: Context<'info, Redeem<'info>>) -> Result<()> {
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
-    let status = ledger.sync_status(now, series_key)?;
-    require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
     require!(
-        matches!(
-            status,
-            SeriesStatus::OnTime | SeriesStatus::InGrace | SeriesStatus::Paused
-        ),
-        ProtocolError::RedemptionStatusNotAllowed
+        series.raise_state == RAISE_SETTLED,
+        ProtocolError::RaiseNotSettled
     );
+    require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
+    let status = ledger.sync_status(now, series_key)?;
+    // the issuer's own obligations only (SPEC §6.7, A15): status ∈ {OnTime, InGrace, Paused}
+    require!(!status.is_terminal(), ProtocolError::TerminalStatus);
+    require!(status != SeriesStatus::Late, ProtocolError::SeriesLate);
     let unlock = ledger
         .settlement_ts
         .checked_add(series.lockup_seconds)
         .ok_or(ProtocolError::MathOverflow)?;
     require!(now >= unlock, ProtocolError::LockupActive);
-    require!(
-        ledger.open_due_amount == 0 && ledger.trueup_due == 0,
-        ProtocolError::DueOutstanding
-    );
+    require!(ledger.open_due_amount == 0, ProtocolError::DueOutstanding);
+    require!(ledger.trueup_due == 0, ProtocolError::TrueUpOutstanding);
     let current = period_of(now).map_err(math)?;
     if let Some(prev) = current.checked_sub(1) {
         if prev >= ledger.first_period {
@@ -195,19 +193,14 @@ pub fn extinguish<'info>(
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
-    let status = ledger.sync_status(now, series_key)?;
-    require!(
-        ctx.accounts.treasury.mint_finalized,
-        ProtocolError::MintNotFinalized
-    );
-    require!(
-        status != SeriesStatus::Extinguished,
-        ProtocolError::TerminalStatus
-    );
+    // check order: distinct attestors, both active and signing the current nonce, settled raise,
+    // finalised mint, not yet extinguished
     require!(
         attestor_a != attestor_b,
         ProtocolError::AttestorsNotDistinct
     );
+    require_active_attestor(&ctx.accounts.attestor_key_a.to_account_info(), &attestor_a)?;
+    require_active_attestor(&ctx.accounts.attestor_key_b.to_account_info(), &attestor_b)?;
     let msg = keccak(&[extinguish_message(
         &ctx.accounts.config.domain,
         &series_key.to_bytes(),
@@ -216,8 +209,19 @@ pub fn extinguish<'info>(
     .as_bytes()]);
     require_signer(&msg, &sig_a, &attestor_a)?;
     require_signer(&msg, &sig_b, &attestor_b)?;
-    require_active_attestor(&ctx.accounts.attestor_key_a.to_account_info(), &attestor_a)?;
-    require_active_attestor(&ctx.accounts.attestor_key_b.to_account_info(), &attestor_b)?;
+    require!(
+        series.raise_state == RAISE_SETTLED,
+        ProtocolError::RaiseNotSettled
+    );
+    require!(
+        ctx.accounts.treasury.mint_finalized,
+        ProtocolError::MintNotFinalized
+    );
+    let status = ledger.sync_status(now, series_key)?;
+    require!(
+        status != SeriesStatus::Extinguished,
+        ProtocolError::TerminalStatus
+    );
 
     // unreleased = proceeds − vested(now); early draws beyond the vested amount are already gone
     let t = &ctx.accounts.treasury;

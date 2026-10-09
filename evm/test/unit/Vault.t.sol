@@ -153,7 +153,7 @@ contract VaultTest is FullFixture {
         income.submitReport(reportInput(sid, Q1_2026 + 6, Proofs.q1(), 2, false));
         vm.prank(issuer);
         vm.expectRevert(TerminalStatus.selector);
-        income.submitTrueUp(sid, 2026, 1, 1, "");
+        income.submitTrueUp(sid, 2026, 1, 1, trueupSig(sid, 0, 2026, 1, 1));
 
         // holders claim their final payout; units burn on claim or by the permissionless crank
         uint256 vaultBal = usdc.balanceOf(address(vault));
@@ -187,7 +187,7 @@ contract VaultTest is FullFixture {
     }
 
     function test_burnRetiredOnlyWhenRetired() public {
-        vm.expectRevert(SeriesNotRetired.selector);
+        vm.expectRevert(TerminalStatus.selector);
         vault.burnRetired(sid, b1);
     }
 
@@ -199,7 +199,7 @@ contract VaultTest is FullFixture {
             sid, newTc, 2.0e18, sign(attestorKey, MercesMessages.amendDigest(domain, sid, 0, newTc, 2.0e18)), noTier1()
         );
         assertEq(vault.capPerUnit(sid), 200e6);
-        (,,, uint64 capRemaining,) = vault.previewRedemption(sid, block.timestamp);
+        (,,, uint64 capRemaining,) = vault.previewRedemption(sid, vm.getBlockTimestamp());
         assertEq(capRemaining, 160e6);
         vm.expectRevert(NothingDue.selector);
         vault.retireIfCapped(sid);
@@ -279,7 +279,7 @@ contract VaultTest is FullFixture {
         reportAndPay(s, Periods.periodOf(settlementTs(s)), Proofs.q1());
         assertEq(vault.pendingOf(s, b1), 3_800e6);
         vm.prank(keeper);
-        auction.deliverBid(s, 0);
+        auction.deliverBid(s, b1);
         assertEq(vault.pendingOf(s, b1), 3_800e6); // delivery is not a change of weight
         vm.prank(b1);
         vault.claim(s);

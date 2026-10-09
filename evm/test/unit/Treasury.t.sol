@@ -18,8 +18,6 @@ contract TreasuryTest is FullFixture {
         allow(b1);
         allow(b2);
         allow(b3);
-        vm.prank(admin);
-        registry.setDefaults(walletCap(10_000));
         // 3 tranches that do not divide evenly
         ReleaseTranche[] memory s = new ReleaseTranche[](3);
         s[0] = ReleaseTranche({atOffsetSeconds: 0, bps: 3333});
@@ -28,6 +26,7 @@ contract TreasuryTest is FullFixture {
         SeriesParams memory p = defaultSeriesParams();
         p.unitsOffered = 150;
         p.minRaise = 100e6;
+        p.walletCapBps = 10_000;
         sid = createSeriesWith(p, s, keccak256("terms"), 2, bytes32(0), noTier1());
         openRaise(sid);
         // proceeds will be exactly 149 USDC (see Auction.t.sol marginal case)
@@ -43,23 +42,23 @@ contract TreasuryTest is FullFixture {
         reveal(sid, p3);
         warpToSettle(sid);
         settle(sid, 1_000_000, 100, 120);
-        sTs = uint64(block.timestamp);
+        sTs = uint64(vm.getBlockTimestamp());
     }
 
     function test_blockedUntilMintFinalized() public {
         assertTrue(treasury.getTreasury(sid).proceedsSet);
         assertEq(treasury.getTreasury(sid).proceeds, 149e6);
         vm.prank(keeper);
-        auction.processBid(sid, 0);
+        auction.processBid(sid, b1);
         assertEq(treasury.getTreasury(sid).deposited, 100e6);
         assertFalse(registry.getSeriesCore(sid).mintFinalized);
         vm.prank(issuer);
         vm.expectRevert(MintNotFinalized.selector);
         treasury.claimRelease(sid);
         vm.prank(keeper);
-        auction.processBid(sid, 1);
+        auction.processBid(sid, b2);
         vm.prank(keeper);
-        auction.processBid(sid, 2);
+        auction.processBid(sid, b3);
         assertTrue(registry.getSeriesCore(sid).mintFinalized);
         assertEq(treasury.getTreasury(sid).deposited, 149e6);
         // releases do not wait for deliveries
@@ -127,7 +126,7 @@ contract TreasuryTest is FullFixture {
         // a hardship pause stops the clock but does not lift a block already in force
         vm.prank(issuer);
         income.requestPause(sid);
-        uint64 pauseEnd = uint64(block.timestamp) + 30 days;
+        uint64 pauseEnd = uint64(vm.getBlockTimestamp()) + 30 days;
         income.approvePause(sid, pauseEnd, pauseSig(sid, 1, pauseEnd));
         assertEq(uint8(income.deriveStatus(sid)), uint8(SeriesStatus.Paused));
         assertTrue(income.isLateUnderlying(sid));
@@ -162,9 +161,9 @@ contract TreasuryTest is FullFixture {
         vm.warp(Periods.periodEnd(Q1_2026)); // OnTime
         vm.prank(issuer);
         income.requestPause(sid);
-        uint64 pauseEnd = uint64(block.timestamp) + 100 days;
+        uint64 pauseEnd = uint64(vm.getBlockTimestamp()) + 100 days;
         income.approvePause(sid, pauseEnd, pauseSig(sid, 1, pauseEnd));
-        vm.warp(block.timestamp + 90 days); // without the pause this would be Late
+        vm.warp(vm.getBlockTimestamp() + 90 days); // without the pause this would be Late
         assertEq(uint8(income.deriveStatus(sid)), uint8(SeriesStatus.Paused));
         assertFalse(income.isLateUnderlying(sid));
         vm.prank(issuer);

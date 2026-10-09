@@ -22,7 +22,7 @@ contract FxTest is FullFixture {
         super.setUp();
         chainlink = new MockChainlinkAggregator(8, "EUR / USD");
         vm.prank(admin);
-        registry.setFxPair(FEED, false, address(0), true);
+        registry.setFxPair(FEED, false, address(0));
         PAIR = registry.fxPairId(FEED, false);
     }
 
@@ -40,72 +40,73 @@ contract FxTest is FullFixture {
         uint64 start = Periods.periodStart(period);
         for (uint64 d = 0; d < n; d++) {
             vm.warp(start + d * DAY + 12 hours);
-            _pythAt(rate, uint64(uint256(uint64(rate)) / 1000), block.timestamp - 60);
+            _pythAt(rate, uint64(uint256(uint64(rate)) / 1000), vm.getBlockTimestamp() - 60);
             _snap();
         }
     }
 
     function test_snapshotNormalizesAndCheckpoints() public {
-        _pythAt(108_000_000, 50_000, block.timestamp - 10); // 1.08 with 0.05% conf
+        _pythAt(108_000_000, 50_000, vm.getBlockTimestamp() - 10); // 1.08 with 0.05% conf
         vm.prank(keeper);
         vm.expectEmit(true, false, false, true);
-        emit IMercesFxAccumulator.FxSnapshot(PAIR, uint32(block.timestamp / DAY), 1.08e18, 1.08e18, 1);
+        emit IMercesFxAccumulator.FxSnapshot(PAIR, uint32(vm.getBlockTimestamp() / DAY), 1.08e18, 1.08e18, 1);
         fx.snapshot(PAIR, new bytes[](0));
         IMercesFxAccumulator.FxPairState memory st = fx.getFxPair(PAIR);
         assertEq(st.sumWad, 1.08e18);
         assertEq(st.count, 1);
-        assertEq(st.lastDay, uint32(block.timestamp / DAY));
-        IMercesFxAccumulator.FxCheckpoint memory cp = fx.getFxCheckpoint(PAIR, Periods.periodOf(block.timestamp));
+        assertEq(st.lastDay, uint32(vm.getBlockTimestamp() / DAY));
+        IMercesFxAccumulator.FxCheckpoint memory cp = fx.getFxCheckpoint(PAIR, Periods.periodOf(vm.getBlockTimestamp()));
         assertTrue(cp.exists);
         assertEq(cp.sumWad, 0);
         assertEq(cp.count, 0);
         assertFalse(cp.flagged);
         vm.expectRevert(SnapshotAlreadyTaken.selector);
         fx.snapshot(PAIR, new bytes[](0));
-        vm.warp(block.timestamp + DAY);
-        _pythAt(110_000_000, 50_000, block.timestamp - 10);
+        vm.warp(vm.getBlockTimestamp() + DAY);
+        _pythAt(110_000_000, 50_000, vm.getBlockTimestamp() - 10);
         _snap();
         assertEq(fx.getFxPair(PAIR).sumWad, 2.18e18);
     }
 
     function test_snapshotValidation() public {
-        vm.expectRevert(abi.encodeWithSelector(FxPairDisabled.selector, bytes32("nope")));
+        vm.expectRevert(abi.encodeWithSelector(UnknownFxPair.selector, bytes32("nope")));
         fx.snapshot(bytes32("nope"), new bytes[](0));
-        _pythAt(108_000_000, 50_000, block.timestamp - 3601);
-        vm.expectRevert(MockPyth.StalePrice.selector);
+        _pythAt(108_000_000, 50_000, vm.getBlockTimestamp() - 3601);
+        vm.expectRevert(StalePrice.selector); // Pyth's own StalePrice() has the same selector
         fx.snapshot(PAIR, new bytes[](0));
-        _pythAt(-1, 0, block.timestamp);
-        vm.expectRevert(InvalidPythPrice.selector);
+        assertEq(MockPyth.StalePrice.selector, StalePrice.selector);
+        _pythAt(-1, 0, vm.getBlockTimestamp());
+        vm.expectRevert(StalePrice.selector); // a non-positive price is treated as stale (reference)
         fx.snapshot(PAIR, new bytes[](0));
-        _pythAt(108_000_000, 1_080_001, block.timestamp);
+        _pythAt(108_000_000, 1_080_001, vm.getBlockTimestamp());
         vm.expectRevert(ConfidenceTooWide.selector);
         fx.snapshot(PAIR, new bytes[](0));
         // an exponent below −18 cannot be represented
-        pyth.setPrice(FEED, 1, 0, -19, block.timestamp);
-        vm.expectRevert(InvalidPythPrice.selector);
+        pyth.setPrice(FEED, 1, 0, -19, vm.getBlockTimestamp());
+        vm.expectRevert(abi.encodeWithSelector(UnsupportedExponent.selector, int32(-19)));
         fx.snapshot(PAIR, new bytes[](0));
-        _pythAt(108_000_000, 1_080_000, block.timestamp); // exactly 1% is allowed
+        _pythAt(108_000_000, 1_080_000, vm.getBlockTimestamp()); // exactly 1% is allowed
         _snap();
         vm.deal(keeper, 1 ether);
-        vm.warp(block.timestamp + DAY);
+        vm.warp(vm.getBlockTimestamp() + DAY);
         vm.prank(keeper);
         vm.expectRevert(PythUpdateFeeInsufficient.selector);
         fx.snapshot{value: 1}(PAIR, new bytes[](0));
-        // disabling a pair stops new series, not snapshots
+        // disabling a pair stops new series, not snapshots (SPEC §3.1)
         vm.prank(admin);
-        registry.setFxPair(FEED, false, address(0), false);
-        _pythAt(108_000_000, 50_000, block.timestamp);
-        vm.expectRevert(abi.encodeWithSelector(FxPairDisabled.selector, PAIR));
-        fx.snapshot(PAIR, new bytes[](0));
+        registry.setFxPairEnabled(PAIR, false);
+        _pythAt(108_000_000, 50_000, vm.getBlockTimestamp());
+        _snap();
+        assertEq(fx.getFxPair(PAIR).count, 2);
     }
 
     function test_positiveExponentNormalizes() public {
-        pyth.setPrice(FEED, 1, 0, 1, block.timestamp); // 10 with expo +1
+        pyth.setPrice(FEED, 1, 0, 1, vm.getBlockTimestamp()); // 10 with expo +1
         _snap();
         assertEq(fx.getFxPair(PAIR).sumWad, 10e18);
         // rates are uint256 WAD internally: a large positive exponent still accumulates exactly
-        vm.warp(block.timestamp + DAY);
-        pyth.setPrice(FEED, 108, 0, 2, block.timestamp);
+        vm.warp(vm.getBlockTimestamp() + DAY);
+        pyth.setPrice(FEED, 108, 0, 2, vm.getBlockTimestamp());
         fx.snapshot(PAIR, new bytes[](0));
         assertEq(fx.getFxPair(PAIR).sumWad, 10e18 + 10_800e18);
     }
@@ -115,7 +116,7 @@ contract FxTest is FullFixture {
         vm.prank(address(timelock));
         fx.setPyth(address(paidPyth));
         bytes[] memory data = new bytes[](1);
-        data[0] = abi.encode(FEED, int64(108_000_000), uint64(50_000), int32(-8), block.timestamp);
+        data[0] = abi.encode(FEED, int64(108_000_000), uint64(50_000), int32(-8), vm.getBlockTimestamp());
         vm.deal(keeper, 1 ether);
         vm.prank(keeper);
         vm.expectRevert(PythUpdateFeeInsufficient.selector);
@@ -129,9 +130,9 @@ contract FxTest is FullFixture {
 
     function test_invertedPair() public {
         vm.prank(admin);
-        registry.setFxPair(FEED, true, address(0), true);
+        registry.setFxPair(FEED, true, address(0));
         bytes32 inv = registry.fxPairId(FEED, true);
-        _pythAt(150_000_000_00, 1_000_000, block.timestamp); // 150.00 with expo -8
+        _pythAt(150_000_000_00, 1_000_000, vm.getBlockTimestamp()); // 150.00 with expo -8
         vm.prank(keeper);
         fx.snapshot(inv, new bytes[](0));
         // floor(1e36 / 150e18) = 6_666_666_666_666_666
@@ -140,7 +141,7 @@ contract FxTest is FullFixture {
     }
 
     function test_quarterAverageTradingDayCoverageAndLiveEnd() public {
-        uint32 p = Periods.periodOf(block.timestamp); // Q1 2026
+        uint32 p = Periods.periodOf(vm.getBlockTimestamp()); // Q1 2026
         assertEq(Periods.tradingDaysInPeriod(p), 64); // 90 days, Jan 1 2026 is a Thursday
         assertEq(Periods.tradingDaysInPeriod(p + 1), 65);
         (bool ok,) = fx.quarterAverage(PAIR, p);
@@ -160,7 +161,7 @@ contract FxTest is FullFixture {
         assertEq(avg1, 1.08e18);
         // in a later period the live rule no longer applies until the next checkpoint exists... but a snapshot
         // in p+1 closes p for good, with the same (insufficient) count
-        _pythAt(108_000_000, 50_000, block.timestamp);
+        _pythAt(108_000_000, 50_000, vm.getBlockTimestamp());
         _snap();
         (ok,) = fx.quarterAverage(PAIR, p);
         assertFalse(ok);
@@ -169,7 +170,7 @@ contract FxTest is FullFixture {
         uint64 start = Periods.periodStart(p2);
         for (uint64 d = 1; d <= 51; d++) {
             vm.warp(start + d * DAY + 1);
-            _pythAt(d % 2 == 0 ? int64(108_000_000) : int64(110_000_000), 50_000, block.timestamp);
+            _pythAt(d % 2 == 0 ? int64(108_000_000) : int64(110_000_000), 50_000, vm.getBlockTimestamp());
             _snap();
         }
         // not yet ended: no live end
@@ -182,7 +183,7 @@ contract FxTest is FullFixture {
         // sum = 1.08 (day 0) + 26 × 1.10 + 25 × 1.08 → /52
         assertEq(avg, (1.08e18 + 26 * 1.1e18 + 25 * 1.08e18) / 52);
         // the next snapshot writes the checkpoint and yields the same result
-        _pythAt(108_000_000, 50_000, block.timestamp);
+        _pythAt(108_000_000, 50_000, vm.getBlockTimestamp());
         _snap();
         (bool ok2, uint256 avg2) = fx.quarterAverage(PAIR, p2);
         assertTrue(ok2);
@@ -190,44 +191,78 @@ contract FxTest is FullFixture {
     }
 
     function test_deviationFlagsPeriodFromEffectivePeriod() public {
-        uint32 p = Periods.periodOf(block.timestamp);
+        uint32 p = Periods.periodOf(vm.getBlockTimestamp());
         vm.prank(admin);
-        registry.setFxPair(FEED, false, address(chainlink), true); // set from zero: effective now
-        chainlink.setAnswer(108_000_000, block.timestamp);
-        _pythAt(108_500_000, 50_000, block.timestamp); // 0.46% off: within the 2% band
+        registry.setFxPairCrosscheck(PAIR, address(chainlink)); // set from zero: effective now
+        assertEq(registry.getFxPair(PAIR).crosscheckEffectivePeriod, p);
+        chainlink.setAnswer(108_000_000, vm.getBlockTimestamp());
+        _pythAt(108_500_000, 50_000, vm.getBlockTimestamp()); // 0.46% off: within the 2% band
         _snap();
         assertFalse(fx.getFxCheckpoint(PAIR, p).flagged);
-        vm.warp(block.timestamp + DAY);
-        chainlink.setAnswer(108_000_000, block.timestamp);
-        _pythAt(111_000_000, 50_000, block.timestamp); // 2.78% off
+        vm.warp(vm.getBlockTimestamp() + DAY);
+        chainlink.setAnswer(108_000_000, vm.getBlockTimestamp());
+        _pythAt(111_000_000, 50_000, vm.getBlockTimestamp()); // 2.78% off
         vm.prank(keeper);
         vm.expectEmit(true, false, false, true);
         emit IMercesFxAccumulator.FxDeviationFlagged(PAIR, p, 1.11e18, 1.08e18);
         fx.snapshot(PAIR, new bytes[](0));
         assertTrue(fx.getFxCheckpoint(PAIR, p).flagged);
-        // a stale cross-check also flags (conservative)
-        vm.warp(block.timestamp + DAY);
-        _pythAt(108_000_000, 50_000, block.timestamp);
-        vm.prank(keeper);
-        vm.expectEmit(true, false, false, true);
-        emit IMercesFxAccumulator.FxDeviationFlagged(PAIR, p, 1.08e18, 0);
-        fx.snapshot(PAIR, new bytes[](0));
-        // a changed cross-check applies from the next period: the rest of this quarter is not cross-checked
+        // a stale cross-check is no comparison: nothing is flagged (the period stays flagged from above)
+        uint32 q = p + 1;
+        vm.warp(Periods.periodStart(q) + 1);
+        _pythAt(130_000_000, 50_000, vm.getBlockTimestamp());
+        vm.recordLogs();
+        _snap();
+        assertEq(vm.getRecordedLogs().length, 1); // FxSnapshot only
+        assertFalse(fx.getFxCheckpoint(PAIR, q).flagged);
+        // a changed cross-check applies from the next period: the rest of this quarter keeps the old feed
         MockChainlinkAggregator other = new MockChainlinkAggregator(8, "other");
         vm.prank(admin);
-        registry.setFxPair(FEED, false, address(other), true);
-        assertEq(registry.getFxPair(PAIR).crosscheckEffectivePeriod, p + 1);
-        vm.warp(block.timestamp + DAY);
-        _pythAt(108_000_000, 50_000, block.timestamp);
-        vm.recordLogs();
-        _snap(); // `other` has no answer yet: it would flag if consulted
-        assertEq(vm.getRecordedLogs().length, 1); // FxSnapshot only
-        vm.warp(Periods.periodStart(p + 1) + 1);
-        _pythAt(108_000_000, 50_000, block.timestamp);
+        registry.setFxPairCrosscheck(PAIR, address(other));
+        assertEq(registry.getFxPair(PAIR).crosscheckEffectivePeriod, q + 1);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(CrosscheckUnchanged.selector, PAIR));
+        registry.setFxPairCrosscheck(PAIR, address(other));
+        vm.warp(vm.getBlockTimestamp() + DAY);
+        other.setAnswer(200_000_000, vm.getBlockTimestamp()); // would deviate if consulted
+        _pythAt(108_000_000, 50_000, vm.getBlockTimestamp());
+        _snap();
+        assertFalse(fx.getFxCheckpoint(PAIR, q).flagged);
+        vm.warp(Periods.periodStart(q + 1) + 1);
+        other.setAnswer(200_000_000, vm.getBlockTimestamp());
+        _pythAt(108_000_000, 50_000, vm.getBlockTimestamp());
         vm.prank(keeper);
         vm.expectEmit(true, false, false, true);
-        emit IMercesFxAccumulator.FxDeviationFlagged(PAIR, p + 1, 1.08e18, 0);
+        emit IMercesFxAccumulator.FxDeviationFlagged(PAIR, q + 1, 1.08e18, 2e18);
         fx.snapshot(PAIR, new bytes[](0));
+    }
+
+    function test_invertedPairInvertsTheCrosscheck() public {
+        vm.prank(admin);
+        bytes32 inv = registry.setFxPair(FEED, true, address(chainlink));
+        chainlink.setAnswer(150_000_000_00, vm.getBlockTimestamp()); // same quote as the Pyth feed: 150.00
+        _pythAt(152_000_000_00, 1_000_000, vm.getBlockTimestamp()); // 1.33% off after inversion as well
+        vm.prank(keeper);
+        fx.snapshot(inv, new bytes[](0));
+        assertFalse(fx.getFxCheckpoint(inv, Periods.periodOf(vm.getBlockTimestamp())).flagged);
+        vm.warp(vm.getBlockTimestamp() + DAY);
+        chainlink.setAnswer(150_000_000_00, vm.getBlockTimestamp());
+        _pythAt(160_000_000_00, 1_000_000, vm.getBlockTimestamp()); // 6.25% off
+        vm.prank(keeper);
+        fx.snapshot(inv, new bytes[](0));
+        assertTrue(fx.getFxCheckpoint(inv, Periods.periodOf(vm.getBlockTimestamp())).flagged);
+    }
+
+    function test_fxPairsAreWriteOnce() public {
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(FxPairExists.selector, PAIR));
+        registry.setFxPair(FEED, false, address(chainlink));
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(UnknownFxPair.selector, bytes32("x")));
+        registry.setFxPairEnabled(bytes32("x"), false);
+        vm.prank(stranger);
+        vm.expectRevert(NotAdmin.selector);
+        registry.setFxPairCrosscheck(PAIR, address(chainlink));
     }
 
     function test_reportWithFxAverageAndFallback() public {
@@ -270,7 +305,7 @@ contract FxTest is FullFixture {
         r2.fxFallbackSignature = sign(attestorKey, MercesMessages.fxDigest(domain, sid, Q1_2026 + 1, 1e18));
         // the fallback is accepted, but q2 does not chain to fxQ1's commitment
         vm.prank(issuer);
-        vm.expectRevert(PriorCommitmentMismatch.selector);
+        vm.expectRevert(InvalidProof.selector);
         income.submitReport(r2);
     }
 }

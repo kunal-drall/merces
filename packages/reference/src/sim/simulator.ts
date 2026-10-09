@@ -1226,7 +1226,10 @@ export class Simulator {
     const accrual = M.lateAccrualTrueup(this.clock(s), this.now, this.statusParams(s));
     const total = u64(l.trueupDue + accrual, "trueup + accrual");
     this.debit(c.actor, total, "true-up");
-    const result = this.vaultReceive(s, total, "Payment", s.issuer, l.trueupAttestedAt);
+    // SPEC §6.2 / B-S14: the true-up is received as a Payment for the period containing the attestation,
+    // so its year anchor is that period's deadline (same rule as quarterly payments).
+    const trueupAnchor = periodEnd(periodOf(l.trueupAttestedAt)) + BigInt(this.params.reportDueDays) * DAY;
+    const result = this.vaultReceive(s, total, "Payment", s.issuer, trueupAnchor);
     l.trueupDue = 0n;
     l.trueupAttestedAt = 0n;
     l.trueupYear = null;

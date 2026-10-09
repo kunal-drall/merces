@@ -431,17 +431,46 @@ pub struct CancelRaise<'info> {
     pub series: Box<Account<'info, Series>>,
     #[account(mut, seeds = [seeds::AUCTION, series.key().as_ref()], bump = auction.bump)]
     pub auction: Box<Account<'info, Auction>>,
+    /// CHECK: the unit mint recorded in the registry (its authority is revoked: nothing can ever be
+    /// minted for a cancelled raise).
+    #[account(mut, address = series.unit_mint @ ProtocolError::UnitMintMismatch)]
+    pub unit_mint: UncheckedAccount<'info>,
+    /// CHECK: data-less signer PDA, mint authority.
+    #[account(seeds = [seeds::AUCTION_AUTH, series.key().as_ref()], bump)]
+    pub auction_auth: UncheckedAccount<'info>,
+    pub token_2022_program: Program<'info, Token2022>,
     /// CHECK: data-less signer PDA for the registry write interface.
     #[account(seeds = [seeds::REGISTRY_AUTHORITY], bump)]
     pub registry_authority: UncheckedAccount<'info>,
     pub registry_program: Program<'info, MercesRegistry>,
 }
 
+/// `cancel_raise` (SPEC §5.2): issuer, before the first bid. The unit mint's authority is revoked
+/// in the same instruction (defence in depth; nothing can be minted for a cancelled raise).
 pub fn cancel_raise(ctx: Context<CancelRaise>) -> Result<()> {
+    let series_key = ctx.accounts.series.key();
     let a = &mut ctx.accounts.auction;
     require!(a.state == RAISE_OPEN, ProtocolError::RaiseNotOpen);
     require!(a.bid_count == 0, ProtocolError::RaiseHasBids);
     a.state = RAISE_CANCELLED;
+    if !a.mint_authority_revoked {
+        let bump = [ctx.bumps.auction_auth];
+        let auth_seeds: &[&[u8]] = &[seeds::AUCTION_AUTH, series_key.as_ref(), &bump];
+        ti::set_authority(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.key(),
+                ti::SetAuthority {
+                    account_or_mint: ctx.accounts.unit_mint.to_account_info(),
+                    current_authority: ctx.accounts.auction_auth.to_account_info(),
+                },
+                &[auth_seeds],
+            ),
+            AuthorityType::MintTokens,
+            None,
+        )?;
+        a.mint_authority_revoked = true;
+        emit!(MintAuthorityRevoked { series: series_key });
+    }
     RegistryCpi {
         registry_program: ctx.accounts.registry_program.to_account_info(),
         config: ctx.accounts.config.to_account_info(),
@@ -463,7 +492,8 @@ pub struct CommitBid<'info> {
     #[account(mut)]
     pub bidder: Signer<'info>,
     pub series: Box<Account<'info, Series>>,
-    /// CHECK: the bidder's registry `AllowlistEntry` PDA; validated in the handler after the phase checks.
+    /// CHECK: the bidder's registry `AllowlistEntry` PDA; validated in the handler (address,
+    /// owner, `allowed`) right after the raise-state check.
     pub bidder_allowlist: UncheckedAccount<'info>,
     #[account(mut, seeds = [seeds::AUCTION, series.key().as_ref()], bump = auction.bump)]
     pub auction: Box<Account<'info, Auction>>,
@@ -487,13 +517,14 @@ pub fn commit_bid<'info>(
 ) -> Result<()> {
     let now = now_ts()?;
     let a = &ctx.accounts.auction;
+    // check order (reference): raise open, bidder allowlisted, commit phase, escrow
     require!(a.state == RAISE_OPEN, ProtocolError::RaiseNotOpen);
-    require!(now < a.commit_end, ProtocolError::CommitPhaseOver);
-    require!(escrow > 0, ProtocolError::ZeroEscrow);
     require_allowlisted(
         &ctx.accounts.bidder_allowlist.to_account_info(),
         &ctx.accounts.bidder.key(),
     )?;
+    require!(now < a.commit_end, ProtocolError::CommitPhaseOver);
+    require!(escrow > 0, ProtocolError::ZeroEscrow);
     transfer_stable(
         &ctx.accounts.stablecoin_program.to_account_info(),
         &ctx.accounts.bidder_stable.to_account_info(),
@@ -731,10 +762,51 @@ pub struct FinalizeSettlement<'info> {
     pub treasury: Box<Account<'info, Treasury>>,
     #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
     pub ledger: AccountLoader<'info, Ledger>,
+    /// CHECK: the unit mint recorded in the registry (its authority is revoked when a raise without
+    /// any bid fails here).
+    #[account(mut, address = series.unit_mint @ ProtocolError::UnitMintMismatch)]
+    pub unit_mint: UncheckedAccount<'info>,
+    /// CHECK: data-less signer PDA, mint authority.
+    #[account(seeds = [seeds::AUCTION_AUTH, series.key().as_ref()], bump)]
+    pub auction_auth: UncheckedAccount<'info>,
+    pub token_2022_program: Program<'info, Token2022>,
     /// CHECK: data-less signer PDA for the registry write interface.
     #[account(seeds = [seeds::REGISTRY_AUTHORITY], bump)]
     pub registry_authority: UncheckedAccount<'info>,
     pub registry_program: Program<'info, MercesRegistry>,
+}
+
+/// Revokes the unit mint's authority (once) and records mint finalisation in the auction and the
+/// registry. A failed raise finalises an empty mint (nothing was minted and nothing ever can be).
+fn finalize_mint<'info>(
+    a: &mut Auction,
+    series_key: Pubkey,
+    unit_mint: &AccountInfo<'info>,
+    auction_auth: &AccountInfo<'info>,
+    auth_bump: u8,
+    token_2022: Pubkey,
+    registry: &RegistryCpi<'info>,
+) -> Result<()> {
+    if !a.mint_authority_revoked {
+        let bump = [auth_bump];
+        let auth_seeds: &[&[u8]] = &[seeds::AUCTION_AUTH, series_key.as_ref(), &bump];
+        ti::set_authority(
+            CpiContext::new_with_signer(
+                token_2022,
+                ti::SetAuthority {
+                    account_or_mint: unit_mint.clone(),
+                    current_authority: auction_auth.clone(),
+                },
+                &[auth_seeds],
+            ),
+            AuthorityType::MintTokens,
+            None,
+        )?;
+        a.mint_authority_revoked = true;
+        emit!(MintAuthorityRevoked { series: series_key });
+    }
+    a.mint_finalized = true;
+    registry.mark_mint_finalized()
 }
 
 /// `finalize_settlement` (SPEC §5.2): never reverts on a wrong proposal; exact results in one
@@ -758,6 +830,10 @@ pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
         registry_authority: ctx.accounts.registry_authority.to_account_info(),
         authority_bump: ctx.bumps.registry_authority,
     };
+    let unit_mint = ctx.accounts.unit_mint.to_account_info();
+    let auction_auth = ctx.accounts.auction_auth.to_account_info();
+    let auth_bump = ctx.bumps.auction_auth;
+    let token_2022 = ctx.accounts.token_2022_program.key();
     let fail =
         |a: &mut Auction, clearing_price: u64, units_sold: u64, proceeds: u64| -> Result<()> {
             a.state = RAISE_FAILED;
@@ -774,12 +850,30 @@ pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
                 proceeds,
                 min_raise: series.min_raise,
             });
+            if a.bid_count == 0 {
+                // no bid to process: the (empty) mint is final now
+                finalize_mint(
+                    a,
+                    series_key,
+                    &unit_mint,
+                    &auction_auth,
+                    auth_bump,
+                    token_2022,
+                    &registry,
+                )?;
+                emit!(RaiseMintFinalized {
+                    series: series_key,
+                    units_sold: 0,
+                    proceeds: 0,
+                });
+            }
             Ok(())
         };
     // 1. no valid bids
     if a.valid_count == 0 {
         return fail(a, 0, 0, 0);
-    } // 2–3. claims and price validity
+    }
+    // 2–3. claims and price validity
     let check = check_proposal(
         series.units_offered,
         a.clearing_price,
@@ -850,8 +944,10 @@ pub struct ProcessBid<'info> {
     pub treasury: Box<Account<'info, Treasury>>,
     #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
     pub ledger: AccountLoader<'info, Ledger>,
-    #[account(init_if_needed, payer = payer, space = 8 + Holder::INIT_SPACE, seeds = [seeds::HOLDER, series.key().as_ref(), bidder.key().as_ref()], bump)]
-    pub holder: Box<Account<'info, Holder>>,
+    /// CHECK: the bidder's `Holder` PDA (address checked by the seeds); created only when units are
+    /// allocated.
+    #[account(mut, seeds = [seeds::HOLDER, series.key().as_ref(), bidder.key().as_ref()], bump)]
+    pub holder: UncheckedAccount<'info>,
     /// CHECK: the bid's owner (only its key is used; nothing is sent to it here).
     #[account(address = bid.bidder)]
     pub bidder: UncheckedAccount<'info>,
@@ -994,19 +1090,21 @@ pub fn process_bid<'info>(ctx: Context<'info, ProcessBid<'info>>) -> Result<()> 
             ),
             alloc,
         )?;
-        let holder_bump = ctx.bumps.holder;
-        register_holder_now(
-            &ledger,
-            &mut ctx.accounts.holder,
-            series_key,
-            bidder,
-            holder_bump,
+        let holder_info = ctx.accounts.holder.to_account_info();
+        let mut h = load_or_create_holder(
+            &holder_info,
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            &series_key,
+            &bidder,
+            ctx.bumps.holder,
         )?;
-        let h = &mut ctx.accounts.holder;
+        register_holder_now(&ledger, &mut h, series_key, bidder, ctx.bumps.holder)?;
         h.undelivered_units = h
             .undelivered_units
             .checked_add(alloc)
             .ok_or(ProtocolError::MathOverflow)?;
+        store_holder(&holder_info, &h)?;
         let t = &mut ctx.accounts.treasury;
         t.proceeds_received = t
             .proceeds_received
@@ -1037,51 +1135,49 @@ pub fn process_bid<'info>(ctx: Context<'info, ProcessBid<'info>>) -> Result<()> 
         .checked_add(1)
         .ok_or(ProtocolError::MathOverflow)?;
 
-    if a.bids_processed == a.bid_count && a.state == RAISE_SETTLED {
-        require!(
-            a.units_minted == a.units_sold,
-            ProtocolError::MintedUnitsMismatch
-        );
-        let t = &mut ctx.accounts.treasury;
-        require!(
-            t.proceeds_received == a.proceeds,
-            ProtocolError::ProceedsMismatch
-        );
-        t.proceeds = a.proceeds;
-        t.mint_finalized = true;
-        a.mint_finalized = true;
-        if !a.mint_authority_revoked {
-            let auth_bump = [ctx.bumps.auction_auth];
-            let auth_seeds: &[&[u8]] = &[seeds::AUCTION_AUTH, series_key.as_ref(), &auth_bump];
-            ti::set_authority(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_2022_program.key(),
-                    ti::SetAuthority {
-                        account_or_mint: ctx.accounts.unit_mint.to_account_info(),
-                        current_authority: ctx.accounts.auction_auth.to_account_info(),
-                    },
-                    &[auth_seeds],
-                ),
-                AuthorityType::MintTokens,
-                None,
-            )?;
-            a.mint_authority_revoked = true;
-            emit!(MintAuthorityRevoked { series: series_key });
-        }
-        RegistryCpi {
+    if a.bids_processed == a.bid_count {
+        let registry = RegistryCpi {
             registry_program: ctx.accounts.registry_program.to_account_info(),
             config: ctx.accounts.config.to_account_info(),
             series: ctx.accounts.series.to_account_info(),
             registry_authority: ctx.accounts.registry_authority.to_account_info(),
             authority_bump: ctx.bumps.registry_authority,
+        };
+        let settled = a.state == RAISE_SETTLED;
+        if settled {
+            require!(
+                a.units_minted == a.units_sold,
+                ProtocolError::MintedUnitsMismatch
+            );
+            let t = &mut ctx.accounts.treasury;
+            require!(
+                t.proceeds_received == a.proceeds,
+                ProtocolError::ProceedsMismatch
+            );
+            t.proceeds = a.proceeds;
+            t.mint_finalized = true;
         }
-        .mark_mint_finalized()?;
-        ledger.units_outstanding = a.units_sold;
-        ledger.mint_finalized = 1;
+        finalize_mint(
+            a,
+            series_key,
+            &ctx.accounts.unit_mint.to_account_info(),
+            &ctx.accounts.auction_auth.to_account_info(),
+            ctx.bumps.auction_auth,
+            ctx.accounts.token_2022_program.key(),
+            &registry,
+        )?;
+        let (units_sold, proceeds) = if settled {
+            // the repayment path opens: `units_outstanding` is the proof's public input (SPEC §6.1)
+            ledger.units_outstanding = a.units_sold;
+            ledger.mint_finalized = 1;
+            (a.units_sold, a.proceeds)
+        } else {
+            (0, 0)
+        };
         emit!(RaiseMintFinalized {
             series: series_key,
-            units_sold: a.units_sold,
-            proceeds: a.proceeds,
+            units_sold,
+            proceeds,
         });
     }
     Ok(())
@@ -1136,7 +1232,7 @@ pub struct DeliverBid<'info> {
 /// `deliver_bid` (SPEC §5.2): pays the pending refund and moves the pending units from the
 /// auction escrow to the bidder (hook rule 3). Retryable; never touches counters or the
 /// treasury. Remaining accounts: the Merces hook accounts for the unit mint
-/// `[hook_program, extra_account_meta_list, config, series, merces_protocol, escrow_arm]` and
+/// `[hook_program, extra_account_meta_list, config, series, escrow_arm]` and
 /// the stablecoin's hook accounts, if any.
 pub fn deliver_bid<'info>(ctx: Context<'info, DeliverBid<'info>>) -> Result<()> {
     let series_key = ctx.accounts.series.key();

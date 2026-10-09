@@ -5,8 +5,10 @@ Every event is an Anchor `#[event]` emitted with `emit!` (a `Program data: <base
 are the SPEC's snake_case names; the EVM contracts use the same names in camelCase. `Pubkey` fields
 are 32 bytes, `[u8; 20]` fields are secp256k1 key addresses, `u128` fields are WAD accumulators.
 
-Indexers decode with the IDLs in `solana/idls/` (`events` section). The test harness decodes the
-same way (`solana/tests/src/events.rs`).
+Indexers decode with the IDLs in `solana/idls/` (`events` section; regenerate with
+`bash solana/scripts/build.sh && bash solana/scripts/export-idls.sh`). The test harness decodes the
+same way (`solana/tests/src/events.rs`); `solana/tests/tests/idl_export.rs` fails when the committed
+IDLs drift from the build.
 
 ## Registry (`merces_registry`)
 
@@ -24,7 +26,7 @@ same way (`solana/tests/src/events.rs`).
 | `AttestorRevoked` | `addr, revoked_at: u64` | `revoke_attestor` |
 | `VerifierKeyRegistered` | `addr` | `register_verifier_key` |
 | `VerifierKeyRevoked` | `addr, revoked_at` | `revoke_verifier_key` |
-| `FxPairSet` | `pair_id, feed_id, inverted, crosscheck, crosscheck_effective_period: u32, enabled` | `set_fx_pair`, `set_fx_pair_enabled` |
+| `FxPairSet` | `pair_id, feed_id, inverted, crosscheck, crosscheck_effective_period: u32, enabled` | `set_fx_pair`, `set_fx_pair_enabled`, `set_fx_crosscheck` (`crosscheck` = the new feed, `crosscheck_effective_period` = the period from which it applies; the previous feed stays in force before it) |
 | `IssuerRegistered` / `IssuerDeactivated` | `wallet` | `register_issuer` / `deactivate_issuer` |
 | `IssuanceStopped` / `IssuanceResumed` | `wallet` | `stop_issuance` / `resume_issuance` |
 | `AllowlistUpdated` | `wallet, allowed` | `set_allowed` |
@@ -32,7 +34,7 @@ same way (`solana/tests/src/events.rs`).
 | `ContractHashSet` | `series, hash` | `set_contract_hash` |
 | `TermsAmended` | `series, nonce: u64, new_terms_commitment, new_cap_multiple_wad, attestor: [u8;20]` | `amend_terms` |
 | `RaiseStateChanged` | `series, state: u8` (§1.7 `RaiseState`) | `mark_raise_opened`, `mark_raise_result`, `mark_curve_activated` |
-| `MintFinalized` | `series` | `mark_mint_finalized` |
+| `MintFinalized` | `series` | `mark_mint_finalized` (settled raises and, with an empty mint, failed raises) |
 | `TerminalStatusSet` | `series, status: u8` (4 Retired, 5 Redeemed, 6 Extinguished) | `mark_terminal` |
 | `CurveActivated` | `series, dbc_config, dbc_pool, base_mint, units_sold, clearing_price` | `mark_curve_activated` (curve mode, later track) |
 
@@ -43,7 +45,7 @@ same way (`solana/tests/src/events.rs`).
 | Event | Fields | Emitted by |
 | --- | --- | --- |
 | `RaiseOpened` | `series, unit_mint, opened_at, commit_end, reveal_end` | `open_raise` |
-| `RaiseCancelled` | `series` | `cancel_raise` |
+| `RaiseCancelled` | `series` | `cancel_raise` (after `MintAuthorityRevoked`) |
 | `BidCommitted` | `series, bidder, escrow` | `commit_bid` |
 | `BidRevealed` | `series, bidder, price, quantity, valid` | `reveal_bid` |
 | `SettlementProposed` | `series, clearing_price, round: u32` | `begin_settlement` |
@@ -52,8 +54,8 @@ same way (`solana/tests/src/events.rs`).
 | `RaiseFailed` | `series, clearing_price, proceeds, min_raise` | `finalize_settlement` |
 | `UnitsAllocated` | `series, bidder, units, cost, fee, refund` | `process_bid` (winners) |
 | `NonRevealCharged` | `series, bidder, charge` | `process_bid` (unrevealed bids of a settled raise) |
-| `RaiseMintFinalized` | `series, units_sold, proceeds` | last `process_bid` of a settled raise |
-| `MintAuthorityRevoked` | `series` | same instruction, right before `RaiseMintFinalized` |
+| `RaiseMintFinalized` | `series, units_sold, proceeds` | the last `process_bid` of a settled raise; for a failed raise the last `process_bid`, or `finalize_settlement` when there was no bid, with `units_sold = proceeds = 0` (empty mint) |
+| `MintAuthorityRevoked` | `series` | the instruction that finalises the mint, right before `RaiseMintFinalized`; `cancel_raise` |
 | `BidDelivered` | `series, bidder, units, refund` | `deliver_bid` |
 
 ### Treasury (§5.3)
@@ -72,10 +74,10 @@ same way (`solana/tests/src/events.rs`).
 | `PaymentSettled` | `series, period, gross, accrual, fee, accepted, refunded` | `submit_report` (zero due) and `pay` |
 | `PayoutDistributed` | `series, source: u8` (0 Payment, 1 Router, 2 Tail, 3 Final)`, gross, accepted, fee, net_added, delta_acc_wad: u128, paid_per_unit_wad: u128, retired` | every vault receipt |
 | `PayoutClaimed` | `series, holder, amount, burned_units` | `claim` |
-| `HolderRegistered` | `series, holder` | `register_holder`, `process_bid`, `process_order` (first fill) |
-| `UnitsBurned` | `series, holder, units, reason: u8` (0 Retired, 1 Redeemed, 2 Extinguished) | `claim`, `burn_retired`, `claim_redemption`, `claim_tail`, `claim_final` |
+| `HolderRegistered` | `series, holder` | `register_holder`, `process_bid` (first allocation), `process_order` (a buyer's first fill); losing and unrevealed bidders get no holder account |
+| `UnitsBurned` | `series, holder, units, reason: u8` (0 Retired, 1 Redeemed, 2 Extinguished) | `claim`, `burn_retired` (`units = 0` for a wallet with no balance, as on EVM), `claim_redemption`, `claim_tail`, `claim_final` |
 | `SeriesRetired` | `series, paid_per_unit_wad, refund` | the receipt that meets the cap, `retire_if_capped`, `redeem` with `C_rem == 0` |
-| `StatusChanged` | `series, old: u8, new: u8` | every `sync_status` that changes the stored status; terminal transitions |
+| `StatusChanged` | `series, old: u8, new: u8` | every `sync_status` that changes the stored status (sync points, as in the reference simulator and the EVM contracts: `submit_report`, `pay`, `pay_trueup`, `submit_trueup`, `route`, `claim_release`, `crank_status`, `approve_pause`, `end_pause`, `open_window`, `redeem`, `extinguish`; other instructions read the derived status without storing it); terminal transitions |
 | `FormalNoticeDue` | `series, period: u32, trueup: bool` | `sync_status` once per period (`trueup = false`) and once per true-up (`trueup = true`, `period` = the true-up's calendar year) |
 | `PauseRequested` | `series, nonce` | `request_pause` |
 | `PauseRequestWithdrawn` | `series, nonce` (the nonce the withdrawn request carried) | `withdraw_pause_request` |
@@ -86,7 +88,7 @@ same way (`solana/tests/src/events.rs`).
 | `IncomeRouted` | `series, amount, pass_through, routed, ytd_received` | `route` |
 | `RouterPeriodClosed` | `series, period, ytd_at_end` | `route` (implicit closing) and `close_router_period` |
 | `FxSnapshot` | `pair, day: u32, rate_wad, sum_wad: u128, count: u32` | `snapshot_fx` |
-| `FxDeviationFlagged` | `pair, period, rate_wad, crosscheck_wad` | reserved (no cross-check feed on Solana in this version, A21) |
+| `FxDeviationFlagged` | `pair, period, rate_wad, crosscheck_wad` | `snapshot_fx` when a cross-check feed is in force for the period and deviates beyond `fx_deviation_band_bps` (the checkpoint is flagged; the snapshot still counts) |
 | `SeriesRedeemed` | `series, price, hurdle, d_avg, cap_remaining, units, deposit` | `redeem` |
 | `RedemptionClaimed` | `series, holder, units, amount` | `claim_redemption`; also `claim_tail` / `claim_final` when they redeem a balance first |
 | `TailDistributed` | `series, period, gross, accepted, fee, refunded` | `pay` on a Redeemed series |
@@ -101,10 +103,15 @@ same way (`solana/tests/src/events.rs`).
 | `WindowOpened` | `series, period, commit_end, reveal_end` | `open_window` |
 | `OrderCommitted` | `series, period, owner, side: u8` (0 bid, 1 ask)`, escrow` | `commit_ask`, `window_commit_bid` |
 | `OrderRevealed` | `series, period, owner, side, price, quantity, valid` | `reveal_order` |
+| `WindowSettlementProposed` | `series, period, clearing_price` (`u64::MAX` for NO_MATCH)`, no_match: bool, round: u32` | `begin_window_settlement` (same fields as the EVM event) |
 | `WindowSettlementRejected` | `series, period, clearing_price` (`u64::MAX` for NO_MATCH)`, reason: u8` (1 NoMatchInvalid, 2 PriceNotRevealed, 3 NoCrossing) | `finalize_window` (no revert) |
 | `WindowCleared` | `series, period, clearing_price, matched_units, branch: u8` (0 SupplyLimited, 1 DemandLimited) | `finalize_window` |
 | `WindowNoMatch` | `series, period` | `finalize_window` |
-| `OrderFilled` | `series, period, owner, side, fill, price` (0 after NO_MATCH)`, fee, refund` (stablecoin for bids, returned units for asks) | `process_order` |
+| `OrderFilled` | `series, period, owner, side, fill, price` (0 after NO_MATCH)`, fee, refund` (stablecoin for bids, returned units for asks) | `process_order` (accounting: the fee is paid here, `refund` and the units / proceeds are recorded on the order for `deliver_order`) |
+| `WindowTakebackProposed` | `series, period, price, reveal_index, round: u32` | `begin_takeback` (proposed threshold ask below `p*`) |
+| `WindowTakebackRejected` | `series, period, round` | `finalize_takeback` when the tally disproves the proposal (no revert; a new round may start) |
+| `WindowTakebackSettled` | `series, period, cancelled_units, below_units, price, reveal_index, partial` | `finalize_takeback` (accepted threshold: asks below `p*` with a larger `(price, reveal_index)` give back everything, the threshold ask gives back `partial`) |
+| `OrderDelivered` | `series, period, owner, side, units, amount` | `deliver_order` (units bought or returned; stablecoin refund or proceeds) |
 
 ## Hook (`merces_hook`)
 
@@ -116,6 +123,12 @@ through the Token-2022 CPI.
 ## Differences from the SPEC §10 list (recorded in `docs/assumptions/track-b.md`)
 
 - `FormalNoticeDue` carries an extra `trueup: bool` so the `FormalNoticeDue(series, trueup)` of §6.4
-  fits the §10 signature; `period` is the calendar year for the true-up variant.
+  fits the §10 signature; `period` is the calendar year for the true-up variant (B-S3).
 - `PauseRequestWithdrawn` reports the nonce of the withdrawn request (the ledger then advances it).
 - `BidRefunded` (v1.0) no longer exists: refunds are `BidDelivered.refund`.
+- Not in §10 but required by §12 ("every state transition emits an event"):
+  `WindowSettlementProposed` (also emitted by the EVM contracts with the same fields),
+  `MintFinalized` (registry), and the Solana-only `WindowTakebackProposed`,
+  `WindowTakebackRejected`, `WindowTakebackSettled` (the paged take-back below `p*`, B-S12) and
+  `OrderDelivered` (two-step window settlement, B-S13). The EVM contracts have their own
+  chain-specific events (`PaymentDeferred`, `OwedWithdrawn`) for the same liveness requirement.

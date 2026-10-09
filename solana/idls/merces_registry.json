@@ -1,0 +1,4205 @@
+{
+  "address": "GigVSncHHvrt8kZVHcdZWULqUE52aAZn7GzGaBNVznSi",
+  "metadata": {
+    "name": "merces_registry",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Merces charter and terms registry (D1) plus allowlist, attestor and verifier-key registries (D11). Deployed immutable."
+  },
+  "instructions": [
+    {
+      "name": "accept_admin",
+      "discriminator": [
+        112,
+        42,
+        45,
+        90,
+        116,
+        181,
+        13,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pending_admin",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "amend_terms",
+      "docs": [
+        "Issuer-favourable amendment (SPEC §3.2, brief C4): the issuer signs the transaction and an",
+        "active attestor signs the `MERCES_AMEND_V1` message with the current nonce. The cap",
+        "multiple may only decrease. Allowed only while `terminal_status == 0`."
+      ],
+      "discriminator": [
+        17,
+        7,
+        252,
+        2,
+        182,
+        121,
+        215,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "issuer_wallet",
+          "signer": true
+        },
+        {
+          "name": "series",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  105,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series.series_id",
+                "account": "Series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "attestor",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "attestor_addr"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_terms_commitment",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "new_cap_multiple_wad",
+          "type": "u64"
+        },
+        {
+          "name": "attestor_addr",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        },
+        {
+          "name": "attestor_sig",
+          "type": {
+            "array": [
+              "u8",
+              65
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_series",
+      "discriminator": [
+        181,
+        9,
+        52,
+        120,
+        197,
+        221,
+        42,
+        142
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "issuer_wallet",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "issuer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  115,
+                  115,
+                  117,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "issuer_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "allowlist_entry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "issuer_wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stablecoin_mint",
+          "docs": [
+            "The settlement stablecoin (SPL Token or Token-2022); decimals and owner are read from it."
+          ]
+        },
+        {
+          "name": "fx_pair",
+          "docs": [
+            "Required when `fx_pair_id != 0`."
+          ],
+          "optional": true
+        },
+        {
+          "name": "series",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  105,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.series_count",
+                "account": "ProtocolConfig"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "CreateSeriesArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "deactivate_issuer",
+      "docs": [
+        "Blocks *new* series only; existing series are untouched (SPEC §3.2)."
+      ],
+      "discriminator": [
+        52,
+        10,
+        163,
+        187,
+        247,
+        22,
+        150,
+        37
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "issuer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  115,
+                  115,
+                  117,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "wallet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "wallet",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "init_protocol",
+      "docs": [
+        "Creates `ProtocolConfig` once (SPEC §3.2)."
+      ],
+      "discriminator": [
+        3,
+        188,
+        141,
+        237,
+        225,
+        226,
+        232,
+        210
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "InitProtocolArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "mark_curve_activated",
+      "docs": [
+        "Curve-mode activation (SPEC §9; the Meteora integration is a later track). Records the DBC",
+        "accounts and fixes `P0` and `units_sold` for cap accounting. Draft → Settled, mint finalised."
+      ],
+      "discriminator": [
+        199,
+        227,
+        142,
+        117,
+        166,
+        213,
+        143,
+        77
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_authority",
+          "signer": true
+        },
+        {
+          "name": "series",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  105,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series.series_id",
+                "account": "Series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "issuer_allowlist",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series.issuer",
+                "account": "Series"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "dbc_config",
+          "type": "pubkey"
+        },
+        {
+          "name": "dbc_pool",
+          "type": "pubkey"
+        },
+        {
+          "name": "base_mint",
+          "type": "pubkey"
+        },
+        {
+          "name": "activated_at",
+          "type": "u64"
+        },
+        {
+          "name": "units_sold",
+          "type": "u64"
+        },
+        {
+          "name": "clearing_price",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "mark_mint_finalized",
+      "docs": [
+        "Mint finalised: every bid of a Settled or Failed raise processed and the mint authority",
+        "revoked (a failed raise finalises an empty mint, so nothing can ever be minted for it)."
+      ],
+      "discriminator": [
+        99,
+        111,
+        132,
+        80,
+        240,
+        35,
+        133,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_authority",
+          "signer": true
+        },
+        {
+          "name": "series",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  105,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series.series_id",
+                "account": "Series"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "mark_raise_opened",
+      "docs": [
+        "Draft → Open. Also enforces the D1 gate: contract hash set, issuer allowlisted, raises not",
+        "paused. Records the unit mint and the protocol's unit escrow ATAs for the hook."
+      ],
+      "discriminator": [
+        240,
+        189,
+        168,
+        88,
+        98,
+        229,
+        252,
+        164
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_authority",
+          "signer": true
+        },
+        {
+          "name": "series",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  105,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series.series_id",
+                "account": "Series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "issuer_allowlist",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series.issuer",
+                "account": "Series"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "unit_mint",
+          "type": "pubkey"
+        },
+        {
+          "name": "opened_at",
+          "type": "u64"
+        },
+        {
+          "name": "auction_escrow_ata",
+          "type": "pubkey"
+        },
+        {
+          "name": "window_escrow_ata",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "mark_raise_result",
+      "docs": [
+        "Records the raise outcome, exact and written once (SPEC §3.2)."
+      ],
+      "discriminator": [
+        213,
+        56,
+        35,
+        38,
+        8,
+        146,
+        85,
+        179
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_authority",
+          "signer": true
+        },
+        {
+          "name": "series",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  105,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series.series_id",
+                "account": "Series"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "state",
+          "type": "u8"
+        },
+        {
+          "name": "settlement_ts",
+          "type": "u64"
+        },
+        {
+          "name": "units_sold",
+          "type": "u64"
+        },
+        {
+          "name": "clearing_price",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "mark_terminal",
+      "docs": [
+        "Terminal status mirror: Retired / Redeemed / Extinguished. Extinguished may follow Retired",
+        "or Redeemed (SPEC §6.9: allowed in every status but Extinguished)."
+      ],
+      "discriminator": [
+        124,
+        120,
+        247,
+        173,
+        14,
+        87,
+        132,
+        103
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_authority",
+          "signer": true
+        },
+        {
+          "name": "series",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  105,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series.series_id",
+                "account": "Series"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "status",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "register_attestor",
+      "docs": [
+        "Registers (or re-activates) an attestor key."
+      ],
+      "discriminator": [
+        68,
+        201,
+        86,
+        244,
+        51,
+        113,
+        15,
+        94
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "attestor",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "addr"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "addr",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "register_issuer",
+      "discriminator": [
+        145,
+        117,
+        52,
+        59,
+        189,
+        27,
+        127,
+        18
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "issuer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  115,
+                  115,
+                  117,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "wallet",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "register_verifier_key",
+      "discriminator": [
+        128,
+        252,
+        149,
+        28,
+        64,
+        87,
+        132,
+        178
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "verifier",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  114,
+                  105,
+                  102,
+                  105,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "addr"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "addr",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "resume_issuance",
+      "discriminator": [
+        225,
+        10,
+        210,
+        222,
+        48,
+        32,
+        11,
+        146
+      ],
+      "accounts": [
+        {
+          "name": "issuer_wallet",
+          "signer": true
+        },
+        {
+          "name": "issuer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  115,
+                  115,
+                  117,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "issuer_wallet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "revoke_attestor",
+      "docs": [
+        "Forward-only revocation (SPEC §1.4): records `revoked_at`; refused for the last active key."
+      ],
+      "discriminator": [
+        185,
+        12,
+        191,
+        140,
+        144,
+        112,
+        102,
+        154
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "attestor",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "addr"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "addr",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "revoke_verifier_key",
+      "discriminator": [
+        38,
+        162,
+        12,
+        240,
+        52,
+        250,
+        34,
+        161
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "verifier",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  114,
+                  105,
+                  102,
+                  105,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "addr"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "addr",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_allowed",
+      "discriminator": [
+        172,
+        134,
+        133,
+        128,
+        12,
+        254,
+        134,
+        112
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "allowlist_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "entry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "wallet",
+          "type": "pubkey"
+        },
+        {
+          "name": "allowed",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_allowlist_manager",
+      "discriminator": [
+        224,
+        94,
+        5,
+        191,
+        3,
+        222,
+        84,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_manager",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_contract_hash",
+      "docs": [
+        "Draft only, non-zero (SPEC §3.2)."
+      ],
+      "discriminator": [
+        1,
+        159,
+        8,
+        144,
+        72,
+        143,
+        181,
+        123
+      ],
+      "accounts": [
+        {
+          "name": "issuer_wallet",
+          "signer": true
+        },
+        {
+          "name": "series",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  105,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series.series_id",
+                "account": "Series"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_defaults",
+      "docs": [
+        "Edits the defaults for *future* series only (bounds-checked)."
+      ],
+      "discriminator": [
+        58,
+        181,
+        153,
+        49,
+        140,
+        16,
+        205,
+        251
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "defaults",
+          "type": {
+            "defined": {
+              "name": "ParametersData"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_early_draw_approver",
+      "docs": [
+        "`Pubkey::default()` unsets the approver (early draws off)."
+      ],
+      "discriminator": [
+        19,
+        63,
+        239,
+        100,
+        224,
+        223,
+        8,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "approver",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_fee_collector",
+      "discriminator": [
+        143,
+        46,
+        10,
+        113,
+        121,
+        157,
+        245,
+        166
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_collector",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_flags",
+      "discriminator": [
+        199,
+        54,
+        111,
+        124,
+        87,
+        47,
+        217,
+        198
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_raises_paused",
+          "type": "bool"
+        },
+        {
+          "name": "windows_enabled",
+          "type": "bool"
+        },
+        {
+          "name": "tier4_enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_fx_crosscheck",
+      "docs": [
+        "Changes a pair's cross-check feed (SPEC §3.1). Setting it from zero applies from the current",
+        "period (nothing was checked before); any later change — a new feed or removal — applies from",
+        "`period_of(now) + 1`, and the feed in force for the running period is kept in",
+        "`prev_crosscheck`, so a live quarter's rule never changes under an issuer."
+      ],
+      "discriminator": [
+        160,
+        149,
+        202,
+        41,
+        2,
+        37,
+        220,
+        207
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "fx_pair",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  120
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "fx_pair.pair_id",
+                "account": "FxPairConfig"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "crosscheck",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_fx_pair",
+      "docs": [
+        "Registers an FX pair, write-once (SPEC §3.1): `pair_id = keccak256(feed_id ‖ inverted)`",
+        "commits to the feed and its direction, and a pair can never be re-registered",
+        "(`FxPairImmutable`). A cross-check feed given here applies from the current period; later",
+        "changes go through `set_fx_crosscheck`. `enabled` only gates new series."
+      ],
+      "discriminator": [
+        129,
+        160,
+        134,
+        58,
+        83,
+        105,
+        243,
+        173
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "fx_pair",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  120
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "pair_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "pair_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "feed_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "inverted",
+          "type": "bool"
+        },
+        {
+          "name": "crosscheck",
+          "type": "pubkey"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_fx_pair_enabled",
+      "docs": [
+        "Enables or disables an existing pair (`enabled = false` only stops new series from",
+        "referencing it; live series keep their pair, SPEC §3.1)."
+      ],
+      "discriminator": [
+        100,
+        4,
+        210,
+        228,
+        228,
+        2,
+        191,
+        105
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "fx_pair",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  120
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "fx_pair.pair_id",
+                "account": "FxPairConfig"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "stop_issuance",
+      "discriminator": [
+        123,
+        10,
+        134,
+        44,
+        49,
+        121,
+        168,
+        101
+      ],
+      "accounts": [
+        {
+          "name": "issuer_wallet",
+          "signer": true
+        },
+        {
+          "name": "issuer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  115,
+                  115,
+                  117,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "issuer_wallet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "transfer_admin",
+      "discriminator": [
+        42,
+        242,
+        66,
+        106,
+        228,
+        10,
+        111,
+        156
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_admin",
+          "type": "pubkey"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "AllowlistEntry",
+      "discriminator": [
+        42,
+        59,
+        88,
+        1,
+        124,
+        138,
+        92,
+        236
+      ]
+    },
+    {
+      "name": "AttestorKey",
+      "discriminator": [
+        246,
+        234,
+        233,
+        132,
+        153,
+        37,
+        254,
+        158
+      ]
+    },
+    {
+      "name": "FxPairConfig",
+      "discriminator": [
+        97,
+        140,
+        45,
+        187,
+        110,
+        107,
+        65,
+        244
+      ]
+    },
+    {
+      "name": "Issuer",
+      "discriminator": [
+        216,
+        19,
+        83,
+        230,
+        108,
+        53,
+        80,
+        14
+      ]
+    },
+    {
+      "name": "ProtocolConfig",
+      "discriminator": [
+        207,
+        91,
+        250,
+        28,
+        152,
+        179,
+        215,
+        209
+      ]
+    },
+    {
+      "name": "Series",
+      "discriminator": [
+        240,
+        97,
+        8,
+        183,
+        139,
+        77,
+        250,
+        162
+      ]
+    },
+    {
+      "name": "VerifierKey",
+      "discriminator": [
+        27,
+        40,
+        233,
+        33,
+        249,
+        246,
+        9,
+        239
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AdminTransferStarted",
+      "discriminator": [
+        31,
+        82,
+        117,
+        177,
+        147,
+        168,
+        210,
+        177
+      ]
+    },
+    {
+      "name": "AdminTransferred",
+      "discriminator": [
+        255,
+        147,
+        182,
+        5,
+        199,
+        217,
+        38,
+        179
+      ]
+    },
+    {
+      "name": "AllowlistManagerSet",
+      "discriminator": [
+        168,
+        4,
+        114,
+        48,
+        8,
+        117,
+        206,
+        225
+      ]
+    },
+    {
+      "name": "AllowlistUpdated",
+      "discriminator": [
+        88,
+        239,
+        93,
+        65,
+        74,
+        140,
+        83,
+        213
+      ]
+    },
+    {
+      "name": "AttestorRegistered",
+      "discriminator": [
+        142,
+        114,
+        59,
+        201,
+        93,
+        183,
+        89,
+        183
+      ]
+    },
+    {
+      "name": "AttestorRevoked",
+      "discriminator": [
+        43,
+        114,
+        48,
+        146,
+        162,
+        21,
+        111,
+        6
+      ]
+    },
+    {
+      "name": "ContractHashSet",
+      "discriminator": [
+        27,
+        118,
+        95,
+        170,
+        193,
+        92,
+        210,
+        97
+      ]
+    },
+    {
+      "name": "CurveActivated",
+      "discriminator": [
+        91,
+        90,
+        237,
+        133,
+        68,
+        208,
+        63,
+        27
+      ]
+    },
+    {
+      "name": "DefaultsSet",
+      "discriminator": [
+        101,
+        72,
+        92,
+        84,
+        90,
+        198,
+        2,
+        113
+      ]
+    },
+    {
+      "name": "EarlyDrawApproverSet",
+      "discriminator": [
+        142,
+        94,
+        21,
+        11,
+        145,
+        99,
+        195,
+        130
+      ]
+    },
+    {
+      "name": "FeeCollectorSet",
+      "discriminator": [
+        150,
+        157,
+        159,
+        208,
+        146,
+        77,
+        0,
+        169
+      ]
+    },
+    {
+      "name": "FlagsSet",
+      "discriminator": [
+        18,
+        239,
+        239,
+        47,
+        29,
+        66,
+        236,
+        126
+      ]
+    },
+    {
+      "name": "FxPairSet",
+      "discriminator": [
+        62,
+        100,
+        211,
+        168,
+        13,
+        110,
+        220,
+        127
+      ]
+    },
+    {
+      "name": "IssuanceResumed",
+      "discriminator": [
+        187,
+        108,
+        104,
+        130,
+        56,
+        159,
+        167,
+        76
+      ]
+    },
+    {
+      "name": "IssuanceStopped",
+      "discriminator": [
+        34,
+        202,
+        32,
+        148,
+        144,
+        253,
+        42,
+        162
+      ]
+    },
+    {
+      "name": "IssuerDeactivated",
+      "discriminator": [
+        99,
+        85,
+        66,
+        97,
+        134,
+        180,
+        9,
+        194
+      ]
+    },
+    {
+      "name": "IssuerRegistered",
+      "discriminator": [
+        98,
+        108,
+        156,
+        224,
+        9,
+        0,
+        195,
+        21
+      ]
+    },
+    {
+      "name": "MintFinalized",
+      "discriminator": [
+        201,
+        211,
+        37,
+        248,
+        157,
+        98,
+        73,
+        211
+      ]
+    },
+    {
+      "name": "ProtocolInitialized",
+      "discriminator": [
+        173,
+        122,
+        168,
+        254,
+        9,
+        118,
+        76,
+        132
+      ]
+    },
+    {
+      "name": "RaiseStateChanged",
+      "discriminator": [
+        187,
+        26,
+        189,
+        153,
+        199,
+        75,
+        20,
+        155
+      ]
+    },
+    {
+      "name": "SeriesCreated",
+      "discriminator": [
+        2,
+        164,
+        54,
+        38,
+        24,
+        181,
+        233,
+        180
+      ]
+    },
+    {
+      "name": "TerminalStatusSet",
+      "discriminator": [
+        200,
+        8,
+        227,
+        71,
+        10,
+        217,
+        192,
+        214
+      ]
+    },
+    {
+      "name": "TermsAmended",
+      "discriminator": [
+        165,
+        218,
+        140,
+        238,
+        243,
+        240,
+        147,
+        185
+      ]
+    },
+    {
+      "name": "VerifierKeyRegistered",
+      "discriminator": [
+        51,
+        226,
+        43,
+        36,
+        28,
+        170,
+        104,
+        156
+      ]
+    },
+    {
+      "name": "VerifierKeyRevoked",
+      "discriminator": [
+        227,
+        104,
+        7,
+        71,
+        203,
+        98,
+        107,
+        98
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Caller is not authorised for this instruction"
+    },
+    {
+      "code": 6001,
+      "name": "NotProtocolAuthority",
+      "msg": "Caller is not the protocol authority PDA"
+    },
+    {
+      "code": 6002,
+      "name": "NotPendingAdmin",
+      "msg": "Caller is not the pending admin"
+    },
+    {
+      "code": 6003,
+      "name": "ZeroAddress",
+      "msg": "Address must not be zero"
+    },
+    {
+      "code": 6004,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6005,
+      "name": "IssuerInactive",
+      "msg": "Issuer is not active"
+    },
+    {
+      "code": 6006,
+      "name": "IssuanceStopped",
+      "msg": "Issuer has stopped new issuance"
+    },
+    {
+      "code": 6007,
+      "name": "NotAllowlisted",
+      "msg": "Wallet is not allowlisted"
+    },
+    {
+      "code": 6008,
+      "name": "AllowlistEntryMismatch",
+      "msg": "Allowlist entry does not belong to this wallet"
+    },
+    {
+      "code": 6009,
+      "name": "UnitsOfferedZero",
+      "msg": "units_offered must be at least 1"
+    },
+    {
+      "code": 6010,
+      "name": "ReservePriceZero",
+      "msg": "reserve_price must be at least 1"
+    },
+    {
+      "code": 6011,
+      "name": "MinRaiseTooHigh",
+      "msg": "min_raise exceeds reserve_price × units_offered"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidReleaseSchedule",
+      "msg": "Release schedule must have 1..=24 tranches, bps summing to 10000, non-decreasing offsets"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidTierFlags",
+      "msg": "Tier flags must be non-zero and use only bits 0..=3"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidMode",
+      "msg": "Unknown series mode"
+    },
+    {
+      "code": 6015,
+      "name": "PublicPriceNotAccepted",
+      "msg": "Curve-mode series require issuer_accepts_public_price = true"
+    },
+    {
+      "code": 6016,
+      "name": "MetadataUriTooLong",
+      "msg": "Metadata URI exceeds 200 bytes"
+    },
+    {
+      "code": 6017,
+      "name": "FxPairMismatch",
+      "msg": "FX pair account missing, disabled or does not match fx_pair_id"
+    },
+    {
+      "code": 6018,
+      "name": "TransferFeeNotZero",
+      "msg": "Stablecoin mint has a non-zero transfer fee"
+    },
+    {
+      "code": 6019,
+      "name": "InvalidStablecoinMint",
+      "msg": "Stablecoin mint could not be read"
+    },
+    {
+      "code": 6020,
+      "name": "NotDraft",
+      "msg": "Series is not in Draft state"
+    },
+    {
+      "code": 6021,
+      "name": "ZeroContractHash",
+      "msg": "Contract hash must be non-zero"
+    },
+    {
+      "code": 6022,
+      "name": "ContractHashNotSet",
+      "msg": "Contract hash is not set; the raise cannot open"
+    },
+    {
+      "code": 6023,
+      "name": "NewRaisesPaused",
+      "msg": "New raises are paused"
+    },
+    {
+      "code": 6024,
+      "name": "SeriesTerminal",
+      "msg": "Series is terminal"
+    },
+    {
+      "code": 6025,
+      "name": "NotSealedBid",
+      "msg": "Series is not a sealed-bid series"
+    },
+    {
+      "code": 6026,
+      "name": "NotCurveMode",
+      "msg": "Series is not a curve-mode series"
+    },
+    {
+      "code": 6027,
+      "name": "InvalidRaiseTransition",
+      "msg": "Invalid raise state transition"
+    },
+    {
+      "code": 6028,
+      "name": "RaiseResultAlreadyWritten",
+      "msg": "Raise results are written once"
+    },
+    {
+      "code": 6029,
+      "name": "MintAlreadyFinalized",
+      "msg": "Mint already finalised"
+    },
+    {
+      "code": 6030,
+      "name": "InvalidTerminalStatus",
+      "msg": "Invalid terminal status"
+    },
+    {
+      "code": 6031,
+      "name": "InvalidTerminalTransition",
+      "msg": "Terminal status transition not allowed"
+    },
+    {
+      "code": 6032,
+      "name": "MalformedSignature",
+      "msg": "Attestor signature is malformed"
+    },
+    {
+      "code": 6033,
+      "name": "SignatureRecoveryFailed",
+      "msg": "Attestor signature recovery failed"
+    },
+    {
+      "code": 6034,
+      "name": "AttestorMismatch",
+      "msg": "Recovered signer is not the supplied attestor address"
+    },
+    {
+      "code": 6035,
+      "name": "AttestorInactive",
+      "msg": "Attestor key is not active"
+    },
+    {
+      "code": 6036,
+      "name": "CapMultipleIncrease",
+      "msg": "Cap multiple may only decrease"
+    },
+    {
+      "code": 6037,
+      "name": "ZeroAttestorAddress",
+      "msg": "Attestor address must be non-zero"
+    },
+    {
+      "code": 6038,
+      "name": "InvalidChainId",
+      "msg": "Invalid chain id"
+    },
+    {
+      "code": 6039,
+      "name": "KeyAlreadyRevoked",
+      "msg": "Key is already revoked"
+    },
+    {
+      "code": 6040,
+      "name": "LastKeyOfKind",
+      "msg": "The last active key of a kind cannot be revoked without a replacement"
+    },
+    {
+      "code": 6041,
+      "name": "FxPairIdMismatch",
+      "msg": "pair_id must equal keccak256(feed_id ‖ inverted)"
+    },
+    {
+      "code": 6042,
+      "name": "FxPairImmutable",
+      "msg": "feed_id and inverted are write-once for an FX pair"
+    },
+    {
+      "code": 6043,
+      "name": "CrosscheckUnchanged",
+      "msg": "The cross-check feed is already the requested one"
+    },
+    {
+      "code": 6044,
+      "name": "WalletCapTooSmall",
+      "msg": "Wallet cap allows no bid: floor(units_offered × wallet_cap_bps / 10000) < 1"
+    },
+    {
+      "code": 6045,
+      "name": "Tier1TermsRequired",
+      "msg": "Tier-1 series must supply plaintext router terms"
+    },
+    {
+      "code": 6046,
+      "name": "Tier1NeedsStablecoinIncome",
+      "msg": "Tier-1 series must use stablecoin income (fx_pair_id = 0)"
+    },
+    {
+      "code": 6047,
+      "name": "Tier1ShareTooLarge",
+      "msg": "Tier-1 series require r_wad × units_offered ≤ WAD"
+    },
+    {
+      "code": 6048,
+      "name": "Tier1TermsMismatch",
+      "msg": "Tier-1 terms do not hash to terms_commitment"
+    },
+    {
+      "code": 6049,
+      "name": "Tier1TermsUnexpected",
+      "msg": "Router terms supplied for a series without tier 1"
+    },
+    {
+      "code": 6050,
+      "name": "PoseidonFailed",
+      "msg": "Poseidon hashing failed"
+    },
+    {
+      "code": 6051,
+      "name": "BoundCapMultiple",
+      "msg": "cap_multiple_wad out of bounds [2.0e18, 3.0e18]"
+    },
+    {
+      "code": 6052,
+      "name": "BoundHurdleRate",
+      "msg": "hurdle_rate_wad out of bounds [0, 0.25e18]"
+    },
+    {
+      "code": 6053,
+      "name": "BoundPayoutMultiple",
+      "msg": "payout_multiple_k out of bounds [1, 20]"
+    },
+    {
+      "code": 6054,
+      "name": "BoundLockup",
+      "msg": "lockup_seconds out of bounds [0, 157680000]"
+    },
+    {
+      "code": 6055,
+      "name": "BoundWalletCap",
+      "msg": "wallet_cap_bps out of bounds [100, 10000]"
+    },
+    {
+      "code": 6056,
+      "name": "BoundAuctionFee",
+      "msg": "auction_fee_bps out of bounds [0, 1000]"
+    },
+    {
+      "code": 6057,
+      "name": "BoundPayoutFee",
+      "msg": "payout_fee_bps out of bounds [0, 2000]"
+    },
+    {
+      "code": 6058,
+      "name": "BoundWindowFee",
+      "msg": "window_fee_bps out of bounds [0, 1000]"
+    },
+    {
+      "code": 6059,
+      "name": "BoundNonRevealCharge",
+      "msg": "non_reveal_charge_bps out of bounds [0, 1000]"
+    },
+    {
+      "code": 6060,
+      "name": "BoundCommitDuration",
+      "msg": "commit_duration out of bounds [1 h, 30 d]"
+    },
+    {
+      "code": 6061,
+      "name": "BoundRevealDuration",
+      "msg": "reveal_duration out of bounds [1 h, 7 d]"
+    },
+    {
+      "code": 6062,
+      "name": "BoundWindowCommitDuration",
+      "msg": "window_commit_duration out of bounds [1 h, 14 d]"
+    },
+    {
+      "code": 6063,
+      "name": "BoundWindowRevealDuration",
+      "msg": "window_reveal_duration out of bounds [1 h, 7 d]"
+    },
+    {
+      "code": 6064,
+      "name": "BoundFxMinCoverage",
+      "msg": "fx_min_coverage_bps out of bounds [5000, 10000]"
+    },
+    {
+      "code": 6065,
+      "name": "BoundFxMaxStaleness",
+      "msg": "fx_max_staleness_seconds out of bounds [60, 86400]"
+    },
+    {
+      "code": 6066,
+      "name": "BoundFxMaxConf",
+      "msg": "fx_max_conf_bps out of bounds [1, 1000]"
+    },
+    {
+      "code": 6067,
+      "name": "BoundFxDeviationBand",
+      "msg": "fx_deviation_band_bps out of bounds [10, 5000]"
+    },
+    {
+      "code": 6068,
+      "name": "BoundMaxPause",
+      "msg": "max_pause_seconds out of bounds [30 d, 730 d]"
+    },
+    {
+      "code": 6069,
+      "name": "BoundMaxCumulativePause",
+      "msg": "max_cumulative_pause_seconds out of bounds [max_pause_seconds, 5 y]"
+    }
+  ],
+  "types": [
+    {
+      "name": "AdminTransferStarted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminTransferred",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AllowlistEntry",
+      "docs": [
+        "Allowlist entry (`[ALLOW, wallet]`). A missing account means \"never allowlisted\"."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowed",
+            "type": "bool"
+          },
+          {
+            "name": "updated_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AllowlistManagerSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "allowlist_manager",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AllowlistUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowed",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AttestorKey",
+      "docs": [
+        "Attestor key (`[ATTESTOR, addr20]`). `revoked_at == 0` while active (SPEC §1.4)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "addr",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "active",
+            "type": "bool"
+          },
+          {
+            "name": "revoked_at",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AttestorRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "addr",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "AttestorRevoked",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "addr",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "revoked_at",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ContractHashSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "CreateSeriesArgs",
+      "docs": [
+        "Arguments to `create_series`. Fees, FX bounds and pause bounds are copied from",
+        "`ProtocolConfig.defaults`; everything here is issuer-chosen within the §1.6 bounds."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "units_offered",
+            "type": "u64"
+          },
+          {
+            "name": "reserve_price",
+            "type": "u64"
+          },
+          {
+            "name": "min_raise",
+            "type": "u64"
+          },
+          {
+            "name": "cap_multiple_wad",
+            "type": "u64"
+          },
+          {
+            "name": "hurdle_rate_wad",
+            "type": "u64"
+          },
+          {
+            "name": "payout_multiple_k",
+            "type": "u16"
+          },
+          {
+            "name": "lockup_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "wallet_cap_bps",
+            "type": "u16"
+          },
+          {
+            "name": "commit_duration",
+            "type": "u64"
+          },
+          {
+            "name": "reveal_duration",
+            "type": "u64"
+          },
+          {
+            "name": "window_commit_duration",
+            "type": "u64"
+          },
+          {
+            "name": "window_reveal_duration",
+            "type": "u64"
+          },
+          {
+            "name": "release_schedule",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "TrancheData"
+                }
+              }
+            }
+          },
+          {
+            "name": "terms_commitment",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "tier_flags",
+            "type": "u8"
+          },
+          {
+            "name": "fx_pair_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "mode",
+            "type": "u8"
+          },
+          {
+            "name": "issuer_accepts_public_price",
+            "type": "bool"
+          },
+          {
+            "name": "metadata_uri",
+            "type": "string"
+          },
+          {
+            "name": "tier1_terms",
+            "docs": [
+              "Required when bit0 (tier 1 split) is set; must hash to `terms_commitment`."
+            ],
+            "type": {
+              "option": {
+                "defined": {
+                  "name": "Tier1Terms"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "CurveActivated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "dbc_config",
+            "type": "pubkey"
+          },
+          {
+            "name": "dbc_pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "units_sold",
+            "type": "u64"
+          },
+          {
+            "name": "clearing_price",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DefaultsSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "defaults",
+            "type": {
+              "defined": {
+                "name": "ParametersData"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "EarlyDrawApproverSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "approver",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FeeCollectorSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "fee_collector",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FlagsSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "new_raises_paused",
+            "type": "bool"
+          },
+          {
+            "name": "windows_enabled",
+            "type": "bool"
+          },
+          {
+            "name": "tier4_enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FxPairConfig",
+      "docs": [
+        "FX pair configuration (`[FX, pair_id]`), `pair_id = keccak256(feed_id ‖ inverted_u8)`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pair_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "feed_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "inverted",
+            "type": "bool"
+          },
+          {
+            "name": "crosscheck",
+            "docs": [
+              "Cross-check feed: on Solana a second Pyth feed id (32 bytes stored as a `Pubkey`); zero when",
+              "none is configured."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "crosscheck_effective_period",
+            "docs": [
+              "Period from which `crosscheck` applies (SPEC §3.1)."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "prev_crosscheck",
+            "docs": [
+              "The cross-check in force before `crosscheck_effective_period` (a change never alters the rule",
+              "of a running quarter)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FxPairSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pair_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "feed_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "inverted",
+            "type": "bool"
+          },
+          {
+            "name": "crosscheck",
+            "type": "pubkey"
+          },
+          {
+            "name": "crosscheck_effective_period",
+            "type": "u32"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitProtocolArgs",
+      "docs": [
+        "Arguments to `init_protocol`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowlist_manager",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_collector",
+            "type": "pubkey"
+          },
+          {
+            "name": "chain_id",
+            "docs": [
+              "Cluster tag (SPEC §1.3): mainnet-beta 101, testnet 102, devnet 103, localnet 104."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "defaults",
+            "type": {
+              "defined": {
+                "name": "ParametersData"
+              }
+            }
+          },
+          {
+            "name": "protocol_program",
+            "docs": [
+              "The `merces_protocol` program id whose `[REGISTRY_AUTHORITY]` PDA may call the write",
+              "interface. Fixed for the life of the deployment (no setter)."
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "IssuanceResumed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "IssuanceStopped",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Issuer",
+      "docs": [
+        "Issuer record (`[ISSUER, wallet]`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "active",
+            "type": "bool"
+          },
+          {
+            "name": "issuance_stopped",
+            "type": "bool"
+          },
+          {
+            "name": "series_count",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "IssuerDeactivated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "IssuerRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintFinalized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ParametersData",
+      "docs": [
+        "Borsh-serialisable mirror of [`Parameters`]."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cap_multiple_wad",
+            "type": "u64"
+          },
+          {
+            "name": "hurdle_rate_wad",
+            "type": "u64"
+          },
+          {
+            "name": "payout_multiple_k",
+            "type": "u16"
+          },
+          {
+            "name": "lockup_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "wallet_cap_bps",
+            "type": "u16"
+          },
+          {
+            "name": "auction_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "payout_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "window_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "non_reveal_charge_bps",
+            "type": "u16"
+          },
+          {
+            "name": "commit_duration",
+            "type": "u64"
+          },
+          {
+            "name": "reveal_duration",
+            "type": "u64"
+          },
+          {
+            "name": "window_commit_duration",
+            "type": "u64"
+          },
+          {
+            "name": "window_reveal_duration",
+            "type": "u64"
+          },
+          {
+            "name": "fx_min_coverage_bps",
+            "type": "u16"
+          },
+          {
+            "name": "fx_max_staleness_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "fx_max_conf_bps",
+            "type": "u16"
+          },
+          {
+            "name": "fx_deviation_band_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_pause_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "max_cumulative_pause_seconds",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolConfig",
+      "docs": [
+        "Global protocol configuration, one per deployment (`[CONFIG]`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowlist_manager",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_collector",
+            "type": "pubkey"
+          },
+          {
+            "name": "domain",
+            "docs": [
+              "`keccak256(1u8 ‖ chain_id_be ‖ registry_program_id)` (SPEC §1.3)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "chain_id",
+            "type": "u64"
+          },
+          {
+            "name": "new_raises_paused",
+            "type": "bool"
+          },
+          {
+            "name": "windows_enabled",
+            "type": "bool"
+          },
+          {
+            "name": "tier4_enabled",
+            "type": "bool"
+          },
+          {
+            "name": "early_draw_approver",
+            "docs": [
+              "Zero when unset (early draws off)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "defaults",
+            "type": {
+              "defined": {
+                "name": "ParametersData"
+              }
+            }
+          },
+          {
+            "name": "protocol_program",
+            "docs": [
+              "The `merces_protocol` program id, fixed at init (no setter)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_authority",
+            "docs": [
+              "`find_program_address([REGISTRY_AUTHORITY], protocol_program)`: the only key allowed to call",
+              "the write interface (SPEC §3.2 `registry_authority`)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "series_count",
+            "type": "u64"
+          },
+          {
+            "name": "attestor_count",
+            "docs": [
+              "Active key counts (a kind's last active key cannot be revoked, SPEC §1.4)."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "verifier_count",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowlist_manager",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_collector",
+            "type": "pubkey"
+          },
+          {
+            "name": "chain_id",
+            "type": "u64"
+          },
+          {
+            "name": "domain",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "protocol_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_authority",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RaiseStateChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "state",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Series",
+      "docs": [
+        "One raise by one issuer (`[SERIES, series_id_le]`). The charter block is frozen once",
+        "`raise_state != Draft` (SPEC §3.3)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series_id",
+            "type": "u64"
+          },
+          {
+            "name": "issuer",
+            "type": "pubkey"
+          },
+          {
+            "name": "mode",
+            "type": "u8"
+          },
+          {
+            "name": "stablecoin",
+            "type": "pubkey"
+          },
+          {
+            "name": "stablecoin_decimals",
+            "type": "u8"
+          },
+          {
+            "name": "stablecoin_program",
+            "docs": [
+              "The stablecoin mint's owner program (SPL Token or Token-2022)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unit_mint",
+            "docs": [
+              "Set by `mark_raise_opened` (sealed bid) or `mark_curve_activated` (curve)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "units_offered",
+            "type": "u64"
+          },
+          {
+            "name": "reserve_price",
+            "type": "u64"
+          },
+          {
+            "name": "min_raise",
+            "type": "u64"
+          },
+          {
+            "name": "cap_multiple_wad",
+            "type": "u64"
+          },
+          {
+            "name": "hurdle_rate_wad",
+            "type": "u64"
+          },
+          {
+            "name": "payout_multiple_k",
+            "type": "u16"
+          },
+          {
+            "name": "lockup_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "wallet_cap_bps",
+            "type": "u16"
+          },
+          {
+            "name": "auction_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "payout_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "window_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "non_reveal_charge_bps",
+            "type": "u16"
+          },
+          {
+            "name": "commit_duration",
+            "type": "u64"
+          },
+          {
+            "name": "reveal_duration",
+            "type": "u64"
+          },
+          {
+            "name": "window_commit_duration",
+            "type": "u64"
+          },
+          {
+            "name": "window_reveal_duration",
+            "type": "u64"
+          },
+          {
+            "name": "fx_min_coverage_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_pause_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "max_cumulative_pause_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "release_schedule",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "TrancheData"
+                }
+              }
+            }
+          },
+          {
+            "name": "contract_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "tier_flags",
+            "type": "u8"
+          },
+          {
+            "name": "fx_pair_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "issuer_accepts_public_price",
+            "type": "bool"
+          },
+          {
+            "name": "metadata_uri",
+            "type": "string"
+          },
+          {
+            "name": "router_theta",
+            "docs": [
+              "Tier-1 plaintext terms (zero unless bit0 of `tier_flags` is set)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "router_r_wad",
+            "type": "u64"
+          },
+          {
+            "name": "terms_commitment",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "amendment_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "raise_state",
+            "type": "u8"
+          },
+          {
+            "name": "opened_at",
+            "type": "u64"
+          },
+          {
+            "name": "settlement_ts",
+            "type": "u64"
+          },
+          {
+            "name": "units_sold",
+            "type": "u64"
+          },
+          {
+            "name": "clearing_price",
+            "type": "u64"
+          },
+          {
+            "name": "mint_finalized",
+            "type": "bool"
+          },
+          {
+            "name": "terminal_status",
+            "type": "u8"
+          },
+          {
+            "name": "auction_escrow_ata",
+            "type": "pubkey"
+          },
+          {
+            "name": "window_escrow_ata",
+            "type": "pubkey"
+          },
+          {
+            "name": "dbc_config",
+            "type": "pubkey"
+          },
+          {
+            "name": "dbc_pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SeriesCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "series_id",
+            "type": "u64"
+          },
+          {
+            "name": "issuer",
+            "type": "pubkey"
+          },
+          {
+            "name": "mode",
+            "type": "u8"
+          },
+          {
+            "name": "stablecoin",
+            "type": "pubkey"
+          },
+          {
+            "name": "units_offered",
+            "type": "u64"
+          },
+          {
+            "name": "reserve_price",
+            "type": "u64"
+          },
+          {
+            "name": "min_raise",
+            "type": "u64"
+          },
+          {
+            "name": "cap_multiple_wad",
+            "type": "u64"
+          },
+          {
+            "name": "hurdle_rate_wad",
+            "type": "u64"
+          },
+          {
+            "name": "k",
+            "type": "u16"
+          },
+          {
+            "name": "lockup_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "wallet_cap_bps",
+            "type": "u16"
+          },
+          {
+            "name": "auction_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "payout_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "window_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "non_reveal_charge_bps",
+            "type": "u16"
+          },
+          {
+            "name": "terms_commitment",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "tier_flags",
+            "type": "u8"
+          },
+          {
+            "name": "fx_pair_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TerminalStatusSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TermsAmended",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "new_terms_commitment",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "new_cap_multiple_wad",
+            "type": "u64"
+          },
+          {
+            "name": "attestor",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Tier1Terms",
+      "docs": [
+        "Plaintext tier-1 terms (public by the issuer's choice, SPEC §6.5); checked against",
+        "`terms_commitment` with Poseidon(5) at series creation."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "theta",
+            "type": "u64"
+          },
+          {
+            "name": "r_wad",
+            "type": "u64"
+          },
+          {
+            "name": "currency_code",
+            "type": "u32"
+          },
+          {
+            "name": "indexing_rule",
+            "type": "u32"
+          },
+          {
+            "name": "terms_salt",
+            "docs": [
+              "The commitment salt as a 32-byte big-endian field element."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TrancheData",
+      "docs": [
+        "Borsh-serialisable mirror of [`Tranche`]."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "at_offset_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VerifierKey",
+      "docs": [
+        "Report-verifier key (`[VERIFIER, addr20]`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "addr",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "active",
+            "type": "bool"
+          },
+          {
+            "name": "revoked_at",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VerifierKeyRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "addr",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "VerifierKeyRevoked",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "addr",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "revoked_at",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

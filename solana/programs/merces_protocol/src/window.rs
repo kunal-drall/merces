@@ -1,6 +1,18 @@
 //! Transfer window (SPEC v1.1 §7, brief D9): the only path through which sealed-bid units change
 //! hands. One order per wallet per window; armed ask deposits; two-branch clearing; first-come
-//! fills at the margin. Ships closed (`windows_enabled = false`).
+//! fills at the margin; buyers re-checked against the allowlist at fill. Ships closed
+//! (`windows_enabled = false`).
+//!
+//! Settlement is two-step, like the primary auction (SPEC §5.2): `process_order` does the
+//! accounting in a fixed order (revealed bids by reveal index, then revealed asks by reveal index;
+//! unrevealed orders and `NoMatch` windows in any order), moves only the window fee to the fee
+//! collector and records what the owner is owed; `deliver_order` pays it out and can be retried
+//! forever, so no recipient-side failure (frozen stablecoin account, closed token account) can block
+//! another order (SPEC §12 liveness). A buyer cancelled at fill gives its units back to the sellers
+//! exactly as SPEC §7 orders it: asks at `p*` in descending reveal index, then asks below `p*` in
+//! descending `(price, reveal_index)` — the latter through a keeper-proposed, tally-verified
+//! threshold (`begin_takeback` / `tally_takeback` / `finalize_takeback`, never reverting on a wrong
+//! proposal) when the cut reaches below `p*`.
 
 use anchor_lang::prelude::*;
 use anchor_lang::AccountsExit;
@@ -11,12 +23,13 @@ use merces_common::encoding::commitment_preimage;
 use merces_common::status::SeriesStatus;
 use merces_common::time::period_of;
 use merces_common::window::{
-    ask_is_valid, bid_is_valid, check_window_clearing, classify, no_match_is_valid, settle_buyer,
-    Branch, FillClass, WindowTally,
+    ask_at_budget, ask_at_total, ask_is_valid, below_cut, below_takeback, bid_is_valid,
+    check_window_clearing, classify, no_match_is_valid, settle_buyer, takeback_threshold_valid,
+    taken_before, Branch, FillClass, WindowTally,
 };
 use merces_onchain::keccak;
 use merces_onchain::seeds::{ALLOW, CONFIG};
-use merces_registry::state::{AllowlistEntry, ProtocolConfig, Series};
+use merces_registry::state::{ProtocolConfig, Series, RAISE_SETTLED};
 
 use crate::common::*;
 use crate::error::{math, ProtocolError};
@@ -39,6 +52,38 @@ fn branch_of(w: &Window) -> Branch {
     }
 }
 
+/// Validates an `Order` PDA of `(series, period)` passed as a remaining account and returns it.
+fn load_order_page_entry(info: &AccountInfo, series_key: &Pubkey, period: u32) -> Result<Order> {
+    require_keys_eq!(*info.owner, crate::ID, ProtocolError::OrderMismatch);
+    let o: Order = {
+        let data = info.try_borrow_data()?;
+        Order::try_deserialize(&mut &data[..])?
+    };
+    require!(
+        o.series == *series_key && o.period == period,
+        ProtocolError::OrderMismatch
+    );
+    let expected = Pubkey::create_program_address(
+        &[
+            seeds::ORDER,
+            series_key.as_ref(),
+            &period.to_le_bytes(),
+            o.owner.as_ref(),
+            &[o.bump],
+        ],
+        &crate::ID,
+    )
+    .map_err(|_| ProtocolError::OrderMismatch)?;
+    require_keys_eq!(expected, *info.key, ProtocolError::OrderMismatch);
+    Ok(o)
+}
+
+fn store_order(info: &AccountInfo, o: &Order) -> Result<()> {
+    let mut data = info.try_borrow_mut_data()?;
+    let mut writer: &mut [u8] = &mut data;
+    o.try_serialize(&mut writer)
+}
+
 // ---------------------------------------------------------------------------------- open_window
 
 #[derive(Accounts)]
@@ -58,6 +103,9 @@ pub struct OpenWindow<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// `open_window(series, period)` (SPEC §7): anyone, once the windows flag is on, the lockup is
+/// over, the series is current (`OnTime`/`InGrace`), the report for `period` (the previous quarter)
+/// is paid and no earlier window of the series is still being processed.
 pub fn open_window(ctx: Context<OpenWindow>, period: u32) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
@@ -66,6 +114,10 @@ pub fn open_window(ctx: Context<OpenWindow>, period: u32) -> Result<()> {
     require!(
         ctx.accounts.config.windows_enabled,
         ProtocolError::WindowsDisabled
+    );
+    require!(
+        series.raise_state == RAISE_SETTLED,
+        ProtocolError::RaiseNotSettled
     );
     require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
     let status = ledger.sync_status(now, series_key)?;
@@ -241,7 +293,8 @@ pub struct WindowCommitBid<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
     pub series: Box<Account<'info, Series>>,
-    /// CHECK: the owner's registry `AllowlistEntry` PDA; validated in the handler after the phase checks.
+    /// CHECK: the owner's registry `AllowlistEntry` PDA; validated in the handler (address, owner,
+    /// `allowed`).
     pub owner_allowlist: UncheckedAccount<'info>,
     #[account(mut, seeds = [seeds::WINDOW, series.key().as_ref(), window.period.to_le_bytes().as_ref()], bump = window.bump)]
     pub window: Box<Account<'info, Window>>,
@@ -270,11 +323,11 @@ pub fn window_commit_bid<'info>(
         w.state == WINDOW_COMMIT && now < w.commit_end,
         ProtocolError::WindowNotCommit
     );
-    require!(escrow > 0, ProtocolError::ZeroEscrow);
     require_allowlisted(
         &ctx.accounts.owner_allowlist.to_account_info(),
         &ctx.accounts.owner.key(),
     )?;
+    require!(escrow > 0, ProtocolError::ZeroEscrow);
     transfer_stable(
         &ctx.accounts.stablecoin_program.to_account_info(),
         &ctx.accounts.owner_stable.to_account_info(),
@@ -331,6 +384,10 @@ pub struct RevealOrder<'info> {
     pub order: Box<Account<'info, Order>>,
     /// CHECK: the owner's unit ATA (bids: wallet-cap room); derivation validated in the handler.
     pub owner_unit_ata: UncheckedAccount<'info>,
+    /// CHECK: the owner's `Holder` PDA (address checked by the seeds; read when it exists) — its
+    /// undelivered auction and window units count toward the wallet cap.
+    #[account(seeds = [seeds::HOLDER, series.key().as_ref(), owner.key().as_ref()], bump)]
+    pub holder: UncheckedAccount<'info>,
     pub token_2022_program: Program<'info, Token2022>,
 }
 
@@ -382,16 +439,11 @@ pub fn reveal_order(
         } else {
             token_account_amount(&ctx.accounts.owner_unit_ata.to_account_info())?
         };
+        let holder = read_holder(&ctx.accounts.holder.to_account_info())?;
+        let owned = owned_units(holder.as_ref(), balance)?;
         let cap =
             wallet_cap_units(ledger.units_outstanding, series.wallet_cap_bps).map_err(math)?;
-        bid_is_valid(
-            price,
-            quantity,
-            o.escrow,
-            series.window_fee_bps,
-            cap,
-            balance,
-        )
+        bid_is_valid(price, quantity, o.escrow, series.window_fee_bps, cap, owned)
     };
     o.valid = valid;
     w.revealed_count = w
@@ -428,6 +480,7 @@ pub fn begin_window_settlement(
     no_match: bool,
 ) -> Result<()> {
     let now = now_ts()?;
+    let series_key = ctx.accounts.series.key();
     let w = &mut ctx.accounts.window;
     require!(
         w.state == WINDOW_COMMIT || w.state == WINDOW_SETTLING,
@@ -445,7 +498,11 @@ pub fn begin_window_settlement(
         .ok_or(ProtocolError::MathOverflow)?;
     w.round_rejected = false;
     w.rejection_reason = 0;
-    w.clearing_price = clearing_price;
+    w.clearing_price = if no_match {
+        NO_MATCH_PRICE
+    } else {
+        clearing_price
+    };
     w.no_match_proposed = no_match;
     w.d_above = 0;
     w.d_at = 0;
@@ -454,11 +511,21 @@ pub fn begin_window_settlement(
     w.max_bid = 0;
     w.min_ask = u64::MAX;
     w.valid_count = 0;
+    w.valid_bids = 0;
+    w.valid_asks = 0;
     w.tallied_count = 0;
+    emit!(WindowSettlementProposed {
+        series: series_key,
+        period: w.period,
+        clearing_price: w.clearing_price,
+        no_match,
+        round: w.tally_round,
+    });
     Ok(())
 }
 
-/// Remaining accounts: up to 24 `Order` PDAs of this window (writable).
+/// Remaining accounts: up to 24 `Order` PDAs of this window (writable). Unrevealed orders and
+/// orders already tallied in this round are skipped, so pages may overlap safely.
 pub fn tally_orders<'info>(ctx: Context<'info, WindowSettle<'info>>) -> Result<()> {
     let series_key = ctx.accounts.series.key();
     let w = &mut ctx.accounts.window;
@@ -471,27 +538,7 @@ pub fn tally_orders<'info>(ctx: Context<'info, WindowSettle<'info>>) -> Result<(
         ProtocolError::TallyPageTooLarge
     );
     for info in ctx.remaining_accounts.iter() {
-        require_keys_eq!(*info.owner, crate::ID, ProtocolError::OrderMismatch);
-        let mut o: Order = {
-            let data = info.try_borrow_data()?;
-            Order::try_deserialize(&mut &data[..])?
-        };
-        require!(
-            o.series == series_key && o.period == w.period,
-            ProtocolError::OrderMismatch
-        );
-        let expected = Pubkey::create_program_address(
-            &[
-                seeds::ORDER,
-                series_key.as_ref(),
-                &w.period.to_le_bytes(),
-                o.owner.as_ref(),
-                &[o.bump],
-            ],
-            &crate::ID,
-        )
-        .map_err(|_| ProtocolError::OrderMismatch)?;
-        require_keys_eq!(expected, *info.key, ProtocolError::OrderMismatch);
+        let mut o = load_order_page_entry(info, &series_key, w.period)?;
         if !o.revealed || o.tallied_round == w.tally_round {
             continue;
         }
@@ -501,29 +548,41 @@ pub fn tally_orders<'info>(ctx: Context<'info, WindowSettle<'info>>) -> Result<(
                 .checked_add(1)
                 .ok_or(ProtocolError::MathOverflow)?;
             if o.side == SIDE_BID {
-                if o.price > w.clearing_price {
-                    w.d_above = w
-                        .d_above
-                        .checked_add(o.quantity)
-                        .ok_or(ProtocolError::MathOverflow)?;
-                } else if o.price == w.clearing_price {
-                    w.d_at = w
-                        .d_at
-                        .checked_add(o.quantity)
-                        .ok_or(ProtocolError::MathOverflow)?;
+                w.valid_bids = w
+                    .valid_bids
+                    .checked_add(1)
+                    .ok_or(ProtocolError::MathOverflow)?;
+                if !w.no_match_proposed {
+                    if o.price > w.clearing_price {
+                        w.d_above = w
+                            .d_above
+                            .checked_add(o.quantity)
+                            .ok_or(ProtocolError::MathOverflow)?;
+                    } else if o.price == w.clearing_price {
+                        w.d_at = w
+                            .d_at
+                            .checked_add(o.quantity)
+                            .ok_or(ProtocolError::MathOverflow)?;
+                    }
                 }
                 w.max_bid = core::cmp::max(w.max_bid, o.price);
             } else {
-                if o.price < w.clearing_price {
-                    w.s_below = w
-                        .s_below
-                        .checked_add(o.quantity)
-                        .ok_or(ProtocolError::MathOverflow)?;
-                } else if o.price == w.clearing_price {
-                    w.s_at = w
-                        .s_at
-                        .checked_add(o.quantity)
-                        .ok_or(ProtocolError::MathOverflow)?;
+                w.valid_asks = w
+                    .valid_asks
+                    .checked_add(1)
+                    .ok_or(ProtocolError::MathOverflow)?;
+                if !w.no_match_proposed {
+                    if o.price < w.clearing_price {
+                        w.s_below = w
+                            .s_below
+                            .checked_add(o.quantity)
+                            .ok_or(ProtocolError::MathOverflow)?;
+                    } else if o.price == w.clearing_price {
+                        w.s_at = w
+                            .s_at
+                            .checked_add(o.quantity)
+                            .ok_or(ProtocolError::MathOverflow)?;
+                    }
                 }
                 w.min_ask = core::cmp::min(w.min_ask, o.price);
             }
@@ -533,8 +592,7 @@ pub fn tally_orders<'info>(ctx: Context<'info, WindowSettle<'info>>) -> Result<(
             .tallied_count
             .checked_add(1)
             .ok_or(ProtocolError::MathOverflow)?;
-        let mut data = info.try_borrow_mut_data()?;
-        o.try_serialize(&mut &mut data[..])?;
+        store_order(info, &o)?;
     }
     Ok(())
 }
@@ -560,6 +618,8 @@ pub fn finalize_window(ctx: Context<WindowSettle>) -> Result<()> {
         max_bid: w.max_bid,
         min_ask: w.min_ask,
         valid_count: w.valid_count,
+        valid_bids: w.valid_bids,
+        valid_asks: w.valid_asks,
     };
     let reject = |w: &mut Window, price: u64, reason: u8| {
         w.round_rejected = true;
@@ -588,7 +648,10 @@ pub fn finalize_window(ctx: Context<WindowSettle>) -> Result<()> {
                 w.branch = c.branch as u8;
                 w.matched_units = c.matched_units;
                 w.marginal_remaining = c.marginal_remaining;
-                w.ask_budget = c.matched_units;
+                w.ask_at_total =
+                    ask_at_total(c.branch, w.s_at, w.s_below, c.matched_units).map_err(math)?;
+                w.ask_at_filled = 0;
+                w.cancelled_units = 0;
                 w.next_bid_index = 0;
                 w.next_ask_index = 0;
                 emit!(WindowCleared {
@@ -606,7 +669,10 @@ pub fn finalize_window(ctx: Context<WindowSettle>) -> Result<()> {
             }
         }
     }
-    ledger.set_active_window(None);
+    // a window without orders is done right away; otherwise the last processed order closes it
+    if w.order_count == 0 && ledger.active_window() == Some(w.period) {
+        ledger.set_active_window(None);
+    }
     Ok(())
 }
 
@@ -625,16 +691,424 @@ pub struct ProcessOrder<'info> {
     pub window: Box<Account<'info, Window>>,
     #[account(mut, seeds = [seeds::ORDER, series.key().as_ref(), window.period.to_le_bytes().as_ref(), owner.key().as_ref()], bump = order.bump)]
     pub order: Box<Account<'info, Order>>,
+    /// CHECK: the order's owner (only its key is used; nothing is sent to it here).
+    #[account(address = order.owner @ ProtocolError::OrderMismatch)]
+    pub owner: UncheckedAccount<'info>,
+    /// CHECK: the owner's `Holder` PDA (address checked by the seeds); created for a buyer's first
+    /// fill, required (registered) for a seller.
+    #[account(mut, seeds = [seeds::HOLDER, series.key().as_ref(), owner.key().as_ref()], bump)]
+    pub holder: UncheckedAccount<'info>,
+    /// CHECK: the owner's registry `AllowlistEntry` PDA, always supplied (address checked; a
+    /// missing entry reads as not allowed) so the buyer re-check at fill cannot be bypassed or
+    /// forced by omission. Ignored for asks.
+    #[account(seeds = [ALLOW, owner.key().as_ref()], bump, seeds::program = merces_registry::ID)]
+    pub owner_allowlist: UncheckedAccount<'info>,
+    /// CHECK: the owner's unit ATA (accrual weight; derivation validated; may not exist).
+    pub owner_unit_ata: UncheckedAccount<'info>,
+    /// CHECK: the window stablecoin escrow PDA created in `prepare_raise`.
+    #[account(mut, seeds = [seeds::WINDOW_STABLE, series.key().as_ref()], bump)]
+    pub window_stable: UncheckedAccount<'info>,
+    /// CHECK: data-less signer PDA owning both window escrows.
+    #[account(seeds = [seeds::WINDOW_ESCROW, series.key().as_ref()], bump)]
+    pub window_escrow_auth: UncheckedAccount<'info>,
+    /// CHECK: the fee collector's ATA; derivation validated in the handler.
+    #[account(mut)]
+    pub fee_collector_ata: UncheckedAccount<'info>,
+    /// CHECK: the stablecoin mint recorded in the registry.
+    #[account(address = series.stablecoin @ ProtocolError::StablecoinMismatch)]
+    pub stablecoin_mint: UncheckedAccount<'info>,
+    #[account(address = series.stablecoin_program @ ProtocolError::TokenProgramMismatch)]
+    pub stablecoin_program: Interface<'info, TokenInterface>,
+    pub token_2022_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+/// `process_order` (SPEC §7), exhaustive; accounting only. Revealed bids go in ascending reveal
+/// index, then revealed asks in ascending reveal index (`OutOfOrder` / `BidsNotProcessed`), so the
+/// first-come margin is deterministic and the cancelled-buyer units are known before any ask is
+/// settled. Unrevealed orders and every order of a `NoMatch` window can be processed at any time.
+/// Only the window fee leaves the escrow here; refunds, proceeds and units are recorded on the
+/// order for `deliver_order`. Remaining accounts: the stablecoin's hook accounts, if any.
+pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<()> {
+    let mut ledger = ctx.accounts.ledger.load_mut()?;
+    let series_key = ctx.accounts.series.key();
+    let w = &ctx.accounts.window;
+    require!(
+        w.state == WINDOW_SETTLED || w.state == WINDOW_NO_MATCH,
+        ProtocolError::WindowNotSettled
+    );
+    let o = &ctx.accounts.order;
+    require!(!o.processed, ProtocolError::OrderAlreadyProcessed);
+    let owner = ctx.accounts.owner.key();
+    let series = &ctx.accounts.series;
+    let stable_program = ctx.accounts.stablecoin_program.key();
+    let t22 = ctx.accounts.token_2022_program.key();
+    let unit_ata = ctx.accounts.owner_unit_ata.to_account_info();
+    require_ata(&unit_ata, &owner, &series.unit_mint, &t22)?;
+    require_ata(
+        &ctx.accounts.fee_collector_ata.to_account_info(),
+        &ctx.accounts.config.fee_collector,
+        &series.stablecoin,
+        &stable_program,
+    )?;
+    let balance = if *unit_ata.owner == t22 && !unit_ata.data_is_empty() {
+        token_account_amount(&unit_ata)?
+    } else {
+        0
+    };
+    let no_match = w.state == WINDOW_NO_MATCH;
+    let live = !no_match && o.revealed && o.valid;
+    if !no_match && o.revealed {
+        if o.side == SIDE_BID {
+            require!(
+                o.reveal_index == w.next_bid_index,
+                ProtocolError::OutOfOrder
+            );
+        } else {
+            require!(
+                w.next_bid_index == w.revealed_bids,
+                ProtocolError::BidsNotProcessed
+            );
+            require!(
+                o.reveal_index == w.next_ask_index,
+                ProtocolError::OutOfOrder
+            );
+        }
+    }
+    let p = w.clearing_price;
+    let branch = branch_of(w);
+    let holder_info = ctx.accounts.holder.to_account_info();
+
+    let (fill, fee, refund) = if o.side == SIDE_BID {
+        // class fill: full side, losing side, or first-come at the margin (branch A)
+        let mut marginal_remaining = w.marginal_remaining;
+        let class = if live {
+            match classify(SIDE_BID, o.price, p, branch) {
+                FillClass::Full => o.quantity,
+                FillClass::Losing => 0,
+                FillClass::Marginal => {
+                    let f = core::cmp::min(o.quantity, marginal_remaining);
+                    marginal_remaining = marginal_remaining
+                        .checked_sub(f)
+                        .ok_or(ProtocolError::MathOverflow)?;
+                    f
+                }
+            }
+        } else {
+            0
+        };
+        // buyer re-check at fill: a buyer no longer allowlisted is refunded in full and its units
+        // go back to the sellers (SPEC §7)
+        let cancelled =
+            class > 0 && !is_allowlisted(&ctx.accounts.owner_allowlist.to_account_info(), &owner)?;
+        let fill = if cancelled { 0 } else { class };
+        let (_cost, fee, refund) =
+            settle_buyer(p, fill, o.escrow, series.window_fee_bps).map_err(math)?;
+        let escrow_bump = [ctx.bumps.window_escrow_auth];
+        let escrow_seeds: &[&[u8]] = &[seeds::WINDOW_ESCROW, series_key.as_ref(), &escrow_bump];
+        transfer_stable(
+            &ctx.accounts.stablecoin_program.to_account_info(),
+            &ctx.accounts.window_stable.to_account_info(),
+            &ctx.accounts.stablecoin_mint.to_account_info(),
+            &ctx.accounts.fee_collector_ata.to_account_info(),
+            &ctx.accounts.window_escrow_auth.to_account_info(),
+            ctx.remaining_accounts,
+            fee,
+            series.stablecoin_decimals,
+            &[escrow_seeds],
+        )?;
+        if fill > 0 {
+            // register (first units) or settle at the current weight, then add the bought units
+            let mut h = load_or_create_holder(
+                &holder_info,
+                &ctx.accounts.payer.to_account_info(),
+                &ctx.accounts.system_program.to_account_info(),
+                &series_key,
+                &owner,
+                ctx.bumps.holder,
+            )?;
+            if !register_holder_now(&ledger, &mut h, series_key, owner, ctx.bumps.holder)? {
+                settle_holder(&ledger, &mut h, balance)?;
+            }
+            h.window_pending_units = h
+                .window_pending_units
+                .checked_add(fill)
+                .ok_or(ProtocolError::MathOverflow)?;
+            store_holder(&holder_info, &h)?;
+        }
+        let w = &mut ctx.accounts.window;
+        w.marginal_remaining = marginal_remaining;
+        if cancelled {
+            w.cancelled_units = w
+                .cancelled_units
+                .checked_add(class)
+                .ok_or(ProtocolError::MathOverflow)?;
+        }
+        w.escrow_stable = w
+            .escrow_stable
+            .checked_sub(fee)
+            .ok_or(ProtocolError::MathOverflow)?;
+        w.bids_processed = w
+            .bids_processed
+            .checked_add(1)
+            .ok_or(ProtocolError::MathOverflow)?;
+        if !no_match && o.revealed {
+            w.next_bid_index = w
+                .next_bid_index
+                .checked_add(1)
+                .ok_or(ProtocolError::MathOverflow)?;
+        }
+        let o = &mut ctx.accounts.order;
+        o.pending_units = fill;
+        o.pending_stable = refund;
+        (fill, fee, refund)
+    } else {
+        let mut at_filled = w.ask_at_filled;
+        let fill = if live {
+            if o.price == p {
+                // at-p* group: first-come against the budget left after cancellations
+                let budget = ask_at_budget(w.ask_at_total, w.cancelled_units);
+                let room = budget.saturating_sub(at_filled);
+                let f = core::cmp::min(o.quantity, room);
+                at_filled = at_filled
+                    .checked_add(f)
+                    .ok_or(ProtocolError::MathOverflow)?;
+                f
+            } else if o.price < p {
+                // below p*: full, minus the threshold cut when the take-back reaches this group
+                let r_below = below_takeback(w.ask_at_total, w.cancelled_units);
+                if r_below == 0 {
+                    o.quantity
+                } else {
+                    require!(w.tb_settled, ProtocolError::TakebackRequired);
+                    let cut = below_cut(
+                        o.price,
+                        o.reveal_index,
+                        o.quantity,
+                        w.tb_price,
+                        w.tb_index,
+                        w.tb_partial,
+                    );
+                    o.quantity
+                        .checked_sub(cut)
+                        .ok_or(ProtocolError::MathOverflow)?
+                }
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let proceeds = p.checked_mul(fill).ok_or(ProtocolError::MathOverflow)?;
+        let units_back = o
+            .escrow
+            .checked_sub(fill)
+            .ok_or(ProtocolError::MathOverflow)?;
+        // seller: settle at the current weight, then move the escrow units to "pending delivery"
+        let mut h = read_holder(&holder_info)?.ok_or(ProtocolError::HolderNotRegistered)?;
+        settle_holder(&ledger, &mut h, balance)?;
+        h.ask_escrow_units = h
+            .ask_escrow_units
+            .checked_sub(o.escrow)
+            .ok_or(ProtocolError::MathOverflow)?;
+        h.window_pending_units = h
+            .window_pending_units
+            .checked_add(units_back)
+            .ok_or(ProtocolError::MathOverflow)?;
+        store_holder(&holder_info, &h)?;
+        let w = &mut ctx.accounts.window;
+        w.ask_at_filled = at_filled;
+        w.asks_processed = w
+            .asks_processed
+            .checked_add(1)
+            .ok_or(ProtocolError::MathOverflow)?;
+        if !no_match && o.revealed {
+            w.next_ask_index = w
+                .next_ask_index
+                .checked_add(1)
+                .ok_or(ProtocolError::MathOverflow)?;
+        }
+        let o = &mut ctx.accounts.order;
+        o.pending_units = units_back;
+        o.pending_stable = proceeds;
+        (fill, 0u64, units_back)
+    };
+    let w = &mut ctx.accounts.window;
+    w.processed_count = w
+        .processed_count
+        .checked_add(1)
+        .ok_or(ProtocolError::MathOverflow)?;
+    if w.processed_count == w.order_count && ledger.active_window() == Some(w.period) {
+        ledger.set_active_window(None);
+    }
+    let o = &mut ctx.accounts.order;
+    o.processed = true;
+    o.fill = fill;
+    emit!(OrderFilled {
+        series: series_key,
+        period: o.period,
+        owner,
+        side: o.side,
+        fill,
+        price: if no_match { 0 } else { p },
+        fee,
+        refund,
+    });
+    Ok(())
+}
+
+// ------------------------------------------------------------------------------------ take-back
+
+#[derive(Accounts)]
+pub struct WindowTakeback<'info> {
+    pub series: Box<Account<'info, Series>>,
+    #[account(mut, seeds = [seeds::WINDOW, series.key().as_ref(), window.period.to_le_bytes().as_ref()], bump = window.bump)]
+    pub window: Box<Account<'info, Window>>,
+}
+
+/// Units the asks below `p*` must give back, available once every revealed bid is processed.
+fn takeback_units(w: &Window) -> Result<u64> {
+    require!(w.state == WINDOW_SETTLED, ProtocolError::WindowNotSettled);
+    require!(
+        w.next_bid_index == w.revealed_bids,
+        ProtocolError::BidsNotProcessed
+    );
+    Ok(below_takeback(w.ask_at_total, w.cancelled_units))
+}
+
+/// Proposes the threshold ask `(price, reveal_index)` — the last order (in descending
+/// `(price, reveal_index)`) the take-back below `p*` reaches. Anyone; allowed only when no round is
+/// in progress (`TakebackInProgress`), so honest keepers' tallies cannot be reset.
+pub fn begin_takeback(ctx: Context<WindowTakeback>, price: u64, reveal_index: u32) -> Result<()> {
+    let series_key = ctx.accounts.series.key();
+    let w = &mut ctx.accounts.window;
+    let r_below = takeback_units(w)?;
+    require!(r_below > 0, ProtocolError::TakebackNotRequired);
+    require!(!w.tb_settled, ProtocolError::TakebackAlreadySettled);
+    require!(
+        w.tb_round == 0 || w.tb_rejected,
+        ProtocolError::TakebackInProgress
+    );
+    w.tb_round = w
+        .tb_round
+        .checked_add(1)
+        .ok_or(ProtocolError::MathOverflow)?;
+    w.tb_rejected = false;
+    w.tb_price = price;
+    w.tb_index = reveal_index;
+    w.tb_above_sum = 0;
+    w.tb_found = false;
+    w.tb_k_quantity = 0;
+    w.tb_tallied = 0;
+    emit!(WindowTakebackProposed {
+        series: series_key,
+        period: w.period,
+        price,
+        reveal_index,
+        round: w.tb_round,
+    });
+    Ok(())
+}
+
+/// Remaining accounts: up to 24 `Order` PDAs of this window (read-write). Every revealed ask is
+/// counted once per round; valid asks below `p*` with a larger key than the proposal add to
+/// `Σ_{key > k} q`, the proposed order itself records its quantity.
+pub fn tally_takeback<'info>(ctx: Context<'info, WindowTakeback<'info>>) -> Result<()> {
+    let series_key = ctx.accounts.series.key();
+    let w = &mut ctx.accounts.window;
+    require!(
+        w.state == WINDOW_SETTLED && w.tb_round > 0 && !w.tb_rejected && !w.tb_settled,
+        ProtocolError::TakebackNotTallying
+    );
+    require!(
+        ctx.remaining_accounts.len() <= TALLY_PAGE,
+        ProtocolError::TallyPageTooLarge
+    );
+    for info in ctx.remaining_accounts.iter() {
+        let mut o = load_order_page_entry(info, &series_key, w.period)?;
+        if o.side != SIDE_ASK || !o.revealed || o.takeback_round == w.tb_round {
+            continue;
+        }
+        if o.valid && o.price < w.clearing_price {
+            if taken_before(o.price, o.reveal_index, w.tb_price, w.tb_index) {
+                w.tb_above_sum = w
+                    .tb_above_sum
+                    .checked_add(o.quantity)
+                    .ok_or(ProtocolError::MathOverflow)?;
+            } else if o.price == w.tb_price && o.reveal_index == w.tb_index {
+                w.tb_found = true;
+                w.tb_k_quantity = o.quantity;
+            }
+        }
+        o.takeback_round = w.tb_round;
+        w.tb_tallied = w
+            .tb_tallied
+            .checked_add(1)
+            .ok_or(ProtocolError::MathOverflow)?;
+        store_order(info, &o)?;
+    }
+    Ok(())
+}
+
+/// Accepts the threshold iff `Σ_{key > k} q < R ≤ Σ_{key > k} q + q_k` (unique when it exists,
+/// and it always exists because `R ≤ s_below`); a wrong proposal is recorded, never reverted.
+pub fn finalize_takeback(ctx: Context<WindowTakeback>) -> Result<()> {
+    let series_key = ctx.accounts.series.key();
+    let w = &mut ctx.accounts.window;
+    require!(
+        w.state == WINDOW_SETTLED && w.tb_round > 0 && !w.tb_rejected && !w.tb_settled,
+        ProtocolError::TakebackNotTallying
+    );
+    require!(
+        w.tb_tallied == w.revealed_asks,
+        ProtocolError::TallyIncomplete
+    );
+    let r_below = takeback_units(w)?;
+    if takeback_threshold_valid(r_below, w.tb_above_sum, w.tb_found, w.tb_k_quantity)
+        .map_err(math)?
+    {
+        w.tb_settled = true;
+        w.tb_partial = r_below
+            .checked_sub(w.tb_above_sum)
+            .ok_or(ProtocolError::MathOverflow)?;
+        emit!(WindowTakebackSettled {
+            series: series_key,
+            period: w.period,
+            cancelled_units: w.cancelled_units,
+            below_units: r_below,
+            price: w.tb_price,
+            reveal_index: w.tb_index,
+            partial: w.tb_partial,
+        });
+    } else {
+        w.tb_rejected = true;
+        emit!(WindowTakebackRejected {
+            series: series_key,
+            period: w.period,
+            round: w.tb_round,
+        });
+    }
+    Ok(())
+}
+
+// -------------------------------------------------------------------------------- deliver_order
+
+#[derive(Accounts)]
+pub struct DeliverOrder<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub series: Box<Account<'info, Series>>,
+    #[account(mut, seeds = [seeds::WINDOW, series.key().as_ref(), window.period.to_le_bytes().as_ref()], bump = window.bump)]
+    pub window: Box<Account<'info, Window>>,
+    #[account(mut, seeds = [seeds::ORDER, series.key().as_ref(), window.period.to_le_bytes().as_ref(), owner.key().as_ref()], bump = order.bump)]
+    pub order: Box<Account<'info, Order>>,
     /// CHECK: the order's owner; units and stablecoin go to its associated token accounts only.
     #[account(address = order.owner @ ProtocolError::OrderMismatch)]
     pub owner: UncheckedAccount<'info>,
-    #[account(init_if_needed, payer = payer, space = 8 + Holder::INIT_SPACE, seeds = [seeds::HOLDER, series.key().as_ref(), owner.key().as_ref()], bump)]
-    pub holder: Box<Account<'info, Holder>>,
-    /// The buyer's allowlist entry (re-checked at fill); a missing or `allowed = false` entry
-    /// cancels the fill. Ignored for asks.
-    #[account(seeds = [ALLOW, owner.key().as_ref()], bump = owner_allowlist.bump, seeds::program = merces_registry::ID)]
-    pub owner_allowlist: Option<Box<Account<'info, AllowlistEntry>>>,
-    /// CHECK: the owner's unit ATA (created idempotently for buyers; derivation validated).
+    /// CHECK: the owner's `Holder` PDA (address checked by the seeds; required when units move).
+    #[account(mut, seeds = [seeds::HOLDER, series.key().as_ref(), owner.key().as_ref()], bump)]
+    pub holder: UncheckedAccount<'info>,
+    /// CHECK: the owner's unit ATA (created idempotently; derivation validated).
     #[account(mut)]
     pub owner_unit_ata: UncheckedAccount<'info>,
     /// CHECK: the owner's stablecoin ATA (created idempotently; derivation validated).
@@ -649,9 +1123,6 @@ pub struct ProcessOrder<'info> {
     /// CHECK: data-less signer PDA owning both window escrows.
     #[account(seeds = [seeds::WINDOW_ESCROW, series.key().as_ref()], bump)]
     pub window_escrow_auth: UncheckedAccount<'info>,
-    /// CHECK: the fee collector's ATA; derivation validated in the handler.
-    #[account(mut)]
-    pub fee_collector_ata: UncheckedAccount<'info>,
     /// CHECK: the unit mint recorded in the registry.
     #[account(address = series.unit_mint @ ProtocolError::UnitMintMismatch)]
     pub unit_mint: UncheckedAccount<'info>,
@@ -665,304 +1136,101 @@ pub struct ProcessOrder<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// `process_order` (SPEC §7), exhaustive. Revealed orders are processed in ascending per-side
-/// reveal index, every bid before any ask, so first-come marginal fills are deterministic and a
-/// buyer whose fill is cancelled (allowlist removed) shrinks the asks' budget before any ask is
-/// paid. Unrevealed orders and every order of a `NoMatch` window can be processed at any time.
-/// Remaining accounts: the Merces hook accounts for the unit mint and the stablecoin's hook
-/// accounts, if any.
-pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<()> {
-    let ledger = ctx.accounts.ledger.load()?;
+/// `deliver_order`: anyone (or the owner), after `process_order`, once. Pays the recorded
+/// stablecoin (bid refund or ask proceeds) and moves the recorded units (bid fill or ask return)
+/// from the window escrow (hook rule 3) to the owner's associated accounts, created idempotently.
+/// A delivery that fails for recipient-side reasons can be retried forever and never affects any
+/// other order. Remaining accounts: the Merces hook accounts for the unit mint, then the
+/// stablecoin's hook accounts, if any.
+pub fn deliver_order<'info>(ctx: Context<'info, DeliverOrder<'info>>) -> Result<()> {
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
-    let w = &ctx.accounts.window;
-    require!(
-        w.state == WINDOW_SETTLED || w.state == WINDOW_NO_MATCH,
-        ProtocolError::WindowNotSettled
-    );
     let o = &ctx.accounts.order;
-    require!(!o.processed, ProtocolError::OrderAlreadyProcessed);
+    require!(o.processed, ProtocolError::OrderNotProcessed);
+    require!(!o.delivered, ProtocolError::OrderAlreadyDelivered);
     let owner = ctx.accounts.owner.key();
-    let stable_program = ctx.accounts.stablecoin_program.key();
-    let t22 = ctx.accounts.token_2022_program.key();
-    require_ata(
-        &ctx.accounts.owner_unit_ata.to_account_info(),
-        &owner,
-        &series.unit_mint,
-        &t22,
-    )?;
-    require_ata(
-        &ctx.accounts.owner_stable_ata.to_account_info(),
-        &owner,
-        &series.stablecoin,
-        &stable_program,
-    )?;
-    require_ata(
-        &ctx.accounts.fee_collector_ata.to_account_info(),
-        &ctx.accounts.config.fee_collector,
-        &series.stablecoin,
-        &stable_program,
-    )?;
-    let no_match = w.state == WINDOW_NO_MATCH;
-    let live = !no_match && o.revealed && o.valid;
-    // ordering
-    if !no_match && o.revealed {
-        if o.side == SIDE_BID {
-            require!(
-                o.reveal_index == w.next_bid_index,
-                ProtocolError::OutOfOrder
-            );
-        } else {
-            require!(
-                w.next_bid_index == w.revealed_bids,
-                ProtocolError::OutOfOrder
-            );
-            require!(
-                o.reveal_index == w.next_ask_index,
-                ProtocolError::OutOfOrder
-            );
-        }
-    }
-    let p = w.clearing_price;
-    let branch = branch_of(w);
-    let decimals = series.stablecoin_decimals;
+    let units = o.pending_units;
+    let amount = o.pending_stable;
+    let side = o.side;
     let escrow_bump = [ctx.bumps.window_escrow_auth];
     let escrow_seeds: &[&[u8]] = &[seeds::WINDOW_ESCROW, series_key.as_ref(), &escrow_bump];
-    let token_2022 = ctx.accounts.token_2022_program.to_account_info();
-    let stable_program_info = ctx.accounts.stablecoin_program.to_account_info();
-    let unit_mint = ctx.accounts.unit_mint.to_account_info();
-    let stable_mint = ctx.accounts.stablecoin_mint.to_account_info();
-    let window_units = ctx.accounts.window_escrow_ata.to_account_info();
-    let window_stable = ctx.accounts.window_stable.to_account_info();
-    let escrow_auth = ctx.accounts.window_escrow_auth.to_account_info();
-    let owner_units = ctx.accounts.owner_unit_ata.to_account_info();
-    let owner_stable = ctx.accounts.owner_stable_ata.to_account_info();
     let payer = ctx.accounts.payer.to_account_info();
     let owner_info = ctx.accounts.owner.to_account_info();
     let system_program = ctx.accounts.system_program.to_account_info();
     let ata_program = ctx.accounts.associated_token_program.to_account_info();
-
-    // class fill (before budget / allowlist adjustments)
-    let mut fill = if live {
-        match classify(o.side, o.price, p, branch) {
-            FillClass::Full => o.quantity,
-            FillClass::Losing => 0,
-            FillClass::Marginal => core::cmp::min(o.quantity, w.marginal_remaining),
-        }
-    } else {
-        0
-    };
-    let class_fill = fill;
-
-    let (fee, refund) = if o.side == SIDE_BID {
-        let allowed = ctx
-            .accounts
-            .owner_allowlist
-            .as_ref()
-            .is_some_and(|e| e.allowed);
-        if fill > 0 && !allowed {
-            // cancelled: full refund; the units stay unmatched and return through the asks
-            fill = 0;
-        }
-        let (_cost, fee, refund) =
-            settle_buyer(p, fill, o.escrow, series.window_fee_bps).map_err(math)?;
+    if amount > 0 {
         create_ata_idempotent(CreateAta {
             payer: &payer,
-            ata: &owner_stable,
+            ata: &ctx.accounts.owner_stable_ata.to_account_info(),
             owner: &owner_info,
-            mint: &stable_mint,
+            mint: &ctx.accounts.stablecoin_mint.to_account_info(),
             system_program: &system_program,
-            token_program: &stable_program_info,
+            token_program: &ctx.accounts.stablecoin_program.to_account_info(),
             ata_program: &ata_program,
         })?;
         transfer_stable(
-            &stable_program_info,
-            &window_stable,
-            &stable_mint,
-            &ctx.accounts.fee_collector_ata.to_account_info(),
-            &escrow_auth,
+            &ctx.accounts.stablecoin_program.to_account_info(),
+            &ctx.accounts.window_stable.to_account_info(),
+            &ctx.accounts.stablecoin_mint.to_account_info(),
+            &ctx.accounts.owner_stable_ata.to_account_info(),
+            &ctx.accounts.window_escrow_auth.to_account_info(),
             ctx.remaining_accounts,
-            fee,
-            decimals,
+            amount,
+            series.stablecoin_decimals,
             &[escrow_seeds],
         )?;
-        transfer_stable(
-            &stable_program_info,
-            &window_stable,
-            &stable_mint,
-            &owner_stable,
-            &escrow_auth,
-            ctx.remaining_accounts,
-            refund,
-            decimals,
-            &[escrow_seeds],
-        )?;
-        if fill > 0 {
-            create_ata_idempotent(CreateAta {
-                payer: &payer,
-                ata: &owner_units,
-                owner: &owner_info,
-                mint: &unit_mint,
-                system_program: &system_program,
-                token_program: &token_2022,
-                ata_program: &ata_program,
-            })?;
-            // register / settle the buyer before its balance changes
-            let bump = ctx.bumps.holder;
-            if !register_holder_now(&ledger, &mut ctx.accounts.holder, series_key, owner, bump)? {
-                let balance = token_account_amount(&owner_units)?;
-                settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
-            }
-            transfer_units(
-                &token_2022,
-                &window_units,
-                &unit_mint,
-                &owner_units,
-                &escrow_auth,
-                ctx.remaining_accounts,
-                fill,
-                &[escrow_seeds],
-            )?;
-        }
-        let w = &mut ctx.accounts.window;
-        if live {
-            if class_fill > 0 && fill == 0 {
-                w.ask_budget = w
-                    .ask_budget
-                    .checked_sub(class_fill)
-                    .ok_or(ProtocolError::MathOverflow)?;
-            }
-            if classify(SIDE_BID, o.price, p, branch) == FillClass::Marginal {
-                w.marginal_remaining = w
-                    .marginal_remaining
-                    .checked_sub(class_fill)
-                    .ok_or(ProtocolError::MathOverflow)?;
-            }
-        }
-        // fee and refund leave the escrow now; the cost stays for the asks
-        let leaving = fee.checked_add(refund).ok_or(ProtocolError::MathOverflow)?;
-        w.escrow_stable = w
-            .escrow_stable
-            .checked_sub(leaving)
-            .ok_or(ProtocolError::MathOverflow)?;
-        w.escrow_units = w
-            .escrow_units
-            .checked_sub(fill)
-            .ok_or(ProtocolError::MathOverflow)?;
-        w.bids_processed = w
-            .bids_processed
-            .checked_add(1)
-            .ok_or(ProtocolError::MathOverflow)?;
-        if !no_match && o.revealed {
-            w.next_bid_index = w
-                .next_bid_index
-                .checked_add(1)
-                .ok_or(ProtocolError::MathOverflow)?;
-        }
-        (fee, refund)
-    } else {
-        if live {
-            fill = core::cmp::min(fill, w.ask_budget);
-        }
-        let proceeds = p.checked_mul(fill).ok_or(ProtocolError::MathOverflow)?;
-        let units_back = o
-            .escrow
-            .checked_sub(fill)
-            .ok_or(ProtocolError::MathOverflow)?;
-        // seller: settle at the current weight, then release the escrow accounting
-        require!(
-            ctx.accounts.holder.registered,
-            ProtocolError::HolderNotRegistered
-        );
-        let balance = token_account_amount(&owner_units)?;
-        settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
-        let h = &mut ctx.accounts.holder;
-        h.ask_escrow_units = h
-            .ask_escrow_units
-            .checked_sub(o.escrow)
-            .ok_or(ProtocolError::MathOverflow)?;
-        if proceeds > 0 {
-            create_ata_idempotent(CreateAta {
-                payer: &payer,
-                ata: &owner_stable,
-                owner: &owner_info,
-                mint: &stable_mint,
-                system_program: &system_program,
-                token_program: &stable_program_info,
-                ata_program: &ata_program,
-            })?;
-            transfer_stable(
-                &stable_program_info,
-                &window_stable,
-                &stable_mint,
-                &owner_stable,
-                &escrow_auth,
-                ctx.remaining_accounts,
-                proceeds,
-                decimals,
-                &[escrow_seeds],
-            )?;
-        }
+    }
+    if units > 0 {
+        let holder_info = ctx.accounts.holder.to_account_info();
+        let mut h = read_holder(&holder_info)?.ok_or(ProtocolError::HolderNotRegistered)?;
+        create_ata_idempotent(CreateAta {
+            payer: &payer,
+            ata: &ctx.accounts.owner_unit_ata.to_account_info(),
+            owner: &owner_info,
+            mint: &ctx.accounts.unit_mint.to_account_info(),
+            system_program: &system_program,
+            token_program: &ctx.accounts.token_2022_program.to_account_info(),
+            ata_program: &ata_program,
+        })?;
         transfer_units(
-            &token_2022,
-            &window_units,
-            &unit_mint,
-            &owner_units,
-            &escrow_auth,
+            &ctx.accounts.token_2022_program.to_account_info(),
+            &ctx.accounts.window_escrow_ata.to_account_info(),
+            &ctx.accounts.unit_mint.to_account_info(),
+            &ctx.accounts.owner_unit_ata.to_account_info(),
+            &ctx.accounts.window_escrow_auth.to_account_info(),
             ctx.remaining_accounts,
-            units_back,
+            units,
             &[escrow_seeds],
         )?;
-        let w = &mut ctx.accounts.window;
-        if live {
-            w.ask_budget = w
-                .ask_budget
-                .checked_sub(fill)
-                .ok_or(ProtocolError::MathOverflow)?;
-            if classify(SIDE_ASK, o.price, p, branch) == FillClass::Marginal {
-                w.marginal_remaining = w
-                    .marginal_remaining
-                    .checked_sub(class_fill)
-                    .ok_or(ProtocolError::MathOverflow)?;
-            }
-        }
-        w.escrow_units = w
-            .escrow_units
-            .checked_sub(units_back)
+        // delivery does not change the accrual weight: pending units become balance units
+        h.window_pending_units = h
+            .window_pending_units
+            .checked_sub(units)
             .ok_or(ProtocolError::MathOverflow)?;
-        w.escrow_stable = w
-            .escrow_stable
-            .checked_sub(proceeds)
-            .ok_or(ProtocolError::MathOverflow)?;
-        w.asks_processed = w
-            .asks_processed
-            .checked_add(1)
-            .ok_or(ProtocolError::MathOverflow)?;
-        if !no_match && o.revealed {
-            w.next_ask_index = w
-                .next_ask_index
-                .checked_add(1)
-                .ok_or(ProtocolError::MathOverflow)?;
-        }
-        (0u64, units_back)
-    };
+        store_holder(&holder_info, &h)?;
+    }
     let w = &mut ctx.accounts.window;
-    w.processed_count = w
-        .processed_count
+    w.escrow_stable = w
+        .escrow_stable
+        .checked_sub(amount)
+        .ok_or(ProtocolError::MathOverflow)?;
+    w.escrow_units = w
+        .escrow_units
+        .checked_sub(units)
+        .ok_or(ProtocolError::MathOverflow)?;
+    w.delivered_count = w
+        .delivered_count
         .checked_add(1)
         .ok_or(ProtocolError::MathOverflow)?;
     let o = &mut ctx.accounts.order;
-    o.processed = true;
-    o.fill = fill;
-    emit!(OrderFilled {
+    o.delivered = true;
+    emit!(OrderDelivered {
         series: series_key,
         period: o.period,
         owner,
-        side: o.side,
-        fill,
-        price: if no_match { 0 } else { p },
-        fee,
-        refund,
+        side,
+        units,
+        amount,
     });
     Ok(())
 }

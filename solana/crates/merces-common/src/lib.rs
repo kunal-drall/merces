@@ -11,6 +11,8 @@ pub mod auction;
 pub mod encoding;
 pub mod fx;
 pub mod params;
+#[cfg(test)]
+mod properties;
 pub mod redemption;
 pub mod router;
 pub mod status;

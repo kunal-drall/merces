@@ -157,7 +157,7 @@ pub fn codes_for(name: &str) -> Vec<u32> {
         "FxMismatch" => vec![p(P::FxAverageMismatch), p(P::FxMustBeOne)],
         "FxPairExists" => vec![r(R::FxPairImmutable)],
         "HolderNotRegistered" => vec![p(P::HolderNotRegistered), ACCOUNT_NOT_INITIALIZED],
-        "InsufficientUnits" => vec![p(P::AskExceedsBalance)],
+        "InsufficientUnits" => vec![p(P::AskExceedsBalance), p(P::ZeroUnits)],
         "InvalidAttestorSignature" => vec![
             p(P::SignerMismatch),
             p(P::AttestorInactive),
@@ -205,7 +205,7 @@ pub fn codes_for(name: &str) -> Vec<u32> {
         "PaymentOutstanding" => vec![p(P::DueOutstanding)],
         "RaiseNotDraft" => vec![p(P::NotDraft), r(R::NotDraft), p(P::RaiseNotOpen)],
         "RaiseNotOpen" => vec![p(P::RaiseNotOpen), ACCOUNT_NOT_INITIALIZED],
-        "RaiseNotSettled" => vec![p(P::NotSettledOrFailed), p(P::MintNotFinalized)],
+        "RaiseNotSettled" => vec![p(P::RaiseNotSettled), p(P::NotSettledOrFailed)],
         "ReportTooEarly" => vec![p(P::PeriodNotEnded)],
         "RevealNotStarted" | "RevealPhaseClosed" => vec![p(P::NotRevealPhase)],
         "RouterPeriodNotClosed" => vec![p(P::RouterPeriodNotClosed)],
@@ -219,7 +219,6 @@ pub fn codes_for(name: &str) -> Vec<u32> {
         "TallyIncomplete" => vec![p(P::TallyIncomplete)],
         "TerminalStatus" => vec![
             p(P::TerminalStatus),
-            p(P::RedemptionStatusNotAllowed),
             p(P::WindowStatusNotAllowed),
             p(P::SeriesExtinguished),
         ],
@@ -249,7 +248,7 @@ pub fn codes_for(name: &str) -> Vec<u32> {
         "WrongPeriod" => vec![p(P::WrongPeriod)],
         "OutOfOrder" => vec![p(P::OutOfOrder)],
         "ZeroEscrow" => vec![p(P::ZeroEscrow)],
-        "TrueUpOutstanding" => vec![p(P::TrueUpOutstanding), p(P::DueOutstanding)],
+        "TrueUpOutstanding" => vec![p(P::TrueUpOutstanding)],
         "TrueUpYearInvalid" => vec![
             p(P::TrueUpYearNotEnded),
             p(P::TrueUpYearUsed),
@@ -313,6 +312,72 @@ pub struct Runner {
     pub name: String,
     /// Maximum compute units consumed by a Merces program per vector op (top-level invocations).
     pub cu: HashMap<String, u64>,
+    /// Maximum compute units per program instruction (`program::instruction`, top-level), parsed
+    /// from the transaction logs of every successful step.
+    pub cu_ix: HashMap<String, u64>,
+    /// SPEC §3.3 snapshot per series: the frozen charter block and the raise results seen so far.
+    charter: HashMap<Pubkey, CharterSnapshot>,
+    /// The stablecoin every series of the vector uses: the SPL mock USDC by default, or the
+    /// Token-2022 mock USDG (transfer hook + zero transfer fee) for the Token-2022 replay.
+    pub stable: Pubkey,
+}
+
+/// What may never change after a raise opens (SPEC §3.3), plus the write-once raise results.
+#[derive(Clone)]
+struct CharterSnapshot {
+    frozen: Vec<u8>,
+    terms_commitment: [u8; 32],
+    cap_multiple_wad: u64,
+    amendment_nonce: u64,
+    raise_state: u8,
+    result: (u64, u64, u64),
+    mint_finalized: bool,
+    terminal_status: u8,
+}
+
+/// Borsh bytes of every Series field that is frozen once `raise_state != Draft` (SPEC §3.3): the
+/// identity, every charter term, the contract hash, the tier/FX flags, the router plaintext and the
+/// unit mint with its escrow accounts (written once by `mark_raise_opened`).
+fn charter_bytes(s: &merces_registry::state::Series) -> Vec<u8> {
+    use anchor_lang::AnchorSerialize;
+    let mut out = Vec::new();
+    let mut put = |v: &dyn Fn(&mut Vec<u8>)| v(&mut out);
+    put(&|o| s.series_id.serialize(o).unwrap());
+    put(&|o| s.issuer.serialize(o).unwrap());
+    put(&|o| s.mode.serialize(o).unwrap());
+    put(&|o| s.stablecoin.serialize(o).unwrap());
+    put(&|o| s.stablecoin_decimals.serialize(o).unwrap());
+    put(&|o| s.stablecoin_program.serialize(o).unwrap());
+    put(&|o| s.unit_mint.serialize(o).unwrap());
+    put(&|o| s.units_offered.serialize(o).unwrap());
+    put(&|o| s.reserve_price.serialize(o).unwrap());
+    put(&|o| s.min_raise.serialize(o).unwrap());
+    put(&|o| s.hurdle_rate_wad.serialize(o).unwrap());
+    put(&|o| s.payout_multiple_k.serialize(o).unwrap());
+    put(&|o| s.lockup_seconds.serialize(o).unwrap());
+    put(&|o| s.wallet_cap_bps.serialize(o).unwrap());
+    put(&|o| s.auction_fee_bps.serialize(o).unwrap());
+    put(&|o| s.payout_fee_bps.serialize(o).unwrap());
+    put(&|o| s.window_fee_bps.serialize(o).unwrap());
+    put(&|o| s.non_reveal_charge_bps.serialize(o).unwrap());
+    put(&|o| s.commit_duration.serialize(o).unwrap());
+    put(&|o| s.reveal_duration.serialize(o).unwrap());
+    put(&|o| s.window_commit_duration.serialize(o).unwrap());
+    put(&|o| s.window_reveal_duration.serialize(o).unwrap());
+    put(&|o| s.fx_min_coverage_bps.serialize(o).unwrap());
+    put(&|o| s.max_pause_seconds.serialize(o).unwrap());
+    put(&|o| s.max_cumulative_pause_seconds.serialize(o).unwrap());
+    put(&|o| s.release_schedule.serialize(o).unwrap());
+    put(&|o| s.contract_hash.serialize(o).unwrap());
+    put(&|o| s.tier_flags.serialize(o).unwrap());
+    put(&|o| s.fx_pair_id.serialize(o).unwrap());
+    put(&|o| s.issuer_accepts_public_price.serialize(o).unwrap());
+    put(&|o| s.metadata_uri.serialize(o).unwrap());
+    put(&|o| s.router_theta.serialize(o).unwrap());
+    put(&|o| s.router_r_wad.serialize(o).unwrap());
+    put(&|o| s.auction_escrow_ata.serialize(o).unwrap());
+    put(&|o| s.window_escrow_ata.serialize(o).unwrap());
+    out
 }
 
 impl Runner {
@@ -331,8 +396,10 @@ impl Runner {
                 keys.insert(k.clone(), signer);
             }
         }
+        let env = Env::new();
+        let stable = env.usdc;
         Runner {
-            env: Env::new(),
+            env,
             actors: HashMap::new(),
             series: HashMap::new(),
             keys,
@@ -342,12 +409,125 @@ impl Runner {
             vector,
             name,
             cu: HashMap::new(),
+            cu_ix: HashMap::new(),
+            charter: HashMap::new(),
+            stable,
         }
     }
 
+    /// SPEC §3.3 / F2: after every step, the charter block of every opened series is byte-identical
+    /// to its snapshot at opening; `terms_commitment` and `cap_multiple_wad` change only in an
+    /// `amend_terms` step (cap never upwards, nonce + 1); raise results are written once; mint
+    /// finalisation and terminal statuses only move forward.
+    fn check_charter(&mut self, op: &str, context: &str) {
+        let keys: Vec<Pubkey> = self.series.values().copied().collect();
+        for key in keys {
+            let s = self.env.series(&key);
+            if s.raise_state == merces_registry::state::RAISE_DRAFT {
+                continue;
+            }
+            let now = CharterSnapshot {
+                frozen: charter_bytes(&s),
+                terms_commitment: s.terms_commitment,
+                cap_multiple_wad: s.cap_multiple_wad,
+                amendment_nonce: s.amendment_nonce,
+                raise_state: s.raise_state,
+                result: (s.settlement_ts, s.units_sold, s.clearing_price),
+                mint_finalized: s.mint_finalized,
+                terminal_status: s.terminal_status,
+            };
+            if let Some(prev) = self.charter.get(&key) {
+                assert!(
+                    prev.frozen == now.frozen,
+                    "{context}: charter block of {key} changed (SPEC §3.3)"
+                );
+                let amended = (
+                    prev.terms_commitment,
+                    prev.cap_multiple_wad,
+                    prev.amendment_nonce,
+                ) != (
+                    now.terms_commitment,
+                    now.cap_multiple_wad,
+                    now.amendment_nonce,
+                );
+                if amended {
+                    assert_eq!(
+                        op, "amend_terms",
+                        "{context}: terms changed outside amend_terms"
+                    );
+                    assert!(
+                        now.cap_multiple_wad <= prev.cap_multiple_wad,
+                        "{context}: cap raised"
+                    );
+                    assert_eq!(
+                        now.amendment_nonce,
+                        prev.amendment_nonce + 1,
+                        "{context}: nonce"
+                    );
+                }
+                if prev.result != (0, 0, 0)
+                    && prev.raise_state != merces_registry::state::RAISE_OPEN
+                {
+                    assert_eq!(
+                        prev.result, now.result,
+                        "{context}: raise results rewritten"
+                    );
+                }
+                assert!(
+                    !prev.mint_finalized || now.mint_finalized,
+                    "{context}: mint finalisation undone"
+                );
+                assert!(
+                    prev.terminal_status == now.terminal_status
+                        || (prev.terminal_status == 0 && now.terminal_status != 0)
+                        || now.terminal_status == merces_registry::state::TERMINAL_EXTINGUISHED,
+                    "{context}: terminal status moved backwards"
+                );
+            }
+            self.charter.insert(key, now);
+        }
+    }
+
+    /// Runs a vector given as JSON, through step `upto` (inclusive) when given.
+    pub fn run_value(vector: Value, upto: Option<usize>) -> Runner {
+        Runner::run_value_on(vector, upto, false)
+    }
+
+    /// As [`Runner::run_value`]; with `usdg` every series of the vector uses the Token-2022 mock
+    /// USDG (transfer hook + zero transfer fee), so every stablecoin movement goes through
+    /// `transfer_checked` with the stablecoin's hook accounts as remaining accounts.
+    pub fn run_value_on(vector: Value, upto: Option<usize>, usdg: bool) -> Runner {
+        assert_eq!(
+            vector["schema"].as_u64(),
+            Some(2),
+            "vector schema 2 expected"
+        );
+        let mut r = Runner::new(vector);
+        if usdg {
+            r.stable = r.env.usdg;
+        }
+        let steps = r.vector["steps"].as_array().unwrap().clone();
+        for (i, step) in steps.iter().enumerate() {
+            if upto.is_some_and(|u| i > u) {
+                break;
+            }
+            r.step(i, step);
+        }
+        r
+    }
+
+    /// Executes an action step (a vector call without `t`) and reports the failure message.
+    pub fn exec_call(&mut self, call: &Value) -> Result<(), String> {
+        self.exec(call)
+    }
+
+    /// The actor's keypair; a fresh wallet (with an empty stablecoin account, as any wallet that
+    /// interacts with the protocol has) on first use.
     fn actor(&mut self, name: &str) -> Keypair {
         if !self.actors.contains_key(name) {
             let k = self.env.new_wallet();
+            let usdc = self.stable;
+            self.env.create_ata(&k.pubkey(), &usdc);
             self.actors.insert(name.to_string(), k);
         }
         self.actors[name].insecure_clone()
@@ -388,67 +568,68 @@ impl Runner {
     pub fn run(path: &str) -> Runner {
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
         let vector: Value = serde_json::from_str(&text).expect("vector json");
-        assert_eq!(
-            vector["schema"].as_u64(),
-            Some(2),
-            "vector schema 2 expected"
-        );
-        let mut r = Runner::new(vector);
-        let steps = r.vector["steps"].as_array().unwrap().clone();
-        for (i, step) in steps.iter().enumerate() {
-            if let Some(t) = step.get("t") {
-                let t = dec_u64(t);
-                if t > r.env.now {
-                    r.env.warp(t);
-                }
+        Runner::run_value(vector, None)
+    }
+
+    /// Executes one vector step (warp, then action / expect / expect_revert) and checks the
+    /// charter snapshot afterwards.
+    pub fn step(&mut self, i: usize, step: &Value) {
+        if let Some(t) = step.get("t") {
+            let t = dec_u64(t);
+            if t > self.env.now {
+                self.env.warp(t);
             }
-            let op = step["op"].as_str().unwrap();
-            let context = format!(
-                "{} step {i} ({op}) t={}{}",
-                r.name,
-                r.env.now,
-                step.get("note")
-                    .and_then(|n| n.as_str())
-                    .map(|n| format!(" — {n}"))
-                    .unwrap_or_default()
-            );
-            match op {
-                "expect" => r.check_expect(step, &context),
-                "expect_revert" => {
-                    let call = &step["call"];
-                    let error = step["error"].as_str().unwrap();
-                    if out_of_range(call) {
-                        // Solana's u64/i64 instruction arguments cannot encode the value: the
-                        // transaction cannot even be built (SPEC §1.1 entry-point range rule).
-                        assert_eq!(
-                            error, "AmountOutOfRange",
-                            "{context}: value out of u64 range but {error} expected"
-                        );
-                        continue;
-                    }
-                    match r.exec(call) {
-                        Ok(()) => panic!(
-                            "{context}: expected revert {error}, call {} succeeded",
-                            call["op"]
-                        ),
-                        Err(msg) => {
-                            let codes = codes_for(error);
-                            if !codes.is_empty()
-                                && !codes.iter().any(|c| msg.contains(&format!("Custom({c})")))
-                            {
-                                panic!("{context}: expected {error} (codes {codes:?}) from {}, got:\n{msg}", call["op"]);
-                            }
+        }
+        let op = step["op"].as_str().unwrap();
+        let context = format!(
+            "{} step {i} ({op}) t={}{}",
+            self.name,
+            self.env.now,
+            step.get("note")
+                .and_then(|n| n.as_str())
+                .map(|n| format!(" — {n}"))
+                .unwrap_or_default()
+        );
+        match op {
+            "expect" => self.check_expect(step, &context),
+            "expect_revert" => {
+                let call = &step["call"];
+                let error = step["error"].as_str().unwrap();
+                if out_of_range(call) {
+                    // Solana's u64/i64 instruction arguments cannot encode the value: the
+                    // transaction cannot even be built (SPEC §1.1 entry-point range rule).
+                    assert_eq!(
+                        error, "AmountOutOfRange",
+                        "{context}: value out of u64 range but {error} expected"
+                    );
+                    return;
+                }
+                match self.exec(call) {
+                    Ok(()) => panic!(
+                        "{context}: expected revert {error}, call {} succeeded",
+                        call["op"]
+                    ),
+                    Err(msg) => {
+                        let codes = codes_for(error);
+                        if !codes.is_empty()
+                            && !codes.iter().any(|c| msg.contains(&format!("Custom({c})")))
+                        {
+                            panic!(
+                                "{context}: expected {error} (codes {codes:?}) from {}, got:\n{msg}",
+                                call["op"]
+                            );
                         }
                     }
                 }
-                _ => {
-                    if let Err(msg) = r.exec(step) {
-                        panic!("{context}: failed:\n{msg}");
-                    }
+                self.check_charter("expect_revert", &context);
+            }
+            _ => {
+                if let Err(msg) = self.exec(step) {
+                    panic!("{context}: failed:\n{msg}");
                 }
+                self.check_charter(op, &context);
             }
         }
-        r
     }
 
     /// The wallet of a vector actor (None when the vector never used it).
@@ -462,6 +643,11 @@ impl Runner {
             .get(name)
             .unwrap_or_else(|| panic!("unknown actor {name}"))
             .insecure_clone()
+    }
+
+    /// Every series the vector created so far.
+    pub fn series_keys(&self) -> Vec<Pubkey> {
+        self.series.values().copied().collect()
     }
 
     /// The series key of a vector series name.
@@ -481,7 +667,7 @@ impl Runner {
 
     fn exec(&mut self, c: &Value) -> StepResult {
         let op = c["op"].as_str().unwrap();
-        let usdc = self.env.usdc;
+        let usdc = self.stable;
         match op {
             "fund" => {
                 let w = self.wallet(c["actor"].as_str().unwrap());
@@ -829,17 +1015,14 @@ impl Runner {
                     .map(|f| f.feed_id)
                     .unwrap_or([0u8; 32]);
                 let expo = i32::try_from(c["expo"].as_i64().unwrap()).unwrap();
-                let crosscheck = c
-                    .get("crosscheckPrice")
-                    .filter(|p| !p.is_null())
-                    .map(|p| {
-                        let cc_expo = c
-                            .get("crosscheckExpo")
-                            .and_then(|e| e.as_i64())
-                            .map(|e| i32::try_from(e).unwrap())
-                            .unwrap_or(expo);
-                        (Env::crosscheck_feed_for(&feed), dec_i64(p), cc_expo)
-                    });
+                let crosscheck = c.get("crosscheckPrice").filter(|p| !p.is_null()).map(|p| {
+                    let cc_expo = c
+                        .get("crosscheckExpo")
+                        .and_then(|e| e.as_i64())
+                        .map(|e| i32::try_from(e).unwrap())
+                        .unwrap_or(expo);
+                    (Env::crosscheck_feed_for(&feed), dec_i64(p), cc_expo)
+                });
                 ok(
                     &mut self.cu,
                     op,
@@ -1025,11 +1208,26 @@ impl Runner {
                     })
                     .collect();
                 entries.sort_by_key(|e| (e.0, e.1, e.2));
-                for (_, _, _, owner) in entries {
+                for (_, _, _, owner) in entries.iter().filter(|e| e.0 == pstate::SIDE_BID) {
                     ok(
                         &mut self.cu,
                         op,
-                        self.env.process_order(&series, period, &owner),
+                        self.env.process_order(&series, period, owner),
+                    )?;
+                }
+                self.settle_takeback(&series, period, &owners)?;
+                for (_, _, _, owner) in entries.iter().filter(|e| e.0 == pstate::SIDE_ASK) {
+                    ok(
+                        &mut self.cu,
+                        op,
+                        self.env.process_order(&series, period, owner),
+                    )?;
+                }
+                for (_, _, _, owner) in &entries {
+                    ok(
+                        &mut self.cu,
+                        "deliver_order",
+                        self.env.deliver_order(&series, period, owner),
                     )?;
                 }
                 Ok(())
@@ -1050,6 +1248,56 @@ impl Runner {
             }
             other => panic!("unsupported op {other}"),
         }
+    }
+
+    /// When cancelled buyers took back more units than the asks at `p*` hold, proposes the
+    /// threshold ask below `p*` (descending `(price, reveal_index)`), tallies every order and
+    /// finalizes the take-back round (SPEC §7, track-b B-21).
+    fn settle_takeback(&mut self, series: &Pubkey, period: u32, owners: &[Pubkey]) -> StepResult {
+        let w = match self.env.window(series, period) {
+            Some(w) if w.state == pstate::WINDOW_SETTLED => w,
+            _ => return Ok(()),
+        };
+        let r_below = w.cancelled_units.saturating_sub(w.ask_at_total);
+        if r_below == 0 {
+            return Ok(());
+        }
+        let mut asks: Vec<(u64, u32, u64)> = owners
+            .iter()
+            .filter_map(|o| self.env.order(series, period, o))
+            .filter(|o| {
+                o.side == pstate::SIDE_ASK && o.revealed && o.valid && o.price < w.clearing_price
+            })
+            .map(|o| (o.price, o.reveal_index, o.quantity))
+            .collect();
+        asks.sort_by_key(|a| core::cmp::Reverse((a.0, a.1)));
+        let mut above = 0u64;
+        let mut threshold = None;
+        for (price, index, qty) in asks {
+            if above < r_below && r_below <= above + qty {
+                threshold = Some((price, index));
+                break;
+            }
+            above += qty;
+        }
+        let (price, index) = threshold.expect("take-back threshold exists");
+        ok(
+            &mut self.cu,
+            "begin_takeback",
+            self.env.begin_takeback(series, period, price, index),
+        )?;
+        for page in owners.chunks(pstate::TALLY_PAGE) {
+            ok(
+                &mut self.cu,
+                "tally_takeback",
+                self.env.tally_takeback(series, period, page),
+            )?;
+        }
+        ok(
+            &mut self.cu,
+            "finalize_takeback",
+            self.env.finalize_takeback(series, period),
+        )
     }
 
     fn create_series(&mut self, c: &Value) -> StepResult {
@@ -1136,10 +1384,14 @@ impl Runner {
             tier1_terms,
         };
         let fx_pair = (fx_pair_id != [0u8; 32]).then(|| fx_config_pda(&fx_pair_id));
-        let usdc = self.env.usdc;
+        let usdc = self.stable;
         let (res, key) = self.env.create_series_tx(&issuer, &usdc, fx_pair, args);
         ok(&mut self.cu, op, res)?;
         self.series.insert(sname, key);
+        if tier_flags & 1 != 0 {
+            // the tier-1 router and its receiving account (permissionless, right after creation)
+            ok(&mut self.cu, "init_router", self.env.init_router(&key))?;
+        }
         if let Some(hash) = c.get("contractHash").and_then(|h| h.as_str()) {
             ok(
                 &mut self.cu,
@@ -1233,7 +1485,7 @@ impl Runner {
             }
         };
         let now = self.env.now;
-        let usdc = self.env.usdc;
+        let usdc = self.stable;
         let series_name = step
             .get("series")
             .and_then(|s| s.as_str())
@@ -1288,7 +1540,7 @@ impl Runner {
             let a = self.env.auction(&series);
             let escrow_units = self.env.token_balance(&p.auction_escrow_ata);
             let escrow_stable = self.env.token_balance(&p.escrow_token);
-            let a = a.unwrap_or_else(|| pstate::Auction {
+            let a = a.unwrap_or(pstate::Auction {
                 series,
                 state: 0,
                 opened_at: 0,
@@ -1511,7 +1763,6 @@ impl Runner {
                 }
             }
         }
-        drop(check);
         if !errors.is_empty() {
             panic!(
                 "{context}: {} mismatch(es):\n  {}",
@@ -1559,7 +1810,7 @@ impl Runner {
             None => "Draft",
             Some(a) => match a.state {
                 pstate::RAISE_DRAFT => "Draft",
-                pstate::RAISE_OPEN if now >= a.commit_end => "Reveal",
+                // the reference keeps `Open` through the reveal phase
                 pstate::RAISE_OPEN => "Open",
                 pstate::RAISE_SETTLING => "Settling",
                 pstate::RAISE_SETTLED => "Settled",
@@ -1591,11 +1842,14 @@ impl Runner {
                 a.as_ref().map(|a| a.units_sold).unwrap_or(0).to_string(),
             ),
             ("clearingPrice", final_price.to_string()),
-            // the treasury's proceeds (0 for a failed raise, whose would-be proceeds stay
-            // readable on the auction account)
+            // proceeds deposited in the treasury so far (the reference's `treasury.proceeds`;
+            // equal to the exact proceeds once the mint is final, 0 for a failed raise)
             (
                 "proceeds",
-                t.as_ref().map(|t| t.proceeds).unwrap_or(0).to_string(),
+                t.as_ref()
+                    .map(|t| t.proceeds_received)
+                    .unwrap_or(0)
+                    .to_string(),
             ),
             (
                 "releasedTotal",

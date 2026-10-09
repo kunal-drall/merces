@@ -218,10 +218,14 @@ pub struct FxPairConfig {
     pub pair_id: [u8; 32],
     pub feed_id: [u8; 32],
     pub inverted: bool,
-    /// Zero when no cross-check feed is configured (always zero on Solana in this version, A21).
+    /// Cross-check feed: on Solana a second Pyth feed id (32 bytes stored as a `Pubkey`); zero when
+    /// none is configured.
     pub crosscheck: Pubkey,
-    /// Period from which the current `crosscheck` applies (SPEC §3.1).
+    /// Period from which `crosscheck` applies (SPEC §3.1).
     pub crosscheck_effective_period: u32,
+    /// The cross-check in force before `crosscheck_effective_period` (a change never alters the rule
+    /// of a running quarter).
+    pub prev_crosscheck: Pubkey,
     pub enabled: bool,
     pub bump: u8,
 }

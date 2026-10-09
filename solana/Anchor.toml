@@ -19,9 +19,6 @@ merces_hook = "2PuKMkGkGLCwsDMLCmm2bcbzjxtabvt9LVJni154ezRt"
 merces_protocol = "EuaPg2nTXsf3CmmeJMfdiQb4C2hU7AfLfFyDLpD69six"
 mock_usdg_hook = "ALQgHjCyfNAtP5mWxYny5i2eW61pK6etSC8Vx6PpgHhA"
 
-[registry]
-url = "https://api.apr.dev"
-
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"

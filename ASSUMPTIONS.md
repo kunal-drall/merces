@@ -48,6 +48,11 @@ decision; the default applies until one arrives. Track-specific notes compiled f
 | A40 | Window buyer removed before fill | Units it would have bought are taken back from asks at `p*` in descending reveal order, then from asks below `p*`, so money is conserved exactly | D9 |
 | A41 | Error naming | Canonical v1.1 error names are exported by `@merces/sdk` (`errors.ts`) and used by the vectors' `expect_revert` steps; where several preconditions fail at once the vectors pin the SPEC's listed check order | F1 |
 | A42 | Not yet covered by a parity vector | Tier-3 true-up and the `AmountOutOfRange` entry rule are unit-tested in the reference only (vectors 20–21 planned) | F1 |
+| A43 | Hook upgrade authority | `merces_hook` (the Solana transfer rules) is upgradeable by the protocol multisig + timelock, mirroring the EVM compliance module behind the T-REX implementation authority owned by the timelock; only the registry (D1) has no upgrade authority | D2, D11 |
+| A44 | Two-step window delivery | `process_order` is accounting only; `deliver_order` pushes units/stablecoin and is retryable, so one frozen recipient account cannot block a window (liveness, §12). Same split as `process_bid`/`deliver_bid` | D9 |
+| A45 | Cancelled-buyer take-back | Asks at `p*` in descending reveal index, then asks below `p*` in descending (price, reveal index); on Solana via a keeper-proposed threshold verified by a paged tally | D9 |
+| A46 | Mock USDG and confidential transfers | Token-2022 refuses `ConfidentialTransferMint` next to a transfer-fee config without a confidential-fee config, so the mock carries TransferHook, TransferFeeConfig (0/0) and MetadataPointer only; the deploy scripts read the real mint's extensions at runtime | M0 |
+| A47 | Compute budgets | `submit_report` needs about 209k CU and `process_bid` can exceed 200k; clients must set a compute-unit limit (Solana) | D6 |
 | A24 | Mock USDG | Token-2022 mint with TransferHook (mock no-op hook program), TransferFeeConfig at 0 bps / 0 max, ConfidentialTransferMint and MetadataPointer, 6 decimals — mirroring the extension set reported for USDG | M0 |
 
 Track-level detail: `docs/assumptions/track-a.md` (reference, circuit, vectors), `docs/assumptions/track-b.md` (Solana), `docs/assumptions/track-c.md` (EVM), `docs/assumptions/track-d.md` (Meteora).

@@ -12,7 +12,7 @@ import {MercesRouterReceiver} from "./MercesRouterReceiver.sol";
 import {MercesMath} from "./libraries/MercesMath.sol";
 import {MercesConstants as C} from "./libraries/MercesConstants.sol";
 import {Periods} from "./libraries/Periods.sol";
-import {ProtocolContracts, RaiseState, SeriesCore, Tier1Terms, TierFlags} from "./types/MercesTypes.sol";
+import {ProtocolContracts, RaiseState, RouterTerms, SeriesCore, TierFlags} from "./types/MercesTypes.sol";
 import "./types/MercesErrors.sol";
 
 /// @title MercesRouter
@@ -78,40 +78,43 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
     // ---------------------------------------------------------------- routing (anyone)
 
     /// @inheritdoc IMercesRouter
-    /// @dev Pulls `amount` from the caller. Before mint finalization of a settled raise the income is held in
-    /// the receiving account (SPEC §6.5 "waits in the receiving account"); afterwards it is split together
-    /// with anything still held there.
-    function route(uint256 seriesId, uint64 amount) external override nonReentrant {
+    /// @dev Pulls `amount` from the caller. Until the mint of a live raise is final the income waits in the
+    /// receiving account (SPEC §6.1 gate, §6.5); afterwards it is split together with anything still held there.
+    /// A raise that failed or was cancelled has no holders, so its income passes straight to the issuer.
+    function route(uint256 seriesId, uint256 amount) external override nonReentrant {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (!TierFlags.has(core.tierFlags, 1)) revert RouterNotEnabled();
-        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
-        if (amount == 0) revert ZeroAmount();
+        uint64 value = amount.toU64();
         Router storage r = _s().routers[seriesId];
         IERC20 stable = IERC20(core.stablecoin);
-        if (!core.mintFinalized) {
+        if (!core.mintFinalized && _raiseLive(core.raiseState)) {
             address receiver = _ensureReceiver(seriesId, r);
-            r.heldBeforeFinalization = (uint256(r.heldBeforeFinalization) + amount).toU64();
-            emit IncomeHeld(seriesId, amount, (stable.balanceOf(receiver) + amount).toU64());
-            stable.safeTransferFrom(msg.sender, receiver, amount);
+            r.heldBeforeFinalization = (uint256(r.heldBeforeFinalization) + value).toU64();
+            emit IncomeHeld(seriesId, value, (stable.balanceOf(receiver) + value).toU64());
+            if (value > 0) stable.safeTransferFrom(msg.sender, receiver, value);
             return;
         }
-        stable.safeTransferFrom(msg.sender, address(this), amount);
+        if (value > 0) stable.safeTransferFrom(msg.sender, address(this), value);
         uint64 held = _collectHeld(r, stable);
-        _route(seriesId, core, (uint256(amount) + held).toU64());
+        _route(seriesId, core, (uint256(value) + held).toU64());
     }
 
     /// @inheritdoc IMercesRouter
-    /// @dev Moves the receiving account's whole balance here and splits it.
+    /// @dev Moves the receiving account's whole balance here and splits it (or passes it to the issuer when the
+    /// raise failed or was cancelled).
     function sweep(uint256 seriesId) external override nonReentrant {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (!TierFlags.has(core.tierFlags, 1)) revert RouterNotEnabled();
-        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
-        if (!core.mintFinalized) revert MintNotFinalized();
+        if (!core.mintFinalized && _raiseLive(core.raiseState)) revert MintNotFinalized();
         Router storage r = _s().routers[seriesId];
-        if (!r.receiverDeployed) revert RouterNotConfigured();
         uint64 held = _collectHeld(r, IERC20(core.stablecoin));
         if (held == 0) revert ZeroAmount();
         _route(seriesId, core, held);
+    }
+
+    /// @dev Draft, Open, Settling or Settled: the raise can still (or did) produce holders.
+    function _raiseLive(RaiseState state) internal pure returns (bool) {
+        return state != RaiseState.Failed && state != RaiseState.Cancelled;
     }
 
     /// @dev Pulls whatever the receiving account holds into the router (zero when none is deployed).
@@ -120,16 +123,22 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
         uint256 bal = stable.balanceOf(r.receiver);
         if (bal == 0) return 0;
         held = bal.toU64();
+        r.heldBeforeFinalization = 0;
         MercesRouterReceiver(r.receiver).forward(stable, held);
     }
 
     /// @dev SPEC §6.5: close the periods since the last receipt, reset YTD at a year boundary, pass income below
     /// θ through, route `min(above, mulDiv(above, r × units_outstanding, WAD))` to the vault.
+    /// @dev After a terminal status (Retired, Redeemed, Extinguished) or for a failed raise nothing is owed to
+    /// holders any more: the whole amount passes through to the issuer.
     function _route(uint256 seriesId, SeriesCore memory core, uint64 amount) internal {
         Router storage r = _s().routers[seriesId];
-        _advance(seriesId, r, core.settlementTs);
         ProtocolContracts memory pc = _contracts();
-        uint256 units = core.terminalStatus != 0 ? 0 : IMercesVault(pc.vault).unitsOutstanding(seriesId);
+        uint256 units;
+        if (core.raiseState == RaiseState.Settled) {
+            _advance(seriesId, r, core.settlementTs);
+            if (core.terminalStatus == 0) units = IMercesVault(pc.vault).unitsOutstanding(seriesId);
+        }
         uint64 share = _split(seriesId, r, amount, units);
         uint64 passThrough = amount - share;
         r.routedTotal += share;
@@ -142,6 +151,7 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
             IMercesIncome(_s().income).receiveRouterShare(seriesId, share);
         }
         emit IncomeRouted(seriesId, amount, passThrough, share, r.ytdReceived);
+        if (core.raiseState == RaiseState.Settled) IMercesIncome(_s().income).crankStatus(seriesId);
     }
 
     /// @dev `close_period_if_needed()` plus the YTD year reset, then records the receipt's period.
@@ -161,7 +171,7 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
 
     /// @dev θ / r split against the running YTD; `r_wad × units ≤ WAD` is enforced at creation so the product fits.
     function _split(uint256 seriesId, Router storage r, uint64 amount, uint256 units) internal returns (uint64) {
-        Tier1Terms memory t = registry().getTier1Terms(seriesId);
+        RouterTerms memory t = registry().getRouterTerms(seriesId);
         uint256 below = t.theta > r.ytdReceived ? t.theta - r.ytdReceived : 0;
         uint256 above = amount - MercesMath.min(amount, below);
         uint256 share = MercesMath.mulDiv(above, uint256(t.rWad) * units, C.WAD);
@@ -176,7 +186,8 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
     function closeRouterPeriod(uint256 seriesId, uint32 period) external override {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (!TierFlags.has(core.tierFlags, 1)) revert RouterNotEnabled();
-        if (period >= Periods.periodOf(block.timestamp)) revert PeriodNotEndedYet(period);
+        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
+        if (period >= Periods.periodOf(block.timestamp)) revert ReportTooEarly();
         _closeThrough(seriesId, _s().routers[seriesId], Periods.periodOf(core.settlementTs), period);
     }
 

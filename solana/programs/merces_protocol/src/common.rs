@@ -348,13 +348,26 @@ impl Ledger {
         })
     }
 
+    /// Whether the raise settled (the ledger was initialised by `finalize_settlement`). Before
+    /// that no countdown runs: the status reads as stored (reference: `syncStatus` is a no-op for
+    /// an unsettled series).
+    pub fn is_settled(&self) -> bool {
+        self.settlement_ts != 0
+    }
+
     pub fn derived_status(&self, now: u64) -> Result<SeriesStatus> {
+        if !self.is_settled() {
+            return Ok(self.stored_status());
+        }
         let pauses = self.pauses();
         derive_status(&self.status_inputs(pauses.as_slice())?, now).map_err(math)
     }
 
     /// `is_late_underlying(now)` (SPEC §6.4): the Late condition ignoring an active pause.
     pub fn is_late_underlying(&self, now: u64) -> Result<bool> {
+        if !self.is_settled() {
+            return Ok(false);
+        }
         let pauses = self.pauses();
         is_late_underlying(&self.status_inputs(pauses.as_slice())?, now).map_err(math)
     }
@@ -369,6 +382,9 @@ impl Ledger {
     /// `FormalNoticeDue` once per period and once per true-up. Elapsed pauses need no closing: the
     /// pause record already holds its end.
     pub fn sync_status(&mut self, now: u64, series_key: Pubkey) -> Result<SeriesStatus> {
+        if !self.is_settled() {
+            return Ok(self.stored_status());
+        }
         let pauses = self.pauses();
         let old = self.stored_status();
         let new = derive_status(&self.status_inputs(pauses.as_slice())?, now).map_err(math)?;
@@ -406,13 +422,21 @@ impl Ledger {
         Ok(new)
     }
 
-    /// Clears every open obligation (retirement, extinguishment).
+    /// Clears every open obligation (retirement, extinguishment): the open due, the true-up due
+    /// with its attestation time, and a pending pause request.
     pub fn clear_dues(&mut self) {
         self.open_due_amount = 0;
         self.set_open_due_period(None);
         self.open_due_tier = 0;
-        self.trueup_due = 0;
+        self.clear_trueup();
         self.pause_requested = 0;
+    }
+
+    /// Clears the true-up due (`trueup_due`, `trueup_attested_at`, `trueup_year`).
+    pub fn clear_trueup(&mut self) {
+        self.trueup_due = 0;
+        self.trueup_attested_at = 0;
+        self.set_trueup_year(None);
     }
 
     // ---- tagged rings
@@ -632,12 +656,154 @@ pub fn retire(
 
 // ------------------------------------------------------------------------------------ holders
 
-/// `accrual_units(w) = unit_balance + undelivered auction units + ask-escrow units` (SPEC §6.1).
+/// `accrual_units(w) = unit_balance + undelivered auction units + ask-escrow units` (SPEC §6.1),
+/// plus window units processed for the holder and not yet delivered (Solana's two-step window
+/// settlement keeps them in the window escrow until `deliver_order`).
 pub fn accrual_units(holder: &Holder, balance: u64) -> Result<u64> {
     balance
         .checked_add(holder.undelivered_units)
         .and_then(|v| v.checked_add(holder.ask_escrow_units))
+        .and_then(|v| v.checked_add(holder.window_pending_units))
         .ok_or(ProtocolError::MathOverflow.into())
+}
+
+/// Units a wallet owns in the series wherever they sit: its token balance, auction units awaiting
+/// delivery and window units awaiting delivery (the window wallet-cap base, SPEC §7).
+pub fn owned_units(holder: Option<&Holder>, balance: u64) -> Result<u64> {
+    match holder {
+        None => Ok(balance),
+        Some(h) => balance
+            .checked_add(h.undelivered_units)
+            .and_then(|v| v.checked_add(h.window_pending_units))
+            .ok_or(ProtocolError::MathOverflow.into()),
+    }
+}
+
+/// Loads the holder record at `info` — the PDA `[HOLDER, series, wallet]` with `bump`, whose
+/// address the caller has verified — creating it (rent from `payer`) when it does not exist. Holder
+/// records are created only when a wallet receives units, so losing bidders and unfilled buyers
+/// leave no account behind. A PDA address pre-funded by a third party is handled like Anchor's
+/// `init` (top up, allocate, assign). Call [`store_holder`] after mutating the record.
+pub fn load_or_create_holder<'info>(
+    info: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    series: &Pubkey,
+    wallet: &Pubkey,
+    bump: u8,
+) -> Result<Holder> {
+    if *info.owner == crate::ID && !info.data_is_empty() {
+        let data = info.try_borrow_data()?;
+        let h = Holder::try_deserialize(&mut &data[..])?;
+        require!(
+            h.series == *series && h.wallet == *wallet,
+            ProtocolError::HolderNotRegistered
+        );
+        return Ok(h);
+    }
+    let space = 8 + Holder::INIT_SPACE;
+    let rent = Rent::get()?.minimum_balance(space);
+    let bump_arr = [bump];
+    let signer_seeds: &[&[u8]] = &[seeds::HOLDER, series.as_ref(), wallet.as_ref(), &bump_arr];
+    let current = info.lamports();
+    if current == 0 {
+        anchor_lang::system_program::create_account(
+            CpiContext::new_with_signer(
+                *system_program.key,
+                anchor_lang::system_program::CreateAccount {
+                    from: payer.clone(),
+                    to: info.clone(),
+                },
+                &[signer_seeds],
+            ),
+            rent,
+            space as u64,
+            &crate::ID,
+        )?;
+    } else {
+        let top_up = rent.saturating_sub(current);
+        if top_up > 0 {
+            anchor_lang::system_program::transfer(
+                CpiContext::new(
+                    *system_program.key,
+                    anchor_lang::system_program::Transfer {
+                        from: payer.clone(),
+                        to: info.clone(),
+                    },
+                ),
+                top_up,
+            )?;
+        }
+        anchor_lang::system_program::allocate(
+            CpiContext::new_with_signer(
+                *system_program.key,
+                anchor_lang::system_program::Allocate {
+                    account_to_allocate: info.clone(),
+                },
+                &[signer_seeds],
+            ),
+            space as u64,
+        )?;
+        anchor_lang::system_program::assign(
+            CpiContext::new_with_signer(
+                *system_program.key,
+                anchor_lang::system_program::Assign {
+                    account_to_assign: info.clone(),
+                },
+                &[signer_seeds],
+            ),
+            &crate::ID,
+        )?;
+    }
+    Ok(Holder {
+        series: *series,
+        wallet: *wallet,
+        registered: false,
+        last_net_acc_wad: 0,
+        pending: 0,
+        redeemed_units: 0,
+        last_tail_acc_wad: 0,
+        last_final_acc_wad: 0,
+        undelivered_units: 0,
+        ask_escrow_units: 0,
+        window_pending_units: 0,
+        bump,
+    })
+}
+
+/// Writes a holder record loaded with [`load_or_create_holder`] back to its account.
+pub fn store_holder(info: &AccountInfo, holder: &Holder) -> Result<()> {
+    let mut data = info.try_borrow_mut_data()?;
+    let mut writer: &mut [u8] = &mut data;
+    holder.try_serialize(&mut writer)
+}
+
+/// Reads the holder record at `info` when it exists (address verified by the caller).
+pub fn read_holder(info: &AccountInfo) -> Result<Option<Holder>> {
+    if *info.owner != crate::ID || info.data_is_empty() {
+        return Ok(None);
+    }
+    let data = info.try_borrow_data()?;
+    Ok(Some(Holder::try_deserialize(&mut &data[..])?))
+}
+
+/// Whether `wallet` is allowlisted now: `acc` must be the registry `AllowlistEntry` PDA of the
+/// wallet (address checked); a missing entry reads as "not allowed". Used for the buyer re-check at
+/// window fill, where the account must always be supplied so a keeper cannot cancel a fill by
+/// omitting it.
+pub fn is_allowlisted(acc: &AccountInfo, wallet: &Pubkey) -> Result<bool> {
+    let (expected, _) = Pubkey::find_program_address(
+        &[merces_onchain::seeds::ALLOW, wallet.as_ref()],
+        &merces_registry::ID,
+    );
+    require_keys_eq!(*acc.key, expected, ProtocolError::NotAllowlisted);
+    if *acc.owner != merces_registry::ID || acc.data_is_empty() {
+        return Ok(false);
+    }
+    let data = acc.try_borrow_data()?;
+    let entry = AllowlistEntry::try_deserialize(&mut &data[..])
+        .map_err(|_| error!(ProtocolError::NotAllowlisted))?;
+    Ok(entry.allowed && entry.wallet == *wallet)
 }
 
 /// `settle_holder` (SPEC §6.3): credits the pending payout for the holder's accrual weight since
@@ -676,6 +842,7 @@ pub fn register_holder_now(
     holder.redeemed_units = 0;
     holder.undelivered_units = 0;
     holder.ask_escrow_units = 0;
+    holder.window_pending_units = 0;
     holder.bump = bump;
     emit!(HolderRegistered {
         series,

@@ -74,17 +74,21 @@ contract MercesTreasury is MercesUpgradeable, IMercesTreasury {
     // ---------------------------------------------------------------- issuer
 
     /// @inheritdoc IMercesTreasury
+    /// @dev Checks in the SPEC §5.3 order: issuer, settled raise, mint finalized, the issuer's own release pause,
+    /// then Late (derived status or the underlying clock), then something vested.
     function claimRelease(uint256 seriesId) external override nonReentrant {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (msg.sender != core.issuer) revert NotIssuer();
         Ledger storage l = _s().ledgers[seriesId];
+        _checkMintFinal(core);
         if (l.issuerPausedReleases) revert ReleasesPaused();
-        _checkReleasable(seriesId, core);
+        _checkNotLate(seriesId);
         uint64 amount = _claimable(seriesId, core, l);
         if (amount == 0) revert NothingVested();
         l.releasedTotal += amount;
         emit ReleaseClaimed(seriesId, amount, l.releasedTotal);
         IERC20(core.stablecoin).safeTransfer(core.issuer, amount);
+        IMercesIncome(_contracts().income).crankStatus(seriesId); // sync_status (SPEC §1.7: every write path)
     }
 
     /// @inheritdoc IMercesTreasury
@@ -99,14 +103,17 @@ contract MercesTreasury is MercesUpgradeable, IMercesTreasury {
     /// @dev Succeeds only if the registry names an approver and that approver returns true (view call). Early
     /// draws count against vesting: `releasedTotal` includes them, so later scheduled releases shrink. They are
     /// subject to the same Late block as scheduled releases and end with extinguishment.
-    function requestEarlyDraw(uint256 seriesId, uint64 amount) external override nonReentrant {
+    function requestEarlyDraw(uint256 seriesId, uint256 amountRequested) external override nonReentrant {
+        uint64 amount = amountRequested.toU64();
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (msg.sender != core.issuer) revert NotIssuer();
+        _checkMintFinal(core);
         address approver = registry().earlyDrawApprover();
         if (approver == address(0)) revert EarlyDrawDisabled();
         Ledger storage l = _s().ledgers[seriesId];
         if (l.extinguishedAt != 0) revert TerminalStatus();
-        _checkReleasable(seriesId, core);
+        if (l.issuerPausedReleases) revert ReleasesPaused();
+        _checkNotLate(seriesId);
         if (amount == 0) revert ZeroAmount();
         if (uint256(l.releasedTotal) + amount > l.proceeds) revert ExceedsProceeds();
         uint64 nonce = l.earlyDrawNonce;
@@ -172,11 +179,15 @@ contract MercesTreasury is MercesUpgradeable, IMercesTreasury {
 
     // ---------------------------------------------------------------- internals
 
-    /// @dev `mint_finalized`, not `Late` by derived status and not late on the underlying clock (a hardship pause
-    /// does not lift a release block already in force).
-    function _checkReleasable(uint256 seriesId, SeriesCore memory core) internal view {
+    /// @dev A settled raise whose mint is final (SPEC §6.1 gate).
+    function _checkMintFinal(SeriesCore memory core) internal pure {
         if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
         if (!core.mintFinalized) revert MintNotFinalized();
+    }
+
+    /// @dev Not `Late` by derived status and not late on the underlying clock (a hardship pause does not lift a
+    /// release block already in force, SPEC §5.3 / §6.4).
+    function _checkNotLate(uint256 seriesId) internal view {
         IMercesIncome income = IMercesIncome(_contracts().income);
         if (income.deriveStatus(seriesId) == SeriesStatus.Late || income.isLateUnderlying(seriesId)) {
             revert SeriesLate();

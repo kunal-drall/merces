@@ -1,0 +1,2374 @@
+[
+  {
+    "type": "function",
+    "name": "acceptAdmin",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "admin",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "allowlistManager",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "amendTerms",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "newTermsCommitment",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "newCapMultipleWad",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "attestorSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "tier1Terms",
+        "type": "tuple",
+        "internalType": "struct Tier1Terms",
+        "components": [
+          {
+            "name": "theta",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "rWad",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "currencyCode",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "indexingRule",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "termsSalt",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "attestorKey",
+    "inputs": [
+      {
+        "name": "key",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct KeyInfo",
+        "components": [
+          {
+            "name": "registered",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "active",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "revokedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "chainId",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "createSeries",
+    "inputs": [
+      {
+        "name": "params",
+        "type": "tuple",
+        "internalType": "struct SeriesParams",
+        "components": [
+          {
+            "name": "stablecoin",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "unitsOffered",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "reservePrice",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "minRaise",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "capMultipleWad",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "hurdleRateWad",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "payoutMultipleK",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "lockupSeconds",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "walletCapBps",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "commitDuration",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "revealDuration",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "windowCommitDuration",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "windowRevealDuration",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "releaseSchedule",
+        "type": "tuple[]",
+        "internalType": "struct ReleaseTranche[]",
+        "components": [
+          {
+            "name": "atOffsetSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "bps",
+            "type": "uint16",
+            "internalType": "uint16"
+          }
+        ]
+      },
+      {
+        "name": "termsCommitment",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "tierFlags",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
+        "name": "fxPairId_",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "mode",
+        "type": "uint8",
+        "internalType": "enum SeriesMode"
+      },
+      {
+        "name": "issuerAcceptsPublicPrice",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "tier1Terms",
+        "type": "tuple",
+        "internalType": "struct Tier1Terms",
+        "components": [
+          {
+            "name": "theta",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "rWad",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "currencyCode",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "indexingRule",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "termsSalt",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "deactivateIssuer",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "domain",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "earlyDrawApprover",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "feeCollector",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "fxPairId",
+    "inputs": [
+      {
+        "name": "feedId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "inverted",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "getDefaults",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct Parameters",
+        "components": [
+          {
+            "name": "capMultipleWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "hurdleRateWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "payoutMultipleK",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "lockupSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "walletCapBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "auctionFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "payoutFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "windowFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "nonRevealChargeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "commitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "revealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowCommitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowRevealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "fxMinCoverageBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "fxMaxStalenessSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "fxMaxConfBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "fxDeviationBandBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "maxPauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "maxCumulativePauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getFlags",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct Flags",
+        "components": [
+          {
+            "name": "newRaisesPaused",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "windowsEnabled",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "tier4Enabled",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getFxPair",
+    "inputs": [
+      {
+        "name": "pairId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct FxPairConfig",
+        "components": [
+          {
+            "name": "exists",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "feedId",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "inverted",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "crosscheck",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "crosscheckEffectivePeriod",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "enabled",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getIssuer",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct Issuer",
+        "components": [
+          {
+            "name": "registered",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "active",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "issuanceStopped",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "seriesCount",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getProtocolContracts",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ProtocolContracts",
+        "components": [
+          {
+            "name": "auction",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "treasury",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "income",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "vault",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "window",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "tokenFactory",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getReleaseSchedule",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple[]",
+        "internalType": "struct ReleaseTranche[]",
+        "components": [
+          {
+            "name": "atOffsetSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "bps",
+            "type": "uint16",
+            "internalType": "uint16"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getRouterTerms",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct RouterTerms",
+        "components": [
+          {
+            "name": "theta",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "rWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getSeriesCore",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct SeriesCore",
+        "components": [
+          {
+            "name": "issuer",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "mode",
+            "type": "uint8",
+            "internalType": "enum SeriesMode"
+          },
+          {
+            "name": "stablecoinDecimals",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "raiseState",
+            "type": "uint8",
+            "internalType": "enum RaiseState"
+          },
+          {
+            "name": "terminalStatus",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "tierFlags",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "issuerAcceptsPublicPrice",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "mintFinalized",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "stablecoin",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "openedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "unitToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "settlementTs",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "unitsSold",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "clearingPrice",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "amendmentNonce",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "contractHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "termsCommitment",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "fxPairId",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getSeriesTerms",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct SeriesTerms",
+        "components": [
+          {
+            "name": "unitsOffered",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "reservePrice",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "minRaise",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "capMultipleWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "hurdleRateWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "payoutMultipleK",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "lockupSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "walletCapBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "auctionFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "payoutFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "windowFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "nonRevealChargeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "commitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "revealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowCommitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowRevealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "maxPauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "maxCumulativePauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "idFactory",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "identityRegistry",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "isAllowed",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "isAttestor",
+    "inputs": [
+      {
+        "name": "key",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "isStablecoinAllowed",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "isTransferLocked",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "timestamp",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "isVerifierKey",
+    "inputs": [
+      {
+        "name": "key",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "markMintFinalized",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "markRaiseOpened",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "unitToken",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "openedAt",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "markRaiseResult",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "state",
+        "type": "uint8",
+        "internalType": "enum RaiseState"
+      },
+      {
+        "name": "settlementTs",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "unitsSold",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "clearingPrice",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "markTerminal",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "status",
+        "type": "uint8",
+        "internalType": "enum SeriesStatus"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "pendingAdmin",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "poseidon5",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "registerAttestor",
+    "inputs": [
+      {
+        "name": "key",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "registerIssuer",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "registerProtocolIdentities",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "registerVerifierKey",
+    "inputs": [
+      {
+        "name": "key",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "resumeIssuance",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "revokeAttestor",
+    "inputs": [
+      {
+        "name": "key",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "revokeVerifierKey",
+    "inputs": [
+      {
+        "name": "key",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "rotateAttestor",
+    "inputs": [
+      {
+        "name": "oldKey",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "newKey",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "rotateVerifierKey",
+    "inputs": [
+      {
+        "name": "oldKey",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "newKey",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "seriesCount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setAllowed",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "allowed",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setAllowlistManager",
+    "inputs": [
+      {
+        "name": "manager",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setContractHash",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "hash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setDefaults",
+    "inputs": [
+      {
+        "name": "defaults",
+        "type": "tuple",
+        "internalType": "struct Parameters",
+        "components": [
+          {
+            "name": "capMultipleWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "hurdleRateWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "payoutMultipleK",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "lockupSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "walletCapBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "auctionFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "payoutFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "windowFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "nonRevealChargeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "commitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "revealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowCommitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowRevealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "fxMinCoverageBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "fxMaxStalenessSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "fxMaxConfBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "fxDeviationBandBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "maxPauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "maxCumulativePauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setEarlyDrawApprover",
+    "inputs": [
+      {
+        "name": "approver",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setFeeCollector",
+    "inputs": [
+      {
+        "name": "collector",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setFlags",
+    "inputs": [
+      {
+        "name": "newRaisesPaused",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "windowsEnabled",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "tier4Enabled",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setFxPair",
+    "inputs": [
+      {
+        "name": "feedId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "inverted",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "crosscheck",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "pairId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setFxPairCrosscheck",
+    "inputs": [
+      {
+        "name": "pairId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "crosscheck",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setFxPairEnabled",
+    "inputs": [
+      {
+        "name": "pairId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "enabled",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setStablecoin",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "allowed",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "stopIssuance",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "transferAdmin",
+    "inputs": [
+      {
+        "name": "newAdmin",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "verifierKey",
+    "inputs": [
+      {
+        "name": "key",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct KeyInfo",
+        "components": [
+          {
+            "name": "registered",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "active",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "revokedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "AdminTransferStarted",
+    "inputs": [
+      {
+        "name": "pendingAdmin",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "AdminTransferred",
+    "inputs": [
+      {
+        "name": "oldAdmin",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newAdmin",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "AllowlistManagerSet",
+    "inputs": [
+      {
+        "name": "allowlistManager",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "AllowlistUpdated",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "allowed",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "AttestorRegistered",
+    "inputs": [
+      {
+        "name": "attestor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "AttestorRevoked",
+    "inputs": [
+      {
+        "name": "attestor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "revokedAt",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ContractHashSet",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "hash",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "DefaultsSet",
+    "inputs": [
+      {
+        "name": "defaults",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct Parameters",
+        "components": [
+          {
+            "name": "capMultipleWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "hurdleRateWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "payoutMultipleK",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "lockupSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "walletCapBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "auctionFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "payoutFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "windowFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "nonRevealChargeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "commitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "revealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowCommitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowRevealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "fxMinCoverageBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "fxMaxStalenessSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "fxMaxConfBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "fxDeviationBandBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "maxPauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "maxCumulativePauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "EarlyDrawApproverSet",
+    "inputs": [
+      {
+        "name": "earlyDrawApprover",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "FeeCollectorSet",
+    "inputs": [
+      {
+        "name": "feeCollector",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "FlagsSet",
+    "inputs": [
+      {
+        "name": "newRaisesPaused",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      },
+      {
+        "name": "windowsEnabled",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      },
+      {
+        "name": "tier4Enabled",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "FxPairSet",
+    "inputs": [
+      {
+        "name": "pairId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "feedId",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "inverted",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      },
+      {
+        "name": "crosscheck",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "crosscheckEffectivePeriod",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      },
+      {
+        "name": "enabled",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "IdentityRegistered",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "identity",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "IssuanceResumed",
+    "inputs": [
+      {
+        "name": "issuer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "IssuanceStopped",
+    "inputs": [
+      {
+        "name": "issuer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "IssuerDeactivated",
+    "inputs": [
+      {
+        "name": "issuer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "IssuerRegistered",
+    "inputs": [
+      {
+        "name": "issuer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MintFinalized",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProtocolInitialized",
+    "inputs": [
+      {
+        "name": "admin",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "allowlistManager",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "feeCollector",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "chainId",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "domain",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RaiseStateChanged",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "state",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum RaiseState"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "SeriesCreated",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "issuer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "mode",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum SeriesMode"
+      },
+      {
+        "name": "stablecoin",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "terms",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct SeriesTerms",
+        "components": [
+          {
+            "name": "unitsOffered",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "reservePrice",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "minRaise",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "capMultipleWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "hurdleRateWad",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "payoutMultipleK",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "lockupSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "walletCapBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "auctionFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "payoutFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "windowFeeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "nonRevealChargeBps",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "commitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "revealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowCommitDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "windowRevealDuration",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "maxPauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "maxCumulativePauseSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          }
+        ]
+      },
+      {
+        "name": "termsCommitment",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "tierFlags",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
+      },
+      {
+        "name": "fxPairId",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "StablecoinSet",
+    "inputs": [
+      {
+        "name": "stablecoin",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "allowed",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      },
+      {
+        "name": "decimals",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TerminalStatusSet",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "status",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum SeriesStatus"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TermsAmended",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "nonce",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "newTermsCommitment",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "newCapMultipleWad",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "attestor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "VerifierKeyRegistered",
+    "inputs": [
+      {
+        "name": "verifierKey",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "VerifierKeyRevoked",
+    "inputs": [
+      {
+        "name": "verifierKey",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "revokedAt",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  }
+]

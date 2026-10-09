@@ -54,7 +54,7 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
     /// accumulates.
     function snapshot(bytes32 pairId, bytes[] calldata priceUpdateData) external payable override nonReentrant {
         FxPairConfig memory cfg = registry().getFxPair(pairId);
-        if (!cfg.enabled) revert FxPairDisabled(pairId);
+        if (!cfg.exists) revert UnknownFxPair(pairId);
         FxPairState storage st = _s().pairs[pairId];
         uint32 day = uint32(block.timestamp / C.DAY);
         if (day <= st.lastDay) revert SnapshotAlreadyTaken();
@@ -82,8 +82,8 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
             cp.count = st.count;
         }
         if (cfg.crosscheck != address(0) && pid >= cfg.crosscheckEffectivePeriod) {
-            (bool fresh, uint256 clWad) = _chainlink(cfg.crosscheck, p.fxMaxStalenessSeconds);
-            if (!fresh || _deviates(rateWad, clWad, p.fxDeviationBandBps)) {
+            (bool fresh, uint256 clWad) = _chainlink(cfg, p.fxMaxStalenessSeconds);
+            if (fresh && _deviates(rateWad, clWad, p.fxDeviationBandBps)) {
                 cp.flagged = true;
                 emit FxDeviationFlagged(pairId, pid, rateWad, clWad);
             }
@@ -94,34 +94,38 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
         emit FxSnapshot(pairId, day, rateWad, st.sumWad, st.count);
     }
 
-    /// @dev SPEC §6.6 steps 1–2: validate the Pyth price and normalize it to a WAD rate (inverting if configured).
+    /// @dev SPEC §6.6 steps 1–2: `IPyth.getPriceNoOlderThan` (which reverts Pyth's `StalePrice()`, the same
+    /// selector as ours), then `publish_time ≥ now − staleness`, `price > 0` (`StalePrice` otherwise, as the
+    /// reference does) and `conf × 10000 ≤ price × fx_max_conf_bps`; normalized to WAD, inverted if configured.
     function _readRate(IPyth pyth_, FxPairConfig memory cfg, Parameters memory p) internal view returns (uint256) {
         PythStructs.Price memory price = pyth_.getPriceNoOlderThan(cfg.feedId, p.fxMaxStalenessSeconds);
-        if (price.price <= 0) revert InvalidPythPrice();
-        if (price.publishTime + p.fxMaxStalenessSeconds < block.timestamp) revert InvalidPythPrice();
+        if (price.price <= 0) revert StalePrice();
+        if (price.publishTime + p.fxMaxStalenessSeconds < block.timestamp) revert StalePrice();
         uint256 raw = uint256(uint64(price.price));
         if (uint256(price.conf) * C.BPS > raw * p.fxMaxConfBps) revert ConfidenceTooWide();
         uint256 rate = _normalize(raw, price.expo);
-        if (cfg.inverted) {
-            if (rate == 0) revert InvalidPythPrice();
-            rate = C.WAD * C.WAD / rate;
-        }
-        return rate;
+        return cfg.inverted ? C.WAD * C.WAD / rate : rate;
     }
 
     /// @dev SPEC §6.6 step 2: `expo ≤ 0` → `price × 10^(18 + expo)` (requires `expo ≥ −18`), `expo > 0` →
-    /// `price × 10^18 × 10^expo`.
+    /// `price × 10^18 × 10^expo` (bounded so the product cannot overflow for a positive int64 price).
     function _normalize(uint256 price, int32 expo) internal pure returns (uint256) {
-        if (expo < -18 || expo > 40) revert InvalidPythPrice();
+        if (expo < -18 || expo > 40) revert UnsupportedExponent(expo);
         return price * 10 ** uint256(int256(18) + int256(expo));
     }
 
-    function _chainlink(address agg, uint64 staleness) internal view returns (bool fresh, uint256 clWad) {
-        (, int256 answer,, uint256 updatedAt,) = AggregatorV3Interface(agg).latestRoundData();
+    /// @dev Chainlink cross-check normalized like the Pyth rate (decimals as a negative exponent, inverted for an
+    /// inverted pair). A missing, non-positive or stale answer (older than the FX staleness bound) is not a
+    /// comparison and flags nothing (docs/assumptions/track-c.md C-11).
+    function _chainlink(FxPairConfig memory cfg, uint64 staleness) internal view returns (bool fresh, uint256 clWad) {
+        AggregatorV3Interface agg = AggregatorV3Interface(cfg.crosscheck);
+        (, int256 answer,, uint256 updatedAt,) = agg.latestRoundData();
         if (answer <= 0 || updatedAt + staleness < block.timestamp) return (false, 0);
-        uint8 dec = AggregatorV3Interface(agg).decimals();
-        uint256 a = uint256(answer);
-        clWad = dec <= 18 ? a * 10 ** (18 - dec) : a / 10 ** (dec - 18);
+        uint8 dec = agg.decimals();
+        if (dec > 36) return (false, 0);
+        clWad = uint256(answer) * C.WAD / 10 ** dec;
+        if (clWad == 0) return (false, 0);
+        if (cfg.inverted) clWad = C.WAD * C.WAD / clWad;
         return (true, clWad);
     }
 

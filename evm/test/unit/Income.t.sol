@@ -124,7 +124,7 @@ contract IncomeTest is FullFixture {
         // a year-2 report chained to the wrong prior is refused before the proof is even checked
         vm.warp(Periods.periodEnd(Q1_2026 + 5));
         vm.prank(issuer);
-        vm.expectRevert(PriorCommitmentMismatch.selector);
+        vm.expectRevert(InvalidProof.selector);
         income.submitReport(reportInput(sid, Q1_2026 + 5, Proofs.q2(), 2, false));
         // and a year-start first report must carry the ZERO prior
         vm.warp(Periods.periodStart(Q1_2026 + 8)); // 2028-01-01
@@ -132,7 +132,7 @@ contract IncomeTest is FullFixture {
         assertEq(Periods.periodOf(settlementTs(s2)), Q1_2026 + 8);
         vm.warp(Periods.periodEnd(Q1_2026 + 8));
         vm.prank(issuer);
-        vm.expectRevert(PriorCommitmentMismatch.selector);
+        vm.expectRevert(InvalidProof.selector);
         income.submitReport(reportInput(s2, Q1_2026 + 8, Proofs.q2(), 2, false));
     }
 
@@ -182,7 +182,7 @@ contract IncomeTest is FullFixture {
         IMercesIncome.ReportInput memory r = reportInput(sid, Q1_2026, p, 2, false);
         r.fxAvgWad = 1.1e18;
         vm.prank(issuer);
-        vm.expectRevert(FxMustBeWad.selector);
+        vm.expectRevert(abi.encodeWithSelector(FxMismatch.selector, 1e18, 1.1e18));
         income.submitReport(r);
         r = reportInput(sid, Q1_2026, p, 2, false);
         r.fxFallbackSignature = hex"01";
@@ -218,7 +218,7 @@ contract IncomeTest is FullFixture {
         r = reportInput(sid, Q1_2026, p, 2, false);
         r.attestationSignature = "";
         vm.prank(issuer);
-        vm.expectRevert(AttestationRequired.selector);
+        vm.expectRevert(abi.encodeWithSelector(InvalidVerifierSignature.selector, address(0)));
         income.submitReport(r);
         // a signature over another tier or liquidity flag recovers a stranger
         r = reportInput(sid, Q1_2026, p, 2, false);
@@ -310,7 +310,7 @@ contract IncomeTest is FullFixture {
         submitReport(sid, Q1_2026, Proofs.q1());
         assertEq(uint8(income.deriveStatus(sid)), uint8(SeriesStatus.Late)); // still unpaid
         vm.warp(graceEnd + 5 * DAY + 100);
-        uint64 accrual = income.lateAccrual(sid, Q1_2026, 12_000e6, block.timestamp);
+        uint64 accrual = income.lateAccrual(sid, Q1_2026, 12_000e6, vm.getBlockTimestamp());
         // mulDiv(mulDiv(12_000e6, 0.08e18, WAD), 5, 365) = 13_150_684
         assertEq(accrual, 13_150_684);
         uint64 total = payDue(sid, issuer);
@@ -348,31 +348,35 @@ contract IncomeTest is FullFixture {
         vm.expectEmit(true, false, false, true);
         emit IMercesIncome.PauseRequested(sid, 1);
         income.requestPause(sid);
+        // a repeated request advances the nonce (the reference re-requests; older signatures die)
         vm.prank(issuer);
-        vm.expectRevert(PauseAlreadyRequested.selector);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesIncome.PauseRequested(sid, 2);
         income.requestPause(sid);
 
-        uint64 start = uint64(block.timestamp);
+        uint64 start = uint64(vm.getBlockTimestamp());
         uint64 pauseEnd = start + 60 * DAY;
         vm.expectRevert(InvalidPauseEnd.selector);
-        income.approvePause(sid, start, pauseSig(sid, 1, start));
+        income.approvePause(sid, start, pauseSig(sid, 2, start));
         vm.expectRevert(abi.encodeWithSelector(InvalidAttestorSignature.selector, vm.addr(0xDEAD)));
-        income.approvePause(sid, pauseEnd, sign(0xDEAD, MercesMessages.pauseDigest(domain, sid, 1, pauseEnd)));
+        income.approvePause(sid, pauseEnd, sign(0xDEAD, MercesMessages.pauseDigest(domain, sid, 2, pauseEnd)));
+        vm.expectRevert(); // a signature over the superseded nonce recovers a stranger
+        income.approvePause(sid, pauseEnd, pauseSig(sid, 1, pauseEnd));
         vm.prank(keeper);
         vm.expectEmit(true, true, false, true);
         emit IMercesIncome.PauseApproved(sid, start, pauseEnd, attestor);
-        income.approvePause(sid, pauseEnd, pauseSig(sid, 1, pauseEnd));
+        income.approvePause(sid, pauseEnd, pauseSig(sid, 2, pauseEnd));
         assertEq(uint8(income.deriveStatus(sid)), uint8(SeriesStatus.Paused));
-        assertEq(income.getLedger(sid).pauseNonce, 1);
+        assertEq(income.getLedger(sid).pauseNonce, 2);
         assertEq(income.getLedger(sid).pauseCount, 1);
         assertEq(income.getPauses(sid).length, 1);
         vm.expectRevert(PauseNotRequested.selector);
-        income.approvePause(sid, pauseEnd, pauseSig(sid, 1, pauseEnd));
+        income.approvePause(sid, pauseEnd, pauseSig(sid, 2, pauseEnd));
 
         // 40 days into the pause the deadline would have passed; the countdown has only run 20 days
         vm.warp(deadline + 30 * DAY);
         assertEq(uint8(income.deriveStatus(sid)), uint8(SeriesStatus.Paused));
-        assertEq(income.countdown(sid, Q1_2026, block.timestamp), 20 * DAY);
+        assertEq(income.countdown(sid, Q1_2026, vm.getBlockTimestamp()), 20 * DAY);
         assertFalse(income.isLateUnderlying(sid));
         vm.prank(issuer);
         treasury.claimRelease(sid); // releases are not blocked by a hardship pause (brief C11 §1)
@@ -384,14 +388,14 @@ contract IncomeTest is FullFixture {
         emit IMercesIncome.StatusChanged(sid, SeriesStatus.Paused, SeriesStatus.OnTime);
         income.crankStatus(sid);
         assertEq(income.getLedger(sid).pausedTotal, 60 * DAY);
-        assertEq(income.countdown(sid, Q1_2026, block.timestamp), 25 * DAY);
+        assertEq(income.countdown(sid, Q1_2026, vm.getBlockTimestamp()), 25 * DAY);
 
         // the issuer may end a pause early
         vm.prank(issuer);
         income.requestPause(sid);
-        uint64 end2 = uint64(block.timestamp) + 30 * DAY;
-        income.approvePause(sid, end2, pauseSig(sid, 2, end2));
-        vm.warp(block.timestamp + 3 * DAY);
+        uint64 end2 = uint64(vm.getBlockTimestamp()) + 30 * DAY;
+        income.approvePause(sid, end2, pauseSig(sid, 3, end2));
+        vm.warp(vm.getBlockTimestamp() + 3 * DAY);
         vm.prank(stranger);
         vm.expectRevert(NotIssuer.selector);
         income.endPause(sid);
@@ -400,28 +404,30 @@ contract IncomeTest is FullFixture {
         emit IMercesIncome.PauseEnded(sid, 63 * DAY);
         income.endPause(sid);
         assertEq(income.getLedger(sid).pausedTotal, 63 * DAY);
-        assertEq(income.getPauses(sid)[1].end, block.timestamp);
+        assertEq(income.getPauses(sid)[1].end, vm.getBlockTimestamp());
         vm.prank(issuer);
         vm.expectRevert(NotPaused.selector);
         income.endPause(sid);
         // late accrual is measured in unpaused time: 288 d elapsed − 63 d paused − 45 d grace = 180 late days
-        vm.warp(block.timestamp + 200 * DAY);
-        assertEq(income.countdown(sid, Q1_2026, block.timestamp), 225 * DAY);
-        assertEq(income.lateAccrual(sid, Q1_2026, 12_000e6, block.timestamp), 473_424_657);
+        vm.warp(vm.getBlockTimestamp() + 200 * DAY);
+        assertEq(income.countdown(sid, Q1_2026, vm.getBlockTimestamp()), 225 * DAY);
+        assertEq(income.lateAccrual(sid, Q1_2026, 12_000e6, vm.getBlockTimestamp()), 473_424_657);
     }
 
     function test_pauseBoundsAndWithdrawal() public {
         vm.prank(issuer);
         income.requestPause(sid); // nonce 1
         // a withdrawn request invalidates its signature
-        uint64 end1 = uint64(block.timestamp) + 30 days;
+        uint64 end1 = uint64(vm.getBlockTimestamp()) + 30 days;
         bytes memory sig1 = pauseSig(sid, 1, end1);
         vm.prank(issuer);
         vm.expectEmit(true, false, false, true);
         emit IMercesIncome.PauseRequestWithdrawn(sid, 2);
         income.withdrawPauseRequest(sid);
-        vm.expectRevert(PauseNotRequested.selector);
+        vm.expectRevert(); // sig1 is over the withdrawn nonce: recovers a stranger
         income.approvePause(sid, end1, sig1);
+        vm.expectRevert(PauseNotRequested.selector);
+        income.approvePause(sid, end1, pauseSig(sid, 2, end1));
         vm.prank(issuer);
         vm.expectRevert(PauseNotRequested.selector);
         income.withdrawPauseRequest(sid);
@@ -432,10 +438,10 @@ contract IncomeTest is FullFixture {
         vm.expectRevert(); // the old nonce recovers a stranger
         income.approvePause(sid, end1, sig1);
         // one approval may not exceed max_pause_seconds (365 d)
-        uint64 tooLong = uint64(block.timestamp) + 365 days + 1;
+        uint64 tooLong = uint64(vm.getBlockTimestamp()) + 365 days + 1;
         vm.expectRevert(PauseTooLong.selector);
         income.approvePause(sid, tooLong, pauseSig(sid, 3, tooLong));
-        uint64 end3 = uint64(block.timestamp) + 365 days;
+        uint64 end3 = uint64(vm.getBlockTimestamp()) + 365 days;
         income.approvePause(sid, end3, pauseSig(sid, 3, end3));
         vm.prank(issuer);
         income.requestPause(sid); // nonce 4, pending while paused
@@ -443,15 +449,15 @@ contract IncomeTest is FullFixture {
         income.approvePause(sid, end3, pauseSig(sid, 4, end3));
         // lifetime bound (730 d): 365 + 365 is fine, 365 + 366 is not
         vm.warp(end3);
-        uint64 end4 = uint64(block.timestamp) + 365 days + 1;
+        uint64 end4 = uint64(vm.getBlockTimestamp()) + 365 days + 1;
         vm.expectRevert(PauseTooLong.selector);
         income.approvePause(sid, end4, pauseSig(sid, 4, end4));
-        end4 = uint64(block.timestamp) + 365 days;
+        end4 = uint64(vm.getBlockTimestamp()) + 365 days;
         income.approvePause(sid, end4, pauseSig(sid, 4, end4));
         vm.warp(end4);
         vm.prank(issuer);
         income.requestPause(sid); // nonce 5
-        uint64 end5 = uint64(block.timestamp) + 1 days;
+        uint64 end5 = uint64(vm.getBlockTimestamp()) + 1 days;
         vm.expectRevert(PauseTooLong.selector);
         income.approvePause(sid, end5, pauseSig(sid, 5, end5));
         assertEq(income.getLedger(sid).pausedTotal, 730 days);
@@ -470,22 +476,26 @@ contract IncomeTest is FullFixture {
                 reportAndPay(ids[i], Q1_2026 + uint32(q), year[q]);
             }
         }
-        assertEq(block.timestamp, Periods.periodEnd(Q1_2026 + 3)); // 2027-01-01: the 2026 year has ended
-        uint64 ts = uint64(block.timestamp);
+        assertEq(vm.getBlockTimestamp(), Periods.periodEnd(Q1_2026 + 3)); // 2027-01-01: the 2026 year has ended
+        uint64 ts = uint64(vm.getBlockTimestamp());
 
         // guards
         vm.prank(stranger);
         vm.expectRevert(NotIssuer.selector);
         income.submitTrueUp(sid, 2026, 1, ts, "");
         vm.startPrank(issuer);
-        vm.expectRevert(ZeroAdjustment.selector);
-        income.submitTrueUp(sid, 2026, 0, ts, "");
+        vm.expectRevert(abi.encodeWithSelector(InvalidAttestorSignature.selector, address(0)));
+        income.submitTrueUp(sid, 2026, 0, ts, ""); // unsigned
+        vm.expectRevert(abi.encodeWithSelector(AmountOutOfRange.selector, uint256(1) << 63));
+        income.submitTrueUp(sid, 2026, int256(1) << 63, ts, "");
+        vm.expectRevert(abi.encodeWithSelector(AmountOutOfRange.selector, uint256(1) << 64));
+        income.submitTrueUp(sid, 2026, 1, uint256(1) << 64, "");
         vm.expectRevert(AttestationInFuture.selector);
-        income.submitTrueUp(sid, 2026, 1, ts + 1, "");
+        income.submitTrueUp(sid, 2026, 1, ts + 1, trueupSig(sid, 0, 2026, 1, ts + 1));
         vm.expectRevert(TrueUpYearInvalid.selector);
-        income.submitTrueUp(sid, 2027, 1, ts, "");
+        income.submitTrueUp(sid, 2027, 1, ts, trueupSig(sid, 0, 2027, 1, ts));
         vm.expectRevert(TrueUpYearInvalid.selector);
-        income.submitTrueUp(sid, 2025, 1, ts, "");
+        income.submitTrueUp(sid, 2025, 1, ts, trueupSig(sid, 0, 2025, 1, ts));
         vm.expectRevert(TrueUpAdjustmentTooLarge.selector); // the year's payments total 66,000
         income.submitTrueUp(sid, 2026, -66_001e6, ts, trueupSig(sid, 0, 2026, -66_001e6, ts));
         vm.expectRevert(abi.encodeWithSelector(InvalidAttestorSignature.selector, vm.addr(0xDEAD)));
@@ -549,7 +559,7 @@ contract IncomeTest is FullFixture {
         vm.stopPrank();
         assertEq(uint8(income.deriveStatus(s3)), uint8(SeriesStatus.OnTime));
         assertEq(income.getLedger(s3).lastTrueupYear, 2026);
-        assertEq(income.getLedger(s3).trueupAttestedAt, ts);
+        assertEq(income.getLedger(s3).trueupAttestedAt, 0); // cleared with the payment
     }
 
     function test_trueUpNoticeAndTierRequirement() public {
@@ -561,7 +571,7 @@ contract IncomeTest is FullFixture {
         reportAndPay(sid, Q1_2026 + 1, Proofs.q2());
         reportAndPay(sid, Q1_2026 + 2, Proofs.q3zero());
         reportAndPay(sid, Q1_2026 + 3, Proofs.q4());
-        uint64 ts = uint64(block.timestamp);
+        uint64 ts = uint64(vm.getBlockTimestamp());
         vm.prank(issuer);
         income.submitTrueUp(sid, 2026, 1_000e6, ts, trueupSig(sid, 0, 2026, 1_000e6, ts));
         vm.warp(ts + 105 * DAY);
@@ -599,7 +609,7 @@ contract IncomeTest is FullFixture {
         vm.prank(issuer);
         income.submitReport(r);
         // the grace window is 45 days: a Q1 report attested by the old key is refused afterwards
-        assertGt(block.timestamp, Q1_END + 1 days + 45 days);
+        assertGt(vm.getBlockTimestamp(), Q1_END + 1 days + 45 days);
         vm.prank(issuer);
         vm.expectRevert(abi.encodeWithSelector(InvalidVerifierSignature.selector, verifier));
         income.submitReport(reportInput(s2, Q1_2026, Proofs.q1(), 2, false));

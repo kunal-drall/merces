@@ -13,14 +13,20 @@ interface IEscrowArming {
     function armedDeposit(address from) external view returns (uint256);
 }
 
+/// @dev Same selectors as the Merces error set (`src/types/MercesErrors.sol`) and the Solana hook's error names.
+error DirectTransferForbidden();
+error UnarmedEscrowDeposit();
+
 /// @title MercesComplianceModule
 /// @notice ERC-3643 compliance rule for sealed-bid series (SPEC v1.1 §4.2, brief C10). `moduleCheck` is true
 /// only for: mints to the auction escrow (`from == 0 && to == auction`), burns (`to == 0`), movements out of
 /// the auction or window escrows (deliveries, fills, returns — the protocol has already applied allowlist and
-/// cap rules) and armed deposits into the window escrow. Everything else is refused, so direct
-/// wallet-to-wallet transfers always fail (`DirectTransferForbidden` on Solana; the T-REX token reverts with
-/// "Transfer not possible" here). One module instance serves every series' compliance; the escrow addresses
-/// are stored per compliance by the token factory at creation.
+/// cap rules) and armed deposits into the window escrow. Everything else is refused with the same error names as
+/// the Solana hook: `UnarmedEscrowDeposit` for an unarmed push into the window escrow, `DirectTransferForbidden`
+/// otherwise. The revert propagates through `ModularCompliance.canTransfer` and the T-REX `Token`, so a direct
+/// transfer between two verified wallets reverts with that custom error (a destination that never had an
+/// identity still gets T-REX's own "Transfer not possible"). One module instance serves every series'
+/// compliance; the escrow addresses are stored per compliance by the token factory at creation.
 contract MercesComplianceModule is AbstractModule {
     struct Escrows {
         address auction;
@@ -58,11 +64,17 @@ contract MercesComplianceModule is AbstractModule {
         returns (bool)
     {
         Escrows storage e = _escrows[_compliance];
-        if (_from == address(0)) return _to == e.auction; // mint: to the auction escrow only
+        if (_from == address(0)) {
+            if (_to != e.auction) revert DirectTransferForbidden(); // mint: to the auction escrow only
+            return true;
+        }
         if (_to == address(0)) return true; // burn (never reaches the compliance in T-REX, kept for symmetry)
         if (_from == e.auction || _from == e.window) return true; // delivery, fill or return
-        if (_to == e.window) return _value > 0 && IEscrowArming(e.window).armedDeposit(_from) == _value;
-        return false; // direct transfers are forbidden at all times
+        if (_to == e.window) {
+            if (_value == 0 || IEscrowArming(e.window).armedDeposit(_from) != _value) revert UnarmedEscrowDeposit();
+            return true;
+        }
+        revert DirectTransferForbidden(); // direct transfers are forbidden at all times
     }
 
     function canComplianceBind(address) external pure override returns (bool) {

@@ -87,17 +87,19 @@ abstract contract FullFixture is MercesFixture {
     function processAll(uint256 seriesId) internal {
         uint256 n = auction.getAuction(seriesId).bidCount;
         for (uint256 i = 0; i < n; i++) {
+            address bidder = auction.getBidAt(seriesId, i).bidder;
             vm.prank(keeper);
-            auction.processBid(seriesId, i);
+            auction.processBid(seriesId, bidder);
         }
     }
 
     function deliverAll(uint256 seriesId) internal {
         uint256 n = auction.getAuction(seriesId).bidCount;
         for (uint256 i = 0; i < n; i++) {
-            if (auction.getBid(seriesId, i).delivered) continue;
+            IMercesAuction.Bid memory b = auction.getBidAt(seriesId, i);
+            if (b.delivered) continue;
             vm.prank(keeper);
-            auction.deliverBid(seriesId, i);
+            auction.deliverBid(seriesId, b.bidder);
         }
     }
 
@@ -191,14 +193,14 @@ abstract contract FullFixture is MercesFixture {
 
     /// @dev Warps to the end of `period` (if earlier) and submits a tier-2 report.
     function submitReport(uint256 sid, uint32 period, Proofs.Proof memory p) internal {
-        if (block.timestamp < Periods.periodEnd(period)) vm.warp(Periods.periodEnd(period));
+        if (vm.getBlockTimestamp() < Periods.periodEnd(period)) vm.warp(Periods.periodEnd(period));
         vm.prank(issuer);
         income.submitReport(reportInput(sid, period, p, 2, false));
     }
 
     function payDue(uint256 sid, address payer) internal returns (uint64 total) {
         (uint64 due, uint32 period) = income.openDue(sid);
-        total = due + income.lateAccrual(sid, period, due, block.timestamp);
+        total = due + income.lateAccrual(sid, period, due, vm.getBlockTimestamp());
         fund(payer, total);
         vm.startPrank(payer);
         usdc.approve(address(income), total);

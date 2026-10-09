@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.30;
 
-/// @notice Every Merces error has a distinct name (SPEC §12). Names that SPEC fixes are kept verbatim.
+/// @notice Every Merces error has a distinct name (SPEC §12). Where SPEC v1.1 / `@merces/sdk` `errors.ts` fixes a
+/// canonical name (the parity vectors' `expect_revert` names) it is used verbatim; EVM-only conditions carry their
+/// own distinct names. Selectors are what the vector runner matches (`test/parity/VectorRunner.t.sol`).
 
-// ---- generic ----
+// ---- conventions (SPEC §1.1) ----
 error ZeroAddress();
 error ZeroAmount();
+/// @dev Entry-point range rule: an externally supplied amount, price, quantity, escrow, `payment_usd`,
+/// `fx_avg_wad`, adjustment or timestamp above `2^64 − 1` (`i64` for signed), or a derived due that does not fit.
 error AmountOutOfRange(uint256 amount);
 error TransferFailed();
 error ParameterOutOfBounds(bytes32 parameter);
@@ -27,33 +31,30 @@ error KeyNotRegistered(address key);
 error KeyAlreadyActive(address key);
 error FxPairExists(bytes32 pairId);
 error UnknownFxPair(bytes32 pairId);
+error CrosscheckUnchanged(bytes32 pairId);
 error IssuerInactive();
-error IssuerIssuanceStopped(); // canonical name `IssuanceStopped` is taken by the SPEC §10 event
-error IssuerNotAllowlisted();
+// The canonical error `IssuanceStopped` shares its name with the SPEC §10 registry event; it is declared in
+// `RegistryErrors` below so both keep their canonical names.
 error NotAllowlisted(address wallet);
 error StablecoinNotAllowed(address token);
 error InvalidReleaseSchedule();
-/// @dev `reason` ∈ {"unitsOffered", "reservePrice", "minRaise", "walletCap", "tier1Rate"} (SPEC §3.2 / §1.6).
+/// @dev `reason` ∈ {"unitsOffered", "reservePrice", "minRaise", "walletCap", "tier1Rate", "tier1Fx"}.
 error InvalidTerms(bytes32 reason);
 error InvalidTierFlags();
-error Tier1RequiresStablecoinIncome();
 error RouterNotEnabled();
 error TermsCommitmentMismatch();
 error CurveModeUnsupported();
 error SeriesNotDraft();
-error ContractHashZero();
+error ContractHashMissing();
 error AmendmentAfterTerminal();
 error UnfavourableAmendment();
 error InvalidAttestorSignature(address signer);
 error InvalidRaiseTransition();
 error AlreadyTerminal();
 error InvalidTerminalStatus();
-error IdentityAlreadyRegistered();
 
-// ---- auction ----
-error NotAuction();
+// ---- auction (SPEC §5.2) ----
 error RaiseNotDraft();
-error ContractHashMissing();
 error NewRaisesPaused();
 error NotSealedBid();
 error RaiseNotOpen();
@@ -78,8 +79,7 @@ error AlreadyDelivered();
 error TooManyBids();
 error UnitsMintedMismatch();
 
-// ---- treasury ----
-error NotTreasury();
+// ---- treasury (SPEC §5.3) ----
 error MintNotFinalized();
 error ReleasesPaused();
 error SeriesLate();
@@ -90,34 +90,29 @@ error ExceedsProceeds();
 error ProceedsAlreadySet();
 error ProceedsMismatch();
 
-// ---- income / verifier ----
-error NotIncome();
+// ---- reports, payments, true-up, pauses (SPEC §6.2, §6.4) ----
 error TailEnded();
 error NoTailDue();
 error WrongPeriod(uint32 expected, uint32 actual);
 error ReportTooEarly();
 error PaymentOutstanding();
-error ReportExists();
 /// @dev Tier not enabled for the series, tier 1 on a mixed series, or the tier-4 flag off (SPEC §6.2 step 3).
 error TierNotEnabled(uint8 tier);
-error FxMustBeWad();
 error FxMismatch(uint256 expected, uint256 actual);
 error FxFallbackNotAllowed();
 error FxFallbackRequired();
-error PriorCommitmentMismatch();
-error IncomeCommitmentMismatch();
+/// @dev Groth16 verification failed, or a commitment the proof opens does not match the chain (prior commitment,
+/// tier-1 router binding).
 error InvalidProof();
 error InvalidVerifierSignature(address signer);
-error AttestationRequired();
 error RouterPeriodNotClosed(uint32 period);
 error NothingDue();
-error ZeroAdjustment();
 error TrueUpOutstanding();
-/// @dev True-up year not complete, already trued up, or missing reports (SPEC §6.2).
+/// @dev True-up year not complete, already trued up, before the settlement year, or with unreported periods.
 error TrueUpYearInvalid();
 error TrueUpAdjustmentTooLarge();
+error AttestationInFuture();
 error PauseNotRequested();
-error PauseAlreadyRequested();
 error AlreadyPaused();
 error NotPaused();
 error InvalidPauseEnd();
@@ -125,47 +120,49 @@ error InvalidPauseEnd();
 error PauseTooLong();
 error TooManyPauses();
 error NotRouter();
-error AttestationInFuture();
-error RouterNotConfigured();
-error PeriodNotEndedYet(uint32 period);
-error FxPairDisabled(bytes32 pairId);
-error SnapshotAlreadyTaken();
-error InvalidPythPrice();
+
+// ---- FX accumulator (SPEC §6.6) ----
+/// @dev Pyth update older than `fx_max_staleness_seconds`, non-positive, or for another feed. Same selector as
+/// Pyth's own `PythErrors.StalePrice()`.
+error StalePrice();
 error ConfidenceTooWide();
+error SnapshotAlreadyTaken();
+error UnsupportedExponent(int32 expo);
 error PythUpdateFeeInsufficient();
 
-// ---- vault ----
-error NotVault();
+// ---- vault and exit path (SPEC §6.3, §6.7–§6.9) ----
 error NoUnitsOutstanding();
 error HolderNotRegistered(address holder);
-error SeriesNotRetired();
 error NotRedeemed();
-error SeriesNotExtinguished();
+error NoRedeemedUnits(address holder);
 error LockupActive();
 error UnreportedPeriods();
-/// @dev Redemption / final claims wait until the series' window has no open or unprocessed orders.
-error WindowPending();
 error SameAttestor();
 error InvalidSource();
 error SupplyAlreadySet();
 
-// ---- window ----
+// ---- transfer window (SPEC §7) ----
 error WindowsDisabled();
 /// @dev Status, report or period precondition of `open_window` failed (SPEC §7).
 error WindowNotEligible();
 error WindowOpen();
 error WindowNotOpen();
 error OrderExists();
-error OrderNotFound();
-error OrderAlreadyRevealed();
-error OrderAlreadyProcessed();
-error ZeroUnits();
 error InsufficientUnits();
+/// @dev A window order processed ahead of the order its fill depends on (asks wait for every bid).
 error OutOfOrder();
-error BidsPending();
 error InvalidProposal();
 error TooManyOrders();
+/// @dev A cancelled buyer's units reach below the clearing price and the ask price index is not complete yet.
+error PriceIndexIncomplete();
+error PriceIndexInvalid();
 
-// ---- token-facing (mirrors the Solana hook error names) ----
+// ---- token-facing (mirrors the Solana hook error names; raised by `MercesComplianceModule`) ----
 error DirectTransferForbidden();
 error UnarmedEscrowDeposit();
+
+/// @notice Errors whose canonical name collides with a SPEC §10 event name in the same contract.
+library RegistryErrors {
+    /// @dev Canonical `IssuanceStopped`: the issuer has stopped new issuance.
+    error IssuanceStopped();
+}

@@ -24,12 +24,9 @@ pub struct InitFxPair<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Creates the accumulator for a registry-configured pair (anyone may pay for it).
+/// Creates the accumulator for a registry-configured pair (anyone may pay for it). A disabled
+/// pair still gets an accumulator: `enabled` only gates new series (SPEC §3.1).
 pub fn init_fx_pair(ctx: Context<InitFxPair>, pair_id: [u8; 32]) -> Result<()> {
-    require!(
-        ctx.accounts.pair_config.enabled,
-        ProtocolError::FxPairDisabled
-    );
     let p = &mut ctx.accounts.pair;
     p.pair_id = pair_id;
     p.sum_wad = 0;
@@ -70,7 +67,8 @@ pub struct SnapshotFx<'info> {
 /// `snapshot` (SPEC §6.6): one per UTC day per pair; validates the Pyth update (full verification,
 /// feed id, staleness, confidence), normalises the rate to WAD, writes the period checkpoint on the
 /// first snapshot of a quarter, and adds to the running sum. Staleness and confidence bounds are the
-/// protocol defaults (the accumulator is shared by every series of the pair).
+/// protocol defaults (the accumulator is shared by every series of the pair). Snapshots stay
+/// permissionless for disabled pairs (live series keep their pair, SPEC §3.1).
 pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
     let now = now_ts()?;
     require!(
@@ -80,7 +78,6 @@ pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
     let day = day_of(now);
     let defaults = ctx.accounts.config.defaults;
     let cfg = &ctx.accounts.pair_config;
-    require!(cfg.enabled, ProtocolError::FxPairDisabled);
     let pair = &mut ctx.accounts.pair;
     require!(
         pair.count == 0 || day > pair.last_day,
@@ -126,8 +123,14 @@ pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
         cp.bump = ctx.bumps.checkpoint;
     }
     // 4. cross-check: a second Pyth feed (no Chainlink on Solana); a deviation above the band
-    //    flags the period so its average needs a fallback
-    if cfg.crosscheck != Pubkey::default() && period >= cfg.crosscheck_effective_period {
+    //    flags the period so its average needs a fallback. The feed in force for this period is
+    //    `crosscheck` from its effective period on, `prev_crosscheck` before (SPEC §3.1).
+    let crosscheck = if period >= cfg.crosscheck_effective_period {
+        cfg.crosscheck
+    } else {
+        cfg.prev_crosscheck
+    };
+    if crosscheck != Pubkey::default() {
         let cl = ctx
             .accounts
             .crosscheck_update
@@ -139,7 +142,7 @@ pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
         );
         let m = &cl.price_message;
         require!(
-            m.feed_id == cfg.crosscheck.to_bytes(),
+            m.feed_id == crosscheck.to_bytes(),
             ProtocolError::FeedIdMismatch
         );
         let cl_time = u64::try_from(m.publish_time).map_err(|_| ProtocolError::PriceStale)?;

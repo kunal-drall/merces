@@ -329,6 +329,9 @@ pub struct Holder {
     pub undelivered_units: u64,
     /// Units escrowed in an open or unprocessed window ask (accrual weight).
     pub ask_escrow_units: u64,
+    /// Units owed to the holder by processed window orders (fills bought, ask units returned) and
+    /// still in the window escrow until `deliver_order` (accrual weight).
+    pub window_pending_units: u64,
     pub bump: u8,
 }
 
@@ -365,6 +368,9 @@ pub struct Router {
     pub last_receipt_period: u32,
     /// Latest period with a recorded checkpoint (0 = none yet).
     pub last_checkpoint_period: u32,
+    /// Period in which the router (and its receiving account) was created. No income can have
+    /// been received before it, so every earlier period's `ytd_at_end` is exactly 0.
+    pub init_period: u32,
     /// Ring of `ROUTER_RING` period checkpoints `{period, ytd_at_end}` (slot = period % ring).
     pub cp_period: [u32; ROUTER_RING],
     pub cp_ytd_at_end: [u64; ROUTER_RING],
@@ -374,6 +380,9 @@ pub struct Router {
 
 impl Router {
     pub fn checkpoint(&self, period: u32) -> Option<u64> {
+        if period < self.init_period {
+            return Some(0);
+        }
         let i = (period as usize) % ROUTER_RING;
         (self.cp_set[i] && self.cp_period[i] == period).then_some(self.cp_ytd_at_end[i])
     }
@@ -440,19 +449,39 @@ pub struct Window {
     pub s_at: u64,
     pub max_bid: u64,
     pub min_ask: u64,
+    pub valid_bids: u32,
+    pub valid_asks: u32,
     pub tallied_count: u32,
     // results
     pub branch: u8,
     pub matched_units: u64,
+    /// Units left for the marginal bids at `p*` (branch A; first-come in reveal order).
     pub marginal_remaining: u64,
+    /// Class fill of the at-`p*` ask group before cancellations (A: `s_at`, B: `D − s_below`).
+    pub ask_at_total: u64,
+    /// Units already given to at-`p*` asks (first-come against `ask_at_total − cancelled_units`).
+    pub ask_at_filled: u64,
+    /// Fills of buyers cancelled at fill time (allowlist removed), taken back from the asks.
+    pub cancelled_units: u64,
     /// Bids are processed in ascending per-side reveal index, then asks.
     pub next_bid_index: u32,
     pub next_ask_index: u32,
     pub bids_processed: u32,
     pub asks_processed: u32,
     pub processed_count: u32,
-    /// Units still payable to asks (`matched − cancelled buyer fills`).
-    pub ask_budget: u64,
+    pub delivered_count: u32,
+    // take-back threshold for the asks below p* (only when cancelled_units > ask_at_total)
+    pub tb_round: u32,
+    pub tb_rejected: bool,
+    pub tb_settled: bool,
+    pub tb_price: u64,
+    pub tb_index: u32,
+    pub tb_above_sum: u64,
+    pub tb_found: bool,
+    pub tb_k_quantity: u64,
+    pub tb_tallied: u32,
+    /// Units cut from the threshold order itself (`R − Σ_{key > k} q`).
+    pub tb_partial: u64,
     pub bump: u8,
 }
 
@@ -476,6 +505,13 @@ pub struct Order {
     pub tallied_round: u32,
     pub processed: bool,
     pub fill: u64,
+    /// Take-back tally round in which this order was counted.
+    pub takeback_round: u32,
+    /// Owed to the owner after processing and paid by `deliver_order`: units (bid fill or ask
+    /// return) and stablecoin (bid refund or ask proceeds).
+    pub pending_units: u64,
+    pub pending_stable: u64,
+    pub delivered: bool,
     pub bump: u8,
 }
 

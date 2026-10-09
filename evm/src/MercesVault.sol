@@ -189,8 +189,10 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
     /// @dev `retire()` (SPEC §6.3): terminal status, registry mirror, open dues cleared.
     function _retire(uint256 seriesId, Ledger storage l, uint64 refund) internal {
         registry().markTerminal(seriesId, SeriesStatus.Retired);
-        IMercesIncome(_contracts().income).clearDues(seriesId);
+        IMercesIncome income = IMercesIncome(_contracts().income);
+        income.clearDues(seriesId);
         emit SeriesRetired(seriesId, l.paidPerUnitWad, refund);
+        income.crankStatus(seriesId);
     }
 
     /// @inheritdoc IMercesVault
@@ -233,9 +235,9 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         uint256 delta = num / n;
         l.tailCarryWad = num - delta * n;
         l.tailAccWad += delta;
-        l.grossReceived += accepted;
-        l.feeCollected += fee;
-        l.refundedToIssuer += refund;
+        l.tailGrossReceived += accepted;
+        l.tailFeeCollected += fee;
+        l.tailRefunded += refund;
         emit TailDistributed(seriesId, period, gross, accepted, fee, refund);
         IERC20 stable = IERC20(core.stablecoin);
         if (fee > 0) stable.safeTransfer(registry().feeCollector(), fee);
@@ -258,8 +260,11 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         Ledger storage l = _s().ledgers[seriesId];
         h.registered = true;
         h.lastNetAccWad = l.netAccWad;
-        h.lastTailAccWad = l.tailAccWad;
-        h.lastFinalAccWad = l.finalAccWad;
+        // the tail and final pools are owed per unit that existed at redemption / extinguishment: a wallet that
+        // registers later can only hold such units (bought in a window that cleared before), so it is owed
+        // their whole share (docs/assumptions/track-c.md C-S20)
+        h.lastTailAccWad = 0;
+        h.lastFinalAccWad = 0;
         emit HolderRegistered(seriesId, wallet);
     }
 
@@ -269,25 +274,59 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         _settle(seriesId, registry().getSeriesCore(seriesId), wallet);
     }
 
+    /// @dev `pending += floor((net_acc − last) × accrual_units / WAD)`. Ask-escrow units of a window that has
+    /// cleared earn through this weight only up to the clearing accumulator (`accAtClear`); the payouts after
+    /// clearing go to the buyer of a sold unit (credited from `accAtClear` at its fill) or to the seller of an
+    /// unsold one (credited at its ask's processing) through `creditWindowAccrual`, so while orders are processed
+    /// one by one every unit earns for exactly one wallet (docs/assumptions/track-c.md C-S4). Rounding only ever
+    /// lowers `pending`.
     function _settle(uint256 seriesId, SeriesCore memory core, address wallet) internal returns (Holder storage h) {
         h = _s().holders[seriesId][wallet];
         if (!h.registered) revert HolderNotRegistered(wallet);
-        Ledger storage l = _s().ledgers[seriesId];
-        uint256 acc = l.netAccWad;
-        if (acc != h.lastNetAccWad) {
-            uint256 units = _accrualUnits(seriesId, core, wallet);
-            h.pending = (uint256(h.pending) + MercesMath.mulDiv(acc - h.lastNetAccWad, units, C.WAD)).toU64();
-            h.lastNetAccWad = acc;
+        uint256 acc = _s().ledgers[seriesId].netAccWad;
+        uint256 last = h.lastNetAccWad;
+        if (acc == last) return h;
+        (uint256 base, uint256 escrow, bool cleared, uint256 snap) = _weights(seriesId, core, wallet);
+        uint256 add;
+        if (!cleared) {
+            add = MercesMath.mulDiv(acc - last, base + escrow, C.WAD);
+        } else if (last < snap) {
+            add = MercesMath.mulDiv(snap - last, base + escrow, C.WAD) + MercesMath.mulDiv(acc - snap, base, C.WAD);
+        } else {
+            add = MercesMath.mulDiv(acc - last, base, C.WAD);
         }
+        h.pending = (uint256(h.pending) + add).toU64();
+        h.lastNetAccWad = acc;
     }
 
-    /// @dev `accrual_units(w) = unit_balance(w) + pending auction units + ask-escrow units` (SPEC §6.1).
-    function _accrualUnits(uint256 seriesId, SeriesCore memory core, address wallet) internal view returns (uint256) {
-        if (core.unitToken == address(0)) return 0;
+    /// @inheritdoc IMercesVault
+    function creditWindowAccrual(uint256 seriesId, address wallet, uint64 units, uint256 fromAccWad) external override {
+        _requireCaller(_contracts().window);
+        Holder storage h = _s().holders[seriesId][wallet];
+        if (!h.registered) revert HolderNotRegistered(wallet);
+        uint256 acc = _s().ledgers[seriesId].netAccWad;
+        if (acc <= fromAccWad || units == 0) return;
+        h.pending = (uint256(h.pending) + MercesMath.mulDiv(acc - fromAccWad, units, C.WAD)).toU64();
+    }
+
+    /// @dev `base = unit_balance + pending auction units`; `escrow` = ask-escrow units with their window state.
+    function _weights(uint256 seriesId, SeriesCore memory core, address wallet)
+        internal
+        view
+        returns (uint256 base, uint256 escrow, bool cleared, uint256 snap)
+    {
+        if (core.unitToken == address(0)) return (0, 0, false, 0);
         ProtocolContracts memory pc = _contracts();
-        return IERC3643Token(core.unitToken).balanceOf(wallet)
-            + IMercesAuction(pc.auction).pendingUnitsOf(seriesId, wallet)
-            + IMercesWindow(pc.window).askEscrowUnits(seriesId, wallet);
+        base = IERC3643Token(core.unitToken).balanceOf(wallet)
+            + IMercesAuction(pc.auction).pendingUnitsOf(seriesId, wallet);
+        (escrow, cleared, snap) = IMercesWindow(pc.window).askAccrual(seriesId, wallet);
+    }
+
+    /// @dev `accrual_units(w) = unit_balance(w) + pending auction units + ask-escrow units` (SPEC §6.1); escrowed
+    /// units of a cleared window no longer count.
+    function _accrualUnits(uint256 seriesId, SeriesCore memory core, address wallet) internal view returns (uint256) {
+        (uint256 base, uint256 escrow, bool cleared,) = _weights(seriesId, core, wallet);
+        return cleared ? base : base + escrow;
     }
 
     /// @inheritdoc IPayoutClaims
@@ -323,10 +362,13 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
     /// balance is a no-op (zero-amount rule).
     function burnRetired(uint256 seriesId, address holder) external override nonReentrant {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
-        if (core.terminalStatus != uint8(SeriesStatus.Retired)) revert SeriesNotRetired();
-        _settle(seriesId, core, holder);
+        if (core.terminalStatus != uint8(SeriesStatus.Retired)) revert TerminalStatus();
         uint64 units = uint64(IERC3643Token(core.unitToken).balanceOf(holder));
-        if (units == 0) return;
+        if (units == 0) {
+            emit UnitsBurned(seriesId, holder, 0, BURN_REASON_RETIRED); // zero-amount rule: a no-op, not a revert
+            return;
+        }
+        _settle(seriesId, core, holder);
         _burnUnits(seriesId, _s().ledgers[seriesId], core, holder, units, BURN_REASON_RETIRED);
     }
 
@@ -348,17 +390,15 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
     /// @dev Units still in the auction escrow are pushed to the holder first (SPEC §6.7 `claim_redemption`).
     function _deliverPendingAuctionUnits(uint256 seriesId, address holder) internal {
         IMercesAuction auction = IMercesAuction(_contracts().auction);
-        (bool exists, uint256 idx) = auction.bidIndexOf(seriesId, holder);
-        if (!exists) return;
-        IMercesAuction.Bid memory b = auction.getBid(seriesId, idx);
-        if (b.processed && !b.delivered) auction.deliverBid(seriesId, idx);
+        if (auction.pendingUnitsOf(seriesId, holder) > 0) auction.deliverBid(seriesId, holder);
     }
 
     // ================================================================ redemption (SPEC §6.7)
 
     /// @inheritdoc IMercesVault
-    /// @dev Issuer only, after the lockup, while current: not Late, nothing due and every ended period reported
-    /// (the issuer's own obligations, A15). Never blockable by an admin, holder or attestor.
+    /// @dev Issuer only, after the lockup, while not Late, with nothing due and every ended period reported (the
+    /// issuer's own obligations, A15). Never blockable by an admin, holder or attestor. A series whose remaining cap
+    /// is already zero retires instead (nothing is owed either way).
     function redeem(uint256 seriesId) external override nonReentrant {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (msg.sender != core.issuer) revert NotIssuer();
@@ -366,7 +406,6 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         _checkRedeemable(seriesId, core, terms);
         Ledger storage l = _s().ledgers[seriesId];
         uint256 n = l.unitsOutstanding;
-        if (n == 0) revert NoUnitsOutstanding();
 
         Quote memory q = _quote(seriesId, core, terms, l, block.timestamp);
         if (q.capRemaining == 0) {
@@ -384,21 +423,23 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
             seriesId, uint64(q.price), _clamp64(q.hurdle), _clamp64(q.dAvg), uint64(q.capRemaining), uint64(n), deposit
         );
         if (deposit > 0) IERC20(core.stablecoin).safeTransferFrom(msg.sender, address(this), deposit);
+        IMercesIncome(_contracts().income).crankStatus(seriesId);
     }
 
+    /// @dev SPEC §6.7 gate in the reference order: settled + final mint, not terminal, not Late (derived status;
+    /// a hardship pause does not block redemption), lockup over, no open due or true-up, every ended period
+    /// reported.
     function _checkRedeemable(uint256 seriesId, SeriesCore memory core, SeriesTerms memory terms) internal view {
         if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
         if (!core.mintFinalized) revert MintNotFinalized();
         if (core.terminalStatus != 0) revert TerminalStatus();
-        if (block.timestamp < uint256(core.settlementTs) + terms.lockupSeconds) revert LockupActive();
-        ProtocolContracts memory pc = _contracts();
-        IMercesIncome income = IMercesIncome(pc.income);
+        IMercesIncome income = IMercesIncome(_contracts().income);
         if (income.deriveStatus(seriesId) == SeriesStatus.Late) revert SeriesLate();
+        if (block.timestamp < uint256(core.settlementTs) + terms.lockupSeconds) revert LockupActive();
         (uint64 due,) = income.openDue(seriesId);
         if (due != 0) revert PaymentOutstanding();
         if (income.trueupDue(seriesId) != 0) revert TrueUpOutstanding();
         if (income.nextExpectedPeriod(seriesId) < Periods.periodOf(block.timestamp)) revert UnreportedPeriods();
-        if (IMercesWindow(pc.window).hasPendingOrders(seriesId)) revert WindowPending();
     }
 
     struct Quote {
@@ -467,35 +508,33 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         _claimRedemption(seriesId, holder);
     }
 
-    /// @dev SPEC §6.7 `claim_redemption`: pending payouts + `P_redeem × units`; pending auction units are
-    /// delivered first; units burn; `redeemed_units` is recorded once for the tail clause. Available in
-    /// `Redeemed` and `Extinguished`.
+    /// @dev SPEC §6.7 `claim_redemption`: pending auction units are delivered first; then pending payouts plus
+    /// `P_redeem × units` for the wallet's balance, which burns. `redeemed_units` accumulates (units returned later,
+    /// e.g. from a window ask, are redeemed by a later claim). Available in `Redeemed` and `Extinguished`.
     function _claimRedemption(uint256 seriesId, address holder) internal {
-        SeriesCore memory core = registry().getSeriesCore(seriesId);
         Ledger storage l = _s().ledgers[seriesId];
         if (l.redemptionTs == 0) revert NotRedeemed();
-        Holder storage h = _settle(seriesId, core, holder);
+        _redemptionBody(seriesId, l, holder);
+    }
+
+    function _redemptionBody(uint256 seriesId, Ledger storage l, address holder)
+        internal
+        returns (uint64 units, uint64 amount)
+    {
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
         _deliverPendingAuctionUnits(seriesId, holder);
-        (uint64 units, uint64 redemption) = _settleRedemption(l, core, h, holder);
-        uint64 amount = (uint256(h.pending) + redemption).toU64();
+        Holder storage h = _settle(seriesId, core, holder);
+        units = uint64(IERC3643Token(core.unitToken).balanceOf(holder));
+        // units redeemed after this holder already claimed tail (they came back from, or were bought in, a
+        // window that cleared before redemption) also get the tail accrued before that claim (C-S21)
+        uint256 tailCatchUp = MercesMath.mulDiv(h.lastTailAccWad, units, C.WAD);
+        h.redeemedUnits += units;
+        amount = (uint256(h.pending) + uint256(l.redemptionPrice) * units + tailCatchUp).toU64();
         h.pending = 0;
         l.claimedTotal += amount;
         emit RedemptionClaimed(seriesId, holder, units, amount);
         if (units > 0) _burnUnits(seriesId, l, core, holder, units, BURN_REASON_REDEEMED);
         if (amount > 0) IERC20(core.stablecoin).safeTransfer(holder, amount);
-    }
-
-    /// @dev Records `redeemed_units = balance` once and returns the redemption proceeds for the units burnt now.
-    function _settleRedemption(Ledger storage l, SeriesCore memory core, Holder storage h, address holder)
-        internal
-        returns (uint64 units, uint64 redemption)
-    {
-        units = uint64(IERC3643Token(core.unitToken).balanceOf(holder));
-        if (!h.redemptionSettled) {
-            h.redemptionSettled = true;
-            h.redeemedUnits = units;
-            redemption = (uint256(l.redemptionPrice) * units).toU64();
-        }
     }
 
     // ================================================================ tail (SPEC §6.8)
@@ -510,13 +549,17 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         _claimTail(seriesId, holder);
     }
 
-    /// @dev A holder with units not yet redeemed goes through `claim_redemption` first (SPEC §6.8).
+    /// @dev A holder with units not yet redeemed goes through `claim_redemption` first (SPEC §6.8); a holder that
+    /// never held units at redemption has nothing to claim (`NoRedeemedUnits`).
     function _claimTail(uint256 seriesId, address holder) internal {
         Ledger storage l = _s().ledgers[seriesId];
         if (l.redemptionTs == 0) revert NotRedeemed();
         Holder storage h = _s().holders[seriesId][holder];
         if (!h.registered) revert HolderNotRegistered(holder);
-        if (!h.redemptionSettled) _claimRedemption(seriesId, holder);
+        if (h.redeemedUnits == 0 && _accrualUnits(seriesId, registry().getSeriesCore(seriesId), holder) > 0) {
+            _redemptionBody(seriesId, l, holder);
+        }
+        if (h.redeemedUnits == 0) revert NoRedeemedUnits(holder);
         uint64 amount = MercesMath.mulDiv(l.tailAccWad - h.lastTailAccWad, h.redeemedUnits, C.WAD).toU64();
         h.lastTailAccWad = l.tailAccWad;
         l.claimedTotal += amount;
@@ -529,26 +572,25 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
     /// @inheritdoc IMercesVault
     /// @dev Two distinct active attestors sign the §1.4 message over `extinguish_nonce`. Allowed in every status
     /// except `Extinguished` once the mint is final. Unreleased treasury funds come to the vault as a no-fee
-    /// final distribution over `final_units`; every open due is cleared; the tail ends.
+    /// final distribution over `final_units`; every open due is cleared; no further tail report is accepted.
     function extinguish(uint256 seriesId, bytes calldata signatureA, bytes calldata signatureB)
         external
         override
         nonReentrant
     {
-        SeriesCore memory core = registry().getSeriesCore(seriesId);
-        if (core.terminalStatus == uint8(SeriesStatus.Extinguished)) revert TerminalStatus();
-        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
-        if (!core.mintFinalized) revert MintNotFinalized();
         Ledger storage l = _s().ledgers[seriesId];
         bytes32 digest = MercesMessages.extinguishDigest(registry().domain(), seriesId, l.extinguishNonce);
-        address a = ECDSA.recover(digest, signatureA);
-        address b = ECDSA.recover(digest, signatureB);
+        (address a,,) = ECDSA.tryRecover(digest, signatureA);
+        (address b,,) = ECDSA.tryRecover(digest, signatureB);
+        if (a == b) revert SameAttestor();
         if (!registry().isAttestor(a)) revert InvalidAttestorSignature(a);
         if (!registry().isAttestor(b)) revert InvalidAttestorSignature(b);
-        if (a == b) revert SameAttestor();
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
+        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
+        if (!core.mintFinalized) revert MintNotFinalized();
+        if (core.terminalStatus == uint8(SeriesStatus.Extinguished)) revert TerminalStatus();
         l.extinguishNonce += 1;
         l.extinguishedAt = uint64(block.timestamp);
-        l.tailExhausted = true;
         l.finalUnits = l.redemptionTs != 0 ? l.unitsAtRedemption : l.unitsOutstanding;
 
         ProtocolContracts memory pc = _contracts();
@@ -557,6 +599,7 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         uint64 unreleased = IMercesTreasury(pc.treasury).moveUnreleasedToVault(seriesId);
         _distributeFinal(seriesId, l, unreleased);
         emit SeriesExtinguished(seriesId, unreleased, a, b);
+        IMercesIncome(pc.income).crankStatus(seriesId);
     }
 
     /// @dev `final_acc_wad += floor(unreleased × WAD / final_units)` with an exact carry, no fee (SPEC §6.9).
@@ -583,38 +626,37 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         _claimFinal(seriesId, holder);
     }
 
-    /// @dev SPEC §6.9 `claim_final`: pending payouts + (for a redeemed series) the unclaimed redemption + the
-    /// pro-rata share of the unreleased treasury, weighted by `redeemed_units` (redeemed series) or the holder's
-    /// units (which are all in the wallet once pending auction units are delivered and no window is pending).
+    /// @dev SPEC §6.9 `claim_final`: weight `w = redeemed_units` for a redeemed series (after redeeming any balance
+    /// still held, which pays `P_redeem × balance`) else `accrual_units(holder)`; pays pending payouts plus the
+    /// holder's share of the unreleased treasury once, then burns any balance left.
     function _claimFinal(uint256 seriesId, address holder) internal {
-        SeriesCore memory core = registry().getSeriesCore(seriesId);
         Ledger storage l = _s().ledgers[seriesId];
-        if (l.extinguishedAt == 0) revert SeriesNotExtinguished();
-        if (IMercesWindow(_contracts().window).hasPendingOrders(seriesId)) revert WindowPending();
-        Holder storage h = _settle(seriesId, core, holder);
+        if (l.extinguishedAt == 0) revert TerminalStatus();
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
         _deliverPendingAuctionUnits(seriesId, holder);
-        uint256 amount = h.pending;
-        h.pending = 0;
-        uint64 units;
-        uint64 weight;
+        Holder storage h = _settle(seriesId, core, holder);
+        IERC3643Token token = IERC3643Token(core.unitToken);
+        uint256 weight;
+        (uint256 base, uint256 escrow, bool cleared,) = _weights(seriesId, core, holder);
+        // units of an ask in a cleared, unprocessed window are either sold or on their way back: settle the
+        // window first so the final share is weighed on what the holder really keeps
+        if (cleared && !h.finalClaimed) revert OutOfOrder();
         if (l.redemptionTs != 0) {
-            bool first = !h.redemptionSettled;
-            uint64 redemption;
-            (units, redemption) = _settleRedemption(l, core, h, holder);
-            if (first) emit RedemptionClaimed(seriesId, holder, units, redemption);
-            amount += redemption;
+            if (token.balanceOf(holder) > 0) _redemptionBody(seriesId, l, holder);
             weight = h.redeemedUnits;
         } else {
-            units = uint64(IERC3643Token(core.unitToken).balanceOf(holder));
-            weight = units;
+            weight = base + escrow;
         }
-        amount += MercesMath.mulDiv(l.finalAccWad - h.lastFinalAccWad, weight, C.WAD);
+        uint256 share = h.finalClaimed ? 0 : MercesMath.mulDiv(l.finalAccWad - h.lastFinalAccWad, weight, C.WAD);
         h.lastFinalAccWad = l.finalAccWad;
-        uint64 amount64 = amount.toU64();
-        l.claimedTotal += amount64;
-        emit FinalClaimed(seriesId, holder, weight, amount64);
-        if (units > 0) _burnUnits(seriesId, l, core, holder, units, BURN_REASON_EXTINGUISHED);
-        if (amount64 > 0) IERC20(core.stablecoin).safeTransfer(holder, amount64);
+        h.finalClaimed = true;
+        uint64 amount = (uint256(h.pending) + share).toU64();
+        h.pending = 0;
+        l.claimedTotal += amount;
+        emit FinalClaimed(seriesId, holder, uint64(weight), amount);
+        uint64 left = uint64(token.balanceOf(holder));
+        if (left > 0) _burnUnits(seriesId, l, core, holder, left, BURN_REASON_EXTINGUISHED);
+        if (amount > 0) IERC20(core.stablecoin).safeTransfer(holder, amount);
     }
 
     // ================================================================ views
@@ -629,6 +671,10 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
 
     function unitsOutstanding(uint256 seriesId) external view override returns (uint64) {
         return _s().ledgers[seriesId].unitsOutstanding;
+    }
+
+    function netAccWad(uint256 seriesId) external view override returns (uint256) {
+        return _s().ledgers[seriesId].netAccWad;
     }
 
     /// @inheritdoc IMercesVault
@@ -675,15 +721,21 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         Holder storage h = _s().holders[seriesId][holder];
         if (!h.registered) return 0;
         Ledger storage l = _s().ledgers[seriesId];
-        uint256 units = _accrualUnits(seriesId, registry().getSeriesCore(seriesId), holder);
-        return uint256(h.pending) + MercesMath.mulDiv(l.netAccWad - h.lastNetAccWad, units, C.WAD);
+        (uint256 base, uint256 escrow, bool cleared, uint256 snap) =
+            _weights(seriesId, registry().getSeriesCore(seriesId), holder);
+        uint256 acc = l.netAccWad;
+        uint256 last = h.lastNetAccWad;
+        if (!cleared) return uint256(h.pending) + MercesMath.mulDiv(acc - last, base + escrow, C.WAD);
+        if (last >= snap) return uint256(h.pending) + MercesMath.mulDiv(acc - last, base, C.WAD);
+        return uint256(h.pending) + MercesMath.mulDiv(snap - last, base + escrow, C.WAD)
+            + MercesMath.mulDiv(acc - snap, base, C.WAD);
     }
 
     /// @inheritdoc IPayoutClaims
     function claimableTail(uint256 seriesId, address holder) external view override returns (uint256) {
         Holder storage h = _s().holders[seriesId][holder];
         Ledger storage l = _s().ledgers[seriesId];
-        uint256 units = h.redemptionSettled
+        uint256 units = h.redeemedUnits != 0
             ? h.redeemedUnits
             : IERC3643Token(registry().getSeriesCore(seriesId).unitToken).balanceOf(holder);
         return MercesMath.mulDiv(l.tailAccWad - h.lastTailAccWad, units, C.WAD);
@@ -694,8 +746,10 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         Holder storage h = _s().holders[seriesId][holder];
         Ledger storage l = _s().ledgers[seriesId];
         SeriesCore memory core = registry().getSeriesCore(seriesId);
-        uint256 weight =
-            (l.redemptionTs != 0 && h.redemptionSettled) ? h.redeemedUnits : _accrualUnits(seriesId, core, holder);
+        if (h.finalClaimed) return 0;
+        uint256 weight = l.redemptionTs != 0
+            ? uint256(h.redeemedUnits) + IERC3643Token(core.unitToken).balanceOf(holder)
+            : _accrualUnits(seriesId, core, holder);
         return MercesMath.mulDiv(l.finalAccWad - h.lastFinalAccWad, weight, C.WAD);
     }
 

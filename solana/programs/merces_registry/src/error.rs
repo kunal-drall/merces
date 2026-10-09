@@ -92,6 +92,8 @@ pub enum RegistryError {
     FxPairIdMismatch,
     #[msg("feed_id and inverted are write-once for an FX pair")]
     FxPairImmutable,
+    #[msg("The cross-check feed is already the requested one")]
+    CrosscheckUnchanged,
     #[msg("Wallet cap allows no bid: floor(units_offered × wallet_cap_bps / 10000) < 1")]
     WalletCapTooSmall,
     #[msg("Tier-1 series must supply plaintext router terms")]

@@ -1,0 +1,154 @@
+{
+  "address": "ALQgHjCyfNAtP5mWxYny5i2eW61pK6etSC8Vx6PpgHhA",
+  "metadata": {
+    "name": "mock_usdg_hook",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "No-op Token-2022 transfer hook for the mock USDG mint used in tests and on devnet."
+  },
+  "instructions": [
+    {
+      "name": "execute",
+      "docs": [
+        "Always allows the transfer."
+      ],
+      "discriminator": [
+        105,
+        37,
+        101,
+        197,
+        75,
+        251,
+        102,
+        26
+      ],
+      "accounts": [
+        {
+          "name": "source_token"
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "destination_token"
+        },
+        {
+          "name": "owner"
+        },
+        {
+          "name": "extra_account_meta_list",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  116,
+                  114,
+                  97,
+                  45,
+                  97,
+                  99,
+                  99,
+                  111,
+                  117,
+                  110,
+                  116,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_extra_account_meta_list",
+      "docs": [
+        "Creates an empty `ExtraAccountMetaList` for `mint`. Anyone may call it (the mock mint has",
+        "no privileged owner), and it can only be created once per mint."
+      ],
+      "discriminator": [
+        43,
+        34,
+        13,
+        49,
+        167,
+        88,
+        235,
+        235
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "extra_account_meta_list",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  116,
+                  114,
+                  97,
+                  45,
+                  97,
+                  99,
+                  99,
+                  111,
+                  117,
+                  110,
+                  116,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    }
+  ]
+}

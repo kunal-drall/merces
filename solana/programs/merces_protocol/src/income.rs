@@ -18,7 +18,9 @@ use merces_common::WAD_U64;
 use merces_onchain::seeds::{ATTESTOR, CONFIG, VERIFIER};
 use merces_onchain::{keccak, poseidon2, recover_eth_address, u64_field, SigError};
 use merces_registry::program::MercesRegistry;
-use merces_registry::state::{AttestorKey, ProtocolConfig, Series, VerifierKey, TIER_FLAG_SPLIT};
+use merces_registry::state::{
+    AttestorKey, ProtocolConfig, Series, VerifierKey, RAISE_SETTLED, TIER_FLAG_SPLIT,
+};
 
 use crate::common::*;
 use crate::error::{math, ProtocolError};
@@ -168,20 +170,31 @@ pub struct SubmitReport<'info> {
     pub attestation_key: UncheckedAccount<'info>,
     /// CHECK: registry `AttestorKey` PDA for `fx_attestor_addr`; validated when a fallback is used.
     pub fx_attestor_key: UncheckedAccount<'info>,
-    /// The rate accumulator of the series' pair (required when the series has an FX pair).
-    #[account(seeds = [seeds::FX_PAIR, series.fx_pair_id.as_ref()], bump = fx_pair.bump)]
-    pub fx_pair: Option<Box<Account<'info, FxPair>>>,
-    /// Accumulator checkpoint at `period` (required when the series has an FX pair).
-    #[account(seeds = [seeds::FX_CHECKPOINT, series.fx_pair_id.as_ref(), args.period.to_le_bytes().as_ref()], bump = fx_start.bump)]
-    pub fx_start: Option<Box<Account<'info, FxCheckpoint>>>,
-    /// Accumulator checkpoint at `period + 1` (optional: the live totals stand in while no
-    /// snapshot of `period + 1` exists).
-    #[account(seeds = [seeds::FX_CHECKPOINT, series.fx_pair_id.as_ref(), args.period.saturating_add(1).to_le_bytes().as_ref()], bump = fx_end.bump)]
-    pub fx_end: Option<Box<Account<'info, FxCheckpoint>>>,
+    /// CHECK: the rate accumulator PDA of the series' pair (address checked by the seeds; read
+    /// when it exists — a pair never snapshotted reads as `NeedsFallback`). Ignored for stablecoin
+    /// income.
+    #[account(seeds = [seeds::FX_PAIR, series.fx_pair_id.as_ref()], bump)]
+    pub fx_pair: UncheckedAccount<'info>,
+    /// CHECK: the accumulator checkpoint PDA at `period` (missing ⇒ `NeedsFallback`).
+    #[account(seeds = [seeds::FX_CHECKPOINT, series.fx_pair_id.as_ref(), args.period.to_le_bytes().as_ref()], bump)]
+    pub fx_start: UncheckedAccount<'info>,
+    /// CHECK: the accumulator checkpoint PDA at `period + 1`. Always passed, so the live totals
+    /// stand in only when no snapshot of `period + 1` exists (SPEC §6.6).
+    #[account(seeds = [seeds::FX_CHECKPOINT, series.fx_pair_id.as_ref(), args.period.saturating_add(1).to_le_bytes().as_ref()], bump)]
+    pub fx_end: UncheckedAccount<'info>,
     /// Tier 1 router (required for tier 1 reports).
     #[account(seeds = [seeds::ROUTER, series.key().as_ref()], bump = router.bump)]
     pub router: Option<Box<Account<'info, Router>>>,
     pub system_program: Program<'info, System>,
+}
+
+/// Reads an account of this program when it exists (address checked by the caller's seeds).
+fn read_existing<T: AccountDeserialize>(info: &AccountInfo) -> Result<Option<T>> {
+    if *info.owner != crate::ID || info.data_is_empty() {
+        return Ok(None);
+    }
+    let data = info.try_borrow_data()?;
+    Ok(Some(T::try_deserialize(&mut &data[..])?))
 }
 
 pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Result<()> {
@@ -190,7 +203,12 @@ pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Resu
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
     let config = &ctx.accounts.config;
-    let status = ledger.sync_status(now, series_key)?;
+    require!(
+        series.raise_state == RAISE_SETTLED,
+        ProtocolError::RaiseNotSettled
+    );
+    // preconditions read the derived status; the stored status is synced in the effects phase
+    let status = ledger.derived_status(now)?;
 
     // 2. preconditions
     require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
@@ -251,61 +269,61 @@ pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Resu
         );
         false
     } else {
-        let pair = ctx
-            .accounts
-            .fx_pair
-            .as_ref()
-            .ok_or(ProtocolError::FxCheckpointMismatch)?;
-        let start_cp = ctx
-            .accounts
-            .fx_start
-            .as_ref()
-            .ok_or(ProtocolError::FxCheckpointMismatch)?;
-        require!(
-            pair.pair_id == series.fx_pair_id && start_cp.pair_id == series.fx_pair_id,
-            ProtocolError::FxCheckpointMismatch
-        );
-        let start = Checkpoint {
-            sum_wad: start_cp.sum_wad,
-            count: start_cp.count,
-            flagged: start_cp.flagged,
-        };
-        let next_start = period_start(
-            args.period
-                .checked_add(1)
-                .ok_or(ProtocolError::MathOverflow)?,
-        )
-        .map_err(math)?;
-        let end = match ctx.accounts.fx_end.as_ref() {
-            Some(e) => {
+        let pair = read_existing::<FxPair>(&ctx.accounts.fx_pair.to_account_info())?;
+        let start_cp = read_existing::<FxCheckpoint>(&ctx.accounts.fx_start.to_account_info())?;
+        let end_cp = read_existing::<FxCheckpoint>(&ctx.accounts.fx_end.to_account_info())?;
+        let (ok, avg) = match (pair, start_cp) {
+            (Some(pair), Some(start_cp)) => {
                 require!(
-                    e.pair_id == series.fx_pair_id,
+                    pair.pair_id == series.fx_pair_id && start_cp.pair_id == series.fx_pair_id,
                     ProtocolError::FxCheckpointMismatch
                 );
-                Some(Checkpoint {
-                    sum_wad: e.sum_wad,
-                    count: e.count,
-                    flagged: e.flagged,
-                })
+                let start = Checkpoint {
+                    sum_wad: start_cp.sum_wad,
+                    count: start_cp.count,
+                    flagged: start_cp.flagged,
+                };
+                let next_start = period_start(
+                    args.period
+                        .checked_add(1)
+                        .ok_or(ProtocolError::MathOverflow)?,
+                )
+                .map_err(math)?;
+                let live_is_end = now >= period_end(args.period).map_err(math)?
+                    && u64::from(pair.last_day)
+                        .checked_mul(DAY)
+                        .ok_or(ProtocolError::MathOverflow)?
+                        < next_start;
+                let end = match end_cp {
+                    Some(e) => {
+                        require!(
+                            e.pair_id == series.fx_pair_id,
+                            ProtocolError::FxCheckpointMismatch
+                        );
+                        Some(Checkpoint {
+                            sum_wad: e.sum_wad,
+                            count: e.count,
+                            flagged: e.flagged,
+                        })
+                    }
+                    // no snapshot of `period + 1` yet: the live totals are the end-of-period totals
+                    None if live_is_end => Some(Checkpoint {
+                        sum_wad: pair.sum_wad,
+                        count: pair.count,
+                        flagged: false,
+                    }),
+                    None => None,
+                };
+                match end {
+                    Some(end) => {
+                        quarter_average(args.period, &start, &end, series.fx_min_coverage_bps)
+                            .map_err(math)?
+                    }
+                    None => (false, 0),
+                }
             }
-            // live end: no snapshot of `period + 1` yet, so the live totals are the end-of-period totals
-            None if u64::from(pair.last_day)
-                .checked_mul(DAY)
-                .ok_or(ProtocolError::MathOverflow)?
-                < next_start =>
-            {
-                Some(Checkpoint {
-                    sum_wad: pair.sum_wad,
-                    count: pair.count,
-                    flagged: false,
-                })
-            }
-            None => None,
-        };
-        let (ok, avg) = match end {
-            Some(end) => quarter_average(args.period, &start, &end, series.fx_min_coverage_bps)
-                .map_err(math)?,
-            None => (false, 0),
+            // no accumulator or no snapshot inside the period: NeedsFallback
+            _ => (false, 0),
         };
         if ok {
             require!(args.fx_avg_wad == avg, ProtocolError::FxAverageMismatch);
@@ -630,7 +648,7 @@ pub fn pay<'info>(ctx: Context<'info, Pay<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
-    let status = ledger.sync_status(now, series_key)?;
+    let status = ledger.derived_status(now)?;
     require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
     require!(
         !matches!(status, SeriesStatus::Retired | SeriesStatus::Extinguished),
@@ -703,7 +721,7 @@ pub fn pay_trueup<'info>(ctx: Context<'info, Pay<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
-    let status = ledger.sync_status(now, series_key)?;
+    let status = ledger.derived_status(now)?;
     require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
     require!(!status.is_terminal(), ProtocolError::TerminalStatus);
     require!(ledger.trueup_due > 0, ProtocolError::NoTrueUpDue);
@@ -717,7 +735,7 @@ pub fn pay_trueup<'info>(ctx: Context<'info, Pay<'info>>) -> Result<()> {
         .ok_or(ProtocolError::MathOverflow)?;
     let anchor = deadline_of(period_of(ledger.trueup_attested_at).map_err(math)?)?;
     settle_receipt(&ctx, &mut ledger, total, anchor, false)?;
-    ledger.trueup_due = 0;
+    ledger.clear_trueup();
     ledger.sync_status(now, series_key)?;
     emit!(TrueUpPaid {
         series: series_key,
@@ -756,15 +774,16 @@ pub fn submit_trueup(
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
+    let status = ledger.derived_status(now)?;
+    // check order: mint finalised, tier 3, attestor, nonce (signature), then the year rules
+    require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
+    require!(!status.is_terminal(), ProtocolError::TerminalStatus);
     require!(
         series.tier_flags & (1 << (TIER_ATTESTOR - 1)) != 0,
         ProtocolError::TierNotEnabled
     );
-    require!(adjustment != 0, ProtocolError::ZeroAdjustment);
-    let status = ledger.sync_status(now, series_key)?;
-    require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
-    require!(!status.is_terminal(), ProtocolError::TerminalStatus);
-    // signature over the stored nonce first: a replay fails before any state check
+    require_active_attestor(&ctx.accounts.attestor_key.to_account_info(), &attestor_addr)?;
+    // the message carries the stored nonce: a replayed or wrong-nonce signature does not recover
     let msg = keccak(&[trueup_message(
         &ctx.accounts.config.domain,
         &series_key.to_bytes(),
@@ -775,7 +794,6 @@ pub fn submit_trueup(
     )
     .as_bytes()]);
     require_signer(&msg, &attestor_sig, &attestor_addr)?;
-    require_active_attestor(&ctx.accounts.attestor_key.to_account_info(), &attestor_addr)?;
     require!(
         attestation_ts <= now,
         ProtocolError::TrueUpTimestampInFuture
@@ -783,53 +801,57 @@ pub fn submit_trueup(
     require!(ledger.trueup_due == 0, ProtocolError::TrueUpOutstanding);
     let year32 = u32::from(year);
     require!(
-        year32 < year_of(period_of(now).map_err(math)?),
-        ProtocolError::TrueUpYearNotEnded
-    );
-    require!(
         ledger.last_trueup_year().is_none_or(|y| y < year32),
         ProtocolError::TrueUpYearUsed
     );
+    require!(
+        year32 < year_of(period_of(now).map_err(math)?),
+        ProtocolError::TrueUpYearNotEnded
+    );
+    // every period of the year from `first_period` on has an accepted report (vacuous for a year
+    // that ended before the series' first period)
     let last_of_year = year32
         .checked_mul(4)
         .and_then(|v| v.checked_add(3))
         .ok_or(ProtocolError::MathOverflow)?;
     require!(
-        ledger.first_period <= last_of_year
-            && matches!(ledger.last_accepted_period(), Some(p) if p >= last_of_year),
+        last_of_year < ledger.first_period
+            || matches!(ledger.last_accepted_period(), Some(p) if p >= last_of_year),
         ProtocolError::TrueUpYearIncomplete
     );
-    ledger.trueup_nonce = ledger
-        .trueup_nonce
-        .checked_add(1)
-        .ok_or(ProtocolError::MathOverflow)?;
-    let deadline = if adjustment > 0 {
-        let due = u64::try_from(adjustment).map_err(|_| ProtocolError::MathOverflow)?;
-        ledger.trueup_due = due;
-        ledger.trueup_attested_at = attestation_ts;
-        ledger.set_trueup_year(Some(year32));
-        ledger.trueup_notice_emitted = 0;
-        attestation_ts
-            .checked_add(TRUEUP_S)
-            .ok_or(ProtocolError::MathOverflow)?
-    } else {
-        let credit = u64::try_from(
-            adjustment
-                .checked_neg()
-                .ok_or(ProtocolError::MathOverflow)?,
-        )
-        .map_err(|_| ProtocolError::MathOverflow)?;
+    if adjustment < 0 {
+        let credit = adjustment.unsigned_abs();
         require!(
             credit <= ledger.year_pay_at(year32),
             ProtocolError::TrueUpExceedsYear
         );
-        ledger.router_credit = ledger
-            .router_credit
-            .checked_add(credit)
-            .ok_or(ProtocolError::MathOverflow)?;
-        0
-    };
+    }
+    ledger.trueup_nonce = ledger
+        .trueup_nonce
+        .checked_add(1)
+        .ok_or(ProtocolError::MathOverflow)?;
     ledger.set_last_trueup_year(Some(year32));
+    let deadline = match adjustment.cmp(&0) {
+        core::cmp::Ordering::Greater => {
+            ledger.trueup_due = adjustment.unsigned_abs();
+            ledger.trueup_attested_at = attestation_ts;
+            ledger.set_trueup_year(Some(year32));
+            ledger.trueup_notice_emitted = 0;
+            attestation_ts
+                .checked_add(TRUEUP_S)
+                .ok_or(ProtocolError::MathOverflow)?
+        }
+        core::cmp::Ordering::Less => {
+            // overpayment: credited forward against the next reports
+            ledger.router_credit = ledger
+                .router_credit
+                .checked_add(adjustment.unsigned_abs())
+                .ok_or(ProtocolError::MathOverflow)?;
+            0
+        }
+        // an exact estimate: the year is trued up, nothing moves
+        core::cmp::Ordering::Equal => 0,
+    };
     ledger.sync_status(now, series_key)?;
     emit!(TrueUpRecorded {
         series: series_key,
@@ -878,9 +900,11 @@ pub fn retire_if_capped(ctx: Context<RetireIfCapped>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let series_key = ctx.accounts.series.key();
-    let status = ledger.sync_status(now, series_key)?;
     require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
-    require!(!status.is_terminal(), ProtocolError::TerminalStatus);
+    require!(
+        !ledger.derived_status(now)?.is_terminal(),
+        ProtocolError::TerminalStatus
+    );
     let cap = cap_per_unit_of(&ctx.accounts.series)?;
     require!(
         is_capped(cap, ledger.paid_per_unit_wad).map_err(math)?,
@@ -911,8 +935,14 @@ pub fn request_pause(ctx: Context<IssuerLedger>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let key = ctx.accounts.series.key();
-    let status = ledger.sync_status(now, key)?;
-    require!(!status.is_terminal(), ProtocolError::TerminalStatus);
+    require!(
+        ctx.accounts.series.raise_state == RAISE_SETTLED,
+        ProtocolError::RaiseNotSettled
+    );
+    require!(
+        !ledger.derived_status(now)?.is_terminal(),
+        ProtocolError::TerminalStatus
+    );
     ledger.pause_requested = 1;
     ledger.pause_requested_at = now;
     ledger.pause_nonce = ledger
@@ -963,14 +993,26 @@ pub fn approve_pause(
     let now = now_ts()?;
     let key = ctx.accounts.series.key();
     let series = &ctx.accounts.series;
-    let status = ledger.sync_status(now, key)?;
-    require!(!status.is_terminal(), ProtocolError::TerminalStatus);
+    // check order (reference): attestor, request, then the bounds of SPEC §6.4
+    require_active_attestor(&ctx.accounts.attestor_key.to_account_info(), &attestor_addr)?;
+    let msg = keccak(&[pause_message(
+        &ctx.accounts.config.domain,
+        &key.to_bytes(),
+        ledger.pause_nonce,
+        pause_end,
+    )
+    .as_bytes()]);
+    require_signer(&msg, &attestor_sig, &attestor_addr)?;
     require!(
         ledger.is_pause_requested(),
         ProtocolError::PauseNotRequested
     );
-    require!(!ledger.is_paused(now), ProtocolError::AlreadyPaused);
+    require!(
+        !ledger.derived_status(now)?.is_terminal(),
+        ProtocolError::TerminalStatus
+    );
     require!(pause_end > now, ProtocolError::PauseEndInPast);
+    require!(!ledger.is_paused(now), ProtocolError::AlreadyPaused);
     let len = pause_end
         .checked_sub(now)
         .ok_or(ProtocolError::MathOverflow)?;
@@ -985,15 +1027,6 @@ pub fn approve_pause(
     );
     let idx = usize::from(ledger.pause_count);
     require!(idx < MAX_PAUSES, ProtocolError::TooManyPauses);
-    let msg = keccak(&[pause_message(
-        &ctx.accounts.config.domain,
-        &key.to_bytes(),
-        ledger.pause_nonce,
-        pause_end,
-    )
-    .as_bytes()]);
-    require_signer(&msg, &attestor_sig, &attestor_addr)?;
-    require_active_attestor(&ctx.accounts.attestor_key.to_account_info(), &attestor_addr)?;
     ledger.pause_start[idx] = now;
     ledger.pause_end[idx] = pause_end;
     ledger.pause_count = ledger
@@ -1017,7 +1050,6 @@ pub fn end_pause(ctx: Context<IssuerLedger>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
     let key = ctx.accounts.series.key();
-    ledger.sync_status(now, key)?;
     let count = usize::from(ledger.pause_count);
     let open = (0..count).find(|&i| ledger.pause_start[i] <= now && now < ledger.pause_end[i]);
     let i = open.ok_or(ProtocolError::NotPaused)?;
