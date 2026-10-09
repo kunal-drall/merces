@@ -32,6 +32,12 @@ Status legend: ✅ all `expect` steps match to the base unit · ❌ mismatch (de
 | 17 | winner leaves the allowlist after reveal: finalization and releases unaffected, late delivery | audit | ✅ | ✅ (USDC and USDG) | ✅ | ⏳ | ⏳ |
 | 18 | report, pay, release, redeem before mint finalization → revert; router income held then routed | audit | ✅ | ✅ (USDC and USDG) | ✅ | ⏳ | ⏳ |
 | 19 | hardship pause approved while Late: releases stay blocked, later clocks unshifted | audit | ✅ | ✅ (USDC and USDG) | ✅ | ⏳ | ⏳ |
+| 20 | tier-3 true-up: estimates, positive/negative adjustment, accrual, redemption block (audit) | audit | ✅ | ✅ (USDC and USDG) | ✅ | ⏳ | ⏳ |
+| 21 | entry-range and zero-amount rules: AmountOutOfRange, no-op claims, idempotent deliver (audit) | audit | ✅ | ✅ (USDC and USDG) | ✅ | ⏳ | ⏳ |
+| 22 | late holder registers after a terminal event: full tail/final share (S1) | review | ✅ | ✅ (USDC and USDG) | ✅ | ⏳ | ⏳ |
+| 23 | redeem twice with an intervening tail claim: catch-up pays the pre-claim slice (S6) | review | ✅ | ✅ (USDC and USDG) | ✅ | ⏳ | ⏳ |
+| 24 | inverted FX pair (USD/JPY, pre-inversion > u64): accumulates, no fallback (S4) | review | ✅ | ✅ (USDC and USDG) | ✅ | ⏳ | ⏳ |
+| 25 | window with a crossing on a terminal series: NoMatch, all orders refunded (S3) | review | ✅ | ✅ (USDC and USDG) | ✅ | ⏳ | ⏳ |
 
 ## Invariant and fuzz runs (brief F2)
 
