@@ -623,7 +623,11 @@ export class Simulator {
         const s = this.getSeries(c.series);
         if (s.ledger.status !== SeriesStatus.Retired) fail("TerminalStatus", "series is not Retired");
         const bal = this.unitsOf(c.holder, s.id);
-        if (bal === 0n) fail("NothingToClaim", "no units to burn");
+        if (bal === 0n) {
+          // zero-amount rule (§1.1): nothing to burn is a no-op, not a revert
+          this.emit(s, `UnitsBurned ${c.holder} 0 Retired`);
+          return;
+        }
         this.settleHolder(s, c.holder);
         this.burn(s, c.holder, bal, "Retired");
         return;
@@ -1185,6 +1189,8 @@ export class Simulator {
     if (!tierEnabled(s.tierFlags, Tier.Tier3Attestor)) fail("TierNotEnabled", "tier 3");
     this.requireActiveAttestor(c.attestor);
     const l = s.ledger;
+    // the §1.4 message carries the current trueup_nonce: a signature over any other nonce does not verify
+    if (u64(B(c.nonce), "nonce") !== l.trueupNonce) fail("InvalidAttestorSignature", `nonce ${c.nonce} != ${l.trueupNonce}`);
     const year = Number(c.year);
     const adj = B(c.adjustment);
     if (adj < -(1n << 63n) || adj > (1n << 63n) - 1n) fail("AmountOutOfRange", "adjustment");
@@ -1504,6 +1510,8 @@ export class Simulator {
     if (!w || w.state !== "Commit" || this.now >= w.commitEnd) fail("WindowNotOpen");
     if (w.orders.some((o) => o.owner === c.actor)) fail("OrderExists", c.actor);
     const side = c.op === "commit_ask" ? 1 : 0;
+    u64(B(c.price), "price");
+    u64(B(c.quantity), "quantity");
     let escrow: bigint;
     if (c.op === "commit_ask") {
       escrow = u64(B(c.units), "units");
@@ -1666,6 +1674,8 @@ export class Simulator {
       routerCredit: D(l.routerCredit),
       trueupNonce: D(l.trueupNonce),
       trueupDue: D(l.trueupDue),
+      trueupAttestedAt: D(l.trueupAttestedAt),
+      lastTrueupYear: l.lastTrueupYear === null ? null : D(l.lastTrueupYear),
       pauseNonce: D(l.pauseNonce),
       pauseCount: D(l.pauses.length),
       pausedTotal: D(l.pausedTotal),

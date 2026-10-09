@@ -1,3 +1,4 @@
 out-dev/
 cache-dev/
 broadcast/**/dry-run/
+scripts/proofs/out/

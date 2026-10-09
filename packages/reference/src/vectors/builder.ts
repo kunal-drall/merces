@@ -281,6 +281,8 @@ export class ScenarioBuilder {
     deliver?: boolean;
     /** runs after the reveal phase closes and before the settlement proposal */
     beforeSettle?: () => Promise<void>;
+    /** runs after every commit while the commit phase is still open */
+    duringCommit?: () => Promise<void>;
   }): Promise<bigint> {
     const s = this.sim.series.get(args.series)!;
     this.at(args.openAt);
@@ -290,6 +292,7 @@ export class ScenarioBuilder {
       const escrow = b.escrow ?? M.requiredEscrow(b.price, b.quantity, s.terms.auctionFeeBps);
       await this.step({ op: "commit_bid", actor: b.actor, series: args.series, price: b.price.toString(), quantity: b.quantity.toString(), salt: this.bidSalt(args.series, b.actor, i), escrow: escrow.toString() });
     }
+    if (args.duringCommit) await args.duringCommit();
     this.at(s.commitEnd + 3600n);
     for (const [i, b] of args.bids.entries()) {
       if (b.reveal === false) continue;

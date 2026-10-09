@@ -437,6 +437,7 @@ pub fn begin_window_settlement(
         .checked_add(1)
         .ok_or(ProtocolError::MathOverflow)?;
     w.round_rejected = false;
+    w.rejection_reason = 0;
     w.clearing_price = clearing_price;
     w.no_match_proposed = no_match;
     w.d_above = 0;
@@ -555,6 +556,7 @@ pub fn finalize_window(ctx: Context<WindowSettle>) -> Result<()> {
     };
     let reject = |w: &mut Window, price: u64, reason: u8| {
         w.round_rejected = true;
+        w.rejection_reason = reason;
         emit!(WindowSettlementRejected {
             series: series_key,
             period: w.period,

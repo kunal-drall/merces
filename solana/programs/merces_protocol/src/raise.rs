@@ -628,6 +628,7 @@ pub fn begin_settlement(
         .checked_add(1)
         .ok_or(ProtocolError::MathOverflow)?;
     a.round_rejected = false;
+    a.rejection_reason = 0;
     a.clearing_price = clearing_price;
     a.q_above_claim = q_above_claim;
     a.q_at_claim = q_at_claim;
@@ -789,6 +790,7 @@ pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
     .map_err(math)?;
     if let Err(reason) = check {
         a.round_rejected = true;
+        a.rejection_reason = reason as u8;
         emit!(SettlementRejected {
             series: series_key,
             round: a.tally_round,
@@ -1204,6 +1206,8 @@ pub fn deliver_bid<'info>(ctx: Context<'info, DeliverBid<'info>>) -> Result<()> 
     }
     let b = &mut ctx.accounts.bid;
     b.delivered = true;
+    b.pending_units = 0;
+    b.pending_refund = 0;
     emit!(BidDelivered {
         series: series_key,
         bidder,

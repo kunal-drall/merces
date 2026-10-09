@@ -22,6 +22,13 @@ impl EthSigner {
         Self { sk, addr }
     }
 
+    /// Key from raw 32-byte secret bytes (the parity vectors publish their test keys).
+    pub fn from_private_key(bytes: &[u8; 32]) -> Self {
+        let sk = SigningKey::from_bytes(bytes.into()).expect("valid secp256k1 scalar");
+        let addr = eth_address(&sk);
+        Self { sk, addr }
+    }
+
     /// Signs a 32-byte digest, returning `r ‖ s ‖ v` with low-`s`.
     pub fn sign(&self, digest: &[u8; 32]) -> [u8; 65] {
         let (sig, rid): (Signature, RecoveryId) = self.sk.sign_prehash_recoverable(digest).expect("sign");

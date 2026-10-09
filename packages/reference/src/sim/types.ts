@@ -122,7 +122,7 @@ export type Call =
       witness: ReportWitness;
     }
   | { op: "pay"; actor: string; series: string }
-  | { op: "submit_trueup"; actor: string; series: string; year: Dec; adjustment: Dec; attestationTs: Dec; attestor: string }
+  | { op: "submit_trueup"; actor: string; series: string; year: Dec; adjustment: Dec; attestationTs: Dec; attestor: string; /** the trueup_nonce the attestor signed over (must equal the stored nonce) */ nonce: Dec }
   | { op: "pay_trueup"; actor: string; series: string }
   | { op: "claim"; actor: string; series: string }
   | { op: "register_holder"; series: string; holder: string }
@@ -181,6 +181,8 @@ export interface LedgerExpect {
   routerCredit: Dec;
   trueupNonce: Dec;
   trueupDue: Dec;
+  trueupAttestedAt: Dec;
+  lastTrueupYear: Dec | null;
   pauseNonce: Dec;
   pauseCount: Dec;
   pausedTotal: Dec;

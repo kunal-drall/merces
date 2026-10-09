@@ -52,6 +52,8 @@ ${rows}
 - Periods: \`period_id = year × 4 + quarter − 1\` (2026 Q1 = 8104). Trading days are Mon–Fri (§1.5).
 - Income and θ inside the circuit are in the income currency at the stablecoin's decimals; \`fxAvgWad\` is a
   pure WAD ratio (1e18 for stablecoin income). \`payment_usd\` is range-checked to \`< 2^64\` in-circuit.
+- §1.1 entry rules: any supplied amount/price/quantity/escrow/payment/rate/timestamp above \`2^64 − 1\` reverts
+  \`AmountOutOfRange\`; claims and burns of zero succeed as no-ops (vector 21).
 
 ## Steps
 
@@ -78,7 +80,7 @@ Every step has \`t\` and \`op\`. Action steps mirror the SPEC v1.1 functions:
 | \`claim_release\`, \`set_release_pause\` | actor, series(, paused) | §5.3 (releases need \`mint_finalized\`, not Late and not \`is_late_underlying\`) |
 | \`submit_report\` | actor, series, period, paymentUsd, fxAvgWad, fxFallback {attestor} \\| null, priorIncomeCommitment, incomeCommitment, tier, liquidityEvent, attestation (key name \\| null), proof, publicSignals, proofEvm, proofSolana, witness (TEST ONLY) | §6.2; \`publicSignals\` = [terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd]; the §1.4 report message is signed over (domain, series, period, prior, income, tier, liquidity_event) |
 | \`pay\` | actor, series | pays \`open_due_amount\` + late accrual (payer = actor); on a Redeemed series this is the tail distribution |
-| \`submit_trueup\`, \`pay_trueup\` | actor, series, year, adjustment, attestationTs, attestor | tier-3 true-up (message carries \`trueup_nonce\`) |
+| \`submit_trueup\`, \`pay_trueup\` | actor, series(, year, adjustment, attestationTs, attestor, nonce) | tier-3 true-up; \`nonce\` is the \`trueup_nonce\` the attestor signed over (the chain requires its stored nonce, so a replayed signature fails \`InvalidAttestorSignature\`) |
 | \`claim\`, \`register_holder\`, \`burn_retired\` | … | §6.3 holder functions |
 | \`retire_if_capped\` | series | permissionless crank: \`cap_eff − paid_per_unit == 0\` → Retired |
 | \`crank_status\` | series | permissionless \`sync_status\` |

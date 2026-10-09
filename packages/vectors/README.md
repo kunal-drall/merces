@@ -31,6 +31,8 @@ Both chain harnesses must replay every vector and match every `expect` to the ba
 | `17_undelivered_winner.json` | A winning bidder (b4) is removed from the allowlist after revealing and its delivery is deferred (recipient-side failure modelled by the harness): processing still mints its 100 units to the auction escrow and finalizes the mint, treasury releases flow, the undelivered units carry accrual weight so b4 claims its share of the first payout, and deliver_bid later succeeds regardless of the current allowlist flag (validity was fixed at reveal). | 51 | 4 | 4 | 2 |
 | `18_report_before_finalization.json` | Settled raise with one bid still unprocessed: the mint is not finalized, units_outstanding is still 0, and submit_report, pay, claim_release, retire_if_capped and redeem all revert MintNotFinalized; split-router receipts are held in the router account. Processing the last bid finalizes the mint (units_outstanding = 400); releases flow, the held income is routed with the next receipt and the Q1 report is accepted. | 51 | 6 | 5 | 2 |
 | `19_pause_while_late.json` | A hardship pause approved while the series is already Late: the status reads Paused but is_late_underlying keeps treasury releases blocked until the overdue payment is made; the Q1 countdown stops during the pause (4 late days → 4 days of accrual when paid on 1 June), releases resume right after payment, and Q2's clock (starting 1 July, after the pause) is unshifted: InGrace one second after 31 July. | 60 | 8 | 4 | 2 |
+| `20_tier3_trueup.json` | Tier-3 (attestor) series with annual true-ups. S1: four quarterly estimates paid for 2026, a +400 true-up recorded with trueup_nonce 0 (a replay of the same signature and a signature over the wrong nonce fail InvalidAttestorSignature; a second true-up while one is unpaid is TrueUpOutstanding), paid inside the 60-day window without accrual; for 2027 a +1,000 true-up is left unpaid past the deadline → Late (releases blocked, redeem rejected), then paid with 10 days of accrual and the series recovers. S2: a −800 adjustment bounded by the year's accepted payments (−7,000 is TrueUpAdjustmentTooLarge) becomes router credit consumed by the next report. | 120 | 11 | 12 | 14 |
+| `21_entry_rules.json` | §1.1 conventions: the entry-point range rule (a bid escrow, price or quantity, a pause end or a claimed payment_usd of 2^64 revert AmountOutOfRange before any other check; a zero escrow is ZeroEscrow), idempotency of the two-phase bid path (AlreadyProcessed, AlreadyDelivered), and the zero-amount rule: a claim with nothing pending and no units to burn succeeds as a no-op, burn_retired on an empty or unregistered wallet is a no-op, while pay with nothing due still reverts NothingDue. | 61 | 5 | 10 | 1 |
 
 ## Conventions
 
@@ -52,6 +54,8 @@ Both chain harnesses must replay every vector and match every `expect` to the ba
 - Periods: `period_id = year × 4 + quarter − 1` (2026 Q1 = 8104). Trading days are Mon–Fri (§1.5).
 - Income and θ inside the circuit are in the income currency at the stablecoin's decimals; `fxAvgWad` is a
   pure WAD ratio (1e18 for stablecoin income). `payment_usd` is range-checked to `< 2^64` in-circuit.
+- §1.1 entry rules: any supplied amount/price/quantity/escrow/payment/rate/timestamp above `2^64 − 1` reverts
+  `AmountOutOfRange`; claims and burns of zero succeed as no-ops (vector 21).
 
 ## Steps
 
@@ -78,7 +82,7 @@ Every step has `t` and `op`. Action steps mirror the SPEC v1.1 functions:
 | `claim_release`, `set_release_pause` | actor, series(, paused) | §5.3 (releases need `mint_finalized`, not Late and not `is_late_underlying`) |
 | `submit_report` | actor, series, period, paymentUsd, fxAvgWad, fxFallback {attestor} \| null, priorIncomeCommitment, incomeCommitment, tier, liquidityEvent, attestation (key name \| null), proof, publicSignals, proofEvm, proofSolana, witness (TEST ONLY) | §6.2; `publicSignals` = [terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd]; the §1.4 report message is signed over (domain, series, period, prior, income, tier, liquidity_event) |
 | `pay` | actor, series | pays `open_due_amount` + late accrual (payer = actor); on a Redeemed series this is the tail distribution |
-| `submit_trueup`, `pay_trueup` | actor, series, year, adjustment, attestationTs, attestor | tier-3 true-up (message carries `trueup_nonce`) |
+| `submit_trueup`, `pay_trueup` | actor, series(, year, adjustment, attestationTs, attestor, nonce) | tier-3 true-up; `nonce` is the `trueup_nonce` the attestor signed over (the chain requires its stored nonce, so a replayed signature fails `InvalidAttestorSignature`) |
 | `claim`, `register_holder`, `burn_retired` | … | §6.3 holder functions |
 | `retire_if_capped` | series | permissionless crank: `cap_eff − paid_per_unit == 0` → Retired |
 | `crank_status` | series | permissionless `sync_status` |

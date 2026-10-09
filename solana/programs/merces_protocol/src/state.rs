@@ -90,6 +90,8 @@ pub struct Auction {
     // settlement proposal and tally (one round at a time)
     pub tally_round: u32,
     pub round_rejected: bool,
+    /// 0 = none, 1 = ClaimMismatch, 2 = InvalidClearingPrice (last rejected round).
+    pub rejection_reason: u8,
     pub clearing_price: u64,
     pub q_above_claim: u64,
     pub q_at_claim: u64,
@@ -428,6 +430,8 @@ pub struct Window {
     // proposal and tally
     pub tally_round: u32,
     pub round_rejected: bool,
+    /// 0 = none, 1 = NoMatchInvalid, 2 = PriceNotRevealed, 3 = NoCrossing (last rejected round).
+    pub rejection_reason: u8,
     pub clearing_price: u64,
     pub no_match_proposed: bool,
     pub d_above: u64,

@@ -123,45 +123,33 @@ mod tests {
             .collect()
     }
 
-    fn be32_from_dec(s: &str) -> [u8; 32] {
-        let v: u128 = s.parse().unwrap();
-        let mut out = [0u8; 32];
-        out[16..].copy_from_slice(&v.to_be_bytes());
-        out
-    }
-
-    /// The generated dev verifying key verifies the committed proof fixtures on the host
-    /// (solana-bn254 runs arkworks natively off-chain), and rejects a tampered input.
+    /// The committed verifying key verifies the parity vectors' Groth16 proofs on the host
+    /// (solana-bn254 runs arkworks natively off-chain) and rejects a tampered public input.
     #[test]
-    fn fixtures_verify_against_generated_vk() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/zk/report_fixtures.json"
-        );
-        let json: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let fixtures = json["fixtures"].as_array().unwrap();
-        assert!(fixtures.len() >= 5);
-        for f in fixtures {
-            let p = &f["public"];
-            let inputs = [
-                hex32(p["terms_commitment"].as_str().unwrap()),
-                be32_from_dec(p["units_outstanding"].as_str().unwrap()),
-                be32_from_dec(p["fx_avg_wad"].as_str().unwrap()),
-                hex32(p["prior_income_commitment"].as_str().unwrap()),
-                hex32(p["income_commitment"].as_str().unwrap()),
-                be32_from_dec(p["payment_usd"].as_str().unwrap()),
-            ];
-            let proof_bytes = hex_decode(f["proof"].as_str().unwrap().trim_start_matches("0x"));
+    fn vector_proofs_verify_against_vk() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../packages/vectors/01_happy_path.json");
+        let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let steps = json["steps"].as_array().unwrap();
+        let mut checked = 0;
+        for step in steps.iter().filter(|s| s["op"] == "submit_report") {
+            let sol = &step["proofSolana"];
+            let pi = sol["publicInputs"].as_array().unwrap();
+            assert_eq!(pi.len(), NR_PUBLIC_INPUTS);
+            let mut inputs = [[0u8; 32]; NR_PUBLIC_INPUTS];
+            for (i, v) in pi.iter().enumerate() {
+                inputs[i] = hex32(v.as_str().unwrap());
+            }
+            let proof_bytes = hex_decode(sol["proof"].as_str().unwrap().trim_start_matches("0x"));
             let mut proof = [0u8; 256];
             proof.copy_from_slice(&proof_bytes);
-            verify_report_proof(&proof, &inputs)
-                .unwrap_or_else(|e| panic!("{} failed: {e:?}", f["name"]));
+            verify_report_proof(&proof, &inputs).unwrap_or_else(|e| panic!("period {} failed: {e:?}", step["period"]));
             // tamper with the payment
             let mut bad = inputs;
             bad[5][31] ^= 1;
             assert!(verify_report_proof(&proof, &bad).is_err());
+            checked += 1;
         }
+        assert!(checked >= 5, "expected at least five report steps, found {checked}");
     }
 
     #[test]

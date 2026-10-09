@@ -162,7 +162,7 @@
       "required": [
         "status", "raiseState", "mintFinalized", "unitsOutstanding", "unitsSold", "clearingPrice", "proceeds", "releasedTotal", "capPerUnit", "capMultipleWad",
         "termsCommitment", "amendmentNonce", "paidPerUnitWad", "netAccWad", "carryWad", "carry", "grossReceived", "feeCollected", "refundedToIssuer",
-        "lastAcceptedPeriod", "lastPaidPeriod", "openDuePeriod", "openDueAmount", "routerCredit", "trueupNonce", "trueupDue", "pauseNonce", "pauseCount", "pausedTotal",
+        "lastAcceptedPeriod", "lastPaidPeriod", "openDuePeriod", "openDueAmount", "routerCredit", "trueupNonce", "trueupDue", "trueupAttestedAt", "lastTrueupYear", "pauseNonce", "pauseCount", "pausedTotal",
         "formalNoticeEmittedFor", "redemptionPrice", "unitsAtRedemption", "tailCapPerUnit", "tailAccWad", "tailExhausted", "extinguishedAt", "finalAccWad", "finalUnits", "extinguishNonce"
       ],
       "additionalProperties": false,
@@ -193,6 +193,8 @@
         "routerCredit": { "$ref": "#/definitions/dec" },
         "trueupNonce": { "$ref": "#/definitions/dec" },
         "trueupDue": { "$ref": "#/definitions/dec" },
+        "trueupAttestedAt": { "$ref": "#/definitions/dec" },
+        "lastTrueupYear": { "$ref": "#/definitions/nullableDec" },
         "pauseNonce": { "$ref": "#/definitions/dec" },
         "pauseCount": { "$ref": "#/definitions/dec" },
         "pausedTotal": { "$ref": "#/definitions/dec" },
