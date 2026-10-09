@@ -86,5 +86,16 @@ The same holds for windows (`MAX_ORDERS_PER_WINDOW = 4096`, pages of 200, one or
 
 ## Deployment
 
-See `evm/script/README.md`. The anvil rehearsal of `DeployLocal.s.sol` (chain 31337) records its transactions in
-`evm/broadcast/DeployLocal.s.sol/31337/run-latest.json`; totals are in the table below.
+Rehearsed on anvil (`evm/script/README.md`); every transaction succeeded and the scripts' on-chain read-back
+(`_verify`) passed.
+
+| Run | Chain id | Transactions | Total gas |
+| --- | ---: | ---: | ---: |
+| `DeployLocal.s.sol` (mocks, admin config, issuer setup, test USDC mint) | 31337 | 58 | 63,176,896 |
+| `DeployMonadTestnet.s.sol` (test USDC deployed, Pyth address carrying `MockPyth` code) | 10143 | 50 | 61,974,584 |
+
+Largest creations: `MercesWindow` implementation 5,289,474, `MercesVault` 5,168,566, `MercesIncome` 5,092,127,
+`MercesRegistry` 4,851,732, Poseidon(5) 4,261,625, `MercesAuction` 4,188,990, T-REX `Token` implementation
+3,124,250, ONCHAINID `Identity` 2,249,619. Opening a raise later deploys the series' token and compliance
+proxies (`openRaise` ≈ 1.45M). On Monad the fee is charged on the gas limit, so the estimate multiplier matters
+more than on Ethereum (see the script README).

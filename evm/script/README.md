@@ -50,7 +50,7 @@ forge build
 
 # local rehearsal
 anvil &
-forge script script/DeployLocal.s.sol --rpc-url anvil --broadcast \
+forge script script/DeployLocal.s.sol --rpc-url anvil --broadcast --slow \
   --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80   # anvil account 0
 
 # Monad testnet
@@ -60,7 +60,8 @@ forge script script/DeployMonadTestnet.s.sol --rpc-url monad_testnet --broadcast
 ```
 
 The scripts call `vm.getCode` for the 0.8.17 T-REX / ONCHAINID / Merces-module artifacts, so they must run
-from `evm/` after `forge build`. The deploy is ~45 transactions; `--slow` sends them one at a time.
+from `evm/` after `forge build`. The deploy is about 50 transactions (58 for the local script); use `--slow` to
+send them one at a time (on anvil, batch-sent transactions can leave one pending in an unmined block).
 
 Monad notes (from Monad's documentation as recalled; the site was unreachable from the build container, verify
 before mainnet): Monad charges for the **gas limit** of a transaction rather than the gas used, so keep forge's
@@ -71,5 +72,7 @@ EIP-170, but every Merces contract already fits under 24,576 bytes; there is no 
 
 `DeployLocal.s.sol` was rehearsed on anvil (chain id 31337) and `DeployMonadTestnet.s.sol` on an anvil node
 started with `--chain-id 10143` whose Pyth address carried the `MockPyth` code (`anvil_setCode`), since the
-Monad RPC is not reachable from the build container. Both records are in `deployments/` (`anvil.json`,
-`monad-testnet-rehearsal.json`); `deployments/monad-testnet.json` is written by the real testnet run.
+Monad RPC is not reachable from the build container: 58 and 50 transactions, all successful, read-back passed
+(totals in `docs/evm/MEASUREMENTS.md`). Both records are in `deployments/` (`anvil.json`,
+`monad-testnet-rehearsal.json`, addresses of those local chains only); `deployments/monad-testnet.json` is
+written by the real testnet run.
