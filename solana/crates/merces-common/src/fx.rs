@@ -136,7 +136,10 @@ mod tests {
         );
         // USD/JPY-type (Pyth price 150×10^8, expo −8): pre-inversion 1.5e20 > u64::MAX, inverts to
         // ≈6.67e15 which fits (S4)
-        assert_eq!(normalize(15_000_000_000, -8).unwrap(), 150u128 * 10u128.pow(18));
+        assert_eq!(
+            normalize(15_000_000_000, -8).unwrap(),
+            150u128 * 10u128.pow(18)
+        );
         assert!(u64::try_from(normalize(15_000_000_000, -8).unwrap()).is_err());
         assert_eq!(
             invert(normalize(15_000_000_000, -8).unwrap()).unwrap(),

@@ -93,7 +93,7 @@ Hook: `ExtraAccountMetaList` at `["extra-account-metas", mint]` (hook program).
 | `create_series(args)` | issuer | terms (§1.6 bounds), `release_schedule`, `terms_commitment`, `tier_flags`, `fx_pair_id`, `mode`, `issuer_accepts_public_price`, `metadata_uri`, `tier1_terms: Option<Tier1Terms>` | fees copied from defaults; tier-1 terms checked with Poseidon(5); the stablecoin must have a zero transfer fee. Curve mode (`mode = 1`): `issuer_accepts_public_price`, stablecoin = `curve_quote_mint`, `min_raise` = the DBC threshold `X ≥ 1`, lockup / wallet cap / auction and window durations all 0; tier-1 `r` is per base lamport |
 | `set_contract_hash` | issuer | `hash` | Draft only |
 | `stop_issuance` / `resume_issuance` | issuer | | |
-| `amend_terms` | issuer | `new_terms_commitment, new_cap_multiple_wad, attestor_addr, attestor_sig` | cap only downwards, within bounds; `terminal_status == 0` |
+| `amend_terms` | issuer | `new_terms_commitment, new_cap_multiple_wad, new_tier1_terms, attestor_addr, attestor_sig` | cap only downwards, within bounds; `terminal_status == 0`. For a tier-1 (split-router) series `new_tier1_terms` is required and re-validated (`TIER_FLAG_SPLIT`, `r_wad × units_offered ≤ WAD`, `Poseidon5 == new_terms_commitment`), rewriting `router_theta` / `router_r_wad`; `route` reads θ / r live from the series, so the amended share applies on the next receipt (S5). A non-tier-1 series must pass `None` |
 | `mark_raise_opened` / `mark_raise_result` / `mark_mint_finalized` / `mark_terminal` / `mark_curve_activated` | `registry_authority` PDA | | the protocol's write interface (§3.2); `mark_mint_finalized` accepts Settled and Failed raises; `mark_curve_activated(dbc_config, dbc_pool, base_mint, dbc_creator, activated_at, units_sold, clearing_price)` is Draft → Open; a curve raise can only be marked Settled, with the activation's `units_sold` and `P0` |
 
 ## Protocol instructions
@@ -157,7 +157,9 @@ when a cross-check feed is in force for the period, the cross-check feed's `Pric
 `crosscheck_update`.
 
 Exit (§6.7, §6.9): `redeem` (issuer; a curve-mode `redeem` takes the eight census accounts of
-`sync_curve_units` as remaining accounts and snapshots the units itself), `extinguish(attestor_a,
+`sync_curve_units` as remaining accounts and snapshots the units itself, but **excludes the DAMM v2
+pool base vault** from the subtraction so the deposit cannot be deflated by a pool sandwich — S2 /
+B-C13), `extinguish(attestor_a,
 sig_a, attestor_b, sig_b)` (anyone).
 
 Window (§7), all permissionless except commits and reveals:
@@ -170,7 +172,7 @@ Window (§7), all permissionless except commits and reveals:
 | `reveal_order(price, quantity, salt)` | owner | the owner's `Holder` (may not exist) and unit ATA are read for the wallet cap |
 | `begin_window_settlement(clearing_price, no_match)` | anyone | `TallyInProgress` while a round is open; emits `WindowSettlementProposed` |
 | `tally_orders` | anyone | ≤ 24 `Order` PDAs (writable) |
-| `finalize_window` | anyone | never reverts on a wrong proposal; on a priced clearing it snapshots `net_acc_wad` on the ledger (`window_cleared`, `window_acc_at_clear`) so a matched ask's escrow stops earning there (C-S4) |
+| `finalize_window` | anyone | never reverts on a wrong proposal; on a priced clearing it snapshots `net_acc_wad` on the ledger (`window_cleared`, `window_acc_at_clear`) so a matched ask's escrow stops earning there (C-S4); a terminal series (Retired / Redeemed / Extinguished) is forced to `NoMatch` (S3) |
 | `process_order` | anyone | accounting only (the window fee is paid here): revealed bids in reveal order first (`OutOfOrder`), then revealed asks in reveal order (`BidsNotProcessed` until every revealed bid is done); unrevealed / invalid orders and NO_MATCH windows in any order. The owner's `AllowlistEntry` PDA is always passed (a missing entry reads as not allowed); a buyer no longer allowlisted is cancelled. The buyer of a sold unit and the seller of a returned one are credited the payouts since the clearing snapshot (C-S4), then the units count as window-pending. Stablecoin hook accounts |
 | `begin_takeback(price, reveal_index)` | anyone | only when cancelled buyers' units exceed the at-`p*` ask group; proposes the threshold ask below `p*` |
 | `tally_takeback` | anyone | ≤ 24 `Order` PDAs; every revealed ask once per round |
@@ -204,7 +206,10 @@ a DAMM v2 `Config` whose `pool_creator_authority` is the DBC pool authority; the
 reports `CreatedPool`); its base vault `PDA(["token_vault", base_mint, pool], cp_amm)`; the locker
 escrow token `ATA(PDA(["escrow", PDA(["base_locker", dbc_pool], DBC)], locker), base_mint)`; the
 leftover token `ATA(curve_authority, base_mint)`. Missing accounts count 0. The stake vault is not
-protocol-held.
+protocol-held. A curve `redeem` runs the same account list but does **not** subtract the DAMM v2 pool
+base vault (S2 / B-C13): `units_at_redemption = supply − dbc_base_vault − locker − leftover`, an
+upper bound on tenderable units the issuer can only raise (by parking base in the pool, raising its
+own deposit), never lower, so no holder is stranded; the pool's locked-LP share stays as dust.
 
 | Instruction | Signer | Arguments | Notes |
 | --- | --- | --- | --- |

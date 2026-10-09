@@ -16,7 +16,7 @@ cd solana && cargo test --release --test measure -- --nocapture   # writes solan
 
 `solana/tests/tests/measure.rs` runs, on LiteSVM 0.17 (Agave 3.1 runtime and cost model):
 
-- all 21 parity vectors twice: on the SPL mock USDC and on the Token-2022 mock USDG
+- all 25 parity vectors twice: on the SPL mock USDC and on the Token-2022 mock USDG
   (`TransferHook` → `mock_usdg_hook`, `TransferFeeConfig` 0/0, `MetadataPointer`), so every
   stablecoin movement is also measured with hook resolution through the remaining accounts;
 - a 30-bid auction of 1,000 units settled with tally pages of 24 bids (worst-case page);
@@ -49,60 +49,60 @@ Rows marked "(CPI)" are inner invocations, already included in the calling instr
 | `merces_protocol` | `BeginSettlement` | 7,228 | 7,228 | 552 |
 | `merces_protocol` | `BeginTakeback` | 8,281 | 8,281 | 16 |
 | `merces_protocol` | `BeginWindowSettlement` | 15,100 | 15,100 | 168 |
-| `merces_protocol` | `BurnRetired` | 35,783 | 29,783 | 80 |
+| `merces_protocol` | `BurnRetired` | 35,783 | 28,283 | 80 |
 | `merces_protocol` | `CancelRaise` | 41,836 | 41,836 | 8 |
-| `merces_protocol` | `Claim` | 90,654 | 72,177 | 1,192 |
-| `merces_protocol` | `ClaimFinal` | 79,127 | 64,159 | 64 |
-| `merces_protocol` | `ClaimRedemption` | 85,906 | 63,423 | 208 |
-| `merces_protocol` | `ClaimRelease` | 82,146 | 64,203 | 464 |
-| `merces_protocol` | `ClaimTail` | 73,722 | 61,722 | 64 |
+| `merces_protocol` | `Claim` | 97,877 | 75,682 | 1,192 |
+| `merces_protocol` | `ClaimFinal` | 76,127 | 65,627 | 64 |
+| `merces_protocol` | `ClaimRedemption` | 85,096 | 64,082 | 208 |
+| `merces_protocol` | `ClaimRelease` | 91,062 | 63,126 | 464 |
+| `merces_protocol` | `ClaimTail` | 87,547 | 62,047 | 64 |
 | `merces_protocol` | `CloseRouterPeriod` | 7,985 | 7,985 | 48 |
-| `merces_protocol` | `CollectCurveProceeds` | 58,393 | 58,330 | 8 |
-| `merces_protocol` | `CommitAsk` | 88,201 | 77,701 | 168 |
-| `merces_protocol` | `CommitBid` | 78,083 | 64,515 | 2,272 |
+| `merces_protocol` | `CollectCurveProceeds` | 58,347 | 58,330 | 8 |
+| `merces_protocol` | `CommitAsk` | 86,701 | 79,201 | 168 |
+| `merces_protocol` | `CommitBid` | 84,055 | 62,959 | 2,272 |
 | `merces_protocol` | `CompleteCurve` | 55,587 | 55,587 | 8 |
 | `merces_protocol` | `CrankStatus` | 11,180 | 11,180 | 240 |
-| `merces_protocol` | `DeliverBid` | 184,396 | 158,676 | 2,272 |
-| `merces_protocol` | `DeliverOrder` | 175,377 | 139,377 | 224 |
+| `merces_protocol` | `DeliverBid` | 176,760 | 149,676 | 2,272 |
+| `merces_protocol` | `DeliverOrder` | 163,377 | 140,709 | 224 |
 | `merces_protocol` | `EndPause` | 11,835 | 11,835 | 16 |
 | `merces_protocol` | `Extinguish` | 154,561 | 141,061 | 16 |
 | `merces_protocol` | `FinalizeSettlement` | 50,357 | 50,357 | 552 |
 | `merces_protocol` | `FinalizeTakeback` | 8,355 | 8,355 | 8 |
-| `merces_protocol` | `FinalizeWindow` | 15,045 | 15,045 | 160 |
+| `merces_protocol` | `FinalizeWindow` | 15,048 | 15,048 | 160 |
 | `merces_protocol` | `InitFxPair` | 10,574 | 10,574 | 16 |
 | `merces_protocol` | `InitRouter` | 37,731 | 37,731 | 48 |
-| `merces_protocol` | `OpenRaise` | 183,445 | 183,436 | 528 |
+| `merces_protocol` | `OpenRaise` | 183,436 | 183,436 | 528 |
 | `merces_protocol` | `OpenWindow` | 26,742 | 26,742 | 72 |
-| `merces_protocol` | `Pay` | 203,045 | 131,293 | 1,056 |
-| `merces_protocol` | `PayTrueup` | 151,486 | 94,486 | 32 |
+| `merces_protocol` | `Pay` | 170,116 | 128,045 | 1,056 |
+| `merces_protocol` | `PayTrueup` | 110,986 | 94,486 | 32 |
 | `merces_protocol` | `PrepareCurve` | 56,359 | 56,359 | 8 |
 | `merces_protocol` | `PrepareRaise` | 128,227 | 128,227 | 528 |
-| `merces_protocol` | `ProcessBid` | 178,311 | 143,731 | 2,272 |
-| `merces_protocol` | `ProcessOrder` | 120,193 | 87,193 | 224 |
-| `merces_protocol` | `Redeem` | 95,484 | 73,556 | 88 |
-| `merces_protocol` | `RegisterHolder` | 22,106 | 19,106 | 16 |
-| `merces_protocol` | `RequestEarlyDraw` | 35,910 | 35,893 | 8 |
+| `merces_protocol` | `ProcessBid` | 196,251 | 146,779 | 2,272 |
+| `merces_protocol` | `ProcessOrder` | 103,605 | 88,605 | 224 |
+| `merces_protocol` | `Redeem` | 91,556 | 75,041 | 88 |
+| `merces_protocol` | `RegisterHolder` | 26,506 | 20,506 | 16 |
+| `merces_protocol` | `RequestEarlyDraw` | 35,942 | 35,893 | 8 |
 | `merces_protocol` | `RequestPause` | 10,661 | 10,661 | 96 |
 | `merces_protocol` | `RetireIfCapped` | 36,233 | 36,233 | 16 |
-| `merces_protocol` | `RevealBid` | 12,008 | 11,976 | 2,224 |
-| `merces_protocol` | `RevealOrder` | 38,619 | 31,512 | 320 |
-| `merces_protocol` | `Route` | 168,703 | 126,349 | 144 |
+| `merces_protocol` | `RevealBid` | 11,976 | 11,976 | 2,224 |
+| `merces_protocol` | `RevealOrder` | 35,464 | 30,296 | 320 |
+| `merces_protocol` | `Route` | 169,850 | 126,350 | 144 |
 | `merces_protocol` | `SetReleasePause` | 6,198 | 6,198 | 16 |
-| `merces_protocol` | `SnapshotFx` | 21,157 | 21,157 | 3,568 |
-| `merces_protocol` | `StakeUnits` | 69,691 | 50,191 | 8 |
+| `merces_protocol` | `SnapshotFx` | 21,154 | 21,154 | 3,568 |
+| `merces_protocol` | `StakeUnits` | 63,691 | 50,191 | 8 |
 | `merces_protocol` | `SubmitReport` | 208,962 | 208,962 | 1,952 |
 | `merces_protocol` | `SubmitTrueup` | 51,830 | 51,830 | 48 |
-| `merces_protocol` | `SyncCurveUnits` | 46,107 | 28,107 | 8 |
+| `merces_protocol` | `SyncCurveUnits` | 40,116 | 29,615 | 8 |
 | `merces_protocol` | `TallyBids` | 73,734 | 73,734 | 560 |
 | `merces_protocol` | `TallyOrders` | 87,940 | 87,940 | 168 |
 | `merces_protocol` | `TallyTakeback` | 80,830 | 80,830 | 16 |
-| `merces_protocol` | `TenderUnits` | 49,056 | 46,056 | 8 |
-| `merces_protocol` | `UnstakeUnits` | 27,820 | 24,820 | 8 |
-| `merces_protocol` | `WindowCommitBid` | 79,606 | 61,606 | 152 |
+| `merces_protocol` | `TenderUnits` | 47,556 | 46,056 | 8 |
+| `merces_protocol` | `UnstakeUnits` | 26,320 | 24,820 | 8 |
+| `merces_protocol` | `WindowCommitBid` | 76,522 | 61,522 | 152 |
 | `merces_protocol` | `WithdrawPauseRequest` | 9,591 | 9,591 | 48 |
 | `merces_registry` | `AcceptAdmin` | 6,340 | 6,340 | 8 |
-| `merces_registry` | `AmendTerms` | 38,616 | 38,616 | 32 |
-| `merces_registry` | `CreateSeries` | 29,858 | 29,858 | 536 |
+| `merces_registry` | `AmendTerms` | 38,757 | 38,757 | 32 |
+| `merces_registry` | `CreateSeries` | 29,889 | 29,858 | 536 |
 | `merces_registry` | `DeactivateIssuer` | 7,014 | 7,014 | 8 |
 | `merces_registry` | `InitProtocol` | 20,880 | 20,880 | 392 |
 | `merces_registry` | `MarkCurveActivated (CPI)` | 13,374 | 13,374 | 8 |
@@ -111,12 +111,12 @@ Rows marked "(CPI)" are inner invocations, already included in the calling instr
 | `merces_registry` | `MarkRaiseResult (CPI)` | 10,859 | 10,859 | 536 |
 | `merces_registry` | `MarkTerminal (CPI)` | 10,810 | 10,810 | 152 |
 | `merces_registry` | `RegisterAttestor` | 20,519 | 20,519 | 752 |
-| `merces_registry` | `RegisterIssuer` | 21,494 | 15,494 | 392 |
+| `merces_registry` | `RegisterIssuer` | 21,494 | 16,994 | 392 |
 | `merces_registry` | `RegisterVerifierKey` | 17,525 | 17,525 | 376 |
 | `merces_registry` | `ResumeIssuance` | 4,032 | 4,032 | 16 |
 | `merces_registry` | `RevokeAttestor` | 9,272 | 9,272 | 16 |
 | `merces_registry` | `RevokeVerifierKey` | 9,278 | 9,278 | 8 |
-| `merces_registry` | `SetAllowed` | 24,665 | 18,665 | 2,360 |
+| `merces_registry` | `SetAllowed` | 32,165 | 20,165 | 2,360 |
 | `merces_registry` | `SetAllowlistManager` | 6,267 | 6,267 | 8 |
 | `merces_registry` | `SetContractHash` | 7,982 | 7,982 | 536 |
 | `merces_registry` | `SetDefaults` | 6,941 | 6,941 | 8 |
@@ -128,7 +128,7 @@ Rows marked "(CPI)" are inner invocations, already included in the calling instr
 | `merces_registry` | `SetFxPairEnabled` | 7,432 | 7,432 | 8 |
 | `merces_registry` | `StopIssuance` | 4,029 | 4,029 | 16 |
 | `merces_registry` | `TransferAdmin` | 6,357 | 6,357 | 8 |
-| `mock_usdg_hook` | `Execute (CPI)` | 12,518 | 6,518 | 5,856 |
+| `mock_usdg_hook` | `Execute (CPI)` | 15,518 | 6,518 | 5,856 |
 | `mock_usdg_hook` | `InitializeExtraAccountMetaList` | 19,632 | 12,132 | 392 |
 
 The `mock_usdg_hook` rows are the devnet stablecoin mock, not Merces code. The curve-mode rows
@@ -142,7 +142,7 @@ PDA checks without a stored bump (`seeds = [...], bump`), ATA derivation checks 
 resolution of a stablecoin's extra-account list call `find_program_address`, which costs 1,500 CU per
 bump candidate tried. The candidate count depends on the keys involved (wallets, mints, series),
 which are random in the tests, so the same instruction costs a multiple of 1,500 CU more or less from
-run to run; the spread column shows it (e.g. `process_bid` 143,731–178,311 CU in this set, 203,438 CU in an earlier one). Per-series PDAs are
+run to run; the spread column shows it (e.g. `process_bid` 146,779–196,251 CU in this set, 203,438 CU in an earlier one). Per-series PDAs are
 fixed for a series, so a series whose PDAs need many candidates pays more on every instruction. The
 spread never affects results, only cost. Storing canonical bumps for the per-series PDAs would make
 these figures nearly constant (open item in `docs/assumptions/track-b.md`).
@@ -185,7 +185,7 @@ these figures nearly constant (open item in `docs/assumptions/track-b.md`).
   `tally_orders` 87,940 CU, `tally_takeback` 80,830 CU — far below any limit; the page size is set by
   the transaction size.
 - **Token-2022 stablecoins** cost more per transfer: the hooked `transfer_checked` resolves the
-  extra-account list and invokes the stablecoin's hook (`mock_usdg_hook::Execute` up to 12.5k CU per
+  extra-account list and invokes the stablecoin's hook (`mock_usdg_hook::Execute` up to 15.5k CU per
   transfer). The maxima above include those paths.
 - **Unit transfers** always invoke `merces_hook::Execute` (up to 15,231 CU) through Token-2022.
 

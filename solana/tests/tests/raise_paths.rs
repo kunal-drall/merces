@@ -302,9 +302,11 @@ fn tier1_amendment_reroutes_the_share() {
     )
     .unwrap();
     env.warp(START_TS + s.commit_duration);
-    env.reveal_bid(&series, &bidder, price, 100, salt_bid).unwrap();
+    env.reveal_bid(&series, &bidder, price, 100, salt_bid)
+        .unwrap();
     env.warp(START_TS + s.commit_duration + s.reveal_duration + 1);
-    env.settle(&series, price, 0, 100, &[bidder.pubkey()]).unwrap();
+    env.settle(&series, price, 0, 100, &[bidder.pubkey()])
+        .unwrap();
     assert!(env.series(&series).mint_finalized);
     let units = env.ledger(&series).unwrap().units_outstanding;
     assert_eq!(units, 100);

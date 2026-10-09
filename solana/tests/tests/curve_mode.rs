@@ -1025,3 +1025,84 @@ fn curve_pda_creator_collects_both_migration_fee_shares() {
     let status = env.raw(&dbc.pool)[layout::POOL_MIGRATION_FEE_WITHDRAW_STATUS];
     assert_eq!(status & 0b110, 0b110, "both shares withdrawn");
 }
+
+/// S2 / B-C13: the curve redemption census resists a DAMM v2 pool sandwich. The issuer can inflate
+/// the pool's base vault in one transaction (swap base in → redeem → swap out); the old census
+/// subtracted that balance, deflating `units_at_redemption` and the deposit and stranding the
+/// non-staked holders. The redemption census now excludes the pool vault, so the deposit covers an
+/// upper bound on tenderable units the issuer can only raise (paying more), never lower. A huge
+/// parked pool balance leaves every staked and wallet holder able to tender in full.
+#[test]
+fn curve_redeem_resists_the_pool_sandwich() {
+    let mut c = launched();
+    let series = c.series;
+    let base_mint = c.dbc.base_mint;
+    let damm = c.damm;
+    let usdc = c.env.usdc;
+    let a = c.a.insecure_clone();
+    let b = c.b.insecure_clone();
+
+    // a and b register; a stakes all its units, b keeps its units in its wallet
+    ok(c.env.register_holder(&series, &a.pubkey()), "register a");
+    ok(c.env.register_holder(&series, &b.pubkey()), "register b");
+    ok(c.env.sync_curve_units(&series, &damm), "sync");
+    let a_units = c.base(&a.pubkey());
+    ok(c.env.stake_units(&a, &series, a_units), "a stakes all");
+    let b_wallet = c.base(&b.pubkey());
+    assert!(a_units > 0 && b_wallet > 0);
+
+    // the sandwich: migrate and park a huge base balance in the DAMM v2 pool vault (the issuer
+    // swapped base in just before redeeming, and will swap it out just after)
+    let census = c.env.curve_census(&series, &damm);
+    c.env
+        .patch(&c.dbc.pool, layout::POOL_MIGRATION_PROGRESS, &[3]);
+    c.env.mock_damm_pool(&census[4]);
+    c.env.set_token_amount(&c.dbc.base_vault, 7);
+    let supply = c.env.mint_supply(&base_mint);
+    let parked = supply - 10 * CURVE_UNIT_SCALE;
+    c.env
+        .mock_token_account(&census[5], &base_mint, &DBC_POOL_AUTHORITY, parked);
+
+    // redeem under the sandwich (the deposit is large because the parked base is not subtracted —
+    // the issuer pays for its own parked units, which stay as dust: the attack is self-defeating)
+    c.env.fund(&c.issuer.pubkey(), &usdc, 1_000_000 * ONE_USDC);
+    let issuer = c.issuer.insecure_clone();
+    ok(
+        c.env.redeem_curve(&issuer, &series, &damm),
+        "redeem under sandwich",
+    );
+    let l = c.env.ledger(&series).unwrap();
+
+    // the count is not deflated by the parked pool; it covers every tenderable unit
+    assert!(
+        l.units_at_redemption >= a_units + b_wallet,
+        "all tenderable units covered"
+    );
+    // the old census (subtracting the parked pool) would have stranded the holders
+    let old_would_be = l.units_at_redemption.saturating_sub(parked);
+    assert!(
+        old_would_be < a_units + b_wallet,
+        "the sandwich would strand under the old census"
+    );
+
+    // every holder tenders in full and is paid from the deposit
+    let price = l.redemption_price;
+    let a0 = c.env.balance_of(&a.pubkey(), &usdc);
+    ok(
+        c.env.tender_units(&a, &series, a_units, 0),
+        "a tenders its stake",
+    );
+    assert_eq!(
+        c.env.balance_of(&a.pubkey(), &usdc) - a0,
+        scaled_amount(price, a_units, CURVE_UNIT_SCALE).unwrap()
+    );
+    let b0 = c.env.balance_of(&b.pubkey(), &usdc);
+    ok(
+        c.env.tender_units(&b, &series, 0, b_wallet),
+        "b tenders its wallet",
+    );
+    assert_eq!(
+        c.env.balance_of(&b.pubkey(), &usdc) - b0,
+        scaled_amount(price, b_wallet, CURVE_UNIT_SCALE).unwrap()
+    );
+}

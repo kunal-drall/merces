@@ -43,7 +43,10 @@ External trust:
   confidence bounds from the defaults). A missing or stale feed only means no snapshot that day;
   a quarter with too few snapshots (or a deviation flag) needs an attestor-signed fallback rate.
   The admin's cross-check feed choice can force that fallback for a period (a stale cross-check
-  update makes that day's `snapshot_fx` revert); it never blocks a report.
+  update makes that day's `snapshot_fx` revert); it never blocks a report. Inverted major-currency
+  pairs normalize in the u128 domain and apply the u64 cap only to the final inverted rate, so a
+  pair whose pre-inversion rate exceeds u64 (USD/JPY and the like) accumulates instead of reverting
+  (security review S4).
 - **Meteora (curve mode only).** The DBC program holds the raise until completion and its layouts
   are read at fixed offsets (`curve::layout`, program 0.2.1; owner, discriminator and length are
   checked first): a DBC upgrade that moves fields would make `activate_curve` / `complete_curve` /
@@ -86,7 +89,7 @@ External trust:
 
 ## Arithmetic
 
-The window's two-step settlement caps a matched ask's escrow accrual at the clearing snapshot and credits the buyer (sold units) and seller (returned units) the payouts since then, so the sold units are never earned twice between a bid's and the matching ask's processing (C-S4, `docs/assumptions/track-b.md` B-S24).
+The window's two-step settlement caps a matched ask's escrow accrual at the clearing snapshot and credits the buyer (sold units) and seller (returned units) the payouts since then, so the sold units are never earned twice between a bid's and the matching ask's processing (C-S4, `docs/assumptions/track-b.md` B-S24). A holder registered after a redemption or extinguishment starts its tail / final cursors at 0 (it can only hold units that existed then), and `redemption_body` pays the pre-claim tail of units that come back later, so late window buyers are not stranded of the pool they are owed (security review S1 / S6).
 
 Checked arithmetic everywhere (`checked_*` with `MathOverflow`, plus `overflow-checks` in release),
 `u128` intermediates for every product, nested `mul_div` forms as SPEC §1.1, exact WAD carries
@@ -125,6 +128,8 @@ were not staked anyway; it never lets payouts exceed a receipt.
 | Curve completion and proceeds | `complete_curve` and `collect_curve_proceeds` are permissionless and read DBC state only; `collect_curve_proceeds` skips what DBC already marked withdrawn, so it is idempotent and cannot be front-run into a loss (withdrawals can only go to the treasury token account, signed by the PDA) |
 | Curve census | `sync_curve_units` is permissionless; accounts that do not exist yet count 0; the snapshot must postdate the period before its report (`CurveUnitsNotSynced`), which any keeper can provide |
 | Curve holders | `unstake_units` is never blocked (any status, no allowlist), settling pending payouts and the final share first; tenders of staked units are always covered (reserved at redemption); wallet tenders are first-come within `units_at_redemption − tendered − staked` |
+| A window on a terminal series | `finalize_window` forces `NoMatch` once the series is Retired / Redeemed / Extinguished, so no keeper can push a non-consensual trade; escrow and bids return through `process_order` / `deliver_order` (security review S3) |
+| Curve redemption deposit | the redemption census excludes the DAMM v2 pool base vault, so an issuer cannot sandwich `redeem` (park base in the pool → deflate the count → under-deposit → strand non-staked holders); the deposit covers an upper bound on tenderable units the issuer can only raise, never lower (security review S2 / B-C13) |
 
 ## Tests (all green)
 
@@ -132,13 +137,13 @@ were not staked anyway; it never lets payouts exceed a receipt.
 | --- | ---: | --- |
 | `merces-common` unit + property tests | 75 | pure math, window settlement model checks, curve units / staking / tender properties |
 | `merces_protocol` unit tests | 5 | Groth16 key vs vector proofs (host), G1 negation, zero income commitment, key-grace rules, ledger layout |
-| `tests/vectors.rs` | 21 | every SPEC §11 parity vector on the SPL mock USDC, with SPEC §3.3 charter byte snapshots after every step |
-| `tests/token2022_stablecoin.rs` | 21 | the same 21 vectors on the Token-2022 mock USDG (transfer hook, zero fee) |
+| `tests/vectors.rs` | 25 | every SPEC §11 parity vector on the SPL mock USDC, with SPEC §3.3 charter byte snapshots after every step (22–25 pin the security-review fixes S1, S6, S4, S3) |
+| `tests/token2022_stablecoin.rs` | 25 | the same 25 vectors on the Token-2022 mock USDG (transfer hook, zero fee) |
 | `tests/charter.rs` | 5 | charter immutability, registry write interface, hook rules, §6.3 vault invariants over four lifecycles, no admin money path |
 | `tests/charter_c11.rs` | 7 | one test per Autonomy Charter rule C11 §1–§7 |
-| `tests/curve_mode.rs` | 7 | curve mode against the real DBC program: full lifecycle (activate → complete → collect → sync → report with a real proof → gated claims → redeem → tender), activation validation, census before/after a byte-exact mocked migration, staking rules, extinguishment, retirement without burns, PDA creator |
+| `tests/curve_mode.rs` | 8 | curve mode against the real DBC program: full lifecycle (activate → complete → collect → sync → report with a real proof → gated claims → redeem → tender), activation validation, census before/after a byte-exact mocked migration, staking rules, extinguishment, retirement without burns, PDA creator, and the S2 redemption pool-sandwich resistance |
 | `tests/known_answers.rs` | 5 | SPEC §1.4 known answers (keccak, Poseidon, domains, commitments, signatures incl. low-s, periods, year ring, fixed point) |
-| `tests/raise_paths.rs` | 5 | no-bid failure, cancellation, undeliverable winner, early draw, dead-raise router |
+| `tests/raise_paths.rs` | 6 | no-bid failure, cancellation, undeliverable winner, early draw, dead-raise router, tier-1 amendment reroute (S5) |
 | `tests/window_settlement.rs` | 4 | take-back below / at `p*`, frozen recipient liveness, a payout in the clearing gap keeps the vault solvent (C-S4) |
 | `tests/fx_paths.rs` | 2 | cross-check change semantics (incl. disabled pair), quarter without snapshots |
 | `tests/roles.rs` | 3 | two-step admin transfer, role rotation, issuer release pause |
