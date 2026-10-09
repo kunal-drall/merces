@@ -408,8 +408,10 @@ export class Simulator {
     if (h.registered) return;
     h.registered = true;
     h.lastNetAccWad = s.vault.netAccWad;
-    h.lastTailAccWad = s.ledger.tail.tailAccWad;
-    h.lastFinalAccWad = s.ledger.final.finalAccWad;
+    // tail/final cursors seed to 0, not the live accumulators (S1 / C-S20): a holder registered
+    // after a redemption or extinguishment is still owed its full pro-rata slice of the fixed pool.
+    h.lastTailAccWad = 0n;
+    h.lastFinalAccWad = 0n;
     this.emit(s, `HolderRegistered ${actor}`);
   }
 
@@ -1377,7 +1379,11 @@ export class Simulator {
     const units = this.unitsOf(actor, s.id);
     if (units > 0n && h.redeemedUnits === 0n) h.redeemedUnits = units;
     else if (units > 0n) h.redeemedUnits += units;
-    const amount = h.pending + l.redemptionPrice * units;
+    // S6 tail catch-up (EVM-canonical): pay the [0, last_tail_acc_wad] slice on the newly redeemed
+    // units now, and do NOT reset the cursor, so a batch redeemed after an earlier tail claim keeps
+    // both its pre-claim slice (here) and its future slice (the next claim_tail). floor, no reset.
+    const tailCatchUp = M.settleHolderDelta(h.lastTailAccWad, 0n, units);
+    const amount = h.pending + l.redemptionPrice * units + tailCatchUp;
     h.pending = 0n;
     this.burn(s, actor, units, "Redeemed");
     if (amount > s.vaultBalance) throw new Error("vault underflow in redemption");
@@ -1566,6 +1572,13 @@ export class Simulator {
     const s = this.getSeries(c.series);
     const w = s.window;
     if (!w || w.state !== "Settling" || w.proposal === undefined || w.roundRejected) fail("WindowNotOpen", "no settlement round");
+    if (M.isTerminal(s.ledger.status)) {
+      // S3 / C-S5: a Redeemed/Extinguished/Retired series must never trade; force NoMatch so every
+      // order is refunded by process_orders, whatever the proposal and the book would otherwise clear.
+      w.state = "NoMatch";
+      this.emit(s, `WindowNoMatch period=${w.period} (series terminal)`);
+      return;
+    }
     const t = M.tallyOrders(w.orders, w.proposal);
     const f = M.finalizeWindow(t, w.proposal);
     if (f.kind === "rejected") {

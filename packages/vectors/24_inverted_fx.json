@@ -1,0 +1,1353 @@
+{
+  "name": "24_inverted_fx",
+  "description": "A JPY-income series reported in USDC through an inverted FX pair (USD/JPY ≈ 150, expo −8 → JPY/USD). The un-inverted WAD rate is 1.5e20, which exceeds u64; the normalization must invert in wide arithmetic and only the final inverted rate (≈ 6.67e15) needs to fit u64 (S4 / C-S? — both stacks must accept it). Snapshots accumulate across a covered quarter and quarter_average returns ok (not the attestor fallback); the report pays in USDC at the inverted average.",
+  "schema": 2,
+  "specVersion": "1.1",
+  "generatedBy": "packages/reference/src/vectors/generate.ts (pnpm vectors)",
+  "config": {
+    "parameters": {
+      "cap_multiple_wad": "2500000000000000000",
+      "hurdle_rate_wad": "80000000000000000",
+      "payout_multiple_k": "5",
+      "lockup_seconds": "47336400",
+      "wallet_cap_bps": "1000",
+      "auction_fee_bps": "100",
+      "payout_fee_bps": "500",
+      "window_fee_bps": "100",
+      "non_reveal_charge_bps": "100",
+      "commit_duration": "604800",
+      "reveal_duration": "172800",
+      "window_commit_duration": "259200",
+      "window_reveal_duration": "86400",
+      "report_due_days": "30",
+      "grace_days": "15",
+      "formal_notice_days": "90",
+      "trueup_days": "60",
+      "tail_seconds": "31536000",
+      "fx_min_coverage_bps": "8000",
+      "fx_max_staleness_seconds": "3600",
+      "fx_max_conf_bps": "100",
+      "fx_deviation_band_bps": "200",
+      "max_pause_seconds": "31536000",
+      "max_cumulative_pause_seconds": "63072000",
+      "max_pauses": "16",
+      "max_release_tranches": "24"
+    },
+    "flags": {
+      "newRaisesPaused": false,
+      "windowsEnabled": false,
+      "tier4Enabled": false
+    },
+    "stablecoinDecimals": 6,
+    "chainDomainNote": "Bid/ask commitments, signed messages and the deployment domain depend on chain-specific wallet bytes and chain id; harnesses recompute them from the plaintext fields here (salts, prices, quantities, periods, nonces, prior/income commitments, liquidity flags) and sign with the keys derived from `keys[*].seed`. Amounts, periods and ledger values are chain-independent."
+  },
+  "actors": [
+    "attestor1",
+    "attestor2",
+    "b1",
+    "b2",
+    "b3",
+    "b4",
+    "issuer",
+    "keeper",
+    "verifier1"
+  ],
+  "keys": {
+    "attestor1": {
+      "seed": "24_inverted_fx:attestor1",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0x5aee899b966bd0e6572a6912d5eb7f34b876ec805941ffa7b599b8730920e751",
+      "address": "0x038d12103cb333e2c43d0f012d5d7377ea426c0a",
+      "role": "attestor"
+    },
+    "attestor2": {
+      "seed": "24_inverted_fx:attestor2",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0x1203d6308206415eeb9331a752d71b6755d8d36e332bcbb762a14eaa76c94b95",
+      "address": "0xd19924a3fa95ccfcacf13ac711ce3c9843798e81",
+      "role": "attestor"
+    },
+    "verifier1": {
+      "seed": "24_inverted_fx:verifier1",
+      "derivation": "keccak256(\"MERCES_TEST_KEY\" ‖ utf8(seed)) mod (secp256k1_n − 1) + 1",
+      "privateKey": "0xee557ed529e27c1f63d018e1d595ca408c9802444c96a894b1430cce38ab29df",
+      "address": "0xf9b21be5869cc1dc2700efca5e557332633909f1",
+      "role": "verifier"
+    }
+  },
+  "seriesPrivate": {
+    "S1": {
+      "termsPlain": {
+        "theta": "12000000000000",
+        "rWad": "100000000000000",
+        "currencyCode": 392,
+        "indexingRule": 0,
+        "termsSalt": "12540501938830659296636217020022209348592809789016191393355512942571566185712"
+      },
+      "termsCommitment": "0x195101ca3b08ee8d51adfb0120545b5d9b05bc3e2df9a90d68c7d04ba1fc21b2"
+    }
+  },
+  "steps": [
+    {
+      "t": "1767312000",
+      "op": "register_attestor",
+      "key": "attestor1"
+    },
+    {
+      "t": "1767312000",
+      "op": "register_attestor",
+      "key": "attestor2"
+    },
+    {
+      "t": "1767312000",
+      "op": "register_verifier_key",
+      "key": "verifier1"
+    },
+    {
+      "t": "1767312000",
+      "op": "allowlist",
+      "wallets": [
+        "issuer",
+        "b1",
+        "b2",
+        "b3",
+        "b4"
+      ]
+    },
+    {
+      "t": "1767312000",
+      "op": "register_issuer",
+      "wallet": "issuer"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "issuer",
+      "amount": "200000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b1",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b2",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b3",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "op": "fund",
+      "actor": "b4",
+      "amount": "50000000000"
+    },
+    {
+      "t": "1767312000",
+      "note": "USD/JPY feed, inverted to JPY/USD; pair id = keccak256(feed_id ‖ 0x01)",
+      "op": "set_fx_pair",
+      "feedId": "0xef2c98c804ba503c6a707e38be4dfbb16683775f195b091252bf24693042fd52",
+      "inverted": true,
+      "crosscheck": true
+    },
+    {
+      "t": "1767312000",
+      "note": "θ = 12,000,000 JPY at 6 decimals (income scale ≈ 80,000 USD), currency 392",
+      "op": "create_series",
+      "actor": "issuer",
+      "series": "S1",
+      "terms": {
+        "unitsOffered": "1000",
+        "reservePrice": "100000000",
+        "minRaise": "20000000000",
+        "capMultipleWad": "2500000000000000000",
+        "hurdleRateWad": "80000000000000000",
+        "payoutMultipleK": "5",
+        "lockupSeconds": "47336400",
+        "walletCapBps": "1000",
+        "auctionFeeBps": "100",
+        "payoutFeeBps": "500",
+        "windowFeeBps": "100",
+        "nonRevealChargeBps": "100",
+        "commitDuration": "604800",
+        "revealDuration": "172800",
+        "windowCommitDuration": "259200",
+        "windowRevealDuration": "86400"
+      },
+      "releaseSchedule": [
+        {
+          "atOffsetSeconds": "0",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "7776000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "15552000",
+          "bps": "2500"
+        },
+        {
+          "atOffsetSeconds": "23328000",
+          "bps": "2500"
+        }
+      ],
+      "termsCommitment": "0x195101ca3b08ee8d51adfb0120545b5d9b05bc3e2df9a90d68c7d04ba1fc21b2",
+      "contractHash": "0xb29d39bc7260082353e004bbffe56e276c5e03aedd48aca9717fcdb53860ad7c",
+      "tierFlags": 2,
+      "fxPairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d"
+    },
+    {
+      "t": "1767571200",
+      "op": "open_raise",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1767574800",
+      "op": "commit_bid",
+      "actor": "b1",
+      "series": "S1",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0x9e143f3825dd4e76fd006ca08c2c4170b3eb3f75dd913b32f7bd5429dd076f94",
+      "escrow": "12120000000"
+    },
+    {
+      "t": "1767578400",
+      "op": "commit_bid",
+      "actor": "b2",
+      "series": "S1",
+      "price": "115000000",
+      "quantity": "100",
+      "salt": "0x0ec01a1e2fa989799a7df1773caf71c2caac13ac49445bf63c00080f5e0298d9",
+      "escrow": "11615000000"
+    },
+    {
+      "t": "1767582000",
+      "op": "commit_bid",
+      "actor": "b3",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "100",
+      "salt": "0x45b08af69620744c62f6c19d8dd8c950a29521019b832f6433c1007f0549187a",
+      "escrow": "11110000000"
+    },
+    {
+      "t": "1767585600",
+      "op": "commit_bid",
+      "actor": "b4",
+      "series": "S1",
+      "price": "105000000",
+      "quantity": "100",
+      "salt": "0x1f9c4d38d057fd64dc0790a650e42bb4306d67a616fd23a43e7b50c3213cdcef",
+      "escrow": "10605000000"
+    },
+    {
+      "t": "1768180200",
+      "op": "reveal_bid",
+      "actor": "b1",
+      "series": "S1",
+      "price": "120000000",
+      "quantity": "100",
+      "salt": "0x9e143f3825dd4e76fd006ca08c2c4170b3eb3f75dd913b32f7bd5429dd076f94"
+    },
+    {
+      "t": "1768180800",
+      "op": "reveal_bid",
+      "actor": "b2",
+      "series": "S1",
+      "price": "115000000",
+      "quantity": "100",
+      "salt": "0x0ec01a1e2fa989799a7df1773caf71c2caac13ac49445bf63c00080f5e0298d9"
+    },
+    {
+      "t": "1768181400",
+      "op": "reveal_bid",
+      "actor": "b3",
+      "series": "S1",
+      "price": "110000000",
+      "quantity": "100",
+      "salt": "0x45b08af69620744c62f6c19d8dd8c950a29521019b832f6433c1007f0549187a"
+    },
+    {
+      "t": "1768182000",
+      "op": "reveal_bid",
+      "actor": "b4",
+      "series": "S1",
+      "price": "105000000",
+      "quantity": "100",
+      "salt": "0x1f9c4d38d057fd64dc0790a650e42bb4306d67a616fd23a43e7b50c3213cdcef"
+    },
+    {
+      "t": "1768352400",
+      "op": "begin_settlement",
+      "series": "S1",
+      "clearingPrice": "105000000",
+      "qAboveClaim": "300",
+      "qAtClaim": "100"
+    },
+    {
+      "t": "1768352400",
+      "op": "finalize_settlement",
+      "series": "S1"
+    },
+    {
+      "t": "1768352460",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768352520",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768352580",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768352640",
+      "op": "process_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
+      "t": "1768352700",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b1"
+    },
+    {
+      "t": "1768352760",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b2"
+    },
+    {
+      "t": "1768352820",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b3"
+    },
+    {
+      "t": "1768352880",
+      "op": "deliver_bid",
+      "series": "S1",
+      "bidder": "b4"
+    },
+    {
+      "t": "1768392000",
+      "note": "first snapshot of Q1 creates the Q1 checkpoint; the un-inverted WAD rate (> u64) is inverted in wide arithmetic to a u64-fitting JPY/USD rate",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14865000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768391940",
+      "crosscheckPrice": "14865000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1768478400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14870000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768478340",
+      "crosscheckPrice": "14870000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1768564800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14875000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768564740",
+      "crosscheckPrice": "14875000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1768824000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14890000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768823940",
+      "crosscheckPrice": "14890000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1768910400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14895000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768910340",
+      "crosscheckPrice": "14895000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1768996800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14900000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1768996740",
+      "crosscheckPrice": "14900000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769083200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14905000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769083140",
+      "crosscheckPrice": "14905000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769169600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14910000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769169540",
+      "crosscheckPrice": "14910000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769428800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14925000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769428740",
+      "crosscheckPrice": "14925000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769515200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14930000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769515140",
+      "crosscheckPrice": "14930000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769601600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14935000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769601540",
+      "crosscheckPrice": "14935000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769688000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14940000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769687940",
+      "crosscheckPrice": "14940000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1769774400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14945000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1769774340",
+      "crosscheckPrice": "14945000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770033600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14960000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770033540",
+      "crosscheckPrice": "14960000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770120000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14965000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770119940",
+      "crosscheckPrice": "14965000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770206400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14970000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770206340",
+      "crosscheckPrice": "14970000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770292800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14975000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770292740",
+      "crosscheckPrice": "14975000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770379200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14980000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770379140",
+      "crosscheckPrice": "14980000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770638400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "14995000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770638340",
+      "crosscheckPrice": "14995000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770724800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15000000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770724740",
+      "crosscheckPrice": "15000000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770811200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15005000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770811140",
+      "crosscheckPrice": "15005000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770897600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15010000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770897540",
+      "crosscheckPrice": "15010000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1770984000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15015000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1770983940",
+      "crosscheckPrice": "15015000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771243200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15030000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771243140",
+      "crosscheckPrice": "15030000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771329600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15035000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771329540",
+      "crosscheckPrice": "15035000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771416000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15040000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771415940",
+      "crosscheckPrice": "15040000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771502400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15045000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771502340",
+      "crosscheckPrice": "15045000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771588800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15050000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771588740",
+      "crosscheckPrice": "15050000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771848000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15065000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771847940",
+      "crosscheckPrice": "15065000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1771934400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15070000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1771934340",
+      "crosscheckPrice": "15070000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772020800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15075000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772020740",
+      "crosscheckPrice": "15075000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772107200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15080000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772107140",
+      "crosscheckPrice": "15080000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772193600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15085000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772193540",
+      "crosscheckPrice": "15085000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772452800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15100000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772452740",
+      "crosscheckPrice": "15100000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772539200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15105000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772539140",
+      "crosscheckPrice": "15105000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772625600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15110000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772625540",
+      "crosscheckPrice": "15110000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772712000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15115000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772711940",
+      "crosscheckPrice": "15115000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1772798400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15120000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1772798340",
+      "crosscheckPrice": "15120000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773057600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15135000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773057540",
+      "crosscheckPrice": "15135000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773144000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15140000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773143940",
+      "crosscheckPrice": "15140000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773230400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15145000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773230340",
+      "crosscheckPrice": "15145000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773316800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15150000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773316740",
+      "crosscheckPrice": "15150000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773403200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15155000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773403140",
+      "crosscheckPrice": "15155000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773662400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15170000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773662340",
+      "crosscheckPrice": "15170000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773748800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15175000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773748740",
+      "crosscheckPrice": "15175000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773835200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15180000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773835140",
+      "crosscheckPrice": "15180000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1773921600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15185000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1773921540",
+      "crosscheckPrice": "15185000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774008000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15190000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774007940",
+      "crosscheckPrice": "15190000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774267200",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15205000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774267140",
+      "crosscheckPrice": "15205000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774353600",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15210000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774353540",
+      "crosscheckPrice": "15210000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774440000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15215000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774439940",
+      "crosscheckPrice": "15215000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774526400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15220000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774526340",
+      "crosscheckPrice": "15220000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774612800",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15225000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774612740",
+      "crosscheckPrice": "15225000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774872000",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15240000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774871940",
+      "crosscheckPrice": "15240000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1774958400",
+      "op": "fx_snapshot",
+      "pairId": "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d",
+      "price": "15245000000",
+      "conf": "20000",
+      "expo": -8,
+      "publishTime": "1774958340",
+      "crosscheckPrice": "15245000000",
+      "crosscheckExpo": -8
+    },
+    {
+      "t": "1775023200",
+      "note": "live-end checkpoint; quarter_average ok (covered, inverted); owed 4% × (15,000,000 − 12,000,000) JPY = 120,000 JPY, converted to USDC at the inverted average",
+      "op": "submit_report",
+      "actor": "issuer",
+      "series": "S1",
+      "period": "8104",
+      "paymentUsd": "797173894",
+      "fxAvgWad": "6643115790651908",
+      "fxFallback": null,
+      "priorIncomeCommitment": "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+      "incomeCommitment": "0x1e873e95aff0a4c4ba0ae9fbac30ab3fac88eb4388186b317a81f25894871485",
+      "tier": 2,
+      "liquidityEvent": false,
+      "attestation": "verifier1",
+      "proof": {
+        "pi_a": [
+          "17398254632264342223781217560718831517645808664425612978617328353443365989638",
+          "10224845296140402706815084186137968222038905869210976829810700728525403198992",
+          "1"
+        ],
+        "pi_b": [
+          [
+            "8847402658011214508870338185176090596833010468305533563211159532768389844708",
+            "4335353333689420237598652482632451856822402997994648939227074794049941650348"
+          ],
+          [
+            "8213471199724091223795619587269386862300331516487238251015405541447385056956",
+            "13803272398684675337167038761971174104967972819524725368655654811672117216235"
+          ],
+          [
+            "1",
+            "0"
+          ]
+        ],
+        "pi_c": [
+          "10189200715562929355550373827661018593356545435147867634397330477486558150865",
+          "5067339418581192926577260573063831400682345234677918039837107209338067512957",
+          "1"
+        ],
+        "protocol": "groth16",
+        "curve": "bn128"
+      },
+      "publicSignals": [
+        "11450948180701381950910550057169888297470339596661738708920516906418857320882",
+        "400",
+        "6643115790651908",
+        "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+        "13808341755077274044243351056213721604872510236922500398338808283624058066053",
+        "797173894"
+      ],
+      "proofEvm": {
+        "pA": [
+          "17398254632264342223781217560718831517645808664425612978617328353443365989638",
+          "10224845296140402706815084186137968222038905869210976829810700728525403198992"
+        ],
+        "pB": [
+          [
+            "4335353333689420237598652482632451856822402997994648939227074794049941650348",
+            "8847402658011214508870338185176090596833010468305533563211159532768389844708"
+          ],
+          [
+            "13803272398684675337167038761971174104967972819524725368655654811672117216235",
+            "8213471199724091223795619587269386862300331516487238251015405541447385056956"
+          ]
+        ],
+        "pC": [
+          "10189200715562929355550373827661018593356545435147867634397330477486558150865",
+          "5067339418581192926577260573063831400682345234677918039837107209338067512957"
+        ],
+        "pubSignals": [
+          "11450948180701381950910550057169888297470339596661738708920516906418857320882",
+          "400",
+          "6643115790651908",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "13808341755077274044243351056213721604872510236922500398338808283624058066053",
+          "797173894"
+        ],
+        "proofBytes": "0x2677102aeea53225480529c5968d6546b3a6adaa4ad8d46b14674cca8bdf2d06169b0eae9f6a23976cd64ae0b3267e6acb822f4a6c1c3bba5c6298e4872c16100995b91881da7d72c1cae66715b3ba24f53ec773b0358c4e26dbf13b64a1bbac138f73d391292a2cebd49993b76b3c606171b27a56bf144d726f957254354ee41e846014cee2fe49e5511ae8c49728f02b4d66f24cb7304ecb47174efb2f83eb1228a8f2ecd3be0c51237e1f7f78d0d76eb9fa36510e2bda02a627f454d186bc1686e21ba5c5a2ac5e031e975449d0b6d542b035c6a9b299b819420011e400d10b34033163e593db40c42a9cfc0752cd065677e4eee4dcb806513f43c2726e7d",
+        "calldata": "0xf398789b2677102aeea53225480529c5968d6546b3a6adaa4ad8d46b14674cca8bdf2d06169b0eae9f6a23976cd64ae0b3267e6acb822f4a6c1c3bba5c6298e4872c16100995b91881da7d72c1cae66715b3ba24f53ec773b0358c4e26dbf13b64a1bbac138f73d391292a2cebd49993b76b3c606171b27a56bf144d726f957254354ee41e846014cee2fe49e5511ae8c49728f02b4d66f24cb7304ecb47174efb2f83eb1228a8f2ecd3be0c51237e1f7f78d0d76eb9fa36510e2bda02a627f454d186bc1686e21ba5c5a2ac5e031e975449d0b6d542b035c6a9b299b819420011e400d10b34033163e593db40c42a9cfc0752cd065677e4eee4dcb806513f43c2726e7d195101ca3b08ee8d51adfb0120545b5d9b05bc3e2df9a90d68c7d04ba1fc21b20000000000000000000000000000000000000000000000000000000000000190000000000000000000000000000000000000000000000000001799e0ece752042098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b648641e873e95aff0a4c4ba0ae9fbac30ab3fac88eb4388186b317a81f25894871485000000000000000000000000000000000000000000000000000000002f83e886"
+      },
+      "proofSolana": {
+        "proofA": "0x2677102aeea53225480529c5968d6546b3a6adaa4ad8d46b14674cca8bdf2d0619c93fc441c77c924b79fad5ce5ad9f2cbff3b46fc558ed2dfbdf3325150e737",
+        "proofB": "0x0995b91881da7d72c1cae66715b3ba24f53ec773b0358c4e26dbf13b64a1bbac138f73d391292a2cebd49993b76b3c606171b27a56bf144d726f957254354ee41e846014cee2fe49e5511ae8c49728f02b4d66f24cb7304ecb47174efb2f83eb1228a8f2ecd3be0c51237e1f7f78d0d76eb9fa36510e2bda02a627f454d186bc",
+        "proofC": "0x1686e21ba5c5a2ac5e031e975449d0b6d542b035c6a9b299b819420011e400d10b34033163e593db40c42a9cfc0752cd065677e4eee4dcb806513f43c2726e7d",
+        "proof": "0x2677102aeea53225480529c5968d6546b3a6adaa4ad8d46b14674cca8bdf2d0619c93fc441c77c924b79fad5ce5ad9f2cbff3b46fc558ed2dfbdf3325150e7370995b91881da7d72c1cae66715b3ba24f53ec773b0358c4e26dbf13b64a1bbac138f73d391292a2cebd49993b76b3c606171b27a56bf144d726f957254354ee41e846014cee2fe49e5511ae8c49728f02b4d66f24cb7304ecb47174efb2f83eb1228a8f2ecd3be0c51237e1f7f78d0d76eb9fa36510e2bda02a627f454d186bc1686e21ba5c5a2ac5e031e975449d0b6d542b035c6a9b299b819420011e400d10b34033163e593db40c42a9cfc0752cd065677e4eee4dcb806513f43c2726e7d",
+        "publicInputs": [
+          "0x195101ca3b08ee8d51adfb0120545b5d9b05bc3e2df9a90d68c7d04ba1fc21b2",
+          "0x0000000000000000000000000000000000000000000000000000000000000190",
+          "0x000000000000000000000000000000000000000000000000001799e0ece75204",
+          "0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864",
+          "0x1e873e95aff0a4c4ba0ae9fbac30ab3fac88eb4388186b317a81f25894871485",
+          "0x000000000000000000000000000000000000000000000000000000002f83e886"
+        ]
+      },
+      "witness": {
+        "incomeYtd": "15000000000000",
+        "incomeSalt": "15256416546586643003057064202925971178909132425200577217698304616809669212992",
+        "priorIncomeYtd": "0",
+        "priorSalt": "0",
+        "theta": "12000000000000",
+        "rWad": "100000000000000"
+      }
+    },
+    {
+      "t": "1775023200",
+      "op": "pay",
+      "actor": "issuer",
+      "series": "S1"
+    },
+    {
+      "t": "1775023200",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39395000000",
+          "units": "100"
+        },
+        "issuer": {
+          "stable": "199202826106",
+          "units": "0"
+        }
+      },
+      "feeCollector": "459858694",
+      "treasury": "42000000000",
+      "vault": "757315200",
+      "auctionEscrow": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x195101ca3b08ee8d51adfb0120545b5d9b05bc3e2df9a90d68c7d04ba1fc21b2",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "1992934735000000000000000",
+        "netAccWad": "1893288000000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "797173894",
+        "feeCollected": "39858694",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8104",
+        "lastPaidPeriod": "8104",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "trueupAttestedAt": "0",
+        "lastTrueupYear": null,
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "fx": {
+        "0x9c0dd113d94969d9e45e076b9c6cadbc9b7200cf6b923aab779b5efaaf19f29d": {
+          "sumWad": "365371368485854941",
+          "count": "55",
+          "quarters": {
+            "8104": {
+              "ok": true,
+              "avgWad": "6643115790651908",
+              "n": "55",
+              "flagged": false
+            }
+          }
+        }
+      },
+      "note": "Q1 accepted through the inverted accumulator (55/64 trading days); payment 797173894 USDC"
+    },
+    {
+      "t": "1775023200",
+      "op": "claim",
+      "actor": "b1",
+      "series": "S1"
+    },
+    {
+      "t": "1775023200",
+      "op": "claim",
+      "actor": "b2",
+      "series": "S1"
+    },
+    {
+      "t": "1775023200",
+      "op": "claim",
+      "actor": "b3",
+      "series": "S1"
+    },
+    {
+      "t": "1775023200",
+      "op": "claim",
+      "actor": "b4",
+      "series": "S1"
+    },
+    {
+      "t": "1775023200",
+      "op": "expect",
+      "series": "S1",
+      "balances": {
+        "b1": {
+          "stable": "39584328800",
+          "units": "100"
+        },
+        "b2": {
+          "stable": "39584328800",
+          "units": "100"
+        },
+        "b3": {
+          "stable": "39584328800",
+          "units": "100"
+        },
+        "b4": {
+          "stable": "39584328800",
+          "units": "100"
+        },
+        "issuer": {
+          "stable": "199202826106",
+          "units": "0"
+        }
+      },
+      "feeCollector": "459858694",
+      "treasury": "42000000000",
+      "vault": "0",
+      "auctionEscrow": "0",
+      "ledger": {
+        "status": "OnTime",
+        "raiseState": "Settled",
+        "mintFinalized": true,
+        "unitsOutstanding": "400",
+        "unitsSold": "400",
+        "clearingPrice": "105000000",
+        "proceeds": "42000000000",
+        "releasedTotal": "0",
+        "capPerUnit": "262500000",
+        "capMultipleWad": "2500000000000000000",
+        "termsCommitment": "0x195101ca3b08ee8d51adfb0120545b5d9b05bc3e2df9a90d68c7d04ba1fc21b2",
+        "amendmentNonce": "0",
+        "paidPerUnitWad": "1992934735000000000000000",
+        "netAccWad": "1893288000000000000000000",
+        "carryWad": "0",
+        "carry": "0",
+        "grossReceived": "797173894",
+        "feeCollected": "39858694",
+        "refundedToIssuer": "0",
+        "lastAcceptedPeriod": "8104",
+        "lastPaidPeriod": "8104",
+        "openDuePeriod": null,
+        "openDueAmount": "0",
+        "routerCredit": "0",
+        "trueupNonce": "0",
+        "trueupDue": "0",
+        "trueupAttestedAt": "0",
+        "lastTrueupYear": null,
+        "pauseNonce": "0",
+        "pauseCount": "0",
+        "pausedTotal": "0",
+        "formalNoticeEmittedFor": null,
+        "redemptionPrice": "0",
+        "unitsAtRedemption": "0",
+        "tailCapPerUnit": "0",
+        "tailAccWad": "0",
+        "tailExhausted": false,
+        "extinguishedAt": "0",
+        "finalAccWad": "0",
+        "finalUnits": "0",
+        "extinguishNonce": "0"
+      },
+      "auction": {
+        "bidCount": "4",
+        "revealedCount": "4",
+        "validCount": "4",
+        "escrowTotal": "0",
+        "auctionEscrowUnits": "0",
+        "tallyRound": "1",
+        "roundRejected": false,
+        "rejectionReason": null,
+        "clearingPrice": "105000000",
+        "qAbove": "300",
+        "qAt": "100",
+        "R": "100",
+        "unitsSold": "400",
+        "proceeds": "42000000000",
+        "unitsMinted": "400",
+        "bidsProcessed": "4",
+        "mintFinalized": true
+      },
+      "holders": {
+        "b1": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b2": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b3": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        },
+        "b4": {
+          "pending": "0",
+          "redeemedUnits": "0",
+          "pendingUnits": "0",
+          "pendingRefund": "0",
+          "delivered": true
+        }
+      },
+      "note": "holders split 95% of the JPY→USDC payment; the inverted pair never forced the attestor fallback"
+    }
+  ]
+}

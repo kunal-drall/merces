@@ -20,10 +20,14 @@ import { s18 } from "./s18_report_before_finalization.js";
 import { s19 } from "./s19_pause_while_late.js";
 import { s20 } from "./s20_tier3_trueup.js";
 import { s21 } from "./s21_entry_rules.js";
+import { s22 } from "./s22_late_holder_tail_final.js";
+import { s23 } from "./s23_redeem_twice_with_tail.js";
+import { s24 } from "./s24_inverted_fx.js";
+import { s25 } from "./s25_window_on_terminal.js";
 
 export interface Scenario {
   name: string;
   build: () => Promise<Vector>;
 }
 
-export const scenarios: Scenario[] = [s01, s02, s03, s04, s05, s06, s07, s08, s09, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, s21];
+export const scenarios: Scenario[] = [s01, s02, s03, s04, s05, s06, s07, s08, s09, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, s21, s22, s23, s24, s25];
