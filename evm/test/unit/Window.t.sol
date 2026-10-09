@@ -9,6 +9,7 @@ import {
     REJECT_WINDOW_NO_BRANCH,
     REJECT_WINDOW_PRICE_NOT_REVEALED
 } from "../../src/interfaces/IMercesWindow.sol";
+import {IERC3643Token} from "../../src/interfaces/external/IERC3643Token.sol";
 import {MercesMessages} from "../../src/libraries/MercesMessages.sol";
 import {Periods} from "../../src/libraries/Periods.sol";
 import {SeriesStatus, TierFlags} from "../../src/types/MercesTypes.sol";
@@ -98,8 +99,9 @@ contract WindowTest is FullFixture {
     }
 
     function _process(uint32 period, address who) internal {
+        uint256 i = _idx(period, who);
         vm.prank(keeper);
-        window.processOrder(sid, period, _idx(period, who));
+        window.processOrder(sid, period, i);
     }
 
     // ---------------------------------------------------------------- guards
@@ -112,17 +114,17 @@ contract WindowTest is FullFixture {
         vm.prank(admin);
         registry.setFlags(false, true, false);
         uint256 draft = createSeries(keccak256("d"));
-        vm.expectRevert(MintNotFinalized.selector);
+        vm.expectRevert(RaiseNotSettled.selector);
         window.openWindow(draft, Q1_2026);
         uint256 locked = runStandardRaise(); // 18-month lockup
         vm.expectRevert(LockupActive.selector);
         window.openWindow(locked, Q1_2026);
-        vm.expectRevert(abi.encodeWithSelector(WrongWindowPeriod.selector, Q1_2026, Q1_2026 - 1));
+        vm.expectRevert(WindowNotEligible.selector);
         window.openWindow(sid, Q1_2026 - 1);
-        vm.expectRevert(ReportNotPaid.selector);
+        vm.expectRevert(WindowNotEligible.selector);
         window.openWindow(sid, Q1_2026 + 1); // not even ended
         _open(Q1_2026);
-        vm.expectRevert(WindowAlreadyOpen.selector);
+        vm.expectRevert(WindowOpen.selector);
         window.openWindow(sid, Q1_2026);
         (bool active, uint32 period) = window.activeWindow(sid);
         assertTrue(active);
@@ -130,25 +132,29 @@ contract WindowTest is FullFixture {
         assertTrue(window.hasPendingOrders(sid));
         // redemption waits while a window is pending
         vm.prank(issuer);
-        vm.expectRevert(WindowOpen.selector);
+        vm.expectRevert(WindowPending.selector);
         vault.redeem(sid);
         // a Late series cannot open a window
         uint256 s2 = runStandardRaise(FLAGS, bytes32(0), Proofs.q1().termsCommitment, P0, 0);
         vm.warp(Periods.periodEnd(Q1_2026 + 1) + 60 days);
         assertEq(uint8(income.deriveStatus(s2)), uint8(SeriesStatus.Late));
-        vm.expectRevert(WindowNotEligibleStatus.selector);
+        vm.expectRevert(WindowNotEligible.selector);
         window.openWindow(s2, Q1_2026 + 1);
     }
 
     function test_commitRevealRules() public {
         _open(Q1_2026);
+        IERC3643Token token = unitToken(sid);
         // the escrow only admits armed deposits
         vm.prank(b1);
         vm.expectRevert(bytes("Transfer not possible"));
-        unitToken(sid).transfer(address(window), 10);
+        token.transfer(address(window), 10);
         vm.prank(b1);
         vm.expectRevert(ZeroUnits.selector);
         window.commitAsk(sid, bytes32(0), 0);
+        vm.prank(b1);
+        vm.expectRevert(InsufficientUnits.selector);
+        window.commitAsk(sid, bytes32(0), 101); // b1 holds 100 units
         _ask(b1, 90e6, 50, 50);
         assertEq(unitToken(sid).balanceOf(address(window)), 50);
         assertEq(window.askEscrowUnits(sid, b1), 50);
@@ -158,11 +164,11 @@ contract WindowTest is FullFixture {
         fund(b1, 1e6);
         vm.startPrank(b1);
         usdc.approve(address(window), 1e6);
-        vm.expectRevert(OrderAlreadyExists.selector);
+        vm.expectRevert(OrderExists.selector);
         window.commitBid(sid, bytes32(0), 1e6);
         vm.stopPrank();
         vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSelector(WalletNotAllowlisted.selector, stranger));
+        vm.expectRevert(abi.encodeWithSelector(NotAllowlisted.selector, stranger));
         window.commitBid(sid, bytes32(0), 1e6);
         vm.prank(b4);
         vm.expectRevert(ZeroEscrow.selector);
@@ -173,11 +179,11 @@ contract WindowTest is FullFixture {
         _ask(b2, 100e6, 40, 30); // asks more than escrowed → invalid
         // reveal phase
         vm.prank(b1);
-        vm.expectRevert(NotRevealPhase.selector);
+        vm.expectRevert(RevealNotStarted.selector);
         window.revealOrder(sid, 90e6, 50, _salt(b1));
         vm.warp(window.getWindow(sid, Q1_2026).commitEnd);
         vm.prank(b1);
-        vm.expectRevert(CommitPhaseOver.selector);
+        vm.expectRevert(CommitPhaseClosed.selector);
         window.commitAsk(sid, bytes32(0), 1);
         vm.prank(stranger);
         vm.expectRevert(OrderNotFound.selector);
@@ -202,8 +208,8 @@ contract WindowTest is FullFixture {
         assertFalse(window.getOrder(sid, Q1_2026, _idx(Q1_2026, b2)).valid);
         assertEq(window.walletCapUnits(sid), 30);
         assertEq(window.requiredBidEscrow(sid, 100e6, 10), 1_010e6);
-        // settle: S = 50 (b1 below), D = 30 (b4 at p*) → demand-limited at 100: matched 30
-        _settleAt(100e6);
+        // settle: the only crossing price is the seller's 90 (S = 50 at p*, D = 30 above): demand-limited, 30 matched
+        _settleAt(90e6);
         IMercesWindow.Window memory w = window.getWindow(sid, Q1_2026);
         assertEq(uint8(w.state), uint8(IMercesWindow.WindowState.Settled));
         assertEq(uint8(w.branch), uint8(IMercesWindow.Branch.DemandLimited));
@@ -220,7 +226,8 @@ contract WindowTest is FullFixture {
         _process(Q1_2026, b1);
         assertEq(unitToken(sid).balanceOf(b4), 30);
         assertEq(unitToken(sid).balanceOf(b1), 70); // 50 escrowed, 30 sold, 20 returned
-        assertEq(usdc.balanceOf(b1), 3_000e6 + 3_800e6 * 0); // proceeds only (pending payouts are claimed separately)
+        assertEq(usdc.balanceOf(b1), 2_700e6 + 1e6); // proceeds (+ the 1 USDC funded above); payouts are claimed separately
+        assertEq(usdc.balanceOf(b4), _escrowBid(100e6, 30) - 2_700e6 - 27e6);
         assertFalse(window.hasPendingOrders(sid));
     }
 
@@ -275,38 +282,42 @@ contract WindowTest is FullFixture {
         assertTrue(window.hasPendingOrders(sid));
 
         // asks wait for the bids; marginal bids go in reveal order
+        uint256 iB1 = _idx(Q1_2026, b1);
+        uint256 iB2 = _idx(Q1_2026, b2);
+        uint256 iB5 = _idx(Q1_2026, b5);
+        uint256 iB6 = _idx(Q1_2026, b6);
         vm.prank(keeper);
         vm.expectRevert(BidsPending.selector);
-        window.processOrder(sid, Q1_2026, _idx(Q1_2026, b1));
+        window.processOrder(sid, Q1_2026, iB1);
         vm.prank(keeper);
         vm.expectRevert(OutOfOrder.selector);
-        window.processOrder(sid, Q1_2026, _idx(Q1_2026, b6));
+        window.processOrder(sid, Q1_2026, iB6);
         (bool hasNext, uint256 nextIdx) = window.nextMarginalOrder(sid, Q1_2026);
         assertTrue(hasNext);
-        assertEq(nextIdx, _idx(Q1_2026, b5));
+        assertEq(nextIdx, iB5);
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit IMercesWindow.OrderFilled(sid, Q1_2026, b5, IMercesWindow.Side.Bid, 30, 100e6, 30e6, 0);
-        window.processOrder(sid, Q1_2026, _idx(Q1_2026, b5));
+        window.processOrder(sid, Q1_2026, iB5);
         _process(Q1_2026, b4); // non-marginal bid, any order
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit IMercesWindow.OrderFilled(sid, Q1_2026, b6, IMercesWindow.Side.Bid, 20, 100e6, 20e6, 1_010e6);
-        window.processOrder(sid, Q1_2026, _idx(Q1_2026, b6));
+        window.processOrder(sid, Q1_2026, iB6);
         vm.prank(keeper);
         vm.expectRevert(OrderAlreadyProcessed.selector);
-        window.processOrder(sid, Q1_2026, _idx(Q1_2026, b6));
+        window.processOrder(sid, Q1_2026, iB6);
         assertEq(window.getWindow(sid, Q1_2026).unitsPool, 80);
         // asks in reveal order, full fills
         vm.prank(keeper);
         vm.expectRevert(OutOfOrder.selector);
-        window.processOrder(sid, Q1_2026, _idx(Q1_2026, b2));
+        window.processOrder(sid, Q1_2026, iB2);
         (hasNext, nextIdx) = window.nextAskOrder(sid, Q1_2026);
-        assertEq(nextIdx, _idx(Q1_2026, b1));
+        assertEq(nextIdx, iB1);
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit IMercesWindow.OrderFilled(sid, Q1_2026, b1, IMercesWindow.Side.Ask, 50, 100e6, 0, 0);
-        window.processOrder(sid, Q1_2026, _idx(Q1_2026, b1));
+        window.processOrder(sid, Q1_2026, iB1);
         _process(Q1_2026, b2);
         // balances: units
         assertEq(unitToken(sid).balanceOf(b1), 50);
@@ -428,18 +439,20 @@ contract WindowTest is FullFixture {
         disallow(b6);
         _process(Q1_2026, b5);
         _process(Q1_2026, b4);
+        uint256 iB6 = _idx(Q1_2026, b6);
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit IMercesWindow.OrderFilled(sid, Q1_2026, b6, IMercesWindow.Side.Bid, 0, 100e6, 0, _escrowBid(100e6, 30));
-        window.processOrder(sid, Q1_2026, _idx(Q1_2026, b6)); // cancelled: full refund, its 20 units stay unmatched
+        window.processOrder(sid, Q1_2026, iB6); // cancelled: full refund, its 20 units stay unmatched
         assertEq(usdc.balanceOf(b6), _escrowBid(100e6, 30));
         assertEq(unitToken(sid).balanceOf(b6), 0);
         assertEq(window.getWindow(sid, Q1_2026).unitsPool, 60);
         _process(Q1_2026, b1); // 50 of the 60 pooled units
+        uint256 iB2 = _idx(Q1_2026, b2);
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit IMercesWindow.OrderFilled(sid, Q1_2026, b2, IMercesWindow.Side.Ask, 10, 100e6, 0, 20);
-        window.processOrder(sid, Q1_2026, _idx(Q1_2026, b2)); // the last seller absorbs the cancellation
+        window.processOrder(sid, Q1_2026, iB2); // the last seller absorbs the cancellation
         assertEq(unitToken(sid).balanceOf(b2), 90);
         assertEq(usdc.balanceOf(b1), 5_000e6);
         assertEq(usdc.balanceOf(b2), 1_000e6);
@@ -457,12 +470,12 @@ contract WindowTest is FullFixture {
         (bytes memory a, bytes memory b) = extinguishSigs(sid, 0);
         vault.extinguish(sid, a, b); // allowed in every status
         vm.prank(b2);
-        vm.expectRevert(WindowOpen.selector);
+        vm.expectRevert(WindowPending.selector);
         vault.claimFinal(sid);
         vm.warp(window.getWindow(sid, Q1_2026).commitEnd);
         _reveal(b1, 90e6, 50);
         _reveal(b4, 100e6, 30);
-        _settleAt(100e6); // B: D = 30 < S = 50 → matched 30
+        _settleAt(90e6); // B at the seller's price: D = 30 < S = 50 → matched 30
         _process(Q1_2026, b4);
         _process(Q1_2026, b1);
         assertFalse(window.hasPendingOrders(sid));

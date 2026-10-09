@@ -54,13 +54,13 @@ contract ExitTest is FullFixture {
         vault.redeem(sid);
         uint256 draft = createSeries(keccak256("d"));
         vm.prank(issuer);
-        vm.expectRevert(MintNotFinalized.selector);
+        vm.expectRevert(RaiseNotSettled.selector);
         vault.redeem(draft);
         // after the lockup with nothing reported the series is Late: redemption waits for the issuer's own
         // obligations (A15)
         vm.warp(settlementTs(sid) + LOCKUP);
         vm.prank(issuer);
-        vm.expectRevert(SeriesIsLate.selector);
+        vm.expectRevert(SeriesLate.selector);
         vault.redeem(sid);
     }
 
@@ -68,7 +68,7 @@ contract ExitTest is FullFixture {
         uint256 s = _openSeries(P0);
         submitReport(s, Q1_2026, Proofs.q1()); // open due
         vm.prank(issuer);
-        vm.expectRevert(OutstandingDue.selector);
+        vm.expectRevert(PaymentOutstanding.selector);
         vault.redeem(s);
         payDue(s, issuer);
         // Q2 ends: it must be reported before redeeming, even while still OnTime
@@ -127,7 +127,7 @@ contract ExitTest is FullFixture {
         emit IPayoutClaims.RedemptionClaimed(s, b1, 0, 0);
         vault.claimRedemption(s);
         vm.prank(issuer);
-        vm.expectRevert(SeriesTerminal.selector);
+        vm.expectRevert(TerminalStatus.selector);
         vault.redeem(s);
         assertEq(usdc.balanceOf(address(feeCollector)), 300e6); // only the auction fees
     }
@@ -282,10 +282,10 @@ contract ExitTest is FullFixture {
         treasury.claimRelease(sid);
         assertEq(treasury.getTreasury(sid).releasedTotal, 15_000e6);
         (bytes memory a, bytes memory b) = extinguishSigs(sid, 0);
-        vm.expectRevert(DuplicateAttestor.selector);
+        vm.expectRevert(SameAttestor.selector);
         vault.extinguish(sid, a, a);
         bytes32 dg = MercesMessages.extinguishDigest(domain, sid, 0);
-        vm.expectRevert(abi.encodeWithSelector(AttestorNotRegistered.selector, vm.addr(0xDEAD)));
+        vm.expectRevert(abi.encodeWithSelector(InvalidAttestorSignature.selector, vm.addr(0xDEAD)));
         vault.extinguish(sid, a, sign(0xDEAD, dg));
         vm.prank(keeper);
         vm.expectEmit(true, false, false, true);
@@ -300,7 +300,7 @@ contract ExitTest is FullFixture {
         assertEq(l.finalAccWad, 50e6 * 1e18); // 15,000 / 300, no fee
         assertEq(l.extinguishedAt, block.timestamp);
         assertEq(usdc.balanceOf(address(treasury)), 0);
-        vm.expectRevert(SeriesIsExtinguished.selector); // no replay, no second extinguishment
+        vm.expectRevert(TerminalStatus.selector); // no replay, no second extinguishment
         vault.extinguish(sid, a, b);
         // holders claim pending payouts + their share of the unreleased funds; units burn
         assertEq(vault.claimableFinal(sid, b1), 5_000e6);
@@ -325,7 +325,7 @@ contract ExitTest is FullFixture {
         vm.expectRevert(TerminalStatus.selector);
         income.submitReport(reportInput(sid, Q1_2026 + 2, Proofs.q3zero(), 2, false));
         vm.prank(issuer);
-        vm.expectRevert(SeriesTerminal.selector);
+        vm.expectRevert(TerminalStatus.selector);
         vault.redeem(sid);
     }
 
@@ -410,7 +410,22 @@ contract ExitTest is FullFixture {
     function test_extinguishRequiresFinalizedMint() public {
         uint256 draft = createSeries(keccak256("d"));
         (bytes memory a, bytes memory b) = extinguishSigs(draft, 0);
-        vm.expectRevert(MintNotFinalized.selector);
+        vm.expectRevert(RaiseNotSettled.selector);
         vault.extinguish(draft, a, b);
+        // settled but not yet mint-finalized
+        uint256 s = standardSeries(TierFlags.TIER2_ZKTLS, bytes32(0));
+        allow(b1);
+        allow(b2);
+        openRaise(s);
+        commit(s, plan(b1, P0, 100, escrowFor(P0, 100)));
+        commit(s, plan(b2, P0, 100, escrowFor(P0, 100)));
+        warpToReveal(s);
+        reveal(s, plan(b1, P0, 100, escrowFor(P0, 100)));
+        reveal(s, plan(b2, P0, 100, escrowFor(P0, 100)));
+        warpToSettle(s);
+        settle(s, P0, 0, 200); // 20,000 USDC = min raise → Settled
+        (a, b) = extinguishSigs(s, 0);
+        vm.expectRevert(MintNotFinalized.selector);
+        vault.extinguish(s, a, b);
     }
 }

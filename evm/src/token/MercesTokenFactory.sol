@@ -42,9 +42,8 @@ contract MercesTokenFactory {
         address tokenOwner_
     ) {
         require(
-            implementationAuthority_ != address(0) && identityRegistry_ != address(0)
-                && complianceModule_ != address(0) && auction_ != address(0) && vault_ != address(0)
-                && window_ != address(0) && tokenOwner_ != address(0),
+            implementationAuthority_ != address(0) && identityRegistry_ != address(0) && complianceModule_ != address(0)
+                && auction_ != address(0) && vault_ != address(0) && window_ != address(0) && tokenOwner_ != address(0),
             "invalid argument - zero address"
         );
         implementationAuthority = implementationAuthority_;
@@ -67,15 +66,17 @@ contract MercesTokenFactory {
         // The factory is `msg.sender` of both proxy constructors, so the delegatecalled `init` makes it the
         // owner of the compliance and the token until ownership is handed over below.
         ModularComplianceProxy mc = new ModularComplianceProxy(implementationAuthority);
-        TokenProxy tp = new TokenProxy(implementationAuthority, identityRegistry, address(mc), name, symbol, 0, address(0));
+        TokenProxy tp =
+            new TokenProxy(implementationAuthority, identityRegistry, address(mc), name, symbol, 0, address(0));
         token = address(tp);
         compliance = address(mc);
         tokenOf[seriesId] = token;
 
         IModularCompliance(compliance).addModule(complianceModule);
-        IModularCompliance(compliance).callModuleFunction(
-            abi.encodeWithSelector(MercesComplianceModule.setEscrows.selector, auction, window), complianceModule
-        );
+        IModularCompliance(compliance)
+            .callModuleFunction(
+                abi.encodeWithSelector(MercesComplianceModule.setEscrows.selector, auction, window), complianceModule
+            );
 
         Token t = Token(token);
         t.addAgent(auction);

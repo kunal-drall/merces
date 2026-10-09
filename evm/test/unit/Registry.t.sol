@@ -63,24 +63,56 @@ contract RegistryTest is MercesFixture {
         ProtocolContracts memory c = registry.getProtocolContracts();
         vm.expectRevert(abi.encodeWithSelector(ChainIdMismatch.selector, 10143, block.chainid));
         new MercesRegistry(
-            admin, allowlistManager, address(feeCollector), 10143, defaultParameters(), trex.identityRegistry, trex.idFactory, poseidon5, c
+            admin,
+            allowlistManager,
+            address(feeCollector),
+            10143,
+            defaultParameters(),
+            trex.identityRegistry,
+            trex.idFactory,
+            poseidon5,
+            c
         );
         Parameters memory p = defaultParameters();
         p.capMultipleWad = 1.9e18;
         vm.expectRevert(abi.encodeWithSelector(ParameterOutOfBounds.selector, bytes32("capMultipleWad")));
         new MercesRegistry(
-            admin, allowlistManager, address(feeCollector), uint64(block.chainid), p, trex.identityRegistry, trex.idFactory, poseidon5, c
+            admin,
+            allowlistManager,
+            address(feeCollector),
+            uint64(block.chainid),
+            p,
+            trex.identityRegistry,
+            trex.idFactory,
+            poseidon5,
+            c
         );
         p = defaultParameters();
         p.maxCumulativePauseSeconds = p.maxPauseSeconds - 1;
         vm.expectRevert(abi.encodeWithSelector(ParameterOutOfBounds.selector, bytes32("maxCumulativePauseSeconds")));
         new MercesRegistry(
-            admin, allowlistManager, address(feeCollector), uint64(block.chainid), p, trex.identityRegistry, trex.idFactory, poseidon5, c
+            admin,
+            allowlistManager,
+            address(feeCollector),
+            uint64(block.chainid),
+            p,
+            trex.identityRegistry,
+            trex.idFactory,
+            poseidon5,
+            c
         );
         c.window = address(0);
         vm.expectRevert(ZeroAddress.selector);
         new MercesRegistry(
-            admin, allowlistManager, address(feeCollector), uint64(block.chainid), defaultParameters(), trex.identityRegistry, trex.idFactory, poseidon5, c
+            admin,
+            allowlistManager,
+            address(feeCollector),
+            uint64(block.chainid),
+            defaultParameters(),
+            trex.identityRegistry,
+            trex.idFactory,
+            poseidon5,
+            c
         );
     }
 
@@ -137,9 +169,13 @@ contract RegistryTest is MercesFixture {
         registry.setAllowed(stranger, true);
         vm.stopPrank();
         // no setter exists for the protocol contracts
-        (bool ok,) = address(registry).call(
-            abi.encodeWithSignature("setProtocolContracts((address,address,address,address,address,address))", registry.getProtocolContracts())
-        );
+        (bool ok,) = address(registry)
+            .call(
+                abi.encodeWithSignature(
+                    "setProtocolContracts((address,address,address,address,address,address))",
+                    registry.getProtocolContracts()
+                )
+            );
         assertFalse(ok);
     }
 
@@ -325,13 +361,13 @@ contract RegistryTest is MercesFixture {
         bytes32 tc = keccak256("terms");
 
         vm.prank(stranger);
-        vm.expectRevert(IssuerNotActive.selector);
+        vm.expectRevert(IssuerInactive.selector);
         _create(p, s, tc, 2, bytes32(0));
 
         vm.prank(admin);
         registry.deactivateIssuer(issuer);
         vm.prank(issuer);
-        vm.expectRevert(IssuerNotActive.selector);
+        vm.expectRevert(IssuerInactive.selector);
         _create(p, s, tc, 2, bytes32(0));
         vm.prank(admin);
         registry.registerIssuer(issuer);
@@ -339,7 +375,7 @@ contract RegistryTest is MercesFixture {
         vm.prank(issuer);
         registry.stopIssuance();
         vm.prank(issuer);
-        vm.expectRevert(IssuanceStoppedByIssuer.selector);
+        vm.expectRevert(IssuerIssuanceStopped.selector);
         _create(p, s, tc, 2, bytes32(0));
         vm.prank(issuer);
         registry.resumeIssuance();
@@ -360,11 +396,11 @@ contract RegistryTest is MercesFixture {
         p.stablecoin = address(usdc);
 
         p.unitsOffered = 0;
-        vm.expectRevert(InvalidUnitsOffered.selector);
+        vm.expectRevert(abi.encodeWithSelector(InvalidTerms.selector, bytes32("unitsOffered")));
         _create(p, s, tc, 2, bytes32(0));
         p.unitsOffered = 9; // 10% of 9 units is no unit at all
         p.minRaise = 0;
-        vm.expectRevert(WalletCapTooSmall.selector);
+        vm.expectRevert(abi.encodeWithSelector(InvalidTerms.selector, bytes32("walletCap")));
         _create(p, s, tc, 2, bytes32(0));
         p.unitsOffered = 10;
         _create(p, s, tc, 2, bytes32(0)); // exactly one unit of cap is enough
@@ -372,12 +408,12 @@ contract RegistryTest is MercesFixture {
         p.minRaise = 500_000_000;
 
         p.reservePrice = 0;
-        vm.expectRevert(InvalidReservePrice.selector);
+        vm.expectRevert(abi.encodeWithSelector(InvalidTerms.selector, bytes32("reservePrice")));
         _create(p, s, tc, 2, bytes32(0));
         p.reservePrice = 1_000_000;
 
         p.minRaise = 1_000_000_001;
-        vm.expectRevert(MinRaiseTooHigh.selector);
+        vm.expectRevert(abi.encodeWithSelector(InvalidTerms.selector, bytes32("minRaise")));
         _create(p, s, tc, 2, bytes32(0));
         p.minRaise = 500_000_000;
 
@@ -478,9 +514,12 @@ contract RegistryTest is MercesFixture {
         vm.expectRevert(Tier1RequiresStablecoinIncome.selector);
         registry.createSeries(p, defaultSchedule(), tc, 1, pair, SeriesMode.SealedBid, false, t);
         p.unitsOffered = 1001; // r × units = 1.001 WAD
-        vm.expectRevert(Tier1RateTooHigh.selector);
+        vm.expectRevert(abi.encodeWithSelector(InvalidTerms.selector, bytes32("tier1Rate")));
         registry.createSeries(p, defaultSchedule(), tc, 1, bytes32(0), SeriesMode.SealedBid, false, t);
         p.unitsOffered = 1000;
+        // a tier-1 flag without router terms is a series without a router
+        vm.expectRevert(RouterNotEnabled.selector);
+        registry.createSeries(p, defaultSchedule(), tc, 1, bytes32(0), SeriesMode.SealedBid, false, noTier1());
         t.theta += 1;
         vm.expectRevert(TermsCommitmentMismatch.selector);
         registry.createSeries(p, defaultSchedule(), tc, 1, bytes32(0), SeriesMode.SealedBid, false, t);
@@ -582,9 +621,10 @@ contract RegistryTest is MercesFixture {
         Tier1Terms memory t = proofTier1Terms();
         t.theta = 90_000e6;
         bytes32 newTc = bytes32(
-            IPoseidon5(poseidon5).poseidon(
-                [uint256(t.theta), uint256(t.rWad), uint256(t.currencyCode), uint256(t.indexingRule), t.termsSalt]
-            )
+            IPoseidon5(poseidon5)
+                .poseidon(
+                    [uint256(t.theta), uint256(t.rWad), uint256(t.currencyCode), uint256(t.indexingRule), t.termsSalt]
+                )
         );
         bytes memory sig = _amendSig(attestorKey, id, 0, newTc, 2.5e18);
         vm.prank(issuer);
@@ -601,11 +641,11 @@ contract RegistryTest is MercesFixture {
         bytes32 newTc = keccak256("x");
         bytes memory sig = _amendSig(attestorKey, id, 0, newTc, 2.6e18);
         vm.prank(issuer);
-        vm.expectRevert(CapMultipleIncrease.selector);
+        vm.expectRevert(UnfavourableAmendment.selector);
         registry.amendTerms(id, newTc, 2.6e18, sig, noTier1());
         sig = _amendSig(attestorKey, id, 0, newTc, 1.9e18);
         vm.prank(issuer);
-        vm.expectRevert(abi.encodeWithSelector(ParameterOutOfBounds.selector, bytes32("capMultipleWad")));
+        vm.expectRevert(UnfavourableAmendment.selector);
         registry.amendTerms(id, newTc, 1.9e18, sig, noTier1());
         sig = _amendSig(attestorKey, id, 0, newTc, 2.5e18);
         vm.prank(stranger);
@@ -614,14 +654,14 @@ contract RegistryTest is MercesFixture {
         uint256 rogueKey = 0xDEAD;
         sig = _amendSig(rogueKey, id, 0, newTc, 2.5e18);
         vm.prank(issuer);
-        vm.expectRevert(abi.encodeWithSelector(AttestorNotRegistered.selector, vm.addr(rogueKey)));
+        vm.expectRevert(abi.encodeWithSelector(InvalidAttestorSignature.selector, vm.addr(rogueKey)));
         registry.amendTerms(id, newTc, 2.5e18, sig, noTier1());
         // a revoked attestor cannot sign amendments (no grace for amendments)
         vm.prank(admin);
         registry.revokeAttestor(attestor);
         sig = _amendSig(attestorKey, id, 0, newTc, 2.5e18);
         vm.prank(issuer);
-        vm.expectRevert(abi.encodeWithSelector(AttestorNotRegistered.selector, attestor));
+        vm.expectRevert(abi.encodeWithSelector(InvalidAttestorSignature.selector, attestor));
         registry.amendTerms(id, newTc, 2.5e18, sig, noTier1());
         sig = _amendSig(attestor2Key, id, 0, bytes32(0), 2.5e18);
         vm.prank(issuer);
@@ -632,7 +672,7 @@ contract RegistryTest is MercesFixture {
         registry.markTerminal(id, SeriesStatus.Redeemed);
         sig = _amendSig(attestor2Key, id, 0, newTc, 2.5e18);
         vm.prank(issuer);
-        vm.expectRevert(SeriesTerminal.selector);
+        vm.expectRevert(AmendmentAfterTerminal.selector);
         registry.amendTerms(id, newTc, 2.5e18, sig, noTier1());
     }
 

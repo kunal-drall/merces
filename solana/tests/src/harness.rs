@@ -4,14 +4,21 @@
 use std::path::PathBuf;
 
 use anchor_lang::prelude::Pubkey;
-use anchor_lang::{AccountDeserialize, AnchorSerialize, Discriminator, InstructionData, ToAccountMetas};
+use anchor_lang::{
+    AccountDeserialize, AnchorSerialize, Discriminator, InstructionData, ToAccountMetas,
+};
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
 use merces_common::encoding::{commitment_preimage, fx_pair_id_preimage};
 use merces_common::params::Parameters;
 use merces_protocol::income::SubmitReportArgs;
-use merces_protocol::state::{self as pstate, seeds as pseeds, Auction, Bid, FxCheckpoint, FxPair, Holder, Ledger, Order, Report, Router, Treasury, Window};
-use merces_registry::state::{AllowlistEntry, FxPairConfig, ParametersData, ProtocolConfig, Series, Tier1Terms, TrancheData};
+use merces_protocol::state::{
+    self as pstate, seeds as pseeds, Auction, Bid, FxCheckpoint, FxPair, Holder, Ledger, Order,
+    Report, Router, Treasury, Window,
+};
+use merces_registry::state::{
+    AllowlistEntry, FxPairConfig, ParametersData, ProtocolConfig, Series, Tier1Terms, TrancheData,
+};
 use merces_registry::CreateSeriesArgs;
 use pyth_solana_receiver_sdk::price_update::{PriceFeedMessage, PriceUpdateV2, VerificationLevel};
 use solana_clock::Clock;
@@ -40,7 +47,9 @@ pub const ATA_PROGRAM: Pubkey = anchor_spl::associated_token::ID;
 pub const SYSTEM_PROGRAM: Pubkey = anchor_lang::system_program::ID;
 
 fn deploy_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/deploy").join(format!("{name}.so"))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/deploy")
+        .join(format!("{name}.so"))
 }
 
 /// Seeds shared with the programs (re-exported for the tests).
@@ -84,49 +93,106 @@ pub fn registry_authority_pda() -> Pubkey {
     Pubkey::find_program_address(&[pseeds::REGISTRY_AUTHORITY], &merces_protocol::ID).0
 }
 pub fn allow_pda(wallet: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[merces_onchain_seeds::ALLOW, wallet.as_ref()], &merces_registry::ID).0
+    Pubkey::find_program_address(
+        &[merces_onchain_seeds::ALLOW, wallet.as_ref()],
+        &merces_registry::ID,
+    )
+    .0
 }
 pub fn issuer_pda(wallet: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[merces_onchain_seeds::ISSUER, wallet.as_ref()], &merces_registry::ID).0
+    Pubkey::find_program_address(
+        &[merces_onchain_seeds::ISSUER, wallet.as_ref()],
+        &merces_registry::ID,
+    )
+    .0
 }
 pub fn attestor_pda(addr: &[u8; 20]) -> Pubkey {
-    Pubkey::find_program_address(&[merces_onchain_seeds::ATTESTOR, addr], &merces_registry::ID).0
+    Pubkey::find_program_address(
+        &[merces_onchain_seeds::ATTESTOR, addr],
+        &merces_registry::ID,
+    )
+    .0
 }
 pub fn verifier_pda(addr: &[u8; 20]) -> Pubkey {
-    Pubkey::find_program_address(&[merces_onchain_seeds::VERIFIER, addr], &merces_registry::ID).0
+    Pubkey::find_program_address(
+        &[merces_onchain_seeds::VERIFIER, addr],
+        &merces_registry::ID,
+    )
+    .0
 }
 pub fn fx_config_pda(pair: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[merces_onchain_seeds::FX, pair], &merces_registry::ID).0
 }
 pub fn series_pda(series_id: u64) -> Pubkey {
-    Pubkey::find_program_address(&[merces_onchain_seeds::SERIES, &series_id.to_le_bytes()], &merces_registry::ID).0
+    Pubkey::find_program_address(
+        &[merces_onchain_seeds::SERIES, &series_id.to_le_bytes()],
+        &merces_registry::ID,
+    )
+    .0
 }
 pub fn bid_pda(series: &Pubkey, bidder: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[pseeds::BID, series.as_ref(), bidder.as_ref()], &merces_protocol::ID).0
+    Pubkey::find_program_address(
+        &[pseeds::BID, series.as_ref(), bidder.as_ref()],
+        &merces_protocol::ID,
+    )
+    .0
 }
 pub fn holder_pda(series: &Pubkey, wallet: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[pseeds::HOLDER, series.as_ref(), wallet.as_ref()], &merces_protocol::ID).0
+    Pubkey::find_program_address(
+        &[pseeds::HOLDER, series.as_ref(), wallet.as_ref()],
+        &merces_protocol::ID,
+    )
+    .0
 }
 pub fn report_pda(series: &Pubkey, period: u32) -> Pubkey {
-    Pubkey::find_program_address(&[pseeds::REPORT, series.as_ref(), &period.to_le_bytes()], &merces_protocol::ID).0
+    Pubkey::find_program_address(
+        &[pseeds::REPORT, series.as_ref(), &period.to_le_bytes()],
+        &merces_protocol::ID,
+    )
+    .0
 }
 pub fn window_pda(series: &Pubkey, period: u32) -> Pubkey {
-    Pubkey::find_program_address(&[pseeds::WINDOW, series.as_ref(), &period.to_le_bytes()], &merces_protocol::ID).0
+    Pubkey::find_program_address(
+        &[pseeds::WINDOW, series.as_ref(), &period.to_le_bytes()],
+        &merces_protocol::ID,
+    )
+    .0
 }
 pub fn order_pda(series: &Pubkey, period: u32, owner: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[pseeds::ORDER, series.as_ref(), &period.to_le_bytes(), owner.as_ref()], &merces_protocol::ID).0
+    Pubkey::find_program_address(
+        &[
+            pseeds::ORDER,
+            series.as_ref(),
+            &period.to_le_bytes(),
+            owner.as_ref(),
+        ],
+        &merces_protocol::ID,
+    )
+    .0
 }
 pub fn fx_pair_pda(pair: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[pseeds::FX_PAIR, pair], &merces_protocol::ID).0
 }
 pub fn fx_checkpoint_pda(pair: &[u8; 32], period: u32) -> Pubkey {
-    Pubkey::find_program_address(&[pseeds::FX_CHECKPOINT, pair, &period.to_le_bytes()], &merces_protocol::ID).0
+    Pubkey::find_program_address(
+        &[pseeds::FX_CHECKPOINT, pair, &period.to_le_bytes()],
+        &merces_protocol::ID,
+    )
+    .0
 }
 pub fn mock_hook_extra_metas(mint: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[mock_usdg_hook::EXTRA_ACCOUNT_METAS_SEED, mint.as_ref()], &mock_usdg_hook::ID).0
+    Pubkey::find_program_address(
+        &[mock_usdg_hook::EXTRA_ACCOUNT_METAS_SEED, mint.as_ref()],
+        &mock_usdg_hook::ID,
+    )
+    .0
 }
 pub fn ata(owner: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
-    anchor_spl::associated_token::get_associated_token_address_with_program_id(owner, mint, token_program)
+    anchor_spl::associated_token::get_associated_token_address_with_program_id(
+        owner,
+        mint,
+        token_program,
+    )
 }
 /// `pair_id = keccak256(feed_id ‖ inverted_u8)` (SPEC §3.1).
 pub fn fx_pair_id(feed_id: &[u8; 32], inverted: bool) -> [u8; 32] {
@@ -134,7 +200,9 @@ pub fn fx_pair_id(feed_id: &[u8; 32], inverted: bool) -> [u8; 32] {
 }
 
 pub fn pdas(series: Pubkey) -> Pdas {
-    let p = |seed: &[u8]| Pubkey::find_program_address(&[seed, series.as_ref()], &merces_protocol::ID).0;
+    let p = |seed: &[u8]| {
+        Pubkey::find_program_address(&[seed, series.as_ref()], &merces_protocol::ID).0
+    };
     let unit_mint = p(pseeds::UNIT_MINT);
     let auction_escrow_auth = p(pseeds::AUCTION_ESCROW);
     let window_escrow_auth = p(pseeds::WINDOW_ESCROW);
@@ -161,8 +229,16 @@ pub fn pdas(series: Pubkey) -> Pdas {
         router: p(pseeds::ROUTER),
         router_token: p(pseeds::ROUTER_TOKEN),
         window_stable: p(pseeds::WINDOW_STABLE),
-        extra_metas: Pubkey::find_program_address(&[merces_hook::EXTRA_ACCOUNT_METAS_SEED, unit_mint.as_ref()], &merces_hook::ID).0,
-        escrow_arm: Pubkey::find_program_address(&[pseeds::ESCROW_ARM, unit_mint.as_ref()], &merces_protocol::ID).0,
+        extra_metas: Pubkey::find_program_address(
+            &[merces_hook::EXTRA_ACCOUNT_METAS_SEED, unit_mint.as_ref()],
+            &merces_hook::ID,
+        )
+        .0,
+        escrow_arm: Pubkey::find_program_address(
+            &[pseeds::ESCROW_ARM, unit_mint.as_ref()],
+            &merces_protocol::ID,
+        )
+        .0,
     }
 }
 
@@ -207,16 +283,26 @@ impl Env {
 
     pub fn new_without_protocol() -> Self {
         let mut svm = LiteSVM::new();
-        svm.add_program_from_file(merces_registry::ID, deploy_path("merces_registry")).expect("registry .so");
-        svm.add_program_from_file(merces_hook::ID, deploy_path("merces_hook")).expect("hook .so");
-        svm.add_program_from_file(merces_protocol::ID, deploy_path("merces_protocol")).expect("protocol .so");
-        svm.add_program_from_file(mock_usdg_hook::ID, deploy_path("mock_usdg_hook")).expect("mock hook .so");
+        svm.add_program_from_file(merces_registry::ID, deploy_path("merces_registry"))
+            .expect("registry .so");
+        svm.add_program_from_file(merces_hook::ID, deploy_path("merces_hook"))
+            .expect("hook .so");
+        svm.add_program_from_file(merces_protocol::ID, deploy_path("merces_protocol"))
+            .expect("protocol .so");
+        svm.add_program_from_file(mock_usdg_hook::ID, deploy_path("mock_usdg_hook"))
+            .expect("mock hook .so");
         let payer = Keypair::new();
         let admin = Keypair::new();
         let allowlist_manager = Keypair::new();
         let fee_collector = Keypair::new();
         let mint_authority = Keypair::new();
-        for k in [&payer, &admin, &allowlist_manager, &fee_collector, &mint_authority] {
+        for k in [
+            &payer,
+            &admin,
+            &allowlist_manager,
+            &fee_collector,
+            &mint_authority,
+        ] {
             svm.airdrop(&k.pubkey(), 1_000_000_000_000).unwrap();
         }
         let mut env = Env {
@@ -267,7 +353,12 @@ impl Env {
                 keypairs.push(s);
             }
         }
-        let tx = Transaction::new_signed_with_payer(&all, Some(&payer_pk), &keypairs, self.svm.latest_blockhash());
+        let tx = Transaction::new_signed_with_payer(
+            &all,
+            Some(&payer_pk),
+            &keypairs,
+            self.svm.latest_blockhash(),
+        );
         let res = self.svm.send_transaction(tx);
         self.svm.expire_blockhash();
         res
@@ -276,17 +367,33 @@ impl Env {
     pub fn send_ok(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> TransactionMetadata {
         match self.send(ixs, signers) {
             Ok(m) => m,
-            Err(e) => panic!("transaction failed: {:?}\n{}", e.err, e.meta.logs.join("\n")),
+            Err(e) => panic!(
+                "transaction failed: {:?}\n{}",
+                e.err,
+                e.meta.logs.join("\n")
+            ),
         }
     }
 
     /// Sends and asserts the failure carries the given custom error code.
-    pub fn send_expect(&mut self, ixs: &[Instruction], signers: &[&Keypair], code: u32) -> FailedTransactionMetadata {
+    pub fn send_expect(
+        &mut self,
+        ixs: &[Instruction],
+        signers: &[&Keypair],
+        code: u32,
+    ) -> FailedTransactionMetadata {
         match self.send(ixs, signers) {
-            Ok(m) => panic!("expected error {code}, transaction succeeded:\n{}", m.logs.join("\n")),
+            Ok(m) => panic!(
+                "expected error {code}, transaction succeeded:\n{}",
+                m.logs.join("\n")
+            ),
             Err(e) => {
                 let s = format!("{:?}", e.err);
-                assert!(s.contains(&format!("Custom({code})")), "expected error {code}, got {s}\n{}", e.meta.logs.join("\n"));
+                assert!(
+                    s.contains(&format!("Custom({code})")),
+                    "expected error {code}, got {s}\n{}",
+                    e.meta.logs.join("\n")
+                );
                 e
             }
         }
@@ -301,7 +408,10 @@ impl Env {
     // ------------------------------------------------------------------ accounts
 
     pub fn account_data(&self, key: &Pubkey) -> Option<Vec<u8>> {
-        self.svm.get_account(key).filter(|a| !a.data.is_empty()).map(|a| a.data)
+        self.svm
+            .get_account(key)
+            .filter(|a| !a.data.is_empty())
+            .map(|a| a.data)
     }
 
     pub fn exists(&self, key: &Pubkey) -> bool {
@@ -309,12 +419,15 @@ impl Env {
     }
 
     pub fn load<T: AccountDeserialize>(&self, key: &Pubkey) -> T {
-        let data = self.account_data(key).unwrap_or_else(|| panic!("account {key} missing"));
+        let data = self
+            .account_data(key)
+            .unwrap_or_else(|| panic!("account {key} missing"));
         T::try_deserialize(&mut &data[..]).expect("deserialize")
     }
 
     pub fn load_opt<T: AccountDeserialize>(&self, key: &Pubkey) -> Option<T> {
-        self.account_data(key).and_then(|d| T::try_deserialize(&mut &d[..]).ok())
+        self.account_data(key)
+            .and_then(|d| T::try_deserialize(&mut &d[..]).ok())
     }
 
     pub fn config(&self) -> ProtocolConfig {
@@ -361,7 +474,9 @@ impl Env {
     }
     pub fn ledger(&self, series: &Pubkey) -> Option<Ledger> {
         let data = self.account_data(&pdas(*series).ledger)?;
-        Some(*bytemuck::from_bytes::<Ledger>(&data[8..8 + core::mem::size_of::<Ledger>()]))
+        Some(bytemuck::pod_read_unaligned::<Ledger>(
+            &data[8..8 + core::mem::size_of::<Ledger>()],
+        ))
     }
 
     // ------------------------------------------------------------------ tokens
@@ -380,37 +495,84 @@ impl Env {
 
     fn create_usdc_mint(&mut self) -> Pubkey {
         let mint = Keypair::new();
-        let space = MintState::LEN;
+        // classic SPL mint layout (`Mint::LEN`)
+        let space = 82usize;
         let lamports = self.svm.minimum_balance_for_rent_exemption(space);
         let ixs = [
-            solana_system_interface::instruction::create_account(&self.payer.pubkey(), &mint.pubkey(), lamports, space as u64, &TOKEN_CLASSIC),
-            spl_token_interface::instruction::initialize_mint2(&TOKEN_CLASSIC, &mint.pubkey(), &self.mint_authority.pubkey(), None, USDC_DECIMALS).unwrap(),
+            solana_system_interface::instruction::create_account(
+                &self.payer.pubkey(),
+                &mint.pubkey(),
+                lamports,
+                space as u64,
+                &TOKEN_CLASSIC,
+            ),
+            spl_token_interface::instruction::initialize_mint2(
+                &TOKEN_CLASSIC,
+                &mint.pubkey(),
+                &self.mint_authority.pubkey(),
+                None,
+                USDC_DECIMALS,
+            )
+            .unwrap(),
         ];
         self.send_ok(&ixs, &[&mint]);
         mint.pubkey()
     }
 
-    /// Token-2022 mint with TransferHook → mock_usdg_hook, TransferFeeConfig 0/0,
-    /// ConfidentialTransferMint and MetadataPointer (ASSUMPTIONS A24).
+    /// Token-2022 mint with TransferHook → mock_usdg_hook, TransferFeeConfig 0/0 and
+    /// MetadataPointer (ASSUMPTIONS A24). Token-2022 refuses `ConfidentialTransferMint` next to a
+    /// `TransferFeeConfig` without a `ConfidentialTransferFeeConfig`, so the mock leaves
+    /// confidential transfers out; the programs never touch that extension.
     fn create_usdg_mint(&mut self) -> Pubkey {
         let mint = Keypair::new();
         let auth = self.mint_authority.pubkey();
         let space = ExtensionType::try_calculate_account_len::<MintState>(&[
             ExtensionType::TransferHook,
             ExtensionType::TransferFeeConfig,
-            ExtensionType::ConfidentialTransferMint,
             ExtensionType::MetadataPointer,
         ])
         .unwrap();
         let lamports = self.svm.minimum_balance_for_rent_exemption(space);
         let mk = mint.pubkey();
         let ixs = [
-            solana_system_interface::instruction::create_account(&self.payer.pubkey(), &mk, lamports, space as u64, &TOKEN_2022),
-            spl_token_2022::extension::transfer_hook::instruction::initialize(&TOKEN_2022, &mk, Some(auth), Some(mock_usdg_hook::ID)).unwrap(),
-            spl_token_2022::extension::transfer_fee::instruction::initialize_transfer_fee_config(&TOKEN_2022, &mk, Some(&auth), Some(&auth), 0, 0).unwrap(),
-            spl_token_2022::extension::confidential_transfer::instruction::initialize_mint(&TOKEN_2022, &mk, Some(auth), false, None).unwrap(),
-            spl_token_2022::extension::metadata_pointer::instruction::initialize(&TOKEN_2022, &mk, Some(auth), Some(mk)).unwrap(),
-            spl_token_2022::instruction::initialize_mint2(&TOKEN_2022, &mk, &auth, None, USDC_DECIMALS).unwrap(),
+            solana_system_interface::instruction::create_account(
+                &self.payer.pubkey(),
+                &mk,
+                lamports,
+                space as u64,
+                &TOKEN_2022,
+            ),
+            spl_token_2022::extension::transfer_hook::instruction::initialize(
+                &TOKEN_2022,
+                &mk,
+                Some(auth),
+                Some(mock_usdg_hook::ID),
+            )
+            .unwrap(),
+            spl_token_2022::extension::transfer_fee::instruction::initialize_transfer_fee_config(
+                &TOKEN_2022,
+                &mk,
+                Some(&auth),
+                Some(&auth),
+                0,
+                0,
+            )
+            .unwrap(),
+            spl_token_2022::extension::metadata_pointer::instruction::initialize(
+                &TOKEN_2022,
+                &mk,
+                Some(auth),
+                Some(mk),
+            )
+            .unwrap(),
+            spl_token_2022::instruction::initialize_mint2(
+                &TOKEN_2022,
+                &mk,
+                &auth,
+                None,
+                USDC_DECIMALS,
+            )
+            .unwrap(),
         ];
         self.send_ok(&ixs, &[&mint]);
         let ix = Instruction {
@@ -446,9 +608,25 @@ impl Env {
         let acc = self.create_ata(owner, mint);
         let tp = self.token_program_of(mint);
         let ix = if tp == TOKEN_CLASSIC {
-            spl_token_interface::instruction::mint_to(&tp, mint, &acc, &self.mint_authority.pubkey(), &[], amount).unwrap()
+            spl_token_interface::instruction::mint_to(
+                &tp,
+                mint,
+                &acc,
+                &self.mint_authority.pubkey(),
+                &[],
+                amount,
+            )
+            .unwrap()
         } else {
-            spl_token_2022::instruction::mint_to(&tp, mint, &acc, &self.mint_authority.pubkey(), &[], amount).unwrap()
+            spl_token_2022::instruction::mint_to(
+                &tp,
+                mint,
+                &acc,
+                &self.mint_authority.pubkey(),
+                &[],
+                amount,
+            )
+            .unwrap()
         };
         let auth = self.mint_authority.insecure_clone();
         self.send_ok(&[ix], &[&auth]);
@@ -472,13 +650,39 @@ impl Env {
     }
 
     /// Plain stablecoin transfer from `from`'s ATA (signer) to `destination` (any token account).
-    pub fn transfer_stable_ix(&self, from: &Pubkey, mint: &Pubkey, destination: &Pubkey, amount: u64) -> Instruction {
+    pub fn transfer_stable_ix(
+        &self,
+        from: &Pubkey,
+        mint: &Pubkey,
+        destination: &Pubkey,
+        amount: u64,
+    ) -> Instruction {
         let tp = self.token_program_of(mint);
         let source = self.ata_of(from, mint);
         let mut ix = if tp == TOKEN_CLASSIC {
-            spl_token_interface::instruction::transfer_checked(&tp, &source, mint, destination, from, &[], amount, USDC_DECIMALS).unwrap()
+            spl_token_interface::instruction::transfer_checked(
+                &tp,
+                &source,
+                mint,
+                destination,
+                from,
+                &[],
+                amount,
+                USDC_DECIMALS,
+            )
+            .unwrap()
         } else {
-            spl_token_2022::instruction::transfer_checked(&tp, &source, mint, destination, from, &[], amount, USDC_DECIMALS).unwrap()
+            spl_token_2022::instruction::transfer_checked(
+                &tp,
+                &source,
+                mint,
+                destination,
+                from,
+                &[],
+                amount,
+                USDC_DECIMALS,
+            )
+            .unwrap()
         };
         ix.accounts.extend(self.stable_hook_accounts(mint));
         ix
@@ -487,7 +691,10 @@ impl Env {
     /// Remaining accounts a stablecoin transfer needs for hook resolution (none for USDC).
     pub fn stable_hook_accounts(&self, mint: &Pubkey) -> Vec<AccountMeta> {
         if *mint == self.usdg {
-            vec![AccountMeta::new_readonly(mock_usdg_hook::ID, false), AccountMeta::new_readonly(mock_hook_extra_metas(mint), false)]
+            vec![
+                AccountMeta::new_readonly(mock_usdg_hook::ID, false),
+                AccountMeta::new_readonly(mock_hook_extra_metas(mint), false),
+            ]
         } else {
             vec![]
         }
@@ -507,7 +714,13 @@ impl Env {
     }
 
     /// A direct wallet-to-wallet unit transfer instruction (expected to fail with the hook).
-    pub fn direct_unit_transfer_ix(&self, series: &Pubkey, from: &Pubkey, to: &Pubkey, amount: u64) -> Instruction {
+    pub fn direct_unit_transfer_ix(
+        &self,
+        series: &Pubkey,
+        from: &Pubkey,
+        to: &Pubkey,
+        amount: u64,
+    ) -> Instruction {
         let p = pdas(*series);
         let mut ix = spl_token_2022::instruction::transfer_checked(
             &TOKEN_2022,
@@ -525,7 +738,14 @@ impl Env {
     }
 
     /// Writes a Pyth `PriceUpdateV2`-shaped account (fully verified) and returns its address.
-    pub fn set_price_update(&mut self, feed_id: [u8; 32], price: i64, conf: u64, expo: i32, publish_time: i64) -> Pubkey {
+    pub fn set_price_update(
+        &mut self,
+        feed_id: [u8; 32],
+        price: i64,
+        conf: u64,
+        expo: i32,
+        publish_time: i64,
+    ) -> Pubkey {
         let update = PriceUpdateV2 {
             write_authority: Pubkey::default(),
             verification_level: VerificationLevel::Full,
@@ -602,7 +822,12 @@ impl Env {
         self.send(&[ix], &[&admin])
     }
 
-    pub fn set_flags(&mut self, new_raises_paused: bool, windows_enabled: bool, tier4_enabled: bool) -> TxResult {
+    pub fn set_flags(
+        &mut self,
+        new_raises_paused: bool,
+        windows_enabled: bool,
+        tier4_enabled: bool,
+    ) -> TxResult {
         let ix = self.admin_only_ix(
             merces_registry::instruction::SetFlags {
                 new_raises_paused,
@@ -615,7 +840,8 @@ impl Env {
     }
 
     pub fn set_early_draw_approver(&mut self, approver: Pubkey) -> TxResult {
-        let ix = self.admin_only_ix(merces_registry::instruction::SetEarlyDrawApprover { approver }.data());
+        let ix = self
+            .admin_only_ix(merces_registry::instruction::SetEarlyDrawApprover { approver }.data());
         self.send_admin(ix)
     }
 
@@ -625,7 +851,8 @@ impl Env {
     }
 
     pub fn set_fee_collector(&mut self, new_collector: Pubkey) -> TxResult {
-        let ix = self.admin_only_ix(merces_registry::instruction::SetFeeCollector { new_collector }.data());
+        let ix = self
+            .admin_only_ix(merces_registry::instruction::SetFeeCollector { new_collector }.data());
         self.send_admin(ix)
     }
 
@@ -638,7 +865,11 @@ impl Env {
                 system_program: SYSTEM_PROGRAM,
             }
             .to_account_metas(None),
-            merces_registry::instruction::SetAllowed { wallet: *wallet, allowed }.data(),
+            merces_registry::instruction::SetAllowed {
+                wallet: *wallet,
+                allowed,
+            }
+            .data(),
         );
         let m = self.allowlist_manager.insecure_clone();
         self.send(&[ix], &[&m])
@@ -725,7 +956,13 @@ impl Env {
         self.send_admin(ix)
     }
 
-    pub fn set_fx_pair(&mut self, pair_id: [u8; 32], feed_id: [u8; 32], inverted: bool, enabled: bool) -> TxResult {
+    pub fn set_fx_pair(
+        &mut self,
+        pair_id: [u8; 32],
+        feed_id: [u8; 32],
+        inverted: bool,
+        enabled: bool,
+    ) -> TxResult {
         let ix = Self::rix(
             merces_registry::accounts::SetFxPair {
                 config: config_pda(),
@@ -764,7 +1001,10 @@ impl Env {
             window_commit_duration: d.window_commit_duration,
             window_reveal_duration: d.window_reveal_duration,
             release_schedule: vec![
-                TrancheData { at_offset_seconds: 0, bps: 5_000 },
+                TrancheData {
+                    at_offset_seconds: 0,
+                    bps: 5_000,
+                },
                 TrancheData {
                     at_offset_seconds: merces_common::time::YEAR,
                     bps: 5_000,
@@ -781,7 +1021,13 @@ impl Env {
     }
 
     /// Tier-1 plaintext terms for `create_series` (bit0 of `tier_flags`).
-    pub fn tier1_terms(theta: u64, r_wad: u64, currency_code: u32, indexing_rule: u32, terms_salt: [u8; 32]) -> Tier1Terms {
+    pub fn tier1_terms(
+        theta: u64,
+        r_wad: u64,
+        currency_code: u32,
+        indexing_rule: u32,
+        terms_salt: [u8; 32],
+    ) -> Tier1Terms {
         Tier1Terms {
             theta,
             r_wad,
@@ -791,7 +1037,13 @@ impl Env {
         }
     }
 
-    pub fn create_series_ix(&self, issuer: &Pubkey, stablecoin: &Pubkey, fx_pair: Option<Pubkey>, args: CreateSeriesArgs) -> (Instruction, Pubkey) {
+    pub fn create_series_ix(
+        &self,
+        issuer: &Pubkey,
+        stablecoin: &Pubkey,
+        fx_pair: Option<Pubkey>,
+        args: CreateSeriesArgs,
+    ) -> (Instruction, Pubkey) {
         let cfg = self.config();
         let series = series_pda(cfg.series_count);
         let ix = Self::rix(
@@ -811,18 +1063,40 @@ impl Env {
         (ix, series)
     }
 
-    pub fn create_series_tx(&mut self, issuer: &Keypair, stablecoin: &Pubkey, fx_pair: Option<Pubkey>, args: CreateSeriesArgs) -> (TxResult, Pubkey) {
+    pub fn create_series_tx(
+        &mut self,
+        issuer: &Keypair,
+        stablecoin: &Pubkey,
+        fx_pair: Option<Pubkey>,
+        args: CreateSeriesArgs,
+    ) -> (TxResult, Pubkey) {
         let (ix, series) = self.create_series_ix(&issuer.pubkey(), stablecoin, fx_pair, args);
         (self.send(&[ix], &[issuer]), series)
     }
 
-    pub fn create_series(&mut self, issuer: &Keypair, stablecoin: &Pubkey, args: CreateSeriesArgs) -> Pubkey {
+    pub fn create_series(
+        &mut self,
+        issuer: &Keypair,
+        stablecoin: &Pubkey,
+        args: CreateSeriesArgs,
+    ) -> Pubkey {
         let (res, series) = self.create_series_tx(issuer, stablecoin, None, args);
-        res.unwrap_or_else(|e| panic!("create_series failed: {:?}\n{}", e.err, e.meta.logs.join("\n")));
+        res.unwrap_or_else(|e| {
+            panic!(
+                "create_series failed: {:?}\n{}",
+                e.err,
+                e.meta.logs.join("\n")
+            )
+        });
         series
     }
 
-    pub fn set_contract_hash(&mut self, issuer: &Keypair, series: &Pubkey, hash: [u8; 32]) -> TxResult {
+    pub fn set_contract_hash(
+        &mut self,
+        issuer: &Keypair,
+        series: &Pubkey,
+        hash: [u8; 32],
+    ) -> TxResult {
         let ix = Self::rix(
             merces_registry::accounts::IssuerSeries {
                 issuer_wallet: issuer.pubkey(),
@@ -851,10 +1125,21 @@ impl Env {
     }
 
     pub fn resume_issuance(&mut self, issuer: &Keypair) -> TxResult {
-        self.issuer_self(issuer, merces_registry::instruction::ResumeIssuance {}.data())
+        self.issuer_self(
+            issuer,
+            merces_registry::instruction::ResumeIssuance {}.data(),
+        )
     }
 
-    pub fn amend_terms(&mut self, issuer: &Keypair, series: &Pubkey, new_tc: [u8; 32], new_cap: u64, attestor_addr: [u8; 20], sig: [u8; 65]) -> TxResult {
+    pub fn amend_terms(
+        &mut self,
+        issuer: &Keypair,
+        series: &Pubkey,
+        new_tc: [u8; 32],
+        new_cap: u64,
+        attestor_addr: [u8; 20],
+        sig: [u8; 65],
+    ) -> TxResult {
         let ix = Self::rix(
             merces_registry::accounts::AmendTerms {
                 config: config_pda(),
@@ -876,7 +1161,12 @@ impl Env {
 
     /// Registers an issuer, allowlists it, creates a series on `stablecoin` and sets the contract
     /// hash. Returns the series key.
-    pub fn setup_series(&mut self, issuer: &Keypair, stablecoin: &Pubkey, args: CreateSeriesArgs) -> Pubkey {
+    pub fn setup_series(
+        &mut self,
+        issuer: &Keypair,
+        stablecoin: &Pubkey,
+        args: CreateSeriesArgs,
+    ) -> Pubkey {
         self.register_issuer(&issuer.pubkey()).unwrap();
         self.allow(&issuer.pubkey(), true).unwrap();
         let series = self.create_series(issuer, stablecoin, args);
@@ -980,7 +1270,13 @@ impl Env {
         self.send(&[ix], &[issuer])
     }
 
-    pub fn commit_bid(&mut self, series: &Pubkey, bidder: &Keypair, commitment: [u8; 32], escrow: u64) -> TxResult {
+    pub fn commit_bid(
+        &mut self,
+        series: &Pubkey,
+        bidder: &Keypair,
+        commitment: [u8; 32],
+        escrow: u64,
+    ) -> TxResult {
         let s = self.series(series);
         let p = pdas(*series);
         let mut ix = Self::pix(
@@ -1003,7 +1299,14 @@ impl Env {
         self.send(&[ix], &[bidder])
     }
 
-    pub fn reveal_bid(&mut self, series: &Pubkey, bidder: &Keypair, price: u64, quantity: u64, salt: [u8; 32]) -> TxResult {
+    pub fn reveal_bid(
+        &mut self,
+        series: &Pubkey,
+        bidder: &Keypair,
+        price: u64,
+        quantity: u64,
+        salt: [u8; 32],
+    ) -> TxResult {
         let p = pdas(*series);
         let ix = Self::pix(
             merces_protocol::accounts::RevealBid {
@@ -1013,12 +1316,23 @@ impl Env {
                 bid: bid_pda(series, &bidder.pubkey()),
             }
             .to_account_metas(None),
-            merces_protocol::instruction::RevealBid { price, quantity, salt }.data(),
+            merces_protocol::instruction::RevealBid {
+                price,
+                quantity,
+                salt,
+            }
+            .data(),
         );
         self.send(&[ix], &[bidder])
     }
 
-    pub fn begin_settlement(&mut self, series: &Pubkey, price: u64, q_above_claim: u64, q_at_claim: u64) -> TxResult {
+    pub fn begin_settlement(
+        &mut self,
+        series: &Pubkey,
+        price: u64,
+        q_above_claim: u64,
+        q_at_claim: u64,
+    ) -> TxResult {
         let p = pdas(*series);
         let ix = Self::pix(
             merces_protocol::accounts::BeginSettlement {
@@ -1047,7 +1361,8 @@ impl Env {
             merces_protocol::instruction::TallyBids {}.data(),
         );
         for b in bidders {
-            ix.accounts.push(AccountMeta::new(bid_pda(series, b), false));
+            ix.accounts
+                .push(AccountMeta::new(bid_pda(series, b), false));
         }
         self.send(&[ix], &[])
     }
@@ -1124,7 +1439,11 @@ impl Env {
                 series: *series,
                 bid: bid_pda(series, bidder),
                 bidder: *bidder,
-                holder: if self.exists(&holder) { Some(holder) } else { None },
+                holder: if self.exists(&holder) {
+                    Some(holder)
+                } else {
+                    None
+                },
                 bidder_stable_ata: self.ata_of(bidder, &s.stablecoin),
                 bidder_unit_ata: ata(bidder, &p.unit_mint, &TOKEN_2022),
                 escrow_auth: p.escrow_auth,
@@ -1148,7 +1467,14 @@ impl Env {
 
     /// Full settlement: begin with the given claims, tally (pages of 24), finalize, then process
     /// and deliver every bid.
-    pub fn settle(&mut self, series: &Pubkey, price: u64, q_above_claim: u64, q_at_claim: u64, bidders: &[Pubkey]) -> TxResult {
+    pub fn settle(
+        &mut self,
+        series: &Pubkey,
+        price: u64,
+        q_above_claim: u64,
+        q_at_claim: u64,
+        bidders: &[Pubkey],
+    ) -> TxResult {
         self.begin_settlement(series, price, q_above_claim, q_at_claim)?;
         let res = self.tally_and_finalize(series, bidders)?;
         for b in bidders {
@@ -1185,7 +1511,12 @@ impl Env {
         self.send(&[create, ix], &[issuer])
     }
 
-    pub fn set_release_pause(&mut self, issuer: &Keypair, series: &Pubkey, paused: bool) -> TxResult {
+    pub fn set_release_pause(
+        &mut self,
+        issuer: &Keypair,
+        series: &Pubkey,
+        paused: bool,
+    ) -> TxResult {
         let p = pdas(*series);
         let ix = Self::pix(
             merces_protocol::accounts::SetReleasePause {
@@ -1199,7 +1530,13 @@ impl Env {
         self.send(&[ix], &[issuer])
     }
 
-    pub fn request_early_draw(&mut self, issuer: &Keypair, approver: &Keypair, series: &Pubkey, amount: u64) -> TxResult {
+    pub fn request_early_draw(
+        &mut self,
+        issuer: &Keypair,
+        approver: &Keypair,
+        series: &Pubkey,
+        amount: u64,
+    ) -> TxResult {
         let s = self.series(series);
         let p = pdas(*series);
         let create = self.create_ata_ix(&issuer.pubkey(), &s.stablecoin);
@@ -1229,7 +1566,14 @@ impl Env {
     /// Builds `submit_report`. `attestation_key` / `fx_attestor_key` are the registry key PDAs
     /// (any account when unused). FX accounts are attached when the series has a pair; the end
     /// checkpoint only when it exists; the router when the series has one.
-    pub fn submit_report_ix(&self, issuer: &Pubkey, series: &Pubkey, args: SubmitReportArgs, attestation_key: Pubkey, fx_attestor_key: Pubkey) -> Instruction {
+    pub fn submit_report_ix(
+        &self,
+        issuer: &Pubkey,
+        series: &Pubkey,
+        args: SubmitReportArgs,
+        attestation_key: Pubkey,
+        fx_attestor_key: Pubkey,
+    ) -> Instruction {
         let s = self.series(series);
         let p = pdas(*series);
         let (fx_pair, fx_start, fx_end) = if s.fx_pair_id != [0u8; 32] {
@@ -1243,7 +1587,11 @@ impl Env {
         } else {
             (None, None, None)
         };
-        let router = if self.exists(&p.router) { Some(p.router) } else { None };
+        let router = if self.exists(&p.router) {
+            Some(p.router)
+        } else {
+            None
+        };
         Self::pix(
             merces_protocol::accounts::SubmitReport {
                 issuer: *issuer,
@@ -1264,13 +1612,32 @@ impl Env {
         )
     }
 
-    pub fn submit_report(&mut self, issuer: &Keypair, series: &Pubkey, args: SubmitReportArgs, attestation_key: Pubkey, fx_attestor_key: Pubkey) -> TxResult {
-        let ix = self.submit_report_ix(&issuer.pubkey(), series, args, attestation_key, fx_attestor_key);
+    pub fn submit_report(
+        &mut self,
+        issuer: &Keypair,
+        series: &Pubkey,
+        args: SubmitReportArgs,
+        attestation_key: Pubkey,
+        fx_attestor_key: Pubkey,
+    ) -> TxResult {
+        let ix = self.submit_report_ix(
+            &issuer.pubkey(),
+            series,
+            args,
+            attestation_key,
+            fx_attestor_key,
+        );
         self.send(&[ix], &[issuer])
     }
 
     /// `pay` / `pay_trueup` shared accounts.
-    pub fn pay_ixs(&self, payer: &Pubkey, series: &Pubkey, period: Option<u32>, trueup: bool) -> Vec<Instruction> {
+    pub fn pay_ixs(
+        &self,
+        payer: &Pubkey,
+        series: &Pubkey,
+        period: Option<u32>,
+        trueup: bool,
+    ) -> Vec<Instruction> {
         let s = self.series(series);
         let p = pdas(*series);
         let create_issuer = self.create_ata_ix(&s.issuer, &s.stablecoin);
@@ -1304,7 +1671,13 @@ impl Env {
     }
 
     pub fn pay(&mut self, payer: &Keypair, series: &Pubkey) -> TxResult {
-        let period = self.ledger(series).and_then(|l| if l.open_due_amount > 0 { l.open_due_period() } else { None });
+        let period = self.ledger(series).and_then(|l| {
+            if l.open_due_amount > 0 {
+                l.open_due_period()
+            } else {
+                None
+            }
+        });
         let ixs = self.pay_ixs(&payer.pubkey(), series, period, false);
         self.send(&ixs, &[payer])
     }
@@ -1358,18 +1731,36 @@ impl Env {
     }
 
     pub fn request_pause(&mut self, issuer: &Keypair, series: &Pubkey) -> TxResult {
-        self.issuer_ledger(issuer, series, merces_protocol::instruction::RequestPause {}.data())
+        self.issuer_ledger(
+            issuer,
+            series,
+            merces_protocol::instruction::RequestPause {}.data(),
+        )
     }
 
     pub fn withdraw_pause_request(&mut self, issuer: &Keypair, series: &Pubkey) -> TxResult {
-        self.issuer_ledger(issuer, series, merces_protocol::instruction::WithdrawPauseRequest {}.data())
+        self.issuer_ledger(
+            issuer,
+            series,
+            merces_protocol::instruction::WithdrawPauseRequest {}.data(),
+        )
     }
 
     pub fn end_pause(&mut self, issuer: &Keypair, series: &Pubkey) -> TxResult {
-        self.issuer_ledger(issuer, series, merces_protocol::instruction::EndPause {}.data())
+        self.issuer_ledger(
+            issuer,
+            series,
+            merces_protocol::instruction::EndPause {}.data(),
+        )
     }
 
-    pub fn approve_pause(&mut self, series: &Pubkey, pause_end: u64, attestor_addr: [u8; 20], sig: [u8; 65]) -> TxResult {
+    pub fn approve_pause(
+        &mut self,
+        series: &Pubkey,
+        pause_end: u64,
+        attestor_addr: [u8; 20],
+        sig: [u8; 65],
+    ) -> TxResult {
         let p = pdas(*series);
         let ix = Self::pix(
             merces_protocol::accounts::ApprovePause {
@@ -1389,7 +1780,16 @@ impl Env {
         self.send(&[ix], &[])
     }
 
-    pub fn submit_trueup(&mut self, issuer: &Keypair, series: &Pubkey, year: u16, adjustment: i64, attestation_ts: u64, attestor_addr: [u8; 20], sig: [u8; 65]) -> TxResult {
+    pub fn submit_trueup(
+        &mut self,
+        issuer: &Keypair,
+        series: &Pubkey,
+        year: u16,
+        adjustment: i64,
+        attestation_ts: u64,
+        attestor_addr: [u8; 20],
+        sig: [u8; 65],
+    ) -> TxResult {
         let p = pdas(*series);
         let ix = Self::pix(
             merces_protocol::accounts::SubmitTrueUp {
@@ -1431,7 +1831,12 @@ impl Env {
         self.send(&[ix], &[])
     }
 
-    fn holder_claim_ixs(&self, series: &Pubkey, holder: &Pubkey, data: Vec<u8>) -> Vec<Instruction> {
+    fn holder_claim_ixs(
+        &self,
+        series: &Pubkey,
+        holder: &Pubkey,
+        data: Vec<u8>,
+    ) -> Vec<Instruction> {
         let s = self.series(series);
         let p = pdas(*series);
         let create_unit = self.create_ata_ix(holder, &p.unit_mint);
@@ -1461,23 +1866,43 @@ impl Env {
     }
 
     pub fn claim(&mut self, series: &Pubkey, holder: &Pubkey) -> TxResult {
-        let ixs = self.holder_claim_ixs(series, holder, merces_protocol::instruction::Claim {}.data());
+        let ixs = self.holder_claim_ixs(
+            series,
+            holder,
+            merces_protocol::instruction::Claim {}.data(),
+        );
         self.send(&ixs, &[])
     }
     pub fn burn_retired(&mut self, series: &Pubkey, holder: &Pubkey) -> TxResult {
-        let ixs = self.holder_claim_ixs(series, holder, merces_protocol::instruction::BurnRetired {}.data());
+        let ixs = self.holder_claim_ixs(
+            series,
+            holder,
+            merces_protocol::instruction::BurnRetired {}.data(),
+        );
         self.send(&ixs, &[])
     }
     pub fn claim_redemption(&mut self, series: &Pubkey, holder: &Pubkey) -> TxResult {
-        let ixs = self.holder_claim_ixs(series, holder, merces_protocol::instruction::ClaimRedemption {}.data());
+        let ixs = self.holder_claim_ixs(
+            series,
+            holder,
+            merces_protocol::instruction::ClaimRedemption {}.data(),
+        );
         self.send(&ixs, &[])
     }
     pub fn claim_tail(&mut self, series: &Pubkey, holder: &Pubkey) -> TxResult {
-        let ixs = self.holder_claim_ixs(series, holder, merces_protocol::instruction::ClaimTail {}.data());
+        let ixs = self.holder_claim_ixs(
+            series,
+            holder,
+            merces_protocol::instruction::ClaimTail {}.data(),
+        );
         self.send(&ixs, &[])
     }
     pub fn claim_final(&mut self, series: &Pubkey, holder: &Pubkey) -> TxResult {
-        let ixs = self.holder_claim_ixs(series, holder, merces_protocol::instruction::ClaimFinal {}.data());
+        let ixs = self.holder_claim_ixs(
+            series,
+            holder,
+            merces_protocol::instruction::ClaimFinal {}.data(),
+        );
         self.send(&ixs, &[])
     }
 
@@ -1563,7 +1988,15 @@ impl Env {
     }
 
     /// Takes a snapshot with a freshly written Pyth-shaped price account.
-    pub fn snapshot_fx(&mut self, pair_id: [u8; 32], feed_id: [u8; 32], price: i64, conf: u64, expo: i32, publish_time: i64) -> TxResult {
+    pub fn snapshot_fx(
+        &mut self,
+        pair_id: [u8; 32],
+        feed_id: [u8; 32],
+        price: i64,
+        conf: u64,
+        expo: i32,
+        publish_time: i64,
+    ) -> TxResult {
         let period = merces_common::time::period_of(self.now).unwrap();
         let price_update = self.set_price_update(feed_id, price, conf, expo, publish_time);
         let ix = Self::pix(
@@ -1606,7 +2039,12 @@ impl Env {
         self.send(&[create, ix], &[issuer])
     }
 
-    pub fn extinguish(&mut self, series: &Pubkey, a: ([u8; 20], [u8; 65]), b: ([u8; 20], [u8; 65])) -> TxResult {
+    pub fn extinguish(
+        &mut self,
+        series: &Pubkey,
+        a: ([u8; 20], [u8; 65]),
+        b: ([u8; 20], [u8; 65]),
+    ) -> TxResult {
         let s = self.series(series);
         let p = pdas(*series);
         let mut ix = Self::pix(
@@ -1658,7 +2096,14 @@ impl Env {
         self.send(&[ix], &[])
     }
 
-    pub fn commit_ask(&mut self, series: &Pubkey, period: u32, owner: &Keypair, commitment: [u8; 32], units: u64) -> TxResult {
+    pub fn commit_ask(
+        &mut self,
+        series: &Pubkey,
+        period: u32,
+        owner: &Keypair,
+        commitment: [u8; 32],
+        units: u64,
+    ) -> TxResult {
         let p = pdas(*series);
         let mut ix = Self::pix(
             merces_protocol::accounts::CommitAsk {
@@ -1682,7 +2127,14 @@ impl Env {
         self.send(&[ix], &[owner])
     }
 
-    pub fn window_commit_bid(&mut self, series: &Pubkey, period: u32, owner: &Keypair, commitment: [u8; 32], escrow: u64) -> TxResult {
+    pub fn window_commit_bid(
+        &mut self,
+        series: &Pubkey,
+        period: u32,
+        owner: &Keypair,
+        commitment: [u8; 32],
+        escrow: u64,
+    ) -> TxResult {
         let s = self.series(series);
         let p = pdas(*series);
         let mut ix = Self::pix(
@@ -1705,7 +2157,15 @@ impl Env {
         self.send(&[ix], &[owner])
     }
 
-    pub fn reveal_order(&mut self, series: &Pubkey, period: u32, owner: &Keypair, price: u64, quantity: u64, salt: [u8; 32]) -> TxResult {
+    pub fn reveal_order(
+        &mut self,
+        series: &Pubkey,
+        period: u32,
+        owner: &Keypair,
+        price: u64,
+        quantity: u64,
+        salt: [u8; 32],
+    ) -> TxResult {
         let p = pdas(*series);
         let ix = Self::pix(
             merces_protocol::accounts::RevealOrder {
@@ -1718,7 +2178,12 @@ impl Env {
                 token_2022_program: TOKEN_2022,
             }
             .to_account_metas(None),
-            merces_protocol::instruction::RevealOrder { price, quantity, salt }.data(),
+            merces_protocol::instruction::RevealOrder {
+                price,
+                quantity,
+                salt,
+            }
+            .data(),
         );
         self.send(&[ix], &[owner])
     }
@@ -1736,7 +2201,13 @@ impl Env {
         )
     }
 
-    pub fn begin_window_settlement(&mut self, series: &Pubkey, period: u32, price: u64, no_match: bool) -> TxResult {
+    pub fn begin_window_settlement(
+        &mut self,
+        series: &Pubkey,
+        period: u32,
+        price: u64,
+        no_match: bool,
+    ) -> TxResult {
         let ix = self.window_settle_ix(
             series,
             period,
@@ -1750,15 +2221,24 @@ impl Env {
     }
 
     pub fn tally_orders(&mut self, series: &Pubkey, period: u32, owners: &[Pubkey]) -> TxResult {
-        let mut ix = self.window_settle_ix(series, period, merces_protocol::instruction::TallyOrders {}.data());
+        let mut ix = self.window_settle_ix(
+            series,
+            period,
+            merces_protocol::instruction::TallyOrders {}.data(),
+        );
         for owner in owners {
-            ix.accounts.push(AccountMeta::new(order_pda(series, period, owner), false));
+            ix.accounts
+                .push(AccountMeta::new(order_pda(series, period, owner), false));
         }
         self.send(&[ix], &[])
     }
 
     pub fn finalize_window(&mut self, series: &Pubkey, period: u32) -> TxResult {
-        let ix = self.window_settle_ix(series, period, merces_protocol::instruction::FinalizeWindow {}.data());
+        let ix = self.window_settle_ix(
+            series,
+            period,
+            merces_protocol::instruction::FinalizeWindow {}.data(),
+        );
         self.send(&[ix], &[])
     }
 
@@ -1777,7 +2257,11 @@ impl Env {
                 order: order_pda(series, period, owner),
                 owner: *owner,
                 holder: holder_pda(series, owner),
-                owner_allowlist: if self.exists(&allow) { Some(allow) } else { None },
+                owner_allowlist: if self.exists(&allow) {
+                    Some(allow)
+                } else {
+                    None
+                },
                 owner_unit_ata: ata(owner, &p.unit_mint, &TOKEN_2022),
                 owner_stable_ata: self.ata_of(owner, &s.stablecoin),
                 window_escrow_ata: p.window_escrow_ata,

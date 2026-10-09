@@ -2059,6 +2059,7 @@ dependencies = [
  "merces_protocol",
  "merces_registry",
  "mock_usdg_hook",
+ "pyth-solana-receiver-sdk",
  "serde",
  "serde_json",
  "solana-address 2.7.0",

@@ -130,7 +130,10 @@ abstract contract FullFixture is MercesFixture {
         return runStandardRaise(tierFlags, fxPairId, Proofs.q1().termsCommitment);
     }
 
-    function runStandardRaise(uint8 tierFlags, bytes32 fxPairId, bytes32 termsCommitment) internal returns (uint256 sid) {
+    function runStandardRaise(uint8 tierFlags, bytes32 fxPairId, bytes32 termsCommitment)
+        internal
+        returns (uint256 sid)
+    {
         return runStandardRaise(tierFlags, fxPairId, termsCommitment, P0, 47_336_400);
     }
 

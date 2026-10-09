@@ -463,8 +463,8 @@ pub struct CommitBid<'info> {
     #[account(mut)]
     pub bidder: Signer<'info>,
     pub series: Box<Account<'info, Series>>,
-    #[account(seeds = [ALLOW, bidder.key().as_ref()], bump = bidder_allowlist.bump, seeds::program = merces_registry::ID)]
-    pub bidder_allowlist: Box<Account<'info, AllowlistEntry>>,
+    /// CHECK: the bidder's registry `AllowlistEntry` PDA; validated in the handler after the phase checks.
+    pub bidder_allowlist: UncheckedAccount<'info>,
     #[account(mut, seeds = [seeds::AUCTION, series.key().as_ref()], bump = auction.bump)]
     pub auction: Box<Account<'info, Auction>>,
     #[account(init, payer = bidder, space = 8 + Bid::INIT_SPACE, seeds = [seeds::BID, series.key().as_ref(), bidder.key().as_ref()], bump)]
@@ -490,10 +490,10 @@ pub fn commit_bid<'info>(
     require!(a.state == RAISE_OPEN, ProtocolError::RaiseNotOpen);
     require!(now < a.commit_end, ProtocolError::CommitPhaseOver);
     require!(escrow > 0, ProtocolError::ZeroEscrow);
-    require!(
-        ctx.accounts.bidder_allowlist.allowed,
-        ProtocolError::NotAllowlisted
-    );
+    require_allowlisted(
+        &ctx.accounts.bidder_allowlist.to_account_info(),
+        &ctx.accounts.bidder.key(),
+    )?;
     transfer_stable(
         &ctx.accounts.stablecoin_program.to_account_info(),
         &ctx.accounts.bidder_stable.to_account_info(),
@@ -758,26 +758,28 @@ pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
         registry_authority: ctx.accounts.registry_authority.to_account_info(),
         authority_bump: ctx.bumps.registry_authority,
     };
-    let fail = |a: &mut Auction, clearing_price: u64, proceeds: u64| -> Result<()> {
-        a.state = RAISE_FAILED;
-        a.clearing_price = clearing_price;
-        a.settlement_ts = now;
-        a.units_sold = 0;
-        a.proceeds = 0;
-        registry.mark_raise_result(RAISE_FAILED, now, 0, clearing_price)?;
-        emit!(RaiseFailed {
-            series: series_key,
-            clearing_price,
-            proceeds,
-            min_raise: series.min_raise,
-        });
-        Ok(())
-    };
+    let fail =
+        |a: &mut Auction, clearing_price: u64, units_sold: u64, proceeds: u64| -> Result<()> {
+            a.state = RAISE_FAILED;
+            a.clearing_price = clearing_price;
+            a.settlement_ts = now;
+            // the would-be results stay readable; nothing is minted or deposited
+            a.units_sold = units_sold;
+            a.proceeds = proceeds;
+            a.r_claim = 0;
+            registry.mark_raise_result(RAISE_FAILED, now, 0, clearing_price)?;
+            emit!(RaiseFailed {
+                series: series_key,
+                clearing_price,
+                proceeds,
+                min_raise: series.min_raise,
+            });
+            Ok(())
+        };
     // 1. no valid bids
     if a.valid_count == 0 {
-        return fail(a, 0, 0);
-    }
-    // 2–3. claims and price validity
+        return fail(a, 0, 0, 0);
+    } // 2–3. claims and price validity
     let check = check_proposal(
         series.units_offered,
         a.clearing_price,
@@ -811,7 +813,7 @@ pub fn finalize_settlement(ctx: Context<FinalizeSettlement>) -> Result<()> {
     // 5. min raise (a zero allocation — only possible with sub-unit marginal shares — fails too)
     if proceeds < series.min_raise || units_sold == 0 {
         let p = a.clearing_price;
-        return fail(a, p, proceeds);
+        return fail(a, p, units_sold, proceeds);
     }
     a.state = RAISE_SETTLED;
     a.settlement_ts = now;

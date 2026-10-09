@@ -204,6 +204,7 @@ pub fn claim<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
 }
 
 /// `burn_retired` (SPEC §6.3): permissionless burn after retirement; `pending` stays claimable.
+/// A zero balance is a no-op (zero-amount rule).
 pub fn burn_retired<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let now = now_ts()?;
@@ -212,7 +213,6 @@ pub fn burn_retired<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()
     let status = ledger.sync_status(now, series_key)?;
     require!(status == SeriesStatus::Retired, ProtocolError::NotRetired);
     let balance = ctx.accounts.holder_unit_ata.amount;
-    require!(balance > 0, ProtocolError::ZeroUnits);
     settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
     ctx.accounts
         .burn_ctx(ctx.bumps.vault_auth)

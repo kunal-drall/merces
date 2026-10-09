@@ -127,8 +127,12 @@ mod tests {
     /// (solana-bn254 runs arkworks natively off-chain) and rejects a tampered public input.
     #[test]
     fn vector_proofs_verify_against_vk() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../packages/vectors/01_happy_path.json");
-        let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../packages/vectors/01_happy_path.json"
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let steps = json["steps"].as_array().unwrap();
         let mut checked = 0;
         for step in steps.iter().filter(|s| s["op"] == "submit_report") {
@@ -142,14 +146,18 @@ mod tests {
             let proof_bytes = hex_decode(sol["proof"].as_str().unwrap().trim_start_matches("0x"));
             let mut proof = [0u8; 256];
             proof.copy_from_slice(&proof_bytes);
-            verify_report_proof(&proof, &inputs).unwrap_or_else(|e| panic!("period {} failed: {e:?}", step["period"]));
+            verify_report_proof(&proof, &inputs)
+                .unwrap_or_else(|e| panic!("period {} failed: {e:?}", step["period"]));
             // tamper with the payment
             let mut bad = inputs;
             bad[5][31] ^= 1;
             assert!(verify_report_proof(&proof, &bad).is_err());
             checked += 1;
         }
-        assert!(checked >= 5, "expected at least five report steps, found {checked}");
+        assert!(
+            checked >= 5,
+            "expected at least five report steps, found {checked}"
+        );
     }
 
     #[test]

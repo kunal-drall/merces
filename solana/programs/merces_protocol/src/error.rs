@@ -244,7 +244,8 @@ pub enum ProtocolError {
     ConfidenceTooWide,
     #[msg("Pyth price update is not fully verified")]
     InsufficientVerification,
-    // ---- window
+    #[msg("The pair's cross-check price update is required for this period")]
+    CrosscheckRequired, // ---- window
     #[msg("Transfer windows are disabled")]
     WindowsDisabled,
     #[msg("Series status does not allow a window")]

@@ -8,6 +8,7 @@ interface IMercesRouter {
     struct Router {
         bool receiverDeployed;
         address receiver;
+        uint64 heldBeforeFinalization;
         uint16 ytdYear;
         uint64 ytdReceived;
         bool hasReceipt;
@@ -25,11 +26,15 @@ interface IMercesRouter {
     }
 
     event RouterReceiverCreated(uint256 indexed series, address receiver);
+    /// @dev Income received before mint finalization waits in the receiving account (SPEC §6.1 gate).
+    event IncomeHeld(uint256 indexed series, uint64 amount, uint64 held);
     event IncomeRouted(uint256 indexed series, uint64 amount, uint64 passThrough, uint64 routed, uint64 ytdReceived);
     event RouterPeriodClosed(uint256 indexed series, uint32 period, uint64 ytdAtEnd);
     event IncomeSet(address income);
 
     function createRouterReceiver(uint256 seriesId) external returns (address receiver);
+    /// @notice Pulls `amount` from the caller and splits it (together with anything held in the receiving
+    /// account). Before mint finalization the amount is held in the receiving account instead.
     function route(uint256 seriesId, uint64 amount) external;
     function sweep(uint256 seriesId) external;
     function closeRouterPeriod(uint256 seriesId, uint32 period) external;

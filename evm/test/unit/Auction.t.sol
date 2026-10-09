@@ -3,7 +3,9 @@ pragma solidity ^0.8.30;
 
 import {FullFixture} from "../utils/FullFixture.sol";
 import {
-    IMercesAuction, REJECT_CLAIM_MISMATCH, REJECT_INVALID_CLEARING_PRICE
+    IMercesAuction,
+    REJECT_CLAIM_MISMATCH,
+    REJECT_INVALID_CLEARING_PRICE
 } from "../../src/interfaces/IMercesAuction.sol";
 import {IMercesTreasury} from "../../src/interfaces/IMercesTreasury.sol";
 import {IMercesRegistry} from "../../src/interfaces/IMercesRegistry.sol";
@@ -53,10 +55,17 @@ contract AuctionTest is FullFixture {
         // no contract hash
         vm.prank(issuer);
         uint256 draft = registry.createSeries(
-            defaultSeriesParams(), defaultSchedule(), keccak256("t2"), 2, bytes32(0), SeriesMode.SealedBid, false, noTier1()
+            defaultSeriesParams(),
+            defaultSchedule(),
+            keccak256("t2"),
+            2,
+            bytes32(0),
+            SeriesMode.SealedBid,
+            false,
+            noTier1()
         );
         vm.prank(issuer);
-        vm.expectRevert(ContractHashNotSet.selector);
+        vm.expectRevert(ContractHashMissing.selector);
         auction.openRaise(draft);
 
         // new raises paused
@@ -114,7 +123,7 @@ contract AuctionTest is FullFixture {
         fund(stranger, 1e6);
         vm.startPrank(stranger);
         usdc.approve(address(auction), 1e6);
-        vm.expectRevert(abi.encodeWithSelector(WalletNotAllowlisted.selector, stranger));
+        vm.expectRevert(abi.encodeWithSelector(NotAllowlisted.selector, stranger));
         auction.commitBid(sid, bytes32(0), 1e6);
         vm.stopPrank();
         vm.prank(b1);
@@ -124,12 +133,12 @@ contract AuctionTest is FullFixture {
         fund(b1, 1e6);
         vm.startPrank(b1);
         usdc.approve(address(auction), 1e6);
-        vm.expectRevert(BidAlreadyExists.selector);
+        vm.expectRevert(BidExists.selector);
         auction.commitBid(sid, bytes32(0), 1e6);
         vm.stopPrank();
         warpToReveal(sid);
         vm.prank(b2);
-        vm.expectRevert(CommitPhaseOver.selector);
+        vm.expectRevert(CommitPhaseClosed.selector);
         auction.commitBid(sid, bytes32(0), 1e6);
         // escrow pulled
         assertEq(usdc.balanceOf(address(auction)), b.escrow);
@@ -149,7 +158,7 @@ contract AuctionTest is FullFixture {
         commit(sid, overCap);
 
         vm.prank(b1);
-        vm.expectRevert(NotRevealPhase.selector);
+        vm.expectRevert(RevealNotStarted.selector);
         auction.revealBid(sid, ok.price, ok.quantity, ok.salt);
         warpToReveal(sid);
         vm.prank(stranger);
@@ -164,7 +173,7 @@ contract AuctionTest is FullFixture {
         emit IMercesAuction.BidRevealed(sid, b1, 1e6, 10, true);
         auction.revealBid(sid, ok.price, ok.quantity, ok.salt);
         vm.prank(b1);
-        vm.expectRevert(BidAlreadyRevealed.selector);
+        vm.expectRevert(AlreadyRevealed.selector);
         auction.revealBid(sid, ok.price, ok.quantity, ok.salt);
 
         reveal(sid, belowReserve);
@@ -178,7 +187,7 @@ contract AuctionTest is FullFixture {
 
         warpToSettle(sid);
         vm.prank(b1);
-        vm.expectRevert(NotRevealPhase.selector);
+        vm.expectRevert(RevealPhaseClosed.selector);
         auction.revealBid(sid, ok.price, ok.quantity, ok.salt);
     }
 
@@ -223,7 +232,7 @@ contract AuctionTest is FullFixture {
         emit IMercesAuction.SettlementRejected(sid, 1, 1_100_000, REJECT_INVALID_CLEARING_PRICE); // valid bid below p*
         auction.finalizeSettlement(sid);
         assertTrue(auction.getAuction(sid).roundRejected);
-        vm.expectRevert(InvalidSettlementState.selector); // nothing to finalize after a rejection
+        vm.expectRevert(NotSettling.selector); // nothing to finalize after a rejection
         auction.finalizeSettlement(sid);
         auction.beginSettlement(sid, 900_000, 300, 0);
         auction.tallyBids(sid, 0, 3);
@@ -301,7 +310,7 @@ contract AuctionTest is FullFixture {
         assertEq(unitToken(sid).balanceOf(b1), 100);
         assertEq(usdc.balanceOf(b1), p1.escrow - 101e6);
         assertEq(auction.pendingUnitsOf(sid, b1), 0);
-        vm.expectRevert(BidAlreadyDelivered.selector);
+        vm.expectRevert(AlreadyDelivered.selector);
         auction.deliverBid(sid, 0);
         deliverAll(sid);
         assertEq(unitToken(sid).balanceOf(b2), 100);
@@ -311,7 +320,7 @@ contract AuctionTest is FullFixture {
         assertEq(usdc.balanceOf(address(auction)), 0);
         assertEq(unitToken(sid).balanceOf(address(auction)), 0);
         _assertConserved(sid);
-        vm.expectRevert(BidAlreadyProcessed.selector);
+        vm.expectRevert(AlreadyProcessed.selector);
         auction.processBid(sid, 0);
     }
 
@@ -366,9 +375,8 @@ contract AuctionTest is FullFixture {
     function test_oversubscribedClearingPriceIsLowestWinningBid() public {
         vm.prank(admin);
         registry.setDefaults(walletCap(10_000));
-        uint256 s = createSeriesWith(
-            smallParams(100, 1e6, 50e6), defaultSchedule(), keccak256("t5"), 2, bytes32(0), noTier1()
-        );
+        uint256 s =
+            createSeriesWith(smallParams(100, 1e6, 50e6), defaultSchedule(), keccak256("t5"), 2, bytes32(0), noTier1());
         openRaise(s);
         BidPlan memory p1 = plan(b1, 3_000_000, 60, escrowFor(3_000_000, 60));
         BidPlan memory p2 = plan(b2, 2_000_000, 60, escrowFor(2_000_000, 60));
@@ -441,7 +449,7 @@ contract AuctionTest is FullFixture {
         assertFalse(treasury.getTreasury(sid).proceedsSet);
         assertTrue(registry.isTransferLocked(sid, type(uint64).max));
         vm.prank(keeper);
-        vm.expectRevert(InvalidSettlementState.selector);
+        vm.expectRevert(RaiseNotOpen.selector);
         auction.beginSettlement(sid, 1e6, 0, 200);
     }
 
@@ -552,7 +560,7 @@ contract AuctionTest is FullFixture {
         reveal(sid, p2);
         warpToSettle(sid);
         vm.startPrank(keeper);
-        vm.expectRevert(InvalidSettlementState.selector);
+        vm.expectRevert(NotSettling.selector);
         auction.tallyBids(sid, 0, 2);
         auction.beginSettlement(sid, 1e6, 0, 200);
         vm.expectRevert(TallyRangeInvalid.selector);
@@ -574,16 +582,16 @@ contract AuctionTest is FullFixture {
         // a completed round may be finalized by anyone; here 200 USDC < 500 min raise → failed
         auction.finalizeSettlement(sid);
         assertEq(uint8(auction.getAuction(sid).state), uint8(RaiseState.Failed));
-        vm.expectRevert(InvalidSettlementState.selector);
+        vm.expectRevert(RaiseNotOpen.selector);
         auction.beginSettlement(sid, 1e6, 0, 200);
         vm.stopPrank();
     }
 
     function test_settlementTimingGuards() public {
         openRaise(sid);
-        vm.expectRevert(RevealNotOver.selector);
+        vm.expectRevert(SettlementNotReady.selector);
         auction.beginSettlement(sid, 1e6, 0, 0);
-        vm.expectRevert(NotSettledOrFailed.selector);
+        vm.expectRevert(RaiseNotSettled.selector);
         auction.processBid(sid, 0);
         vm.expectRevert(BidNotFound.selector);
         auction.deliverBid(sid, 0);
@@ -603,7 +611,7 @@ contract AuctionTest is FullFixture {
         vm.startPrank(keeper);
         auction.beginSettlement(sid, 1e6, 0, 0);
         auction.finalizeSettlement(sid); // unrevealed only → no valid bids → failed
-        vm.expectRevert(BidNotProcessed.selector);
+        vm.expectRevert(NotProcessed.selector);
         auction.deliverBid(sid, 0);
         auction.processBid(sid, 0);
         auction.deliverBid(sid, 0);

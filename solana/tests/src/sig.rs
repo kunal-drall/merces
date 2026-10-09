@@ -2,7 +2,6 @@
 //! `v ∈ {27, 28}` and low-`s`, identified by the 20-byte Ethereum-style address.
 
 use k256::ecdsa::{RecoveryId, Signature, SigningKey};
-use k256::elliptic_curve::sec1::ToEncodedPoint;
 
 /// A test signer.
 #[derive(Clone)]
@@ -31,9 +30,13 @@ impl EthSigner {
 
     /// Signs a 32-byte digest, returning `r ‖ s ‖ v` with low-`s`.
     pub fn sign(&self, digest: &[u8; 32]) -> [u8; 65] {
-        let (sig, rid): (Signature, RecoveryId) = self.sk.sign_prehash_recoverable(digest).expect("sign");
+        let (sig, rid): (Signature, RecoveryId) =
+            self.sk.sign_prehash_recoverable(digest).expect("sign");
         let (sig, rid) = match sig.normalize_s() {
-            Some(normalized) => (normalized, RecoveryId::new(!rid.is_y_odd(), rid.is_x_reduced())),
+            Some(normalized) => (
+                normalized,
+                RecoveryId::new(!rid.is_y_odd(), rid.is_x_reduced()),
+            ),
             None => (sig, rid),
         };
         let mut out = [0u8; 65];

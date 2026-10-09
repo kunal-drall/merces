@@ -22,6 +22,7 @@ interface IMercesAuction {
         // settlement proposal and tally (one round at a time)
         uint32 tallyRound;
         bool roundRejected;
+        uint8 rejectionReason;
         uint64 clearingPrice;
         uint64 qAboveClaim;
         uint64 qAtClaim;

@@ -5,9 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {MercesUpgradeable} from "./base/MercesUpgradeable.sol";
-import {
-    IMercesAuction, REJECT_CLAIM_MISMATCH, REJECT_INVALID_CLEARING_PRICE
-} from "./interfaces/IMercesAuction.sol";
+import {IMercesAuction, REJECT_CLAIM_MISMATCH, REJECT_INVALID_CLEARING_PRICE} from "./interfaces/IMercesAuction.sol";
 import {IMercesTreasury} from "./interfaces/IMercesTreasury.sol";
 import {IMercesTokenFactory} from "./interfaces/IMercesTokenFactory.sol";
 import {IMercesVault} from "./interfaces/IMercesVault.sol";
@@ -59,7 +57,7 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (msg.sender != core.issuer) revert NotIssuer();
         if (core.raiseState != RaiseState.Draft) revert RaiseNotDraft();
-        if (core.contractHash == bytes32(0)) revert ContractHashNotSet();
+        if (core.contractHash == bytes32(0)) revert ContractHashMissing();
         if (!registry().isAllowed(core.issuer)) revert IssuerNotAllowlisted();
         if (registry().getFlags().newRaisesPaused) revert NewRaisesPaused();
         if (core.mode != SeriesMode.SealedBid) revert NotSealedBid();
@@ -71,9 +69,8 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
         a.commitEnd = a.openedAt + terms.commitDuration;
         a.revealEnd = a.commitEnd + terms.revealDuration;
 
-        (address token,) = IMercesTokenFactory(_contracts().tokenFactory).createToken(
-            seriesId, string.concat("Merces HEU ", Strings.toString(seriesId)), "HEU"
-        );
+        (address token,) = IMercesTokenFactory(_contracts().tokenFactory)
+            .createToken(seriesId, string.concat("Merces HEU ", Strings.toString(seriesId)), "HEU");
         a.unitToken = token;
         registry().markRaiseOpened(seriesId, token, a.openedAt);
         emit RaiseOpened(seriesId, token, a.openedAt, a.commitEnd, a.revealEnd);
@@ -97,11 +94,11 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
     function commitBid(uint256 seriesId, bytes32 commitment, uint64 escrow) external override nonReentrant {
         Auction storage a = _s().auctions[seriesId];
         if (a.state != RaiseState.Open) revert RaiseNotOpen();
-        if (block.timestamp >= a.commitEnd) revert CommitPhaseOver();
-        if (!registry().isAllowed(msg.sender)) revert WalletNotAllowlisted(msg.sender);
+        if (block.timestamp >= a.commitEnd) revert CommitPhaseClosed();
+        if (!registry().isAllowed(msg.sender)) revert NotAllowlisted(msg.sender);
         if (escrow == 0) revert ZeroEscrow();
         AuctionStorage storage $ = _s();
-        if ($.bidIndexPlusOne[seriesId][msg.sender] != 0) revert BidAlreadyExists();
+        if ($.bidIndexPlusOne[seriesId][msg.sender] != 0) revert BidExists();
         Bid[] storage bids = $.bids[seriesId];
         if (bids.length >= C.MAX_BIDS_PER_AUCTION) revert TooManyBids();
 
@@ -125,12 +122,13 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
     function revealBid(uint256 seriesId, uint64 price, uint64 quantity, bytes32 salt) external override {
         Auction storage a = _s().auctions[seriesId];
         if (a.state != RaiseState.Open) revert RaiseNotOpen();
-        if (block.timestamp < a.commitEnd || block.timestamp >= a.revealEnd) revert NotRevealPhase();
+        if (block.timestamp < a.commitEnd) revert RevealNotStarted();
+        if (block.timestamp >= a.revealEnd) revert RevealPhaseClosed();
         AuctionStorage storage $ = _s();
         uint256 idx = $.bidIndexPlusOne[seriesId][msg.sender];
         if (idx == 0) revert BidNotFound();
         Bid storage bid = $.bids[seriesId][idx - 1];
-        if (bid.revealed) revert BidAlreadyRevealed();
+        if (bid.revealed) revert AlreadyRevealed();
         if (MercesMessages.orderCommitment(price, quantity, salt, msg.sender) != bid.commitment) {
             revert CommitmentMismatch();
         }
@@ -158,8 +156,8 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
         override
     {
         Auction storage a = _s().auctions[seriesId];
-        if (a.state != RaiseState.Open && a.state != RaiseState.Settling) revert InvalidSettlementState();
-        if (block.timestamp < a.revealEnd) revert RevealNotOver();
+        if (a.state != RaiseState.Open && a.state != RaiseState.Settling) revert RaiseNotOpen();
+        if (block.timestamp < a.revealEnd) revert SettlementNotReady();
         if (a.tallyRound != 0 && !a.roundRejected) revert TallyInProgress();
         uint64 n = registry().getSeriesTerms(seriesId).unitsOffered;
         a.state = RaiseState.Settling;
@@ -173,6 +171,7 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
         a.talliedCount = 0;
         a.minValidPrice = type(uint64).max;
         a.roundRejected = false;
+        a.rejectionReason = 0;
         a.tallyRound += 1;
         emit SettlementProposed(seriesId, clearingPrice, a.tallyRound);
     }
@@ -183,7 +182,7 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
     /// their escrow (`price ≥ reserve ≥ 1`), so the sums fit in uint64 whenever `escrow_total` does.
     function tallyBids(uint256 seriesId, uint256 fromIndex, uint256 toIndex) external override {
         Auction storage a = _s().auctions[seriesId];
-        if (a.state != RaiseState.Settling || a.roundRejected) revert InvalidSettlementState();
+        if (a.state != RaiseState.Settling || a.roundRejected) revert NotSettling();
         Bid[] storage bids = _s().bids[seriesId];
         if (fromIndex >= toIndex || toIndex > bids.length) revert TallyRangeInvalid();
         if (toIndex - fromIndex > C.MAX_TALLY_PAGE) revert TallyPageTooLarge();
@@ -223,7 +222,7 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
     /// `proceeds = p* × units_sold`; (5) min raise. Steps 2 and 3 reject the round instead of reverting.
     function finalizeSettlement(uint256 seriesId) external override nonReentrant {
         Auction storage a = _s().auctions[seriesId];
-        if (a.state != RaiseState.Settling || a.roundRejected) revert InvalidSettlementState();
+        if (a.state != RaiseState.Settling || a.roundRejected) revert NotSettling();
         if (a.talliedCount != a.revealedCount) revert TallyIncomplete();
         SeriesTerms memory terms = registry().getSeriesTerms(seriesId);
         uint64 p = a.clearingPrice;
@@ -260,9 +259,19 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
         emit RaiseSettled(seriesId, p, unitsSold, proceeds, a.settlementTs);
     }
 
+    /// @dev Records the rejection and clears the proposal so the next round starts from a clean slate; the
+    /// per-bid tally marks are keyed by round and need no reset.
     function _reject(uint256 seriesId, Auction storage a, uint8 reason) internal {
         a.roundRejected = true;
+        a.rejectionReason = reason;
         emit SettlementRejected(seriesId, a.tallyRound, a.clearingPrice, reason);
+        a.clearingPrice = 0;
+        a.qAboveClaim = 0;
+        a.qAtClaim = 0;
+        a.rClaim = 0;
+        a.qAbove = 0;
+        a.qAt = 0;
+        a.allocSum = 0;
     }
 
     function _fail(uint256 seriesId, Auction storage a, uint64 p, uint64 proceeds, uint64 minRaise) internal {
@@ -284,11 +293,11 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
     function processBid(uint256 seriesId, uint256 bidIndex) external override nonReentrant {
         AuctionStorage storage $ = _s();
         Auction storage a = $.auctions[seriesId];
-        if (a.state != RaiseState.Settled && a.state != RaiseState.Failed) revert NotSettledOrFailed();
+        if (a.state != RaiseState.Settled && a.state != RaiseState.Failed) revert RaiseNotSettled();
         Bid[] storage bids = $.bids[seriesId];
         if (bidIndex >= bids.length) revert BidNotFound();
         Bid storage bid = bids[bidIndex];
-        if (bid.processed) revert BidAlreadyProcessed();
+        if (bid.processed) revert AlreadyProcessed();
         bid.processed = true;
         a.bidsProcessed += 1;
 
@@ -380,8 +389,8 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
         Bid[] storage bids = $.bids[seriesId];
         if (bidIndex >= bids.length) revert BidNotFound();
         Bid storage bid = bids[bidIndex];
-        if (!bid.processed) revert BidNotProcessed();
-        if (bid.delivered) revert BidAlreadyDelivered();
+        if (!bid.processed) revert NotProcessed();
+        if (bid.delivered) revert AlreadyDelivered();
         bid.delivered = true;
         uint64 units = bid.pendingUnits;
         uint64 refund = bid.pendingRefund;

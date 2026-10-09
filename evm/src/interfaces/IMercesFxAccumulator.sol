@@ -18,12 +18,20 @@ interface IMercesFxAccumulator {
         uint32 lastDay;
     }
 
-    event FxSnapshot(bytes32 indexed pair, uint32 day, uint64 rateWad, uint256 sumWad, uint32 count);
-    event FxDeviationFlagged(bytes32 indexed pair, uint32 period, uint64 rateWad, uint64 crosscheckWad);
+    event FxSnapshot(bytes32 indexed pair, uint32 day, uint256 rateWad, uint256 sumWad, uint32 count);
+    event FxDeviationFlagged(bytes32 indexed pair, uint32 period, uint256 rateWad, uint256 crosscheckWad);
     event PythSet(address pyth);
 
     function snapshot(bytes32 pairId, bytes[] calldata priceUpdateData) external payable;
-    function quarterAverage(bytes32 pairId, uint32 period) external view returns (bool ok, uint64 avgWad);
+    /// @notice SPEC §6.6 `quarter_average`: `ok` is the Ok branch; `avgWad` is the mean of the snapshots in the
+    /// period whenever at least one exists (also reported alongside `ok == false`, for diagnostics).
+    function quarterAverage(bytes32 pairId, uint32 period) external view returns (bool ok, uint256 avgWad);
+    /// @notice Diagnostic view of a period: `available` (at least one snapshot between the start checkpoint
+    /// and the end), `ok` (coverage met and not flagged), `avgWad`, snapshot count `n`, `flagged`.
+    function quarterStats(bytes32 pairId, uint32 period)
+        external
+        view
+        returns (bool available, bool ok, uint256 avgWad, uint32 n, bool flagged);
     function getFxPair(bytes32 pairId) external view returns (FxPairState memory);
     function getFxCheckpoint(bytes32 pairId, uint32 period) external view returns (FxCheckpoint memory);
     function pyth() external view returns (address);

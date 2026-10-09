@@ -23,7 +23,12 @@ pub fn events_of<T: Discriminator + AnchorDeserialize>(logs: &[String]) -> Vec<T
 /// The single event of type `T`, panicking if there is not exactly one.
 pub fn single_event<T: Discriminator + AnchorDeserialize>(logs: &[String]) -> T {
     let mut evs = events_of::<T>(logs);
-    assert_eq!(evs.len(), 1, "expected exactly one event, got {}", evs.len());
+    assert_eq!(
+        evs.len(),
+        1,
+        "expected exactly one event, got {}",
+        evs.len()
+    );
     evs.remove(0)
 }
 

@@ -43,18 +43,18 @@ contract RouterTest is FullFixture {
         assertEq(MercesRouterReceiver(predicted).router(), address(router));
         assertEq(MercesRouterReceiver(predicted).seriesId(), sid);
         uint256 nonTier1 = runStandardRaise(TierFlags.TIER2_ZKTLS, bytes32(0));
-        vm.expectRevert(NotTierOne.selector);
+        vm.expectRevert(RouterNotEnabled.selector);
         router.createRouterReceiver(nonTier1);
     }
 
     function test_routeGuards() public {
         uint256 nonTier1 = runStandardRaise(TierFlags.TIER2_ZKTLS, bytes32(0));
-        vm.expectRevert(NotTierOne.selector);
+        vm.expectRevert(RouterNotEnabled.selector);
         router.route(nonTier1, 1);
         uint256 draft = createSeriesWith(
             defaultSeriesParams(), defaultSchedule(), Proofs.q1().termsCommitment, 1, bytes32(0), proofTier1Terms()
         );
-        vm.expectRevert(MintNotFinalized.selector);
+        vm.expectRevert(RaiseNotSettled.selector);
         router.route(draft, 1);
         vm.expectRevert(ZeroAmount.selector);
         router.route(sid, 0);
@@ -63,10 +63,11 @@ contract RouterTest is FullFixture {
         router.createRouterReceiver(sid);
         vm.expectRevert(ZeroAmount.selector);
         router.sweep(sid);
-        usdc.mint(router.routerReceiver(sid), 1);
+        address receiver = router.routerReceiver(sid);
+        usdc.mint(receiver, 1);
         vm.prank(stranger);
         vm.expectRevert(NotRouter.selector);
-        MercesRouterReceiver(router.routerReceiver(sid)).forward(IERC20(address(usdc)), 1);
+        MercesRouterReceiver(receiver).forward(IERC20(address(usdc)), 1);
     }
 
     function test_splitAndPureTier1Report() public {
@@ -179,7 +180,7 @@ contract RouterTest is FullFixture {
         assertEq(income.getLedger(s).routerCredit, 6_000e6);
         vm.warp(Periods.periodEnd(Q1_2026));
         vm.prank(issuer);
-        vm.expectRevert(Tier1NotPure.selector);
+        vm.expectRevert(abi.encodeWithSelector(TierNotEnabled.selector, 1));
         income.submitReport(reportInput(s, Q1_2026, Proofs.q1(), 1, false));
         vm.prank(issuer);
         income.submitReport(reportInput(s, Q1_2026, Proofs.q1(), 2, false));
@@ -214,11 +215,53 @@ contract RouterTest is FullFixture {
 
     function test_incomeBeforeFinalizationWaitsInReceiver() public {
         uint256 s = standardSeries(TierFlags.TIER1_SPLIT, bytes32(0));
-        address receiver = router.createRouterReceiver(s);
-        usdc.mint(receiver, 5_000e6);
+        // before settlement the raise may still fail: nothing is accepted
+        fund(payer, 1);
+        vm.startPrank(payer);
+        usdc.approve(address(router), 1);
+        vm.expectRevert(RaiseNotSettled.selector);
+        router.route(s, 1);
+        vm.stopPrank();
+        allow(b1);
+        allow(b2);
+        allow(b3);
+        openRaise(s);
+        address[3] memory bidders = [b1, b2, b3];
+        uint64 escrow = escrowFor(P0, 100);
+        for (uint256 i = 0; i < 3; i++) {
+            commit(s, plan(bidders[i], P0, 100, escrow));
+        }
+        warpToReveal(s);
+        for (uint256 i = 0; i < 3; i++) {
+            reveal(s, plan(bidders[i], P0, 100, escrow));
+        }
+        warpToSettle(s);
+        settle(s, P0, 0, 300);
+        // settled but not yet mint-finalized: income waits in the receiving account (SPEC §6.5)
+        address receiver = router.routerReceiver(s);
+        fund(payer, 30_000e6);
+        vm.startPrank(payer);
+        usdc.approve(address(router), 30_000e6);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesRouter.IncomeHeld(s, 30_000e6, 30_000e6);
+        router.route(s, 30_000e6);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(receiver), 30_000e6);
+        assertEq(router.getRouter(s).heldBeforeFinalization, 30_000e6);
         vm.expectRevert(MintNotFinalized.selector);
         router.sweep(s);
-        assertEq(usdc.balanceOf(receiver), 5_000e6);
+        processAll(s);
+        deliverAll(s);
+        // the next receipt collects the held income: 90,000 YTD → 10,000 above θ → 30 % = 3,000 to the vault
+        fund(payer, 60_000e6);
+        vm.startPrank(payer);
+        usdc.approve(address(router), 60_000e6);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesRouter.IncomeRouted(s, 90_000e6, 87_000e6, 3_000e6, 90_000e6);
+        router.route(s, 60_000e6);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(receiver), 0);
+        assertEq(vault.getLedger(s).grossReceived, 3_000e6);
     }
 
     function test_retiredSeriesPassesEverythingThrough() public {

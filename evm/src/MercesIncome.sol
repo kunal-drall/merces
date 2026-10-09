@@ -113,13 +113,14 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
         view
         returns (bool tail, uint64 units)
     {
+        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
         if (!core.mintFinalized) revert MintNotFinalized();
         uint8 ts = core.terminalStatus;
         if (ts == uint8(SeriesStatus.Retired) || ts == uint8(SeriesStatus.Extinguished)) revert TerminalStatus();
         uint32 expected = _nextExpected(l, core);
         if (input.period != expected) revert WrongPeriod(expected, input.period);
-        if (block.timestamp < Periods.periodEnd(input.period)) revert PeriodNotEnded();
-        if (l.openDueAmount > 0) revert PreviousPeriodUnpaid();
+        if (block.timestamp < Periods.periodEnd(input.period)) revert ReportTooEarly();
+        if (l.openDueAmount > 0) revert PaymentOutstanding();
         if (_s().reports[input.seriesId][input.period].exists) revert ReportExists();
         IMercesVault vault = IMercesVault(_contracts().vault);
         if (ts == uint8(SeriesStatus.Redeemed)) {
@@ -132,27 +133,27 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
             units = vault.unitsOutstanding(input.seriesId);
         }
         if (!TierFlags.has(core.tierFlags, input.tier)) revert TierNotEnabled(input.tier);
-        if (input.tier == 4 && !registry().getFlags().tier4Enabled) revert Tier4Disabled();
-        if (input.tier == 1 && !TierFlags.isPureTier1(core.tierFlags)) revert Tier1NotPure();
+        if (input.tier == 4 && !registry().getFlags().tier4Enabled) revert TierNotEnabled(4);
+        if (input.tier == 1 && !TierFlags.isPureTier1(core.tierFlags)) revert TierNotEnabled(1);
     }
 
     /// @dev SPEC §6.2 step 4. Returns whether the fallback (attestor-signed) rate was used.
     function _checkFx(ReportInput calldata input, SeriesCore memory core) internal view returns (bool fxFallback) {
         if (core.fxPairId == bytes32(0)) {
             if (input.fxAvgWad != C.WAD) revert FxMustBeWad();
-            if (input.fxFallbackSignature.length != 0) revert FxFallbackNotNeeded();
+            if (input.fxFallbackSignature.length != 0) revert FxFallbackNotAllowed();
             return false;
         }
-        (bool ok, uint64 avg) = IMercesFxAccumulator(_s().fxAccumulator).quarterAverage(core.fxPairId, input.period);
+        (bool ok, uint256 avg) = IMercesFxAccumulator(_s().fxAccumulator).quarterAverage(core.fxPairId, input.period);
         if (ok) {
-            if (input.fxAvgWad != avg) revert FxMismatch(avg, input.fxAvgWad);
-            if (input.fxFallbackSignature.length != 0) revert FxFallbackNotNeeded();
+            if (uint256(input.fxAvgWad) != avg) revert FxMismatch(avg, input.fxAvgWad);
+            if (input.fxFallbackSignature.length != 0) revert FxFallbackNotAllowed();
             return false;
         }
-        if (input.fxFallbackSignature.length == 0) revert FxFallbackSignatureRequired();
+        if (input.fxFallbackSignature.length == 0) revert FxFallbackRequired();
         bytes32 digest = MercesMessages.fxDigest(registry().domain(), input.seriesId, input.period, input.fxAvgWad);
         address signer = ECDSA.recover(digest, input.fxFallbackSignature);
-        if (!registry().isAttestor(signer)) revert AttestorNotRegistered(signer);
+        if (!registry().isAttestor(signer)) revert InvalidAttestorSignature(signer);
         return true;
     }
 
@@ -208,9 +209,9 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
         );
         address signer = ECDSA.recover(digest, input.attestationSignature);
         if (input.tier == 2) {
-            if (!_keyValid(registry().verifierKey(signer), input.period)) revert VerifierKeyNotRegistered(signer);
+            if (!_keyValid(registry().verifierKey(signer), input.period)) revert InvalidVerifierSignature(signer);
         } else if (!_keyValid(registry().attestorKey(signer), input.period)) {
-            revert AttestorNotRegistered(signer);
+            revert InvalidAttestorSignature(signer);
         }
     }
 
@@ -300,10 +301,12 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
     /// vault and hands it to `receiveGross` (`Tail` while Redeemed, with no accrual). Partial payments are not
     /// supported (A13).
     function pay(uint256 seriesId) external override nonReentrant {
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
+        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
+        if (!core.mintFinalized) revert MintNotFinalized();
         Ledger storage l = _s().ledgers[seriesId];
         uint64 due = l.openDueAmount;
         if (due == 0) revert NothingDue();
-        SeriesCore memory core = registry().getSeriesCore(seriesId);
         uint32 period = l.openDuePeriod;
         bool tail = l.openDueIsTail;
         uint64 accrual = core.terminalStatus == uint8(SeriesStatus.Redeemed)
@@ -322,9 +325,8 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
 
         ProtocolContracts memory pc = _contracts();
         IERC20(core.stablecoin).safeTransferFrom(msg.sender, pc.vault, total);
-        (uint64 accepted, uint64 fee, uint64 refunded) = IMercesVault(pc.vault).receiveGross(
-            seriesId, total, tail ? PayoutSource.Tail : PayoutSource.Payment, period
-        );
+        (uint64 accepted, uint64 fee, uint64 refunded) = IMercesVault(pc.vault)
+            .receiveGross(seriesId, total, tail ? PayoutSource.Tail : PayoutSource.Payment, period);
         emit PaymentSettled(seriesId, period, total, accrual, fee, accepted, refunded);
         _sync(seriesId);
     }
@@ -341,6 +343,7 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
     {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (msg.sender != core.issuer) revert NotIssuer();
+        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
         if (!core.mintFinalized) revert MintNotFinalized();
         if (core.terminalStatus != 0) revert TerminalStatus();
         if (!TierFlags.has(core.tierFlags, 3)) revert TierNotEnabled(3);
@@ -348,16 +351,16 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
         if (attestationTs > block.timestamp) revert AttestationInFuture();
         Ledger storage l = _s().ledgers[seriesId];
         if (l.trueupDue != 0) revert TrueUpOutstanding();
-        if (l.hasLastTrueupYear && l.lastTrueupYear >= year) revert TrueUpYearAlreadyRecorded();
-        if (year >= Periods.yearOf(Periods.periodOf(block.timestamp))) revert TrueUpYearNotEnded();
+        if (l.hasLastTrueupYear && l.lastTrueupYear >= year) revert TrueUpYearInvalid();
+        if (year >= Periods.yearOf(Periods.periodOf(block.timestamp))) revert TrueUpYearInvalid();
         uint32 lastOfYear = uint32(year) * 4 + 3;
-        if (year < Periods.yearOf(Periods.periodOf(core.settlementTs))) revert TrueUpYearUnreported();
-        if (!l.hasAccepted || l.lastAcceptedPeriod < lastOfYear) revert TrueUpYearUnreported();
+        if (year < Periods.yearOf(Periods.periodOf(core.settlementTs))) revert TrueUpYearInvalid();
+        if (!l.hasAccepted || l.lastAcceptedPeriod < lastOfYear) revert TrueUpYearInvalid();
 
         bytes32 digest =
             MercesMessages.trueupDigest(registry().domain(), seriesId, l.trueupNonce, year, adjustment, attestationTs);
         address signer = ECDSA.recover(digest, sig);
-        if (!registry().isAttestor(signer)) revert AttestorNotRegistered(signer);
+        if (!registry().isAttestor(signer)) revert InvalidAttestorSignature(signer);
         l.trueupNonce += 1;
 
         uint64 deadline;
@@ -370,7 +373,7 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
             deadline = attestationTs + uint64(C.TRUEUP_SECONDS);
         } else {
             uint256 abs_ = uint256(-int256(adjustment));
-            if (abs_ > _yearPayments(seriesId, year)) revert TrueUpExceedsPayments();
+            if (abs_ > _yearPayments(seriesId, year)) revert TrueUpAdjustmentTooLarge();
             l.routerCredit = (uint256(l.routerCredit) + abs_).toU64();
         }
         l.hasLastTrueupYear = true;
@@ -392,9 +395,10 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
     function payTrueUp(uint256 seriesId) external override nonReentrant {
         Ledger storage l = _s().ledgers[seriesId];
         uint64 due = l.trueupDue;
-        if (due == 0) revert NoTrueUpDue();
+        if (due == 0) revert NothingDue();
         SeriesCore memory core = registry().getSeriesCore(seriesId);
-        uint64 accrual = _lateAccrualTrueup(registry().getSeriesTerms(seriesId), l, _s().pauses[seriesId], block.timestamp);
+        uint64 accrual =
+            _lateAccrualTrueup(registry().getSeriesTerms(seriesId), l, _s().pauses[seriesId], block.timestamp);
         uint64 total = (uint256(due) + accrual).toU64();
         uint32 period = Periods.periodOf(l.trueupAttestedAt);
         l.trueupDue = 0;
@@ -416,7 +420,7 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
     function requestPause(uint256 seriesId) external override {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (msg.sender != core.issuer) revert NotIssuer();
-        if (core.terminalStatus != 0) revert SeriesTerminal();
+        if (core.terminalStatus != 0) revert TerminalStatus();
         Ledger storage l = _s().ledgers[seriesId];
         if (l.pauseRequested) revert PauseAlreadyRequested();
         l.pauseRequested = true;
@@ -445,15 +449,15 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
         Pause[] storage ps = _s().pauses[seriesId];
         if (!l.pauseRequested) revert PauseNotRequested();
         if (_isPaused(ps, block.timestamp)) revert AlreadyPaused();
-        if (pauseEnd <= block.timestamp) revert PauseEndInPast();
+        if (pauseEnd <= block.timestamp) revert InvalidPauseEnd();
         SeriesTerms memory terms = registry().getSeriesTerms(seriesId);
         uint64 length = pauseEnd - uint64(block.timestamp);
         if (length > terms.maxPauseSeconds) revert PauseTooLong();
-        if (uint256(l.pausedTotal) + length > terms.maxCumulativePauseSeconds) revert CumulativePauseExceeded();
+        if (uint256(l.pausedTotal) + length > terms.maxCumulativePauseSeconds) revert PauseTooLong();
         if (ps.length >= C.MAX_PAUSES) revert TooManyPauses();
         bytes32 digest = MercesMessages.pauseDigest(registry().domain(), seriesId, l.pauseNonce, pauseEnd);
         address signer = ECDSA.recover(digest, attestorSignature);
-        if (!registry().isAttestor(signer)) revert AttestorNotRegistered(signer);
+        if (!registry().isAttestor(signer)) revert InvalidAttestorSignature(signer);
         ps.push(Pause({start: uint64(block.timestamp), end: pauseEnd}));
         l.pauseCount = uint8(ps.length);
         l.pausedTotal += length;
@@ -492,7 +496,8 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
         if (core.terminalStatus != 0 || core.raiseState != RaiseState.Settled) return;
         uint32 p = _earliestUnpaid(l, core);
         if (
-            _countdown(ps, p, block.timestamp) >= C.NOTICE_SECONDS && !(l.hasFormalNotice && l.formalNoticeEmittedFor == p)
+            _countdown(ps, p, block.timestamp) >= C.NOTICE_SECONDS
+                && !(l.hasFormalNotice && l.formalNoticeEmittedFor == p)
         ) {
             l.hasFormalNotice = true;
             l.formalNoticeEmittedFor = p;
@@ -511,7 +516,11 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
     // ---- clock helpers (SPEC §6.4) ----
 
     /// @dev `paused_within(a, b)` with every pause clipped at `nowTs` (only the last pause can be open).
-    function _pausedWithin(Pause[] storage ps, uint256 a, uint256 b, uint256 nowTs) internal view returns (uint256 total) {
+    function _pausedWithin(Pause[] storage ps, uint256 a, uint256 b, uint256 nowTs)
+        internal
+        view
+        returns (uint256 total)
+    {
         uint256 n = ps.length;
         for (uint256 i = 0; i < n; i++) {
             uint256 s = ps[i].start;
@@ -612,9 +621,8 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
     /// that amount becomes router credit against the quarter's report (SPEC §6.5).
     function receiveRouterShare(uint256 seriesId, uint64 share) external override returns (uint64 accepted) {
         if (msg.sender != _s().router) revert NotRouter();
-        (accepted,,) = IMercesVault(_contracts().vault).receiveGross(
-            seriesId, share, PayoutSource.Router, Periods.periodOf(block.timestamp)
-        );
+        (accepted,,) = IMercesVault(_contracts().vault)
+            .receiveGross(seriesId, share, PayoutSource.Router, Periods.periodOf(block.timestamp));
         Ledger storage l = _s().ledgers[seriesId];
         l.routerCredit = (uint256(l.routerCredit) + accepted).toU64();
     }
@@ -632,7 +640,8 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
     // ================================================================ views
 
     function deriveStatus(uint256 seriesId) external view override returns (SeriesStatus) {
-        return _derive(registry().getSeriesCore(seriesId), _s().ledgers[seriesId], _s().pauses[seriesId], block.timestamp);
+        return
+            _derive(registry().getSeriesCore(seriesId), _s().ledgers[seriesId], _s().pauses[seriesId], block.timestamp);
     }
 
     function deriveStatusAt(uint256 seriesId, uint256 timestamp) external view override returns (SeriesStatus) {

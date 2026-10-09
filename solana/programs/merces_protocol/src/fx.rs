@@ -1,7 +1,7 @@
 //! Rate accumulator (SPEC v1.1 §6.6, brief C9) fed by Pyth `PriceUpdateV2` accounts.
 
 use anchor_lang::prelude::*;
-use merces_common::fx::{conf_ok, invert, normalize};
+use merces_common::fx::{conf_ok, deviates, invert, normalize};
 use merces_common::time::{day_of, period_of};
 use merces_onchain::seeds::{CONFIG, FX};
 use merces_registry::state::{FxPairConfig, ProtocolConfig};
@@ -61,6 +61,9 @@ pub struct SnapshotFx<'info> {
     pub checkpoint: Box<Account<'info, FxCheckpoint>>,
     /// Owner (Pyth receiver program) and discriminator checked by Anchor.
     pub price_update: Box<Account<'info, PriceUpdateV2>>,
+    /// The cross-check feed's update (the pair's `crosscheck`, read as a Pyth feed id); required
+    /// once a cross-check is configured and effective for the period.
+    pub crosscheck_update: Option<Box<Account<'info, PriceUpdateV2>>>,
     pub system_program: Program<'info, System>,
 }
 
@@ -122,9 +125,46 @@ pub fn snapshot_fx(ctx: Context<SnapshotFx>, period: u32) -> Result<()> {
         cp.flagged = false;
         cp.bump = ctx.bumps.checkpoint;
     }
-    // 4. cross-check: no Chainlink on Solana in this version (A21); `crosscheck` stays unset.
-
-    // 5. accumulate
+    // 4. cross-check: a second Pyth feed (no Chainlink on Solana); a deviation above the band
+    //    flags the period so its average needs a fallback
+    if cfg.crosscheck != Pubkey::default() && period >= cfg.crosscheck_effective_period {
+        let cl = ctx
+            .accounts
+            .crosscheck_update
+            .as_ref()
+            .ok_or(ProtocolError::CrosscheckRequired)?;
+        require!(
+            cl.verification_level == VerificationLevel::Full,
+            ProtocolError::InsufficientVerification
+        );
+        let m = &cl.price_message;
+        require!(
+            m.feed_id == cfg.crosscheck.to_bytes(),
+            ProtocolError::FeedIdMismatch
+        );
+        let cl_time = u64::try_from(m.publish_time).map_err(|_| ProtocolError::PriceStale)?;
+        require!(
+            cl_time
+                .checked_add(defaults.fx_max_staleness_seconds)
+                .ok_or(ProtocolError::MathOverflow)?
+                >= now,
+            ProtocolError::PriceStale
+        );
+        require!(m.price > 0, ProtocolError::PriceNotPositive);
+        let mut cl_wad = normalize(m.price, m.exponent).map_err(math)?;
+        if cfg.inverted {
+            cl_wad = invert(cl_wad).map_err(math)?;
+        }
+        if deviates(rate_wad, cl_wad, defaults.fx_deviation_band_bps).map_err(math)? {
+            cp.flagged = true;
+            emit!(FxDeviationFlagged {
+                pair: pair.pair_id,
+                period,
+                rate_wad,
+                crosscheck_wad: cl_wad,
+            });
+        }
+    } // 5. accumulate
     pair.sum_wad = pair
         .sum_wad
         .checked_add(u128::from(rate_wad))

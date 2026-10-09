@@ -88,7 +88,9 @@ interface IMercesWindow {
     }
 
     event WindowOpened(uint256 indexed series, uint32 indexed period, uint64 commitEnd, uint64 revealEnd);
-    event OrderCommitted(uint256 indexed series, uint32 indexed period, address indexed owner, Side side, uint64 escrow);
+    event OrderCommitted(
+        uint256 indexed series, uint32 indexed period, address indexed owner, Side side, uint64 escrow
+    );
     event OrderRevealed(
         uint256 indexed series,
         uint32 indexed period,
@@ -134,7 +136,10 @@ interface IMercesWindow {
     function askEscrowUnits(uint256 seriesId, address wallet) external view returns (uint64);
     function getWindow(uint256 seriesId, uint32 period) external view returns (Window memory);
     function getOrder(uint256 seriesId, uint32 period, uint256 index) external view returns (Order memory);
-    function orderIndexOf(uint256 seriesId, uint32 period, address owner) external view returns (bool exists, uint256 index);
+    function orderIndexOf(uint256 seriesId, uint32 period, address owner)
+        external
+        view
+        returns (bool exists, uint256 index);
     /// @notice Next marginal-side order (branch A: bids at p*) that must be processed, if any.
     function nextMarginalOrder(uint256 seriesId, uint32 period) external view returns (bool exists, uint256 index);
     /// @notice Next ask in reveal order that must be processed, if any.

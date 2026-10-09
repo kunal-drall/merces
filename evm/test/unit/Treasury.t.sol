@@ -122,7 +122,7 @@ contract TreasuryTest is FullFixture {
         assertEq(usdc.balanceOf(issuer), 149e6);
         vm.warp(graceEnd + 1); // Late: blocked even before any vesting check
         vm.prank(issuer);
-        vm.expectRevert(SeriesIsLate.selector);
+        vm.expectRevert(SeriesLate.selector);
         treasury.claimRelease(sid);
         // a hardship pause stops the clock but does not lift a block already in force
         vm.prank(issuer);
@@ -132,13 +132,13 @@ contract TreasuryTest is FullFixture {
         assertEq(uint8(income.deriveStatus(sid)), uint8(SeriesStatus.Paused));
         assertTrue(income.isLateUnderlying(sid));
         vm.prank(issuer);
-        vm.expectRevert(SeriesIsLate.selector);
+        vm.expectRevert(SeriesLate.selector);
         treasury.claimRelease(sid);
         vm.prank(issuer);
         income.endPause(sid);
         assertEq(uint8(income.deriveStatus(sid)), uint8(SeriesStatus.Late));
         vm.prank(issuer);
-        vm.expectRevert(SeriesIsLate.selector);
+        vm.expectRevert(SeriesLate.selector);
         treasury.claimRelease(sid);
         // (becoming current again lifts the block: Income.t.sol test_statusDerivationTimeline)
 
@@ -151,7 +151,7 @@ contract TreasuryTest is FullFixture {
         emit IMercesTreasury.ReleasePauseSet(sid, true);
         treasury.setReleasePause(sid, true);
         vm.prank(issuer);
-        vm.expectRevert(ReleasesPausedByIssuer.selector);
+        vm.expectRevert(ReleasesPaused.selector);
         treasury.claimRelease(sid);
         vm.prank(issuer);
         treasury.setReleasePause(sid, false);
@@ -190,7 +190,7 @@ contract TreasuryTest is FullFixture {
         assertEq(l.extinguishedAt, sTs + 30 days);
         assertEq(l.releasedTotal, T1);
         vm.prank(address(vault));
-        vm.expectRevert(SeriesIsExtinguished.selector);
+        vm.expectRevert(TerminalStatus.selector);
         treasury.moveUnreleasedToVault(sid);
         // the estate keeps what had vested by extinguished_at, and nothing more ever vests
         vm.warp(sTs + 100 days);
@@ -213,7 +213,7 @@ contract TreasuryTest is FullFixture {
     function test_earlyDrawHook() public {
         processAll(sid);
         vm.prank(issuer);
-        vm.expectRevert(EarlyDrawsDisabled.selector);
+        vm.expectRevert(EarlyDrawDisabled.selector);
         treasury.requestEarlyDraw(sid, 10e6);
 
         MockEarlyDrawApprover approver = new MockEarlyDrawApprover();
@@ -244,7 +244,7 @@ contract TreasuryTest is FullFixture {
         assertEq(treasury.claimable(sid), 49e6);
         approver.setApproveAll(true);
         vm.prank(issuer);
-        vm.expectRevert(EarlyDrawExceedsProceeds.selector);
+        vm.expectRevert(ExceedsProceeds.selector);
         treasury.requestEarlyDraw(sid, 49e6 + 1);
         vm.prank(issuer);
         vm.expectRevert(ZeroAmount.selector);
@@ -269,7 +269,7 @@ contract TreasuryTest is FullFixture {
         assertEq(moved, 49e6);
         assertEq(usdc.balanceOf(address(treasury)), 0);
         vm.prank(issuer);
-        vm.expectRevert(SeriesIsExtinguished.selector);
+        vm.expectRevert(TerminalStatus.selector);
         treasury.requestEarlyDraw(sid, 1);
     }
 

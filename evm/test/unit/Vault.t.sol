@@ -36,7 +36,7 @@ contract VaultTest is FullFixture {
         assertTrue(h.registered);
         assertEq(h.lastNetAccWad, 0);
         // registration by outsiders needs the allowlist; the auction and the window register unconditionally
-        vm.expectRevert(abi.encodeWithSelector(WalletNotAllowlisted.selector, stranger));
+        vm.expectRevert(abi.encodeWithSelector(NotAllowlisted.selector, stranger));
         vault.registerHolder(sid, stranger);
         vault.registerHolder(sid, b1); // idempotent
         vm.prank(address(auction));
@@ -66,7 +66,7 @@ contract VaultTest is FullFixture {
         vm.expectRevert(MintNotFinalized.selector);
         vault.receiveGross(draft, 1, PayoutSource.Payment, 0);
         vm.prank(address(income));
-        vm.expectRevert(SeriesNotRedeemed.selector);
+        vm.expectRevert(NotRedeemed.selector);
         vault.receiveGross(sid, 1, PayoutSource.Tail, 0);
         // a zero gross is a no-op distribution
         vm.prank(address(income));
@@ -118,7 +118,7 @@ contract VaultTest is FullFixture {
         reportAndPay(sid, Q1_2026 + 3, Proofs.q4());
         reportAndPay(sid, Q1_2026 + 4, Proofs.y2q1());
         assertEq(vault.getLedger(sid).paidPerUnitWad, 240e6 * 1e18); // 72,000 / 300
-        vm.expectRevert(NotCapped.selector);
+        vm.expectRevert(NothingDue.selector);
         vault.retireIfCapped(sid);
         // y2q2: 30,000 due, only 3,000 of cap room (10 USDC × 300)
         submitReport(sid, Q1_2026 + 5, Proofs.y2q2cap());
@@ -143,7 +143,7 @@ contract VaultTest is FullFixture {
         assertEq(l.grossReceived, 75_000e6);
         assertEq(l.refundedToIssuer, 27_000e6);
         assertEq(l.paidPerUnitWad, 250e6 * 1e18);
-        vm.expectRevert(SeriesTerminal.selector);
+        vm.expectRevert(TerminalStatus.selector);
         vault.retireIfCapped(sid);
 
         // reports and true-ups are closed
@@ -172,8 +172,7 @@ contract VaultTest is FullFixture {
         assertEq(vault.unitsOutstanding(sid), 100);
         assertEq(vault.pendingOf(sid, b2), 23_750e6); // pending survives the burn
         vm.prank(keeper);
-        vm.expectRevert(ZeroUnits.selector);
-        vault.burnRetired(sid, b2);
+        vault.burnRetired(sid, b2); // nothing left: no-op
         vm.prank(b2);
         vault.claim(sid);
         vm.prank(b3);
@@ -194,7 +193,7 @@ contract VaultTest is FullFixture {
 
     function test_loweredCapAppliesLiveAndRetireIfCapped() public {
         reportAndPay(sid, Q1_2026, Proofs.q1()); // paid 40/unit
-        bytes32 newTc = keccak256("new");
+        bytes32 newTc = Proofs.q1().termsCommitment; // the cap changes, the terms do not
         vm.prank(issuer);
         registry.amendTerms(
             sid, newTc, 2.0e18, sign(attestorKey, MercesMessages.amendDigest(domain, sid, 0, newTc, 2.0e18)), noTier1()
@@ -202,7 +201,7 @@ contract VaultTest is FullFixture {
         assertEq(vault.capPerUnit(sid), 200e6);
         (,,, uint64 capRemaining,) = vault.previewRedemption(sid, block.timestamp);
         assertEq(capRemaining, 160e6);
-        vm.expectRevert(NotCapped.selector);
+        vm.expectRevert(NothingDue.selector);
         vault.retireIfCapped(sid);
         // pay up to 240/unit, then lower the cap below what was paid: the effective cap is what was paid
         reportAndPay(sid, Q1_2026 + 1, Proofs.q2());
@@ -216,13 +215,13 @@ contract VaultTest is FullFixture {
     function test_retireIfCappedAfterAmendment() public {
         reportAndPay(sid, Q1_2026, Proofs.q1());
         reportAndPay(sid, Q1_2026 + 1, Proofs.q2()); // 80/unit paid
-        bytes32 newTc = keccak256("new");
+        bytes32 newTc = Proofs.q1().termsCommitment; // the cap changes, the terms do not
         // cap multiple 2.0 → 200/unit: not met yet
         vm.prank(issuer);
         registry.amendTerms(
             sid, newTc, 2.0e18, sign(attestorKey, MercesMessages.amendDigest(domain, sid, 0, newTc, 2.0e18)), noTier1()
         );
-        vm.expectRevert(NotCapped.selector);
+        vm.expectRevert(NothingDue.selector);
         vault.retireIfCapped(sid);
         reportAndPay(sid, Q1_2026 + 2, Proofs.q3zero());
         reportAndPay(sid, Q1_2026 + 3, Proofs.q4()); // 220 > 200 → retires with a 6,000 refund
@@ -231,7 +230,7 @@ contract VaultTest is FullFixture {
         assertEq(vault.capEffWad(sid), 200e6 * 1e18);
         uint256 s2 = runStandardRaise();
         reportAndPay(s2, Q1_2026 + 4, Proofs.y2q1()); // first period of s2 is Q1 2027
-        bytes32 tc2 = keccak256("new2");
+        bytes32 tc2 = Proofs.q1().termsCommitment;
         vm.prank(issuer);
         registry.amendTerms(
             s2, tc2, 2.0e18, sign(attestorKey, MercesMessages.amendDigest(domain, s2, 0, tc2, 2.0e18)), noTier1()

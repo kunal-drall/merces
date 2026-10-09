@@ -64,9 +64,10 @@ library MercesMessages {
         pure
         returns (bytes32)
     {
-        return keccak256(
-            abi.encodePacked("MERCES_AMEND_V1", dom, seriesKey(seriesId), nonce, newTermsCommitment, newCapWad)
-        );
+        return
+            keccak256(
+                abi.encodePacked("MERCES_AMEND_V1", dom, seriesKey(seriesId), nonce, newTermsCommitment, newCapWad)
+            );
     }
 
     function pauseDigest(bytes32 dom, uint256 seriesId, uint64 nonce, uint64 pauseEnd) internal pure returns (bytes32) {

@@ -78,7 +78,7 @@ contract MercesTreasury is MercesUpgradeable, IMercesTreasury {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (msg.sender != core.issuer) revert NotIssuer();
         Ledger storage l = _s().ledgers[seriesId];
-        if (l.issuerPausedReleases) revert ReleasesPausedByIssuer();
+        if (l.issuerPausedReleases) revert ReleasesPaused();
         _checkReleasable(seriesId, core);
         uint64 amount = _claimable(seriesId, core, l);
         if (amount == 0) revert NothingVested();
@@ -103,12 +103,12 @@ contract MercesTreasury is MercesUpgradeable, IMercesTreasury {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (msg.sender != core.issuer) revert NotIssuer();
         address approver = registry().earlyDrawApprover();
-        if (approver == address(0)) revert EarlyDrawsDisabled();
+        if (approver == address(0)) revert EarlyDrawDisabled();
         Ledger storage l = _s().ledgers[seriesId];
-        if (l.extinguishedAt != 0) revert SeriesIsExtinguished();
+        if (l.extinguishedAt != 0) revert TerminalStatus();
         _checkReleasable(seriesId, core);
         if (amount == 0) revert ZeroAmount();
-        if (uint256(l.releasedTotal) + amount > l.proceeds) revert EarlyDrawExceedsProceeds();
+        if (uint256(l.releasedTotal) + amount > l.proceeds) revert ExceedsProceeds();
         uint64 nonce = l.earlyDrawNonce;
         if (!IEarlyDrawApprover(approver).approveEarlyDraw(seriesId, amount, nonce)) revert EarlyDrawNotApproved();
         l.earlyDrawNonce = nonce + 1;
@@ -129,7 +129,7 @@ contract MercesTreasury is MercesUpgradeable, IMercesTreasury {
         _requireCaller(vault);
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         Ledger storage l = _s().ledgers[seriesId];
-        if (l.extinguishedAt != 0) revert SeriesIsExtinguished();
+        if (l.extinguishedAt != 0) revert TerminalStatus();
         l.extinguishedAt = uint64(block.timestamp);
         if (core.raiseState != RaiseState.Settled || !l.proceedsSet) return 0;
         uint64 v = _vested(seriesId, core, l, block.timestamp);
@@ -175,10 +175,11 @@ contract MercesTreasury is MercesUpgradeable, IMercesTreasury {
     /// @dev `mint_finalized`, not `Late` by derived status and not late on the underlying clock (a hardship pause
     /// does not lift a release block already in force).
     function _checkReleasable(uint256 seriesId, SeriesCore memory core) internal view {
+        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
         if (!core.mintFinalized) revert MintNotFinalized();
         IMercesIncome income = IMercesIncome(_contracts().income);
         if (income.deriveStatus(seriesId) == SeriesStatus.Late || income.isLateUnderlying(seriesId)) {
-            revert SeriesIsLate();
+            revert SeriesLate();
         }
     }
 
@@ -205,11 +206,7 @@ contract MercesTreasury is MercesUpgradeable, IMercesTreasury {
         total = uint64(acc); // ≤ proceeds by construction
     }
 
-    function _tranche(uint64 proceeds, ReleaseTranche[] memory schedule, uint256 index)
-        internal
-        pure
-        returns (uint64)
-    {
+    function _tranche(uint64 proceeds, ReleaseTranche[] memory schedule, uint256 index) internal pure returns (uint64) {
         uint256 n = schedule.length;
         if (index >= n) return 0;
         if (index < n - 1) return uint64(uint256(proceeds).bpsOf(schedule[index].bps));

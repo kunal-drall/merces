@@ -71,7 +71,8 @@ contract DeployTest is MercesFixture {
         assertEq(IPoseidon2(poseidon2).poseidon([uint256(0), uint256(0)]), income.ZERO_INCOME_COMMITMENT());
         // Poseidon(5) over the test terms reproduces the proofs' terms commitment
         assertEq(
-            IPoseidon5(poseidon5).poseidon([uint256(80_000e6), uint256(1e15), uint256(840), uint256(0), uint256(11111)]),
+            IPoseidon5(poseidon5)
+                .poseidon([uint256(80_000e6), uint256(1e15), uint256(840), uint256(0), uint256(11111)]),
             uint256(0x201faf2984873e67d24c9f09126f394ec18e666b7f75e3c1206258f4b76215b8)
         );
     }

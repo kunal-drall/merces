@@ -13,7 +13,9 @@ use merces_common::vault::{self, cap_per_unit, holder_delta, ReceiveInput, Recei
 use merces_onchain::{
     token_account_owner_and_amount, transfer_checked_hooked, HelperError, TransferAccounts,
 };
-use merces_registry::state::{Series, TERMINAL_EXTINGUISHED, TERMINAL_REDEEMED, TERMINAL_RETIRED};
+use merces_registry::state::{
+    AllowlistEntry, Series, TERMINAL_EXTINGUISHED, TERMINAL_REDEEMED, TERMINAL_RETIRED,
+};
 
 use crate::error::{math, ProtocolError};
 use crate::events::*;
@@ -196,6 +198,29 @@ pub fn transfer_units<'info>(
         signer_seeds,
     )
     .map_err(map_helper_error)
+}
+
+/// Requires `acc` to be the registry `AllowlistEntry` PDA of `wallet` with `allowed = true`
+/// (a missing entry means "never allowlisted"). Checked in the handler so phase and amount
+/// errors take precedence over the allowlist error.
+pub fn require_allowlisted(acc: &AccountInfo, wallet: &Pubkey) -> Result<()> {
+    let (expected, _) = Pubkey::find_program_address(
+        &[merces_onchain::seeds::ALLOW, wallet.as_ref()],
+        &merces_registry::ID,
+    );
+    require_keys_eq!(*acc.key, expected, ProtocolError::NotAllowlisted);
+    require!(
+        *acc.owner == merces_registry::ID && !acc.data_is_empty(),
+        ProtocolError::NotAllowlisted
+    );
+    let data = acc.try_borrow_data()?;
+    let entry = AllowlistEntry::try_deserialize(&mut &data[..])
+        .map_err(|_| error!(ProtocolError::NotAllowlisted))?;
+    require!(
+        entry.allowed && entry.wallet == *wallet,
+        ProtocolError::NotAllowlisted
+    );
+    Ok(())
 }
 
 /// Associated token account address of `owner` for `mint` under `token_program`.
@@ -528,14 +553,6 @@ impl Ledger {
             .checked_add(out.delta_acc_wad)
             .ok_or(ProtocolError::MathOverflow)?;
         self.tail_carry_wad = out.carry_wad_out;
-        self.fee_collected = self
-            .fee_collected
-            .checked_add(out.fee)
-            .ok_or(ProtocolError::MathOverflow)?;
-        self.refunded_to_issuer = self
-            .refunded_to_issuer
-            .checked_add(out.refund)
-            .ok_or(ProtocolError::MathOverflow)?;
         if out.capped {
             self.tail_exhausted = 1;
         }

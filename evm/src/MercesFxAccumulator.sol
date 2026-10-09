@@ -73,7 +73,7 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
             revert PythUpdateFeeInsufficient();
         }
 
-        uint64 rateWad = _readRate(pyth_, cfg, p);
+        uint256 rateWad = _readRate(pyth_, cfg, p);
         uint32 pid = Periods.periodOf(block.timestamp);
         FxCheckpoint storage cp = _s().checkpoints[pairId][pid];
         if (!cp.exists) {
@@ -85,7 +85,7 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
             (bool fresh, uint256 clWad) = _chainlink(cfg.crosscheck, p.fxMaxStalenessSeconds);
             if (!fresh || _deviates(rateWad, clWad, p.fxDeviationBandBps)) {
                 cp.flagged = true;
-                emit FxDeviationFlagged(pairId, pid, rateWad, uint64(MercesMath.min(clWad, type(uint64).max)));
+                emit FxDeviationFlagged(pairId, pid, rateWad, clWad);
             }
         }
         st.sumWad += rateWad;
@@ -95,18 +95,18 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
     }
 
     /// @dev SPEC §6.6 steps 1–2: validate the Pyth price and normalize it to a WAD rate (inverting if configured).
-    function _readRate(IPyth pyth_, FxPairConfig memory cfg, Parameters memory p) internal view returns (uint64) {
+    function _readRate(IPyth pyth_, FxPairConfig memory cfg, Parameters memory p) internal view returns (uint256) {
         PythStructs.Price memory price = pyth_.getPriceNoOlderThan(cfg.feedId, p.fxMaxStalenessSeconds);
         if (price.price <= 0) revert InvalidPythPrice();
         if (price.publishTime + p.fxMaxStalenessSeconds < block.timestamp) revert InvalidPythPrice();
         uint256 raw = uint256(uint64(price.price));
-        if (uint256(price.conf) * C.BPS > raw * p.fxMaxConfBps) revert PythConfidenceTooWide();
+        if (uint256(price.conf) * C.BPS > raw * p.fxMaxConfBps) revert ConfidenceTooWide();
         uint256 rate = _normalize(raw, price.expo);
         if (cfg.inverted) {
             if (rate == 0) revert InvalidPythPrice();
             rate = C.WAD * C.WAD / rate;
         }
-        return rate.toU64();
+        return rate;
     }
 
     /// @dev SPEC §6.6 step 2: `expo ≤ 0` → `price × 10^(18 + expo)` (requires `expo ≥ −18`), `expo > 0` →
@@ -132,13 +132,32 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
     }
 
     /// @inheritdoc IMercesFxAccumulator
+    function quarterAverage(bytes32 pairId, uint32 period) external view override returns (bool ok, uint256 avgWad) {
+        (, ok, avgWad,,) = _quarter(pairId, period);
+    }
+
+    /// @inheritdoc IMercesFxAccumulator
+    function quarterStats(bytes32 pairId, uint32 period)
+        external
+        view
+        override
+        returns (bool available, bool ok, uint256 avgWad, uint32 n, bool flagged)
+    {
+        return _quarter(pairId, period);
+    }
+
     /// @dev SPEC §6.6 `quarter_average`: the start is `checkpoints[p]`; the end is `checkpoints[p+1]` when present,
     /// else the live totals once `p` has ended and no snapshot has been taken in `p+1` yet (they are then exactly
     /// the end-of-`p` totals); otherwise `NeedsFallback`. `ok` needs trading-day coverage
     /// `n × 10000 ≥ trading_days_in_period(p) × min_coverage_bps` and no deviation flag on `p`.
-    function quarterAverage(bytes32 pairId, uint32 period) external view override returns (bool ok, uint64 avgWad) {
+    function _quarter(bytes32 pairId, uint32 period)
+        internal
+        view
+        returns (bool available, bool ok, uint256 avgWad, uint32 n, bool flagged)
+    {
         FxCheckpoint storage a = _s().checkpoints[pairId][period];
-        if (!a.exists) return (false, 0);
+        if (!a.exists) return (false, false, 0, 0, false);
+        flagged = a.flagged;
         FxCheckpoint storage b = _s().checkpoints[pairId][period + 1];
         uint256 sumEnd;
         uint256 countEnd;
@@ -150,15 +169,16 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
             if (
                 block.timestamp < Periods.periodEnd(period)
                     || uint256(st.lastDay) * C.DAY >= Periods.periodStart(period + 1)
-            ) return (false, 0);
+            ) return (false, false, 0, 0, flagged);
             sumEnd = st.sumWad;
             countEnd = st.count;
         }
-        uint256 n = countEnd - a.count;
-        if (n == 0) return (false, 0);
-        avgWad = ((sumEnd - a.sumWad) / n).toU64();
+        n = uint32(countEnd - a.count);
+        if (n == 0) return (false, false, 0, 0, flagged);
+        available = true;
+        avgWad = (sumEnd - a.sumWad) / n;
         uint16 minCoverage = registry().getDefaults().fxMinCoverageBps;
-        ok = n * C.BPS >= uint256(Periods.tradingDaysInPeriod(period)) * minCoverage && !a.flagged;
+        ok = uint256(n) * C.BPS >= uint256(Periods.tradingDaysInPeriod(period)) * minCoverage && !flagged;
     }
 
     function getFxPair(bytes32 pairId) external view override returns (FxPairState memory) {

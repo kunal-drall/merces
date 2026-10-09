@@ -51,7 +51,9 @@ pub struct OpenWindow<'info> {
     pub series: Box<Account<'info, Series>>,
     #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
     pub ledger: AccountLoader<'info, Ledger>,
-    #[account(init, payer = payer, space = 8 + Window::INIT_SPACE, seeds = [seeds::WINDOW, series.key().as_ref(), period.to_le_bytes().as_ref()], bump)]
+    /// `init_if_needed` so a second `open_window` for the same period reverts `WindowAlreadyOpen`
+    /// instead of failing account creation; the handler refuses any already-used window account.
+    #[account(init_if_needed, payer = payer, space = 8 + Window::INIT_SPACE, seeds = [seeds::WINDOW, series.key().as_ref(), period.to_le_bytes().as_ref()], bump)]
     pub window: Box<Account<'info, Window>>,
     pub system_program: Program<'info, System>,
 }
@@ -87,6 +89,11 @@ pub fn open_window(ctx: Context<OpenWindow>, period: u32) -> Result<()> {
     );
     require!(
         ledger.active_window().is_none(),
+        ProtocolError::WindowAlreadyOpen
+    );
+    require!(
+        ctx.accounts.window.state == WINDOW_CLOSED
+            && ctx.accounts.window.series == Pubkey::default(),
         ProtocolError::WindowAlreadyOpen
     );
     let commit_end = now
@@ -234,8 +241,8 @@ pub struct WindowCommitBid<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
     pub series: Box<Account<'info, Series>>,
-    #[account(seeds = [ALLOW, owner.key().as_ref()], bump = owner_allowlist.bump, seeds::program = merces_registry::ID)]
-    pub owner_allowlist: Box<Account<'info, AllowlistEntry>>,
+    /// CHECK: the owner's registry `AllowlistEntry` PDA; validated in the handler after the phase checks.
+    pub owner_allowlist: UncheckedAccount<'info>,
     #[account(mut, seeds = [seeds::WINDOW, series.key().as_ref(), window.period.to_le_bytes().as_ref()], bump = window.bump)]
     pub window: Box<Account<'info, Window>>,
     #[account(init, payer = owner, space = 8 + Order::INIT_SPACE, seeds = [seeds::ORDER, series.key().as_ref(), window.period.to_le_bytes().as_ref(), owner.key().as_ref()], bump)]
@@ -264,10 +271,10 @@ pub fn window_commit_bid<'info>(
         ProtocolError::WindowNotCommit
     );
     require!(escrow > 0, ProtocolError::ZeroEscrow);
-    require!(
-        ctx.accounts.owner_allowlist.allowed,
-        ProtocolError::NotAllowlisted
-    );
+    require_allowlisted(
+        &ctx.accounts.owner_allowlist.to_account_info(),
+        &ctx.accounts.owner.key(),
+    )?;
     transfer_stable(
         &ctx.accounts.stablecoin_program.to_account_info(),
         &ctx.accounts.owner_stable.to_account_info(),
@@ -832,9 +839,11 @@ pub fn process_order<'info>(ctx: Context<'info, ProcessOrder<'info>>) -> Result<
                     .ok_or(ProtocolError::MathOverflow)?;
             }
         }
+        // fee and refund leave the escrow now; the cost stays for the asks
+        let leaving = fee.checked_add(refund).ok_or(ProtocolError::MathOverflow)?;
         w.escrow_stable = w
             .escrow_stable
-            .checked_sub(o.escrow)
+            .checked_sub(leaving)
             .ok_or(ProtocolError::MathOverflow)?;
         w.escrow_units = w
             .escrow_units

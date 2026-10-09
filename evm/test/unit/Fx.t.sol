@@ -78,7 +78,7 @@ contract FxTest is FullFixture {
         vm.expectRevert(InvalidPythPrice.selector);
         fx.snapshot(PAIR, new bytes[](0));
         _pythAt(108_000_000, 1_080_001, block.timestamp);
-        vm.expectRevert(PythConfidenceTooWide.selector);
+        vm.expectRevert(ConfidenceTooWide.selector);
         fx.snapshot(PAIR, new bytes[](0));
         // an exponent below −18 cannot be represented
         pyth.setPrice(FEED, 1, 0, -19, block.timestamp);
@@ -100,9 +100,14 @@ contract FxTest is FullFixture {
     }
 
     function test_positiveExponentNormalizes() public {
-        pyth.setPrice(FEED, 108, 0, 2, block.timestamp); // 10,800 with expo +2
+        pyth.setPrice(FEED, 1, 0, 1, block.timestamp); // 10 with expo +1
         _snap();
-        assertEq(fx.getFxPair(PAIR).sumWad, 10_800e18);
+        assertEq(fx.getFxPair(PAIR).sumWad, 10e18);
+        // rates are uint256 WAD internally: a large positive exponent still accumulates exactly
+        vm.warp(block.timestamp + DAY);
+        pyth.setPrice(FEED, 108, 0, 2, block.timestamp);
+        fx.snapshot(PAIR, new bytes[](0));
+        assertEq(fx.getFxPair(PAIR).sumWad, 10e18 + 10_800e18);
     }
 
     function test_snapshotWithPythUpdateAndFeeRefund() public {
@@ -140,11 +145,19 @@ contract FxTest is FullFixture {
         assertEq(Periods.tradingDaysInPeriod(p + 1), 65);
         (bool ok,) = fx.quarterAverage(PAIR, p);
         assertFalse(ok); // no checkpoints yet
+        (bool avail,,,,) = fx.quarterStats(PAIR, p);
+        assertFalse(avail);
         // 51 snapshots < 80% of 64 trading days (51.2)
         _cover(p, 51, 108_000_000);
         vm.warp(Periods.periodEnd(p) + 1);
         (ok,) = fx.quarterAverage(PAIR, p); // the period ended and no snapshot was taken in p+1: live end
         assertFalse(ok); // NeedsFallback: low coverage
+        (bool avail1, bool ok1, uint256 avg1, uint32 n1, bool flagged1) = fx.quarterStats(PAIR, p);
+        assertTrue(avail1);
+        assertFalse(ok1);
+        assertFalse(flagged1);
+        assertEq(n1, 51);
+        assertEq(avg1, 1.08e18);
         // in a later period the live rule no longer applies until the next checkpoint exists... but a snapshot
         // in p+1 closes p for good, with the same (insufficient) count
         _pythAt(108_000_000, 50_000, block.timestamp);
@@ -163,15 +176,15 @@ contract FxTest is FullFixture {
         (ok,) = fx.quarterAverage(PAIR, p2);
         assertFalse(ok);
         vm.warp(Periods.periodEnd(p2) + 1);
-        uint64 avg;
+        uint256 avg;
         (ok, avg) = fx.quarterAverage(PAIR, p2); // 52 snapshots in p2 (the closing one on day 0 + 51)
         assertTrue(ok);
         // sum = 1.08 (day 0) + 26 × 1.10 + 25 × 1.08 → /52
-        assertEq(avg, uint64((1.08e18 + 26 * 1.10e18 + 25 * 1.08e18) / 52));
+        assertEq(avg, (1.08e18 + 26 * 1.1e18 + 25 * 1.08e18) / 52);
         // the next snapshot writes the checkpoint and yields the same result
         _pythAt(108_000_000, 50_000, block.timestamp);
         _snap();
-        (bool ok2, uint64 avg2) = fx.quarterAverage(PAIR, p2);
+        (bool ok2, uint256 avg2) = fx.quarterAverage(PAIR, p2);
         assertTrue(ok2);
         assertEq(avg2, avg);
     }
@@ -222,7 +235,7 @@ contract FxTest is FullFixture {
         // cover Q1 2026 at a constant 1.10 so the quarter average is exactly 1.1e18 (fxQ1 proof)
         _cover(Q1_2026, Periods.daysInPeriod(Q1_2026), 110_000_000);
         vm.warp(Periods.periodEnd(Q1_2026) + 1);
-        (bool ok, uint64 avg) = fx.quarterAverage(PAIR, Q1_2026);
+        (bool ok, uint256 avg) = fx.quarterAverage(PAIR, Q1_2026);
         assertTrue(ok);
         assertEq(avg, 1.1e18);
         IMercesIncome.ReportInput memory r = reportInput(sid, Q1_2026, Proofs.fxQ1(), 2, false);
@@ -233,7 +246,7 @@ contract FxTest is FullFixture {
         r = reportInput(sid, Q1_2026, Proofs.fxQ1(), 2, false);
         r.fxFallbackSignature = sign(attestorKey, MercesMessages.fxDigest(domain, sid, Q1_2026, 1.1e18));
         vm.prank(issuer);
-        vm.expectRevert(FxFallbackNotNeeded.selector);
+        vm.expectRevert(FxFallbackNotAllowed.selector);
         income.submitReport(r);
         r = reportInput(sid, Q1_2026, Proofs.fxQ1(), 2, false);
         vm.prank(issuer);
@@ -248,16 +261,16 @@ contract FxTest is FullFixture {
         vm.warp(Periods.periodEnd(Q1_2026 + 1) + 1);
         IMercesIncome.ReportInput memory r2 = reportInput(sid, Q1_2026 + 1, Proofs.q2(), 2, false);
         vm.prank(issuer);
-        vm.expectRevert(FxFallbackSignatureRequired.selector);
+        vm.expectRevert(FxFallbackRequired.selector);
         income.submitReport(r2);
         r2.fxFallbackSignature = sign(0xDEAD, MercesMessages.fxDigest(domain, sid, Q1_2026 + 1, 1e18));
         vm.prank(issuer);
-        vm.expectRevert(abi.encodeWithSelector(AttestorNotRegistered.selector, vm.addr(0xDEAD)));
+        vm.expectRevert(abi.encodeWithSelector(InvalidAttestorSignature.selector, vm.addr(0xDEAD)));
         income.submitReport(r2);
         r2.fxFallbackSignature = sign(attestorKey, MercesMessages.fxDigest(domain, sid, Q1_2026 + 1, 1e18));
-        // the fallback is accepted, but q2 was proven against the USD terms → the proof fails
+        // the fallback is accepted, but q2 does not chain to fxQ1's commitment
         vm.prank(issuer);
-        vm.expectRevert(InvalidProof.selector);
+        vm.expectRevert(PriorCommitmentMismatch.selector);
         income.submitReport(r2);
     }
 }

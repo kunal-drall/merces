@@ -12,7 +12,7 @@ import {MercesRouterReceiver} from "./MercesRouterReceiver.sol";
 import {MercesMath} from "./libraries/MercesMath.sol";
 import {MercesConstants as C} from "./libraries/MercesConstants.sol";
 import {Periods} from "./libraries/Periods.sol";
-import {ProtocolContracts, SeriesCore, Tier1Terms, TierFlags} from "./types/MercesTypes.sol";
+import {ProtocolContracts, RaiseState, SeriesCore, Tier1Terms, TierFlags} from "./types/MercesTypes.sol";
 import "./types/MercesErrors.sol";
 
 /// @title MercesRouter
@@ -55,8 +55,11 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
     /// @dev Anyone may deploy the receiving account of a tier-1 series at its deterministic address.
     function createRouterReceiver(uint256 seriesId) external override returns (address receiver) {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
-        if (!TierFlags.has(core.tierFlags, 1)) revert NotTierOne();
-        Router storage r = _s().routers[seriesId];
+        if (!TierFlags.has(core.tierFlags, 1)) revert RouterNotEnabled();
+        return _ensureReceiver(seriesId, _s().routers[seriesId]);
+    }
+
+    function _ensureReceiver(uint256 seriesId, Router storage r) internal returns (address receiver) {
         if (r.receiverDeployed) return r.receiver;
         receiver = address(new MercesRouterReceiver{salt: bytes32(seriesId)}(seriesId));
         r.receiverDeployed = true;
@@ -75,32 +78,49 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
     // ---------------------------------------------------------------- routing (anyone)
 
     /// @inheritdoc IMercesRouter
-    /// @dev Pulls `amount` from the caller and splits it.
+    /// @dev Pulls `amount` from the caller. Before mint finalization of a settled raise the income is held in
+    /// the receiving account (SPEC §6.5 "waits in the receiving account"); afterwards it is split together
+    /// with anything still held there.
     function route(uint256 seriesId, uint64 amount) external override nonReentrant {
-        SeriesCore memory core = _routable(seriesId);
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
+        if (!TierFlags.has(core.tierFlags, 1)) revert RouterNotEnabled();
+        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
         if (amount == 0) revert ZeroAmount();
-        IERC20(core.stablecoin).safeTransferFrom(msg.sender, address(this), amount);
-        _route(seriesId, core, amount);
+        Router storage r = _s().routers[seriesId];
+        IERC20 stable = IERC20(core.stablecoin);
+        if (!core.mintFinalized) {
+            address receiver = _ensureReceiver(seriesId, r);
+            r.heldBeforeFinalization = (uint256(r.heldBeforeFinalization) + amount).toU64();
+            emit IncomeHeld(seriesId, amount, (stable.balanceOf(receiver) + amount).toU64());
+            stable.safeTransferFrom(msg.sender, receiver, amount);
+            return;
+        }
+        stable.safeTransferFrom(msg.sender, address(this), amount);
+        uint64 held = _collectHeld(r, stable);
+        _route(seriesId, core, (uint256(amount) + held).toU64());
     }
 
     /// @inheritdoc IMercesRouter
     /// @dev Moves the receiving account's whole balance here and splits it.
     function sweep(uint256 seriesId) external override nonReentrant {
-        SeriesCore memory core = _routable(seriesId);
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
+        if (!TierFlags.has(core.tierFlags, 1)) revert RouterNotEnabled();
+        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
+        if (!core.mintFinalized) revert MintNotFinalized();
         Router storage r = _s().routers[seriesId];
         if (!r.receiverDeployed) revert RouterNotConfigured();
-        IERC20 stable = IERC20(core.stablecoin);
-        uint256 bal = stable.balanceOf(r.receiver);
-        if (bal == 0) revert ZeroAmount();
-        uint64 amount = bal.toU64();
-        MercesRouterReceiver(r.receiver).forward(stable, amount);
-        _route(seriesId, core, amount);
+        uint64 held = _collectHeld(r, IERC20(core.stablecoin));
+        if (held == 0) revert ZeroAmount();
+        _route(seriesId, core, held);
     }
 
-    function _routable(uint256 seriesId) internal view returns (SeriesCore memory core) {
-        core = registry().getSeriesCore(seriesId);
-        if (!TierFlags.has(core.tierFlags, 1)) revert NotTierOne();
-        if (!core.mintFinalized) revert MintNotFinalized();
+    /// @dev Pulls whatever the receiving account holds into the router (zero when none is deployed).
+    function _collectHeld(Router storage r, IERC20 stable) internal returns (uint64 held) {
+        if (!r.receiverDeployed) return 0;
+        uint256 bal = stable.balanceOf(r.receiver);
+        if (bal == 0) return 0;
+        held = bal.toU64();
+        MercesRouterReceiver(r.receiver).forward(stable, held);
     }
 
     /// @dev SPEC §6.5: close the periods since the last receipt, reset YTD at a year boundary, pass income below
@@ -155,7 +175,7 @@ contract MercesRouter is MercesUpgradeable, IMercesRouter {
     /// tier-1 report can be verified even when no receipt arrives in the following period.
     function closeRouterPeriod(uint256 seriesId, uint32 period) external override {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
-        if (!TierFlags.has(core.tierFlags, 1)) revert NotTierOne();
+        if (!TierFlags.has(core.tierFlags, 1)) revert RouterNotEnabled();
         if (period >= Periods.periodOf(block.timestamp)) revert PeriodNotEndedYet(period);
         _closeThrough(seriesId, _s().routers[seriesId], Periods.periodOf(core.settlementTs), period);
     }

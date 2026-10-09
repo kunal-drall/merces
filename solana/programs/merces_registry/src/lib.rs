@@ -299,6 +299,9 @@ pub mod merces_registry {
     /// FX pair configuration (SPEC §3.1): `pair_id = keccak256(feed_id ‖ inverted)`; `feed_id` and
     /// `inverted` are write-once; `crosscheck` may be set from zero once (effective now), later
     /// changes apply from the next period; `enabled` only gates new series.
+    /// Registers an FX pair, write-once: `pair_id = keccak256(feed_id ‖ inverted)` commits to the
+    /// feed and its direction, and a pair can never be re-registered (SPEC §3.1). The cross-check
+    /// feed is recorded with its effective period; on Solana it stays unset in this version (A21).
     pub fn set_fx_pair(
         ctx: Context<SetFxPair>,
         pair_id: [u8; 32],
@@ -313,38 +316,38 @@ pub mod merces_registry {
         let now = now_u64()?;
         let current_period = period_of(now).map_err(|_| RegistryError::MathOverflow)?;
         let p = &mut ctx.accounts.fx_pair;
-        if p.pair_id == [0u8; 32] {
-            p.pair_id = pair_id;
-            p.feed_id = feed_id;
-            p.inverted = inverted;
-            p.crosscheck = crosscheck;
-            p.crosscheck_effective_period = if crosscheck == Pubkey::default() {
-                0
-            } else {
-                current_period
-            };
-            p.bump = ctx.bumps.fx_pair;
+        require!(p.pair_id == [0u8; 32], RegistryError::FxPairImmutable);
+        p.pair_id = pair_id;
+        p.feed_id = feed_id;
+        p.inverted = inverted;
+        p.crosscheck = crosscheck;
+        p.crosscheck_effective_period = if crosscheck == Pubkey::default() {
+            0
         } else {
-            require!(
-                p.feed_id == feed_id && p.inverted == inverted,
-                RegistryError::FxPairImmutable
-            );
-            if crosscheck != p.crosscheck {
-                p.crosscheck_effective_period = if p.crosscheck == Pubkey::default() {
-                    current_period
-                } else {
-                    current_period
-                        .checked_add(1)
-                        .ok_or(RegistryError::MathOverflow)?
-                };
-                p.crosscheck = crosscheck;
-            }
-        }
+            current_period
+        };
         p.enabled = enabled;
+        p.bump = ctx.bumps.fx_pair;
         emit!(FxPairSet {
             pair_id,
             feed_id,
             inverted,
+            crosscheck: p.crosscheck,
+            crosscheck_effective_period: p.crosscheck_effective_period,
+            enabled,
+        });
+        Ok(())
+    }
+
+    /// Enables or disables an existing pair (`enabled = false` only stops new series from
+    /// referencing it; live series keep their pair, SPEC §3.1).
+    pub fn set_fx_pair_enabled(ctx: Context<SetFxPairEnabled>, enabled: bool) -> Result<()> {
+        let p = &mut ctx.accounts.fx_pair;
+        p.enabled = enabled;
+        emit!(FxPairSet {
+            pair_id: p.pair_id,
+            feed_id: p.feed_id,
+            inverted: p.inverted,
             crosscheck: p.crosscheck,
             crosscheck_effective_period: p.crosscheck_effective_period,
             enabled,
@@ -971,6 +974,15 @@ pub struct SetFxPair<'info> {
     #[account(init_if_needed, payer = admin, space = 8 + FxPairConfig::INIT_SPACE, seeds = [FX, pair_id.as_ref()], bump)]
     pub fx_pair: Account<'info, FxPairConfig>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetFxPairEnabled<'info> {
+    #[account(seeds = [CONFIG], bump = config.bump, has_one = admin @ RegistryError::Unauthorized)]
+    pub config: Account<'info, ProtocolConfig>,
+    pub admin: Signer<'info>,
+    #[account(mut, seeds = [FX, fx_pair.pair_id.as_ref()], bump = fx_pair.bump)]
+    pub fx_pair: Account<'info, FxPairConfig>,
 }
 
 #[derive(Accounts)]

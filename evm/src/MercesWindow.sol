@@ -17,7 +17,7 @@ import {MercesMath} from "./libraries/MercesMath.sol";
 import {MercesMessages} from "./libraries/MercesMessages.sol";
 import {MercesConstants as C} from "./libraries/MercesConstants.sol";
 import {Periods} from "./libraries/Periods.sol";
-import {ProtocolContracts, SeriesCore, SeriesStatus, SeriesTerms} from "./types/MercesTypes.sol";
+import {ProtocolContracts, RaiseState, SeriesCore, SeriesStatus, SeriesTerms} from "./types/MercesTypes.sol";
 import "./types/MercesErrors.sol";
 
 /// @title MercesWindow
@@ -74,19 +74,19 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         if (!registry().getFlags().windowsEnabled) revert WindowsDisabled();
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         SeriesTerms memory terms = registry().getSeriesTerms(seriesId);
+        if (core.raiseState != RaiseState.Settled) revert RaiseNotSettled();
         if (!core.mintFinalized) revert MintNotFinalized();
         if (block.timestamp < uint256(core.settlementTs) + terms.lockupSeconds) revert LockupActive();
         IMercesIncome income = IMercesIncome(_contracts().income);
         SeriesStatus st = income.deriveStatus(seriesId);
-        if (st != SeriesStatus.OnTime && st != SeriesStatus.InGrace) revert WindowNotEligibleStatus();
+        if (st != SeriesStatus.OnTime && st != SeriesStatus.InGrace) revert WindowNotEligible();
         (bool hasPaid, uint32 lastPaid) = income.lastPaidPeriod(seriesId);
-        if (!hasPaid || lastPaid < period) revert ReportNotPaid();
-        uint32 expected = Periods.periodOf(block.timestamp) - 1;
-        if (period != expected) revert WrongWindowPeriod(expected, period);
+        if (!hasPaid || lastPaid < period) revert WindowNotEligible();
+        if (period != Periods.periodOf(block.timestamp) - 1) revert WindowNotEligible();
         WindowStorage storage $ = _s();
-        if ($.hasActive[seriesId] || $.unprocessedOrders[seriesId] != 0) revert WindowAlreadyOpen();
+        if ($.hasActive[seriesId] || $.unprocessedOrders[seriesId] != 0) revert WindowOpen();
         Window storage w = $.windows[seriesId][period];
-        if (w.state != WindowState.None) revert WindowAlreadyOpen();
+        if (w.state != WindowState.None) revert WindowOpen();
         w.state = WindowState.Open;
         w.period = period;
         w.opensAt = uint64(block.timestamp);
@@ -105,16 +105,18 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     /// units count, SPEC §6.1).
     function commitAsk(uint256 seriesId, bytes32 commitment, uint64 units) external override nonReentrant {
         (Window storage w, uint32 period) = _openWindow(seriesId);
-        if (block.timestamp >= w.commitEnd) revert CommitPhaseOver();
+        if (block.timestamp >= w.commitEnd) revert CommitPhaseClosed();
         if (units == 0) revert ZeroUnits();
+        IERC3643Token token = IERC3643Token(registry().getSeriesCore(seriesId).unitToken);
+        if (units > token.balanceOf(msg.sender)) revert InsufficientUnits();
+        // settle at the current weight before the escrow accounting changes (the weight itself is unchanged)
+        IMercesVault(_contracts().vault).settleHolder(seriesId, msg.sender);
         WindowStorage storage $ = _s();
         _newOrder($, w, seriesId, period, Side.Ask, commitment, units);
         w.escrowUnits += units;
         $.askEscrow[seriesId][msg.sender] += units;
         emit OrderCommitted(seriesId, period, msg.sender, Side.Ask, units);
 
-        IMercesVault(_contracts().vault).settleHolder(seriesId, msg.sender);
-        IERC3643Token token = IERC3643Token(registry().getSeriesCore(seriesId).unitToken);
         $.armedDeposit[msg.sender] = units;
         if (!token.transferFrom(msg.sender, address(this), units)) revert TransferFailed();
         delete $.armedDeposit[msg.sender];
@@ -123,8 +125,8 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     /// @inheritdoc IMercesWindow
     function commitBid(uint256 seriesId, bytes32 commitment, uint64 escrow) external override nonReentrant {
         (Window storage w, uint32 period) = _openWindow(seriesId);
-        if (block.timestamp >= w.commitEnd) revert CommitPhaseOver();
-        if (!registry().isAllowed(msg.sender)) revert WalletNotAllowlisted(msg.sender);
+        if (block.timestamp >= w.commitEnd) revert CommitPhaseClosed();
+        if (!registry().isAllowed(msg.sender)) revert NotAllowlisted(msg.sender);
         if (escrow == 0) revert ZeroEscrow();
         _newOrder(_s(), w, seriesId, period, Side.Bid, commitment, escrow);
         w.bidCount += 1;
@@ -142,7 +144,7 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         bytes32 commitment,
         uint64 escrow
     ) internal {
-        if ($.orderIndexPlusOne[seriesId][period][msg.sender] != 0) revert OrderAlreadyExists();
+        if ($.orderIndexPlusOne[seriesId][period][msg.sender] != 0) revert OrderExists();
         Order[] storage list = $.orders[seriesId][period];
         if (list.length >= C.MAX_ORDERS_PER_WINDOW) revert TooManyOrders();
         list.push();
@@ -163,7 +165,8 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     /// `escrow ≥ p×q + fee` and `balance(owner) + quantity ≤ wallet_cap_units`. A failure records `valid = false`.
     function revealOrder(uint256 seriesId, uint64 price, uint64 quantity, bytes32 salt) external override {
         (Window storage w, uint32 period) = _openWindow(seriesId);
-        if (block.timestamp < w.commitEnd || block.timestamp >= w.revealEnd) revert NotRevealPhase();
+        if (block.timestamp < w.commitEnd) revert RevealNotStarted();
+        if (block.timestamp >= w.revealEnd) revert RevealPhaseClosed();
         WindowStorage storage $ = _s();
         uint256 idx = $.orderIndexPlusOne[seriesId][period][msg.sender];
         if (idx == 0) revert OrderNotFound();
@@ -203,8 +206,8 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     /// @dev A new proposal is accepted only when no round is in progress or the completed round was rejected.
     function beginWindowSettlement(uint256 seriesId, uint64 clearingPrice, bool noMatch) external override {
         (Window storage w, uint32 period) = _activeWindow(seriesId);
-        if (w.state != WindowState.Open && w.state != WindowState.Settling) revert InvalidSettlementState();
-        if (block.timestamp < w.revealEnd) revert RevealNotOver();
+        if (w.state != WindowState.Open && w.state != WindowState.Settling) revert WindowNotOpen();
+        if (block.timestamp < w.revealEnd) revert SettlementNotReady();
         if (w.tallyRound != 0 && !w.roundRejected) revert TallyInProgress();
         if (!noMatch && clearingPrice == 0) revert InvalidProposal();
         w.state = WindowState.Settling;
@@ -228,7 +231,7 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     /// @inheritdoc IMercesWindow
     function tallyOrders(uint256 seriesId, uint256 fromIndex, uint256 toIndex) external override {
         (Window storage w, uint32 period) = _activeWindow(seriesId);
-        if (w.state != WindowState.Settling || w.roundRejected) revert InvalidSettlementState();
+        if (w.state != WindowState.Settling || w.roundRejected) revert NotSettling();
         Order[] storage list = _s().orders[seriesId][period];
         if (fromIndex >= toIndex || toIndex > list.length) revert TallyRangeInvalid();
         if (toIndex - fromIndex > C.MAX_TALLY_PAGE) revert TallyPageTooLarge();
@@ -261,7 +264,7 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     /// or (B) demand-limited `D > 0 && s_below ≤ D && D < S` must hold. A wrong proposal is rejected, not reverted.
     function finalizeWindow(uint256 seriesId) external override {
         (Window storage w, uint32 period) = _activeWindow(seriesId);
-        if (w.state != WindowState.Settling || w.roundRejected) revert InvalidSettlementState();
+        if (w.state != WindowState.Settling || w.roundRejected) revert NotSettling();
         if (w.talliedCount != w.revealedCount) revert TallyIncomplete();
         if (w.noMatchProposed) {
             bool crossing = w.hasValidBid && w.hasValidAsk && w.maxBid >= w.minAsk;
@@ -309,7 +312,7 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     function processOrder(uint256 seriesId, uint32 period, uint256 orderIndex) external override nonReentrant {
         WindowStorage storage $ = _s();
         Window storage w = $.windows[seriesId][period];
-        if (w.state != WindowState.Settled && w.state != WindowState.NoMatch) revert WindowNotSettled();
+        if (w.state != WindowState.Settled && w.state != WindowState.NoMatch) revert WindowNotOpen();
         Order[] storage list = $.orders[seriesId][period];
         if (orderIndex >= list.length) revert OrderNotFound();
         Order storage o = list[orderIndex];
@@ -495,12 +498,12 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
 
     function _openWindow(uint256 seriesId) internal view returns (Window storage w, uint32 period) {
         (w, period) = _activeWindow(seriesId);
-        if (w.state != WindowState.Open) revert InvalidSettlementState();
+        if (w.state != WindowState.Open) revert WindowNotOpen();
     }
 
     function _activeWindow(uint256 seriesId) internal view returns (Window storage w, uint32 period) {
         WindowStorage storage $ = _s();
-        if (!$.hasActive[seriesId]) revert NoActiveWindow();
+        if (!$.hasActive[seriesId]) revert WindowNotOpen();
         period = $.activePeriod[seriesId];
         w = $.windows[seriesId][period];
     }

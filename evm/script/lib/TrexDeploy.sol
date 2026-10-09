@@ -42,9 +42,10 @@ library TrexDeploy {
         s.implementationAuthority = _create(
             vm, "TREXImplementationAuthority.sol:TREXImplementationAuthority", abi.encode(true, address(0), address(0))
         );
-        ITrexImplementationAuthorityLite(s.implementationAuthority).addAndUseTREXVersion(
-            ITrexImplementationAuthorityLite.Version({major: 4, minor: 1, patch: 6}),
-            ITrexImplementationAuthorityLite.TREXContracts({
+        ITrexImplementationAuthorityLite(s.implementationAuthority)
+            .addAndUseTREXVersion(
+                ITrexImplementationAuthorityLite.Version({major: 4, minor: 1, patch: 6}),
+                ITrexImplementationAuthorityLite.TREXContracts({
                 tokenImplementation: s.tokenImpl,
                 ctrImplementation: s.ctrImpl,
                 irImplementation: s.irImpl,
@@ -52,7 +53,7 @@ library TrexDeploy {
                 tirImplementation: s.tirImpl,
                 mcImplementation: s.mcImpl
             })
-        );
+            );
 
         s.claimTopicsRegistry =
             _create(vm, "ClaimTopicsRegistryProxy.sol:ClaimTopicsRegistryProxy", abi.encode(s.implementationAuthority));

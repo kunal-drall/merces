@@ -159,7 +159,9 @@ pub struct SubmitReport<'info> {
     pub series: Box<Account<'info, Series>>,
     #[account(mut, seeds = [seeds::LEDGER, series.key().as_ref()], bump)]
     pub ledger: AccountLoader<'info, Ledger>,
-    #[account(init, payer = issuer, space = 8 + Report::INIT_SPACE, seeds = [seeds::REPORT, series.key().as_ref(), args.period.to_le_bytes().as_ref()], bump)]
+    /// `init_if_needed` so a repeated period reverts `WrongPeriod` (the sequential-period rule
+    /// guarantees the account of the next expected period is fresh).
+    #[account(init_if_needed, payer = issuer, space = 8 + Report::INIT_SPACE, seeds = [seeds::REPORT, series.key().as_ref(), args.period.to_le_bytes().as_ref()], bump)]
     pub report: Box<Account<'info, Report>>,
     /// CHECK: registry key PDA for `attestation_addr` (verifier key for tier 2, attestor for tier 3);
     /// validated in the handler. Any account for tiers 1 and 4.
@@ -511,7 +513,9 @@ pub struct Pay<'info> {
     /// The report of the open due period (`pay`); unused by `pay_trueup`.
     #[account(mut, seeds = [seeds::REPORT, series.key().as_ref(), report.period.to_le_bytes().as_ref()], bump = report.bump)]
     pub report: Option<Box<Account<'info, Report>>>,
-    #[account(mut, token::mint = stablecoin_mint, token::authority = payer, token::token_program = stablecoin_program)]
+    /// The payer's stablecoin account; `dup` because the issuer usually pays from the same account
+    /// that receives truncation refunds (`issuer_stable_ata`).
+    #[account(mut, dup, token::mint = stablecoin_mint, token::authority = payer, token::token_program = stablecoin_program)]
     pub payer_stable: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, seeds = [seeds::VAULT_TOKEN, series.key().as_ref()], bump)]
     pub vault_token: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -760,6 +764,22 @@ pub fn submit_trueup(
     let status = ledger.sync_status(now, series_key)?;
     require!(ledger.is_mint_finalized(), ProtocolError::MintNotFinalized);
     require!(!status.is_terminal(), ProtocolError::TerminalStatus);
+    // signature over the stored nonce first: a replay fails before any state check
+    let msg = keccak(&[trueup_message(
+        &ctx.accounts.config.domain,
+        &series_key.to_bytes(),
+        ledger.trueup_nonce,
+        year,
+        adjustment,
+        attestation_ts,
+    )
+    .as_bytes()]);
+    require_signer(&msg, &attestor_sig, &attestor_addr)?;
+    require_active_attestor(&ctx.accounts.attestor_key.to_account_info(), &attestor_addr)?;
+    require!(
+        attestation_ts <= now,
+        ProtocolError::TrueUpTimestampInFuture
+    );
     require!(ledger.trueup_due == 0, ProtocolError::TrueUpOutstanding);
     let year32 = u32::from(year);
     require!(
@@ -779,21 +799,6 @@ pub fn submit_trueup(
             && matches!(ledger.last_accepted_period(), Some(p) if p >= last_of_year),
         ProtocolError::TrueUpYearIncomplete
     );
-    require!(
-        attestation_ts <= now,
-        ProtocolError::TrueUpTimestampInFuture
-    );
-    let msg = keccak(&[trueup_message(
-        &ctx.accounts.config.domain,
-        &series_key.to_bytes(),
-        ledger.trueup_nonce,
-        year,
-        adjustment,
-        attestation_ts,
-    )
-    .as_bytes()]);
-    require_signer(&msg, &attestor_sig, &attestor_addr)?;
-    require_active_attestor(&ctx.accounts.attestor_key.to_account_info(), &attestor_addr)?;
     ledger.trueup_nonce = ledger
         .trueup_nonce
         .checked_add(1)

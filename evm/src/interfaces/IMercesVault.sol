@@ -80,7 +80,9 @@ interface IMercesVault is IPayoutClaims {
         uint64 units,
         uint64 deposit
     );
-    event TailDistributed(uint256 indexed series, uint32 period, uint64 gross, uint64 accepted, uint64 fee, uint64 refunded);
+    event TailDistributed(
+        uint256 indexed series, uint32 period, uint64 gross, uint64 accepted, uint64 fee, uint64 refunded
+    );
     event SeriesExtinguished(uint256 indexed series, uint64 unreleased, address attestorA, address attestorB);
 
     /// @dev Auction only, at mint finalization: `units_outstanding = units_sold`.

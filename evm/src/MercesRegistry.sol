@@ -473,22 +473,22 @@ contract MercesRegistry is IMercesRegistry {
         SeriesMode mode
     ) internal view {
         Issuer storage issuer = _issuers[msg.sender];
-        if (!issuer.registered || !issuer.active) revert IssuerNotActive();
-        if (issuer.issuanceStopped) revert IssuanceStoppedByIssuer();
+        if (!issuer.registered || !issuer.active) revert IssuerInactive();
+        if (issuer.issuanceStopped) revert IssuerIssuanceStopped();
         if (!_allowed[msg.sender]) revert IssuerNotAllowlisted();
         if (mode != SeriesMode.SealedBid) revert CurveModeUnsupported();
         if (!_stablecoins[p.stablecoin]) revert StablecoinNotAllowed(p.stablecoin);
-        if (p.unitsOffered < 1) revert InvalidUnitsOffered();
-        if (p.reservePrice < 1) revert InvalidReservePrice();
+        if (p.unitsOffered < 1) revert InvalidTerms("unitsOffered");
+        if (p.reservePrice < 1) revert InvalidTerms("reservePrice");
         // reserve × units must stay in the shared uint64 money domain, and bounds the minimum raise
         uint256 maxProceeds = uint256(p.reservePrice) * p.unitsOffered;
         maxProceeds.toU64();
-        if (p.minRaise > maxProceeds) revert MinRaiseTooHigh();
+        if (p.minRaise > maxProceeds) revert InvalidTerms("minRaise");
         if (tierFlags == 0 || tierFlags & ~TierFlags.ALL != 0) revert InvalidTierFlags();
         if (fxPairId_ != bytes32(0) && !_fxPairs[fxPairId_].enabled) revert UnknownFxPair(fxPairId_);
         if (termsCommitment == bytes32(0)) revert ParameterOutOfBounds("termsCommitment");
         // at least one unit of wallet cap, otherwise no bid could ever be valid (SPEC §1.6)
-        if (uint256(p.unitsOffered).bpsOf(_defaults.walletCapBps) < 1) revert WalletCapTooSmall();
+        if (uint256(p.unitsOffered).bpsOf(_defaults.walletCapBps) < 1) revert InvalidTerms("walletCap");
         _checkSeriesParams(p);
     }
 
@@ -499,7 +499,8 @@ contract MercesRegistry is IMercesRegistry {
         view
     {
         if (fxPairId_ != bytes32(0)) revert Tier1RequiresStablecoinIncome();
-        if (uint256(t.rWad) * p.unitsOffered > C.WAD) revert Tier1RateTooHigh();
+        if (t.rWad == 0) revert RouterNotEnabled(); // a tier-1 flag needs router terms
+        if (uint256(t.rWad) * p.unitsOffered > C.WAD) revert InvalidTerms("tier1Rate");
         _checkTier1Commitment(termsCommitment, t);
     }
 
@@ -573,16 +574,18 @@ contract MercesRegistry is IMercesRegistry {
         SeriesCore storage core = _cores[seriesId];
         SeriesTerms storage terms = _terms[seriesId];
         if (msg.sender != core.issuer) revert NotIssuer();
-        if (core.terminalStatus != 0) revert SeriesTerminal();
+        if (core.terminalStatus != 0) revert AmendmentAfterTerminal();
         if (newTermsCommitment == bytes32(0)) revert ParameterOutOfBounds("termsCommitment");
-        if (newCapMultipleWad > terms.capMultipleWad) revert CapMultipleIncrease();
-        if (newCapMultipleWad < C.CAP_MULTIPLE_MIN) revert ParameterOutOfBounds("capMultipleWad");
+        if (newCapMultipleWad > terms.capMultipleWad || newCapMultipleWad < C.CAP_MULTIPLE_MIN) {
+            revert UnfavourableAmendment();
+        }
         uint64 nonce = core.amendmentNonce;
         bytes32 digest = MercesMessages.amendDigest(domain, seriesId, nonce, newTermsCommitment, newCapMultipleWad);
         address signer = ECDSA.recover(digest, attestorSignature);
-        if (!_attestors[signer].active) revert AttestorNotRegistered(signer);
+        if (!_attestors[signer].active) revert InvalidAttestorSignature(signer);
         if (core.tierFlags & TierFlags.TIER1_SPLIT != 0) {
-            if (uint256(tier1Terms.rWad) * terms.unitsOffered > C.WAD) revert Tier1RateTooHigh();
+            if (tier1Terms.rWad == 0) revert RouterNotEnabled();
+            if (uint256(tier1Terms.rWad) * terms.unitsOffered > C.WAD) revert InvalidTerms("tier1Rate");
             _checkTier1Commitment(newTermsCommitment, tier1Terms);
             _tier1[seriesId] = tier1Terms;
         }
@@ -643,8 +646,7 @@ contract MercesRegistry is IMercesRegistry {
     /// @dev none → Retired / Redeemed / Extinguished; Retired or Redeemed → Extinguished (SPEC §6.9).
     function markTerminal(uint256 seriesId, SeriesStatus status) external override onlyVault seriesExists(seriesId) {
         SeriesCore storage core = _cores[seriesId];
-        if (status != SeriesStatus.Retired && status != SeriesStatus.Redeemed && status != SeriesStatus.Extinguished)
-        {
+        if (status != SeriesStatus.Retired && status != SeriesStatus.Redeemed && status != SeriesStatus.Extinguished) {
             revert InvalidTerminalStatus();
         }
         if (core.terminalStatus != 0) {

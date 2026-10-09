@@ -37,7 +37,10 @@ fn be32_to_u64(b: &[u8; 32]) -> u64 {
 
 /// Path of a vector file inside `packages/vectors`.
 pub fn vector_path(name: &str) -> String {
-    format!("{}/../../packages/vectors/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!(
+        "{}/../../packages/vectors/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
 }
 
 /// Every `submit_report` step of a vector (actions and `expect_revert` calls) as proof material,
@@ -47,12 +50,21 @@ pub fn report_proofs(vector: &str, series: &str) -> Vec<ReportProof> {
     let v: Value = serde_json::from_str(&text).expect("vector json");
     let mut out = Vec::new();
     for step in v["steps"].as_array().unwrap() {
-        let call = if step["op"] == "expect_revert" { &step["call"] } else { step };
+        let call = if step["op"] == "expect_revert" {
+            &step["call"]
+        } else {
+            step
+        };
         if call["op"] != "submit_report" || call["series"] != series {
             continue;
         }
         let sol = &call["proofSolana"];
-        let pi: Vec<[u8; 32]> = sol["publicInputs"].as_array().unwrap().iter().map(|x| hex32(x.as_str().unwrap())).collect();
+        let pi: Vec<[u8; 32]> = sol["publicInputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| hex32(x.as_str().unwrap()))
+            .collect();
         out.push(ReportProof {
             period: call["period"].as_str().unwrap().parse().unwrap(),
             terms_commitment: pi[0],
