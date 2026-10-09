@@ -17,7 +17,8 @@ explains how to use the API; the spec is the source of truth for shapes.
   <token>`. One account links a Solana and an EVM wallet (`POST /me/wallets/link`). Roles and eligibility are inside the
   token; refresh with `POST /me/session/refresh` after review decisions.
 - **Access tiers** (`x-access` on every operation): `public`, `account` (signed in), `backer` (passed eligibility),
-  `holder` (holds or held units of that series), `issuer` (the series' issuer), `attestor`, `admin`, and the
+  `holder` (holds or held units of that series), `issuer` (the series' issuer), `attestor` (a wallet registered
+  onchain and indexed; a proposal alone gets 403 "pending"), `admin`, and the
   combinations `holder-or-issuer`, `issuer-or-attestor`.
 - **Writes** accept an `Idempotency-Key` header, scoped to your account; the same key with the same body replays the
   stored response, a different body is a 409, and a repeat while the first request is still running is a 409 (retry later).
@@ -45,14 +46,16 @@ lateness is refused onchain after the next day boundary; rebuild it) → hardshi
 …/bids/build-commit` → keep an encrypted backup (`PUT …/bids/backup`) → reveal (`POST …/bids/build-reveal`) → refunds
 (`POST …/bids/build-refund`) → `GET /me/holdings`, `GET /series/{id}/payouts`, claims (`POST
 /series/{id}/payouts/build-claim`), redemption claims. Curve-mode buys (`POST /series/{id}/curve/build-buy`) need a wallet on that
-chain's allowlist (403 otherwise). The auction preview leaves out bidders no longer allowlisted, as settlement does.
+chain's allowlist (403 otherwise) and, while the curve is bonding, stay within the wallet cap shown by
+`GET /series/{id}/curve` (`walletCap`; 422 with the remaining allowance otherwise). After graduation no cap applies. The auction preview leaves out bidders no longer allowlisted, as settlement does.
 `GET /me/bids` shows `refundable` as what `claimRefund` would pay now: 0 before settlement, then the deposit less the
 allocated spend, its auction fee and anything already refunded.
 
 **Attestor**: `GET /attestor/queue` → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
 attestations, extinguishment transactions (two signers).
 
-**Admin**: review queue, eligibility revocation, flags, templates, attestor and verifier-key registration (multisig
+**Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
+(`GET /admin/attestors`) and verifier-key registration (multisig
 transactions), accounting and reconciliation, notification backlog, keeper runs, audit log.
 
 ## What the public sees

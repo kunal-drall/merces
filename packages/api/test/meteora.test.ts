@@ -43,27 +43,51 @@ describe.skipIf(!dbTestsEnabled())('M6 Meteora support (E14)', () => {
     expect(viaUsdg.json().swap.quote.outAmount).toBe('999500000');
     expect(viaUsdg.json().swap.transactionBase64).toBeTruthy();
     expect(viaUsdg.json().tx.command.kind).toBe('buyCurve');
+    // the bonding-phase wallet cap is shown with the notice (harness terms: 20% of 1000 units offered)
+    expect(st0.json().walletCap).toMatchObject({ units: '200', enforced: true });
+    expect(st0.json().notice).toMatch(/After graduation the units trade freely/);
     // buy with USDC through the builder and relay; mirror into the mock pool
-    const buy = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[0]!.address, amountIn: USDC(1500).toString(), payIn: 'USDC' }, backerTok);
+    const buy = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[0]!.address, amountIn: USDC(900).toString(), payIn: 'USDC' }, backerTok);
+    expect(buy.statusCode, buy.body).toBe(200);
     expect(BigInt(buy.json().minUnitsOut)).toBeGreaterThan(0n);
     const sent = await rig.post('/tx/send', await h.backers[0]!.sign(buy.json().tx as UnsignedTx), backerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     const minted = sent.json().events.find((e: { type: string }) => e.type === 'UnitsMinted');
-    defaultMeteoraProviders.meteora.applyBuy(cfg.json().pool, USDC(1500), BigInt(minted.payload.units));
+    expect(BigInt(minted.payload.units)).toBeLessThanOrEqual(200n);
+    defaultMeteoraProviders.meteora.applyBuy(cfg.json().pool, USDC(900), BigInt(minted.payload.units));
     let mon = await rig.post('/admin/curves/monitor', {}, adminTok);
     expect(mon.json()).toEqual({ checked: 1, graduated: [] });
     const st1 = await rig.get(`/series/${seriesId}/curve`);
     expect(st1.json().onchain.graduated).toBe(false);
-    expect(st1.json().pool.progressBps).toBe(7500);
-    // second buy crosses the threshold: the simulator graduates on the buy; the monitor records it
-    const buy2 = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[1]!.address, amountIn: USDC(600).toString(), payIn: 'USDC' }, await rig.grant({ accountId: 'b1', wallets: [{ chain: 'solana', address: h.backers[1]!.address }], roles: ['backer'] }));
-    const sent2 = await rig.post('/tx/send', await h.backers[1]!.sign(buy2.json().tx as UnsignedTx), rig.token({ accountId: 'b1', wallets: [{ chain: 'solana', address: h.backers[1]!.address }], roles: ['backer'] }));
-    expect(sent2.json().events.map((e: { type: string }) => e.type)).toContain('CurveGraduated');
+    expect(st1.json().pool.progressBps).toBe(4500);
+    // a second buy that would take the same wallet over the cap is refused by the builder, and by the chain
+    const over = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[0]!.address, amountIn: USDC(300).toString(), payIn: 'USDC' }, backerTok);
+    expect(over.statusCode).toBe(422);
+    expect(over.json().message).toMatch(/at most 200 units/);
+    await expect(h.exec(h.backers[0]!, { kind: 'buyCurve', seriesId, amountIn: USDC(300).toString(), minUnitsOut: '0' })).rejects.toMatchObject({ code: 'WalletCap' });
+    // other wallets keep buying within their own cap; the third buy crosses the threshold and the curve graduates
+    const b1Tok = await rig.grant({ accountId: 'b1', wallets: [{ chain: 'solana', address: h.backers[1]!.address }], roles: ['backer'] });
+    const buy2 = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[1]!.address, amountIn: USDC(900).toString(), payIn: 'USDC' }, b1Tok);
+    expect(buy2.statusCode, buy2.body).toBe(200);
+    const sent2 = await rig.post('/tx/send', await h.backers[1]!.sign(buy2.json().tx as UnsignedTx), b1Tok);
+    expect(sent2.statusCode, sent2.body).toBe(200);
+    expect(sent2.json().events.map((e: { type: string }) => e.type)).not.toContain('CurveGraduated');
+    // keep the mock pool in step with the simulator so its quote (and minUnitsOut) matches the chain
+    defaultMeteoraProviders.meteora.applyBuy(cfg.json().pool, USDC(900), BigInt(sent2.json().events.find((e: { type: string }) => e.type === 'UnitsMinted').payload.units));
+    const b2Tok = await rig.grant({ accountId: 'b2', wallets: [{ chain: 'solana', address: h.backers[2]!.address }], roles: ['backer'] });
+    const buy3 = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[2]!.address, amountIn: USDC(300).toString(), payIn: 'USDC' }, b2Tok);
+    expect(buy3.statusCode, buy3.body).toBe(200);
+    const sent3 = await rig.post('/tx/send', await h.backers[2]!.sign(buy3.json().tx as UnsignedTx), b2Tok);
+    expect(sent3.statusCode, sent3.body).toBe(200);
+    expect(sent3.json().events.map((e: { type: string }) => e.type)).toContain('CurveGraduated');
     mon = await rig.post('/admin/curves/monitor', {}, adminTok);
     expect(mon.json().graduated).toEqual([]);
     await rig.sync();
     const st2 = await rig.get(`/series/${seriesId}/curve`);
     expect(st2.json().onchain.graduated).toBe(true);
+    // after graduation no cap holds, and the app says so
+    expect(st2.json().walletCap).toMatchObject({ enforced: false });
+    expect(st2.json().walletCap.note).toMatch(/no wallet cap applies/);
     expect((await rig.get(`/series/${seriesId}`)).json().phase).toBe('Settled');
     expect((await rig.get(`/series/${seriesId}`)).json().curve.graduated).toBe(true);
     expect((await rig.post('/admin/curves/monitor', {}, backerTok)).statusCode).toBe(403);

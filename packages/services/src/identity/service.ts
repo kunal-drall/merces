@@ -83,7 +83,10 @@ export class IdentityService {
     if (!acc.rows[0]) throw AppError.notFound('account');
     const wallets = await this.ctx.pool.query<{ chain: string; address: string }>('select chain, address from account_wallets where account_id = $1 order by linked_at', [accountId]);
     const elig = await this.ctx.pool.query('select 1 from eligibility where account_id = $1 and revoked_at is null limit 1', [accountId]);
-    return { accountId, wallets: wallets.rows, roles: acc.rows[0].roles, eligible: !!elig.rowCount, exp: Math.floor(Date.now() / 1000) + 24 * 3600, iat: Math.floor(Date.now() / 1000) };
+    // 'attestor' follows the indexed onchain registry of the account's wallets (A-M5-2), not a stored grant
+    const att = await this.ctx.pool.query('select 1 from attestors t join account_wallets w on w.chain = t.chain and w.address = t.attestor where w.account_id = $1 and t.active limit 1', [accountId]);
+    const roles = [...acc.rows[0].roles.filter((r) => r !== 'attestor'), ...(att.rowCount ? (['attestor'] as Role[]) : [])];
+    return { accountId, wallets: wallets.rows, roles, eligible: !!elig.rowCount, exp: Math.floor(Date.now() / 1000) + 24 * 3600, iat: Math.floor(Date.now() / 1000) };
   }
 
   // ---- applications

@@ -108,3 +108,9 @@ It runs in CI on a six-hour schedule and whenever `stage1/**`, `stage1.map.json`
 - Pyth receiver accounts / `updatePriceFeeds` call shapes inside Stage 1's rate accumulator; FX weekend policy.
 - Reclaim's onchain verifier on Monad is not listed by Reclaim; the report verifier's offchain attestation is the
   path Stage 1 verifies onchain (registered ed25519 key).
+- **Where curve buyers' money sits before graduation (asked of Stage 1).** The simulator books each pre-graduation
+  curve buy into the series treasury, so extinguishing an ungraduated curve can return it to holders pro rata
+  (A-CURVE-3). If Stage 1's design leaves those payments in Meteora's pool instead, Merces may not be able to repay
+  them at all, and A-CURVE-3, the simulator's `buyCurve`/`extinguish` and the `TreasuryFunded` projection for curves
+  must be revisited when Stage 1 reports. The bonding-phase wallet cap (A-CURVE-2) must also be enforced by Stage 1's
+  curve program, or the backend's check is advisory only.

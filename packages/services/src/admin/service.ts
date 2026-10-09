@@ -3,7 +3,6 @@ import { AppError, audit, getFlag, listFlags, setFlag } from '@merces/core';
 import { addressFamily, normaliseAddress, type AdminCommand, type ChainPort, type UnsignedTx } from '@merces/domain';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
-import { IdentityService } from '../identity/service.ts';
 
 /**
  * E13 — admin API with an append-only audit log.
@@ -58,10 +57,7 @@ export interface AdminTxRequest {
 type RequestRow = { request_id: string; kind: AdminCommand['kind']; chain: string; command: AdminCommand; state: AdminTxRequest['state']; tx_id: string | null; created_by: string; meta: Record<string, unknown>; created_at: Date; sent_at: Date | null; confirmed_at: Date | null };
 
 export class AdminService {
-  private readonly identity: IdentityService;
-  constructor(private readonly ctx: ServiceContext) {
-    this.identity = new IdentityService(ctx);
-  }
+  constructor(private readonly ctx: ServiceContext) {}
 
   private port(chain: string): ChainPort {
     const port = this.ctx.chains.chains.get(chain);
@@ -155,10 +151,33 @@ export class AdminService {
     if (!acc.rowCount) throw AppError.notFound('account');
     const meta = { accountId: input.accountId, jurisdiction: input.jurisdiction ?? null, kind: input.kind ?? null };
     const r = await this.propose(input.chain, { kind: 'registerAttestor', attestor: wallet, active: input.active }, admin, meta);
-    // the role lets the account use the attestor routes; signing authority still comes only from the chain registry
-    if (input.active) await this.identity.grantRole(input.accountId, 'attestor', admin.accountId);
+    // A proposal grants nothing (A-M5-2): attestor access starts when the multisig's registerAttestor is onchain and
+    // indexed, and ends when a deactivation is indexed. Until then the account sees no hardship cases or documents.
+    await this.ctx.pool.query(
+      'insert into attestor_proposals (chain, wallet, account_id, active, request_id, proposed_by) values ($1,$2,$3,$4,$5,$6) on conflict (chain, wallet) do update set account_id = excluded.account_id, active = excluded.active, request_id = excluded.request_id, proposed_by = excluded.proposed_by, proposed_at = now()',
+      [input.chain, wallet, input.accountId, input.active, r.request.requestId, admin.accountId],
+    );
     await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'attestor.register', target: `${input.chain}:${wallet}`, detail: { requestId: r.request.requestId, ...meta, active: input.active } });
     return r;
+  }
+
+  /**
+   * Attestor proposals and the indexed onchain registry side by side. status: 'registered' (active onchain),
+   * 'pending-onchain' (proposed active, not yet indexed as active), 'deactivation-pending' (proposed inactive, still
+   * active onchain) or 'inactive'. Only an indexed active registration gives attestor access.
+   */
+  async listAttestors(): Promise<Record<string, unknown>[]> {
+    const r = await this.ctx.pool.query(
+      `select coalesce(p.chain, a.chain) as chain, coalesce(p.wallet, a.attestor) as wallet, p.account_id, p.active as proposed_active,
+              p.request_id, p.proposed_by, p.proposed_at, a.active as onchain_active
+         from attestor_proposals p full outer join attestors a on a.chain = p.chain and a.attestor = p.wallet
+        order by 1, 2`,
+    );
+    return r.rows.map((x) => {
+      const onchain = x.onchain_active === true;
+      const status = onchain ? (x.proposed_active === false ? 'deactivation-pending' : 'registered') : x.proposed_active === true ? 'pending-onchain' : 'inactive';
+      return { chain: x.chain, wallet: x.wallet, accountId: x.account_id ?? null, status, onchainActive: onchain, proposal: x.proposed_by ? { active: x.proposed_active, requestId: x.request_id, proposedBy: x.proposed_by, proposedAt: x.proposed_at } : null };
+    });
   }
 
   async registerVerifierKey(input: z.infer<typeof registerVerifierKeySchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {

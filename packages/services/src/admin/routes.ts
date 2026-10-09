@@ -25,6 +25,7 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
 
   defineRoute(app, ctx, { method: 'GET', url: '/admin/audit-log', access: 'admin', handler: async (req) => ({ entries: await s.auditLog(auditLogQuerySchema.parse(req.query)) }) });
 
+  defineRoute(app, ctx, { method: 'GET', url: '/admin/attestors', access: 'admin', handler: async () => ({ attestors: await s.listAttestors() }) });
   defineRoute(app, ctx, {
     method: 'POST', url: '/admin/attestors', access: 'admin',
     handler: async (req, reply, session) => {

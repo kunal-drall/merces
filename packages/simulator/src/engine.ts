@@ -1080,6 +1080,12 @@ export class SimEngine {
     const spot = c.basePrice + mulDiv(c.basePrice, c.slopeWad * s.unitsOutstanding, WAD);
     const units = amountIn / spot;
     if (units < big(cmd.minUnitsOut) || units === 0n) throw new ChainError('InvalidTerms', 'slippage: fewer units than minUnitsOut');
+    // Bonding phase only: a wallet may hold at most the series' wallet cap of the units offered (C10/R17, A-CURVE-2).
+    // After graduation the units trade freely on the DEX pool and no cap can hold; the issuer accepted that by
+    // choosing a curve raise.
+    const cap = walletCapUnits(s.terms.unitsOffered, s.terms.walletCapBps);
+    const held = s.positions.get(signer)?.units ?? 0n;
+    if (held + units > cap) throw new ChainError('WalletCap', `before graduation a wallet may hold at most ${cap} units; this wallet holds ${held}`);
     this.debit(signer, s.terms.stablecoinMint, amountIn);
     c.raised += amountIn;
     s.treasuryTotal += amountIn;

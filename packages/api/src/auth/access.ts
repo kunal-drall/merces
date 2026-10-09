@@ -9,7 +9,7 @@ import type { AppContext } from '../context.ts';
  *  backer    — any signed-in account that passed eligibility review (disclosure of terms needs this)
  *  holder    — an account holding (or having held) units of the series in the path (a bid alone does not count)
  *  issuer    — the issuer of the series in the path (or, for issuer-scoped routes without a series, any issuer role)
- *  attestor  — registered attestor role
+ *  attestor  — a wallet registered (and indexed) as an active attestor onchain; a proposal alone is not enough
  *  admin     — admin role
  *  account   — any signed-in account (used for /me and application routes)
  */
@@ -26,6 +26,22 @@ export function sessionOf(req: FastifyRequest): Session | null {
  */
 export async function isEligible(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'accountId'>): Promise<boolean> {
   const r = await ctx.pool.query('select 1 from eligibility where account_id = $1 and revoked_at is null limit 1', [s.accountId]);
+  return !!r.rowCount;
+}
+
+/**
+ * Attestor access is the indexed onchain registry, read live on every request (A-M5-2): one of the session's wallets
+ * must be registered and active in `attestors`. A proposal alone grants nothing, and an indexed deactivation ends
+ * access at once, whatever role an older session token carries.
+ */
+export async function isRegisteredAttestor(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'wallets'>): Promise<boolean> {
+  if (!s.wallets.length) return false;
+  const r = await ctx.pool.query('select 1 from attestors where active and (chain, attestor) in (select c, w from unnest($1::text[], $2::text[]) as t(c, w)) limit 1', [s.wallets.map((w) => w.chain), s.wallets.map((w) => w.address)]);
+  return !!r.rowCount;
+}
+
+async function attestorPending(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'wallets' | 'accountId'>): Promise<boolean> {
+  const r = await ctx.pool.query('select 1 from attestor_proposals where active and (account_id = $1 or (chain, wallet) in (select c, w from unnest($2::text[], $3::text[]) as t(c, w))) limit 1', [s.accountId, s.wallets.map((w) => w.chain), s.wallets.map((w) => w.address)]);
   return !!r.rowCount;
 }
 
@@ -57,7 +73,8 @@ export async function requireTier(ctx: AppContext, req: FastifyRequest, _reply: 
       if (has('admin')) return s;
       break;
     case 'attestor':
-      if (has('attestor') || has('admin')) return s;
+      if (has('admin') || (await isRegisteredAttestor(ctx, s))) return s;
+      if (await attestorPending(ctx, s)) throw AppError.forbidden('attestor registration is pending: access starts once the multisig has registered your wallet onchain and it is indexed');
       break;
     case 'backer':
       if (has('admin') || ((has('backer') || has('issuer')) && (await isEligible(ctx, s)))) return s;
@@ -72,7 +89,7 @@ export async function requireTier(ctx: AppContext, req: FastifyRequest, _reply: 
       if (has('admin') || (await isHolderOf()) || (await isIssuerOf())) return s;
       break;
     case 'issuer-or-attestor':
-      if (has('admin') || has('attestor') || (await isIssuerOf())) return s;
+      if (has('admin') || (await isIssuerOf()) || (await isRegisteredAttestor(ctx, s))) return s;
       break;
   }
   throw AppError.forbidden(`requires ${tier}`);

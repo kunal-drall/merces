@@ -34,7 +34,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     return sent.json().txId as string;
   }
 
-  it('registers an attestor: build for the multisig → sign → send → mark sent → confirmed on the chain; the account gets the attestor role', async () => {
+  it('registers an attestor: build for the multisig → sign → send → mark sent → confirmed; attestor access starts only once the registration is indexed', async () => {
     const w = new SimWallet('solana', 'attestor-new');
     await new IdentityService(rig.ctx).seedAccount({ accountId: 'att-new', wallets: [{ chain: 'solana', address: w.address, family: 'solana' }], roles: ['backer'], eligible: false });
     expect(await rig.sol.sim.listAttestors()).not.toContain(w.address);
@@ -59,9 +59,15 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect(replay.json().request.requestId).toBe(request.requestId);
     expect((await rig.post('/admin/attestors', { ...body, active: false }, adminTok, { 'idempotency-key': 'att-1' })).statusCode).toBe(409);
 
-    // the role is granted offchain right away; signing authority comes only from the chain registry
+    // a proposal grants nothing (A-M5-2): no stored role, no attestor routes, a clear 'pending' answer
     const roles = await rig.t.pool.query<{ roles: string[] }>('select roles from accounts where account_id = $1', ['att-new']);
-    expect(roles.rows[0]!.roles).toContain('attestor');
+    expect(roles.rows[0]!.roles).not.toContain('attestor');
+    const attTok = rig.token({ accountId: 'att-new', wallets: [{ chain: 'solana', address: w.address }], roles: ['attestor'] }); // even a token claiming the role
+    const pending = await rig.get('/attestor/queue', attTok);
+    expect(pending.statusCode).toBe(403);
+    expect(pending.json().message).toMatch(/pending/);
+    const listed = (await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { wallet: string }) => a.wallet === w.address);
+    expect(listed).toMatchObject({ chain: 'solana', accountId: 'att-new', status: 'pending-onchain', onchainActive: false });
 
     // nothing happened on the chain yet: marking sent with a tx the chain does not reflect leaves the request `sent`
     const bogus = await rig.post(`/admin/tx-requests/${request.requestId}/sent`, { txId: 'not-yet' }, adminTok);
@@ -77,6 +83,12 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect(marked.json().txId).toBe(txId);
     expect(marked.json().confirmedAt).toBeTruthy();
     expect(await rig.sol.sim.listAttestors()).toContain(w.address);
+    // onchain but not yet indexed: still no access; once indexed, the attestor routes open and the session carries the role
+    expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(403);
+    await rig.sync();
+    expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(200);
+    expect((await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { wallet: string }) => a.wallet === w.address).status).toBe('registered');
+    expect((await new IdentityService(rig.ctx).sessionFor('att-new')).roles).toContain('attestor');
     // a different tx id after confirmation is refused
     expect((await rig.post(`/admin/tx-requests/${request.requestId}/sent`, { txId: 'other' }, adminTok)).statusCode).toBe(409);
     expect((await rig.post('/admin/tx-requests/nope/sent', { txId }, adminTok)).statusCode).toBe(404);
@@ -88,11 +100,19 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     // audited with the admin's account id, append-only
     const audit = await rig.get(`/admin/audit-log?actor=admin-1&target=solana:${w.address}`, adminTok);
     expect(audit.json().entries.map((e: { action: string }) => e.action)).toEqual(['attestor.register']);
-    const grant = await rig.get('/admin/audit-log?action=role.grant&target=att-new', adminTok);
-    expect(grant.json().entries[0].detail).toEqual({ role: 'attestor' });
+    expect((await rig.get('/admin/audit-log?action=role.grant&target=att-new', adminTok)).json().entries).toEqual([]);
     const sent = await rig.get(`/admin/audit-log?action=tx-request&target=${request.requestId}`, adminTok);
     expect(sent.json().entries.map((e: { detail: { confirmed: boolean } }) => e.detail.confirmed)).toEqual([true, false]);
     await expect(rig.t.pool.query('delete from audit_log where actor = $1', ['admin-1'])).rejects.toThrow(/append-only/);
+
+    // deactivation: proposing it changes nothing until it is onchain and indexed; then access ends at once
+    const off = await rig.post('/admin/attestors', { ...body, active: false }, adminTok);
+    expect((await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { wallet: string }) => a.wallet === w.address).status).toBe('deactivation-pending');
+    expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(200);
+    await relay(off.json().tx as UnsignedTx);
+    await rig.sync();
+    expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(403);
+    expect((await new IdentityService(rig.ctx).sessionFor('att-new')).roles).not.toContain('attestor');
   });
 
   it('registers a verifier key and pauses/resumes new raises through tracked multisig requests', async () => {

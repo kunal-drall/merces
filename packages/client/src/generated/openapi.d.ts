@@ -1505,9 +1505,10 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Attestor proposals beside the indexed onchain registry; only an indexed active registration gives attestor access */
+        get: operations["adminListAttestors"];
         put?: never;
-        /** Build registerAttestor for the multisig, grant the attestor role to the account (when active) and open a tx request; audited */
+        /** Build registerAttestor for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); audited */
         post: operations["adminRegisterAttestor"];
         delete?: never;
         options?: never;
@@ -2788,7 +2789,7 @@ export type components = {
             chain: string;
             /** @description the attestor's signing wallet on that chain */
             wallet: string;
-            /** @description the Merces account that receives the attestor role (when active) */
+            /** @description the Merces account proposed as attestor; it gains attestor access only once this wallet's registration is onchain and indexed */
             accountId: string;
             /** @description false deactivates an attestor onchain */
             active: boolean;
@@ -5755,6 +5756,38 @@ export interface operations {
                 content: {
                     "application/json": {
                         entries: components["schemas"]["AdminAuditEntry"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adminListAttestors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One row per (chain, wallet) proposed or registered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        attestors: {
+                            chain: string;
+                            wallet: string;
+                            accountId?: string | null;
+                            /** @enum {string} */
+                            status: "registered" | "pending-onchain" | "deactivation-pending" | "inactive";
+                            onchainActive: boolean;
+                            proposal?: Record<string, never> | null;
+                        }[];
                     };
                 };
             };

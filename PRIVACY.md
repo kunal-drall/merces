@@ -11,7 +11,8 @@ Retention periods are an open question (Part J.9). Until Kunal sets them, nothin
 ## Legend
 
 Readers: **owner** (the account the data belongs to), **issuer** (of the series), **holder** (of the series),
-**backer** (eligible), **attestor** (the chosen attestor), **admin**, **public**, **nobody** (ciphertext the server cannot
+**backer** (eligible), **attestor** (the chosen attestor, and only while its wallet is registered onchain and indexed;
+a proposed attestor reads nothing), **admin**, **public**, **nobody** (ciphertext the server cannot
 decrypt). Storage: **plain**, **vault** (AES-256-GCM under the server's vault key), **e2e** (encrypted on the client for a
 specific attestor; the server never holds the key), **hash** (a commitment or digest), **none** (never stored).
 An **e2e** row lists who can decrypt it. Admins can also fetch e2e ciphertext through the attestor routes (to route or

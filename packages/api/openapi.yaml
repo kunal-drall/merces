@@ -1187,7 +1187,7 @@ components:
           description: the attestor's signing wallet on that chain
         accountId:
           type: string
-          description: the Merces account that receives the attestor role (when active)
+          description: the Merces account proposed as attestor; it gains attestor access only once this wallet's registration is onchain and indexed
         active:
           type: boolean
           description: false deactivates an attestor onchain
@@ -4565,6 +4565,59 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
   /admin/attestors:
+    get:
+      operationId: adminListAttestors
+      x-access: admin
+      tags:
+        - admin
+      security:
+        - session: []
+      summary: Attestor proposals beside the indexed onchain registry; only an indexed active registration gives attestor access
+      responses:
+        "200":
+          description: One row per (chain, wallet) proposed or registered
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - attestors
+                properties:
+                  attestors:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - chain
+                        - wallet
+                        - status
+                        - onchainActive
+                      properties:
+                        chain:
+                          type: string
+                        wallet:
+                          type: string
+                        accountId:
+                          type:
+                            - string
+                            - "null"
+                        status:
+                          type: string
+                          enum:
+                            - registered
+                            - pending-onchain
+                            - deactivation-pending
+                            - inactive
+                        onchainActive:
+                          type: boolean
+                        proposal:
+                          type:
+                            - object
+                            - "null"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
     post:
       operationId: adminRegisterAttestor
       x-access: admin
@@ -4572,7 +4625,7 @@ paths:
         - admin
       security:
         - session: []
-      summary: Build registerAttestor for the multisig, grant the attestor role to the account (when active) and open a tx request; audited
+      summary: Build registerAttestor for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); audited
       parameters:
         - $ref: "#/components/parameters/adminIdempotencyKey"
       requestBody:

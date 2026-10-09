@@ -1,4 +1,5 @@
 import { AppError, audit } from '@merces/core';
+import { walletCapUnits } from '@merces/math';
 import type { UnsignedTx } from '@merces/domain';
 import type { DexPort, MeteoraPort } from '@merces/ports';
 import type { Session } from '@merces/api';
@@ -10,7 +11,19 @@ import type { ServiceContext } from '../context.ts';
  * route through the DEX port. Surfaces clearly that curve-mode units have a live public price and no transfer
  * limits after graduation.
  */
-export const CURVE_NOTICE = 'Curve-mode units have a live public price and no transfer limits after graduation. They are not sealed-bid HEUs: holdings are not allowlisted or capped after the curve graduates.';
+export const CURVE_NOTICE =
+  'Curve-mode units have a live public price. While the curve is bonding, only allowlisted wallets can buy and each wallet can hold at most the wallet cap shown here (10% of the units offered by default). After graduation the units trade freely on the DEX pool: no wallet cap and no allowlist apply, and any wallet can hold any amount. The issuer accepted this by choosing a curve raise. These are not sealed-bid HEUs.';
+
+/** The bonding-phase wallet cap for a series, and whether it still applies (it ends at graduation). */
+function walletCapView(series: { terms: { unitsOffered: string; walletCapBps: number | string } }, graduated: boolean): { bps: number; units: string; enforced: boolean; note: string } {
+  const units = walletCapUnits(BigInt(series.terms.unitsOffered), BigInt(series.terms.walletCapBps)).toString();
+  return {
+    bps: Number(series.terms.walletCapBps),
+    units,
+    enforced: !graduated,
+    note: graduated ? 'The curve has graduated: units trade freely and no wallet cap applies.' : `Until graduation a wallet can hold at most ${units} units. After graduation no wallet cap applies.`,
+  };
+}
 
 export class MeteoraService {
   constructor(
@@ -55,7 +68,8 @@ export class MeteoraService {
     const onchain = await chain.getCurve(seriesId);
     const cfg = (await this.ctx.pool.query('select * from curve_configs where series_id = $1', [seriesId])).rows[0];
     const pool = cfg?.pool ? await this.meteora.getPoolState(cfg.pool) : null;
-    return { seriesId, onchain, pool, configured: !!cfg, notice: CURVE_NOTICE, graduationMonitor: await this.lastGraduationCheck(seriesId) };
+    const { series } = await this.curveSeries(seriesId);
+    return { seriesId, onchain, pool, configured: !!cfg, walletCap: walletCapView(series, !!onchain?.graduated), notice: CURVE_NOTICE, graduationMonitor: await this.lastGraduationCheck(seriesId) };
   }
 
   /** Quote and build a buy on the curve (backer). With USDG as the pay-in currency, returns the swap route first. */
@@ -67,7 +81,11 @@ export class MeteoraService {
     // refuse before any swap is built: a USDG buyer would otherwise swap for real and then have the buy revert
     if (['Retired', 'Redeemed', 'Extinguished'].includes(series.status)) throw AppError.conflict(`series is ${series.status}; curve buys are closed`);
     if (series.phase === 'Cancelled' || series.phase === 'Failed') throw AppError.conflict(`raise is ${series.phase}; curve buys are closed`);
-    if ((await chain.getCurve(seriesId))?.graduated) throw AppError.conflict('the curve has graduated; buy on the DEX pool');
+    const curve = await chain.getCurve(seriesId);
+    if (curve?.graduated) throw AppError.conflict('the curve has graduated; buy on the DEX pool');
+    const cap = walletCapView(series, false);
+    const held = BigInt((await chain.getPosition(seriesId, buyer))?.units ?? '0');
+    if (held >= BigInt(cap.units)) throw AppError.unprocessable(`this wallet already holds ${held} units, the most a wallet can hold before graduation (${cap.units})`);
     const info = await chain.info();
     const usdc = info.stablecoins.USDC!.mint;
     let swap: Record<string, unknown> | null = null;
@@ -80,11 +98,15 @@ export class MeteoraService {
       usdcAmount = q.outAmount;
       swap = { provider: this.dex.provider, quote: q, transactionBase64: built.transactionBase64, expiresAt: built.expiresAt, note: 'Sign and send this swap first; the curve quotes in USDC.' };
     }
+    if (curve && BigInt(curve.spotPrice) > 0n) {
+      const estimate = BigInt(usdcAmount) / BigInt(curve.spotPrice);
+      if (held + estimate > BigInt(cap.units)) throw AppError.unprocessable(`before graduation a wallet can hold at most ${cap.units} units; this wallet holds ${held} and can buy about ${BigInt(cap.units) - held} more`);
+    }
     const cfg = (await this.ctx.pool.query('select pool from curve_configs where series_id = $1', [seriesId])).rows[0];
     const quote = cfg?.pool ? await this.meteora.quoteBuy(cfg.pool, usdcAmount) : null;
     const minUnitsOut = quote ? ((BigInt(quote.unitsOut) * BigInt(10_000 - slippageBps)) / 10_000n).toString() : '0';
     const tx: UnsignedTx = await chain.build({ kind: 'buyCurve', seriesId, amountIn: usdcAmount, minUnitsOut }, buyer);
-    return { seriesId, payIn, amountIn, usdcAmount, quote, minUnitsOut, swap, tx, series: { status: series.status, phase: series.phase }, notice: CURVE_NOTICE };
+    return { seriesId, payIn, amountIn, usdcAmount, quote, minUnitsOut, swap, tx, series: { status: series.status, phase: series.phase }, walletCap: cap, notice: CURVE_NOTICE };
   }
 
   /** Keeper/admin: check graduation and crank the chain when the curve crossed the threshold. */

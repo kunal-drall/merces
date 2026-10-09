@@ -201,10 +201,14 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: monAtt.address, approve: true }, wrongChain)).statusCode).toBe(403);
     const unreg = new SimWallet('solana', 'attestor-unregistered');
     const unregTok = rig.token({ accountId: 'att-3', roles: ['attestor'], wallets: [{ chain: 'solana', address: unreg.address }] });
-    const refused = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: unreg.address, approve: true }, unregTok);
+    // an unregistered wallet never reaches the attestor routes, whatever role its token claims (A-M5-2)
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: unreg.address, approve: true }, unregTok)).statusCode).toBe(403);
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: attestor.address, approve: true }, unregTok)).statusCode).toBe(403);
+    // a registered attestor naming a wallet the chain has not registered is refused by the service
+    const twoWallets = rig.token({ accountId: 'att-4', roles: ['attestor'], wallets: [{ chain: 'solana', address: attestor.address }, { chain: 'solana', address: unreg.address }] });
+    const refused = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: unreg.address, approve: true }, twoWallets);
     expect(refused.statusCode).toBe(422);
     expect(refused.json().message).toContain('not a registered attestor');
-    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: attestor.address, approve: true }, unregTok)).statusCode).toBe(403);
     expect((await rig.get(`/series/${seriesId}/amendments`, issuerTok)).json().amendments[0].state).toBe('proposed');
     const att = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: attestor.address, approve: true }, attTok);
     expect(att.json()).toMatchObject({ state: 'attested', favourable: true });

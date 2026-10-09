@@ -68,9 +68,9 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(me.statusCode).toBe(200);
     expect(me.json().wallets).toEqual([{ chain: 'solana', address: h.attestors[0]!.address, registeredOnchain: true }]);
     expect(me.json().openWork).toEqual({ hardship: 0, tier3: 0, tier3Annual: 0, fxRequests: 0, amendments: 0, extinguishments: 0 });
-    // an attestor role whose wallet the chain has not registered sees no work
+    // a token claiming the attestor role for a wallet the chain has not registered gets no attestor routes at all
     const unregistered = rig.token({ accountId: 'att-x', wallets: [{ chain: 'solana', address: h.backers[4]!.address }], roles: ['attestor'] });
-    expect((await rig.get('/attestor/me', unregistered)).json().wallets[0].registeredOnchain).toBe(false);
+    expect((await rig.get('/attestor/me', unregistered)).statusCode).toBe(403);
     const q = await rig.get('/attestor/queue', attTok);
     expect(q.statusCode).toBe(200);
     expect(q.json()).toEqual({ hardship: [], tier3: [], tier3Annual: [], fxRequests: [], amendments: [], extinguishments: [] });
