@@ -48,7 +48,7 @@ AUDIT-NOTES,MEASUREMENTS}.md`.
 
 ## Status at hand-back
 
-Every §13 item above is implemented; the SPEC §11 vector suite (21 vectors, schema 2) passes in full on the
+Every §13 item above is implemented; the SPEC §11 vector suite (25 vectors, schema 2) passes in full on the
 EVM stack (`test/parity/VectorRunner.t.sol`, default via-IR and `dev` profiles). Item by item:
 
 | §13 item | Resolution |
@@ -225,3 +225,34 @@ Differences that remain (for the lead to decide): Solana's `claim_redemption` / 
 ask escrow (`AskEscrowOutstanding`); the EVM lets a holder with an *uncleared* ask claim its final share with the
 escrowed units counted (they are redeemed / returned later) and blocks only a *cleared*, unprocessed ask
 (`OutOfOrder`). C-S4 (post-clearing accrual on escrowed units) differs as described there.
+
+## Security review fixes (SECURITY_REVIEW.md, 9 Oct)
+
+Two EVM findings applied; the review confirms the EVM is the canonical/correct side for S1, S3, S4, S5 and S6
+(the four new vectors 22–25 exercise those behaviours and pass against the EVM unchanged).
+
+- **S7 (medium) — router credit burned on a non-liquidity tail report.** `MercesIncome._applyReport` consumed
+  `min(routerCredit, paymentUsd)` unconditionally before the `tail && !liquidityEvent ? 0 : …` ternary forced
+  `due = 0`, so a non-liquidity tail report with `payment_usd > 0` spent router credit while paying nothing,
+  double-charging the issuer at a later tail liquidity event. Fixed to match Solana (`income.rs:459-470`): the
+  credit is touched only on the branch that actually produces a due. Test:
+  `Exit.t.sol::test_nonLiquidityTailReportDoesNotBurnRouterCredit`.
+- **S8 (low) — FX fallback attestor revocation grace.** `MercesIncome._checkFx` validated the FX fallback signer
+  with `isAttestor` (active only), while the report-attestation path uses `_keyValid(…, period)` which honours
+  the §1.4 forward-only revocation grace. An admin revocation could therefore reject an in-flight quarter's
+  fallback that Solana accepts, manufacturing lateness. Fixed to use `_keyValid(attestorKey(signer), period)`.
+  Test: `Fx.t.sol::test_fxFallbackHonoursAttestorRevocationGrace`.
+
+## New parity vectors 22–25 (Track A, SPEC v1.1)
+
+Vectors 01–21 are unchanged. The four new vectors pass against the EVM with no contract change — they confirm
+behaviours the EVM already implements (recorded above):
+
+- **22 late-holder tail/final (S1/C-S20).** A holder that joins mid-life through a window is paid its full
+  pro-rata tail and final share; `registerHolder` seeds the tail and final cursors to 0.
+- **23 redeem-twice-with-tail (S6/C-S21).** A two-batch redemption with a tail claim in between; the second
+  batch is credited the earlier tail slice (catch-up), nothing strands.
+- **24 inverted FX (S4).** A JPY-income series through an inverted pair; the un-inverted WAD rate exceeds
+  uint64 and the inversion is done in wide arithmetic, only the final rate fitting uint64.
+- **25 window on a terminal series (S3/C-S5).** A window whose book would clear is forced to NoMatch once the
+  series is Redeemed or Extinguished; every order is returned, no non-consensual trade.

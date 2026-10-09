@@ -2,7 +2,7 @@
 
 Foundry 1.7.1, solc 0.8.30 via-IR, optimizer 200 runs, `evm_version = cancun`, default profile (the deployment
 build). Gas figures are execution gas of the external call as reported by `forge test --gas-report` over the
-whole suite (unit, charter, fuzz, invariant and the 21 SPEC §11 vectors) — they exclude the 21,000 intrinsic and
+whole suite (unit, charter, fuzz, invariant and the 25 SPEC §11 vectors) — they exclude the 21,000 intrinsic and
 calldata cost of a transaction. Money contracts are called through their ERC-1967 proxies (≈ +2.6k per call for
 the delegatecall hop, included). Regenerate with `cd evm && forge test --gas-report` and
 `forge build --sizes`.

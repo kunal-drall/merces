@@ -162,7 +162,10 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
         if (!fallbackGiven) revert FxFallbackRequired();
         bytes32 digest = MercesMessages.fxDigest(registry().domain(), input.seriesId, input.period, fxAvgWad);
         address signer = _recover(digest, input.fxFallbackSignature);
-        if (!registry().isAttestor(signer)) revert InvalidAttestorSignature(signer);
+        // Honour the §1.4 forward-only revocation grace (S8), as the report-attestation path does: a key revoked
+        // after the period ended still signs its in-flight quarter, so an admin revocation cannot manufacture
+        // lateness.
+        if (!_keyValid(registry().attestorKey(signer), input.period)) revert InvalidAttestorSignature(signer);
         return true;
     }
 
@@ -268,9 +271,16 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
         uint64 paymentUsd,
         uint64 fxAvgWad
     ) internal {
-        uint64 creditUsed = uint64(MercesMath.min(l.routerCredit, paymentUsd));
-        l.routerCredit -= creditUsed;
-        uint64 due = tail && !input.liquidityEvent ? 0 : paymentUsd - creditUsed;
+        // A non-liquidity tail report pays nothing and must not consume router credit (S7, income.rs:459-470):
+        // touching the credit here would double-charge the issuer at a later tail liquidity event.
+        uint64 due;
+        if (tail && !input.liquidityEvent) {
+            due = 0;
+        } else {
+            uint64 creditUsed = uint64(MercesMath.min(l.routerCredit, paymentUsd));
+            l.routerCredit -= creditUsed;
+            due = paymentUsd - creditUsed;
+        }
         Report storage r = _s().reports[input.seriesId][input.period];
         r.exists = true;
         r.acceptedAt = uint64(block.timestamp);

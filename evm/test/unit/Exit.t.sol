@@ -241,6 +241,35 @@ contract ExitTest is FullFixture {
         assertEq(unitToken(s).balanceOf(b2), 0);
     }
 
+    /// @dev S7: a non-liquidity tail report (due forced to 0) must not consume router credit, or a later tail
+    /// liquidity event would double-charge the issuer. The credit survives the non-liquidity report and is
+    /// applied exactly once at the liquidity event.
+    function test_nonLiquidityTailReportDoesNotBurnRouterCredit() public {
+        uint256 s = _openSeries(300e6);
+        _payYear2026(s); // now at 2027-01-01, year 2026 fully reported
+        // a negative true-up for 2026 credits 3,000 forward (trueup_due stays 0, so it never blocks redemption)
+        uint64 ts = uint64(vm.getBlockTimestamp());
+        vm.prank(issuer);
+        income.submitTrueUp(s, 2026, -3_000e6, ts, trueupSig(s, 0, 2026, -3_000e6, ts));
+        assertEq(income.getLedger(s).routerCredit, 3_000e6);
+
+        vm.warp(settlementTs(s) + YEAR);
+        _redeem(s);
+        // Q1 2027: a non-liquidity tail report with payment_usd = 6,000 — due is forced to 0 and the credit is left
+        vm.warp(Periods.periodEnd(Q1_2026 + 4));
+        vm.prank(issuer);
+        income.submitReport(reportInput(s, Q1_2026 + 4, Proofs.y2q1(), 2, false));
+        assertEq(income.getReport(s, Q1_2026 + 4).due, 0);
+        assertEq(income.getLedger(s).routerCredit, 3_000e6, "router credit burned on a non-liquidity tail report");
+        // Q2 2027 liquidity event proving 30,000: the credit is applied once → due 27,000
+        vm.warp(Periods.periodEnd(Q1_2026 + 5));
+        vm.prank(issuer);
+        income.submitReport(reportInput(s, Q1_2026 + 5, Proofs.y2q2cap(), 2, true));
+        (uint64 due,) = income.openDue(s);
+        assertEq(due, 27_000e6);
+        assertEq(income.getLedger(s).routerCredit, 0);
+    }
+
     function test_tailExhaustionTruncatesAndCloses() public {
         uint256 s = _openSeries(300e6);
         _payYear2026(s);

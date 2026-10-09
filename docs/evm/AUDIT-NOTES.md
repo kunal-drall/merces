@@ -114,11 +114,27 @@ issuer, redemption `C_rem` uses `ceil(paid)` so payments + redemption + tail nev
 3. `MercesWindow.finalizeWindow` (two branches, uniqueness fuzzed in `WindowFuzz`), `_askFill` take-back with
    the keeper price index (C-S2), the reveal-order sequence (C-S6) and the two-step delivery (C-S3).
 4. `MercesIncome._derive` / `_isLateUnderlying` / pause arithmetic and the release block.
+   `_applyReport` touches router credit only on the branch that produces a due (S7); `_checkFx` honours the
+   attestor revocation grace on the FX fallback (S8).
 5. `MercesComplianceModule.moduleCheck` and the armed deposit.
 6. `MercesRegistry.amendTerms` and the absence of any other per-series write after `markRaiseOpened`.
 7. `script/lib/MercesDeploy.sol`: registry address prediction, ownership hand-offs.
 
-## 12. Accepted risks and open points
+## 12. Security review (SECURITY_REVIEW.md)
+
+Two findings fixed in `MercesIncome`:
+- **S7** `_applyReport` consumed router credit unconditionally before the tail ternary forced `due = 0`, so a
+  non-liquidity tail report burned credit while paying nothing (double charge at a later tail liquidity event).
+  Credit is now touched only when a due is produced.
+- **S8** `_checkFx` validated the FX fallback signer with `isAttestor` (active only); it now uses
+  `_keyValid(attestorKey(signer), period)`, the same §1.4 revocation grace as the report path, so an admin
+  revocation cannot manufacture lateness on an in-flight quarter.
+
+The review confirms the EVM is the canonical/correct side for S1, S3, S4, S5 and S6; vectors 22–25 cover those
+and pass unchanged. Regression tests: `Exit.t.sol::test_nonLiquidityTailReportDoesNotBurnRouterCredit`,
+`Fx.t.sol::test_fxFallbackHonoursAttestorRevocationGrace`.
+
+## 13. Accepted risks and open points
 
 - C-4: the timelock can replace the Groth16 verifier and the Pyth address (upgrade-equivalent, same delay).
 - C-5: an admin can make a reporting tier unusable for future periods (key revocation, `tier4_enabled`);

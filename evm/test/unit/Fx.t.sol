@@ -275,6 +275,37 @@ contract FxTest is FullFixture {
         registry.setFxPairCrosscheck(PAIR, address(chainlink));
     }
 
+    /// @dev S8 (SPEC §1.4 forward-only revocation grace): an attestor revoked after a quarter ended still signs
+    /// that quarter's FX fallback during the grace window, so an admin revocation cannot manufacture lateness on
+    /// an in-flight report. The FX fallback path honours the same grace as the report-attestation path.
+    function test_fxFallbackHonoursAttestorRevocationGrace() public {
+        // two Q1-2026 series with an FX pair but no snapshots → the quarter average needs the attestor fallback
+        uint256 sid = runStandardRaise(TierFlags.TIER2_ZKTLS, PAIR, Proofs.fxQ1().termsCommitment);
+        uint256 s2 = runStandardRaise(TierFlags.TIER2_ZKTLS, PAIR, Proofs.fxQ1().termsCommitment);
+        // the attestor is revoked after Q1 ended but within the 45-day grace
+        vm.warp(Periods.periodEnd(Q1_2026) + 5 days);
+        vm.prank(admin);
+        registry.revokeAttestor(attestor);
+        assertFalse(registry.isAttestor(attestor));
+        IMercesIncome.ReportInput memory r = reportInput(sid, Q1_2026, Proofs.fxQ1(), 2, false);
+        r.fxFallbackSignature = sign(attestorKey, MercesMessages.fxDigest(domain, sid, Q1_2026, uint64(r.fxAvgWad)));
+        vm.prank(issuer);
+        income.submitReport(r); // accepted during the grace
+        assertTrue(income.getReport(sid, Q1_2026).fxFallback);
+        assertEq(income.getReport(sid, Q1_2026).fxAvgWad, 1.1e18);
+        payDue(sid, issuer);
+
+        // once the grace expires (revoked_at + 45 days), the revoked key no longer attests the quarter's fallback
+        vm.warp(Periods.periodEnd(Q1_2026) + 5 days + C_GRACE + 1 days);
+        IMercesIncome.ReportInput memory r2 = reportInput(s2, Q1_2026, Proofs.fxQ1(), 2, false);
+        r2.fxFallbackSignature = sign(attestorKey, MercesMessages.fxDigest(domain, s2, Q1_2026, uint64(r2.fxAvgWad)));
+        vm.prank(issuer);
+        vm.expectRevert(abi.encodeWithSelector(InvalidAttestorSignature.selector, attestor));
+        income.submitReport(r2);
+    }
+
+    uint256 internal constant C_GRACE = 45 days;
+
     function test_reportWithFxAverageAndFallback() public {
         uint256 sid = runStandardRaise(TierFlags.TIER2_ZKTLS, PAIR, Proofs.fxQ1().termsCommitment);
         // cover Q1 2026 at a constant 1.10 so the quarter average is exactly 1.1e18 (fxQ1 proof)

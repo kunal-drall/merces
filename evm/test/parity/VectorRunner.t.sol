@@ -93,11 +93,27 @@ contract VectorRunnerTest is VectorBase {
         _run("21_entry_rules");
     }
 
-    /// @dev Every vector file in the directory is covered by a test above (21 vectors, schema 2).
+    function test_vector_22_late_holder_tail_final() public {
+        _run("22_late_holder_tail_final");
+    }
+
+    function test_vector_23_redeem_twice_with_tail() public {
+        _run("23_redeem_twice_with_tail");
+    }
+
+    function test_vector_24_inverted_fx() public {
+        _run("24_inverted_fx");
+    }
+
+    function test_vector_25_window_on_terminal() public {
+        _run("25_window_on_terminal");
+    }
+
+    /// @dev Every vector file in the directory is covered by a test above (25 vectors, schema 2).
     function test_vectorSetIsComplete() public view {
         string memory readme = vm.readFile("../packages/vectors/README.md");
         assertTrue(bytes(readme).length > 0);
-        for (uint256 i = 1; i <= 21; i++) {
+        for (uint256 i = 1; i <= 25; i++) {
             string memory n = _vectorName(i);
             string memory j = vm.readFile(string.concat("../packages/vectors/", n, ".json"));
             assertEq(stdJson.readUint(j, ".schema"), 2);
@@ -107,7 +123,7 @@ contract VectorRunnerTest is VectorBase {
     }
 
     function _vectorName(uint256 i) internal pure returns (string memory) {
-        string[21] memory names = [
+        string[25] memory names = [
             "01_happy_path",
             "02_failed_auction",
             "03_auction_edges",
@@ -128,7 +144,11 @@ contract VectorRunnerTest is VectorBase {
             "18_report_before_finalization",
             "19_pause_while_late",
             "20_tier3_trueup",
-            "21_entry_rules"
+            "21_entry_rules",
+            "22_late_holder_tail_final",
+            "23_redeem_twice_with_tail",
+            "24_inverted_fx",
+            "25_window_on_terminal"
         ];
         return names[i - 1];
     }
