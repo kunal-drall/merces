@@ -104,6 +104,8 @@ export const ERRORS = {
   WindowNotOpen: "no window in the required phase",
   OrderExists: "wallet already has an order in this window (one order per wallet, either side)",
   OutOfOrder: "marginal window order processed ahead of the reveal-index cursor",
+  BidsNotProcessed: "a window ask was processed before every bid was processed",
+  DeliverFirst: "holder has window units awaiting delivery; deliver_order before claiming redemption or final",
   UnarmedEscrowDeposit: "unit transfer into the window escrow without an armed commit_ask",
   WalletCapExceeded: "destination balance would exceed floor(units_outstanding × wallet_cap_bps / 10000)",
   InsufficientUnits: "ask quantity exceeds escrowed units",
