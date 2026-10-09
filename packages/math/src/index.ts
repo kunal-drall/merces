@@ -123,6 +123,9 @@ export {
   paymentUsd,
 } from '@merces/reference';
 
+// The shapes of Stage 1's vector `expect` views (types only, nothing runs): the simulator's stage1 view builds them.
+export type { LedgerExpect, AuctionExpect, HolderExpect } from '@merces/reference';
+
 // ---------------------------------------------------------------- ours (no Stage 1 counterpart)
 export { type Period, periodOf, periodOfPid, periodFrom, parsePeriod, periodsBetween, toPid, fromPid } from './periods.ts';
 export { wadFromDecimal, wadToDecimal, utcDayIndex } from './decimal.ts';

@@ -15,7 +15,7 @@ export function toPeriodState(x: SimSeries, periodId: string, now: number): Peri
   const standing: PeriodState['standing'] = x.status === 'Paused' && !settled ? 'Deferred' : interim.periodStanding(d, now, settled);
   return {
     seriesId: x.seriesId, periodId, dueAt: d.dueAt, graceEndsAt: d.graceEndsAt, formalNoticeAt: d.formalNoticeAt, reportAccepted: !!p?.reportAccepted, tier: p?.tier ?? null,
-    paymentDue: s(liveDue), accrual: s(liveAccrual), paid: s(p?.paid ?? 0n), splitReceived: s(p?.splitReceived ?? 0n), settled, standing, incomeCommitment: p?.incomeCommitment ?? null, liquidityEvent: !!p?.liquidityEvent,
+    paymentDue: s(liveDue), accrual: s(liveAccrual), paid: s(p?.paid ?? 0n), splitReceived: s(p?.splitReceived ?? 0n), settled, standing, incomeCommitment: p?.incomeCommitment ?? null, priorIncomeCommitment: p?.priorIncomeCommitment ?? null, liquidityEvent: !!p?.liquidityEvent,
   };
 }
 /** Every completed quarter plus every period with a record, in order. */

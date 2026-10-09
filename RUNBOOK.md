@@ -41,6 +41,39 @@ genesis hash against the configured cluster; EVM accepts only chain ids in the t
 RPC stops the process under `live`; under `auto` the chain falls back to the simulator and the refusal is the logged
 reason. A new testnet is added to the allow-list in code, never through configuration.
 
+### Simulator state version 2: reset
+
+From S1 the persisted simulator state is **version 2**: it carries Stage 1's own series ledger, payout vault, tail and
+final pool beside ours. A persisted chain of another version is never upgraded in place: `SimulatorChain.create`
+refuses it with `SimStateVersionError`, so the API and `dev:mock` stop at boot on a database that still holds a
+version-1 chain. Reset the simulated chains **before deploying the version-2 build** (no environment holds simulator
+data worth keeping):
+
+```
+pnpm --filter @merces/simulator sim:reset --dry-run                      # what would go, nothing deleted
+MERCES_ALLOW_SIM_RESET=1 pnpm --filter @merces/simulator sim:reset       # every simulator chain under MERCES_SIM_KEY
+MERCES_ALLOW_SIM_RESET=1 pnpm --filter @merces/simulator sim:reset --chain solana --prefix sim
+```
+
+- It refuses without `MERCES_ALLOW_SIM_RESET=1` (except `--dry-run`). `DATABASE_URL` picks the database and
+  `MERCES_SIM_KEY` (or `--prefix`) the key prefix, as for the API.
+- Stop the API / `dev:mock` first: a chain whose single-writer lock is held is refused.
+- Only chains with a persisted simulator state (`sim_state` key `<prefix>:<chain>`) are reset; a chain key without one
+  (for example a live chain) is refused.
+- In one transaction it deletes, for the reset chains only (row deletes, never `TRUNCATE`): `sim_state` and
+  `sim_events`; the indexer projections and cursor of those chains (every chain-keyed read-model table, plus
+  `attestor_proposals` and `fx_fallback_requests`); and every off-chain row keyed by a series of those chains (each
+  table with a `series_id` column, such as `series_drafts`, `terms_vault`, `reports`, `tier3_cases`,
+  `hardship_requests`, plus `reminders_sent`, `notifications`, `outbox` and `jobs` rows naming such a series). Series
+  ids are deterministic, so a row left behind would re-attach to a new series with the same id. Projections are keyed
+  by chain, not by prefix: they go whichever prefix fed them.
+- It keeps people, paper and audit records not tied to a series (accounts, wallets, applications, eligibility,
+  contract sessions, drafts that never created a series, `audit_log`).
+- It prints the rows deleted per table. The chain's registrations lived in the simulator state and are gone: re-apply
+  the allowlist (`setAllowlist`), the attestors (`registerAttestor`), the report-verifier key (`registerVerifierKey`)
+  and the issuer registrations (`registerIssuer`). `dev:mock` does this itself: it registers the verifier key at boot
+  and re-seeds its synthetic cohort on an empty chain.
+
 ## Keys
 
 - Development: `MERCES_KMS_PROVIDER=local` derives deterministic keys from `MERCES_LOCAL_KEY_SEED`. The report verifier's

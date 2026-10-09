@@ -2,7 +2,7 @@ import { ChainError, orderCommitment, type Command } from '@merces/domain';
 import { interim } from '@merces/math';
 import type { SimSeries, SimTransferWindow } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
-import { position, setUnits } from './holders.ts';
+import { position, registerHolder, setUnits } from './holders.ts';
 
 // ------------------------------------------------------------------ transfer windows (built, switched off at the service layer)
 export function openTransferWindow(e: EngineCore, cmd: Extract<Command, { kind: 'openTransferWindow' }>, now: number, emit: Emit): void {
@@ -106,6 +106,7 @@ export function clearTransferWindow(e: EngineCore, cmd: Extract<Command, { kind:
     seller.escrowed -= f.units;
     setUnits(s, seller, seller.units - f.units);
     setUnits(s, buyer, buyer.units + f.units);
+    registerHolder(s, buyer); // a window buyer with a fill becomes a registered holder (SIM:1647)
     const amount = f.units * clearing;
     const buyOrder = w.orders.get(f.buyer)!;
     buyOrder.deposit -= amount;

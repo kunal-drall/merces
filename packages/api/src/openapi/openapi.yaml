@@ -171,8 +171,9 @@ components:
         capPerUnit: { type: [string, 'null'] }
         grossPaidPerUnit: { type: string }
         claimedTotal: { $ref: '#/components/schemas/Money' }
-        claimable: { $ref: '#/components/schemas/Money' }
+        claimable: { $ref: '#/components/schemas/Money', description: 'net payout claimable now; excludes the tail and the final pool' }
         tailClaimable: { $ref: '#/components/schemas/Money' }
+        finalClaimable: { $ref: '#/components/schemas/Money', description: 'final-pool share claimable after an extinguishment' }
         realisedYieldBps: { type: integer }
         lockupEndsAt: { type: [integer, 'null'] }
         redemptionPrice: { type: [string, 'null'] }

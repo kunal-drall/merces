@@ -2544,8 +2544,11 @@ export type components = {
             capPerUnit?: string | null;
             grossPaidPerUnit?: string;
             claimedTotal?: components["schemas"]["Money"];
+            /** @description net payout claimable now; excludes the tail and the final pool */
             claimable?: components["schemas"]["Money"];
             tailClaimable?: components["schemas"]["Money"];
+            /** @description final-pool share claimable after an extinguishment */
+            finalClaimable?: components["schemas"]["Money"];
             realisedYieldBps?: number;
             lockupEndsAt?: number | null;
             redemptionPrice?: string | null;

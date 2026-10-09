@@ -63,6 +63,10 @@ export function extinguish(e: EngineCore, signers: string[], cmd: Extract<Comman
   emit('SeriesExtinguished', { seriesId: s.seriesId, attestors: [a1, a2], returnedToHolders: str(returned) });
   setStatus(s, 'Extinguished', emit);
 }
+/** A holder's share of the final pool it could take now, without moving its cursor (the read side of `takeFinal`). Nothing yet (WP7). */
+export function claimableFinal(_s: SimSeries, _p: SimPosition): bigint {
+  return 0n;
+}
 /** A holder's share of the final pool of an extinguished series; moves the holder's final cursor. Nothing yet: the unreleased treasury goes through the payout accumulator. */
 export function takeFinal(_e: EngineCore, _s: SimSeries, _p: SimPosition, _emit: Emit): bigint {
   return 0n;

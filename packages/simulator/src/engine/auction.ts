@@ -2,7 +2,8 @@ import { ChainError, bidCommitment, type Command } from '@merces/domain';
 import { interim } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
-import { position, setUnits } from './holders.ts';
+import { position, registerHolder, setUnits } from './holders.ts';
+import { pidAtTime } from './ledger.ts';
 
 // ------------------------------------------------------------------ auction
 export function openRaise(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'openRaise' }>, now: number, emit: Emit): void {
@@ -88,6 +89,7 @@ export function settleAuction(e: EngineCore, cmd: Extract<Command, { kind: 'sett
       emit('FeeTaken', { seriesId: s.seriesId, kind: 'auction', amount: str(alloc.fee), payer: b.bidder });
       const p = position(s, b.bidder);
       setUnits(s, p, p.units + alloc.units);
+      registerHolder(s, p); // Stage 1 registers every allocated bidder (SIM:1005)
       emit('UnitsMinted', { seriesId: s.seriesId, holder: b.bidder, units: str(alloc.units) });
     } else {
       b.refundable = b.deposit;
@@ -96,6 +98,7 @@ export function settleAuction(e: EngineCore, cmd: Extract<Command, { kind: 'sett
   }
   s.phase = 'Settled';
   s.settledAt = now;
+  s.ledger.firstPeriod = pidAtTime(now); // SIM:972
   s.issuePrice = res.clearingPrice;
   s.unitsSold = res.unitsSold;
   s.unitsOutstanding = res.unitsSold;
@@ -105,7 +108,7 @@ export function settleAuction(e: EngineCore, cmd: Extract<Command, { kind: 'sett
   s.tranches = s.terms.releaseSchedule.map((t, i, arr) => {
     const amount = i === arr.length - 1 ? res.proceeds - allocated : interim.bpsOf(res.proceeds, BigInt(t.bps));
     allocated += amount;
-    return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false };
+    return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false, returned: false };
   });
   emit('AuctionSettled', { seriesId: s.seriesId, clearingPrice: str(res.clearingPrice), unitsSold: str(res.unitsSold), proceeds: str(res.proceeds), totalFees: str(res.totalFees), settledAt: now });
   emit('TreasuryFunded', { seriesId: s.seriesId, amount: str(res.proceeds) });

@@ -1,8 +1,17 @@
 import { ChainError, DEFAULTS, type Command } from '@merces/domain';
-import { WAD } from '@merces/math';
+import { PARAMETER_BOUNDS, WAD, newFinalState, newTailState, newVaultState } from '@merces/math';
 import { deriveAddress } from '../addresses.ts';
 import type { SimSeries, SimTerms } from '../state.ts';
 import { big, str, type EngineCore, type Emit } from './core.ts';
+import { fail } from './errors.ts';
+import { newLedger } from './ledger.ts';
+
+/** Stage 1 fixes the report due, grace and formal-notice days (min = max, SDK constants.ts:87-89). */
+const FIXED_DAYS = [
+  ['dueDays', 'reportDueDays'],
+  ['graceDays', 'graceDays'],
+  ['formalNoticeDays', 'formalNoticeDays'],
+] as const;
 
 // ------------------------------------------------------------------ issuers and series
 export function registerIssuer(e: EngineCore, signer: string, now: number, emit: Emit): void {
@@ -29,6 +38,11 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   if (coin.mint !== t.stablecoinMint) throw new ChainError('InvalidTerms', 'stablecoin mint does not match the chain catalogue');
   const capWad = big(t.capMultipleWad);
   if (capWad < DEFAULTS.capMultipleMinWad || capWad > DEFAULTS.capMultipleMaxWad) throw new ChainError('InvalidTerms', 'cap multiple out of bounds (2.0–3.0)');
+  for (const [ours, stage1] of FIXED_DAYS) {
+    const b = PARAMETER_BOUNDS[stage1];
+    const v = BigInt(t[ours]);
+    if (v < b.min || v > b.max) fail('ParameterOutOfBounds', `${ours} is fixed by Stage 1 at ${b.min}`);
+  }
   const bpsSum = t.releaseSchedule.reduce((a, x) => a + x.bps, 0);
   if (bpsSum !== 10_000) throw new ChainError('InvalidTerms', 'release schedule must sum to 10000 bps');
   if (big(t.unitsOffered) <= 0n) throw new ChainError('InvalidTerms', 'unitsOffered must be positive');
@@ -64,8 +78,9 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   const s: SimSeries = {
     seriesId, address, issuer: signer, terms, phase: 'Draft', status: 'OnTime', createdAt: now, openedAt: null, commitEndsAt: null, revealEndsAt: null, settledAt: null,
     issuePrice: null, unitsSold: 0n, unitsOutstanding: 0n, capPerUnit: null, paidPerUnitWad: 0n, accNetWad: 0n, vaultBalance: 0n, vaultGrossTotal: 0n, vaultFeesTotal: 0n, vaultDistributedNet: 0n,
-    treasuryTotal: 0n, treasuryReleased: 0n, tranches: [], releasesPausedByIssuer: false, releasesPausedLate: false, bids: new Map(), bidOrder: 0, positions: new Map(), periods: new Map(),
+    treasuryTotal: 0n, treasuryReleased: 0n, treasuryReturned: 0n, tranches: [], releasesPausedByIssuer: false, releasesPausedLate: false, bids: new Map(), bidOrder: 0, positions: new Map(), periods: new Map(),
     pause: null, pauseIntervals: [], pausedSecondsTotal: 0, redemption: null, extinguishedAt: null, grossByYear: new Map(), grossPaidTotal: 0n, feesTotal: 0n, transferWindows: [], curve: null, splitRouter: null, amendments: [],
+    ledger: newLedger(), vault: newVaultState(), tail: newTailState(0n), final: newFinalState(),
   };
   e.state.series.set(seriesId, s);
   issuer.seriesIds.push(seriesId);

@@ -9,7 +9,8 @@ import { wadToDecimal } from '@merces/math';
 import { DEFAULT_GENESIS, SimClock } from './clock.ts';
 import { deriveAddress, personalityConfig, type Personality } from './addresses.ts';
 import { SimEngine, type EngineOptions } from './engine.ts';
-import type { SimState } from './state.ts';
+import { SIM_STATE_VERSION, type SimState } from './state.ts';
+import { stage1View, type Stage1View } from './stage1-view.ts';
 import type { SimPersistence } from './persistence.ts';
 import { toAuctionState, toBid } from './reads/auction.ts';
 import { toCurveState } from './reads/curve.ts';
@@ -64,6 +65,7 @@ export class SimulatorChain implements ChainPort {
       }
     }
     const state: SimState = {
+      version: SIM_STATE_VERSION,
       config: cfg,
       admin: deriveAddress(cfg.family, 'role:admin'),
       feeCollector: deriveAddress(cfg.family, 'role:feeCollector'),
@@ -97,6 +99,7 @@ export class SimulatorChain implements ChainPort {
   static createSync(opts: Omit<SimulatorOptions, 'persistence'>): SimulatorChain {
     const cfg = personalityConfig(opts.personality, opts.chainKey);
     const state: SimState = {
+      version: SIM_STATE_VERSION,
       config: cfg,
       admin: deriveAddress(cfg.family, 'role:admin'),
       feeCollector: deriveAddress(cfg.family, 'role:feeCollector'),
@@ -137,6 +140,15 @@ export class SimulatorChain implements ChainPort {
     await this.persist();
     return t;
   }
+  /**
+   * Stage 1's view of a series at the current time: the vector `expect` ledger, the money pools and the registered
+   * holders, built from the simulator state (see stage1-view.ts). The vector runner and white-box tests read it.
+   */
+  stage1View(seriesId: string): Stage1View {
+    const x = this.state.series.get(seriesId);
+    if (!x) throw new ChainError('NotFound', `series ${seriesId} not found`);
+    return stage1View(x, this.clock.now());
+  }
   /** Tier-1 router hook: a registered split router posts a receipt. */
   async postSplitReceipt(router: string, seriesId: string, amount: bigint): Promise<TxResult> {
     return this.run(() => this.engine.execute({ kind: 'postSplitReceipt', seriesId, amount: s(amount) }, { kind: 'router', router }));
@@ -174,11 +186,11 @@ export class SimulatorChain implements ChainPort {
     return i ? toIssuerState(i) : null;
   }
   async listSeries(): Promise<SeriesState[]> {
-    return [...this.state.series.values()].map((x) => toSeriesState(this.chain, x));
+    return [...this.state.series.values()].map((x) => toSeriesState(this.chain, x, this.clock.now()));
   }
   async getSeries(seriesId: string): Promise<SeriesState | null> {
     const x = this.state.series.get(seriesId);
-    return x ? toSeriesState(this.chain, x) : null;
+    return x ? toSeriesState(this.chain, x, this.clock.now()) : null;
   }
   async getAuction(seriesId: string): Promise<AuctionState | null> {
     const x = this.state.series.get(seriesId);

@@ -6,3 +6,4 @@ export * from './persistence.ts';
 export * from './wallets.ts';
 export * from './state.ts';
 export * from './harness.ts';
+export * from './stage1-view.ts';

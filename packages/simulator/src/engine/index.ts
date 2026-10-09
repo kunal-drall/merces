@@ -6,6 +6,7 @@ import type { interim, Period } from '@merces/math';
 import type { SimClock } from '../clock.ts';
 import type { SimSeries, SimState } from '../state.ts';
 import { balKey, type EngineCore, type EngineOptions, type Emit } from './core.ts';
+import { fail } from './errors.ts';
 import { auctionPhase, cancelRaise, claimRefund, commitBid, openRaise, revealBid, settleAuction } from './auction.ts';
 import { buyCurve, graduateCurve } from './curve.ts';
 import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
@@ -147,7 +148,7 @@ export class SimEngine implements EngineCore {
   debit(wallet: string, mint: string, amount: bigint): void {
     if (amount < 0n) throw new ChainError('ChainSpecific', 'negative debit');
     const b = this.balance(wallet, mint);
-    if (b < amount) throw new ChainError('InsufficientFunds', `${wallet} has ${b} < ${amount}`);
+    if (b < amount) fail('InsufficientEscrow', `${wallet} has ${b} < ${amount}`); // Stage 1 debit (SIM:297-303)
     this.state.balances.set(balKey(wallet, mint), b - amount);
   }
   /** test faucet; not reachable through ChainPort */

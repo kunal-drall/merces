@@ -73,9 +73,17 @@ export class PgSimPersistence implements SimPersistence {
     const r = await this.pool.query<{ state: string; clock: string }>('select state, clock from sim_state where key = $1', [this.key]);
     const row = r.rows[0];
     if (!row) return null;
+    let state: SimState;
+    try {
+      state = deserialiseState(row.state);
+    } catch (e) {
+      // a state of another version (SimStateVersionError) is never opened: release the lock so the reset tool can run
+      await this.close();
+      throw e;
+    }
     const ev = await this.pool.query<{ event: DomainEvent }>('select event from sim_events where key = $1 order by seq', [this.key]);
     this.savedEvents = ev.rows.length;
-    return { state: deserialiseState(row.state), events: ev.rows.map((x) => x.event), clock: Number(row.clock) };
+    return { state, events: ev.rows.map((x) => x.event), clock: Number(row.clock) };
   }
 
   async save(state: SimState, events: DomainEvent[], clock: number, _eventCount: number): Promise<void> {

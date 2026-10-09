@@ -58,13 +58,14 @@ export class LifecycleService {
   }
 
   // ---- R13 payouts
-  async buildClaim(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; claimable: string; tailClaimable: string; builder: string }> {
+  /** `claimable`, `tailClaimable` and `finalClaimable` are disjoint (net payout, tail, final pool); one claimPayout pays all three. */
+  async buildClaim(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; claimable: string; tailClaimable: string; finalClaimable: string; builder: string }> {
     const chain = this.ctx.chainFor(seriesId);
     this.requireWallet(session, chain.chain, holder);
     const p = await chain.getPosition(seriesId, holder);
     if (!p) throw AppError.notFound('position');
-    if (BigInt(p.claimable) + BigInt(p.tailClaimable) === 0n) throw AppError.conflict('nothing to claim');
-    return { tx: await this.claimBuilder.build(chain, seriesId, holder), claimable: p.claimable, tailClaimable: p.tailClaimable, builder: this.claimBuilder.kind };
+    if (BigInt(p.claimable) + BigInt(p.tailClaimable) + BigInt(p.finalClaimable) === 0n) throw AppError.conflict('nothing to claim');
+    return { tx: await this.claimBuilder.build(chain, seriesId, holder), claimable: p.claimable, tailClaimable: p.tailClaimable, finalClaimable: p.finalClaimable, builder: this.claimBuilder.kind };
   }
 
   // ---- R15 redemption

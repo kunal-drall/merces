@@ -97,6 +97,10 @@ export function payTail(e: EngineCore, s: SimSeries, signer: string, p: SimPerio
   emit('TailPayout', { seriesId: s.seriesId, periodId: p.periodId, perUnit: str(amount / r.unitsAtRedemption), total: str(amount) });
   p.paid += amount;
 }
+/** The tail a holder could take now, without moving its cursor (the read side of `takeTail`). */
+export function claimableTail(s: SimSeries, p: SimPosition): bigint {
+  return s.redemption && p.redeemedUnits > 0n ? interim.claimable(p.redeemedUnits, s.redemption.accTailNetWad, p.tailDebt) : 0n;
+}
 /** The tail a holder can take now; moves the holder's tail cursor. */
 export function takeTail(_e: EngineCore, s: SimSeries, p: SimPosition): bigint {
   let amount = 0n;

@@ -1,7 +1,10 @@
-import { ChainError, type Command, type LifecycleStatus } from '@merces/domain';
-import { interim, periodsBetween, type Period } from '@merces/math';
+import { ChainError, type Command } from '@merces/domain';
+import { interim, periodsBetween, toPid, type Period } from '@merces/math';
 import type { SimPeriod, SimSeries } from '../state.ts';
 import { TERMINAL, type EngineCore, type Emit } from './core.ts';
+import { setStatus } from './ledger.ts';
+
+export { setStatus };
 
 /** Completed quarters a settled series must report, oldest first (A-REP-1: the settlement quarter counts). */
 export function reportablePeriods(s: SimSeries, now: number): Period[] {
@@ -11,7 +14,10 @@ export function reportablePeriods(s: SimSeries, now: number): Period[] {
 export function periodRecord(s: SimSeries, periodId: string): SimPeriod {
   let p = s.periods.get(periodId);
   if (!p) {
-    p = { periodId, reportAccepted: false, tier: null, paymentStable: 0n, outstanding: 0n, accrual: 0n, paymentDue: 0n, paid: 0n, splitReceived: 0n, settled: false, incomeCommitment: null, liquidityEvent: false, formalNoticeEmitted: false, acceptedAt: null, isTail: false };
+    p = {
+      periodId, pid: toPid(periodId), reportAccepted: false, tier: null, paymentStable: 0n, outstanding: 0n, accrual: 0n, paymentDue: 0n, paid: 0n, splitReceived: 0n, settled: false,
+      incomeCommitment: null, priorIncomeCommitment: null, due: 0n, accrualPaid: 0n, paidAt: null, liquidityEvent: false, formalNoticeEmitted: false, acceptedAt: null, isTail: false,
+    };
     s.periods.set(periodId, p);
   }
   return p;
@@ -55,12 +61,6 @@ export function derivedStanding(s: SimSeries, now: number): { status: 'OnTime' |
     }
   }
   return { status, worst };
-}
-export function setStatus(s: SimSeries, to: LifecycleStatus, emit: Emit): void {
-  if (s.status === to) return;
-  const from = s.status;
-  s.status = to;
-  emit('StatusChanged', { seriesId: s.seriesId, from, to });
 }
 /** After a payment or report: if the issuer is current again, lift the Late pause. */
 export function syncStatus(_e: EngineCore, s: SimSeries, now: number, emit: Emit): void {

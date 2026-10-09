@@ -2,7 +2,8 @@ import { ChainError, type Command } from '@merces/domain';
 import { interim, WAD } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
-import { position, setUnits } from './holders.ts';
+import { position, registerHolder, setUnits } from './holders.ts';
+import { pidAtTime } from './ledger.ts';
 
 // ------------------------------------------------------------------ curve mode (Solana only; toy linear curve)
 export function buyCurve(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'buyCurve' }>, now: number, emit: Emit): void {
@@ -41,13 +42,16 @@ export function graduate(s: SimSeries, now: number, emit: Emit): void {
   c.graduated = true;
   s.phase = 'Settled';
   s.settledAt = now;
+  s.ledger.firstPeriod = pidAtTime(now);
+  // every curve buyer becomes a registered holder at graduation, as Stage 1 registers allocated bidders at settlement
+  for (const p of s.positions.values()) if (p.units > 0n) registerHolder(s, p);
   s.issuePrice = s.unitsSold > 0n ? c.raised / s.unitsSold : c.basePrice;
   s.capPerUnit = interim.perUnitCap(s.terms.capMultipleWad, s.issuePrice);
   let allocated = 0n;
   s.tranches = s.terms.releaseSchedule.map((t, i, arr) => {
     const amount = i === arr.length - 1 ? s.treasuryTotal - allocated : interim.bpsOf(s.treasuryTotal, BigInt(t.bps));
     allocated += amount;
-    return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false };
+    return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false, returned: false };
   });
   emit('CurveGraduated', { seriesId: s.seriesId, raised: str(c.raised), unitsOutstanding: str(s.unitsOutstanding) });
 }

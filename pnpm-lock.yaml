@@ -477,6 +477,9 @@ importers:
 
   packages/simulator:
     dependencies:
+      '@merces/db':
+        specifier: workspace:*
+        version: link:../db
       '@merces/domain':
         specifier: workspace:*
         version: link:../domain
