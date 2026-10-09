@@ -234,10 +234,29 @@ const families: Family[] = [
     stage1_: (s, i: { units: bigint; last: bigint; acc: bigint }) => (s.settleHolderDelta as unknown as (...a: bigint[]) => bigint)(i.acc, i.last, i.units),
   },
   {
+    name: 'remaining cap at redemption',
+    ours: 'capRemaining',
+    stage1: ['redemptionQuote', 'newVaultState'],
+    note: 'Ours floors (C·WAD − paid)/WAD; Stage 1 takes C − ceil(paid/WAD). The two are algebraically equal; this family checks it.',
+    cases: (r) => {
+      const out: unknown[] = [];
+      for (let i = 0; i < 300; i++) {
+        const cap = r.big(1n, 10n ** 9n);
+        out.push({ cap, paid: r.big(0n, cap * WAD + WAD) });
+      }
+      return out;
+    },
+    ours_: (i: { cap: bigint; paid: bigint }) => ours.capRemaining(i.cap, i.paid),
+    stage1_: (s, i: { cap: bigint; paid: bigint }) => {
+      const yearGross = (s.newVaultState as unknown as () => { yearGross: unknown })().yearGross;
+      return ((s.redemptionQuote as unknown as (a: object) => { cRemaining: bigint })({ p0: 1n, hurdleRateWad: 0n, payoutMultipleK: 1, t: 0n, capPerUnit: i.cap, paidPerUnitWad: i.paid, yearGross, unitsOutstanding: 1n })).cRemaining;
+    },
+  },
+  {
     name: 'redemption price',
     ours: 'redemptionQuote',
     stage1: ['redemptionQuote', 'newVaultState', 'capPerUnit'],
-    note: 'No payout history (D_avg is 0 or absent), so the price is decided by the hurdle or the remaining cap; compares price, remaining cap and hurdle.',
+    note: 'No payout history (D_avg is 0 or absent), so the price is decided by the hurdle or the remaining cap; compares price, remaining cap and hurdle. A disagreement here that the remaining-cap family does not show comes from the hurdle.',
     cases: (r) => {
       const out: unknown[] = [];
       for (let i = 0; i < 300; i++) {

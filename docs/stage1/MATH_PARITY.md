@@ -13,8 +13,9 @@ Stage 1 math: packages/reference (compared function by function on deterministic
 | late accrual | `lateAccrual` | `lateAccrual` | 300 | **143** |
 | vault receipt sequence (cap, payout fee, accumulator) | `applyGrossPayment + payoutFee + accrueNet` | `vaultReceiveGross` | 150 | **102** |
 | holder claim since last settlement | `claimable(units, acc, rewardDebt(units, last))` | `settleHolderDelta` | 300 | **145** |
-| redemption price | `redemptionQuote` | `redemptionQuote` | 300 | **156** |
-| auction clearing | `clearAuction` | `findClearingPrice` | 300 | **124** |
+| remaining cap at redemption | `capRemaining` | `redemptionQuote` | 300 | 0 |
+| redemption price | `redemptionQuote` | `redemptionQuote` | 300 | **137** |
+| auction clearing | `clearAuction` | `findClearingPrice` | 300 | **121** |
 
 ## wallet cap at the auction
 
@@ -73,33 +74,38 @@ Each case is up to six receipts on one series; compared per receipt (accepted, r
   - ours `"286532958885654672"`
   - Stage 1 `"286532958885654671"`
 
+## remaining cap at redemption
+
+Ours floors (C·WAD − paid)/WAD; Stage 1 takes C − ceil(paid/WAD). The two are algebraically equal; this family checks it.
+
+
 ## redemption price
 
-No payout history (D_avg is 0 or absent), so the price is decided by the hurdle or the remaining cap; compares price, remaining cap and hurdle.
+No payout history (D_avg is 0 or absent), so the price is decided by the hurdle or the remaining cap; compares price, remaining cap and hurdle. A disagreement here that the remaining-cap family does not show comes from the hurdle.
 
-- input `{"h":"181668758885104475","m":"1777708222709513123","p0":"93350074","paid":"160159544621283948301505519","t":"153504363","units":"51137"}`
-  - ours `{"capRemaining":"5789649","hurdle":"210698550","price":"5789649"}`
-  - Stage 1 `{"capRemaining":"5789649","hurdle":"210698548","price":"5789649"}`
-- input `{"h":"136395082576696274","m":"2921432434429724151","p0":"54758403","paid":"152675354288769529703070170","t":"132351215","units":"685237"}`
-  - ours `{"capRemaining":"7297619","hurdle":"93772114","price":"7297619"}`
-  - Stage 1 `{"capRemaining":"7297619","hurdle":"93772112","price":"7297619"}`
-- input `{"h":"239900750412411717","m":"1767155064764063992","p0":"81651578","paid":"90544246668300287706281591","t":"80091858","units":"527770"}`
-  - ours `{"capRemaining":"53746752","hurdle":"141779838","price":"53746752"}`
-  - Stage 1 `{"capRemaining":"53746752","hurdle":"141779837","price":"53746752"}`
+- input `{"h":"59600772141515082","m":"2846638925209514082","p0":"27295413","paid":"43230726816752182647089240","t":"124844186","units":"35498"}`
+  - ours `{"capRemaining":"34469458","hurdle":"34328173","price":"34328173"}`
+  - Stage 1 `{"capRemaining":"34469458","hurdle":"34328171","price":"34328171"}`
+- input `{"h":"146228036530187672","m":"1901240749367979221","p0":"69016600","paid":"89901468238659154749682552","t":"144559165","units":"747367"}`
+  - ours `{"capRemaining":"41315703","hurdle":"129307258","price":"41315703"}`
+  - Stage 1 `{"capRemaining":"41315703","hurdle":"129307255","price":"41315703"}`
+- input `{"h":"126830720104131701","m":"2244398366115028563","p0":"22835636","paid":"40983874233020275554662116","t":"110922607","units":"320795"}`
+  - ours `{"capRemaining":"10268389","hurdle":"34816806","price":"10268389"}`
+  - Stage 1 `{"capRemaining":"10268389","hurdle":"34816804","price":"10268389"}`
 
 ## auction clearing
 
 One valid bid per wallet, each within the wallet cap (bids past the cap are invalid at reveal in Stage 1). Compares success, clearing price, units sold and every bidder’s allocation.
 
-- input `{"bids":[{"price":"35","qty":"342"},{"price":"32","qty":"377"},{"price":"32","qty":"368"},{"price":"33","qty":"299"},{"price":"35","qty":"198"},{"price":"37","qty":"367"},{"price":"35","qty":"382"},{"price":"35","qty":"291"},{"price":"34","qty":"31"},{"price":"33","qty":"417"}],"capBps":"9663","minRaise":"6110","reserve":"31","units":"488"}`
-  - ours `{"allocations":["121","0","0","0","0","367","0","0","0","0"],"clearingPrice":"35","success":true,"unitsSold":"488"}`
-  - Stage 1 `{"allocations":["34","0","0","0","19","367","38","29","0","0"],"clearingPrice":"35","success":true,"unitsSold":"487"}`
-- input `{"bids":[{"price":"16","qty":"92"},{"price":"21","qty":"159"},{"price":"16","qty":"213"},{"price":"17","qty":"88"},{"price":"21","qty":"107"},{"price":"19","qty":"58"},{"price":"21","qty":"148"},{"price":"16","qty":"32"},{"price":"16","qty":"117"},{"price":"21","qty":"222"},{"price":"15","qty":"130"}],"capBps":"6260","minRaise":"2176","reserve":"15","units":"460"}`
-  - ours `{"allocations":["0","159","0","0","107","0","148","0","0","46","0"],"clearingPrice":"21","success":true,"unitsSold":"460"}`
-  - Stage 1 `{"allocations":["0","115","0","0","77","0","107","0","0","160","0"],"clearingPrice":"21","success":true,"unitsSold":"459"}`
-- input `{"bids":[{"price":"38","qty":"35"},{"price":"41","qty":"176"},{"price":"37","qty":"150"},{"price":"38","qty":"84"},{"price":"39","qty":"29"},{"price":"42","qty":"186"}],"capBps":"4157","minRaise":"10181","reserve":"37","units":"458"}`
-  - ours `{"allocations":["35","176","0","32","29","186"],"clearingPrice":"38","success":true,"unitsSold":"458"}`
-  - Stage 1 `{"allocations":["19","176","0","47","29","186"],"clearingPrice":"38","success":true,"unitsSold":"457"}`
+- input `{"bids":[{"price":"16","qty":"51"},{"price":"21","qty":"66"},{"price":"21","qty":"24"},{"price":"19","qty":"11"},{"price":"16","qty":"2"},{"price":"20","qty":"41"},{"price":"20","qty":"29"},{"price":"15","qty":"58"}],"capBps":"8790","minRaise":"549","reserve":"15","units":"83"}`
+  - ours `{"allocations":["0","66","17","0","0","0","0","0"],"clearingPrice":"21","success":true,"unitsSold":"83"}`
+  - Stage 1 `{"allocations":["0","60","22","0","0","0","0","0"],"clearingPrice":"21","success":true,"unitsSold":"82"}`
+- input `{"bids":[{"price":"50","qty":"24"},{"price":"51","qty":"41"},{"price":"49","qty":"36"},{"price":"51","qty":"44"},{"price":"48","qty":"13"},{"price":"49","qty":"9"},{"price":"51","qty":"45"},{"price":"48","qty":"9"}],"capBps":"9843","minRaise":"692","reserve":"47","units":"78"}`
+  - ours `{"allocations":["0","41","0","37","0","0","0","0"],"clearingPrice":"51","success":true,"unitsSold":"78"}`
+  - Stage 1 `{"allocations":["0","24","0","26","0","0","27","0"],"clearingPrice":"51","success":true,"unitsSold":"77"}`
+- input `{"bids":[{"price":"42","qty":"76"},{"price":"47","qty":"234"},{"price":"41","qty":"12"},{"price":"45","qty":"218"},{"price":"45","qty":"61"},{"price":"42","qty":"37"},{"price":"42","qty":"117"},{"price":"45","qty":"94"},{"price":"46","qty":"220"},{"price":"46","qty":"49"},{"price":"47","qty":"239"},{"price":"46","qty":"26"}],"capBps":"8675","minRaise":"10046","reserve":"41","units":"346"}`
+  - ours `{"allocations":["0","234","0","0","0","0","0","0","0","0","112","0"],"clearingPrice":"47","success":true,"unitsSold":"346"}`
+  - Stage 1 `{"allocations":["0","171","0","0","0","0","0","0","0","0","174","0"],"clearingPrice":"47","success":true,"unitsSold":"345"}`
 
 ## Not compared function by function
 

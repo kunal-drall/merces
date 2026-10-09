@@ -51,6 +51,7 @@ export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: 'direct' |
   register_issuer: { canonical: 'registerIssuer', kind: 'direct' },
   create_series: { canonical: 'createSeries (Stage 1 adds tier_flags, fx_pair_id, mode, release schedule, k, fee bps per series)', kind: 'reshaped' },
   open_raise: { canonical: 'openRaise', kind: 'direct' },
+  cancel_raise: { canonical: 'cancelRaise', kind: 'direct' },
   allowlist: { canonical: 'setAllowlist', kind: 'direct' },
   register_attestor: { canonical: 'registerAttestor', kind: 'direct' },
   revoke_attestor: { canonical: 'registerAttestor(active=false) (Stage 1: forward-only with a 45-day grace)', kind: 'reshaped' },
@@ -95,6 +96,7 @@ export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: 'direct' |
   resume_issuance: { canonical: 'none', kind: 'missing' },
   retire_if_capped: { canonical: 'none (canonical retirement happens inside payIn; Stage 1 also retires after a cap-lowering amendment)', kind: 'missing' },
   register_holder: { canonical: 'none (canonical holders are implicit in positions)', kind: 'missing' },
+  transfer_units: { canonical: 'none: a direct unit transfer, used only inside expect_revert (DirectTransferForbidden); the canonical model has no transfer to refuse', kind: 'harness' },
 };
 
 /**
@@ -106,23 +108,34 @@ function inventoryStage1Vectors(dir: string, ctx: StepCtx): StepReport {
   const files = readdirSync(dir).filter((f) => /^\d\d_.*\.json$/.test(f)).sort();
   const ops = new Map<string, number>();
   const expects = new Map<string, number>();
+  let totalSteps = 0;
+  let totalReverts = 0;
   const lines: string[] = ['# VECTOR_PARITY.md', '', `Stage 1 vectors in ${dir.startsWith(ctx.location.root + '/') ? `$STAGE1_PATH/${relative(ctx.location.root, dir)}` : dir}${ctx.location.manifest.commit ? ` at ${ctx.location.manifest.commit}` : ''} (Stage 1 format). Replay through the Stage 1 vector runner is pending; inventory only.`, '', '| Vector | Steps | Expect checks | Expected reverts | Ops without a direct counterpart |', '| --- | --- | --- | --- | --- |'];
   for (const f of files) {
-    const v = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { steps?: { op?: string; expect?: unknown; revert?: unknown; expectRevert?: unknown }[] };
+    const v = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { steps?: { op?: string; call?: { op?: string }; [k: string]: unknown }[] };
     const steps = v.steps ?? [];
+    totalSteps += steps.length;
     let nExpect = 0;
     let nRevert = 0;
     const gaps = new Set<string>();
-    for (const st of steps) {
-      const op = String(st.op ?? 'unknown');
+    const count = (op: string) => {
       ops.set(op, (ops.get(op) ?? 0) + 1);
-      if (op === 'expect') {
-        nExpect++;
-        for (const k of Object.keys(st as Record<string, unknown>)) if (!['t', 'op'].includes(k)) expects.set(k, (expects.get(k) ?? 0) + 1);
-      }
-      if (op === 'expect_revert' || st.revert !== undefined || st.expectRevert !== undefined) nRevert++;
       const kind = STAGE1_OP_MAP[op]?.kind;
       if (kind !== 'direct' && kind !== 'harness') gaps.add(op);
+    };
+    for (const st of steps) {
+      const op = String(st.op ?? 'unknown');
+      count(op);
+      if (op === 'expect') {
+        nExpect++;
+        for (const k of Object.keys(st)) if (!['t', 'op', 'note'].includes(k)) expects.set(k, (expects.get(k) ?? 0) + 1);
+      }
+      // a reverted call is nested: { op: 'expect_revert', call: { op, … }, error }
+      if (op === 'expect_revert') {
+        nRevert++;
+        totalReverts++;
+        if (st.call?.op) count(String(st.call.op));
+      }
     }
     lines.push(`| ${f} | ${steps.length} | ${nExpect} | ${nRevert} | ${gaps.size ? [...gaps].sort().map((g) => `\`${g}\``).join(', ') : 'none'} |`);
   }
@@ -134,5 +147,5 @@ function inventoryStage1Vectors(dir: string, ctx: StepCtx): StepReport {
     '| --- | --- | --- | --- |',
     ...[...ops].sort((a, b) => b[1] - a[1]).map(([k, n]) => `| \`${k}\` | ${n} | ${STAGE1_OP_MAP[k]?.canonical ?? 'unknown'} | ${STAGE1_OP_MAP[k]?.kind ?? '**unmapped**'} |`), '', '## Expect fields', '', ...[...expects].sort((a, b) => b[1] - a[1]).map(([k, n]) => `- \`${k}\` × ${n}`));
   writeFileSync(join(ctx.outDir, 'VECTOR_PARITY.md'), lines.join('\n') + '\n');
-  return { step: 'vectors', status: 'warn', summary: `${files.length} Stage 1 vectors found (Stage 1 format, ${ops.size} distinct ops); not replayed yet: the Stage 1 vector runner is pending the canonical-model review`, details: [`${files.length} vectors, ${[...ops.values()].reduce((a, b) => a + b, 0)} steps, ${ops.size} distinct ops; see VECTOR_PARITY.md`] };
+  return { step: 'vectors', status: 'warn', summary: `${files.length} Stage 1 vectors found (Stage 1 format, ${ops.size} distinct ops); not replayed yet: the Stage 1 vector runner is pending the canonical-model review`, details: [`${files.length} vectors, ${totalSteps} steps (${totalReverts} expected reverts), ${ops.size} distinct ops counting the calls inside reverts; see VECTOR_PARITY.md`] };
 }

@@ -29,8 +29,8 @@ Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitigno
 | detect | ok: `stage1.map.json` (hand-written) |
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
 | diff | drift: **Solana** 3 canonical items without a counterpart, 260 field mismatches, 87 extra Stage 1 items; **Monad testnet** 1 / 221 / 97. `INTERFACE_DRIFT.md`; review below |
-| math | **6 of 11 function families disagree** with Stage 1 (snapshot in `docs/stage1/MATH_PARITY.md`, A-MATH-2): hurdle compounding, late accrual, payout accumulator carry, holder claims, remaining-cap rounding in redemption, auction marginal fill. Stage 1 wins |
-| vectors | 25 vectors inventoried, **0 replayed**: every vector settles its auction through `begin_settlement` → `tally_bids` → `finalize_settlement` → `process_bid` → `deliver_bid`, which the canonical model does in one `settleAuction`, and every `expect` compares Stage 1's full state snapshot (snapshot in `docs/stage1/VECTOR_PARITY.md` maps each of the 50 ops) |
+| math | **6 of 12 function families disagree** with Stage 1 (snapshot in `docs/stage1/MATH_PARITY.md`, A-MATH-2): hurdle compounding and late accrual (ours is never lower: we would overcharge the issuer), the payout accumulator's dropped remainder, holder claims (ours can pay one base unit more), the redemption price (through the hurdle only) and the auction's marginal fill. Stage 1 wins |
+| vectors | 25 vectors (2,092 steps, 143 expected reverts) inventoried, **0 replayed**: every vector settles its auction through `begin_settlement` → `tally_bids` → `finalize_settlement` → `process_bid` → `deliver_bid`, which the canonical model does in one `settleAuction`; every `expect` compares Stage 1's full state snapshot; and every report carries a Groth16 proof over Stage 1's public inputs. Estimate: 8 vectors (04, 06, 07, 09, 11, 19, 23, 25) can pass once the simulator takes Stage 1's report public inputs, with documented runner shims; the other 15 need canonical changes (B below). No vector covers curve mode. `docs/stage1/VECTOR_PARITY.md` maps each op |
 | conformance | **blocked**: no devnet or testnet deployment |
 | verdict | both chains NOT ready |
 
@@ -46,7 +46,7 @@ the Stage 1 checkout with Stage 1's pinned toolchain; `node_modules` and `dist` 
 | D6.5: conformance on Solana devnet and Monad testnet | Stage 1 deployed to both (STATUS.md: both RPCs are blocked from Stage 1's build container, U5), funded test wallets |
 | D6.6: full raise-to-payout cycle live | D6.5 |
 | D6.7: `live` in staging | D6.6 |
-| Stage 1's own open items | owner decisions H1–H8; S2 curve-redemption residual (A49); the development trusted setup must be replaced before mainnet (A37). Stage 1's documents disagree on S2: `SECURITY_REVIEW.md` says "fix designed, not yet coded" while SPEC v1.1.2 §9, STATUS.md and A49 describe the census fix as built |
+| Stage 1's own open items | owner decisions H1–H8; S2 curve-redemption residual (A49); the development trusted setup must be replaced before mainnet (A37). On S2 the code is ahead of `SECURITY_REVIEW.md`, which still says "fix designed, not yet coded": `exit.rs` takes the census without the pool vault (`compute_curve_units(…, true)`), as SPEC v1.1.2 §9, STATUS.md and A49 say |
 
 ### The two curve questions, answered from the Stage 1 code
 
@@ -84,37 +84,64 @@ redemption slippage guard (`maxPricePerUnit`) checked before submitting, since S
 
 **B. Canonical model changes (Stage 1 wins).**
 
-1. *Auction settlement.* Stage 1: proposer claims (`begin_settlement`), paged `tally_bids`, `finalize_settlement`, then
-   per-bid `process_bid` and `deliver_bid`; uniform price with pro-rata marginal fill `floor(R × q / q_at)`; one bid per
-   wallet; a bid above the wallet cap is invalid at reveal; 1% non-reveal charge (H1). Ours: one `settleAuction`,
-   fill by price then commit order, cap applied at allocation. Proposal: keeper-driven settlement steps and per-bid
-   delivery in the model, Stage 1's events (`SettlementProposed/Rejected`, `UnitsAllocated`, `BidDelivered`,
-   `NonRevealCharged`), and Stage 1's clearing math.
-2. *Transfer window.* Same multi-step shape (`begin_window_settlement`, `tally_orders`, `finalize_window`,
-   `process_order`, `deliver_order`, take-back steps), keyed by period rather than a window id, and **windows ship
-   disabled** (`windows_enabled = false`, A18): the keepers must not open windows until the admin enables them.
-3. *Holder claims.* Stage 1 keeps separate tail and final accumulators with `claim_tail` and `claim_final`, and an
-   explicit `register_holder`; ours routes the tail and extinguishment through the payout accumulator. Proposal: add
-   `claimTail`, `claimFinal`, `registerHolder` and their events.
-4. *Signatures and commitments.* Attestor and report-verifier keys are **secp256k1** (20-byte addresses, 65-byte
-   low-s signatures over Stage 1's `MERCES_*_V1` keccak messages bound to a per-deployment domain and per-series
-   nonces, SPEC §1.4); ours signs with ed25519 over a different message. Bid and order commitments are keccak over
-   packed integers; terms and income commitments are Poseidon; proofs are Groth16 over Stage 1's circuit; ours are
-   sha256 over canonical JSON with a mock prover. This touches the report verifier's KMS key type, the device prover,
-   the terms vault and the bid flow.
-5. *Extinguishment.* Two distinct attestor signatures with a nonce; only unvested proceeds go to holders, vested but
-   unclaimed tranches stay with the estate (A31, H4); requires a settled raise.
-6. *Missing flows.* Tier-3 true-up (`submit_trueup`, `pay_trueup`), the income router (`init_router`, `route`,
-   `close_router_period`), `withdraw_pause_request`, key revocation with a 45-day grace (A33), `retire_if_capped`,
-   `resume_issuance`, `request_early_draw`, and the admin surface (`set_flags` with `windows_enabled` and
-   `tier4_enabled`, `set_fx_pair`, `set_defaults`, `set_contract_hash`, admin transfer).
-7. *Series parameters.* `create_series` carries mode, tier flags, FX pair, release schedule, `k`, hurdle, fee and
-   non-reveal bps, lockup and wallet cap, and the terms commitment; ours carries a `terms` object.
-8. *Curve mode.* As above: Solana only; no `buyCurve` in Merces (a DBC swap; the backend could still build the
-   unsigned Meteora swap); `activate_curve`, `complete_curve`, `collect_curve_proceeds`, `sync_curve_units`,
-   staking and tender; no cancel, failure or extinguishment before graduation.
-9. *Math.* Replace the six disagreeing families with Stage 1's formulas (or import `@merces/reference`), then
-   replay the 25 vectors through a Stage 1 op runner on the simulator with full-state expectations.
+1. *Auction settlement.* Stage 1: proposer claims (`begin_settlement`), paged `tally_bids`, `finalize_settlement`
+   (a wrong proposal is rejected, not reverted), then per-bid `process_bid` and a retryable `deliver_bid` that pushes
+   units and refunds; uniform price with a pro-rata marginal fill `floor(R × q / q_at)` and the remainder unsold; one
+   bid per wallet; a bid above the wallet cap is invalid at reveal and refunded in full; 1% non-reveal charge (H1); a
+   winner removed from the allowlist after committing still receives units. Ours: one `settleAuction`, fill by price
+   then commit order, cap applied at allocation, refunds pulled with `claimRefund`, de-allowlisted winners excluded.
+2. *Transfer window.* The same multi-step shape (`begin_window_settlement`, `tally_orders`, `finalize_window`,
+   `process_order`, `deliver_order`, take-back steps) keyed by period, two-branch clearing with first-come fills at the
+   margin, a 100 bps window fee, ask units held in escrow, a terminal series forced to NoMatch (S3). Stage 1 emits
+   per-order fills, so the canonical pairwise `UnitsTransferred(from, to)` has no source. **Windows ship disabled**
+   (`windows_enabled = false`, A18): the keepers must not open windows until the admin enables them.
+3. *Holder claims.* Separate tail and final accumulators with `claim_tail` and `claim_final`, an explicit
+   `register_holder` (cursors start at 0, S1), and a tail catch-up inside the redemption claim (S6). Ours routes the
+   tail and extinguishment through the payout accumulator.
+4. *Signatures, commitments, proofs.* Attestor and report-verifier keys are **secp256k1** 20-byte addresses on both
+   chains, signing Stage 1's `MERCES_*_V1` keccak messages (per-deployment domain, per-series nonces, low-s), and the
+   signatures travel as **instruction arguments**; nobody co-signs (our `UnsignedTx.coSigners` and the attestor
+   wallet check of A-M5-2 assume otherwise). Ours: ed25519 over canonical JSON. Bid and order commitments are keccak
+   over packed integers; terms and income commitments are Poseidon; proofs are Groth16 with public inputs
+   `[terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd]`, so
+   `submitReport` needs the prior commitment (A25). Ours: sha256 over canonical JSON, a mock prover, our own input
+   order. This touches the report verifier's KMS key type, the device prover, the terms vault and the bid flow.
+5. *Extinguishment.* Two distinct attestor signatures with a nonce; only **unvested** proceeds go to holders, vested
+   but undrawn tranches stay with the estate (A31, H4); refused unless the raise settled.
+6. *Missing flows.* The tier-3 true-up is onchain (`submit_trueup`, `pay_trueup`; our A-C8-3 and A-M5-5 assumed it
+   was not); the tier-1 income router (`init_router`, `route`, `close_router_period`) is permissionless and keeps θ
+   and r in plaintext onchain for tier-1 series (Stage 1 A22: the issuer's choice; our events say θ never goes
+   onchain, so this is a privacy decision for the owner); `withdraw_pause_request`; pauses without a requested end;
+   key revocation with a 45-day grace (A33); `retire_if_capped`; `resume_issuance`; `request_early_draw`.
+7. *Actors and admin.* `register_issuer` is **admin-only** on both chains (ours is the issuer's own command); there is
+   no admin router registration; timelock-only powers need `TimelockController.schedule`/`execute`; the admin
+   surface adds `set_flags` (`new_raises_paused`, `windows_enabled`, `tier4_enabled`), `set_fx_pair`, `set_defaults`,
+   `set_contract_hash`, admin transfer. One user action can need several transactions (Solana `prepare_raise` then
+   `open_raise`), while our builder returns one.
+8. *Series parameters and identity.* `create_series` carries mode, tier flags, FX pair, release schedule (≤ 24
+   tranches), `k`, hurdle, fee and non-reveal bps, lockup and wallet cap, and the terms commitment. EVM series ids are
+   `uint256` counters, not addresses. Defaults differ: lockup 547.875 days (ours 540), tail 365 days (ours 360). Our
+   `walletCapBps` must be positive, which rejects every Stage 1 curve series (cap 0).
+9. *Status and timing.* The formal notice falls at period end + 90 days (ours + 120); OnTime lasts while the
+   countdown is ≤ 30 days and InGrace while ≤ 45 days (ours switches at the boundary); `D_avg` buckets a payment by its
+   period's deadline, not by when it arrived; FX coverage counts trading days, and weekend snapshots revert.
+10. *Indexer and codecs.* Stage 1 events carry no stream sequence, while our indexer requires a dense `seq` (the
+    adapter must keep its own counter, or the indexer accepts a strictly increasing one). Codecs: `period` u32 ↔
+    `"YYYYQn"` (and a calendar year for true-up notices), `pair_id` bytes32 ↔ `"EUR/USD"`, base58/hex keys. Some enum
+    codes differ between the chains (`UnitsBurned.reason`, `WindowCleared.branch`), event order inside a transaction
+    differs between the chains, several canonical events are joins (`PaymentReceived` = `PaymentSettled` +
+    `PayoutDistributed`), and the Solana decoder must accept only Merces program frames and skip failed transactions.
+11. *Curve mode.* Solana only; no `buyCurve` in Merces (a DBC swap; the backend could still build the unsigned
+    Meteora swap); `activate_curve`, `complete_curve`, `collect_curve_proceeds`, `sync_curve_units`, staking and
+    tender; no cancel, failure or extinguishment before graduation; units in base lamports (6 decimals). Our Meteora
+    service must generate configs with creator fee 0 and the Merces PDA as fee claimer, or activation fails (H3).
+12. *Math.* Replace the six disagreeing families with Stage 1's formulas (or import `@merces/reference`), then
+    replay the 25 vectors through a Stage 1 op runner on the simulator with full-state expectations.
+
+**Stage 1 documents that disagree with Stage 1's code** (the code, IDLs and vectors win): `SECURITY_REVIEW.md` on S2;
+`EVENTS.md` field lists in several places; `CURVE_MODE.md` §5 (claims are gated by staking); the vectors declare
+`specVersion "1.1"` while testing v1.1.2 fixes; vector 15's notes say a non-revealer is charged while its expectations
+show a full refund (the expectations match SPEC §5.2).
 
 ## What we expect from Stage 1
 
