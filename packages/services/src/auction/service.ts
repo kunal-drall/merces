@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { bidCommitment, type UnsignedTx } from '@merces/domain';
+import { ChainError, bidCommitment, type UnsignedTx } from '@merces/domain';
 import { bidDeposit, clearAuction, walletCapUnits } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -136,6 +136,8 @@ export class AuctionService {
             await chain.submit({ kind: 'settleAuction', seriesId: s.seriesId }, 'keeper');
             settled.push(s.seriesId);
           } catch (e) {
+            // settled or cancelled between the listing and the submit (anyone may settle): nothing to do, not a failure
+            if (e instanceof ChainError && (e.code === 'WrongPhase' || e.code === 'Duplicate')) continue;
             failed.push(`${s.seriesId}: ${(e as Error).message}`);
           }
         }

@@ -26,9 +26,9 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
 
-  # No separate keepers service in mock mode: dev:mock runs the keepers and the indexer in-process, because a
-  # persisted simulator chain has exactly one owning process (a second process on the same key refuses to start).
-  # Against live chains, run `pnpm dev:keepers` as its own process with MERCES_KEEPERS=false on the API.
+  # No separate keepers or indexer service in mock mode: a persisted simulator chain has exactly one owning process,
+  # the API, which indexes and cranks it in-process. `pnpm dev:indexer` and `pnpm dev:keepers` serve live chains only
+  # (they skip simulated ones), so add them as services once a chain runs live.
 
   verifier:
     build: .
