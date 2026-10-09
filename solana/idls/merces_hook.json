@@ -514,6 +514,14 @@
             "type": "u32"
           },
           {
+            "name": "curve_quote_mint",
+            "docs": [
+              "The only quote mint curve-mode series may use (USDC of the cluster, SPEC §9), fixed at init",
+              "(no setter); zero disables curve mode."
+            ],
+            "type": "pubkey"
+          },
+          {
             "name": "bump",
             "type": "u8"
           }
@@ -749,6 +757,14 @@
           },
           {
             "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "dbc_creator",
+            "docs": [
+              "`pool.creator` of the DBC pool at activation: the issuer wallet or the protocol's",
+              "`curve_authority` PDA (CURVE_MODE §6)."
+            ],
             "type": "pubkey"
           },
           {

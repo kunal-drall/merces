@@ -65,7 +65,7 @@ contract LifecycleInvariantTest is FreeReportFixture {
         auctionFees = usdc.balanceOf(address(feeCollector));
         charterAtStart = _charter();
 
-        bytes4[] memory selectors = new bytes4[](23);
+        bytes4[] memory selectors = new bytes4[](25);
         selectors[0] = LifecycleHandler.warp.selector;
         selectors[1] = LifecycleHandler.report.selector;
         selectors[2] = LifecycleHandler.pay.selector;
@@ -90,6 +90,8 @@ contract LifecycleInvariantTest is FreeReportFixture {
         selectors[20] = LifecycleHandler.advanceQuarter.selector;
         selectors[21] = LifecycleHandler.windowCycle.selector;
         selectors[22] = LifecycleHandler.windowProcess.selector;
+        selectors[23] = LifecycleHandler.windowDeliver.selector;
+        selectors[24] = LifecycleHandler.windowDeliver.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
     }
@@ -145,10 +147,11 @@ contract LifecycleInvariantTest is FreeReportFixture {
         );
         uint256 owed;
         for (uint256 i = 0; i < handler.walletCount(); i++) {
-            address w = _wallet(i);
-            owed += vault.pendingOf(sid, w) + vault.claimableTail(sid, w) + vault.claimableFinal(sid, w);
+            owed += _owedTo(_wallet(i), l);
         }
-        if (l.redemptionTs != 0) owed += uint256(l.redemptionPrice) * l.unitsOutstanding;
+        if (l.redemptionTs != 0) {
+            owed += uint256(l.redemptionPrice) * l.unitsOutstanding + l.tailAccWad * l.unitsOutstanding / 1e18;
+        }
         assertGe(bal, owed, "claims exceed the vault balance");
         // and nothing is stranded: outside a half-processed window (whose post-clearing accrual is credited at
         // processing, C-S4) the excess is rounding dust, < 1 base unit per settle
@@ -157,6 +160,16 @@ contract LifecycleInvariantTest is FreeReportFixture {
             assertLe(bal - owed, handler.calls() * 8 + 16, "value stranded in the vault");
         }
         assertEq(l.netAccWad * 300 + l.carryWad, (uint256(l.grossReceived) - l.feeCollected) * 1e18, "carry");
+    }
+
+    /// @dev What the vault owes `w` per holder record: pending payouts, the final share, and the tail of its
+    /// redeemed units since its last tail claim. Units not yet redeemed (wallet, window escrow, in transit) are
+    /// owed `redemption price + full tail` each and are counted in aggregate via `units_outstanding` (C-S21).
+    function _owedTo(address w, IMercesVault.Ledger memory l) internal view returns (uint256 owed) {
+        owed = vault.pendingOf(sid, w) + vault.claimableFinal(sid, w);
+        if (l.redemptionTs == 0) return owed;
+        IMercesVault.Holder memory h = vault.getHolder(sid, w);
+        owed += (l.tailAccWad - h.lastTailAccWad) * h.redeemedUnits / 1e18;
     }
 
     /// forge-config: default.invariant.runs = 48
@@ -207,8 +220,10 @@ contract LifecycleInvariantTest is FreeReportFixture {
             assertEq(bal, handler.unitsGhost(w), "units moved outside the window, burns and redemption");
             held += bal;
         }
-        (bool exists, uint32 period) = window.currentWindow(sid);
-        uint256 escrow = exists ? window.getWindow(sid, period).escrowUnits : 0;
+        uint256 escrow;
+        for (uint256 i = 0; i < handler.windowCount(); i++) {
+            escrow += window.getWindow(sid, handler.windowPeriods(i)).escrowUnits;
+        }
         assertEq(token.balanceOf(address(window)), escrow);
         assertEq(held + escrow, token.totalSupply(), "units created or lost");
         assertEq(token.totalSupply(), vault.unitsOutstanding(sid));
@@ -224,18 +239,17 @@ contract LifecycleInvariantTest is FreeReportFixture {
         for (uint256 i = 0; i < handler.windowCount(); i++) {
             uint32 p = handler.windowPeriods(i);
             IMercesWindow.Window memory w = window.getWindow(sid, p);
+            uint256 delivered;
+            for (uint256 k = 0; k < w.orderCount; k++) {
+                IMercesWindow.Order memory o = window.getOrderAt(sid, p, k);
+                if (o.delivered) delivered += o.pendingStable;
+            }
             assertEq(
-                uint256(w.escrowStable),
-                handler.bidEscrowIn(p) - w.feesTotal - w.stableRefunded - w.stableToSellers,
-                "window money not conserved"
+                uint256(w.escrowStable), handler.bidEscrowIn(p) - w.feesTotal - delivered, "window money not conserved"
             );
             live += w.escrowStable;
         }
-        uint256 owed;
-        for (uint256 i = 0; i < handler.walletCount(); i++) {
-            owed += window.owed(sid, _wallet(i));
-        }
-        assertEq(usdc.balanceOf(address(window)), live + owed);
+        assertEq(usdc.balanceOf(address(window)), live, "window holds more than its live escrow");
     }
 
     /// forge-config: default.invariant.runs = 48
@@ -267,6 +281,10 @@ contract LifecycleInvariantTest is FreeReportFixture {
                 handler.windowProcess(i);
             }
             assertEq(uint8(window.getWindow(sid, period).state), uint8(IMercesWindow.WindowState.Done));
+        }
+        handler.deliverAll(); // every delivery can always be made
+        for (uint256 i = 0; i < handler.walletCount(); i++) {
+            assertEq(window.pendingUnitsOf(sid, _wallet(i)), 0);
         }
         for (uint256 i = 0; i < handler.walletCount(); i++) {
             handler.claim(i, i % 2 == 0);

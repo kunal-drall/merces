@@ -309,7 +309,14 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         h.pending = (uint256(h.pending) + MercesMath.mulDiv(acc - fromAccWad, units, C.WAD)).toU64();
     }
 
-    /// @dev `base = unit_balance + pending auction units`; `escrow` = ask-escrow units with their window state.
+    /// @dev Window units awaiting `deliverOrder` must reach the wallet before units are redeemed or burned
+    /// (B-S13).
+    function _requireNoWindowPending(uint256 seriesId, address holder) internal view {
+        if (IMercesWindow(_contracts().window).pendingUnitsOf(seriesId, holder) != 0) revert DeliverFirst();
+    }
+
+    /// @dev `base = unit_balance + pending auction units + window units awaiting delivery`; `escrow` = ask-escrow
+    /// units with their window state.
     function _weights(uint256 seriesId, SeriesCore memory core, address wallet)
         internal
         view
@@ -317,9 +324,10 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
     {
         if (core.unitToken == address(0)) return (0, 0, false, 0);
         ProtocolContracts memory pc = _contracts();
+        IMercesWindow window = IMercesWindow(pc.window);
         base = IERC3643Token(core.unitToken).balanceOf(wallet)
-            + IMercesAuction(pc.auction).pendingUnitsOf(seriesId, wallet);
-        (escrow, cleared, snap) = IMercesWindow(pc.window).askAccrual(seriesId, wallet);
+            + IMercesAuction(pc.auction).pendingUnitsOf(seriesId, wallet) + window.pendingUnitsOf(seriesId, wallet);
+        (escrow, cleared, snap) = window.askAccrual(seriesId, wallet);
     }
 
     /// @dev `accrual_units(w) = unit_balance(w) + pending auction units + ask-escrow units` (SPEC §6.1); escrowed
@@ -522,6 +530,7 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         returns (uint64 units, uint64 amount)
     {
         SeriesCore memory core = registry().getSeriesCore(seriesId);
+        _requireNoWindowPending(seriesId, holder);
         _deliverPendingAuctionUnits(seriesId, holder);
         Holder storage h = _settle(seriesId, core, holder);
         units = uint64(IERC3643Token(core.unitToken).balanceOf(holder));
@@ -633,6 +642,7 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         Ledger storage l = _s().ledgers[seriesId];
         if (l.extinguishedAt == 0) revert TerminalStatus();
         SeriesCore memory core = registry().getSeriesCore(seriesId);
+        _requireNoWindowPending(seriesId, holder);
         _deliverPendingAuctionUnits(seriesId, holder);
         Holder storage h = _settle(seriesId, core, holder);
         IERC3643Token token = IERC3643Token(core.unitToken);
@@ -643,7 +653,9 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         if (cleared && !h.finalClaimed) revert OutOfOrder();
         if (l.redemptionTs != 0) {
             if (token.balanceOf(holder) > 0) _redemptionBody(seriesId, l, holder);
-            weight = h.redeemedUnits;
+            // units still in an (uncleared) ask escrow come back later and are redeemed then; they carry their
+            // final share now, like every unit that existed at redemption
+            weight = uint256(h.redeemedUnits) + escrow;
         } else {
             weight = base + escrow;
         }
@@ -747,9 +759,7 @@ contract MercesVault is MercesUpgradeable, IMercesVault {
         Ledger storage l = _s().ledgers[seriesId];
         SeriesCore memory core = registry().getSeriesCore(seriesId);
         if (h.finalClaimed) return 0;
-        uint256 weight = l.redemptionTs != 0
-            ? uint256(h.redeemedUnits) + IERC3643Token(core.unitToken).balanceOf(holder)
-            : _accrualUnits(seriesId, core, holder);
+        uint256 weight = (l.redemptionTs != 0 ? uint256(h.redeemedUnits) : 0) + _accrualUnits(seriesId, core, holder);
         return MercesMath.mulDiv(l.finalAccWad - h.lastFinalAccWad, weight, C.WAD);
     }
 

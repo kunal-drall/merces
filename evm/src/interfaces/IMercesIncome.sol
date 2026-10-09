@@ -3,9 +3,6 @@ pragma solidity ^0.8.30;
 
 import {SeriesStatus} from "../types/MercesTypes.sol";
 
-/// @dev `FormalNoticeDue.period` sentinel for the tier-3 true-up notice (SPEC §6.4 `FormalNoticeDue(series, trueup)`).
-uint32 constant TRUEUP_NOTICE_PERIOD = type(uint32).max;
-
 /// @notice ProofOfIncome verifier, status machine with per-obligation unpaused countdowns and tier-3 true-up
 /// (D6, C8; SPEC v1.1 §6.1–§6.4). The tier-1 split router (D5, §6.5) is `MercesRouter`; the FX rate
 /// accumulator (C9, §6.6) is `MercesFxAccumulator`.
@@ -107,7 +104,9 @@ interface IMercesIncome {
         uint64 refunded
     );
     event StatusChanged(uint256 indexed series, SeriesStatus oldStatus, SeriesStatus newStatus);
-    event FormalNoticeDue(uint256 indexed series, uint32 period);
+    /// @dev `trueup == false`: the report countdown of `period` reached the formal-notice threshold;
+    /// `trueup == true`: the true-up of calendar year `period` did (SPEC §6.4, B-S3).
+    event FormalNoticeDue(uint256 indexed series, uint32 period, bool trueup);
     event PauseRequested(uint256 indexed series, uint64 nonce);
     event PauseRequestWithdrawn(uint256 indexed series, uint64 nonce);
     event PauseApproved(uint256 indexed series, uint64 start, uint64 end, address indexed attestor);

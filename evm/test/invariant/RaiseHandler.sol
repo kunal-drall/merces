@@ -339,7 +339,7 @@ contract RaiseHandler is Test {
         if (kind == 0) {
             registry.setFlags(seed % 2 == 0, seed % 3 == 0, false);
         } else if (kind == 1) {
-            registry.registerAttestor(address(uint160(uint256(keccak256(abi.encode(seed))))));
+            try registry.registerAttestor(address(uint160(uint256(keccak256(abi.encode(seed)))))) {} catch {}
         } else if (kind == 2) {
             registry.setStablecoin(address(usdc), true);
         } else if (kind == 3) {

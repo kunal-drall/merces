@@ -86,6 +86,8 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
         a.state = RaiseState.Cancelled;
         registry().markRaiseResult(seriesId, RaiseState.Cancelled, 0, 0, 0);
         emit RaiseCancelled(seriesId);
+        // no minter remains: units are only ever minted by `processBid` of a settled raise (B-S18)
+        emit MintAuthorityRevoked(seriesId);
     }
 
     // ---------------------------------------------------------------- bidders
@@ -384,6 +386,8 @@ contract MercesAuction is MercesUpgradeable, IMercesAuction {
             IMercesVault(pc.vault).initializeSupply(seriesId, a.unitsSold);
             emit RaiseMintFinalized(seriesId, a.unitsSold, a.proceeds);
         } else {
+            // a failed raise finalises an empty mint (B-S17); the repayment path still requires Settled
+            registry().markMintFinalized(seriesId);
             emit RaiseMintFinalized(seriesId, 0, 0);
         }
         emit MintAuthorityRevoked(seriesId);

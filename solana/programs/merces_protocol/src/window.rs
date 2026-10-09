@@ -115,6 +115,8 @@ pub fn open_window(ctx: Context<OpenWindow>, period: u32) -> Result<()> {
         ctx.accounts.config.windows_enabled,
         ProtocolError::WindowsDisabled
     );
+    // curve-mode units trade freely on DAMM v2: there is no transfer window (SPEC §9)
+    require!(!ledger.is_curve(), ProtocolError::NotSealedBid);
     require!(
         series.raise_state == RAISE_SETTLED,
         ProtocolError::RaiseNotSettled

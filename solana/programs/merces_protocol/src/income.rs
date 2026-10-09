@@ -226,6 +226,11 @@ pub fn submit_report(ctx: Context<SubmitReport>, args: SubmitReportArgs) -> Resu
     );
     require!(ledger.open_due_amount == 0, ProtocolError::DueOutstanding);
     let is_tail = status == SeriesStatus::Redeemed;
+    if !is_tail {
+        // curve mode: `units_outstanding` (the proof input and the vault weight) must have been
+        // re-counted after the period ended (`sync_curve_units`, CURVE_MODE §4)
+        crate::curve::require_units_synced_for(&ledger, args.period)?;
+    }
     if is_tail {
         let tail_end = ledger
             .redemption_ts
@@ -907,7 +912,7 @@ pub fn retire_if_capped(ctx: Context<RetireIfCapped>) -> Result<()> {
     );
     let cap = cap_per_unit_of(&ctx.accounts.series)?;
     require!(
-        is_capped(cap, ledger.paid_per_unit_wad).map_err(math)?,
+        is_capped(cap, ledger.paid_per_unit_wad, ledger.scale()).map_err(math)?,
         ProtocolError::NotCapped
     );
     let registry = RegistryCpi {

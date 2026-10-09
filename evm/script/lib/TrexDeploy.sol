@@ -73,7 +73,9 @@ library TrexDeploy {
         IIdentityRegistryStorageLite(s.identityRegistryStorage).bindIdentityRegistry(s.identityRegistry);
 
         // ONCHAINID: library-mode Identity implementation, its implementation authority and the IdFactory.
-        s.identityImpl = _create(vm, "Identity.sol:Identity", abi.encode(address(this), true));
+        // library-mode Identity: the management key argument must be non-zero but is never used (no `address(this)`,
+        // which forge forbids in scripts)
+        s.identityImpl = _create(vm, "Identity.sol:Identity", abi.encode(msg.sender, true));
         s.identityImplementationAuthority =
             _create(vm, "ImplementationAuthority.sol:ImplementationAuthority", abi.encode(s.identityImpl));
         s.idFactory = _create(vm, "IdFactory.sol:IdFactory", abi.encode(s.identityImplementationAuthority));

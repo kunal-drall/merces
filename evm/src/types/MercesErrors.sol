@@ -151,6 +151,10 @@ error OrderExists();
 error InsufficientUnits();
 /// @dev A window order processed ahead of the order its fill depends on (asks wait for every bid).
 error OutOfOrder();
+/// @dev A window ask processed before every revealed bid (SPEC §7, B-S9).
+error BidsNotProcessed();
+/// @dev Redemption / final claim while window units of the holder await `deliverOrder` (B-S13).
+error DeliverFirst();
 error InvalidProposal();
 error TooManyOrders();
 /// @dev A cancelled buyer's units reach below the clearing price and the ask price index is not complete yet.

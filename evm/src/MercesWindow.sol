@@ -12,6 +12,7 @@ import {
 } from "./interfaces/IMercesWindow.sol";
 import {IMercesIncome} from "./interfaces/IMercesIncome.sol";
 import {IMercesVault} from "./interfaces/IMercesVault.sol";
+import {IMercesAuction} from "./interfaces/IMercesAuction.sol";
 import {IERC3643Token} from "./interfaces/external/IERC3643Token.sol";
 import {MercesMath} from "./libraries/MercesMath.sol";
 import {MercesMessages} from "./libraries/MercesMessages.sol";
@@ -27,20 +28,22 @@ import "./types/MercesErrors.sol";
 /// demand-limited), so a crossing price always exists. A wrong proposal is recorded, never reverted, and an
 /// incomplete round cannot be reset.
 ///
-/// Fills follow SPEC §7 exactly and do not depend on the processing order: the full side fills in full, the
-/// losing side not at all, and the marginal side first-come in ascending reveal index — computed in O(1) from
-/// the quantity of valid same-price orders revealed earlier (recorded at reveal). A filled bid whose buyer is no
-/// longer allowlisted at fill is cancelled (full refund) and its units are taken back from the sell side: from
-/// the asks at `p*` in descending reveal index, then from the asks below `p*` in descending (price, reveal index)
-/// order — the reference order — so sellers' proceeds always equal buyers' payments. Asks therefore wait for every
-/// bid (`OutOfOrder`), and when the take-back reaches below `p*` a keeper first indexes the ask price levels
-/// below `p*` (`indexAskPrices`, verified complete by their quantity sum).
+/// Fills follow SPEC §7: the full side fills in full, the losing side not at all, and the marginal side first-come
+/// in ascending reveal index — computed in O(1) from the quantity of valid same-price orders revealed earlier
+/// (recorded at reveal). Processing follows the reveal order (B-S9): revealed bids in ascending reveal index, then
+/// revealed asks in ascending reveal index; unrevealed orders and `NO_MATCH` windows in any order. A filled bid
+/// whose buyer is no longer allowlisted at fill is cancelled (full refund) and its units are taken back from the
+/// sell side: from the asks at `p*` in descending reveal index, then from the asks below `p*` in descending
+/// (price, reveal index) order (B-S12), so sellers' proceeds always equal buyers' payments. When the take-back
+/// reaches below `p*` a keeper first indexes the ask price levels below `p*` (`indexAskPrices`, verified complete
+/// by their quantity sum; `WindowTakebackSettled`).
 ///
-/// Liveness (SPEC §12): units always move (every holder has a never-deleted T-REX identity and the compliance
-/// module admits movements out of this escrow); a stablecoin push that fails for a recipient-side reason is
-/// deferred to `owed` and retried by `withdrawOwed`, so no recipient blocks other orders. This contract is the
-/// only path through which units move between wallets: the compliance module admits transfers into the escrow
-/// only when this contract has armed them (`armedDeposit`) and transfers out only from this contract.
+/// Liveness (SPEC §12, B-S13): settlement is two steps. `processOrder` does the accounting and pays the fee to the
+/// collector (protocol accounts only); `deliverOrder` pushes the recorded units and stablecoin to the owner, once,
+/// retryable forever, so no recipient can block another order. Units awaiting delivery count in their owner's
+/// accrual weight (`pendingUnitsOf`). This contract is the only path through which units move between wallets:
+/// the compliance module admits transfers into the escrow only when this contract has armed them
+/// (`armedDeposit`) and transfers out only from this contract.
 contract MercesWindow is MercesUpgradeable, IMercesWindow {
     using SafeERC20 for IERC20;
     using MercesMath for uint256;
@@ -57,7 +60,10 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         mapping(uint256 => bool) hasWindow;
         mapping(uint256 => uint32) currentPeriod;
         mapping(uint256 => mapping(address => uint64)) askEscrow;
-        mapping(uint256 => mapping(address => uint64)) owed;
+        // window units processed for a wallet but not yet delivered (all windows of the series)
+        mapping(uint256 => mapping(address => uint64)) pendingUnits;
+        // order indices per side in reveal order (the processing sequence)
+        mapping(uint256 => mapping(uint32 => mapping(Side => uint32[]))) revealed;
         mapping(address => uint256) armedDeposit;
     }
 
@@ -173,8 +179,9 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     // ================================================================ reveal
 
     /// @inheritdoc IMercesWindow
-    /// @dev Validity (SPEC §7): `price ≥ 1`, `quantity ≥ 1`; asks `quantity ≤ escrow_units`; bids
-    /// `escrow ≥ p×q + fee` and `balance(owner) + quantity ≤ wallet_cap_units`. A failure records `valid = false`.
+    /// @dev Validity (SPEC §7, B-S19): `price ≥ 1`, `quantity ≥ 1`; asks `quantity ≤ escrow_units`; bids
+    /// `escrow ≥ p×q + fee` and `owned(owner) + quantity ≤ wallet_cap_units`, where owned = balance + undelivered
+    /// auction units + ask escrow + window units awaiting delivery. A failure records `valid = false`.
     function revealOrder(uint256 seriesId, uint256 price, uint256 quantity, bytes32 salt) external override {
         uint64 p = price.toU64();
         uint64 q = quantity.toU64();
@@ -188,18 +195,38 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         Order storage o = $.orders[seriesId][period][idx - 1];
         if (o.revealed) revert AlreadyRevealed();
         if (MercesMessages.orderCommitment(p, q, salt, msg.sender) != o.commitment) revert CommitmentMismatch();
-        bool valid = p >= 1 && q >= 1;
-        if (valid) {
-            if (o.side == Side.Ask) {
-                valid = q <= o.escrow;
-            } else {
-                SeriesTerms memory terms = registry().getSeriesTerms(seriesId);
-                uint256 bal = IERC3643Token(registry().getSeriesCore(seriesId).unitToken).balanceOf(msg.sender);
-                valid = uint256(o.escrow) >= _requiredBidEscrow(terms, p, q) && bal + q <= _capUnits(seriesId, terms);
-            }
-        }
+        bool valid = _revealValid($, seriesId, o, p, q);
+        _recordReveal($, w, seriesId, period, uint32(idx - 1), p, q, valid);
+    }
+
+    function _revealValid(WindowStorage storage $, uint256 seriesId, Order storage o, uint64 p, uint64 q)
+        internal
+        view
+        returns (bool)
+    {
+        if (p < 1 || q < 1) return false;
+        if (o.side == Side.Ask) return q <= o.escrow;
+        SeriesTerms memory terms = registry().getSeriesTerms(seriesId);
+        return uint256(o.escrow) >= _requiredBidEscrow(terms, p, q)
+            && _ownedUnits($, seriesId, o.owner) + q <= _capUnits(seriesId, terms);
+    }
+
+    /// @dev Per-side reveal index (the processing sequence), first-come prefix at the price.
+    function _recordReveal(
+        WindowStorage storage $,
+        Window storage w,
+        uint256 seriesId,
+        uint32 period,
+        uint32 index,
+        uint64 p,
+        uint64 q,
+        bool valid
+    ) internal {
+        Order storage o = $.orders[seriesId][period][index];
         o.revealed = true;
-        o.revealIndex = w.revealedCount;
+        if (o.side == Side.Bid) o.revealIndex = w.revealedBids++;
+        else o.revealIndex = w.revealedAsks++;
+        $.revealed[seriesId][period][o.side].push(index);
         o.valid = valid;
         o.price = p;
         o.quantity = q;
@@ -209,7 +236,7 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
             o.samePricePrefix = atPrice[p];
             atPrice[p] = (uint256(atPrice[p]) + q).toU64();
         }
-        emit OrderRevealed(seriesId, period, msg.sender, o.side, p, q, valid);
+        emit OrderRevealed(seriesId, period, o.owner, o.side, p, q, valid);
     }
 
     // ================================================================ settlement
@@ -239,7 +266,7 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         w.talliedCount = 0;
         w.roundRejected = false;
         w.tallyRound += 1;
-        emit WindowSettlementProposed(seriesId, period, p, noMatch, w.tallyRound);
+        emit WindowSettlementProposed(seriesId, period, noMatch ? type(uint64).max : p, noMatch, w.tallyRound);
     }
 
     /// @inheritdoc IMercesWindow
@@ -280,10 +307,11 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         (Window storage w, uint32 period) = _current(seriesId);
         if (w.state != WindowState.Settling || w.roundRejected) revert WindowNotOpen();
         if (w.talliedCount != w.revealedCount) revert TallyIncomplete();
-        // a series that reached a terminal status (Retired, Redeemed, Extinguished) no longer trades: every order
-        // goes back to its owner (docs/assumptions/track-c.md C-S5)
-        if (w.noMatchProposed || registry().getSeriesCore(seriesId).terminalStatus != 0) {
-            if (w.hasValidBid && w.hasValidAsk && w.maxBid >= w.minAsk) {
+        // a series that reached a terminal status (Retired, Redeemed, Extinguished) no longer trades: any proposal
+        // ends in NO_MATCH and every order goes back to its owner (docs/assumptions/track-c.md C-S5)
+        bool terminal = registry().getSeriesCore(seriesId).terminalStatus != 0;
+        if (w.noMatchProposed || terminal) {
+            if (!terminal && w.hasValidBid && w.hasValidAsk && w.maxBid >= w.minAsk) {
                 _reject(seriesId, period, w, REJECT_WINDOW_CROSSING_EXISTS);
                 return;
             }
@@ -314,7 +342,7 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
 
     function _reject(uint256 seriesId, uint32 period, Window storage w, uint8 reason) internal {
         w.roundRejected = true;
-        emit WindowSettlementRejected(seriesId, period, w.proposedPrice, reason);
+        emit WindowSettlementRejected(seriesId, period, w.noMatchProposed ? type(uint64).max : w.proposedPrice, reason);
     }
 
     // ================================================================ processing (anyone)
@@ -326,6 +354,10 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     function indexAskPrices(uint256 seriesId, uint64[] calldata prices) external override {
         (Window storage w, uint32 period) = _current(seriesId);
         if (w.state != WindowState.Settled) revert WindowNotOpen();
+        if (w.nextBidIndex != w.revealedBids) revert BidsNotProcessed();
+        if (w.cancelledUnits <= (w.branch == Branch.SupplyLimited ? w.sAt : w.marginalRemaining)) {
+            revert PriceIndexInvalid(); // no take-back below p*
+        }
         if (prices.length > C.MAX_TALLY_PAGE) revert TallyPageTooLarge();
         WindowStorage storage $ = _s();
         mapping(uint64 => uint64) storage atPrice = $.qtyAtPrice[seriesId][period][Side.Ask];
@@ -342,22 +374,27 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         }
         w.priceIndexSum = sum;
         w.priceIndexLast = last;
+        if (sum == w.sBelow && !w.takebackSettled) {
+            w.takebackSettled = true;
+            uint64 atStar = w.branch == Branch.SupplyLimited ? w.sAt : w.marginalRemaining;
+            emit WindowTakebackSettled(seriesId, period, w.cancelledUnits, w.cancelledUnits - atStar);
+        }
     }
 
     /// @inheritdoc IMercesWindow
     /// @dev Exhaustive cases (SPEC §7 `process_order`): `NoMatch`, unrevealed or invalid orders get their full
-    /// escrow back, in any order. In a settled window bids are processed in any order; an ask that sells units
-    /// waits until every bid is processed, because cancelled buyers' units are taken back from the asks.
+    /// escrow back. Moves money only to the fee collector; the owner's units and stablecoin wait for
+    /// `deliverOrder` (B-S13).
     function processOrder(uint256 seriesId, address owner) external override nonReentrant {
         (Window storage w, uint32 period) = _current(seriesId);
         if (w.state != WindowState.Settled && w.state != WindowState.NoMatch) revert WindowNotOpen();
         WindowStorage storage $ = _s();
-        uint256 idx = $.orderIndexPlusOne[seriesId][period][owner];
-        if (idx == 0) revert BidNotFound();
-        Order storage o = $.orders[seriesId][period][idx - 1];
+        Order storage o = _order($, seriesId, period, owner);
         if (o.processed) revert AlreadyProcessed();
+        bool settled = w.state == WindowState.Settled;
+        if (settled && o.revealed) _checkSequence(w, o);
         uint64 fill;
-        bool live = w.state == WindowState.Settled && o.revealed && o.valid;
+        bool live = settled && o.revealed && o.valid;
         if (o.side == Side.Bid) {
             if (live) {
                 fill = _bidNominal(w, o);
@@ -374,8 +411,20 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         o.fill = fill;
         w.processedCount += 1;
         if (w.processedCount == w.orderCount) w.state = WindowState.Done;
-        if (o.side == Side.Bid) _settleBid(seriesId, period, w, o, fill);
-        else _settleAsk(seriesId, period, w, o, fill);
+        if (o.side == Side.Bid) _accountBid(seriesId, period, w, o, fill);
+        else _accountAsk(seriesId, period, w, o, fill);
+    }
+
+    /// @dev B-S9: revealed bids in ascending reveal index, then revealed asks in ascending reveal index.
+    function _checkSequence(Window storage w, Order storage o) internal {
+        if (o.side == Side.Bid) {
+            if (o.revealIndex != w.nextBidIndex) revert OutOfOrder();
+            w.nextBidIndex += 1;
+        } else {
+            if (w.nextBidIndex != w.revealedBids) revert BidsNotProcessed();
+            if (o.revealIndex != w.nextAskIndex) revert OutOfOrder();
+            w.nextAskIndex += 1;
+        }
     }
 
     /// @dev Branch A: `> p*` full, `== p*` first-come from `S − d_above`, `< p*` nothing. Branch B: `≥ p*` full.
@@ -412,8 +461,7 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
     {
         uint64 nominal = _askNominal(w, o);
         if (nominal == 0) return 0;
-        if (w.bidsProcessed != w.bidCount) revert OutOfOrder();
-        uint64 cancelled = w.cancelledUnits;
+        uint64 cancelled = w.cancelledUnits; // final: every revealed bid is processed (`_checkSequence`)
         if (cancelled == 0) return nominal;
         uint64 p = w.clearingPrice;
         bool supplyLimited = w.branch == Branch.SupplyLimited;
@@ -433,72 +481,85 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         return _firstCome(o.quantity, budget, prefix);
     }
 
-    /// @dev Bid settlement: fee to the collector, refund to the buyer (deferred on failure), units to the buyer.
-    function _settleBid(uint256 seriesId, uint32 period, Window storage w, Order storage o, uint64 fill) internal {
-        SeriesCore memory core = registry().getSeriesCore(seriesId);
+    /// @dev Bid accounting: fee to the collector now; the refund and the units wait for delivery. The buyer is
+    /// registered and settled before its units count (pending), then credited the payouts since clearing on them
+    /// (C-S4).
+    function _accountBid(uint256 seriesId, uint32 period, Window storage w, Order storage o, uint64 fill) internal {
         uint64 p = w.clearingPrice;
         uint64 cost = uint64(uint256(p) * fill);
         uint64 fee = uint64(uint256(cost).bpsOf(registry().getSeriesTerms(seriesId).windowFeeBps));
         uint64 refund = o.escrow - cost - fee;
-        w.escrowStable -= fee + refund;
+        w.escrowStable -= fee;
         w.feesTotal += fee;
-        w.stableRefunded += refund;
-        w.unitsDelivered += fill;
-        w.escrowUnits -= fill;
+        o.pendingUnits = fill;
+        o.pendingStable = refund;
         emit OrderFilled(seriesId, period, o.owner, Side.Bid, fill, p, fee, refund);
-        IERC20 stable = IERC20(core.stablecoin);
-        if (fee > 0) stable.safeTransfer(registry().feeCollector(), fee);
-        _push(stable, seriesId, o.owner, refund);
         if (fill > 0) {
             IMercesVault vault = IMercesVault(_contracts().vault);
             vault.registerHolder(seriesId, o.owner);
             vault.settleHolder(seriesId, o.owner);
             // the buyer owns the units from the clearing point (C-S4): payouts since then accrue to it
             vault.creditWindowAccrual(seriesId, o.owner, fill, w.accAtClear);
-            if (!IERC3643Token(core.unitToken).transfer(o.owner, fill)) revert TransferFailed();
+            _s().pendingUnits[seriesId][o.owner] += fill;
+        }
+        if (fee > 0) {
+            IERC20(registry().getSeriesCore(seriesId).stablecoin).safeTransfer(registry().feeCollector(), fee);
         }
     }
 
-    /// @dev Ask settlement: the seller's accrual is settled before its escrowed units leave the accounting, it is
-    /// paid `p* × fill` (deferred on failure) and gets the unsold units back (a return, not an acquisition).
-    function _settleAsk(uint256 seriesId, uint32 period, Window storage w, Order storage o, uint64 fill) internal {
-        SeriesCore memory core = registry().getSeriesCore(seriesId);
+    /// @dev Ask accounting: the seller's accrual is settled while its escrow still counts; the units coming back
+    /// (credited the payouts since a priced clearing, C-S4) and the proceeds wait for delivery.
+    function _accountAsk(uint256 seriesId, uint32 period, Window storage w, Order storage o, uint64 fill) internal {
         uint64 p = w.clearingPrice;
-        uint64 proceeds = uint64(uint256(p) * fill);
         uint64 back = o.escrow - fill;
-        w.escrowStable -= proceeds;
-        w.escrowUnits -= back;
-        w.stableToSellers += proceeds;
-        w.unitsReturned += back;
+        o.pendingUnits = back;
+        o.pendingStable = uint64(uint256(p) * fill);
         emit OrderFilled(seriesId, period, o.owner, Side.Ask, fill, p, 0, back);
         IMercesVault vault = IMercesVault(_contracts().vault);
         vault.settleHolder(seriesId, o.owner);
-        // unsold units earned for the seller throughout; after a priced clearing the escrow weight stopped at
-        // `accAtClear`, so the units coming back are credited from there (C-S4)
         if (w.branch != Branch.None) vault.creditWindowAccrual(seriesId, o.owner, back, w.accAtClear);
-        _s().askEscrow[seriesId][o.owner] -= o.escrow;
-        _push(IERC20(core.stablecoin), seriesId, o.owner, proceeds);
-        if (back > 0 && !IERC3643Token(core.unitToken).transfer(o.owner, back)) revert TransferFailed();
-    }
-
-    /// @dev Pushes `amount` to `to`; a recipient-side failure (e.g. a blocked stablecoin account) defers it to
-    /// `owed` instead of blocking the window.
-    function _push(IERC20 stable, uint256 seriesId, address to, uint64 amount) internal {
-        if (amount == 0) return;
-        if (!stable.trySafeTransfer(to, amount)) {
-            _s().owed[seriesId][to] += amount;
-            emit PaymentDeferred(seriesId, to, amount);
-        }
+        WindowStorage storage $ = _s();
+        $.askEscrow[seriesId][o.owner] -= o.escrow;
+        $.pendingUnits[seriesId][o.owner] += back;
     }
 
     /// @inheritdoc IMercesWindow
-    /// @dev Anyone may retry a deferred payment to its owner's own address; nothing owed is a no-op.
-    function withdrawOwed(uint256 seriesId, address owner) external override nonReentrant {
-        uint64 amount = _s().owed[seriesId][owner];
-        if (amount == 0) return;
-        _s().owed[seriesId][owner] = 0;
-        emit OwedWithdrawn(seriesId, owner, amount);
-        IERC20(registry().getSeriesCore(seriesId).stablecoin).safeTransfer(owner, amount);
+    /// @dev Anyone; pays the order's owner only. A recipient-side failure reverts this call alone and can be
+    /// retried at any time. Moving units from pending to the balance leaves the owner's accrual weight unchanged.
+    function deliverOrder(uint256 seriesId, uint32 period, address owner) external override nonReentrant {
+        WindowStorage storage $ = _s();
+        Window storage w = $.windows[seriesId][period];
+        Order storage o = _order($, seriesId, period, owner);
+        if (!o.processed) revert NotProcessed();
+        if (o.delivered) revert AlreadyDelivered();
+        o.delivered = true;
+        uint64 units = o.pendingUnits;
+        uint64 amount = o.pendingStable;
+        w.escrowUnits -= units;
+        w.escrowStable -= amount;
+        $.pendingUnits[seriesId][owner] -= units;
+        emit OrderDelivered(seriesId, period, owner, o.side, units, amount);
+        SeriesCore memory core = registry().getSeriesCore(seriesId);
+        if (amount > 0) IERC20(core.stablecoin).safeTransfer(owner, amount);
+        if (units > 0 && !IERC3643Token(core.unitToken).transfer(owner, units)) revert TransferFailed();
+    }
+
+    function _order(WindowStorage storage $, uint256 seriesId, uint32 period, address owner)
+        internal
+        view
+        returns (Order storage)
+    {
+        uint256 idx = $.orderIndexPlusOne[seriesId][period][owner];
+        if (idx == 0) revert BidNotFound();
+        return $.orders[seriesId][period][idx - 1];
+    }
+
+    /// @dev Units `wallet` owns in the series: balance + undelivered auction units + ask escrow + window units
+    /// awaiting delivery (B-S19).
+    function _ownedUnits(WindowStorage storage $, uint256 seriesId, address wallet) internal view returns (uint256) {
+        IERC3643Token token = IERC3643Token(registry().getSeriesCore(seriesId).unitToken);
+        return token.balanceOf(wallet) + IMercesAuction(_contracts().auction).pendingUnitsOf(seriesId, wallet)
+            + $.askEscrow[seriesId][wallet] + $.pendingUnits[seriesId][wallet];
     }
 
     // ================================================================ views
@@ -542,8 +603,21 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         if (w.branch != Branch.None) return (escrowUnits, true, w.accAtClear);
     }
 
-    function owed(uint256 seriesId, address owner) external view override returns (uint64) {
-        return _s().owed[seriesId][owner];
+    /// @inheritdoc IMercesWindow
+    function pendingUnitsOf(uint256 seriesId, address wallet) external view override returns (uint64) {
+        return _s().pendingUnits[seriesId][wallet];
+    }
+
+    /// @inheritdoc IMercesWindow
+    function revealedOrderAt(uint256 seriesId, uint32 period, Side side, uint256 index)
+        external
+        view
+        override
+        returns (address)
+    {
+        uint32[] storage list = _s().revealed[seriesId][period][side];
+        if (index >= list.length) revert BidNotFound();
+        return _s().orders[seriesId][period][list[index]].owner;
     }
 
     function getWindow(uint256 seriesId, uint32 period) external view override returns (Window memory) {
@@ -567,9 +641,9 @@ contract MercesWindow is MercesUpgradeable, IMercesWindow {
         WindowStorage storage $ = _s();
         if (!$.hasWindow[seriesId]) return false;
         Window storage w = $.windows[seriesId][$.currentPeriod[seriesId]];
-        if (w.state != WindowState.Settled || w.bidsProcessed != w.bidCount) return false;
+        if (w.state != WindowState.Settled || w.nextBidIndex != w.revealedBids) return false;
         uint64 atStar = w.branch == Branch.SupplyLimited ? w.sAt : w.marginalRemaining;
-        return w.cancelledUnits > atStar && w.priceIndexSum != w.sBelow;
+        return w.cancelledUnits > atStar && !w.takebackSettled;
     }
 
     /// @inheritdoc IMercesWindow

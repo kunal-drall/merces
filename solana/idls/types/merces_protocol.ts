@@ -14,6 +14,242 @@ export type MercesProtocol = {
   },
   "instructions": [
     {
+      "name": "activateCurve",
+      "discriminator": [
+        95,
+        207,
+        169,
+        151,
+        222,
+        1,
+        209,
+        48
+      ],
+      "accounts": [
+        {
+          "name": "issuer",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                233,
+                140,
+                196,
+                223,
+                74,
+                68,
+                32,
+                241,
+                220,
+                208,
+                248,
+                162,
+                204,
+                221,
+                84,
+                248,
+                15,
+                242,
+                187,
+                12,
+                240,
+                93,
+                60,
+                74,
+                11,
+                246,
+                4,
+                154,
+                152,
+                79,
+                137,
+                239
+              ]
+            }
+          }
+        },
+        {
+          "name": "series",
+          "writable": true
+        },
+        {
+          "name": "issuerAllowlist",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "issuer"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                233,
+                140,
+                196,
+                223,
+                74,
+                68,
+                32,
+                241,
+                220,
+                208,
+                248,
+                162,
+                204,
+                221,
+                84,
+                248,
+                15,
+                242,
+                187,
+                12,
+                240,
+                93,
+                60,
+                74,
+                11,
+                246,
+                4,
+                154,
+                152,
+                79,
+                137,
+                239
+              ]
+            }
+          }
+        },
+        {
+          "name": "ledger",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  101,
+                  100,
+                  103,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dbcConfig"
+        },
+        {
+          "name": "dbcPool"
+        },
+        {
+          "name": "baseMint",
+          "docs": [
+            "checked in the handler."
+          ]
+        },
+        {
+          "name": "curveAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  117,
+                  114,
+                  118,
+                  101,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "registryAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "registryProgram",
+          "address": "GigVSncHHvrt8kZVHcdZWULqUE52aAZn7GzGaBNVznSi"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "approvePause",
       "discriminator": [
         149,
@@ -1430,6 +1666,211 @@ export type MercesProtocol = {
       ]
     },
     {
+      "name": "collectCurveProceeds",
+      "discriminator": [
+        216,
+        74,
+        132,
+        91,
+        61,
+        113,
+        23,
+        250
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                233,
+                140,
+                196,
+                223,
+                74,
+                68,
+                32,
+                241,
+                220,
+                208,
+                248,
+                162,
+                204,
+                221,
+                84,
+                248,
+                15,
+                242,
+                187,
+                12,
+                240,
+                93,
+                60,
+                74,
+                11,
+                246,
+                4,
+                154,
+                152,
+                79,
+                137,
+                239
+              ]
+            }
+          }
+        },
+        {
+          "name": "series"
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasuryToken",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "feeCollectorToken",
+          "writable": true
+        },
+        {
+          "name": "curveAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  117,
+                  114,
+                  118,
+                  101,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dbcPoolAuthority",
+          "address": "FhVo3mqL8PW5pH5U2CN4XE33DokiyZnUwuGpH2hmHLuM"
+        },
+        {
+          "name": "dbcConfig"
+        },
+        {
+          "name": "dbcPool",
+          "writable": true
+        },
+        {
+          "name": "dbcQuoteVault",
+          "writable": true
+        },
+        {
+          "name": "dbcBaseVault",
+          "writable": true
+        },
+        {
+          "name": "baseMint"
+        },
+        {
+          "name": "stablecoinMint"
+        },
+        {
+          "name": "stablecoinProgram"
+        },
+        {
+          "name": "token2022Program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "dbcEventAuthority",
+          "address": "8Ks12pbrD6PXxfty1hVQiE9sc289zgU1zHkvXhrSdriF"
+        },
+        {
+          "name": "dbcProgram",
+          "address": "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "commitAsk",
       "discriminator": [
         30,
@@ -1758,6 +2199,169 @@ export type MercesProtocol = {
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "completeCurve",
+      "discriminator": [
+        63,
+        44,
+        84,
+        34,
+        194,
+        178,
+        193,
+        67
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                233,
+                140,
+                196,
+                223,
+                74,
+                68,
+                32,
+                241,
+                220,
+                208,
+                248,
+                162,
+                204,
+                221,
+                84,
+                248,
+                15,
+                242,
+                187,
+                12,
+                240,
+                93,
+                60,
+                74,
+                11,
+                246,
+                4,
+                154,
+                152,
+                79,
+                137,
+                239
+              ]
+            }
+          }
+        },
+        {
+          "name": "series",
+          "writable": true
+        },
+        {
+          "name": "ledger",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  101,
+                  100,
+                  103,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dbcConfig"
+        },
+        {
+          "name": "dbcPool"
+        },
+        {
+          "name": "registryAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "registryProgram",
+          "address": "GigVSncHHvrt8kZVHcdZWULqUE52aAZn7GzGaBNVznSi"
+        }
+      ],
+      "args": []
     },
     {
       "name": "crankStatus",
@@ -4184,6 +4788,202 @@ export type MercesProtocol = {
         {
           "name": "registryProgram",
           "address": "GigVSncHHvrt8kZVHcdZWULqUE52aAZn7GzGaBNVznSi"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "prepareCurve",
+      "discriminator": [
+        229,
+        97,
+        118,
+        241,
+        4,
+        38,
+        208,
+        110
+      ],
+      "accounts": [
+        {
+          "name": "issuer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "series"
+        },
+        {
+          "name": "stablecoinMint"
+        },
+        {
+          "name": "stablecoinProgram"
+        },
+        {
+          "name": "vaultAuth",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasuryAuth",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "ledger",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  101,
+                  100,
+                  103,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasuryToken",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vaultToken",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
         },
         {
           "name": "systemProgram",
@@ -6799,6 +7599,196 @@ export type MercesProtocol = {
       ]
     },
     {
+      "name": "stakeUnits",
+      "discriminator": [
+        8,
+        17,
+        250,
+        141,
+        164,
+        88,
+        136,
+        87
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "series"
+        },
+        {
+          "name": "ledger",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  101,
+                  100,
+                  103,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "holder",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  111,
+                  108,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "ownerAllowlist",
+          "docs": [
+            "as not allowed)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                233,
+                140,
+                196,
+                223,
+                74,
+                68,
+                32,
+                241,
+                220,
+                208,
+                248,
+                162,
+                204,
+                221,
+                84,
+                248,
+                15,
+                242,
+                187,
+                12,
+                240,
+                93,
+                60,
+                74,
+                11,
+                246,
+                4,
+                154,
+                152,
+                79,
+                137,
+                239
+              ]
+            }
+          }
+        },
+        {
+          "name": "ownerBaseAta",
+          "writable": true
+        },
+        {
+          "name": "stakeAuth",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  117,
+                  114,
+                  118,
+                  101,
+                  95,
+                  115,
+                  116,
+                  97,
+                  107,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stakeVault",
+          "writable": true
+        },
+        {
+          "name": "baseMint"
+        },
+        {
+          "name": "token2022Program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associatedTokenProgram",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "units",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "submitReport",
       "discriminator": [
         27,
@@ -7195,6 +8185,72 @@ export type MercesProtocol = {
       ]
     },
     {
+      "name": "syncCurveUnits",
+      "discriminator": [
+        240,
+        47,
+        118,
+        182,
+        60,
+        126,
+        13,
+        5
+      ],
+      "accounts": [
+        {
+          "name": "series"
+        },
+        {
+          "name": "ledger",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  101,
+                  100,
+                  103,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "baseMint"
+        },
+        {
+          "name": "dbcPool"
+        },
+        {
+          "name": "dbcBaseVault"
+        },
+        {
+          "name": "dammConfig"
+        },
+        {
+          "name": "dammPool"
+        },
+        {
+          "name": "dammBaseVault"
+        },
+        {
+          "name": "lockerEscrowToken"
+        },
+        {
+          "name": "leftoverToken"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "tallyBids",
       "discriminator": [
         122,
@@ -7353,6 +8409,315 @@ export type MercesProtocol = {
         }
       ],
       "args": []
+    },
+    {
+      "name": "tenderUnits",
+      "discriminator": [
+        184,
+        53,
+        178,
+        106,
+        223,
+        6,
+        150,
+        126
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true
+        },
+        {
+          "name": "series"
+        },
+        {
+          "name": "ledger",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  101,
+                  100,
+                  103,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "holder",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  111,
+                  108,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "ownerBaseAta",
+          "writable": true
+        },
+        {
+          "name": "ownerStableAta",
+          "writable": true
+        },
+        {
+          "name": "stakeAuth",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  117,
+                  114,
+                  118,
+                  101,
+                  95,
+                  115,
+                  116,
+                  97,
+                  107,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stakeVault",
+          "writable": true
+        },
+        {
+          "name": "baseMint",
+          "writable": true
+        },
+        {
+          "name": "vaultToken",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vaultAuth",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stablecoinMint"
+        },
+        {
+          "name": "stablecoinProgram"
+        },
+        {
+          "name": "token2022Program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "fromStake",
+          "type": "u64"
+        },
+        {
+          "name": "fromWallet",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "unstakeUnits",
+      "discriminator": [
+        162,
+        33,
+        100,
+        12,
+        168,
+        114,
+        0,
+        93
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true
+        },
+        {
+          "name": "series"
+        },
+        {
+          "name": "ledger",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  101,
+                  100,
+                  103,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "holder",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  111,
+                  108,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "ownerBaseAta",
+          "writable": true
+        },
+        {
+          "name": "stakeAuth",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  117,
+                  114,
+                  118,
+                  101,
+                  95,
+                  115,
+                  116,
+                  97,
+                  107,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "series"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stakeVault",
+          "writable": true
+        },
+        {
+          "name": "baseMint"
+        },
+        {
+          "name": "token2022Program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "units",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "windowCommitBid",
@@ -7744,6 +9109,32 @@ export type MercesProtocol = {
         109,
         18,
         209
+      ]
+    },
+    {
+      "name": "curveProceedsCollected",
+      "discriminator": [
+        84,
+        108,
+        32,
+        196,
+        130,
+        64,
+        41,
+        37
+      ]
+    },
+    {
+      "name": "curveUnitsSynced",
+      "discriminator": [
+        162,
+        95,
+        162,
+        156,
+        28,
+        233,
+        99,
+        131
       ]
     },
     {
@@ -8290,6 +9681,32 @@ export type MercesProtocol = {
         129,
         9,
         122
+      ]
+    },
+    {
+      "name": "unitsStaked",
+      "discriminator": [
+        110,
+        124,
+        213,
+        7,
+        123,
+        79,
+        60,
+        104
+      ]
+    },
+    {
+      "name": "unitsUnstaked",
+      "discriminator": [
+        35,
+        75,
+        100,
+        115,
+        201,
+        67,
+        41,
+        129
       ]
     },
     {
@@ -9082,6 +10499,186 @@ export type MercesProtocol = {
       "code": 6136,
       "name": "bidsNotProcessed",
       "msg": "Every revealed bid must be processed before asks and take-back rounds"
+    },
+    {
+      "code": 6137,
+      "name": "notCurveMode",
+      "msg": "Series is not a curve-mode series"
+    },
+    {
+      "code": 6138,
+      "name": "dbcAccountInvalid",
+      "msg": "Account is not the expected Meteora DBC PoolConfig / VirtualPool (owner, discriminator or size)"
+    },
+    {
+      "code": 6139,
+      "name": "dbcPoolMismatch",
+      "msg": "DBC pool does not belong to the config / base mint / series"
+    },
+    {
+      "code": 6140,
+      "name": "dbcQuoteMintMismatch",
+      "msg": "DBC config quote mint is not the series stablecoin (USDC)"
+    },
+    {
+      "code": 6141,
+      "name": "dbcQuoteProgramMismatch",
+      "msg": "DBC config quote token program does not match the stablecoin's program"
+    },
+    {
+      "code": 6142,
+      "name": "dbcFeeClaimerMismatch",
+      "msg": "DBC fee_claimer and leftover_receiver must be the series curve_authority PDA"
+    },
+    {
+      "code": 6143,
+      "name": "dbcMigrationOptionUnsupported",
+      "msg": "DBC config must migrate to DAMM v2"
+    },
+    {
+      "code": 6144,
+      "name": "dbcTokenUnsupported",
+      "msg": "DBC config must create a fixed-supply Token-2022 base mint with 6 decimals"
+    },
+    {
+      "code": 6145,
+      "name": "creatorMigrationFeeBypassesTreasury",
+      "msg": "A creator migration-fee share would bypass the treasury: the issuer-creator share must be 0"
+    },
+    {
+      "code": 6146,
+      "name": "creatorLiquidityBypassesTreasury",
+      "msg": "Creator-withdrawable DAMM v2 liquidity would bypass the treasury: creator unlocked and vesting liquidity must be 0"
+    },
+    {
+      "code": 6147,
+      "name": "curveCreatorLockedVesting",
+      "msg": "A curve_authority creator cannot hold a locked-vesting issuer allocation"
+    },
+    {
+      "code": 6148,
+      "name": "curveCreatorInvalid",
+      "msg": "DBC pool creator must be the issuer or the series curve_authority PDA"
+    },
+    {
+      "code": 6149,
+      "name": "curveThresholdMismatch",
+      "msg": "min_raise must equal the DBC migration_quote_threshold"
+    },
+    {
+      "code": 6150,
+      "name": "curveUnitsMismatch",
+      "msg": "DBC swap_base_amount does not sell units_offered whole units"
+    },
+    {
+      "code": 6151,
+      "name": "curveMintAuthority",
+      "msg": "Base mint must have no mint or freeze authority"
+    },
+    {
+      "code": 6152,
+      "name": "curveMintExtension",
+      "msg": "Base mint carries an extension other than MetadataPointer / TokenMetadata"
+    },
+    {
+      "code": 6153,
+      "name": "curveNotComplete",
+      "msg": "The DBC curve has not completed (quote_reserve < migration_quote_threshold)"
+    },
+    {
+      "code": 6154,
+      "name": "dammConfigInvalid",
+      "msg": "DAMM v2 config is not a DBC-migration config (owner, discriminator or pool_creator_authority)"
+    },
+    {
+      "code": 6155,
+      "name": "dammPoolMismatch",
+      "msg": "DAMM v2 pool address does not derive from the config and the pool mints"
+    },
+    {
+      "code": 6156,
+      "name": "dammPoolMissing",
+      "msg": "The DBC pool has migrated but the DAMM v2 pool account is missing"
+    },
+    {
+      "code": 6157,
+      "name": "dammVaultMismatch",
+      "msg": "DAMM v2 base vault address mismatch"
+    },
+    {
+      "code": 6158,
+      "name": "dbcVaultMismatch",
+      "msg": "DBC base vault address mismatch"
+    },
+    {
+      "code": 6159,
+      "name": "lockerEscrowMismatch",
+      "msg": "Locker escrow token account address mismatch"
+    },
+    {
+      "code": 6160,
+      "name": "leftoverAccountMismatch",
+      "msg": "Leftover receiver token account address mismatch"
+    },
+    {
+      "code": 6161,
+      "name": "curveUnitsInconsistent",
+      "msg": "Protocol-held balances exceed the base mint supply"
+    },
+    {
+      "code": 6162,
+      "name": "curveUnitsBelowStake",
+      "msg": "Units outstanding would fall below the staked units"
+    },
+    {
+      "code": 6163,
+      "name": "curveUnitsNotSynced",
+      "msg": "Curve units must be synced after the reported period ended (sync_curve_units)"
+    },
+    {
+      "code": 6164,
+      "name": "stakeExceedsOutstanding",
+      "msg": "Staking beyond the synced units outstanding: run sync_curve_units first"
+    },
+    {
+      "code": 6165,
+      "name": "insufficientStake",
+      "msg": "Unstaking or tendering more than the holder's stake"
+    },
+    {
+      "code": 6166,
+      "name": "tenderQuotaExhausted",
+      "msg": "Wallet tenders exhausted the redemption quota left after the reserved stakes"
+    },
+    {
+      "code": 6167,
+      "name": "curveUsesTender",
+      "msg": "Curve-mode redemption is by tender_units"
+    },
+    {
+      "code": 6168,
+      "name": "curveModeNoBurn",
+      "msg": "Curve-mode units are never force-burned"
+    },
+    {
+      "code": 6169,
+      "name": "stakeVaultMismatch",
+      "msg": "Stake vault address mismatch"
+    },
+    {
+      "code": 6170,
+      "name": "curveAccountsMissing",
+      "msg": "A curve-mode redeem needs the eight protocol-held census accounts as remaining accounts"
+    },
+    {
+      "code": 6171,
+      "name": "curveTokenAccountInvalid",
+      "msg": "Protocol-held account is not a Token-2022 account of the base mint"
+    },
+    {
+      "code": 6172,
+      "name": "curveAlreadyComplete",
+      "msg": "The DBC curve already completed: a pool must be bound to its series before the sale ends"
     }
   ],
   "types": [
@@ -9390,6 +10987,70 @@ export type MercesProtocol = {
           {
             "name": "valid",
             "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "curveProceedsCollected",
+      "docs": [
+        "`collect_curve_proceeds`: the DBC migration fee and surplus withdrawn into the treasury",
+        "(`proceeds` = the treasury's new total), the partner trading fee into the fee collector."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "migrationFee",
+            "type": "u64"
+          },
+          {
+            "name": "surplus",
+            "type": "u64"
+          },
+          {
+            "name": "tradingFee",
+            "type": "u64"
+          },
+          {
+            "name": "proceeds",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "curveUnitsSynced",
+      "docs": [
+        "`sync_curve_units` (and the snapshot inside a curve-mode `redeem`): `units_outstanding =",
+        "supply − protocol_held`, all in base lamports."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "supply",
+            "type": "u64"
+          },
+          {
+            "name": "protocolHeld",
+            "type": "u64"
+          },
+          {
+            "name": "unitsOutstanding",
+            "type": "u64"
+          },
+          {
+            "name": "stakedTotal",
+            "type": "u64"
           }
         ]
       }
@@ -9751,6 +11412,14 @@ export type MercesProtocol = {
             "type": "u64"
           },
           {
+            "name": "stakedUnits",
+            "docs": [
+              "Curve mode: base lamports staked in the series stake vault — the holder's only accrual",
+              "weight (units outside the protocol move freely and earn nothing, CURVE_MODE §5)."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "bump",
             "type": "u8"
           }
@@ -9943,6 +11612,35 @@ export type MercesProtocol = {
             "type": "u64"
           },
           {
+            "name": "unitScale",
+            "docs": [
+              "Accounting units per whole unit: 1 for sealed-bid series, `10^6` for curve-mode series",
+              "(base lamports, SPEC §9). 0 reads as 1."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "unitsSyncedAt",
+            "docs": [
+              "Curve mode: unix time of the last `sync_curve_units` (0 = never)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "stakedTotal",
+            "docs": [
+              "Curve mode: Σ holder stakes (the earning weights; `≤ units_outstanding`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "tenderedTotal",
+            "docs": [
+              "Curve mode: units tendered against the redemption deposit (`≤ units_at_redemption`)."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "yearPaySum",
             "docs": [
               "Σ `payment_usd` accepted per calendar year (tagged ring; bounds negative true-ups)."
@@ -10122,11 +11820,18 @@ export type MercesProtocol = {
             "type": "u8"
           },
           {
+            "name": "curve",
+            "docs": [
+              "1 for a curve-mode series (SPEC §9)."
+            ],
+            "type": "u8"
+          },
+          {
             "name": "padding",
             "type": {
               "array": [
                 "u8",
-                12
+                11
               ]
             }
           }
@@ -10888,6 +12593,14 @@ export type MercesProtocol = {
             "type": "u32"
           },
           {
+            "name": "curveQuoteMint",
+            "docs": [
+              "The only quote mint curve-mode series may use (USDC of the cluster, SPEC §9), fixed at init",
+              "(no setter); zero disables curve mode."
+            ],
+            "type": "pubkey"
+          },
+          {
             "name": "bump",
             "type": "u8"
           }
@@ -11531,6 +13244,14 @@ export type MercesProtocol = {
             "type": "pubkey"
           },
           {
+            "name": "dbcCreator",
+            "docs": [
+              "`pool.creator` of the DBC pool at activation: the issuer wallet or the protocol's",
+              "`curve_authority` PDA (CURVE_MODE §6)."
+            ],
+            "type": "pubkey"
+          },
+          {
             "name": "bump",
             "type": "u8"
           }
@@ -12016,6 +13737,60 @@ export type MercesProtocol = {
           {
             "name": "reason",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unitsStaked",
+      "docs": [
+        "Units moved into the series stake vault (`staked` = the holder's stake afterwards)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "holder",
+            "type": "pubkey"
+          },
+          {
+            "name": "units",
+            "type": "u64"
+          },
+          {
+            "name": "staked",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unitsUnstaked",
+      "docs": [
+        "Units returned from the stake vault (`staked` = the holder's stake afterwards)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "series",
+            "type": "pubkey"
+          },
+          {
+            "name": "holder",
+            "type": "pubkey"
+          },
+          {
+            "name": "units",
+            "type": "u64"
+          },
+          {
+            "name": "staked",
+            "type": "u64"
           }
         ]
       }

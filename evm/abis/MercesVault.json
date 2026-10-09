@@ -1351,6 +1351,11 @@
   },
   {
     "type": "error",
+    "name": "DeliverFirst",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "ERC1967InvalidImplementation",
     "inputs": [
       {

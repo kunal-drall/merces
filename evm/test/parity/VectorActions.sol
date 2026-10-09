@@ -568,8 +568,9 @@ abstract contract VectorActions is VectorStack {
         window.finalizeWindow(sid);
     }
 
-    /// @dev Processes every order of the current window: bids, then (when the take-back of cancelled buyers'
-    /// units reaches below `p*`) the ask price index, then asks — the reference's single `process_orders` step.
+    /// @dev The reference's single `process_orders` step: revealed bids in reveal order, then (when cancelled
+    /// buyers' units reach below `p*`) the ask price index, then revealed asks in reveal order, then the
+    /// unrevealed orders; finally every order is delivered (B-S9, B-S13).
     function _processOrders(uint256 sid) internal {
         (bool exists, uint32 period) = window.currentWindow(sid);
         IMercesWindow.Window memory w;
@@ -583,17 +584,29 @@ abstract contract VectorActions is VectorStack {
             window.processOrder(sid, first); // reverts with the window's own error
             return;
         }
-        _processSide(sid, period, w.orderCount, IMercesWindow.Side.Bid);
+        _processRevealed(sid, period, IMercesWindow.Side.Bid, w.revealedBids);
         if (window.priceIndexRequired(sid)) _indexAskPrices(sid, period, w.orderCount);
-        _processSide(sid, period, w.orderCount, IMercesWindow.Side.Ask);
-    }
-
-    function _processSide(uint256 sid, uint32 period, uint256 n, IMercesWindow.Side side) internal {
-        for (uint256 i = 0; i < n; i++) {
+        _processRevealed(sid, period, IMercesWindow.Side.Ask, w.revealedAsks);
+        for (uint256 i = 0; i < w.orderCount; i++) {
             IMercesWindow.Order memory o = window.getOrderAt(sid, period, i);
-            if (o.side != side || o.processed) continue;
+            if (o.processed) continue;
             vm.prank(keeper);
             window.processOrder(sid, o.owner);
+        }
+        for (uint256 i = 0; i < w.orderCount; i++) {
+            IMercesWindow.Order memory o = window.getOrderAt(sid, period, i);
+            if (o.delivered) continue;
+            vm.prank(keeper);
+            window.deliverOrder(sid, period, o.owner);
+        }
+    }
+
+    function _processRevealed(uint256 sid, uint32 period, IMercesWindow.Side side, uint256 n) internal {
+        for (uint256 i = 0; i < n; i++) {
+            address owner = window.revealedOrderAt(sid, period, side, i);
+            if (window.getOrder(sid, period, owner).processed) continue;
+            vm.prank(keeper);
+            window.processOrder(sid, owner);
         }
     }
 

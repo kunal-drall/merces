@@ -815,6 +815,7 @@ impl Env {
                     chain_id: CHAIN_ID_LOCALNET,
                     defaults,
                     protocol_program: merces_protocol::ID,
+                    curve_quote_mint: self.usdc,
                 },
             }
             .data(),
@@ -1917,7 +1918,13 @@ impl Env {
     ) -> Vec<Instruction> {
         let s = self.series(series);
         let p = pdas(*series);
-        let create_unit = self.create_ata_ix(holder, &p.unit_mint);
+        // the registry's unit mint: the protocol PDA mint (sealed bid) or the DBC base mint (curve)
+        let unit_mint = if s.unit_mint == Pubkey::default() {
+            p.unit_mint
+        } else {
+            s.unit_mint
+        };
+        let create_unit = self.create_ata_ix(holder, &unit_mint);
         let create_stable = self.create_ata_ix(holder, &s.stablecoin);
         let mut ix = Self::pix(
             merces_protocol::accounts::HolderClaim {
@@ -1926,11 +1933,11 @@ impl Env {
                 ledger: p.ledger,
                 holder: holder_pda(series, holder),
                 holder_wallet: *holder,
-                holder_unit_ata: ata(holder, &p.unit_mint, &TOKEN_2022),
+                holder_unit_ata: ata(holder, &unit_mint, &TOKEN_2022),
                 holder_stable_ata: self.ata_of(holder, &s.stablecoin),
                 vault_token: p.vault_token,
                 vault_auth: p.vault_auth,
-                unit_mint: p.unit_mint,
+                unit_mint,
                 stablecoin_mint: s.stablecoin,
                 stablecoin_program: s.stablecoin_program,
                 token_2022_program: TOKEN_2022,
@@ -1953,15 +1960,21 @@ impl Env {
     }
     pub fn burn_retired(&mut self, series: &Pubkey, holder: &Pubkey) -> TxResult {
         let p = pdas(*series);
+        let s = self.series(series);
+        let unit_mint = if s.unit_mint == Pubkey::default() {
+            p.unit_mint
+        } else {
+            s.unit_mint
+        };
         let ix = Self::pix(
             merces_protocol::accounts::BurnRetired {
                 series: *series,
                 ledger: p.ledger,
                 holder: holder_pda(series, holder),
                 holder_wallet: *holder,
-                holder_unit_ata: ata(holder, &p.unit_mint, &TOKEN_2022),
+                holder_unit_ata: ata(holder, &unit_mint, &TOKEN_2022),
                 vault_auth: p.vault_auth,
-                unit_mint: p.unit_mint,
+                unit_mint,
                 token_2022_program: TOKEN_2022,
             }
             .to_account_metas(None),

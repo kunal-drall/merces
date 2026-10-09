@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MercesUpgradeable} from "./base/MercesUpgradeable.sol";
-import {IMercesIncome, TRUEUP_NOTICE_PERIOD} from "./interfaces/IMercesIncome.sol";
+import {IMercesIncome} from "./interfaces/IMercesIncome.sol";
 import {IMercesVault} from "./interfaces/IMercesVault.sol";
 import {IMercesRouter} from "./interfaces/IMercesRouter.sol";
 import {IGroth16Verifier} from "./interfaces/IGroth16Verifier.sol";
@@ -407,8 +407,11 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
     function _checkTrueupYear(SeriesCore memory core, Ledger storage l, uint16 year) internal view {
         if (l.hasLastTrueupYear && l.lastTrueupYear >= year) revert TrueUpYearInvalid();
         if (year >= Periods.yearOf(Periods.periodOf(block.timestamp))) revert TrueUpYearInvalid();
-        if (year < Periods.yearOf(_firstPeriod(core))) revert TrueUpYearInvalid();
-        if (!l.hasAccepted || l.lastAcceptedPeriod < uint32(year) * 4 + 3) revert TrueUpYearInvalid();
+        // every period of the year reported — vacuous when the year ended before the first period (B-S20)
+        uint32 lastOfYear = uint32(year) * 4 + 3;
+        if (lastOfYear >= _firstPeriod(core) && (!l.hasAccepted || l.lastAcceptedPeriod < lastOfYear)) {
+            revert TrueUpYearInvalid();
+        }
     }
 
     /// @dev `Σ payment_usd` accepted for the four periods of `year`.
@@ -541,7 +544,7 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
         ) {
             l.hasFormalNotice = true;
             l.formalNoticeEmittedFor = p;
-            emit FormalNoticeDue(seriesId, p);
+            emit FormalNoticeDue(seriesId, p, false);
         }
         if (
             l.trueupDue > 0 && !l.trueupNoticeEmitted
@@ -549,7 +552,7 @@ contract MercesIncome is MercesUpgradeable, IMercesIncome {
                     >= C.TRUEUP_SECONDS + (C.NOTICE_SECONDS - C.GRACE_SECONDS)
         ) {
             l.trueupNoticeEmitted = true;
-            emit FormalNoticeDue(seriesId, TRUEUP_NOTICE_PERIOD);
+            emit FormalNoticeDue(seriesId, l.trueupYear, true);
         }
     }
 

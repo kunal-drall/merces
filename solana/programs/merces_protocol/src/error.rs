@@ -289,6 +289,83 @@ pub enum ProtocolError {
     TakebackAlreadySettled,
     #[msg("Every revealed bid must be processed before asks and take-back rounds")]
     BidsNotProcessed,
+    // ---- curve mode (SPEC §9, docs/meteora/CURVE_MODE.md)
+    #[msg("Series is not a curve-mode series")]
+    NotCurveMode,
+    #[msg("Account is not the expected Meteora DBC PoolConfig / VirtualPool (owner, discriminator or size)")]
+    DbcAccountInvalid,
+    #[msg("DBC pool does not belong to the config / base mint / series")]
+    DbcPoolMismatch,
+    #[msg("DBC config quote mint is not the series stablecoin (USDC)")]
+    DbcQuoteMintMismatch,
+    #[msg("DBC config quote token program does not match the stablecoin's program")]
+    DbcQuoteProgramMismatch,
+    #[msg("DBC fee_claimer and leftover_receiver must be the series curve_authority PDA")]
+    DbcFeeClaimerMismatch,
+    #[msg("DBC config must migrate to DAMM v2")]
+    DbcMigrationOptionUnsupported,
+    #[msg("DBC config must create a fixed-supply Token-2022 base mint with 6 decimals")]
+    DbcTokenUnsupported,
+    #[msg("A creator migration-fee share would bypass the treasury: the issuer-creator share must be 0")]
+    CreatorMigrationFeeBypassesTreasury,
+    #[msg("Creator-withdrawable DAMM v2 liquidity would bypass the treasury: creator unlocked and vesting liquidity must be 0")]
+    CreatorLiquidityBypassesTreasury,
+    #[msg("A curve_authority creator cannot hold a locked-vesting issuer allocation")]
+    CurveCreatorLockedVesting,
+    #[msg("DBC pool creator must be the issuer or the series curve_authority PDA")]
+    CurveCreatorInvalid,
+    #[msg("min_raise must equal the DBC migration_quote_threshold")]
+    CurveThresholdMismatch,
+    #[msg("DBC swap_base_amount does not sell units_offered whole units")]
+    CurveUnitsMismatch,
+    #[msg("Base mint must have no mint or freeze authority")]
+    CurveMintAuthority,
+    #[msg("Base mint carries an extension other than MetadataPointer / TokenMetadata")]
+    CurveMintExtension,
+    #[msg("The DBC curve has not completed (quote_reserve < migration_quote_threshold)")]
+    CurveNotComplete,
+    #[msg("DAMM v2 config is not a DBC-migration config (owner, discriminator or pool_creator_authority)")]
+    DammConfigInvalid,
+    #[msg("DAMM v2 pool address does not derive from the config and the pool mints")]
+    DammPoolMismatch,
+    #[msg("The DBC pool has migrated but the DAMM v2 pool account is missing")]
+    DammPoolMissing,
+    #[msg("DAMM v2 base vault address mismatch")]
+    DammVaultMismatch,
+    #[msg("DBC base vault address mismatch")]
+    DbcVaultMismatch,
+    #[msg("Locker escrow token account address mismatch")]
+    LockerEscrowMismatch,
+    #[msg("Leftover receiver token account address mismatch")]
+    LeftoverAccountMismatch,
+    #[msg("Protocol-held balances exceed the base mint supply")]
+    CurveUnitsInconsistent,
+    #[msg("Units outstanding would fall below the staked units")]
+    CurveUnitsBelowStake,
+    #[msg("Curve units must be synced after the reported period ended (sync_curve_units)")]
+    CurveUnitsNotSynced,
+    #[msg("Staking beyond the synced units outstanding: run sync_curve_units first")]
+    StakeExceedsOutstanding,
+    #[msg("Unstaking or tendering more than the holder's stake")]
+    InsufficientStake,
+    #[msg("Wallet tenders exhausted the redemption quota left after the reserved stakes")]
+    TenderQuotaExhausted,
+    #[msg("Curve-mode redemption is by tender_units")]
+    CurveUsesTender,
+    #[msg("Curve-mode units are never force-burned")]
+    CurveModeNoBurn,
+    #[msg("Stake vault address mismatch")]
+    StakeVaultMismatch,
+    #[msg(
+        "A curve-mode redeem needs the eight protocol-held census accounts as remaining accounts"
+    )]
+    CurveAccountsMissing,
+    #[msg("Protocol-held account is not a Token-2022 account of the base mint")]
+    CurveTokenAccountInvalid,
+    #[msg(
+        "The DBC curve already completed: a pool must be bound to its series before the sale ends"
+    )]
+    CurveAlreadyComplete,
 }
 
 impl From<merces_common::MathError> for ProtocolError {

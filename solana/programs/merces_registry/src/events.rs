@@ -174,6 +174,7 @@ pub struct CurveActivated {
     pub dbc_config: Pubkey,
     pub dbc_pool: Pubkey,
     pub base_mint: Pubkey,
+    pub dbc_creator: Pubkey,
     pub units_sold: u64,
     pub clearing_price: u64,
 }

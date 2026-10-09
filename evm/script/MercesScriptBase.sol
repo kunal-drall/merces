@@ -106,8 +106,7 @@ abstract contract MercesScriptBase is Script {
                 && c.window == d.window && c.tokenFactory == d.tokenFactory,
             "verify: protocol contracts"
         );
-        address[8] memory owned =
-            [d.auction, d.treasury, d.vault, d.income, d.router, d.window, d.fx, d.feeCollector];
+        address[8] memory owned = [d.auction, d.treasury, d.vault, d.income, d.router, d.window, d.fx, d.feeCollector];
         for (uint256 i = 0; i < owned.length; i++) {
             require(IAgentRole(owned[i]).owner() == d.timelock, "verify: money contract owner");
         }

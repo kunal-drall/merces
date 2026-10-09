@@ -172,27 +172,39 @@ contract WindowFuzzTest is FullFixture {
         return false;
     }
 
-    /// @dev Bids (in a random order), then the keeper's ask price index when the take-back needs it, then asks.
+    /// @dev Revealed bids in reveal order, the keeper's ask price index when the take-back needs it, revealed asks
+    /// in reveal order, the unrevealed orders; then every delivery, in a random order (B-S9, B-S13).
     function _processAll(O[] memory os, uint256 seed) internal {
-        uint256 start = seed % BUYERS;
-        for (uint256 k = 0; k < BUYERS; k++) {
-            O memory o = os[3 + (start + k) % BUYERS];
-            if (o.price == 0) continue;
-            vm.prank(keeper);
-            window.processOrder(sid, o.who);
+        IMercesWindow.Window memory w = _w();
+        if (w.state == IMercesWindow.WindowState.Settled) {
+            for (uint256 i = 0; i < w.revealedBids; i++) {
+                vm.prank(keeper);
+                window.processOrder(sid, window.revealedOrderAt(sid, Q1_2026, IMercesWindow.Side.Bid, i));
+            }
+            if (window.priceIndexRequired(sid)) {
+                uint64[] memory prices = _askPricesBelow(os, _w().clearingPrice);
+                vm.prank(keeper);
+                window.indexAskPrices(sid, prices);
+            }
+            for (uint256 i = 0; i < w.revealedAsks; i++) {
+                vm.prank(keeper);
+                window.processOrder(sid, window.revealedOrderAt(sid, Q1_2026, IMercesWindow.Side.Ask, i));
+            }
         }
-        if (window.priceIndexRequired(sid)) {
-            uint64[] memory prices = _askPricesBelow(os, _w().clearingPrice);
-            vm.prank(keeper);
-            window.indexAskPrices(sid, prices);
-        }
-        for (uint256 k = 0; k < 3; k++) {
-            O memory o = os[(seed / 7 + k) % 3];
-            if (o.price == 0) continue;
+        uint256 start = seed % os.length;
+        for (uint256 k = 0; k < os.length; k++) {
+            O memory o = os[(start + k) % os.length];
+            if (o.price == 0 || window.getOrder(sid, Q1_2026, o.who).processed) continue;
             vm.prank(keeper);
             window.processOrder(sid, o.who);
         }
         assertEq(uint8(_w().state), uint8(IMercesWindow.WindowState.Done));
+        for (uint256 k = 0; k < os.length; k++) {
+            O memory o = os[(start + os.length - 1 - k) % os.length]; // a different order than processing
+            if (o.price == 0 || window.getOrder(sid, Q1_2026, o.who).delivered) continue;
+            vm.prank(keeper);
+            window.deliverOrder(sid, Q1_2026, o.who);
+        }
     }
 
     function _askPricesBelow(O[] memory os, uint64 p) internal pure returns (uint64[] memory out) {

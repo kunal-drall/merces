@@ -520,6 +520,14 @@ export type MercesHook = {
             "type": "u32"
           },
           {
+            "name": "curveQuoteMint",
+            "docs": [
+              "The only quote mint curve-mode series may use (USDC of the cluster, SPEC §9), fixed at init",
+              "(no setter); zero disables curve mode."
+            ],
+            "type": "pubkey"
+          },
+          {
             "name": "bump",
             "type": "u8"
           }
@@ -755,6 +763,14 @@ export type MercesHook = {
           },
           {
             "name": "baseMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "dbcCreator",
+            "docs": [
+              "`pool.creator` of the DBC pool at activation: the issuer wallet or the protocol's",
+              "`curve_authority` PDA (CURVE_MODE §6)."
+            ],
             "type": "pubkey"
           },
           {

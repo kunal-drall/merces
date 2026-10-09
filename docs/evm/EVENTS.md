@@ -65,7 +65,7 @@ The tables below are generated from the compiled ABIs (`evm/abis/*.json`); "Emit
 | `BidProcessed` | seriesⁱ: uint256, bidderⁱ: address, units: uint64, refund: uint64 | `_recordRefund` |
 | `BidRevealed` | seriesⁱ: uint256, bidderⁱ: address, price: uint64, quantity: uint64, valid: bool | `revealBid` |
 | `Initialized` | version: uint64 | (inherited) |
-| `MintAuthorityRevoked` | seriesⁱ: uint256 | `_finalizeMint` |
+| `MintAuthorityRevoked` | seriesⁱ: uint256 | `cancelRaise`, `_finalizeMint` |
 | `NonRevealCharged` | seriesⁱ: uint256, bidderⁱ: address, charge: uint64 | `processBid` |
 | `OwnershipTransferred` | previousOwnerⁱ: address, newOwnerⁱ: address | (inherited) |
 | `RaiseCancelled` | seriesⁱ: uint256 | `cancelRaise` |
@@ -96,7 +96,7 @@ The tables below are generated from the compiled ABIs (`evm/abis/*.json`); "Emit
 
 | Event | Fields (`indexed` marked ⁱ) | Emitted by |
 | --- | --- | --- |
-| `FormalNoticeDue` | seriesⁱ: uint256, period: uint32 | `_sync` |
+| `FormalNoticeDue` | seriesⁱ: uint256, period: uint32, trueup: bool | `_sync` |
 | `FxAccumulatorSet` | fxAccumulator: address | `initialize` |
 | `Groth16VerifierSet` | verifier: address | `initialize`, `setGroth16Verifier` |
 | `Initialized` | version: uint64 | (inherited) |
@@ -164,17 +164,17 @@ The tables below are generated from the compiled ABIs (`evm/abis/*.json`); "Emit
 | --- | --- | --- |
 | `Initialized` | version: uint64 | (inherited) |
 | `OrderCommitted` | seriesⁱ: uint256, periodⁱ: uint32, ownerⁱ: address, side: uint8, escrow: uint64 | `commitAsk`, `commitBid` |
-| `OrderFilled` | seriesⁱ: uint256, periodⁱ: uint32, ownerⁱ: address, side: uint8, fill: uint64, price: uint64, fee: uint64, refund: uint64 | `_settleBid`, `_settleAsk` |
-| `OrderRevealed` | seriesⁱ: uint256, periodⁱ: uint32, ownerⁱ: address, side: uint8, price: uint64, quantity: uint64, valid: bool | `revealOrder` |
-| `OwedWithdrawn` | seriesⁱ: uint256, ownerⁱ: address, amount: uint64 | `withdrawOwed` |
+| `OrderDelivered` | seriesⁱ: uint256, periodⁱ: uint32, ownerⁱ: address, side: uint8, units: uint64, amount: uint64 | `deliverOrder` |
+| `OrderFilled` | seriesⁱ: uint256, periodⁱ: uint32, ownerⁱ: address, side: uint8, fill: uint64, price: uint64, fee: uint64, refund: uint64 | `_accountBid`, `_accountAsk` |
+| `OrderRevealed` | seriesⁱ: uint256, periodⁱ: uint32, ownerⁱ: address, side: uint8, price: uint64, quantity: uint64, valid: bool | `_recordReveal` |
 | `OwnershipTransferred` | previousOwnerⁱ: address, newOwnerⁱ: address | (inherited) |
-| `PaymentDeferred` | seriesⁱ: uint256, ownerⁱ: address, amount: uint64 | `_push` |
 | `Upgraded` | implementationⁱ: address | (inherited) |
 | `WindowCleared` | seriesⁱ: uint256, periodⁱ: uint32, clearingPrice: uint64, matchedUnits: uint64, branch: uint8 | `finalizeWindow` |
 | `WindowNoMatch` | seriesⁱ: uint256, periodⁱ: uint32 | `finalizeWindow` |
 | `WindowOpened` | seriesⁱ: uint256, periodⁱ: uint32, commitEnd: uint64, revealEnd: uint64 | `openWindow` |
 | `WindowSettlementProposed` | seriesⁱ: uint256, periodⁱ: uint32, clearingPrice: uint64, noMatch: bool, round: uint32 | `beginWindowSettlement` |
 | `WindowSettlementRejected` | seriesⁱ: uint256, periodⁱ: uint32, clearingPrice: uint64, reason: uint8 | `_reject` |
+| `WindowTakebackSettled` | seriesⁱ: uint256, periodⁱ: uint32, cancelledUnits: uint64, belowUnits: uint64 | `indexAskPrices` |
 
 ## MercesTokenFactory
 
@@ -197,11 +197,19 @@ The tables below are generated from the compiled ABIs (`evm/abis/*.json`); "Emit
 | `FeesWithdrawn` | tokenⁱ: address, toⁱ: address, amount: uint256 | `withdraw` |
 | `OwnershipTransferred` | previousOwnerⁱ: address, newOwnerⁱ: address | (inherited) |
 
-## EVM-only events
+## Events beyond SPEC §10
 
-Not in SPEC §10; emitted for operational transparency. None replaces a canonical event.
+Not in the SPEC §10 list; none replaces a canonical event. The first group exists on Solana with the same name
+and fields (Track B parity, `docs/assumptions/track-b.md`); the rest are EVM-only, for operational transparency.
 
 | Event | Contract | Meaning |
+| --- | --- | --- |
+| `FormalNoticeDue(series, period, trueup)` | income | SPEC lists `(series, period)`; `trueup = true` marks the true-up notice, `period` then carries the calendar year (B-S3) |
+| `WindowSettlementProposed(series, period, clearingPrice, noMatch, round)` | window | Keeper proposal; `clearingPrice = 2^64 − 1` for `NO_MATCH` (also in `WindowSettlementRejected`) |
+| `WindowTakebackSettled(series, period, cancelledUnits, belowUnits)` | window | Cancelled buyers' units reach below `p*` and the take-back from those asks is settled (B-S12; Solana adds its threshold key) |
+| `OrderDelivered(series, period, owner, side, units, amount)` | window | `deliverOrder` pushed a processed order's units and stablecoin to its owner (B-S13) |
+
+| EVM-only event | Contract | Meaning |
 | --- | --- | --- |
 | `IdentityRegistered(wallet, identity)` | registry | First allowlisting of a wallet created and registered its ONCHAINID in the shared T-REX identity registry (SPEC §4.2) |
 | `StablecoinSet(stablecoin, allowed, decimals)` | registry | Stablecoin allowlist for **new** series (existing series keep theirs) |
@@ -212,8 +220,6 @@ Not in SPEC §10; emitted for operational transparency. None replaces a canonica
 | `SupplyInitialized(series, unitsOutstanding)` | vault | `units_outstanding = units_sold` at mint finalization |
 | `IncomeHeld` | router | Tier-1 income received before the raise was final, held for the series |
 | `RouterReceiverCreated(series, receiver)` | router | Per-series income address deployed |
-| `WindowSettlementProposed(series, period, clearingPrice, noMatch, round)` | window | Keeper proposal (window analogue of `SettlementProposed`) |
-| `PaymentDeferred(series, owner, amount)` / `OwedWithdrawn` | window | A stablecoin push failed for a recipient-side reason and waits in `owed` (C-S3) |
 | `UnitTokenCreated` | token factory | T-REX token + compliance proxies created for a series |
 | `ComplianceBound` / `ComplianceUnbound` / `EscrowsSet` | compliance module | Module bound to a series' compliance with its auction/window escrows |
 | `FeesWithdrawn` | fee collector | Timelock withdrew collected fees |

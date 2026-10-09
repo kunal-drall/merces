@@ -440,8 +440,11 @@ export type MercesRegistry = {
     {
       "name": "markCurveActivated",
       "docs": [
-        "Curve-mode activation (SPEC §9; the Meteora integration is a later track). Records the DBC",
-        "accounts and fixes `P0` and `units_sold` for cap accounting. Draft → Settled, mint finalised."
+        "Curve-mode activation (SPEC §9, CURVE_MODE §2–§3): records the DBC config, pool, base mint",
+        "and pool creator validated by `merces_protocol::activate_curve`, and fixes `P0`",
+        "(`clearing_price`, per whole unit) and the design `units_sold` (base lamports) for cap",
+        "accounting. Draft → Open; the protocol marks the raise Settled (and the mint final) when it",
+        "observes the curve's completion."
       ],
       "discriminator": [
         199,
@@ -534,6 +537,10 @@ export type MercesRegistry = {
         },
         {
           "name": "baseMint",
+          "type": "pubkey"
+        },
+        {
+          "name": "dbcCreator",
           "type": "pubkey"
         },
         {
@@ -2807,6 +2814,21 @@ export type MercesRegistry = {
       "code": 6069,
       "name": "boundMaxCumulativePause",
       "msg": "max_cumulative_pause_seconds out of bounds [max_pause_seconds, 5 y]"
+    },
+    {
+      "code": 6070,
+      "name": "curveQuoteMintMismatch",
+      "msg": "Curve-mode series must use the configured curve quote mint (USDC)"
+    },
+    {
+      "code": 6071,
+      "name": "curveTermsNotZero",
+      "msg": "Curve-mode series take no lockup, wallet cap or auction/window durations (all must be 0)"
+    },
+    {
+      "code": 6072,
+      "name": "curveThresholdZero",
+      "msg": "Curve-mode series need a migration threshold (min_raise ≥ 1)"
     }
   ],
   "types": [
@@ -3127,6 +3149,10 @@ export type MercesRegistry = {
             "type": "pubkey"
           },
           {
+            "name": "dbcCreator",
+            "type": "pubkey"
+          },
+          {
             "name": "unitsSold",
             "type": "u64"
           },
@@ -3343,6 +3369,14 @@ export type MercesRegistry = {
             "docs": [
               "The `merces_protocol` program id whose `[REGISTRY_AUTHORITY]` PDA may call the write",
               "interface. Fixed for the life of the deployment (no setter)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "curveQuoteMint",
+            "docs": [
+              "The cluster's USDC mint, the only quote mint of curve-mode series (SPEC §9; zero disables",
+              "curve mode). Fixed for the life of the deployment (no setter)."
             ],
             "type": "pubkey"
           }
@@ -3623,6 +3657,14 @@ export type MercesRegistry = {
           {
             "name": "verifierCount",
             "type": "u32"
+          },
+          {
+            "name": "curveQuoteMint",
+            "docs": [
+              "The only quote mint curve-mode series may use (USDC of the cluster, SPEC §9), fixed at init",
+              "(no setter); zero disables curve mode."
+            ],
+            "type": "pubkey"
           },
           {
             "name": "bump",
@@ -3917,6 +3959,14 @@ export type MercesRegistry = {
           },
           {
             "name": "baseMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "dbcCreator",
+            "docs": [
+              "`pool.creator` of the DBC pool at activation: the issuer wallet or the protocol's",
+              "`curve_authority` PDA (CURVE_MODE §6)."
+            ],
             "type": "pubkey"
           },
           {

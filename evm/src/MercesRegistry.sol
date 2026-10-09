@@ -375,15 +375,22 @@ contract MercesRegistry is IMercesRegistry {
     }
 
     /// @inheritdoc IMercesRegistry
-    /// @dev SPEC §3.1: `crosscheck` may be set from 0 once (effective now); later changes, including removal, take
-    /// effect from `period_of(now) + 1`. Until then the accumulator keeps applying the rule recorded for the live
-    /// period (`crosscheck_effective_period` is compared with the snapshot's period).
+    /// @dev SPEC §3.1, B-S10: from zero with no feed in force for the running period → effective now; otherwise
+    /// effective from `period_of(now) + 1` while the feed in force (`prevCrosscheck`) keeps applying to the
+    /// running period, so a live quarter's rule never changes under an issuer.
     function setFxPairCrosscheck(bytes32 pairId, address crosscheck) external override onlyAdmin {
         FxPairConfig storage cfg = _fxPairs[pairId];
         if (!cfg.exists) revert UnknownFxPair(pairId);
         if (crosscheck == cfg.crosscheck) revert CrosscheckUnchanged(pairId);
         uint32 nowPeriod = Periods.periodOf(block.timestamp);
-        cfg.crosscheckEffectivePeriod = cfg.crosscheck == address(0) ? nowPeriod : nowPeriod + 1;
+        address inForce = nowPeriod >= cfg.crosscheckEffectivePeriod ? cfg.crosscheck : cfg.prevCrosscheck;
+        if (inForce == address(0)) {
+            cfg.prevCrosscheck = address(0);
+            cfg.crosscheckEffectivePeriod = nowPeriod;
+        } else {
+            cfg.prevCrosscheck = inForce;
+            cfg.crosscheckEffectivePeriod = nowPeriod + 1;
+        }
         cfg.crosscheck = crosscheck;
         _emitFxPair(pairId, cfg);
     }
@@ -695,7 +702,11 @@ contract MercesRegistry is IMercesRegistry {
     /// @inheritdoc IMercesRegistry
     function markMintFinalized(uint256 seriesId) external override onlyAuction seriesExists(seriesId) {
         SeriesCore storage core = _cores[seriesId];
-        if (core.raiseState != RaiseState.Settled || core.mintFinalized) revert InvalidRaiseTransition();
+        // Settled, or Failed (the empty mint of a failed raise is final too, B-S17); the repayment path still
+        // requires Settled
+        if ((core.raiseState != RaiseState.Settled && core.raiseState != RaiseState.Failed) || core.mintFinalized) {
+            revert InvalidRaiseTransition();
+        }
         core.mintFinalized = true;
         emit MintFinalized(seriesId);
     }

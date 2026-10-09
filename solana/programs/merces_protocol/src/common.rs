@@ -82,6 +82,45 @@ impl<'info> RegistryCpi<'info> {
         )
     }
 
+    /// Curve-mode activation (SPEC §9): records the DBC accounts, the pool creator, the design
+    /// `units_sold` (base lamports) and `P0` (per whole unit); Draft → Open.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mark_curve_activated(
+        &self,
+        issuer_allowlist: &AccountInfo<'info>,
+        dbc_config: Pubkey,
+        dbc_pool: Pubkey,
+        base_mint: Pubkey,
+        dbc_creator: Pubkey,
+        activated_at: u64,
+        units_sold: u64,
+        clearing_price: u64,
+    ) -> Result<()> {
+        let bump = [self.authority_bump];
+        let seeds: &[&[u8]] = &[seeds::REGISTRY_AUTHORITY, &bump];
+        let signer: &[&[&[u8]]] = &[seeds];
+        let ctx = CpiContext::new_with_signer(
+            *self.registry_program.key,
+            merces_registry::cpi::accounts::MarkCurveActivated {
+                config: self.config.clone(),
+                protocol_authority: self.registry_authority.clone(),
+                series: self.series.clone(),
+                issuer_allowlist: issuer_allowlist.clone(),
+            },
+            signer,
+        );
+        merces_registry::cpi::mark_curve_activated(
+            ctx,
+            dbc_config,
+            dbc_pool,
+            base_mint,
+            dbc_creator,
+            activated_at,
+            units_sold,
+            clearing_price,
+        )
+    }
+
     pub fn mark_mint_finalized(&self) -> Result<()> {
         let bump = [self.authority_bump];
         let seeds: &[&[u8]] = &[seeds::REGISTRY_AUTHORITY, &bump];
@@ -504,6 +543,7 @@ impl Ledger {
             gross,
             units,
             cap_per_unit,
+            unit_scale: self.scale(),
             paid_per_unit_wad: self.paid_per_unit_wad,
             carry_wad: self.carry_wad,
             fee_bps,
@@ -563,6 +603,7 @@ impl Ledger {
             gross,
             units,
             cap_per_unit: self.tail_cap_per_unit,
+            unit_scale: self.scale(),
             paid_per_unit_wad: self.tail_paid_per_unit_wad,
             carry_wad: self.tail_carry_wad,
             fee_bps,
@@ -658,12 +699,14 @@ pub fn retire(
 
 /// `accrual_units(w) = unit_balance + undelivered auction units + ask-escrow units` (SPEC §6.1),
 /// plus window units processed for the holder and not yet delivered (Solana's two-step window
-/// settlement keeps them in the window escrow until `deliver_order`).
+/// settlement keeps them in the window escrow until `deliver_order`), plus — curve mode — the
+/// staked units (curve callers pass `balance = 0`: wallet balances never earn there).
 pub fn accrual_units(holder: &Holder, balance: u64) -> Result<u64> {
     balance
         .checked_add(holder.undelivered_units)
         .and_then(|v| v.checked_add(holder.ask_escrow_units))
         .and_then(|v| v.checked_add(holder.window_pending_units))
+        .and_then(|v| v.checked_add(holder.staked_units))
         .ok_or(ProtocolError::MathOverflow.into())
 }
 
@@ -767,6 +810,7 @@ pub fn load_or_create_holder<'info>(
         undelivered_units: 0,
         ask_escrow_units: 0,
         window_pending_units: 0,
+        staked_units: 0,
         bump,
     })
 }
@@ -843,6 +887,7 @@ pub fn register_holder_now(
     holder.undelivered_units = 0;
     holder.ask_escrow_units = 0;
     holder.window_pending_units = 0;
+    holder.staked_units = 0;
     holder.bump = bump;
     emit!(HolderRegistered {
         series,

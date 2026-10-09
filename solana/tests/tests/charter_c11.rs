@@ -269,13 +269,17 @@ fn c11_4_units_carry_no_vote() {
     ]
     .into_iter()
     .collect();
-    // instructions a holder signs, all about the holder's own escrowed order
+    // instructions a holder signs, all about the holder's own escrowed order or (curve mode) the
+    // holder's own units: staking them to earn, unstaking, tendering them at redemption
     let holder_signed: BTreeSet<&str> = [
         "commit_bid",
         "reveal_bid",
         "commit_ask",
         "window_commit_bid",
         "reveal_order",
+        "stake_units",
+        "unstake_units",
+        "tender_units",
     ]
     .into_iter()
     .collect();

@@ -508,25 +508,29 @@ contract LifecycleHandler is Test {
         _flagLiveness("no window proposal was accepted", "");
     }
 
-    /// @dev One order per call (bids first, then the ask price index if needed, then asks), so payouts and
-    /// claims interleave with processing.
+    /// @dev One order per call in the mandated sequence (revealed bids, the ask price index if needed, revealed
+    /// asks, then unrevealed orders; any order in a NO_MATCH window), so payouts, claims and deliveries interleave
+    /// with processing.
     function windowProcess(uint256 seed) external {
         calls++;
         (bool active, uint32 period, IMercesWindow.Window memory w) = _window();
         if (!active) return;
         if (w.state != IMercesWindow.WindowState.Settled && w.state != IMercesWindow.WindowState.NoMatch) return;
-        address[] storage owners = orderOwners[period];
         address target;
-        for (uint256 pass = 0; pass < 2 && target == address(0); pass++) {
+        if (w.state == IMercesWindow.WindowState.Settled && w.nextBidIndex < w.revealedBids) {
+            target = e.window.revealedOrderAt(e.sid, period, IMercesWindow.Side.Bid, w.nextBidIndex);
+        } else if (w.state == IMercesWindow.WindowState.Settled && w.nextAskIndex < w.revealedAsks) {
+            if (e.window.priceIndexRequired(e.sid)) _indexAsks(period, w);
+            target = e.window.revealedOrderAt(e.sid, period, IMercesWindow.Side.Ask, w.nextAskIndex);
+        } else {
+            address[] storage owners = orderOwners[period];
             for (uint256 k = 0; k < owners.length; k++) {
                 address who = owners[(seed % owners.length + k) % owners.length];
-                if (e.window.getOrder(e.sid, period, who).processed) continue;
-                if ((pass == 0) == !orders[period][who].ask) {
+                if (!e.window.getOrder(e.sid, period, who).processed) {
                     target = who;
                     break;
                 }
             }
-            if (pass == 0 && target == address(0) && e.window.priceIndexRequired(e.sid)) _indexAsks(period, w);
         }
         if (target == address(0)) return;
         vm.prank(keeper);
@@ -534,6 +538,45 @@ contract LifecycleHandler is Test {
             hits["processOrder"]++;
         } catch (bytes memory err) {
             _flagLiveness("processOrder reverted", err);
+        }
+        _syncUnits();
+    }
+
+    /// @dev Delivers one processed, undelivered order of any window (anyone, owner-only push, retryable).
+    function windowDeliver(uint256 seed) external {
+        calls++;
+        uint256 nw = windowPeriods.length;
+        if (nw == 0) return;
+        for (uint256 j = 0; j < nw; j++) {
+            uint32 period = windowPeriods[(seed % nw + j) % nw];
+            address[] storage owners = orderOwners[period];
+            for (uint256 k = 0; k < owners.length; k++) {
+                address who = owners[(seed % owners.length + k) % owners.length];
+                IMercesWindow.Order memory o = e.window.getOrder(e.sid, period, who);
+                if (!o.processed || o.delivered) continue;
+                vm.prank(keeper);
+                try e.window.deliverOrder(e.sid, period, who) {
+                    hits["deliverOrder"]++;
+                } catch (bytes memory err) {
+                    _flagLiveness("deliverOrder reverted", err);
+                }
+                _syncUnits();
+                return;
+            }
+        }
+    }
+
+    /// @dev Delivers everything still pending (liveness check at the end of a run).
+    function deliverAll() external {
+        for (uint256 j = 0; j < windowPeriods.length; j++) {
+            uint32 period = windowPeriods[j];
+            address[] storage owners = orderOwners[period];
+            for (uint256 k = 0; k < owners.length; k++) {
+                IMercesWindow.Order memory o = e.window.getOrder(e.sid, period, owners[k]);
+                if (!o.processed || o.delivered) continue;
+                vm.prank(keeper);
+                e.window.deliverOrder(e.sid, period, owners[k]);
+            }
         }
         _syncUnits();
     }
@@ -640,7 +683,7 @@ contract LifecycleHandler is Test {
         if (kind == 0) {
             e.registry.setFlags(seed % 2 == 0, seed % 4 != 0, seed % 3 == 0);
         } else if (kind == 1) {
-            e.registry.registerAttestor(address(uint160(uint256(keccak256(abi.encode("a", seed))))));
+            try e.registry.registerAttestor(address(uint160(uint256(keccak256(abi.encode("a", seed)))))) {} catch {}
         } else if (kind == 2) {
             e.registry.setStablecoin(address(e.usdc), seed % 2 == 0);
         } else if (kind == 3) {
@@ -656,7 +699,7 @@ contract LifecycleHandler is Test {
             try e.registry.registerIssuer(e.issuer) {} catch {}
         } else if (kind == 6) {
             address v2 = address(uint160(uint256(keccak256(abi.encode("v", seed)))));
-            e.registry.registerVerifierKey(v2);
+            try e.registry.registerVerifierKey(v2) {} catch {}
         } else if (kind == 7) {
             try e.registry.setFxPair(keccak256(abi.encode(seed)), seed % 2 == 0, address(0)) {} catch {}
         }

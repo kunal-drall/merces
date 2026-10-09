@@ -24,7 +24,7 @@ burn, freeze, force-transfer, pause or recover units outside the protocol paths.
 | Timelock (owner of proxies, T-REX IAs, fee collector) | upgrade money code after the delay; `setGroth16Verifier`, `setPyth`; withdraw fees | reach the registry (no upgrade path, C11 §7) | `test_C11_7_charterFieldsHaveNoUpgradePath` (ERC-1967 slot empty, upgrade through the timelock leaves terms bit-identical) |
 | Allowlist manager | eligibility | freeze/seize units, block claims | identities never deleted; claims need registration only; invariants flag any claim / window step / release blocked by an allowlist change |
 | Attestor / verifier key | sign §1.4 messages | move funds | signatures only gate reports, amendments, pauses, FX fallback, true-ups, extinguishment (two distinct keys) |
-| Keeper | permissionless cranks | send value anywhere but its owner | `claimFor`, `deliverBid`, `processOrder`, `withdrawOwed` pay the owner only |
+| Keeper | permissionless cranks | send value anywhere but its owner | `claimFor`, `deliverBid`, `deliverOrder` pay the owner only |
 | Issuer | raise, releases, reports, payments, pauses, redemption, own issuance switch | change live terms except favourable amendments | `NotIssuer` guards; no function can pull the issuer's money except its own transaction (`test_C11_3_noFunctionCanForceAPayment`: unlimited allowances to every contract, nothing moves) |
 
 ## 3. Money flows
@@ -32,7 +32,8 @@ burn, freeze, force-transfer, pause or recover units outside the protocol paths.
 Every stablecoin pull is `safeTransferFrom(msg.sender, …)`: `commitBid` (auction, window), `pay`, `payTrueUp`,
 `route`, `redeem`. Every push goes to its owner: refunds and units (`deliverBid`), proceeds into the treasury
 (`processBid`), releases to the issuer, fees to the registry's fee collector, payouts to holders, window
-proceeds/refunds (deferred to `owed` on a recipient-side failure, C-S3), cap refunds to the issuer. The only
+proceeds/refunds and units (`deliverOrder`, a separate, retryable push after `processOrder`, C-S3 / B-S13),
+cap refunds to the issuer. The only
 cross-contract fund move is `moveUnreleasedToVault` (vault-only, at extinguishment). Invariants checked after
 every fuzzed call (`test/invariant/`):
 
@@ -56,7 +57,7 @@ every fuzzed call (`test/invariant/`):
   early-draw approver (view, only when configured), Poseidon and the Groth16 verifier (views).
 - Stablecoin assumptions: a standard ERC-20 with 6 decimals as allowlisted by the admin; **no fee-on-transfer
   or rebasing tokens** (accounting assumes received == sent). A token that blocks a recipient makes that
-  recipient's own pull fail; in the window such pushes are deferred so others are unaffected (C-S3).
+  recipient's own pull or delivery fail; window settlement is two-step so no other order is affected (C-S3).
 - `MercesComplianceModule` arms a transient `armedDeposit(from) = units` immediately before the window's
   `transferFrom` and clears it after, so the only accepted deposit into the window is the commit's own.
 
@@ -111,7 +112,7 @@ issuer, redemption `C_rem` uses `ceil(paid)` so payments + redemption + tail nev
 2. `MercesAuction.finalizeSettlement` (claims vs tally, uniqueness of the clearing price — fuzzed in
    `test/fuzz/AuctionFuzz.t.sol`) and `processBid` / `deliverBid`.
 3. `MercesWindow.finalizeWindow` (two branches, uniqueness fuzzed in `WindowFuzz`), `_askFill` take-back with
-   the keeper price index (C-S2), deferred pushes (C-S3).
+   the keeper price index (C-S2), the reveal-order sequence (C-S6) and the two-step delivery (C-S3).
 4. `MercesIncome._derive` / `_isLateUnderlying` / pause arithmetic and the release block.
 5. `MercesComplianceModule.moduleCheck` and the armed deposit.
 6. `MercesRegistry.amendTerms` and the absence of any other per-series write after `markRaiseOpened`.
@@ -123,5 +124,6 @@ issuer, redemption `C_rem` uses `ceil(paid)` so payments + redemption + tail nev
 - C-5: an admin can make a reporting tier unusable for future periods (key revocation, `tier4_enabled`);
   releases, claims and redemption are never admin-gated. An issuer with only that tier would fall Late.
 - C-S12: T-REX `canTransfer` reverts instead of returning false for forbidden transfers.
-- C-S4 divergence from the reference when a payout lands between window clearing and processing.
+- C-S4 divergence from the reference when a payout lands between window clearing and processing (and the
+  Solana double count in that interval, reported for alignment).
 - Development trusted setup; mock stablecoin and mock Pyth only in local deployments.

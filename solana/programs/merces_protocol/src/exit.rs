@@ -7,6 +7,7 @@ use merces_common::redemption::{redemption_price, RedemptionInputs};
 use merces_common::status::SeriesStatus;
 use merces_common::time::period_of;
 use merces_common::treasury::vested;
+use merces_common::vault::scaled_amount;
 use merces_onchain::keccak;
 use merces_onchain::seeds::CONFIG;
 use merces_registry::program::MercesRegistry;
@@ -76,6 +77,21 @@ pub fn redeem<'info>(ctx: Context<'info, Redeem<'info>>) -> Result<()> {
             );
         }
     }
+    // curve mode: the units snapshot is taken now from the eight census accounts passed as
+    // remaining accounts (CURVE_MODE §4, §7), so the deposit covers every unit outstanding at
+    // redemption; USDC has no transfer hook, so no stablecoin hook accounts follow
+    let hook_accounts: &[AccountInfo<'info>] = if ledger.is_curve() {
+        require!(
+            ctx.remaining_accounts.len() == crate::curve::CURVE_UNIT_ACCOUNTS,
+            ProtocolError::CurveAccountsMissing
+        );
+        let a = crate::curve::CurveUnitAccounts::from_slice(ctx.remaining_accounts)?;
+        let u = crate::curve::compute_curve_units(series, &ledger, &a)?;
+        crate::curve::store_curve_units(&mut ledger, u, now, series_key)?;
+        &[]
+    } else {
+        ctx.remaining_accounts
+    };
     let units = ledger.units_outstanding;
     require!(units > 0, ProtocolError::NoUnitsOutstanding);
     let cap = cap_per_unit_of(series)?;
@@ -89,6 +105,7 @@ pub fn redeem<'info>(ctx: Context<'info, Redeem<'info>>) -> Result<()> {
         year_gross: &ring,
         settlement_ts: ledger.settlement_ts,
         now,
+        unit_scale: ledger.scale(),
     })
     .map_err(math)?;
     let registry = RegistryCpi {
@@ -102,17 +119,15 @@ pub fn redeem<'info>(ctx: Context<'info, Redeem<'info>>) -> Result<()> {
         // nothing is owed either way
         return retire(&mut ledger, &registry, series_key, 0);
     }
-    let deposit = price
-        .price
-        .checked_mul(units)
-        .ok_or(ProtocolError::MathOverflow)?;
+    // `P_redeem × units` (sealed bid) or `floor(P_redeem × base lamports / 10^6)` (curve mode)
+    let deposit = scaled_amount(price.price, units, ledger.scale()).map_err(math)?;
     transfer_stable(
         &ctx.accounts.stablecoin_program.to_account_info(),
         &ctx.accounts.issuer_stable.to_account_info(),
         &ctx.accounts.stablecoin_mint.to_account_info(),
         &ctx.accounts.vault_token.to_account_info(),
         &ctx.accounts.issuer.to_account_info(),
-        ctx.remaining_accounts,
+        hook_accounts,
         deposit,
         series.stablecoin_decimals,
         &[],

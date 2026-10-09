@@ -62,10 +62,10 @@ EVM stack (`test/parity/VectorRunner.t.sol`, default via-IR and `dev` profiles).
 | 7 | every entry point takes `uint256` and applies `AmountOutOfRange` (C-S19) |
 | 8 | canonical errors; `closeRouterPeriod` before settlement reverts `RaiseNotSettled` |
 | 10 | re-request advances the nonce; `request_pause` gated on settlement; reference check order |
-| 11 | signature before state checks; zero adjustment accepted; true-up fields cleared on payment and retirement |
+| 11 | signature before state checks; zero adjustment accepted; vacuous complete-year rule (B-S20); true-up fields cleared on payment and retirement |
 | 12 | Late before lockup; no window gate on redemption |
 | 13 | `extinguish` leaves `tail_exhausted`; accumulative `redeemed_units`; `NoRedeemedUnits`; `burn_retired` zero-amount no-op; `TerminalStatus` |
-| 14 | SPEC take-back order with a verified keeper price index (C-S2); deferred pushes (C-S3); canonical errors; observable `Commit`/`Reveal`/`Done` |
+| 14 | reveal-order processing (C-S6 / B-S9); reference take-back order with a verified keeper price index (C-S2 / B-S12); two-step settlement `processOrder` / `deliverOrder` (C-S3 / B-S13); owned-units wallet cap (B-S19); canonical errors; observable `Commit`/`Reveal`/`Done` |
 | 15 | canonical `DirectTransferForbidden` / `UnarmedEscrowDeposit` (C-S12) |
 | 16 | FX pairs create-only (`FxPairExists`), separate enable/cross-check setters; series wallet cap from params; canonical errors |
 | 17, 18 | done |
@@ -78,44 +78,61 @@ interpretation). Each is the most faithful reading of the brief we could find; n
 - **C-S1 (SPEC §6.3, reference defect S1) — exact WAD carry.** A base-unit carry double-counts dust; the vault
   keeps `carry_wad = num − delta × N` with `num = (accepted − fee) × WAD + carry_wad` for the main, tail and
   final accumulators (§13 item 18). Invariant: `netAccWad × N + carryWad == (gross − fee) × WAD`.
-- **C-S2 (SPEC §7 take-back order).** "Asks at p\* in descending reveal index, then asks below p\*" needs the
-  asks below `p*` in (price, reveal) order, which cannot be sorted on chain in bounded gas. A keeper supplies
-  the ascending distinct ask prices below `p*` (`indexAskPrices`, ≤ 200 per call); the window verifies each
-  price has valid ask quantity, is strictly ascending and below `p*`, and that the indexed quantities sum to
-  `s_below` before any ask below `p*` is settled (`PriceIndexInvalid`, `PriceIndexIncomplete`). Only needed
-  when cancelled buyer units exceed the asks at `p*` (`priceIndexRequired`).
-- **C-S3 (SPEC §7, §12 liveness) — recipient-side failures in the window.** A stablecoin push that fails for
-  the recipient (e.g. a blocked account) is recorded in `owed(series, owner)` (`PaymentDeferred`) and retried
-  by anyone with `withdrawOwed` (pays the owner only), so no recipient can block another order or the window.
-  Units always move (identities are never deleted, SPEC §4.2).
-- **C-S4 (SPEC §6.1 accrual weight vs per-order window processing).** SPEC counts ask-escrow units in the
-  seller's weight until the ask is processed; the reference processes a window atomically, but on EVM bids
-  are processed (units delivered) before asks, so a payout landing in between would be earned twice (buyer
-  balance + seller escrow) and the vault would become insolvent. Implemented: when a window clears with a
-  price the vault accumulator is snapshotted (`accAtClear`); the seller's escrow weight stops there; payouts
-  after clearing are credited by `creditWindowAccrual` to the **buyer** of a sold unit (from `accAtClear`, at
-  its fill) and to the **seller** of an unsold unit (at its ask's processing). Every unit earns for exactly
-  one wallet at every moment, so `Σ claims == distributions − dust` (fuzz `WindowFuzz`, invariant
-  `invariant_vaultSolventAndExact` incl. the stranded-value bound). Divergence from the reference only when a
-  payout lands between `finalize_window` and `process_orders`: the reference pays the sold units' share to the
-  seller, the EVM to the buyer (no vector covers it; the trade is economically done at clearing).
-  `pendingOf` excludes the not-yet-credited part until the order is processed.
+- **C-S2 (SPEC §7 take-back order, = Track B B-S12).** At-`p*` asks give back first in descending reveal index,
+  then the asks below `p*` in descending (price, reveal index) — the reference order. Taking back below `p*`
+  needs those asks in key order, which cannot be sorted on chain in bounded gas: a keeper supplies the
+  ascending distinct ask prices below `p*` (`indexAskPrices`, ≤ 200 per call) once every revealed bid is
+  processed; the window verifies each price has valid ask quantity, is strictly ascending and below `p*`,
+  and that the indexed quantities sum to `s_below` (`PriceIndexInvalid`; asks below `p*` revert
+  `PriceIndexIncomplete` until then). Completion emits `WindowTakebackSettled(series, period, cancelledUnits,
+  belowUnits)`, the event Solana emits when its keeper threshold round settles (same `cancelledUnits` and
+  `belowUnits`; Solana additionally carries its threshold key). Only needed when cancelled buyer units exceed
+  the units sold at `p*` (`priceIndexRequired`).
+- **C-S3 (SPEC §7, §12 liveness, = B-S13) — two-step window settlement.** `processOrder` does the accounting
+  and pays the window fee to the collector (protocol accounts only) and records what the owner is owed
+  (`pendingUnits`, `pendingStable`); `deliverOrder(series, period, owner)` pushes it to the owner once
+  (`OrderDelivered(series, period, owner, side, units, amount)`), callable by anyone, retryable forever, so a
+  blocked stablecoin account or any other recipient-side failure affects only that delivery. Units awaiting
+  delivery count in the owner's accrual weight (`pendingUnitsOf`); `claimRedemption` / `claimFinal` (and a
+  `claimTail` that must redeem first) revert `DeliverFirst` while any are pending. (This replaces the earlier
+  EVM-only `owed` / `withdrawOwed` deferral.)
+- **C-S4 (SPEC §6.1 accrual weight vs per-order window processing; open with Track B).** SPEC counts
+  ask-escrow units in the seller's weight until the ask is processed, and B-S13 counts units awaiting delivery
+  in the owner's weight. The reference processes a window atomically, but with per-order processing bids come
+  first (B-S9): between a bid's processing (buyer's pending units count) and the matching ask's processing
+  (seller's escrow still counts) a payout would be earned twice on the sold units and the vault would become
+  insolvent. EVM: when a window clears with a price the vault accumulator is snapshotted (`accAtClear`); the
+  seller's escrow weight stops there; payouts after clearing are credited by `creditWindowAccrual` to the
+  **buyer** of a sold unit (from `accAtClear`, when its bid is processed) and to the **seller** of an unsold
+  unit (when its ask is processed); from processing on, the units count as pending, then as balance. Every
+  unit earns for exactly one wallet at every moment, so `Σ claims == distributions − dust` (fuzz
+  `WindowFuzz`, invariant `invariant_vaultSolventAndExact` incl. the stranded-value bound). With no payout
+  between clearing and processing (every vector) this equals the reference; otherwise the reference pays the
+  sold units' post-clearing share to the seller, the EVM to the buyer. **Solana (B-S13 as written) counts both
+  the buyer's pending units and the seller's escrow in that interval — reported to the coordinator as a
+  solvency issue to align.** `pendingOf` excludes the not-yet-credited part until the order is processed.
 - **C-S5 (SPEC §7) — windows on a series that becomes terminal.** A window opened while the series was live
-  whose finalization comes after retirement, redemption or extinguishment is forced to `NoMatch` (every order
-  returned). A window that already cleared is processed normally; `claim_final` of a seller with a cleared,
-  unprocessed ask reverts `OutOfOrder` until the order is processed (its units are either sold or coming back).
-- **C-S6 (SPEC §7 marginal cursor).** SPEC fills the marginal side first-come behind a processing cursor
-  (`next_marginal_reveal_index`). On EVM the fill is computed from `samePricePrefix` (the valid quantity at the
-  same side and price revealed earlier, fixed at reveal), which gives the identical first-come result in any
-  processing order, so one unprocessed order can never block the others. Asks that sell units wait for every
-  bid (`OutOfOrder`) because cancelled buyers' units are taken back from them.
+  whose finalization comes after retirement, redemption or extinguishment ends in `NoMatch` whatever the
+  proposal (a crossing no longer matters; found by the lifecycle invariant: rejecting `NO_MATCH` because a
+  crossing exists while also refusing every price left such a window stuck). A window that already cleared is
+  processed normally; `claim_final` of a seller with a cleared, unprocessed ask reverts `OutOfOrder` until the
+  order is processed (its units are either sold or coming back). An uncleared ask's escrow counts in the
+  final-share weight (also after redemption: those units are redeemed when they come back).
+- **C-S6 (SPEC §7 processing order, = B-S9).** Revealed bids are processed in ascending reveal index, then
+  revealed asks in ascending reveal index (`OutOfOrder`; an ask before every revealed bid → `BidsNotProcessed`);
+  unrevealed orders and `NO_MATCH` windows in any order. `revealIndex` counts per side;
+  `revealedOrderAt(series, period, side, i)` gives the sequence to keepers. The marginal first-come fill is
+  computed from `samePricePrefix` (valid same-side, same-price quantity revealed earlier), which equals the
+  SPEC cursor result in this order.
 - **C-S7 (SPEC §5.2 finalize).** A valid proposal whose computed `units_sold` is 0 is treated like a min-raise
   failure (`Failed`, full refunds) rather than a settled raise with no units.
 - **C-S8 (reference `ytdAtEnd`).** For a period before the settlement quarter the EVM returns `(true, 0)`
   (nothing can have been routed for the series yet), so the prior binding of a tier-1 series' first report is
   well defined; the reference answers "not closed" there.
-- **C-S9 (SPEC §6.5 true-up year).** The reference accepts a true-up for a year that ended before settlement;
-  the EVM rejects it (`TrueUpYearInvalid`): no payment of that year exists to adjust.
+- **C-S9 (SPEC §6.5 true-up year, = B-S20).** A zero adjustment is a valid true-up (nonce and year
+  consumed, nothing due). The "every period of the year reported" rule is vacuous for a year whose last
+  period is before the series' first period (as the reference and Solana); such a year had no payment, so a
+  negative adjustment there is `TrueUpAdjustmentTooLarge`.
 - **C-S10 (SPEC §6.5 / §6.3 `year_gross`).** A paid true-up is booked in the `year_gross` slot keyed by the
   report deadline of `period_of(attested_at)`, the same anchor rule as a quarterly payment (SPEC §6.3); the
   reference anchors at `attested_at` itself. The two differ only when `attested_at` and that deadline fall
@@ -140,6 +157,11 @@ interpretation). Each is the most faithful reading of the brief we could find; n
 - **C-S18 (SPEC §7)** a window with no orders goes straight to `Done` at finalization.
 - **C-S19 (SPEC §1.1 entry rule)** `bidCommitment` / `orderCommitment` and every amount/price/quantity entry
   point take `uint256` and revert `AmountOutOfRange` for values ≥ 2^64 (vector 21).
+- **C-S21 (SPEC §6.7 / §6.8, defect).** With accumulative `redeemed_units`, units redeemed after their holder
+  already claimed tail (units that came back from, or were bought in, a window that cleared before
+  redemption) would miss the tail accrued before that claim. `claim_redemption` pays them
+  `last_tail_acc × units` on top of the redemption price, so every unit that existed at redemption gets its
+  full tail. Test: `WindowExit.t.sol`.
 - **C-S20 (SPEC §6.1 `register_holder`, defect).** SPEC (and the reference) start a new holder's tail and final
   checkpoints at the current accumulators. A buyer registered at its fill after redemption or extinguishment
   (window cleared before) holds units that existed at the snapshot, so it would get no tail / final share and
@@ -180,3 +202,26 @@ interpretation). Each is the most faithful reading of the brief we could find; n
   is `Draft` from the registry, otherwise the auction state; `rejectionReason` 1/2 map to
   `ClaimMismatch`/`InvalidClearingPrice`; window `clearingPrice`/`branch` are null unless the window cleared
   with a price; `holders` must list every registered actor.
+
+## Parity decisions from Track B (coordinator, 9 Oct; `docs/assumptions/track-b.md` B-S2…B-S22)
+
+| Decision | EVM |
+| --- | --- |
+| B-S10 cross-check changes | `FxPairConfig.prevCrosscheck`; `setFxPairCrosscheck` from zero with nothing in force → effective now, otherwise from `period_of(now) + 1` while the feed in force keeps applying to the running period; pairs create-only (`FxPairExists`) |
+| B-S9 processing order | revealed bids, then revealed asks, each in ascending per-side reveal index (`OutOfOrder`, `BidsNotProcessed`); unrevealed orders and NO_MATCH windows in any order (C-S6) |
+| B-S12 take-back | reference order with a verified keeper price index; `WindowTakebackSettled(series, period, cancelledUnits, belowUnits)` (C-S2) |
+| B-S13 two-step settlement | `processOrder` / `deliverOrder`, `OrderDelivered`, pending units in the accrual weight, `DeliverFirst` (C-S3); `WindowSettlementProposed` emitted at every round start (`NO_MATCH` → price `2^64 − 1`) |
+| B-S19 wallet cap at reveal | `balance + undelivered auction units + ask escrow + window units awaiting delivery` |
+| B-S3 `FormalNoticeDue` | `(series, period, trueup)`, `period` = calendar year when `trueup` |
+| B-S4 / B-S17 / B-S18 | `units_sold == 0` → Failed (C-S7); a failed raise finalises an empty mint (`RaiseMintFinalized(series, 0, 0)`, registry `markMintFinalized` accepts Failed; the repayment path still requires Settled); `cancelRaise` emits `MintAuthorityRevoked` (only `processBid` of a settled raise ever mints) |
+| B-S5 / B-S6 | early draw after extinguishment reverts — canonical `TerminalStatus` (Solana's `SeriesExtinguished` is not in `errors.ts`); `unreleased = min(proceeds − vested(now), treasury balance)` = `proceeds − max(vested(now), released_total)` (C-1) |
+| B-S16 / B-S21 router | pass-through after a failed or cancelled raise and after a terminal status; the receiver can be created at any time (deterministic CREATE2 address), income is counted when routed, periods before settlement read 0 (C-S8) |
+| B-S20 / B-S14 true-up | zero adjustment valid; vacuous complete-year rule (C-S9); payment anchored at `deadline(period_of(trueup_attested_at))` (C-S10) |
+| B-S22 / B-S8 FX | a missing start checkpoint → not available (fallback required), never a revert; snapshot staleness/confidence and coverage from the registry defaults in force |
+| B-S15 sync points | `submitReport`, `pay`, `payTrueUp`, `submitTrueUp`, `route` (settled), `claimRelease`, `crankStatus`, `approvePause`, `endPause`, `openWindow`, `redeem`, `extinguish` (and a retirement, which stores `Retired` as Solana's `retire` does); preconditions read `deriveStatus` without storing; holder claims read the registry's terminal status |
+| `burn_retired` zero-amount rule | a wallet without units: no-op emitting `UnitsBurned(series, holder, 0, Retired)` |
+
+Differences that remain (for the lead to decide): Solana's `claim_redemption` / `claim_final` also require no
+ask escrow (`AskEscrowOutstanding`); the EVM lets a holder with an *uncleared* ask claim its final share with the
+escrowed units counted (they are redeemed / returned later) and blocks only a *cleared*, unprocessed ask
+(`OutOfOrder`). C-S4 (post-clearing accrual on escrowed units) differs as described there.

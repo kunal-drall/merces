@@ -14,8 +14,11 @@ pub struct ReceiveInput {
     pub gross: u64,
     /// Weight units (`N`), must be `> 0`.
     pub units: u64,
-    /// Per-unit cap in base units; `cap_wad = cap_per_unit × WAD`.
+    /// Per-unit cap in base units per whole unit; `cap_wad = cap_per_unit × WAD / unit_scale`.
     pub cap_per_unit: u64,
+    /// Accounting units per whole unit: 1 for sealed-bid series (whole units), `10^decimals` for
+    /// curve-mode series, whose weights and per-unit accumulators are in base lamports (SPEC §9).
+    pub unit_scale: u64,
     /// Current per-unit gross accumulator.
     pub paid_per_unit_wad: u128,
     /// Exact WAD-scaled remainder carried from earlier receipts (`< units`).
@@ -48,9 +51,7 @@ pub fn receive_capped(input: ReceiveInput) -> MathResult<ReceiveOutcome> {
     }
     let n = u128::from(input.units);
     let g = u128::from(input.gross);
-    let cap_wad = u128::from(input.cap_per_unit)
-        .checked_mul(WAD)
-        .ok_or(MathError::Overflow)?;
+    let cap_wad = scaled_cap_wad(input.cap_per_unit, input.unit_scale)?;
     let cap_eff_wad = core::cmp::max(cap_wad, input.paid_per_unit_wad);
     let mut inc_wad = mul_div(g, WAD, n)?;
     let (accepted, refund, capped) = if add_u128(input.paid_per_unit_wad, inc_wad)? < cap_eff_wad {
@@ -121,6 +122,39 @@ pub fn holder_delta(acc_wad: u128, last_acc_wad: u128, weight: u64) -> MathResul
     to_u64(mul_div(delta, u128::from(weight), WAD)?)
 }
 
+/// `WAD / unit_scale`: the WAD value of one base unit per whole unit, expressed per accounting
+/// unit. `unit_scale` must divide `WAD` (1 or a power of ten up to 10^18), so the conversion is exact.
+pub fn wad_per_scaled_unit(unit_scale: u64) -> MathResult<u128> {
+    let s = u128::from(unit_scale);
+    let q = WAD.checked_div(s).ok_or(MathError::InvalidInput)?;
+    let r = WAD.checked_rem(s).ok_or(MathError::InvalidInput)?;
+    if r != 0 {
+        return Err(MathError::InvalidInput);
+    }
+    Ok(q)
+}
+
+/// The cap per accounting unit as a WAD accumulator value: `cap_per_unit × WAD / unit_scale`
+/// (exact; `unit_scale = 1` gives the SPEC §6.3 `cap_wad = cap_per_unit × WAD`).
+pub fn scaled_cap_wad(cap_per_unit: u64, unit_scale: u64) -> MathResult<u128> {
+    u128::from(cap_per_unit)
+        .checked_mul(wad_per_scaled_unit(unit_scale)?)
+        .ok_or(MathError::Overflow)
+}
+
+/// `floor(price × units / unit_scale)`: an amount for `units` accounting units at a price per
+/// whole unit (redemption deposits and tenders of curve-mode series).
+pub fn scaled_amount(price: u64, units: u64, unit_scale: u64) -> MathResult<u64> {
+    if unit_scale == 0 {
+        return Err(MathError::DivisionByZero);
+    }
+    to_u64(mul_div(
+        u128::from(price),
+        u128::from(units),
+        u128::from(unit_scale),
+    )?)
+}
+
 /// `cap_per_unit = floor(cap_multiple_wad × P0 / WAD)`.
 pub fn cap_per_unit(cap_multiple_wad: u64, clearing_price: u64) -> MathResult<u64> {
     to_u64(mul_div(
@@ -131,11 +165,8 @@ pub fn cap_per_unit(cap_multiple_wad: u64, clearing_price: u64) -> MathResult<u6
 }
 
 /// `cap_eff_wad − paid_per_unit_wad == 0` (a lowered cap already met): `retire_if_capped`.
-pub fn is_capped(cap_per_unit: u64, paid_per_unit_wad: u128) -> MathResult<bool> {
-    let cap_wad = u128::from(cap_per_unit)
-        .checked_mul(WAD)
-        .ok_or(MathError::Overflow)?;
-    Ok(paid_per_unit_wad >= cap_wad)
+pub fn is_capped(cap_per_unit: u64, paid_per_unit_wad: u128, unit_scale: u64) -> MathResult<bool> {
+    Ok(paid_per_unit_wad >= scaled_cap_wad(cap_per_unit, unit_scale)?)
 }
 
 #[cfg(test)]
@@ -149,6 +180,7 @@ mod tests {
             gross,
             units,
             cap_per_unit: cap,
+            unit_scale: 1,
             paid_per_unit_wad: paid,
             carry_wad: carry,
             fee_bps: fee,
@@ -207,8 +239,11 @@ mod tests {
         assert!(low.capped);
         assert_eq!(low.accepted, 0);
         assert_eq!(low.refund, 5);
-        assert!(is_capped(1, 2_400_000 * WAD).unwrap());
-        assert!(!is_capped(2_500_000, 2_400_000 * WAD).unwrap());
+        assert!(is_capped(1, 2_400_000 * WAD, 1).unwrap());
+        assert!(!is_capped(2_500_000, 2_400_000 * WAD, 1).unwrap());
+        // curve-mode scale: 25 USDC per unit = 25 base units per base lamport (×WAD)
+        assert!(is_capped(25_000_000, 25 * WAD, 1_000_000).unwrap());
+        assert!(!is_capped(25_000_000, 25 * WAD - 1, 1_000_000).unwrap());
     }
 
     #[test]

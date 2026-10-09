@@ -23,6 +23,11 @@ pub mod seeds {
     pub const ESCROW_AUTH: &[u8] = b"escrow_auth";
     pub const TREASURY_AUTH: &[u8] = b"treasury_auth";
     pub const ROUTER_AUTH: &[u8] = b"router_auth";
+    /// Curve mode: the DBC `fee_claimer` and `leftover_receiver` (and, optionally, pool creator)
+    /// of a series, signing the migration-fee and trading-fee withdrawals by CPI.
+    pub const CURVE_AUTHORITY: &[u8] = b"curve_authority";
+    /// Curve mode: owner of the stake vault (ATA of the base mint) holding staked units.
+    pub const CURVE_STAKE: &[u8] = b"curve_stake";
     pub use merces_onchain::seeds::{
         AUCTION_ESCROW, ESCROW_ARM, REGISTRY_AUTHORITY, WINDOW_ESCROW,
     };
@@ -175,7 +180,7 @@ pub struct Ledger {
     pub tail_paid_per_unit_wad: u128,
     pub final_acc_wad: u128,
     pub year_gross_wad: [u128; YEAR_RING],
-    // u64 (23 + 4 + 16 + 16 = 59 × 8 = 472)
+    // u64 (27 + 4 + 16 + 16 = 63 × 8 = 504)
     pub settlement_ts: u64,
     pub open_due_amount: u64,
     pub router_credit: u64,
@@ -201,6 +206,15 @@ pub struct Ledger {
     pub final_carry_wad: u64,
     pub final_units: u64,
     pub extinguish_nonce: u64,
+    /// Accounting units per whole unit: 1 for sealed-bid series, `10^6` for curve-mode series
+    /// (base lamports, SPEC §9). 0 reads as 1.
+    pub unit_scale: u64,
+    /// Curve mode: unix time of the last `sync_curve_units` (0 = never).
+    pub units_synced_at: u64,
+    /// Curve mode: Σ holder stakes (the earning weights; `≤ units_outstanding`).
+    pub staked_total: u64,
+    /// Curve mode: units tendered against the redemption deposit (`≤ units_at_redemption`).
+    pub tendered_total: u64,
     /// Σ `payment_usd` accepted per calendar year (tagged ring; bounds negative true-ups).
     pub year_pay_sum: [u64; YEAR_RING],
     pub pause_start: [u64; MAX_PAUSES],
@@ -220,7 +234,7 @@ pub struct Ledger {
     pub year_pay_tag: [u32; YEAR_RING],
     pub trueup_year_v: u32,
     pub last_trueup_year_v: u32,
-    // u8 (15 + 4 + 4 + 1 = 24) + padding 12 → 784 total
+    // u8 (15 + 4 + 4 + 1 + 1 = 25) + padding 11 → 816 total
     pub status: u8,
     pub has_last_accepted_period: u8,
     pub has_last_paid_period: u8,
@@ -239,12 +253,26 @@ pub struct Ledger {
     pub year_gross_set: [u8; YEAR_RING],
     pub year_pay_set: [u8; YEAR_RING],
     pub bump: u8,
-    pub _padding: [u8; 12],
+    /// 1 for a curve-mode series (SPEC §9).
+    pub curve: u8,
+    pub _padding: [u8; 11],
 }
 
 impl Ledger {
     /// Account size including the 8-byte discriminator.
     pub const LEN: usize = 8 + core::mem::size_of::<Ledger>();
+
+    /// Accounting units per whole unit (1 sealed bid, `10^6` curve mode).
+    pub fn scale(&self) -> u64 {
+        if self.unit_scale == 0 {
+            1
+        } else {
+            self.unit_scale
+        }
+    }
+    pub fn is_curve(&self) -> bool {
+        self.curve != 0
+    }
 
     pub fn last_accepted_period(&self) -> Option<u32> {
         (self.has_last_accepted_period != 0).then_some(self.last_accepted_period_v)
@@ -332,6 +360,9 @@ pub struct Holder {
     /// Units owed to the holder by processed window orders (fills bought, ask units returned) and
     /// still in the window escrow until `deliver_order` (accrual weight).
     pub window_pending_units: u64,
+    /// Curve mode: base lamports staked in the series stake vault — the holder's only accrual
+    /// weight (units outside the protocol move freely and earn nothing, CURVE_MODE §5).
+    pub staked_units: u64,
     pub bump: u8,
 }
 
@@ -519,7 +550,7 @@ pub struct Order {
 mod ledger_layout {
     #[test]
     fn ledger_is_16_byte_aligned_without_padding() {
-        assert_eq!(core::mem::size_of::<super::Ledger>(), 784);
+        assert_eq!(core::mem::size_of::<super::Ledger>(), 816);
         assert_eq!(core::mem::size_of::<super::Ledger>() % 16, 0);
     }
 }

@@ -131,3 +131,47 @@ pub fn takeback_window() -> Runner {
     }
     r
 }
+
+/// A curve-mode series end to end on the real DBC program (measurements): activation, three
+/// buys to completion, proceeds collection, a census, registration, stake / unstake, a claim,
+/// a census-backed redemption and tenders from stake and wallet.
+pub fn curve_scenario() -> Env {
+    use crate::curve::*;
+    use merces_common::curve::CURVE_UNIT_SCALE;
+    use merces_protocol::curve::DBC_POOL_AUTHORITY;
+    let mut env = Env::new();
+    env.load_dbc();
+    let issuer = env.new_wallet();
+    let x = fixture_u64(&curve_fixture(), "migrationQuoteThreshold");
+    let usdc = env.usdc;
+    let series = env.setup_series(&issuer, &usdc, curve_series_args([3u8; 32], x));
+    env.prepare_curve(&issuer, &series).unwrap();
+    let (res, config) = env.dbc_create_config(&curve_authority(&series), &usdc);
+    res.unwrap();
+    let (res, dbc) = env.dbc_create_pool(&config, &issuer, &usdc);
+    res.unwrap();
+    env.activate_curve(&issuer, &series, &dbc).unwrap();
+    let mut holders = Vec::new();
+    for amount in [400u64, 350, 300] {
+        let w = env.new_wallet();
+        env.allow(&w.pubkey(), true).unwrap();
+        env.fund(&w.pubkey(), &usdc, 2_000 * ONE_USDC);
+        env.dbc_buy(&dbc, &w, amount * ONE_USDC).unwrap();
+        holders.push(w);
+    }
+    env.complete_curve(&series).unwrap();
+    env.collect_curve_proceeds(&series).unwrap();
+    let damm = env.mock_damm_config(&DBC_POOL_AUTHORITY);
+    env.sync_curve_units(&series, &damm).unwrap();
+    let a = &holders[0];
+    env.register_holder(&series, &a.pubkey()).unwrap();
+    let units = env.balance_of(&a.pubkey(), &dbc.base_mint);
+    env.stake_units(a, &series, units).unwrap();
+    env.unstake_units(a, &series, CURVE_UNIT_SCALE).unwrap();
+    env.claim(&series, &a.pubkey()).unwrap();
+    env.fund(&issuer.pubkey(), &usdc, 2_000 * ONE_USDC);
+    env.redeem_curve(&issuer, &series, &damm).unwrap();
+    env.tender_units(a, &series, units - CURVE_UNIT_SCALE, CURVE_UNIT_SCALE)
+        .unwrap();
+    env
+}

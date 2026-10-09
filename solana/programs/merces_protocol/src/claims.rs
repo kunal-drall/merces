@@ -9,6 +9,7 @@ use merces_onchain::seeds::ALLOW;
 use merces_registry::state::{AllowlistEntry, Series};
 
 use crate::common::*;
+use crate::curve::settle_curve_holder;
 use crate::error::{math, ProtocolError};
 use crate::events::*;
 use crate::state::*;
@@ -178,6 +179,21 @@ pub fn claim<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     ctx.accounts.check_atas()?;
     let series_key = ctx.accounts.series.key();
+    if ledger.is_curve() {
+        // curve mode: staked units earn, nothing is ever burned (CURVE_MODE §5, §7)
+        settle_curve_holder(&ledger, &mut ctx.accounts.holder)?;
+        let amount = ctx.accounts.holder.pending;
+        ctx.accounts.holder.pending = 0;
+        ctx.accounts
+            .pay_out(ctx.remaining_accounts, amount, ctx.bumps.vault_auth)?;
+        emit!(PayoutClaimed {
+            series: series_key,
+            holder: ctx.accounts.holder.wallet,
+            amount,
+            burned_units: 0,
+        });
+        return Ok(());
+    }
     let status = ledger.stored_status();
     let balance = ctx.accounts.holder_unit_ata.amount;
     settle_holder(&ledger, &mut ctx.accounts.holder, balance)?;
@@ -233,6 +249,7 @@ pub fn burn_retired(ctx: Context<BurnRetired>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
     let series_key = ctx.accounts.series.key();
     let wallet = ctx.accounts.holder_wallet.key();
+    require!(!ledger.is_curve(), ProtocolError::CurveModeNoBurn);
     let status = ledger.stored_status();
     require!(
         status == SeriesStatus::Retired,
@@ -310,6 +327,7 @@ fn redemption_body(
 /// `claim_redemption` (SPEC §6.7). Available in `Redeemed` and `Extinguished`.
 pub fn claim_redemption<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> {
     let mut ledger = ctx.accounts.ledger.load_mut()?;
+    require!(!ledger.is_curve(), ProtocolError::CurveUsesTender);
     ctx.accounts.check_atas()?;
     let series_key = ctx.accounts.series.key();
     let burn = ctx.accounts.burn_ctx(ctx.bumps.vault_auth);
@@ -334,7 +352,17 @@ pub fn claim_tail<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()> 
     let series_key = ctx.accounts.series.key();
     require!(ledger.redemption_ts != 0, ProtocolError::NotRedeemed);
     let mut total = 0u64;
-    let balance = ctx.accounts.holder_unit_ata.amount;
+    if ledger.is_curve() {
+        // curve mode: units were tendered (tender_units); pending payouts are settled here too
+        settle_curve_holder(&ledger, &mut ctx.accounts.holder)?;
+        total = ctx.accounts.holder.pending;
+        ctx.accounts.holder.pending = 0;
+    }
+    let balance = if ledger.is_curve() {
+        0
+    } else {
+        ctx.accounts.holder_unit_ata.amount
+    };
     if balance > 0 {
         let burn = ctx.accounts.burn_ctx(ctx.bumps.vault_auth);
         let (units, amount) =
@@ -381,6 +409,35 @@ pub fn claim_final<'info>(ctx: Context<'info, HolderClaim<'info>>) -> Result<()>
     );
     let mut amount = 0u64;
     let mut burned = 0u64;
+    if ledger.is_curve() {
+        // curve mode: the final share is weighted by the tendered units of a redeemed series,
+        // else by the stake (credited by the settlement); nothing is burned
+        settle_curve_holder(&ledger, &mut ctx.accounts.holder)?;
+        let holder = &mut ctx.accounts.holder;
+        let (weight, share) = if ledger.redemption_ts != 0 {
+            let w = holder.redeemed_units;
+            let f =
+                holder_delta(ledger.final_acc_wad, holder.last_final_acc_wad, w).map_err(math)?;
+            holder.last_final_acc_wad = ledger.final_acc_wad;
+            (w, f)
+        } else {
+            (holder.staked_units, 0)
+        };
+        let total = holder
+            .pending
+            .checked_add(share)
+            .ok_or(ProtocolError::MathOverflow)?;
+        holder.pending = 0;
+        ctx.accounts
+            .pay_out(ctx.remaining_accounts, total, ctx.bumps.vault_auth)?;
+        emit!(FinalClaimed {
+            series: series_key,
+            holder: ctx.accounts.holder.wallet,
+            units: weight,
+            amount: total,
+        });
+        return Ok(());
+    }
     let burn = ctx.accounts.burn_ctx(ctx.bumps.vault_auth);
     let balance = ctx.accounts.holder_unit_ata.amount;
     let weight = if ledger.redemption_ts != 0 {

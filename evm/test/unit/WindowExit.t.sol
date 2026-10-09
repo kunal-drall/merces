@@ -87,10 +87,18 @@ contract WindowExitTest is FreeReportFixture {
         vault.claimRedemption(sid);
         vault.claimTail(sid);
         vm.stopPrank();
-        vm.prank(keeper);
+        vm.startPrank(keeper);
         window.processOrder(sid, b4);
-        vm.prank(keeper);
         window.processOrder(sid, b1);
+        vm.stopPrank();
+        // units awaiting delivery must reach the wallet before they are redeemed (B-S13)
+        vm.prank(b1);
+        vm.expectRevert(DeliverFirst.selector);
+        vault.claimRedemption(sid);
+        vm.startPrank(keeper);
+        window.deliverOrder(sid, Q1_2026, b4);
+        window.deliverOrder(sid, Q1_2026, b1);
+        vm.stopPrank();
         assertEq(unitToken(sid).balanceOf(b1), 20);
         assertEq(unitToken(sid).balanceOf(b4), 10);
 

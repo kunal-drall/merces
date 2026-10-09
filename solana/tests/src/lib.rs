@@ -9,6 +9,7 @@
 // Instruction builders mirror the on-chain argument lists one to one.
 #![allow(clippy::too_many_arguments)]
 
+pub mod curve;
 pub mod events;
 pub mod harness;
 pub mod scenarios;

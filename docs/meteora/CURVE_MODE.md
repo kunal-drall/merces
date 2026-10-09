@@ -5,6 +5,11 @@ after this note is accepted. **Scope:** only what the DBC program source support
 citations as in `PROCEEDS_OPTIONS.md`). Everything here is a proposal recorded in `docs/assumptions/track-d.md`;
 money/charter choices are flagged for Kunal.
 
+**Status (9 Oct 2026):** implemented by Track B in `merces_registry` / `merces_protocol`. §10 records what was
+built and where it departs from §2–§7 (the claim scheme of §5 is replaced by staking, the tender burns in place);
+`docs/solana/INTERFACES.md` §Curve mode is the instruction reference and `docs/assumptions/track-b.md` B-C1–B-C12
+the decision log.
+
 ## 1. Lifecycle and who does what
 
 ```
@@ -188,11 +193,95 @@ should accept either arrangement.
 | Public price | None until a window clears | Live, public; `issuer_accepts_public_price = true` recorded |
 | External dependencies | None | DBC, DAMM v2, Jupiter locker programs; Meteora's DAMM v2 config keys; manual migrator or own keeper on devnet |
 
-## 9. Open items for Track B
+## 9. Open items for Track B (closed 9 Oct 2026, see §10)
 
-1. `activate_curve` account validation list (§2) and the `dbc_creator` choice (§6, Kunal Q3).
-2. `sync_curve_units` crank reading the four protocol-held balances (§4) before `accept_report`.
-3. Debt-pattern holder sync for freely moving units (§5).
+1. `activate_curve` account validation list (§2) and the `dbc_creator` choice (§6, Kunal Q3). → done; both creators
+   accepted, the proceeds route enforced (§10.3).
+2. `sync_curve_units` crank reading the four protocol-held balances (§4) before `accept_report`. → done (§10.4).
+3. Debt-pattern holder sync for freely moving units (§5). → replaced by staking (§10.2).
 4. `collect_curve_proceeds` CPI into DBC (`withdraw_migration_fee`, `claim_trading_fee`) with the PDA signer, including the
-   Token-2022 base/quote program selection (`config.quote_token_flag`, PROG/state/config.rs:529-530).
-5. Tender redemption instructions (§7).
+   Token-2022 base/quote program selection (`config.quote_token_flag`, PROG/state/config.rs:529-530). → done (§10.3).
+5. Tender redemption instructions (§7). → done; units burn in place (§10.5).
+
+## 10. Implementation notes (Track B, ARCHITECTURE-relevant)
+
+### 10.1 Lifecycle as built
+
+```
+Issuer                                  Anyone / keeper                         Holder (registered)
+──────────────────────────────────      ────────────────────────────────────    ─────────────────────────────
+create_series (mode Curve, Draft)
+prepare_curve      (Ledger unit_scale = 10^6, Treasury, token accounts)
+activate_curve     (while the curve runs: checks §2 + route, fixes P0;
+                    registry mark_curve_activated: Draft → Open)
+                                        complete_curve   (quote_reserve ≥ X:
+                                          registry Settled at finish_curve_timestamp,
+                                          mint final, treasury + repayment open)
+                                        collect_curve_proceeds (fee + surplus → treasury,
+                                          partner trading fees → fee collector)
+                                        sync_curve_units (census → units_outstanding)   stake_units / unstake_units
+submit_report / pay (as sealed-bid; the census must postdate the period)                claim (staked weight)
+redeem (census in the same instruction, deposit)                                         tender_units (pay + burn)
+```
+
+The instruction names differ from §2/§7: `mark_curve_complete` is `complete_curve`, `redeem_series` is the
+existing `redeem`, `claim_payout` the existing `claim`, `burn_retired_units` the existing `burn_retired`
+(refused in curve mode). Activation is refused once the curve is complete, so the issuer binds the series before the
+outcome is known; `prepare_curve` is a separate transaction for the same stack-frame reason as `prepare_raise`.
+
+### 10.2 Claim gating: staking instead of balance reading (replaces §5)
+
+§5's claim reads the current ATA balance with a debt checkpoint that must be "re-based on every balance change", but
+nothing can observe balance changes on a mint without a hook: a holder claims, moves the units to a second registered
+wallet and claims the same receipt again (`merces-common` `balance_reading_scheme_double_pays`). Built instead:
+
+- `stake_units(units)` moves base lamports into the series stake vault `ATA(PDA(["curve_stake", series]), base_mint)`;
+  only staked units accrue, with the debt pattern applied on every stake change, claim and tender. Staking requires a
+  registered, **allowlisted** holder (this is the claim gate) and is bounded by the last census:
+  `staked_total ≤ units_outstanding` at every receipt, hence Σ payouts ≤ net receipts
+  (`curve_staking_never_overpays`).
+- `unstake_units` is never blocked and settles pending payouts first. ARCHITECTURE §4's "claim before selling" reads
+  "unstake before selling" (which pays out).
+- The share of units nobody staked stays in the vault, unclaimed (it counted toward the cap); it is not redistributed.
+
+### 10.3 Proceeds route and collection (§6, §7, PROCEEDS_OPTIONS Q3)
+
+`activate_curve` enforces that the raise can only reach the series treasury: with the issuer as `creator`,
+`creator_migration_fee_percentage == 0` and no creator LP share (the generator's A3 default `creatorFeePercentage: 100`
+is refused; the partner route `creatorFeePercentage: 0` is accepted); with `curve_authority` as `creator`, both fee
+shares are withdrawn by the PDA and a locked issuer allocation is refused (the PDA would own the escrow).
+`collect_curve_proceeds` (anyone, idempotent) CPIs `withdraw_migration_fee(0)` (and `(1)` for the PDA creator) and the
+partner (and PDA-creator) surplus into the treasury token account, books the balance difference as
+`Treasury.proceeds` (released on the D4 schedule from `settlement_ts = finish_curve_timestamp`), and claims the partner
+quote trading fees into the fee collector (`claim_trading_fee(0, u64::MAX)`; base-side fees, which exist only with an
+output-token fee mode, are not claimed). The quote token program follows `quote_token_flag`. With
+`creator_trading_fee_percentage > 0` the issuer claims its trading-fee and surplus shares directly (buyers' fees, not
+proceeds; default 0).
+
+### 10.4 Units and census (§4)
+
+Option 1 of §4 is built: the base lamport is the accounting unit (`Ledger.unit_scale = 10^6`), prices stay per whole
+unit, the terms' `r` is per base lamport. `sync_curve_units` takes eight accounts — base mint, DBC pool, DBC base
+vault, a DAMM v2 config, the DAMM v2 pool, its base vault, the locker escrow token account, the leftover token account
+— and stores `supply − protocol-held`. The DAMM v2 config is the caller's choice and is accepted when owned by DAMM v2
+with `pool_creator_authority` equal to the DBC pool authority (only DBC can create pools on it, one per base mint at
+migration); the pool must exist once `migration_progress == CreatedPool`. Missing accounts count 0, the stake vault is
+not protocol-held. A report needs a census taken after its period ended; the census is refused in terminal statuses;
+`redeem` takes the census in the same instruction.
+
+### 10.5 Tender (§7)
+
+The design's transfer to a `redemption_escrow` is unnecessary: `tender_units(from_stake, from_wallet)` burns the
+units in place by their owner's authority (the stake PDA for staked units, the holder's signature for wallet units)
+and pays `floor(P_redeem × units / 10^6)` plus pending payouts from the deposit. The DBC mint has no permanent
+delegate, so nothing is ever burned without the holder. Because units keep circulating after redemption (units bought
+out of the DAMM v2 pool were not in the census), wallet tenders share `units_at_redemption − tendered − staked`;
+staked units are reserved. The tail clause weighs tendered units.
+
+### 10.6 Testing
+
+`solana/tests/tests/curve_mode.rs` runs the SDK's DBC fixture build (vendored in `solana/tests/fixtures/meteora`) in
+LiteSVM: a config built with the generator's parameters and `curve_authority` as partner, a Token-2022 pool created by
+the issuer, real `swap2` buys to completion, the protocol's DBC CPIs (990 USDC of a 1,000 USDC threshold reach the
+treasury), census, a real Groth16 report on base-lamport units, gated claims, redemption and tender. DAMM v2 and the
+locker are not executed; their post-migration accounts are written byte-exactly from the program layouts.

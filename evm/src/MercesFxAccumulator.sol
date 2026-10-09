@@ -81,8 +81,9 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
             cp.sumWad = st.sumWad;
             cp.count = st.count;
         }
-        if (cfg.crosscheck != address(0) && pid >= cfg.crosscheckEffectivePeriod) {
-            (bool fresh, uint256 clWad) = _chainlink(cfg, p.fxMaxStalenessSeconds);
+        address feed = pid >= cfg.crosscheckEffectivePeriod ? cfg.crosscheck : cfg.prevCrosscheck;
+        if (feed != address(0)) {
+            (bool fresh, uint256 clWad) = _chainlink(feed, cfg.inverted, p.fxMaxStalenessSeconds);
             if (fresh && _deviates(rateWad, clWad, p.fxDeviationBandBps)) {
                 cp.flagged = true;
                 emit FxDeviationFlagged(pairId, pid, rateWad, clWad);
@@ -117,15 +118,19 @@ contract MercesFxAccumulator is MercesUpgradeable, IMercesFxAccumulator {
     /// @dev Chainlink cross-check normalized like the Pyth rate (decimals as a negative exponent, inverted for an
     /// inverted pair). A missing, non-positive or stale answer (older than the FX staleness bound) is not a
     /// comparison and flags nothing (docs/assumptions/track-c.md C-11).
-    function _chainlink(FxPairConfig memory cfg, uint64 staleness) internal view returns (bool fresh, uint256 clWad) {
-        AggregatorV3Interface agg = AggregatorV3Interface(cfg.crosscheck);
+    function _chainlink(address feed, bool inverted, uint64 staleness)
+        internal
+        view
+        returns (bool fresh, uint256 clWad)
+    {
+        AggregatorV3Interface agg = AggregatorV3Interface(feed);
         (, int256 answer,, uint256 updatedAt,) = agg.latestRoundData();
         if (answer <= 0 || updatedAt + staleness < block.timestamp) return (false, 0);
         uint8 dec = agg.decimals();
         if (dec > 36) return (false, 0);
         clWad = uint256(answer) * C.WAD / 10 ** dec;
         if (clWad == 0) return (false, 0);
-        if (cfg.inverted) clWad = C.WAD * C.WAD / clWad;
+        if (inverted) clWad = C.WAD * C.WAD / clWad;
         return (true, clWad);
     }
 

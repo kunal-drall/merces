@@ -92,9 +92,12 @@ contract WindowTest is FullFixture {
         vm.stopPrank();
     }
 
-    function _process(uint32, address who) internal {
+    /// @dev Accounting step then delivery (B-S13).
+    function _process(uint32 period, address who) internal {
         vm.prank(keeper);
         window.processOrder(sid, who);
+        vm.prank(keeper);
+        window.deliverOrder(sid, period, who);
     }
 
     function _state() internal view returns (IMercesWindow.WindowState) {
@@ -214,15 +217,16 @@ contract WindowTest is FullFixture {
         assertEq(uint8(w.branch), uint8(IMercesWindow.Branch.DemandLimited));
         assertEq(w.matchedUnits, 30);
         assertEq(w.validCount, 2);
-        // invalid orders get everything back, any time
+        // revealed orders follow the reveal sequence, valid or not (B-S9): bids b4, b5, b6, then asks b1, b2;
+        // invalid orders get everything back
+        _process(Q1_2026, b4);
         _process(Q1_2026, b5);
-        _process(Q1_2026, b2);
+        _process(Q1_2026, b6);
         assertEq(usdc.balanceOf(b5), _escrowBid(100e6, 31));
+        _process(Q1_2026, b1);
+        _process(Q1_2026, b2);
         assertEq(unitToken(sid).balanceOf(b2), 100);
         assertEq(window.askEscrowUnits(sid, b2), 0);
-        _process(Q1_2026, b4);
-        _process(Q1_2026, b6);
-        _process(Q1_2026, b1);
         assertEq(unitToken(sid).balanceOf(b4), 30);
         assertEq(unitToken(sid).balanceOf(b1), 70); // 50 escrowed, 30 sold, 20 returned
         assertEq(usdc.balanceOf(b1), 2_700e6 + 1e6); // proceeds (+ the 1 USDC funded above); payouts are claimed separately
@@ -254,7 +258,7 @@ contract WindowTest is FullFixture {
         window.beginWindowSettlement(sid, 100e6, false);
         window.tallyOrders(sid, 0, 5);
         vm.expectEmit(true, true, false, true);
-        emit IMercesWindow.WindowSettlementRejected(sid, Q1_2026, 0, REJECT_WINDOW_CROSSING_EXISTS);
+        emit IMercesWindow.WindowSettlementRejected(sid, Q1_2026, type(uint64).max, REJECT_WINDOW_CROSSING_EXISTS);
         window.finalizeWindow(sid);
         window.beginWindowSettlement(sid, 95e6, false); // nobody revealed 95
         window.tallyOrders(sid, 0, 5);
@@ -278,28 +282,48 @@ contract WindowTest is FullFixture {
         assertEq(w.tallyRound, 4);
         assertEq(uint8(w.state), uint8(IMercesWindow.WindowState.Settled));
 
-        // asks wait for every bid; marginal bids fill first-come in reveal order whatever the processing order
+        // bids in reveal order, then asks in reveal order (B-S9); marginal bids fill first-come
         vm.prank(keeper);
-        vm.expectRevert(OutOfOrder.selector);
+        vm.expectRevert(BidsNotProcessed.selector);
         window.processOrder(sid, b1);
         vm.prank(keeper);
-        vm.expectEmit(true, true, true, true);
-        emit IMercesWindow.OrderFilled(sid, Q1_2026, b6, IMercesWindow.Side.Bid, 20, 100e6, 20e6, 1_010e6);
-        window.processOrder(sid, b6); // revealed after b5: gets what b5 leaves of the 50-unit margin
+        vm.expectRevert(OutOfOrder.selector);
+        window.processOrder(sid, b6);
+        _process(Q1_2026, b4);
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit IMercesWindow.OrderFilled(sid, Q1_2026, b5, IMercesWindow.Side.Bid, 30, 100e6, 30e6, 0);
         window.processOrder(sid, b5);
         vm.prank(keeper);
+        vm.expectEmit(true, true, true, true);
+        emit IMercesWindow.OrderFilled(sid, Q1_2026, b6, IMercesWindow.Side.Bid, 20, 100e6, 20e6, 1_010e6);
+        window.processOrder(sid, b6); // revealed after b5: gets what b5 leaves of the 50-unit margin
+        vm.prank(keeper);
         vm.expectRevert(AlreadyProcessed.selector);
         window.processOrder(sid, b6);
-        _process(Q1_2026, b4);
-        // asks: any order once the bids are done, full fills
-        _process(Q1_2026, b2);
+        // delivery is a separate, owner-only push, once
+        vm.prank(keeper);
+        vm.expectEmit(true, true, true, true);
+        emit IMercesWindow.OrderDelivered(sid, Q1_2026, b6, IMercesWindow.Side.Bid, 20, 1_010e6);
+        window.deliverOrder(sid, Q1_2026, b6);
+        vm.prank(keeper);
+        vm.expectRevert(AlreadyDelivered.selector);
+        window.deliverOrder(sid, Q1_2026, b6);
+        vm.prank(keeper);
+        window.deliverOrder(sid, Q1_2026, b5);
+        vm.prank(keeper);
+        vm.expectRevert(OutOfOrder.selector);
+        window.processOrder(sid, b2);
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit IMercesWindow.OrderFilled(sid, Q1_2026, b1, IMercesWindow.Side.Ask, 50, 100e6, 0, 0);
         window.processOrder(sid, b1);
+        vm.prank(keeper);
+        vm.expectRevert(NotProcessed.selector);
+        window.deliverOrder(sid, Q1_2026, b2);
+        vm.prank(keeper);
+        window.deliverOrder(sid, Q1_2026, b1);
+        _process(Q1_2026, b2);
         // balances: units
         assertEq(unitToken(sid).balanceOf(b1), 50);
         assertEq(unitToken(sid).balanceOf(b2), 70);
@@ -317,10 +341,7 @@ contract WindowTest is FullFixture {
         assertEq(usdc.balanceOf(address(window)), 0);
         assertEq(usdc.balanceOf(address(feeCollector)), 300e6 + 600e6 + 80e6);
         w = window.getWindow(sid, Q1_2026);
-        assertEq(w.stableToSellers, 8_000e6);
         assertEq(w.feesTotal, 80e6);
-        assertEq(w.unitsDelivered, 80);
-        assertEq(w.unitsReturned, 0);
         assertEq(w.processedCount, 5);
         assertEq(uint8(w.state), uint8(IMercesWindow.WindowState.Done));
         // payouts: pre-window accruals are preserved, post-window accruals follow the new balances
@@ -354,8 +375,8 @@ contract WindowTest is FullFixture {
         emit IMercesWindow.WindowCleared(sid, p2, 100e6, 60, IMercesWindow.Branch.DemandLimited);
         window.finalizeWindow(sid);
         vm.stopPrank();
-        _process(p2, b8); // bids first, any order in branch B
-        _process(p2, b7);
+        _process(p2, b7); // bids in reveal order, then asks in reveal order
+        _process(p2, b8);
         _process(p2, b2); // marginal asks in reveal order: b2 60 → 50, b1 → 10
         _process(p2, b1);
         assertEq(unitToken(sid).balanceOf(b2), 20); // 70 − 50
@@ -418,22 +439,26 @@ contract WindowTest is FullFixture {
         _reveal(b6, 100e6, 30);
         _settleAt(100e6); // matched 80, marginal 50 (b5 30, b6 20)
         disallow(b6);
-        _process(Q1_2026, b5);
         _process(Q1_2026, b4);
+        _process(Q1_2026, b5);
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit IMercesWindow.OrderFilled(sid, Q1_2026, b6, IMercesWindow.Side.Bid, 0, 100e6, 0, _escrowBid(100e6, 30));
         window.processOrder(sid, b6); // cancelled: full refund, its 20 units are taken back from the sellers
+        vm.prank(keeper);
+        window.deliverOrder(sid, Q1_2026, b6);
         assertEq(usdc.balanceOf(b6), _escrowBid(100e6, 30));
         assertEq(unitToken(sid).balanceOf(b6), 0);
         assertEq(window.getWindow(sid, Q1_2026).cancelledUnits, 20);
         assertFalse(window.priceIndexRequired(sid)); // 20 ≤ the 30 units sold at p*
-        // take-back from the asks at p* first (descending reveal index): b2 sells 10 of 30; b1 below p* sells 50
+        // take-back from the asks at p* first (descending reveal index): b1 below p* sells 50; b2 sells 10 of 30
+        _process(Q1_2026, b1);
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit IMercesWindow.OrderFilled(sid, Q1_2026, b2, IMercesWindow.Side.Ask, 10, 100e6, 0, 20);
         window.processOrder(sid, b2);
-        _process(Q1_2026, b1);
+        vm.prank(keeper);
+        window.deliverOrder(sid, Q1_2026, b2);
         assertEq(unitToken(sid).balanceOf(b2), 90);
         assertEq(unitToken(sid).balanceOf(b1), 50);
         assertEq(usdc.balanceOf(b1), 5_000e6);
@@ -475,10 +500,8 @@ contract WindowTest is FullFixture {
         _process(Q1_2026, b6); // fills 10
         // 60 cancelled > the 30 sold at p*: the take-back reaches the asks below p*
         assertTrue(window.priceIndexRequired(sid));
-        _process(Q1_2026, b2); // asks at p* need no index: fully taken back
-        assertEq(unitToken(sid).balanceOf(b2), 100);
         vm.prank(keeper);
-        vm.expectRevert(PriceIndexIncomplete.selector);
+        vm.expectRevert(PriceIndexIncomplete.selector); // b1 (90) is next in reveal order and below p*
         window.processOrder(sid, b1);
         uint64[] memory bad = new uint64[](1);
         bad[0] = 100e6; // not below p*
@@ -487,11 +510,16 @@ contract WindowTest is FullFixture {
         uint64[] memory levels = new uint64[](2);
         levels[0] = 90e6;
         levels[1] = 95e6;
+        vm.expectEmit(true, true, false, true);
+        emit IMercesWindow.WindowTakebackSettled(sid, Q1_2026, 60, 30);
         window.indexAskPrices(sid, levels);
         assertFalse(window.priceIndexRequired(sid));
-        // remaining 30 below p* are taken back from the highest price first: b3 (95) gives back 20, b1 (90) 10
-        _process(Q1_2026, b3);
+        // the asks at p* give back first (b2 all 30), then below p* from the highest price: b3 (95) gives back
+        // 20, b1 (90) 10
         _process(Q1_2026, b1);
+        _process(Q1_2026, b3);
+        _process(Q1_2026, b2);
+        assertEq(unitToken(sid).balanceOf(b2), 100);
         assertEq(unitToken(sid).balanceOf(b3), 100); // all 20 back
         assertEq(unitToken(sid).balanceOf(b1), 60); // sold 40 of 50
         assertEq(usdc.balanceOf(b1), 4_000e6);
@@ -591,5 +619,35 @@ contract WindowTest is FullFixture {
         assertLe(before - usdc.balanceOf(address(vault)), pendingTotal + unreleased);
         assertLe(usdc.balanceOf(address(vault)), 8, "only rounding dust is left");
         assertEq(unitToken(sid).totalSupply(), 0);
+    }
+
+    /// @dev B-S19: the reveal-time wallet cap counts units the buyer owns but has not received yet.
+    function test_walletCapCountsUndeliveredWindowUnits() public {
+        _open(Q1_2026);
+        _ask(b1, 100e6, 30, 30);
+        _bid(b4, 100e6, 30, _escrowBid(100e6, 30));
+        vm.warp(window.getWindow(sid, Q1_2026).commitEnd);
+        _reveal(b1, 100e6, 30);
+        _reveal(b4, 100e6, 30);
+        _settleAt(100e6);
+        vm.startPrank(keeper);
+        window.processOrder(sid, b4); // 30 units pending for b4, not delivered
+        window.processOrder(sid, b1);
+        vm.stopPrank();
+        assertEq(window.pendingUnitsOf(sid, b4), 30);
+        assertEq(unitToken(sid).balanceOf(b4), 0);
+        assertEq(vault.accrualUnits(sid, b4), 30); // pending units earn
+        reportAndPay(sid, Q1_2026 + 1, Proofs.q2());
+        _open(Q1_2026 + 1);
+        uint32 p2 = Q1_2026 + 1;
+        _bid(b4, 100e6, 1, _escrowBid(100e6, 1));
+        vm.warp(window.getWindow(sid, p2).commitEnd);
+        _reveal(b4, 100e6, 1);
+        assertFalse(window.getOrder(sid, p2, b4).valid, "30 owned + 1 > the 30-unit cap");
+        // the delivery of the first window is still possible at any time
+        vm.prank(keeper);
+        window.deliverOrder(sid, Q1_2026, b4);
+        assertEq(unitToken(sid).balanceOf(b4), 30);
+        assertEq(window.pendingUnitsOf(sid, b4), 0);
     }
 }

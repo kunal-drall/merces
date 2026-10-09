@@ -742,6 +742,11 @@
             "name": "enabled",
             "type": "bool",
             "internalType": "bool"
+          },
+          {
+            "name": "prevCrosscheck",
+            "type": "address",
+            "internalType": "address"
           }
         ]
       }

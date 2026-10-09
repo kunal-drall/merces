@@ -41,7 +41,7 @@ account types are exported by the crates (`merces_protocol::state::seeds`,
 - **Compute budget and size.** Always send `SetComputeUnitLimit` (`submit_report` needs about
   209k CU, above the 200k default; see `MEASUREMENTS.md` for every instruction). Every instruction
   fits a legacy transaction; `prepare_raise` and `open_raise` must be sent as two transactions.
-- **Errors.** Every failure has its own code (`merces_registry` 70, `merces_protocol` 137,
+- **Errors.** Every failure has its own code (`merces_registry` 73, `merces_protocol` 173,
   `merces_hook` 9 codes; names and messages in the IDLs' `errors`).
 
 ## PDAs
@@ -81,7 +81,7 @@ Hook: `ExtraAccountMetaList` at `["extra-account-metas", mint]` (hook program).
 
 | Instruction | Signer | Arguments | Notes |
 | --- | --- | --- | --- |
-| `init_protocol(args)` | payer | `admin, allowlist_manager, fee_collector, chain_id, defaults, protocol_program` | once; `protocol_authority = PDA(["registry_authority"], protocol_program)` |
+| `init_protocol(args)` | payer | `admin, allowlist_manager, fee_collector, chain_id, defaults, protocol_program, curve_quote_mint` | once; `protocol_authority = PDA(["registry_authority"], protocol_program)`; `curve_quote_mint` = the cluster's USDC, the only quote mint of curve-mode series (zero disables curve mode); no setter |
 | `set_allowlist_manager`, `set_fee_collector`, `set_flags`, `set_early_draw_approver`, `set_defaults`, `transfer_admin` | admin | | never the zero key; `set_defaults` bounds-checked (§1.6) and applies to future series only |
 | `accept_admin` | pending admin | | two-step transfer |
 | `register_attestor` / `revoke_attestor` / `register_verifier_key` / `revoke_verifier_key` | admin | `addr20` | revocation records `revoked_at`; the last active key of a kind cannot be revoked |
@@ -90,11 +90,11 @@ Hook: `ExtraAccountMetaList` at `["extra-account-metas", mint]` (hook program).
 | `set_fx_pair_enabled` | admin | `enabled` | gates new series only; snapshots and reports of existing series continue |
 | `register_issuer` / `deactivate_issuer` | admin | `wallet` | deactivation blocks new series only |
 | `set_allowed` | allowlist manager | `wallet, allowed` | |
-| `create_series(args)` | issuer | terms (§1.6 bounds), `release_schedule`, `terms_commitment`, `tier_flags`, `fx_pair_id`, `mode`, `issuer_accepts_public_price`, `metadata_uri`, `tier1_terms: Option<Tier1Terms>` | fees copied from defaults; tier-1 terms checked with Poseidon(5); the stablecoin must have a zero transfer fee |
+| `create_series(args)` | issuer | terms (§1.6 bounds), `release_schedule`, `terms_commitment`, `tier_flags`, `fx_pair_id`, `mode`, `issuer_accepts_public_price`, `metadata_uri`, `tier1_terms: Option<Tier1Terms>` | fees copied from defaults; tier-1 terms checked with Poseidon(5); the stablecoin must have a zero transfer fee. Curve mode (`mode = 1`): `issuer_accepts_public_price`, stablecoin = `curve_quote_mint`, `min_raise` = the DBC threshold `X ≥ 1`, lockup / wallet cap / auction and window durations all 0; tier-1 `r` is per base lamport |
 | `set_contract_hash` | issuer | `hash` | Draft only |
 | `stop_issuance` / `resume_issuance` | issuer | | |
 | `amend_terms` | issuer | `new_terms_commitment, new_cap_multiple_wad, attestor_addr, attestor_sig` | cap only downwards, within bounds; `terminal_status == 0` |
-| `mark_raise_opened` / `mark_raise_result` / `mark_mint_finalized` / `mark_terminal` / `mark_curve_activated` | `registry_authority` PDA | | the protocol's write interface (§3.2); `mark_mint_finalized` accepts Settled and Failed raises |
+| `mark_raise_opened` / `mark_raise_result` / `mark_mint_finalized` / `mark_terminal` / `mark_curve_activated` | `registry_authority` PDA | | the protocol's write interface (§3.2); `mark_mint_finalized` accepts Settled and Failed raises; `mark_curve_activated(dbc_config, dbc_pool, base_mint, dbc_creator, activated_at, units_sold, clearing_price)` is Draft → Open; a curve raise can only be marked Settled, with the activation's `units_sold` and `P0` |
 
 ## Protocol instructions
 
@@ -148,7 +148,9 @@ for a disabled pair. `snapshot_fx` takes a Pyth `PriceUpdateV2` (`VerificationLe
 when a cross-check feed is in force for the period, the cross-check feed's `PriceUpdateV2` as
 `crosscheck_update`.
 
-Exit (§6.7, §6.9): `redeem` (issuer), `extinguish(attestor_a, sig_a, attestor_b, sig_b)` (anyone).
+Exit (§6.7, §6.9): `redeem` (issuer; a curve-mode `redeem` takes the eight census accounts of
+`sync_curve_units` as remaining accounts and snapshots the units itself), `extinguish(attestor_a,
+sig_a, attestor_b, sig_b)` (anyone).
 
 Window (§7), all permissionless except commits and reveals:
 
@@ -166,6 +168,53 @@ Window (§7), all permissionless except commits and reveals:
 | `tally_takeback` | anyone | ≤ 24 `Order` PDAs; every revealed ask once per round |
 | `finalize_takeback` | anyone | accepts iff `Σ_{key > k} q < R ≤ Σ_{key ≥ k} q` (unique); otherwise `WindowTakebackRejected` and a new round may start. Asks below `p*` revert `TakebackRequired` until a threshold is settled |
 | `deliver_order` | anyone | after `process_order`, once, retryable forever: pays the recorded stablecoin and moves the recorded units to the owner's ATAs (created idempotently); unit hook accounts, then stablecoin hook accounts |
+
+## Curve mode (SPEC §9, `docs/meteora/CURVE_MODE.md`)
+
+A curve-mode series sells its units on a Meteora Dynamic Bonding Curve pool. External programs:
+DBC `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN` (pool authority
+`FhVo3mqL8PW5pH5U2CN4XE33DokiyZnUwuGpH2hmHLuM`, event authority
+`8Ks12pbrD6PXxfty1hVQiE9sc289zgU1zHkvXhrSdriF`), DAMM v2 `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG`,
+Jupiter locker `LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn` (`merces_protocol::curve` constants).
+
+**Units.** The DBC base mint (Token-2022, 6 decimals, `MetadataPointer` + `TokenMetadata` only, no
+mint/freeze authority, no hook, no permanent delegate) is the series' `unit_mint`. One unit (HEU) =
+`10^6` base lamports, and the accounting unit is the base lamport: `Ledger.unit_scale = 10^6`,
+`units_outstanding`, `units_sold` (registry), weights, stakes and tenders are base lamports; prices
+(`P0` = registry `clearing_price`, the cap, `P_redeem`) stay per whole unit; the proof's
+`units_outstanding` is base lamports, so the terms' `r` is per base lamport.
+
+**PDAs** (`merces_protocol`): `curve_authority = ["curve_authority", series]` — the DBC
+`fee_claimer` and `leftover_receiver` (optionally the pool creator), signs the DBC withdrawals by CPI;
+`curve_stake = ["curve_stake", series]` — owner of the stake vault `ATA(curve_stake, base_mint)`.
+No auction, escrow, window or hook accounts exist in curve mode.
+
+**Census** (`units_outstanding = supply − protocol-held`), accounts in this order (also the
+remaining accounts of a curve `redeem`): base mint; DBC pool; DBC base vault (`pool.base_vault`);
+a DAMM v2 `Config` whose `pool_creator_authority` is the DBC pool authority; the DAMM v2 pool
+`PDA(["pool", config, max(base, quote), min(base, quote)], cp_amm)` (must exist once the DBC pool
+reports `CreatedPool`); its base vault `PDA(["token_vault", base_mint, pool], cp_amm)`; the locker
+escrow token `ATA(PDA(["escrow", PDA(["base_locker", dbc_pool], DBC)], locker), base_mint)`; the
+leftover token `ATA(curve_authority, base_mint)`. Missing accounts count 0. The stake vault is not
+protocol-held.
+
+| Instruction | Signer | Arguments | Notes |
+| --- | --- | --- | --- |
+| `prepare_curve` | issuer | | Draft; creates Ledger (`unit_scale = 10^6`), Treasury, treasury and vault stablecoin accounts |
+| `activate_curve` | issuer | | binds `dbc_config`, `dbc_pool`, `base_mint`; checks (in order) curve Draft series, DBC owner + discriminators, pool on this config, curve not yet complete, base mint of the pool, quote mint = stablecoin = `curve_quote_mint` with the matching token program (`quote_token_flag`), `fee_claimer = leftover_receiver = curve_authority`, DAMM v2 migration, fixed-supply Token-2022 base with 6 decimals, the proceeds route (issuer creator: creator migration-fee share 0 and no creator-withdrawable liquidity; `curve_authority` creator: no locked issuer allocation), `min_raise = migration_quote_threshold`, `swap_base_amount` sells `units_offered` (±1 unit), base mint authorities and extensions; fixes `P0 = floor(X × 10^6 / swap_base_amount)`; registry Draft → Open |
+| `complete_curve` | anyone | | `pool.quote_reserve ≥ migration_quote_threshold`: registry Open → Settled at `finish_curve_timestamp`, mint final, treasury and repayment open |
+| `sync_curve_units` | anyone | | the census above; required after a period ends before its report (`CurveUnitsNotSynced`), and before stakes beyond the last snapshot; refused in terminal statuses |
+| `collect_curve_proceeds` | anyone | | after completion: DBC `withdraw_migration_fee(0)` (and `(1)` when `curve_authority` is the creator) and partner / creator surplus into the treasury (D4 schedule from `settlement_ts`); any time: `claim_trading_fee(0, max)` into the fee collector; idempotent |
+| `stake_units(units)` | holder | units | registered + allowlisted holder, non-terminal status; `staked_total + units ≤ units_outstanding`; settles first (debt pattern); creates the stake vault idempotently |
+| `unstake_units(units)` | holder | units | any status; settles first (pending payouts, and the final share of an extinguished series) |
+| `tender_units(from_stake, from_wallet)` | holder | units | redeemed series; pays `floor(P_redeem × units / 10^6)` + pending; burns staked units by the `curve_stake` PDA and wallet units by the holder's signature; wallet units are bounded by `units_at_redemption − tendered − staked` (`TenderQuotaExhausted`) |
+
+Existing instructions in curve mode: `register_holder` (allowlisted), `claim` (pays the staked
+weight's share, never burns), `claim_tail` (weight = tendered units), `claim_final` (weight = stake,
+or tendered units after a redemption), `burn_retired` (`CurveModeNoBurn`), `claim_redemption`
+(`CurveUsesTender`), `open_window` and the raise instructions (`NotSealedBid`). Treasury, reports,
+payments, pauses, true-ups, router, retirement and extinguishment work as in sealed-bid mode on
+base-lamport units.
 
 ## Hook instructions
 
@@ -195,6 +244,10 @@ Window (§7), all permissionless except commits and reveals:
   `units_at_redemption` after redemption); tier-1 reports need the router's checkpoints for
   `period` and `period − 1` (`close_router_period` or a routed receipt; periods before
   `Router.init_period` read 0).
+- **Curve keepers:** `complete_curve` once the DBC pool completes; `collect_curve_proceeds` after
+  completion (and whenever partner trading fees accrue); `sync_curve_units` after each period ends
+  and before the issuer's report (and whenever holders want to stake more than the last snapshot);
+  holders `stake_units` to earn (claims pay staked units only) and `unstake_units` before selling.
 - **FX keepers:** one `snapshot_fx` per UTC trading day per pair (weekends fail staleness by
   design); a quarter's average needs `fx_min_coverage_bps` of its Monday–Friday days and no
   deviation flag, otherwise reports use an attestor-signed fallback rate.

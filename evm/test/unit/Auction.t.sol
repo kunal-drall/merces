@@ -442,7 +442,10 @@ contract AuctionTest is FullFixture {
         assertEq(usdc.balanceOf(address(auction)), 0);
         assertEq(unitToken(sid).totalSupply(), 0);
         assertTrue(auction.mintFinalized(sid)); // a failed raise is final once every bid is processed
-        assertFalse(registry.getSeriesCore(sid).mintFinalized); // the repayment path never opens
+        assertTrue(registry.getSeriesCore(sid).mintFinalized); // the empty mint is final too (B-S17) ...
+        vm.prank(issuer);
+        vm.expectRevert(RaiseNotSettled.selector); // ... but the repayment path never opens
+        treasury.claimRelease(sid);
         assertFalse(treasury.getTreasury(sid).proceedsSet);
         IMercesAuction.Auction memory fa = auction.getAuction(sid);
         assertEq(fa.clearingPrice, 1e6); // the exact would-be results are kept

@@ -10,6 +10,7 @@ use anchor_lang::prelude::*;
 
 pub mod claims;
 pub mod common;
+pub mod curve;
 pub mod error;
 pub mod events;
 pub mod exit;
@@ -23,6 +24,7 @@ pub mod window;
 pub mod zk;
 
 use claims::*;
+use curve::*;
 use exit::*;
 use fx::*;
 use income::*;
@@ -258,5 +260,43 @@ pub mod merces_protocol {
     }
     pub fn deliver_order<'info>(ctx: Context<'info, DeliverOrder<'info>>) -> Result<()> {
         window::deliver_order(ctx)
+    }
+
+    // ---- curve mode (SPEC §9, docs/meteora/CURVE_MODE.md)
+
+    pub fn prepare_curve(ctx: Context<PrepareCurve>) -> Result<()> {
+        curve::prepare_curve(ctx)
+    }
+
+    pub fn activate_curve(ctx: Context<ActivateCurve>) -> Result<()> {
+        curve::activate_curve(ctx)
+    }
+
+    pub fn complete_curve(ctx: Context<CompleteCurve>) -> Result<()> {
+        curve::complete_curve(ctx)
+    }
+
+    pub fn sync_curve_units(ctx: Context<SyncCurveUnits>) -> Result<()> {
+        curve::sync_curve_units(ctx)
+    }
+
+    pub fn collect_curve_proceeds(ctx: Context<CollectCurveProceeds>) -> Result<()> {
+        curve::collect_curve_proceeds(ctx)
+    }
+
+    pub fn stake_units(ctx: Context<StakeUnits>, units: u64) -> Result<()> {
+        curve::stake_units(ctx, units)
+    }
+
+    pub fn unstake_units(ctx: Context<UnstakeUnits>, units: u64) -> Result<()> {
+        curve::unstake_units(ctx, units)
+    }
+
+    pub fn tender_units<'info>(
+        ctx: Context<'info, TenderUnits<'info>>,
+        from_stake: u64,
+        from_wallet: u64,
+    ) -> Result<()> {
+        curve::tender_units(ctx, from_stake, from_wallet)
     }
 }

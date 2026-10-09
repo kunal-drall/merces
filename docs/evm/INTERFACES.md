@@ -56,8 +56,8 @@ registry or move funds outside the defined paths (C11 §7, SPEC §2 hard limits)
   that was never allowlisted (no identity), which no protocol path attempts.
 - **Pull payments.** Every token-moving external function is `nonReentrant` and follows
   checks-effects-interactions. Keepers may push only to the rightful owner (`claimFor`, `deliverBid`,
-  `processOrder`, `withdrawOwed`); a recipient-side stablecoin failure in the window is deferred to
-  `owed(series, owner)` instead of blocking (C-S3).
+  `deliverOrder`). Window settlement is two steps (B-S13): `processOrder` touches protocol accounts only,
+  `deliverOrder` pushes to the owner once and can be retried forever, so no recipient blocks another order.
 - **Addressing.** A bid or order is addressed by its owner (`getBid(series, bidder)`,
   `getOrder(series, period, owner)`); index-based getters exist for paging (`getBidAt`, `getOrderAt`).
 - **Pages.** `tallyBids(series, from, to)` / `tallyOrders(series, from, to)` take ≤ 200 entries
@@ -188,16 +188,16 @@ Views: `accrualUnits`, `capEffWad`, `capPerUnit`, `claimableFinal`, `claimableTa
 | `beginWindowSettlement(uint256 seriesId, uint256 clearingPrice, bool noMatch)` | anyone, after reveal end, no round in progress |
 | `commitAsk(uint256 seriesId, bytes32 commitment, uint256 units)` | holder (armed escrow deposit) |
 | `commitBid(uint256 seriesId, bytes32 commitment, uint256 escrow)` | allowlisted wallet |
+| `deliverOrder(uint256 seriesId, uint32 period, address owner)` | anyone; pushes units and stablecoin to the order's owner, once, retryable (B-S13) |
 | `finalizeWindow(uint256 seriesId)` | anyone; a wrong proposal is rejected |
 | `indexAskPrices(uint256 seriesId, uint64[] prices)` | anyone (keeper price index for the take-back, verified) |
 | `initialize(address owner_, address registry_)` | once |
 | `openWindow(uint256 seriesId, uint32 period)` | anyone (windows enabled, OnTime/InGrace, lockup over, previous quarter paid) |
-| `processOrder(uint256 seriesId, address owner)` | anyone; once per order |
+| `processOrder(uint256 seriesId, address owner)` | anyone; once per order, in the reveal sequence (B-S9); fee to the collector only |
 | `revealOrder(uint256 seriesId, uint256 price, uint256 quantity, bytes32 salt)` | the order's owner, reveal phase |
 | `tallyOrders(uint256 seriesId, uint256 fromIndex, uint256 toIndex)` | anyone, ≤ 200 orders per page |
-| `withdrawOwed(uint256 seriesId, address owner)` | anyone; pays the owner |
 
-Views: `armedDeposit`, `askAccrual`, `askEscrowUnits`, `currentWindow`, `getOrder`, `getOrderAt`, `getWindow`, `orderCommitment`, `owed`, `priceIndexRequired`, `registry`, `requiredBidEscrow`, `walletCapUnits`.
+Views: `armedDeposit`, `askAccrual`, `askEscrowUnits`, `currentWindow`, `getOrder`, `getOrderAt`, `getWindow`, `orderCommitment`, `pendingUnitsOf`, `priceIndexRequired`, `registry`, `requiredBidEscrow`, `revealedOrderAt`, `walletCapUnits`.
 
 ### MercesRouter
 

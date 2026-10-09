@@ -171,6 +171,29 @@
   },
   {
     "type": "function",
+    "name": "deliverOrder",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "period",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "finalizeWindow",
     "inputs": [
       {
@@ -272,6 +295,21 @@
             "name": "fill",
             "type": "uint64",
             "internalType": "uint64"
+          },
+          {
+            "name": "pendingUnits",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "pendingStable",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "delivered",
+            "type": "bool",
+            "internalType": "bool"
           }
         ]
       }
@@ -368,6 +406,21 @@
             "name": "fill",
             "type": "uint64",
             "internalType": "uint64"
+          },
+          {
+            "name": "pendingUnits",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "pendingStable",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "delivered",
+            "type": "bool",
+            "internalType": "bool"
           }
         ]
       }
@@ -541,6 +594,26 @@
             "internalType": "uint256"
           },
           {
+            "name": "revealedBids",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "revealedAsks",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "nextBidIndex",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "nextAskIndex",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
             "name": "processedCount",
             "type": "uint32",
             "internalType": "uint32"
@@ -564,6 +637,11 @@
             "name": "priceIndexLast",
             "type": "uint64",
             "internalType": "uint64"
+          },
+          {
+            "name": "takebackSettled",
+            "type": "bool",
+            "internalType": "bool"
           },
           {
             "name": "unitsDelivered",
@@ -667,7 +745,7 @@
   },
   {
     "type": "function",
-    "name": "owed",
+    "name": "pendingUnitsOf",
     "inputs": [
       {
         "name": "seriesId",
@@ -675,7 +753,7 @@
         "internalType": "uint256"
       },
       {
-        "name": "owner",
+        "name": "wallet",
         "type": "address",
         "internalType": "address"
       }
@@ -785,6 +863,40 @@
   },
   {
     "type": "function",
+    "name": "revealedOrderAt",
+    "inputs": [
+      {
+        "name": "seriesId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "period",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "side",
+        "type": "uint8",
+        "internalType": "enum IMercesWindow.Side"
+      },
+      {
+        "name": "index",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "tallyOrders",
     "inputs": [
       {
@@ -826,24 +938,6 @@
     "stateMutability": "view"
   },
   {
-    "type": "function",
-    "name": "withdrawOwed",
-    "inputs": [
-      {
-        "name": "seriesId",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "owner",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
     "type": "event",
     "name": "OrderCommitted",
     "inputs": [
@@ -873,6 +967,49 @@
       },
       {
         "name": "escrow",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "OrderDelivered",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "period",
+        "type": "uint32",
+        "indexed": true,
+        "internalType": "uint32"
+      },
+      {
+        "name": "owner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "side",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum IMercesWindow.Side"
+      },
+      {
+        "name": "units",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "amount",
         "type": "uint64",
         "indexed": false,
         "internalType": "uint64"
@@ -980,56 +1117,6 @@
         "type": "bool",
         "indexed": false,
         "internalType": "bool"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "OwedWithdrawn",
-    "inputs": [
-      {
-        "name": "series",
-        "type": "uint256",
-        "indexed": true,
-        "internalType": "uint256"
-      },
-      {
-        "name": "owner",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint64",
-        "indexed": false,
-        "internalType": "uint64"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "PaymentDeferred",
-    "inputs": [
-      {
-        "name": "series",
-        "type": "uint256",
-        "indexed": true,
-        "internalType": "uint256"
-      },
-      {
-        "name": "owner",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint64",
-        "indexed": false,
-        "internalType": "uint64"
       }
     ],
     "anonymous": false
@@ -1185,6 +1272,37 @@
         "type": "uint8",
         "indexed": false,
         "internalType": "uint8"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "WindowTakebackSettled",
+    "inputs": [
+      {
+        "name": "series",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "period",
+        "type": "uint32",
+        "indexed": true,
+        "internalType": "uint32"
+      },
+      {
+        "name": "cancelledUnits",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "belowUnits",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
       }
     ],
     "anonymous": false

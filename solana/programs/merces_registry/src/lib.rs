@@ -8,6 +8,7 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::Mint;
+use merces_common::curve::CURVE_UNIT_SCALE;
 use merces_common::encoding::{
     amend_message, domain_preimage, fx_pair_id_preimage, CHAIN_KIND_SOLANA,
 };
@@ -44,6 +45,9 @@ pub struct InitProtocolArgs {
     /// The `merces_protocol` program id whose `[REGISTRY_AUTHORITY]` PDA may call the write
     /// interface. Fixed for the life of the deployment (no setter).
     pub protocol_program: Pubkey,
+    /// The cluster's USDC mint, the only quote mint of curve-mode series (SPEC §9; zero disables
+    /// curve mode). Fixed for the life of the deployment (no setter).
+    pub curve_quote_mint: Pubkey,
 }
 
 /// Arguments to `create_series`. Fees, FX bounds and pause bounds are copied from
@@ -141,6 +145,7 @@ pub mod merces_registry {
         cfg.series_count = 0;
         cfg.attestor_count = 0;
         cfg.verifier_count = 0;
+        cfg.curve_quote_mint = args.curve_quote_mint;
         cfg.bump = ctx.bumps.config;
         emit!(ProtocolInitialized {
             admin: args.admin,
@@ -457,11 +462,34 @@ pub mod merces_registry {
         );
         require!(args.units_offered >= 1, RegistryError::UnitsOfferedZero);
         require!(args.reserve_price >= 1, RegistryError::ReservePriceZero);
-        let max_raise = args
-            .reserve_price
-            .checked_mul(args.units_offered)
-            .ok_or(RegistryError::MathOverflow)?;
-        require!(args.min_raise <= max_raise, RegistryError::MinRaiseTooHigh);
+        let curve = args.mode == MODE_CURVE;
+        if curve {
+            // SPEC §9 / CURVE_MODE §2: `units_offered` = units sold on the curve, `reserve_price` =
+            // start price per unit (informational), `min_raise` = the DBC migration threshold `X`
+            // (a curve raise completes at exactly `X` or never), checked against the pool config at
+            // `activate_curve`. No auction, lockup, wallet cap or window: those terms must be 0.
+            require!(args.min_raise >= 1, RegistryError::CurveThresholdZero);
+            require!(
+                args.lockup_seconds == 0
+                    && args.wallet_cap_bps == 0
+                    && args.commit_duration == 0
+                    && args.reveal_duration == 0
+                    && args.window_commit_duration == 0
+                    && args.window_reveal_duration == 0,
+                RegistryError::CurveTermsNotZero
+            );
+            require_keys_eq!(
+                ctx.accounts.stablecoin_mint.key(),
+                cfg.curve_quote_mint,
+                RegistryError::CurveQuoteMintMismatch
+            );
+        } else {
+            let max_raise = args
+                .reserve_price
+                .checked_mul(args.units_offered)
+                .ok_or(RegistryError::MathOverflow)?;
+            require!(args.min_raise <= max_raise, RegistryError::MinRaiseTooHigh);
+        }
         require!(
             args.tier_flags != 0 && args.tier_flags & !TIER_FLAGS_MASK == 0,
             RegistryError::InvalidTierFlags
@@ -488,21 +516,42 @@ pub mod merces_registry {
         validate_schedule(&schedule).map_err(|_| RegistryError::InvalidReleaseSchedule)?;
 
         // Bounds: issuer-chosen values plus the protocol defaults, checked as one parameter set.
+        // Curve-mode series store 0 for the auction/lockup/window terms (checked above); the bounds
+        // check then only concerns the cap, hurdle and payout multiple.
         let d: Parameters = cfg.defaults.into();
+        let (lockup, wallet_cap, commit, reveal, w_commit, w_reveal) = if curve {
+            (
+                d.lockup_seconds,
+                d.wallet_cap_bps,
+                d.commit_duration,
+                d.reveal_duration,
+                d.window_commit_duration,
+                d.window_reveal_duration,
+            )
+        } else {
+            (
+                args.lockup_seconds,
+                args.wallet_cap_bps,
+                args.commit_duration,
+                args.reveal_duration,
+                args.window_commit_duration,
+                args.window_reveal_duration,
+            )
+        };
         let params = Parameters {
             cap_multiple_wad: args.cap_multiple_wad,
             hurdle_rate_wad: args.hurdle_rate_wad,
             payout_multiple_k: args.payout_multiple_k,
-            lockup_seconds: args.lockup_seconds,
-            wallet_cap_bps: args.wallet_cap_bps,
+            lockup_seconds: lockup,
+            wallet_cap_bps: wallet_cap,
             auction_fee_bps: d.auction_fee_bps,
             payout_fee_bps: d.payout_fee_bps,
             window_fee_bps: d.window_fee_bps,
             non_reveal_charge_bps: d.non_reveal_charge_bps,
-            commit_duration: args.commit_duration,
-            reveal_duration: args.reveal_duration,
-            window_commit_duration: args.window_commit_duration,
-            window_reveal_duration: args.window_reveal_duration,
+            commit_duration: commit,
+            reveal_duration: reveal,
+            window_commit_duration: w_commit,
+            window_reveal_duration: w_reveal,
             fx_min_coverage_bps: d.fx_min_coverage_bps,
             fx_max_staleness_seconds: d.fx_max_staleness_seconds,
             fx_max_conf_bps: d.fx_max_conf_bps,
@@ -513,12 +562,14 @@ pub mod merces_registry {
         if let Some(f) = params.first_violation() {
             return Err(RegistryError::from(f).into());
         }
-        // SPEC §1.6: at least one unit of wallet cap, so a bid can be valid.
-        require!(
-            wallet_cap_allows_a_bid(args.units_offered, args.wallet_cap_bps)
-                .map_err(|_| RegistryError::MathOverflow)?,
-            RegistryError::WalletCapTooSmall
-        );
+        // SPEC §1.6: at least one unit of wallet cap, so a bid can be valid (no auction in curve mode).
+        if !curve {
+            require!(
+                wallet_cap_allows_a_bid(args.units_offered, args.wallet_cap_bps)
+                    .map_err(|_| RegistryError::MathOverflow)?,
+                RegistryError::WalletCapTooSmall
+            );
+        }
 
         // FX pair: zero means stablecoin income (fx = 1); otherwise the pair must exist and be enabled.
         if args.fx_pair_id != [0u8; 32] {
@@ -540,8 +591,16 @@ pub mod merces_registry {
                 args.fx_pair_id == [0u8; 32],
                 RegistryError::Tier1NeedsStablecoinIncome
             );
+            // curve mode: units are base lamports (10^6 per unit), so `r` is per base lamport
+            let offered = if curve {
+                u128::from(args.units_offered)
+                    .checked_mul(u128::from(CURVE_UNIT_SCALE))
+                    .ok_or(RegistryError::MathOverflow)?
+            } else {
+                u128::from(args.units_offered)
+            };
             let share = u128::from(t.r_wad)
-                .checked_mul(u128::from(args.units_offered))
+                .checked_mul(offered)
                 .ok_or(RegistryError::MathOverflow)?;
             require!(share <= WAD, RegistryError::Tier1ShareTooLarge);
             let h = poseidon5(&[
@@ -619,6 +678,7 @@ pub mod merces_registry {
         s.dbc_config = Pubkey::default();
         s.dbc_pool = Pubkey::default();
         s.base_mint = Pubkey::default();
+        s.dbc_creator = Pubkey::default();
         s.bump = ctx.bumps.series;
 
         let cfg = &mut ctx.accounts.config;
@@ -792,6 +852,16 @@ pub mod merces_registry {
         clearing_price: u64,
     ) -> Result<()> {
         let s = &mut ctx.accounts.series;
+        // a curve raise can only complete, with the P0 and design units fixed at activation
+        // (SPEC §9: no cancel, no failure — a DBC pool that never reaches X stays Open)
+        if s.mode == MODE_CURVE {
+            require!(
+                state == RAISE_SETTLED
+                    && units_sold == s.units_sold
+                    && clearing_price == s.clearing_price,
+                RegistryError::InvalidRaiseTransition
+            );
+        }
         match state {
             RAISE_CANCELLED => {
                 require!(
@@ -876,13 +946,18 @@ pub mod merces_registry {
         Ok(())
     }
 
-    /// Curve-mode activation (SPEC §9; the Meteora integration is a later track). Records the DBC
-    /// accounts and fixes `P0` and `units_sold` for cap accounting. Draft → Settled, mint finalised.
+    /// Curve-mode activation (SPEC §9, CURVE_MODE §2–§3): records the DBC config, pool, base mint
+    /// and pool creator validated by `merces_protocol::activate_curve`, and fixes `P0`
+    /// (`clearing_price`, per whole unit) and the design `units_sold` (base lamports) for cap
+    /// accounting. Draft → Open; the protocol marks the raise Settled (and the mint final) when it
+    /// observes the curve's completion.
+    #[allow(clippy::too_many_arguments)]
     pub fn mark_curve_activated(
         ctx: Context<MarkCurveActivated>,
         dbc_config: Pubkey,
         dbc_pool: Pubkey,
         base_mint: Pubkey,
+        dbc_creator: Pubkey,
         activated_at: u64,
         units_sold: u64,
         clearing_price: u64,
@@ -907,27 +982,30 @@ pub mod merces_registry {
             RegistryError::InvalidRaiseTransition
         );
         require_keys_neq!(base_mint, Pubkey::default(), RegistryError::ZeroAddress);
+        require_keys_neq!(dbc_config, Pubkey::default(), RegistryError::ZeroAddress);
+        require_keys_neq!(dbc_pool, Pubkey::default(), RegistryError::ZeroAddress);
+        require_keys_neq!(dbc_creator, Pubkey::default(), RegistryError::ZeroAddress);
         s.dbc_config = dbc_config;
         s.dbc_pool = dbc_pool;
         s.base_mint = base_mint;
+        s.dbc_creator = dbc_creator;
         s.unit_mint = base_mint;
         s.opened_at = activated_at;
-        s.settlement_ts = activated_at;
         s.units_sold = units_sold;
         s.clearing_price = clearing_price;
-        s.mint_finalized = true;
-        s.raise_state = RAISE_SETTLED;
+        s.raise_state = RAISE_OPEN;
         emit!(CurveActivated {
             series: s.key(),
             dbc_config,
             dbc_pool,
             base_mint,
+            dbc_creator,
             units_sold,
             clearing_price,
         });
         emit!(RaiseStateChanged {
             series: s.key(),
-            state: RAISE_SETTLED
+            state: RAISE_OPEN
         });
         Ok(())
     }

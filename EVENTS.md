@@ -83,6 +83,15 @@ Chain-specific type details and indexed fields: `docs/solana/EVENTS.md`, `docs/e
 | `SeriesExtinguished` | `series, unreleased, attestor_a, attestor_b` | Two attestors; unreleased treasury moved to the vault |
 | `FinalClaimed` | `series, holder, units, amount` | Pro rata share of unreleased funds; units burned |
 
+ ## Curve mode (Solana only)
+
+| Event | Fields | Meaning |
+| --- | --- | --- |
+| `CurveActivated` | `series, dbc_config, dbc_pool, base_mint, dbc_creator, p0, units_sold` | Curve series bound to its Meteora DBC pool |
+| `CurveUnitsSynced` | `series, units_outstanding, base_supply` | Outstanding = supply minus protocol/pool-held base |
+| `CurveProceedsCollected` | `series, migration_fee, trading_fee` | Migration fee to the treasury, trading fee to the fee collector |
+| `UnitsStaked` / `UnitsUnstaked` | `series, holder, units` | Claim gate: only staked units earn |
+
 ## Transfer window
 
 | Event | Fields | Meaning |

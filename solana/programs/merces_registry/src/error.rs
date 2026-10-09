@@ -147,6 +147,15 @@ pub enum RegistryError {
     BoundMaxPause,
     #[msg("max_cumulative_pause_seconds out of bounds [max_pause_seconds, 5 y]")]
     BoundMaxCumulativePause,
+    // Curve mode (SPEC §9)
+    #[msg("Curve-mode series must use the configured curve quote mint (USDC)")]
+    CurveQuoteMintMismatch,
+    #[msg(
+        "Curve-mode series take no lockup, wallet cap or auction/window durations (all must be 0)"
+    )]
+    CurveTermsNotZero,
+    #[msg("Curve-mode series need a migration threshold (min_raise ≥ 1)")]
+    CurveThresholdZero,
 }
 
 impl From<merces_common::params::ParamField> for RegistryError {

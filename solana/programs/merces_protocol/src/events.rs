@@ -453,3 +453,45 @@ pub struct OrderFilled {
     pub fee: u64,
     pub refund: u64,
 }
+
+// ---- curve mode (SPEC §9, docs/meteora/CURVE_MODE.md)
+
+/// `sync_curve_units` (and the snapshot inside a curve-mode `redeem`): `units_outstanding =
+/// supply − protocol_held`, all in base lamports.
+#[event]
+pub struct CurveUnitsSynced {
+    pub series: Pubkey,
+    pub supply: u64,
+    pub protocol_held: u64,
+    pub units_outstanding: u64,
+    pub staked_total: u64,
+}
+
+/// `collect_curve_proceeds`: the DBC migration fee and surplus withdrawn into the treasury
+/// (`proceeds` = the treasury's new total), the partner trading fee into the fee collector.
+#[event]
+pub struct CurveProceedsCollected {
+    pub series: Pubkey,
+    pub migration_fee: u64,
+    pub surplus: u64,
+    pub trading_fee: u64,
+    pub proceeds: u64,
+}
+
+/// Units moved into the series stake vault (`staked` = the holder's stake afterwards).
+#[event]
+pub struct UnitsStaked {
+    pub series: Pubkey,
+    pub holder: Pubkey,
+    pub units: u64,
+    pub staked: u64,
+}
+
+/// Units returned from the stake vault (`staked` = the holder's stake afterwards).
+#[event]
+pub struct UnitsUnstaked {
+    pub series: Pubkey,
+    pub holder: Pubkey,
+    pub units: u64,
+    pub staked: u64,
+}

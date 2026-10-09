@@ -1,15 +1,17 @@
 //! Compute-unit measurements per program instruction (`docs/solana/MEASUREMENTS.md`): every parity
-//! vector (on the SPL mock USDC and again on the Token-2022 mock USDG), a full-page auction (30 bids, tally pages of 24), the window take-back flow, a 24-order
-//! window tally page, a 24-ask take-back tally page, an early draw, an FX cross-check change and the
-//! admin/keeper paths the vectors do not reach are replayed; every successful
-//! transaction's logs are parsed by `events::record_instruction_cu`. Writes `target/measurements.md`.
+//! vector (on the SPL mock USDC and again on the Token-2022 mock USDG), a full-page auction (30
+//! bids, tally pages of 24), the window take-back flow, a 24-order window tally page, a 24-ask
+//! take-back tally page, an early draw, an FX cross-check change, the admin/keeper paths the
+//! vectors do not reach and a curve-mode lifecycle on the real DBC program are replayed; every
+//! successful transaction's logs are parsed by `events::record_instruction_cu`. Writes
+//! `target/measurements.md`.
 
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::{AccountSerialize, Space};
 use merces_protocol::state::{Order, SIDE_ASK, SIDE_BID, TALLY_PAGE, WINDOW_SETTLED};
 use merces_tests::events::cu_table;
 use merces_tests::harness::*;
-use merces_tests::scenarios::{full_page_auction, takeback_window};
+use merces_tests::scenarios::{curve_scenario, full_page_auction, takeback_window};
 use merces_tests::vectors::{run_vector, Runner};
 use merces_tests::zkfix::vector_path;
 use serde_json::Value;
@@ -231,6 +233,7 @@ fn compute_units_per_instruction() {
     window_tally_page();
     takeback_tally_page();
     early_draw_and_crosscheck();
+    curve_scenario();
     let table = cu_table();
     let mut out = String::from(
         "| Program | Instruction | Max compute units | Samples |\n| --- | --- | ---: | ---: |\n",
@@ -305,6 +308,15 @@ fn compute_units_per_instruction() {
         "merces_registry::SetAllowlistManager",
         "merces_registry::SetFeeCollector",
         "merces_protocol::SetReleasePause",
+        "merces_protocol::PrepareCurve",
+        "merces_protocol::ActivateCurve",
+        "merces_protocol::CompleteCurve",
+        "merces_protocol::CollectCurveProceeds",
+        "merces_protocol::SyncCurveUnits",
+        "merces_protocol::StakeUnits",
+        "merces_protocol::UnstakeUnits",
+        "merces_protocol::TenderUnits",
+        "merces_registry::MarkCurveActivated (CPI)",
     ] {
         assert!(
             table.keys().any(|k| k == must),

@@ -215,19 +215,29 @@ contract FxTest is FullFixture {
         _snap();
         assertEq(vm.getRecordedLogs().length, 1); // FxSnapshot only
         assertFalse(fx.getFxCheckpoint(PAIR, q).flagged);
-        // a changed cross-check applies from the next period: the rest of this quarter keeps the old feed
+        // a changed cross-check applies from the next period: the rest of this quarter keeps the feed in force
+        // (B-S10, `prevCrosscheck`)
         MockChainlinkAggregator other = new MockChainlinkAggregator(8, "other");
         vm.prank(admin);
         registry.setFxPairCrosscheck(PAIR, address(other));
         assertEq(registry.getFxPair(PAIR).crosscheckEffectivePeriod, q + 1);
+        assertEq(registry.getFxPair(PAIR).prevCrosscheck, address(chainlink));
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(CrosscheckUnchanged.selector, PAIR));
         registry.setFxPairCrosscheck(PAIR, address(other));
         vm.warp(vm.getBlockTimestamp() + DAY);
         other.setAnswer(200_000_000, vm.getBlockTimestamp()); // would deviate if consulted
+        chainlink.setAnswer(108_100_000, vm.getBlockTimestamp()); // the previous feed is consulted: within band
         _pythAt(108_000_000, 50_000, vm.getBlockTimestamp());
         _snap();
         assertFalse(fx.getFxCheckpoint(PAIR, q).flagged);
+        vm.warp(vm.getBlockTimestamp() + DAY);
+        chainlink.setAnswer(120_000_000, vm.getBlockTimestamp()); // the previous feed still rules the running period
+        _pythAt(108_000_000, 50_000, vm.getBlockTimestamp());
+        vm.prank(keeper);
+        vm.expectEmit(true, false, false, true);
+        emit IMercesFxAccumulator.FxDeviationFlagged(PAIR, q, 1.08e18, 1.2e18);
+        fx.snapshot(PAIR, new bytes[](0));
         vm.warp(Periods.periodStart(q + 1) + 1);
         other.setAnswer(200_000_000, vm.getBlockTimestamp());
         _pythAt(108_000_000, 50_000, vm.getBlockTimestamp());

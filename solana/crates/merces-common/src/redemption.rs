@@ -1,5 +1,6 @@
 //! Redemption formula price (SPEC v1.1 §6.7, brief C7).
 
+use crate::vault::wad_per_scaled_unit;
 use crate::{div_ceil, mul_div, time::YEAR, to_u64, MathError, MathResult, WAD};
 
 /// One slot of the tagged `year_gross` ring (SPEC §6.3): gross paid per unit (WAD) in settlement
@@ -63,6 +64,9 @@ pub struct RedemptionInputs<'a> {
     pub year_gross: &'a [YearGross],
     pub settlement_ts: u64,
     pub now: u64,
+    /// Accounting units per whole unit (1 sealed bid, `10^decimals` curve mode): the
+    /// accumulators are per accounting unit, the prices per whole unit.
+    pub unit_scale: u64,
 }
 
 /// The terms of the formula, all in base units per unit.
@@ -103,7 +107,9 @@ pub fn redemption_price(inp: &RedemptionInputs) -> MathResult<RedemptionPrice> {
         .ok_or(MathError::Overflow)?;
     let years = t.checked_div(YEAR).ok_or(MathError::DivisionByZero)?;
     let hurdle = hurdle_price(inp.clearing_price, inp.hurdle_rate_wad, t)?;
-    let paid_units = to_u64(div_ceil(inp.paid_per_unit_wad, WAD)?)?;
+    // per-accounting-unit WAD accumulators → base units per whole unit (exact for scale 1)
+    let per_unit_den = wad_per_scaled_unit(inp.unit_scale)?;
+    let paid_units = to_u64(div_ceil(inp.paid_per_unit_wad, per_unit_den)?)?;
     let cap_remaining = inp.cap_per_unit.saturating_sub(paid_units);
     let (d_avg, floor_term) = if years >= 1 {
         let n = core::cmp::min(years, 3);
@@ -115,7 +121,9 @@ pub fn redemption_price(inp: &RedemptionInputs) -> MathResult<RedemptionPrice> {
                 .checked_add(year_gross_at(inp.year_gross, year))
                 .ok_or(MathError::Overflow)?;
         }
-        let den = u128::from(n).checked_mul(WAD).ok_or(MathError::Overflow)?;
+        let den = u128::from(n)
+            .checked_mul(per_unit_den)
+            .ok_or(MathError::Overflow)?;
         let d_avg = to_u64(sum.checked_div(den).ok_or(MathError::DivisionByZero)?)?;
         let k_term = u64::from(inp.payout_multiple_k)
             .checked_mul(d_avg)
@@ -170,6 +178,7 @@ mod tests {
             paid_per_unit_wad: 0,
             year_gross: &empty,
             settlement_ts: 0,
+            unit_scale: 1,
             now: YEAR / 2,
         })
         .unwrap();
@@ -184,6 +193,7 @@ mod tests {
             paid_per_unit_wad: 600_000 * WAD,
             year_gross: &y,
             settlement_ts: 0,
+            unit_scale: 1,
             now: 2 * YEAR,
         })
         .unwrap();
@@ -199,6 +209,7 @@ mod tests {
             paid_per_unit_wad: 2_000_000 * WAD,
             year_gross: &y,
             settlement_ts: 0,
+            unit_scale: 1,
             now: 2 * YEAR,
         })
         .unwrap();
@@ -212,6 +223,7 @@ mod tests {
             paid_per_unit_wad: 2_000_000 * WAD + 1,
             year_gross: &y,
             settlement_ts: 0,
+            unit_scale: 1,
             now: 2 * YEAR,
         })
         .unwrap();
@@ -240,6 +252,7 @@ mod tests {
             paid_per_unit_wad: 0,
             year_gross: &r,
             settlement_ts: 0,
+            unit_scale: 1,
             now: 4 * YEAR,
         })
         .unwrap();

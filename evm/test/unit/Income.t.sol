@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {FullFixture} from "../utils/FullFixture.sol";
 import {Proofs} from "../utils/Proofs.sol";
-import {IMercesIncome, TRUEUP_NOTICE_PERIOD} from "../../src/interfaces/IMercesIncome.sol";
+import {IMercesIncome} from "../../src/interfaces/IMercesIncome.sol";
 import {IMercesVault} from "../../src/interfaces/IMercesVault.sol";
 import {IPayoutClaims} from "../../src/interfaces/IPayoutClaims.sol";
 import {MercesMessages} from "../../src/libraries/MercesMessages.sol";
@@ -327,7 +327,7 @@ contract IncomeTest is FullFixture {
         vm.warp(Q1_END + 90 * DAY);
         vm.prank(keeper);
         vm.expectEmit(true, false, false, true);
-        emit IMercesIncome.FormalNoticeDue(sid, Q1_2026);
+        emit IMercesIncome.FormalNoticeDue(sid, Q1_2026, false);
         income.crankStatus(sid);
         assertTrue(income.getLedger(sid).hasFormalNotice);
         assertEq(income.getLedger(sid).formalNoticeEmittedFor, Q1_2026);
@@ -494,8 +494,9 @@ contract IncomeTest is FullFixture {
         income.submitTrueUp(sid, 2026, 1, ts + 1, trueupSig(sid, 0, 2026, 1, ts + 1));
         vm.expectRevert(TrueUpYearInvalid.selector);
         income.submitTrueUp(sid, 2027, 1, ts, trueupSig(sid, 0, 2027, 1, ts));
-        vm.expectRevert(TrueUpYearInvalid.selector);
-        income.submitTrueUp(sid, 2025, 1, ts, trueupSig(sid, 0, 2025, 1, ts));
+        // a year before the first period is vacuously complete (B-S20) but had no payment that could be lowered
+        vm.expectRevert(TrueUpAdjustmentTooLarge.selector);
+        income.submitTrueUp(sid, 2025, -1, ts, trueupSig(sid, 0, 2025, -1, ts));
         vm.expectRevert(TrueUpAdjustmentTooLarge.selector); // the year's payments total 66,000
         income.submitTrueUp(sid, 2026, -66_001e6, ts, trueupSig(sid, 0, 2026, -66_001e6, ts));
         vm.expectRevert(abi.encodeWithSelector(InvalidAttestorSignature.selector, vm.addr(0xDEAD)));
@@ -577,7 +578,7 @@ contract IncomeTest is FullFixture {
         vm.warp(ts + 105 * DAY);
         vm.prank(keeper);
         vm.expectEmit(true, false, false, true);
-        emit IMercesIncome.FormalNoticeDue(sid, TRUEUP_NOTICE_PERIOD);
+        emit IMercesIncome.FormalNoticeDue(sid, 2026, true);
         income.crankStatus(sid);
         assertTrue(income.getLedger(sid).trueupNoticeEmitted);
     }

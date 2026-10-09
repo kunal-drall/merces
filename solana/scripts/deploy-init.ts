@@ -2,13 +2,14 @@
  * Post-deployment initialisation of the Merces Solana programs (called by deploy.sh).
  *
  *   node --import tsx scripts/deploy-init.ts --cluster <localnet|devnet|testnet> --url <rpc> --keypair <path>
- *        [--admin <pk>] [--allowlist-manager <pk>] [--fee-collector <pk>] [--verify]
+ *        [--admin <pk>] [--allowlist-manager <pk>] [--fee-collector <pk>] [--curve-quote-mint <pk>] [--verify]
  *
  * Without --verify: creates the mock stablecoins (a classic SPL "USDC" and a Token-2022 "USDG" with
  * TransferHook → mock_usdg_hook, TransferFeeConfig 0 bps / 0 max and MetadataPointer, both 6
  * decimals; ASSUMPTIONS A24), the mock hook's extra-account-meta list, the fee collector's token
- * accounts, and calls merces_registry::init_protocol with the SPEC §1.6 defaults and
- * `protocol_program = merces_protocol`. Idempotent: existing mints and an existing ProtocolConfig
+ * accounts, and calls merces_registry::init_protocol with the SPEC §1.6 defaults,
+ * `protocol_program = merces_protocol` and `curve_quote_mint` (the cluster's USDC for curve-mode
+ * series, SPEC §9: `--curve-quote-mint`, default the mock USDC). Idempotent: existing mints and an existing ProtocolConfig
  * are reused (and checked). With --verify: reads everything back from the chain (program upgrade
  * authorities included) and writes solana/deployments/<cluster>.json.
  */
@@ -105,7 +106,7 @@ interface Deployment {
   initializedAt?: string;
   verifiedAt?: string;
   programs: Record<string, { id: string; upgradeAuthority: string | null; soSha256?: string }>;
-  registry: { config: string; registryAuthority: string; domain: string; admin: string; allowlistManager: string; feeCollector: string };
+  registry: { config: string; registryAuthority: string; domain: string; admin: string; allowlistManager: string; feeCollector: string; curveQuoteMint?: string };
   stablecoins: Record<string, { mint: string; program: string; decimals: number; mintAuthority: string; feeCollectorAccount: string }>;
 }
 
@@ -185,6 +186,9 @@ async function main(): Promise<void> {
     ]);
   }
 
+  // the only quote mint of curve-mode series (SPEC §9): the cluster's USDC, by default the mock
+  const curveQuoteMint = new PublicKey(arg("curve-quote-mint") ?? usdc.toBase58());
+
   // ---- fee collector token accounts (process_bid / pay / route pay fees into them)
   await send(conn, payer, [
     createAssociatedTokenAccountIdempotentInstruction(payer.publicKey, getAssociatedTokenAddressSync(usdc, feeCollector, true, TOKEN_PROGRAM_ID), feeCollector, usdc, TOKEN_PROGRAM_ID),
@@ -201,6 +205,7 @@ async function main(): Promise<void> {
         chain_id: new BN(CHAIN_IDS[cluster]),
         defaults: DEFAULTS,
         protocol_program: protocolId,
+        curve_quote_mint: curveQuoteMint,
       },
     });
     await send(conn, payer, [
@@ -226,7 +231,7 @@ async function main(): Promise<void> {
     deployer: payer.publicKey.toBase58(),
     initializedAt: new Date().toISOString(),
     programs: {},
-    registry: { config: config.toBase58(), registryAuthority: registryAuthority.toBase58(), domain: "", admin: admin.toBase58(), allowlistManager: allowlistManager.toBase58(), feeCollector: feeCollector.toBase58() },
+    registry: { config: config.toBase58(), registryAuthority: registryAuthority.toBase58(), domain: "", admin: admin.toBase58(), allowlistManager: allowlistManager.toBase58(), feeCollector: feeCollector.toBase58(), curveQuoteMint: curveQuoteMint.toBase58() },
     stablecoins: {
       usdc: { mint: usdc.toBase58(), program: TOKEN_PROGRAM_ID.toBase58(), decimals: 6, mintAuthority: payer.publicKey.toBase58(), feeCollectorAccount: getAssociatedTokenAddressSync(usdc, feeCollector, true, TOKEN_PROGRAM_ID).toBase58() },
       usdg: { mint: usdg.toBase58(), program: TOKEN_2022_PROGRAM_ID.toBase58(), decimals: 6, mintAuthority: payer.publicKey.toBase58(), feeCollectorAccount: getAssociatedTokenAddressSync(usdg, feeCollector, true, TOKEN_2022_PROGRAM_ID).toBase58() },
@@ -275,6 +280,7 @@ async function verify(
   if (!cfgInfo) throw new Error("ProtocolConfig missing");
   const cfg = ids.registryCoder.accounts.decode("ProtocolConfig", cfgInfo.data);
   if (!cfg.protocol_program.equals(ids.protocolId)) throw new Error("protocol_program mismatch");
+  if (previous.registry.curveQuoteMint && cfg.curve_quote_mint.toBase58() !== previous.registry.curveQuoteMint) throw new Error("curve_quote_mint mismatch");
   if (!cfg.protocol_authority.equals(ids.registryAuthority)) throw new Error("registry_authority mismatch");
   if (cfg.chain_id.toNumber() !== CHAIN_IDS[cluster]) throw new Error("chain_id mismatch");
   for (const [k, v] of Object.entries(DEFAULTS)) {

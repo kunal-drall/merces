@@ -109,7 +109,8 @@ interface IMercesVault is IPayoutClaims {
     function getHolder(uint256 seriesId, address holder) external view returns (Holder memory);
     function unitsOutstanding(uint256 seriesId) external view returns (uint64);
     function netAccWad(uint256 seriesId) external view returns (uint256);
-    /// @notice `unit_balance + pending auction units + ask-escrow units` (SPEC §6.1 accrual weight).
+    /// @notice `unit_balance + pending auction units + window units awaiting delivery + ask-escrow units` (SPEC §6.1
+    /// accrual weight, B-S13).
     function accrualUnits(uint256 seriesId, address wallet) external view returns (uint256);
     function capPerUnit(uint256 seriesId) external view returns (uint64);
     function capEffWad(uint256 seriesId) external view returns (uint256);

@@ -36,7 +36,7 @@ IDLs drift from the build.
 | `RaiseStateChanged` | `series, state: u8` (§1.7 `RaiseState`) | `mark_raise_opened`, `mark_raise_result`, `mark_curve_activated` |
 | `MintFinalized` | `series` | `mark_mint_finalized` (settled raises and, with an empty mint, failed raises) |
 | `TerminalStatusSet` | `series, status: u8` (4 Retired, 5 Redeemed, 6 Extinguished) | `mark_terminal` |
-| `CurveActivated` | `series, dbc_config, dbc_pool, base_mint, units_sold, clearing_price` | `mark_curve_activated` (curve mode, later track) |
+| `CurveActivated` | `series, dbc_config, dbc_pool, base_mint, dbc_creator, units_sold, clearing_price` (`units_sold` = the config's `swap_base_amount` in base lamports, `clearing_price` = `P0` per whole unit) | `mark_curve_activated` (CPI from `activate_curve`; the series moves Draft → Open, with `RaiseStateChanged`) |
 
 ## Protocol (`merces_protocol`)
 
@@ -96,6 +96,28 @@ IDLs drift from the build.
 | `SeriesExtinguished` | `series, unreleased, attestor_a, attestor_b` | `extinguish` |
 | `FinalClaimed` | `series, holder, units, amount` | `claim_final` |
 
+### Curve mode (§9, `docs/meteora/CURVE_MODE.md`)
+
+Units in curve-mode events are base lamports (`10^6` per unit); prices stay per whole unit.
+
+| Event | Fields | Emitted by |
+| --- | --- | --- |
+| `CurveUnitsSynced` | `series, supply, protocol_held, units_outstanding, staked_total` | `sync_curve_units`, and the census of a curve `redeem` |
+| `CurveProceedsCollected` | `series, migration_fee, surplus, trading_fee, proceeds` (`migration_fee` + `surplus` = what reached the treasury in this call, `trading_fee` = what reached the fee collector, `proceeds` = the treasury's total afterwards) | `collect_curve_proceeds` (also when nothing was due: all zero) |
+| `UnitsStaked` | `series, holder, units, staked` (the holder's stake afterwards) | `stake_units` |
+| `UnitsUnstaked` | `series, holder, units, staked` | `unstake_units` |
+
+Existing events in curve mode: `RaiseOpened` (`activate_curve`; `unit_mint` = the DBC base mint,
+`commit_end = reveal_end = 0`); `RaiseSettled` and `RaiseMintFinalized` (`complete_curve`;
+`settlement_ts = finish_curve_timestamp`, `units_sold` = design units, `proceeds = 0` because the
+proceeds arrive later through `CurveProceedsCollected`), with the registry's `RaiseStateChanged`
+and `MintFinalized`; `UnitsBurned` (reason 1 Redeemed) followed by `RedemptionClaimed` from
+`tender_units` (the amount includes any pending payout settled first); `PayoutClaimed` with
+`burned_units = 0` (claims never burn: `UnitsBurned` reason 0 is never emitted in curve mode);
+`FinalClaimed` with the staked (or, after a redemption, tendered) units as `units` and no burn.
+`SeriesRedeemed.units` is the census at redemption. No `BidCommitted` / window / `MintAuthorityRevoked`
+event exists for a curve series.
+
 ### Transfer window (§7)
 
 | Event | Fields | Emitted by |
@@ -126,9 +148,20 @@ through the Token-2022 CPI.
   fits the §10 signature; `period` is the calendar year for the true-up variant (B-S3).
 - `PauseRequestWithdrawn` reports the nonce of the withdrawn request (the ledger then advances it).
 - `BidRefunded` (v1.0) no longer exists: refunds are `BidDelivered.refund`.
-- Not in §10 but required by §12 ("every state transition emits an event"):
+- Not in the v1.1 §10 list but required by §12 ("every state transition emits an event"):
   `WindowSettlementProposed` (also emitted by the EVM contracts with the same fields),
   `MintFinalized` (registry), and the Solana-only `WindowTakebackProposed`,
   `WindowTakebackRejected`, `WindowTakebackSettled` (the paged take-back below `p*`, B-S12) and
   `OrderDelivered` (two-step window settlement, B-S13). The EVM contracts have their own
   chain-specific events (`PaymentDeferred`, `OwedWithdrawn`) for the same liveness requirement.
+- SPEC v1.1.1 §10 (item 19) added these names with shorter field lists than the implementation
+  above: `WindowSettlementProposed(series, period, clearing_price, round)` (Solana and EVM also carry
+  `no_match`), `WindowTakebackProposed(series, period, threshold)` (Solana: the threshold is
+  `price, reveal_index`, plus `round`), `WindowTakebackRejected(series, period, threshold, reason)`
+  (Solana: `round`; a rejection has one cause, the tally disproving the threshold) and
+  `WindowTakebackSettled(series, period, cancelled_units)` (Solana adds `below_units, price,
+  reveal_index, partial`). Recorded as B-S23; the lead decides whether the SPEC lists or the events
+  change.
+- Curve mode (§9 lists no events): `CurveActivated` gains `dbc_creator` (the DBC pool creator, issuer
+  wallet or `curve_authority`, CURVE_MODE §6); `CurveUnitsSynced`, `CurveProceedsCollected`,
+  `UnitsStaked`, `UnitsUnstaked` are Solana-only (B-C1, B-C4, B-C5 in `docs/assumptions/track-b.md`).

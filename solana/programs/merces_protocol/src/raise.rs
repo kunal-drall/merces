@@ -131,6 +131,7 @@ pub fn prepare_raise(ctx: Context<PrepareRaise>) -> Result<()> {
     arm.armed_units = 0;
     arm.bump = ctx.bumps.escrow_arm;
     ledger.series = series_key;
+    ledger.unit_scale = 1;
     ledger.bump = ctx.bumps.ledger;
     Ok(())
 }

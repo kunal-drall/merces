@@ -68,7 +68,12 @@ interface IMercesWindow {
         /// seller at its ask's processing (unsold units), so per-order processing never counts a unit twice and
         /// never strands one (docs/assumptions/track-c.md C-S4).
         uint256 accAtClear;
-        // processing
+        // processing: revealed bids in ascending reveal index, then revealed asks in ascending reveal index
+        // (SPEC §7, B-S9); `revealIndex` counts per side
+        uint32 revealedBids;
+        uint32 revealedAsks;
+        uint32 nextBidIndex;
+        uint32 nextAskIndex;
         uint32 processedCount;
         uint32 bidsProcessed;
         /// @dev Units of filled bids cancelled at fill (buyer no longer allowlisted), taken back from the asks.
@@ -76,11 +81,9 @@ interface IMercesWindow {
         /// @dev Σ valid ask quantity of the price levels below `p*` indexed so far (take-back order, SPEC §7).
         uint64 priceIndexSum;
         uint64 priceIndexLast;
-        // ghost accounting
-        uint64 unitsDelivered;
-        uint64 unitsReturned;
-        uint64 stableToSellers;
-        uint64 stableRefunded;
+        /// @dev The take-back below `p*` is settled (index complete); `WindowTakebackSettled` was emitted.
+        bool takebackSettled;
+        /// @dev Window fees paid to the collector (Σ over the bids).
         uint64 feesTotal;
     }
 
@@ -99,6 +102,11 @@ interface IMercesWindow {
         uint32 talliedRound;
         bool processed;
         uint64 fill;
+        /// @dev Recorded at processing, pushed by `deliverOrder` (B-S13): units (bid fill or ask return) and
+        /// stablecoin (bid refund or ask proceeds).
+        uint64 pendingUnits;
+        uint64 pendingStable;
+        bool delivered;
     }
 
     event WindowOpened(uint256 indexed series, uint32 indexed period, uint64 commitEnd, uint64 revealEnd);
@@ -114,6 +122,7 @@ interface IMercesWindow {
         uint64 quantity,
         bool valid
     );
+    /// @dev `clearingPrice` is `type(uint64).max` for a `NO_MATCH` proposal (as on Solana).
     event WindowSettlementProposed(
         uint256 indexed series, uint32 indexed period, uint64 clearingPrice, bool noMatch, uint32 round
     );
@@ -132,10 +141,16 @@ interface IMercesWindow {
         uint64 fee,
         uint64 refund
     );
-    /// @dev EVM-only: a stablecoin push to `owner` failed for a recipient-side reason; the amount waits in
-    /// `owed(series, owner)` and `withdrawOwed` retries it (SPEC §12 liveness).
-    event PaymentDeferred(uint256 indexed series, address indexed owner, uint64 amount);
-    event OwedWithdrawn(uint256 indexed series, address indexed owner, uint64 amount);
+    /// @dev The cancelled buyers' units reach below `p*` and the take-back from those asks is settled (B-S12):
+    /// `belowUnits = cancelledUnits − units sold at p*` come off the asks below `p*` in descending
+    /// (price, reveal index).
+    event WindowTakebackSettled(
+        uint256 indexed series, uint32 indexed period, uint64 cancelledUnits, uint64 belowUnits
+    );
+    /// @dev `deliverOrder` pushed what a processed order owes its owner (B-S13).
+    event OrderDelivered(
+        uint256 indexed series, uint32 indexed period, address indexed owner, Side side, uint64 units, uint64 amount
+    );
 
     function openWindow(uint256 seriesId, uint32 period) external;
     function commitAsk(uint256 seriesId, bytes32 commitment, uint256 units) external;
@@ -147,8 +162,13 @@ interface IMercesWindow {
     /// @notice Keeper-supplied price levels of the valid asks below `p*`, strictly ascending; complete when their
     /// quantities sum to `s_below`. Needed only when cancelled buyers' units reach below the clearing price.
     function indexAskPrices(uint256 seriesId, uint64[] calldata prices) external;
+    /// @notice Accounting step (protocol accounts only): fill, fee to the collector, holder accrual. Revealed bids
+    /// in ascending reveal index first (`OutOfOrder`), then revealed asks (`BidsNotProcessed`, `OutOfOrder`);
+    /// unrevealed orders and `NO_MATCH` windows in any order.
     function processOrder(uint256 seriesId, address owner) external;
-    function withdrawOwed(uint256 seriesId, address owner) external;
+    /// @notice Pushes a processed order's units and stablecoin to its owner, once; retryable forever, never
+    /// affects another order (SPEC §12).
+    function deliverOrder(uint256 seriesId, uint32 period, address owner) external;
 
     /// @notice SPEC §1.3 order commitment; reverts `AmountOutOfRange` when price or quantity does not fit uint64.
     function orderCommitment(uint256 price, uint256 quantity, bytes32 salt, address owner)
@@ -166,11 +186,14 @@ interface IMercesWindow {
         external
         view
         returns (uint64 escrowUnits, bool cleared, uint256 accAtClear);
-    function owed(uint256 seriesId, address owner) external view returns (uint64);
+    /// @notice Window units processed for `wallet` but not yet delivered (they count in its accrual weight).
+    function pendingUnitsOf(uint256 seriesId, address wallet) external view returns (uint64);
+    /// @notice Owner of the `index`-th revealed order of `side` (the processing sequence).
+    function revealedOrderAt(uint256 seriesId, uint32 period, Side side, uint256 index) external view returns (address);
     function getWindow(uint256 seriesId, uint32 period) external view returns (Window memory);
     function getOrder(uint256 seriesId, uint32 period, address owner) external view returns (Order memory);
     function getOrderAt(uint256 seriesId, uint32 period, uint256 index) external view returns (Order memory);
-    /// @notice Whether `processOrder` must wait for the price index (cancelled units reach below `p*`).
+    /// @notice Whether asks below `p*` must wait for the price index (cancelled units reach below `p*`).
     function priceIndexRequired(uint256 seriesId) external view returns (bool);
     function walletCapUnits(uint256 seriesId) external view returns (uint64);
     function requiredBidEscrow(uint256 seriesId, uint256 price, uint256 quantity) external view returns (uint256);

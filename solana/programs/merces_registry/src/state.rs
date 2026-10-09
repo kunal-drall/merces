@@ -167,6 +167,9 @@ pub struct ProtocolConfig {
     /// Active key counts (a kind's last active key cannot be revoked, SPEC §1.4).
     pub attestor_count: u32,
     pub verifier_count: u32,
+    /// The only quote mint curve-mode series may use (USDC of the cluster, SPEC §9), fixed at init
+    /// (no setter); zero disables curve mode.
+    pub curve_quote_mint: Pubkey,
     pub bump: u8,
 }
 
@@ -294,6 +297,9 @@ pub struct Series {
     pub dbc_config: Pubkey,
     pub dbc_pool: Pubkey,
     pub base_mint: Pubkey,
+    /// `pool.creator` of the DBC pool at activation: the issuer wallet or the protocol's
+    /// `curve_authority` PDA (CURVE_MODE §6).
+    pub dbc_creator: Pubkey,
     pub bump: u8,
 }
 

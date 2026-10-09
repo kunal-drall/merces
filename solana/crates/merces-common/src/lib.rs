@@ -8,6 +8,7 @@
 #![deny(clippy::arithmetic_side_effects)]
 
 pub mod auction;
+pub mod curve;
 pub mod encoding;
 pub mod fx;
 pub mod params;

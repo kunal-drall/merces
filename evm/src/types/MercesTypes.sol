@@ -170,6 +170,8 @@ struct FxPairConfig {
     address crosscheck;
     uint32 crosscheckEffectivePeriod;
     bool enabled;
+    /// @dev The feed in force before `crosscheckEffectivePeriod` (B-S10): it keeps applying to the running period.
+    address prevCrosscheck;
 }
 
 /// @notice The protocol contracts allowed to call the registry's narrow write interface; fixed at init.

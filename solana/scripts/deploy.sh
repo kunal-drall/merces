@@ -11,6 +11,7 @@
 #   --admin <pubkey>                    protocol admin (default: deployer)
 #   --allowlist-manager <pubkey>        allowlist manager (default: deployer)
 #   --fee-collector <pubkey>            fee collector (default: deployer)
+#   --curve-quote-mint <pubkey>         the USDC mint curve-mode series must use (default: the mock USDC)
 #   --protocol-upgrade-authority <pk>   hand the upgrade authority of merces_protocol and merces_hook
 #                                       (money code + transfer rules: SPEC §0, §2) to this key, the
 #                                       multisig + timelock (default: keep the deployer)
@@ -38,6 +39,7 @@ SKIP_BUILD=0
 ADMIN=""
 ALLOWLIST_MANAGER=""
 FEE_COLLECTOR=""
+CURVE_QUOTE_MINT=""
 PROTOCOL_UPGRADE_AUTHORITY=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,6 +49,7 @@ while [ $# -gt 0 ]; do
     --admin) ADMIN="$2"; shift 2 ;;
     --allowlist-manager) ALLOWLIST_MANAGER="$2"; shift 2 ;;
     --fee-collector) FEE_COLLECTOR="$2"; shift 2 ;;
+    --curve-quote-mint) CURVE_QUOTE_MINT="$2"; shift 2 ;;
     --protocol-upgrade-authority) PROTOCOL_UPGRADE_AUTHORITY="$2"; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
@@ -78,7 +81,7 @@ HOOK_ID="$(solana-keygen pubkey keys/merces_hook-keypair.json)"
 node --import tsx scripts/deploy-init.ts \
   --cluster "$CLUSTER" --url "$URL" --keypair "$KEYPAIR" \
   ${ADMIN:+--admin "$ADMIN"} ${ALLOWLIST_MANAGER:+--allowlist-manager "$ALLOWLIST_MANAGER"} \
-  ${FEE_COLLECTOR:+--fee-collector "$FEE_COLLECTOR"}
+  ${FEE_COLLECTOR:+--fee-collector "$FEE_COLLECTOR"} ${CURVE_QUOTE_MINT:+--curve-quote-mint "$CURVE_QUOTE_MINT"}
 
 # the registry is immutable: no upgrade path for charter data
 echo "revoking the merces_registry upgrade authority"
