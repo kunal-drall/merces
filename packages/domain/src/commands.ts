@@ -9,23 +9,43 @@ import { seriesTermsSchema, tierSchema, fxBasisSchema } from './events.ts';
  * Admin commands are built for the protocol multisig.
  */
 
-export const reportProofSchema = z.object({
-  /** 'groth16-bn254' once Stage 1's circuit exists; 'mock' for the simulator's structural verifier. */
-  system: z.enum(['groth16-bn254', 'mock']),
-  /** proof bytes (base64) or the mock digest */
-  proof: z.string(),
-  /** public inputs as decimal strings, in circuit order */
-  publicInputs: z.array(z.string()),
-});
+/** A decimal string of at most 78 digits: a BN254 field element or smaller (snarkjs encoding). */
+const decimalSchema = z.string().regex(/^\d{1,78}$/);
+
+/** A snarkjs Groth16 proof over BN254 (chain-neutral JSON; the adapters encode it for the EVM or Solana verifier). */
+export const groth16ProofSchema = z.object({
+  pi_a: z.array(decimalSchema).length(3),
+  pi_b: z.array(z.array(decimalSchema).length(2)).length(3),
+  pi_c: z.array(decimalSchema).length(3),
+  protocol: z.literal('groth16'),
+  curve: z.literal('bn128'),
+}).strict();
+export type Groth16ProofJson = z.infer<typeof groth16ProofSchema>;
+
+/**
+ * The report proof: Stage 1's ProofOfIncome circuit (Groth16 over BN254) or, in the simulator only, the mock
+ * system (a digest over the public inputs, accepted only by a simulator configured with `acceptMockProofs`).
+ * `publicInputs` are the circuit's six public signals as decimal strings, in Stage 1's order
+ * (`reportPublicInputs` in hashing.ts).
+ */
+export const reportProofSchema = z.discriminatedUnion('system', [
+  z.object({ system: z.literal('groth16-bn254'), proof: groth16ProofSchema, publicInputs: z.array(decimalSchema).length(6) }),
+  z.object({ system: z.literal('mock'), proof: z.string(), publicInputs: z.array(decimalSchema).length(6) }),
+]);
 export type ReportProof = z.infer<typeof reportProofSchema>;
 
-/** Signed by the report verifier over {seriesId, periodId, incomeCommitment, tier}. The income source never goes onchain (B7). */
+/**
+ * Signed by the report verifier over `attestationMessage()`: Stage 1's report-attestation fields (series, period,
+ * prior and income commitments, tier, liquidity event). The income source never goes onchain (B7).
+ */
 export const verifierAttestationSchema = z.object({
   keyId: z.string(),
   seriesId: seriesIdSchema,
   periodId: periodIdSchema,
+  priorIncomeCommitment: hash32Schema,
   incomeCommitment: hash32Schema,
   tier: tierSchema,
+  liquidityEvent: z.boolean(),
   /** hex ed25519 signature over attestationMessage() */
   signature: z.string(),
 });
@@ -50,8 +70,10 @@ export const userCommands = {
     periodId: periodIdSchema,
     tier: tierSchema,
     paymentStable: moneySchema,
+    /** the income commitment this report chains from (Stage 1 prior chain; ZERO at a year start) */
+    priorIncomeCommitment: hash32Schema,
     incomeCommitment: hash32Schema,
-    termsCommitment: hash32Schema,
+    /* no termsCommitment: the chain proves against the series' live commitment (SPEC §6.2) */
     fxBasis: fxBasisSchema,
     fxAvgWad: wadSchema,
     pair: pairSchema.nullable(),

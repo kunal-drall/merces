@@ -59,6 +59,17 @@ export {
   ERROR_ALIASES,
   isErrorName,
   type ErrorName,
+  // commitments (SPEC §1.5): Poseidon over BN254 with circomlib's parameters. The commitment helpers return the
+  // field element; `@merces/domain` wraps them into the 0x-hex the canonical model carries.
+  BN254_FR,
+  assertField,
+  poseidon2,
+  poseidon5,
+  termsCommitment as termsCommitmentField,
+  incomeCommitment as incomeCommitmentField,
+  routerIncomeCommitment as routerIncomeCommitmentField,
+  CURRENCY_CODES,
+  INDEXING_RULES,
   // other
   U64_MAX,
   ZERO_INCOME_COMMITMENT,

@@ -1412,6 +1412,10 @@
                 "type": "string",
                 "pattern": "^\\d+$"
               },
+              "priorIncomeCommitment": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
               "incomeCommitment": {
                 "type": "string",
                 "pattern": "^0x[0-9a-f]{64}$"
@@ -1442,6 +1446,7 @@
               "tier",
               "paymentDue",
               "accrual",
+              "priorIncomeCommitment",
               "incomeCommitment",
               "termsCommitment",
               "fxBasis",
@@ -4121,6 +4126,10 @@
           "type": "string",
           "pattern": "^\\d+$"
         },
+        "priorIncomeCommitment": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
         "incomeCommitment": {
           "type": "string",
           "pattern": "^0x[0-9a-f]{64}$"
@@ -4151,6 +4160,7 @@
         "tier",
         "paymentDue",
         "accrual",
+        "priorIncomeCommitment",
         "incomeCommitment",
         "termsCommitment",
         "fxBasis",
@@ -5368,11 +5378,11 @@
           "type": "string",
           "pattern": "^\\d+$"
         },
-        "incomeCommitment": {
+        "priorIncomeCommitment": {
           "type": "string",
           "pattern": "^0x[0-9a-f]{64}$"
         },
-        "termsCommitment": {
+        "incomeCommitment": {
           "type": "string",
           "pattern": "^0x[0-9a-f]{64}$"
         },
@@ -5431,31 +5441,112 @@
           ]
         },
         "proof": {
-          "type": "object",
-          "properties": {
-            "system": {
-              "type": "string",
-              "enum": [
-                "groth16-bn254",
-                "mock"
-              ]
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "system": {
+                  "type": "string",
+                  "const": "groth16-bn254"
+                },
+                "proof": {
+                  "type": "object",
+                  "properties": {
+                    "pi_a": {
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^\\d{1,78}$"
+                      }
+                    },
+                    "pi_b": {
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "type": "array",
+                      "items": {
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^\\d{1,78}$"
+                        }
+                      }
+                    },
+                    "pi_c": {
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^\\d{1,78}$"
+                      }
+                    },
+                    "protocol": {
+                      "type": "string",
+                      "const": "groth16"
+                    },
+                    "curve": {
+                      "type": "string",
+                      "const": "bn128"
+                    }
+                  },
+                  "required": [
+                    "pi_a",
+                    "pi_b",
+                    "pi_c",
+                    "protocol",
+                    "curve"
+                  ],
+                  "additionalProperties": false
+                },
+                "publicInputs": {
+                  "minItems": 6,
+                  "maxItems": 6,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^\\d{1,78}$"
+                  }
+                }
+              },
+              "required": [
+                "system",
+                "proof",
+                "publicInputs"
+              ],
+              "additionalProperties": false
             },
-            "proof": {
-              "type": "string"
-            },
-            "publicInputs": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
+            {
+              "type": "object",
+              "properties": {
+                "system": {
+                  "type": "string",
+                  "const": "mock"
+                },
+                "proof": {
+                  "type": "string"
+                },
+                "publicInputs": {
+                  "minItems": 6,
+                  "maxItems": 6,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^\\d{1,78}$"
+                  }
+                }
+              },
+              "required": [
+                "system",
+                "proof",
+                "publicInputs"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "system",
-            "proof",
-            "publicInputs"
-          ],
-          "additionalProperties": false
+          ]
         },
         "attestation": {
           "anyOf": [
@@ -5472,6 +5563,10 @@
                 "periodId": {
                   "type": "string",
                   "pattern": "^\\d{4}Q[1-4]$"
+                },
+                "priorIncomeCommitment": {
+                  "type": "string",
+                  "pattern": "^0x[0-9a-f]{64}$"
                 },
                 "incomeCommitment": {
                   "type": "string",
@@ -5497,6 +5592,9 @@
                     }
                   ]
                 },
+                "liquidityEvent": {
+                  "type": "boolean"
+                },
                 "signature": {
                   "type": "string"
                 }
@@ -5505,8 +5603,10 @@
                 "keyId",
                 "seriesId",
                 "periodId",
+                "priorIncomeCommitment",
                 "incomeCommitment",
                 "tier",
+                "liquidityEvent",
                 "signature"
               ],
               "additionalProperties": false
@@ -5538,8 +5638,8 @@
         "periodId",
         "tier",
         "paymentStable",
+        "priorIncomeCommitment",
         "incomeCommitment",
-        "termsCommitment",
         "fxBasis",
         "fxAvgWad",
         "pair",

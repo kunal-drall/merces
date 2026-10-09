@@ -20,9 +20,11 @@ function describe(v: Record<string, unknown>): string {
   if (v.enum) return (v.enum as unknown[]).map((x) => `\`${String(x)}\``).join(' \\| ');
   if (v.const !== undefined) return `\`${String(v.const)}\``;
   if (v.anyOf) return (v.anyOf as Record<string, unknown>[]).map(describe).join(' \\| ');
+  if (v.oneOf) return (v.oneOf as Record<string, unknown>[]).map(describe).join(' \\| ');
   if (v.type === 'array') return `array of ${describe((v.items as Record<string, unknown>) ?? {})}`;
   if (v.type === 'object') return 'object { ' + Object.entries((v.properties as Record<string, Record<string, unknown>>) ?? {}).map(([k, x]) => `${k}: ${describe(x)}`).join(', ') + ' }';
   if (v.pattern === '^\\d+$') return 'decimal string (base units / WAD / units)';
+  if (v.pattern === '^\\d{1,78}$') return 'decimal string (field element)';
   if (v.pattern === '^0x[0-9a-f]{64}$') return 'hex32';
   if (v.pattern === '^\\d{4}Q[1-4]$') return 'period id (YYYYQn)';
   if (v.pattern === '^[A-Z]{3}\\/[A-Z]{3}$') return 'pair (XXX/USD)';

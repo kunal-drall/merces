@@ -78,9 +78,18 @@ export const eventPayloads = {
     ...seriesScoped,
     periodId: periodIdSchema,
     tier: tierSchema,
+    /**
+     * The due the report opened (Stage 1 `Report.due`): the payment less tier-1 split credit, 0 for a tail report
+     * that is not a liquidity event. It excludes lateness accrual, which is charged when the payment lands
+     * (`PaymentReceived.accrual`).
+     */
     paymentDue: moneySchema,
+    /** Always "0": accrual is charged at payment time (`PaymentReceived.accrual`), never at the report. */
     accrual: moneySchema,
+    /** the income commitment the report chained from (Stage 1's event omits it; adapters read it from the stored report) */
+    priorIncomeCommitment: hash32Schema,
     incomeCommitment: hash32Schema,
+    /** the series' live terms commitment the proof was checked against */
     termsCommitment: hash32Schema,
     fxBasis: fxBasisSchema,
     fxAvgWad: wadSchema,

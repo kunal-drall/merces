@@ -111,6 +111,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `tier`: `1` \| `2` \| `3` \| `4`
 - `paymentDue`: decimal string (base units / WAD / units)
 - `accrual`: decimal string (base units / WAD / units)
+- `priorIncomeCommitment`: hex32
 - `incomeCommitment`: hex32
 - `termsCommitment`: hex32
 - `fxBasis`: `accumulator` \| `attestor` \| `unity`
@@ -307,7 +308,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **claimRefund**: `seriesId`: string
 - **drawRelease**: `seriesId`: string
 - **pauseReleases**: `seriesId`: string; `paused`: boolean
-- **submitReport**: `seriesId`: string; `periodId`: period id (YYYYQn); `tier`: `1` \| `2` \| `3` \| `4`; `paymentStable`: decimal string (base units / WAD / units); `incomeCommitment`: hex32; `termsCommitment`: hex32; `fxBasis`: `accumulator` \| `attestor` \| `unity`; `fxAvgWad`: decimal string (base units / WAD / units); `pair`: pair (XXX/USD) \| null; `attestorRate`: object { attestor: string, rateWad: decimal string (base units / WAD / units), pair: pair (XXX/USD) } \| null; `proof`: object { system: `groth16-bn254` \| `mock`, proof: string, publicInputs: array of string }; `attestation`: object { keyId: string, seriesId: string, periodId: period id (YYYYQn), incomeCommitment: hex32, tier: `1` \| `2` \| `3` \| `4`, signature: string } \| null; `attestor`: string \| null; `liquidityEvent`: boolean
+- **submitReport**: `seriesId`: string; `periodId`: period id (YYYYQn); `tier`: `1` \| `2` \| `3` \| `4`; `paymentStable`: decimal string (base units / WAD / units); `priorIncomeCommitment`: hex32; `incomeCommitment`: hex32; `fxBasis`: `accumulator` \| `attestor` \| `unity`; `fxAvgWad`: decimal string (base units / WAD / units); `pair`: pair (XXX/USD) \| null; `attestorRate`: object { attestor: string, rateWad: decimal string (base units / WAD / units), pair: pair (XXX/USD) } \| null; `proof`: object { system: `groth16-bn254`, proof: object { pi_a: array of decimal string (field element), pi_b: array of array of decimal string (field element), pi_c: array of decimal string (field element), protocol: `groth16`, curve: `bn128` }, publicInputs: array of decimal string (field element) } \| object { system: `mock`, proof: string, publicInputs: array of decimal string (field element) }; `attestation`: object { keyId: string, seriesId: string, periodId: period id (YYYYQn), priorIncomeCommitment: hex32, incomeCommitment: hex32, tier: `1` \| `2` \| `3` \| `4`, liquidityEvent: boolean, signature: string } \| null; `attestor`: string \| null; `liquidityEvent`: boolean
 - **payIn**: `seriesId`: string; `periodId`: period id (YYYYQn); `amount`: decimal string (base units / WAD / units)
 - **claimPayout**: `seriesId`: string
 - **requestPause**: `seriesId`: string; `until`: integer

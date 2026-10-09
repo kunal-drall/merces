@@ -43,8 +43,11 @@ const SDK_REEXPORTS = [
   'newYearGross', 'settlementYear', 'yearGrossAdd', 'yearGrossGet',
   'DEFAULT_PARAMETERS', 'PARAMETER_BOUNDS', 'parametersFromStrings', 'SeriesStatus', 'RaiseState', 'TIER_FLAG', 'tierEnabled',
   'ERRORS', 'ERROR_ALIASES', 'isErrorName',
+  'BN254_FR', 'assertField', 'poseidon2', 'poseidon5', 'CURRENCY_CODES', 'INDEXING_RULES',
   'U64_MAX', 'ZERO_INCOME_COMMITMENT', 'bytes32ToField', 'fieldToBytes32',
 ] as const;
+/** Stage 1's commitment helpers, renamed: they return the field element (`@merces/domain` returns the 0x-hex). */
+const SDK_RENAMED = { termsCommitmentField: 'termsCommitment', incomeCommitmentField: 'incomeCommitment', routerIncomeCommitmentField: 'routerIncomeCommitment' } as const;
 const REFERENCE_REEXPORTS = [
   'isTerminal', 'deadlineSeconds', 'graceSeconds', 'noticeSeconds', 'countdown', 'nextExpectedPeriod', 'earliestUnpaid', 'deriveStatus', 'isLateUnderlying', 'lateDays', 'lateAccrual', 'formalNoticeDue', 'pauseApprovalError',
   'newVaultState', 'capPerUnit', 'capEffWad', 'isCapped', 'vaultReceiveGross', 'settleHolderDelta', 'accumulate',
@@ -58,12 +61,13 @@ describe('@merces/math gateway', () => {
     const gw = gateway as unknown as Record<string, unknown>;
     for (const n of SDK_REEXPORTS) expect(gw[n], n).toBe((sdk as unknown as Record<string, unknown>)[n]);
     expect(gw.pidAt).toBe(sdk.periodOf);
+    for (const [ours, theirs] of Object.entries(SDK_RENAMED)) expect(gw[ours], ours).toBe((sdk as unknown as Record<string, unknown>)[theirs]);
     for (const n of REFERENCE_REEXPORTS) expect(gw[n], n).toBe((ref as unknown as Record<string, unknown>)[n]);
   });
   it('exports exactly Stage 1, our helpers and `interim` (no swap machinery, no other top-level interim name)', () => {
     const ours = ['periodOf', 'periodOfPid', 'periodFrom', 'parsePeriod', 'periodsBetween', 'toPid', 'fromPid', 'wadFromDecimal', 'wadToDecimal', 'utcDayIndex', 'ratePerUnit', 'paymentStable', 'PAYMENT_RANGE_ERROR', 'statusParamsOf', 'projectDeadlines', 'standingOf', 'capRemaining'];
     const keys = Object.keys(gateway);
-    expect([...keys].sort()).toEqual([...SDK_REEXPORTS, 'pidAt', ...REFERENCE_REEXPORTS, ...ours, 'interim'].sort());
+    expect([...keys].sort()).toEqual([...SDK_REEXPORTS, 'pidAt', ...Object.keys(SDK_RENAMED), ...REFERENCE_REEXPORTS, ...ours, 'interim'].sort());
     // Stage 1's positional quarterPayment (θ third) and the S2 auction cap are deliberately not re-exported
     expect(keys).not.toContain('quarterPayment');
     expect(keys).not.toContain('walletCapUnits');
