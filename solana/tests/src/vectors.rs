@@ -543,10 +543,17 @@ impl Runner {
                 let feed = hex32(c["feedId"].as_str().unwrap());
                 let inverted = c["inverted"].as_bool().unwrap_or(false);
                 let pair = fx_pair_id(&feed, inverted);
+                // the vectors model the cross-check as a second normalized rate on each snapshot
+                // (track-a A-14); on Solana it is a second Pyth feed id (track-b B-S10)
+                let crosscheck = if c["crosscheck"].as_bool().unwrap_or(false) {
+                    Pubkey::new_from_array(Env::crosscheck_feed_for(&feed))
+                } else {
+                    Pubkey::default()
+                };
                 ok(
                     &mut self.cu,
                     op,
-                    self.env.set_fx_pair(pair, feed, inverted, true),
+                    self.env.set_fx_pair(pair, feed, inverted, crosscheck, true),
                 )?;
                 if self.env.fx_pair(&pair).is_none() {
                     ok(&mut self.cu, op, self.env.init_fx_pair(pair))?;
@@ -822,6 +829,17 @@ impl Runner {
                     .map(|f| f.feed_id)
                     .unwrap_or([0u8; 32]);
                 let expo = i32::try_from(c["expo"].as_i64().unwrap()).unwrap();
+                let crosscheck = c
+                    .get("crosscheckPrice")
+                    .filter(|p| !p.is_null())
+                    .map(|p| {
+                        let cc_expo = c
+                            .get("crosscheckExpo")
+                            .and_then(|e| e.as_i64())
+                            .map(|e| i32::try_from(e).unwrap())
+                            .unwrap_or(expo);
+                        (Env::crosscheck_feed_for(&feed), dec_i64(p), cc_expo)
+                    });
                 ok(
                     &mut self.cu,
                     op,
@@ -832,6 +850,7 @@ impl Runner {
                         dec_u64(&c["conf"]),
                         expo,
                         dec_i64(&c["publishTime"]),
+                        crosscheck,
                     ),
                 )
             }
@@ -1572,9 +1591,11 @@ impl Runner {
                 a.as_ref().map(|a| a.units_sold).unwrap_or(0).to_string(),
             ),
             ("clearingPrice", final_price.to_string()),
+            // the treasury's proceeds (0 for a failed raise, whose would-be proceeds stay
+            // readable on the auction account)
             (
                 "proceeds",
-                a.as_ref().map(|a| a.proceeds).unwrap_or(0).to_string(),
+                t.as_ref().map(|t| t.proceeds).unwrap_or(0).to_string(),
             ),
             (
                 "releasedTotal",

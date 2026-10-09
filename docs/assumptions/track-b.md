@@ -6,6 +6,40 @@ and `crates/merces-onchain` (syscall glue), the LiteSVM test harness, the SPEC �
 measurements and deploy scripts. Every reading, default and defect found while implementing SPEC.md
 v1.1 is listed here with the section it concerns. "Vectors" says which parity vector pins it.
 
+## Gap list against SPEC v1.1 §13 (assessment at hand-over, 9 Oct 2026)
+
+State found: `anchor build` green (no stack-frame warnings), the shared crate and the three programs
+already rewritten for v1.1, but the test crate did **not compile** (`SnapshotFx.crosscheck_update` was
+added to the program without updating the harness), so none of the 21 vectors had been replayed against
+the current programs. Audit of every module against §13, before any code change:
+
+| §13 item | Status found | Gap / action |
+| --- | --- | --- |
+| 1 auction always terminates | implemented (`valid_count == 0 → Failed`, `WalletCapTooSmall`) | verify with vectors 02, 15 |
+| 2 no settlement stalls | implemented (`TallyInProgress`, `round_rejected`, `SettlementRejected` / `WindowSettlementRejected`) | — |
+| 3 exact one-pass settlement | implemented (claims, `alloc_sum`, registry written once) | — |
+| 4 undeliverable bids | implemented (`process_bid` / `deliver_bid`) | **partial**: a `Failed` raise never reaches `mint_finalized` (vectors 02/15 expect it after the last `process_bid`, A-7) |
+| 5 mint-finalization gate | implemented (`MintNotFinalized` first in every money path; stored `units_outstanding`; `accrual_units`) | add an explicit `RaiseNotSettled` guard so a finalised *failed* raise cannot enter the repayment path |
+| 6 cap amendments | implemented (live cap, `cap_eff`, `retire_if_capped`, no amendment after terminal) | — |
+| 7 income scale | implemented (Borsh `u64` arguments, proof public inputs) | — |
+| 8 tier rules | implemented (`Tier1NotExclusive`, Poseidon(2) binding, `close_router_period`) | — |
+| 9 first-report prior | implemented | — |
+| 10 clock | implemented (bounded pause list, `is_late_underlying`, withdraw, `end_pause`) | — |
+| 11 true-up | implemented (nonce, once per year, bounded negatives, Late, blocks redemption) | — |
+| 12 redemption gate | implemented (`C_rem` saturates, due-date year ring) | — |
+| 13 tail/final | implemented (shared `receive_capped`, separate carries, `tail_exhausted`, estate) | — |
+| 14 window | implemented (two branches, first-come margin, one order per wallet, armed deposits, buyer re-check) | — |
+| 15 hook | implemented (escrow rules, `EscrowArm`, 4-entry resolvable list) | — |
+| 16 registry | implemented (`protocol_program` at init, write-once FX pairs, forward-only revocation with grace, `mint_finalized`) | `mark_mint_finalized` must also accept a `Failed` raise (item 4) |
+| 17 conventions | implemented (zero-amount no-ops, nested `mulDiv`) | — |
+| 18 WAD carry | implemented (`carry_wad`, `tail_carry_wad`, `final_carry_wad`) | — |
+
+Harness / tests: the vector runner read `ledger.proceeds` from the auction (the would-be proceeds of a
+failed raise) instead of the treasury; the FX harness ignored the vectors' cross-check prices
+(`crosscheck: true` pairs, vector 13). Missing deliverables: C11 charter tests (one per rule), the
+charter byte-snapshot test, the §1.4 known-answer test, `docs/solana/MEASUREMENTS.md`,
+`docs/solana/AUDIT-NOTES.md`, `solana/idls/`, `solana/scripts/deploy*`, `solana/deployments/`.
+
 ## SPEC defects and gaps
 
 | # | Section | Defect / gap | What Solana does | Vectors |

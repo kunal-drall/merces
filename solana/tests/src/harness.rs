@@ -956,11 +956,14 @@ impl Env {
         self.send_admin(ix)
     }
 
+    /// Registers an FX pair; `crosscheck` is the cross-check Pyth feed id (`Pubkey::default()`
+    /// for none).
     pub fn set_fx_pair(
         &mut self,
         pair_id: [u8; 32],
         feed_id: [u8; 32],
         inverted: bool,
+        crosscheck: Pubkey,
         enabled: bool,
     ) -> TxResult {
         let ix = Self::rix(
@@ -975,12 +978,18 @@ impl Env {
                 pair_id,
                 feed_id,
                 inverted,
-                crosscheck: Pubkey::default(),
+                crosscheck,
                 enabled,
             }
             .data(),
         );
         self.send_admin(ix)
+    }
+
+    /// The synthetic cross-check feed id the tests pair with `feed_id`
+    /// (`keccak256("MERCES_TEST_CROSSCHECK" ‖ feed_id)`).
+    pub fn crosscheck_feed_for(feed_id: &[u8; 32]) -> [u8; 32] {
+        keccak(&[b"MERCES_TEST_CROSSCHECK", feed_id])
     }
 
     /// Issuer-chosen terms used across the tests: 100 units at a 1 000 USDC reserve, min raise
@@ -1987,7 +1996,9 @@ impl Env {
         self.send(&[ix], &[])
     }
 
-    /// Takes a snapshot with a freshly written Pyth-shaped price account.
+    /// Takes a snapshot with a freshly written Pyth-shaped price account. `crosscheck` is the
+    /// pair's cross-check feed `(feed_id, price, expo)` when one is configured (SPEC §6.6 step 4;
+    /// on Solana the cross-check is a second Pyth feed, see `docs/assumptions/track-b.md` B-S10).
     pub fn snapshot_fx(
         &mut self,
         pair_id: [u8; 32],
@@ -1996,9 +2007,13 @@ impl Env {
         conf: u64,
         expo: i32,
         publish_time: i64,
+        crosscheck: Option<([u8; 32], i64, i32)>,
     ) -> TxResult {
         let period = merces_common::time::period_of(self.now).unwrap();
         let price_update = self.set_price_update(feed_id, price, conf, expo, publish_time);
+        let crosscheck_update = crosscheck.map(|(cc_feed, cc_price, cc_expo)| {
+            self.set_price_update(cc_feed, cc_price, 0, cc_expo, publish_time)
+        });
         let ix = Self::pix(
             merces_protocol::accounts::SnapshotFx {
                 keeper: self.payer.pubkey(),
@@ -2007,6 +2022,7 @@ impl Env {
                 pair: fx_pair_pda(&pair_id),
                 checkpoint: fx_checkpoint_pda(&pair_id, period),
                 price_update,
+                crosscheck_update,
                 system_program: SYSTEM_PROGRAM,
             }
             .to_account_metas(None),
