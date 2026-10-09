@@ -35,6 +35,14 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      # Stage 1's reference math ships as TypeScript; the math step imports its build (A-MATH-2).
+      - name: Build Stage 1 reference math (if present)
+        run: |
+          if [ -f stage1/packages/reference/package.json ]; then
+            cd stage1
+            pnpm install --frozen-lockfile --ignore-scripts --filter '@merces/reference...'
+            pnpm -r --filter '@merces/reference...' build
+          fi
       - run: pnpm stage1:sync
         env:
           SOLANA_RPC_URL: ${{ vars.SOLANA_RPC_URL }}

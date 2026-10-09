@@ -1,0 +1,55 @@
+{
+  "version": "stage1@5eafd41",
+  "commit": "5eafd41",
+  "branch": "claude/sweet-goodall-b7acm3",
+  "specVersion": "1.1.2",
+  "_note": "Hand-written: Stage 1 ships no handoff/manifest.json. Paths are relative to STAGE1_PATH. No devnet or testnet deployment exists yet, so solana.programs and evm[].contracts are empty on purpose: the live adapters stay unavailable and auto mode keeps every chain on the simulator. The localnet/anvil rehearsal addresses are recorded under rehearsals for reference only and are never used to go live.",
+  "math": {
+    "package": "packages/reference"
+  },
+  "vectors": "packages/vectors",
+  "events": {
+    "doc": "EVENTS.md"
+  },
+  "interfaces": {
+    "doc": "INTERFACES.md",
+    "solanaDoc": "docs/solana/INTERFACES.md",
+    "evmDoc": "docs/evm/INTERFACES.md",
+    "solanaEvents": "docs/solana/EVENTS.md",
+    "evmEvents": "docs/evm/EVENTS.md"
+  },
+  "circuit": {
+    "wasm": "circuits/build/report.wasm",
+    "zkey": "circuits/build/report_final.zkey",
+    "verificationKey": "circuits/build/verification_key.json",
+    "note": "development trusted setup (STATUS.md: replace with a real ceremony before mainnet)"
+  },
+  "solana": {
+    "cluster": "devnet",
+    "programs": {},
+    "idlDir": "solana/idls"
+  },
+  "evm": [
+    {
+      "chain": "monad-testnet",
+      "chainId": 10143,
+      "contracts": {},
+      "abiDir": "evm/abis"
+    }
+  ],
+  "rehearsals": {
+    "solana": "solana/deployments/localnet.json",
+    "evm": [
+      "evm/deployments/anvil.json",
+      "evm/deployments/monad-testnet-rehearsal.json"
+    ]
+  },
+  "missing": [
+    "handoff/manifest.json (the whole file)",
+    "Solana devnet program ids and RPC (only a localnet deployment record exists)",
+    "Monad testnet contract addresses and RPC (evm/deployments/monad-testnet-rehearsal.json is an anvil rehearsal with anvil's default deployer, not a testnet deployment)",
+    "a machine-readable events/commands schema (EVENTS.md and INTERFACES.md are prose; field sets come from the IDLs and ABIs)",
+    "stablecoin mints/addresses for devnet and testnet",
+    "start slot / start block for the indexer"
+  ]
+}

@@ -1,180 +1,418 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { stage1Path } from '@merces/chains';
 import { adminCommands, eventPayloads, routerCommands, serviceCommands, userCommands } from '@merces/domain';
 import type { StepReport } from '../report.ts';
 import type { StepCtx } from './generate.ts';
 
+type FieldMap = Map<string, Set<string> | null>;
+
+/** One interface source (a JSON schema, the Solana IDLs, one EVM chain's ABIs, or the generated clients). */
+interface Source {
+  label: string;
+  origin: string;
+  events: FieldMap;
+  commands: FieldMap;
+  conflicts: string[];
+  excluded: string[];
+  /** Solana instruction accounts (the series, holder, issuer… are accounts, not args). */
+  accounts: Map<string, Set<string>>;
+  /** Stage 1 items only another Merces program/contract can call (listed, not counted as extra). */
+  internal: string[];
+}
+
 /**
  * Step 3: diff Stage 1's events and instructions against the canonical vocabulary and write INTERFACE_DRIFT.md.
- * Accepted inputs: a JSON schema file shaped like ours ({events: {Name: {properties}}, commands: {...}}), or
- * the generated IDL/ABI modules (event and instruction names only). Nothing is papered over: every
- * canonical item without a counterpart, every extra Stage 1 item and every field mismatch is listed.
- * Only exact matches (case, '_' and '-' ignored) count as mappings; a substring look-alike is listed as an
- * unverified match and counts as drift, as do extra fields/args and items whose fields are unknown.
+ * Sources, in order of preference: a JSON schema shaped like ours ({events: {Name: {properties}}, commands: {...}});
+ * otherwise each chain separately, from the Solana IDL JSON (instruction args, event fields via the IDL types) and
+ * from each EVM chain's ABI JSON (events and state-changing functions); otherwise the generated clients (names only).
+ * Nothing is papered over: every canonical item without a counterpart, every extra Stage 1 item and every field
+ * mismatch is listed. Only exact matches (case, '_' and '-' ignored) count as mappings; a substring look-alike is listed
+ * as an unverified match and counts as drift, as do extra fields/args, items whose fields are unknown, and items two
+ * sources describe differently. Mocks and third-party plumbing (token standards, timelock, verifier) are listed as
+ * excluded, not diffed.
  */
 export async function diffInterfaces(ctx: StepCtx): Promise<StepReport> {
-  const details: string[] = [];
   const m = ctx.location.manifest;
+  const sources: Source[] = [];
   const schemaPath = stage1Path(ctx.location, m.events?.schema);
-  const stage1Events = new Map<string, Set<string> | null>();
-  const stage1Commands = new Map<string, Set<string> | null>();
-  let source = 'none';
-  const conflicts: string[] = [];
-  /**
-   * Record an item seen in one source. Sources never overwrite each other: a names-only source (an IDL without the
-   * schema file) leaves the item unverified even when another source has fields, and two sources that disagree on
-   * the field set (two chains, or two ABIs with the same function name) make it unverified and are listed.
-   */
-  const put = (map: Map<string, Set<string> | null>, name: string, fields: Set<string> | null): void => {
-    if (!map.has(name)) {
-      map.set(name, fields);
-      return;
+  if (schemaPath && existsSync(schemaPath)) sources.push(fromSchema(schemaPath));
+  else {
+    const idlDir = stage1Path(ctx.location, m.solana?.idlDir);
+    if (idlDir && existsSync(idlDir) && readdirSync(idlDir).some((f) => f.endsWith('.json'))) sources.push(fromSolanaIdls(idlDir));
+    for (const e of m.evm ?? []) {
+      const abiDir = stage1Path(ctx.location, e.abiDir);
+      if (abiDir && existsSync(abiDir) && readdirSync(abiDir).some((f) => f.endsWith('.json'))) sources.push(fromEvmAbis(abiDir, e.chain));
     }
-    const prev = map.get(name) ?? null;
-    if (prev === null || fields === null) {
-      map.set(name, null);
-      return;
-    }
-    const same = prev.size === fields.size && [...prev].every((f) => fields.has(f));
-    if (!same) {
-      conflicts.push(`${name}: sources disagree on fields ({${[...prev].join(', ')}} vs {${[...fields].join(', ')}})`);
-      map.set(name, null);
-    }
-  };
+    if (sources.length === 0) sources.push(fromGenerated(ctx.generatedDir));
+  }
 
-  if (schemaPath && existsSync(schemaPath)) {
-    source = schemaPath;
-    const raw = JSON.parse(readFileSync(schemaPath, 'utf8')) as { events?: Record<string, { properties?: Record<string, unknown> }>; commands?: Record<string, { properties?: Record<string, unknown> }> };
-    for (const [n, s] of Object.entries(raw.events ?? {})) stage1Events.set(n, s.properties ? new Set(Object.keys(s.properties)) : null);
-    for (const [n, s] of Object.entries(raw.commands ?? {})) stage1Commands.set(n, s.properties ? new Set(Object.keys(s.properties)) : null);
-  } else {
-    // fall back to names from the generated modules
-    source = 'generated clients (names only)';
-    const genSol = join(ctx.generatedDir, 'solana');
-    const genEvm = join(ctx.generatedDir, 'evm');
-    if (existsSync(genSol)) {
-      for (const f of (await import('node:fs')).readdirSync(genSol).filter((x) => x.endsWith('.ts') && x !== 'index.ts')) {
-        const src = readFileSync(join(genSol, f), 'utf8');
-        for (const mm of src.matchAll(/^  (\w+): \{ discriminator/gm)) {
-          const name = mm[1]!;
-          if (src.indexOf(`export const events = {`) < src.indexOf(mm[0]) && src.indexOf(mm[0]) < src.indexOf('export const accounts')) put(stage1Events, name, null);
-          else if (src.indexOf(mm[0]) < src.indexOf('export const events')) put(stage1Commands, name, null);
-        }
-      }
+  const at = m.commit ? ` at ${m.commit}` : '';
+  const where = (o: string) => (o.startsWith(ctx.location.root + '/') ? `$STAGE1_PATH/${relative(ctx.location.root, o)}` : o);
+  const md: string[] = ['# INTERFACE_DRIFT.md', '', `Generated by stage1:sync from Stage 1${at}: ${sources.map((s) => `${s.label} (${where(s.origin)})`).join('; ')}.`, ''];
+  const totals = { missing: 0, mismatched: 0, unverified: 0, extra: 0 };
+  const perSource: string[] = [];
+  const sections: string[] = [];
+  for (const src of sources) {
+    const r = diffSource(src);
+    totals.missing += r.missing;
+    totals.mismatched += r.mismatched;
+    totals.unverified += r.unverified;
+    totals.extra += r.extra;
+    perSource.push(`| ${src.label} | ${r.missing} | ${r.mismatched} | ${r.unverified} | ${r.extra} | ${src.events.size} | ${src.commands.size} |`);
+    sections.push(...(sources.length > 1 ? [`## ${src.label}`, ''] : []), ...r.md);
+  }
+  md.push('| Source | Canonical items without counterpart | Field mismatches | Unverified matches | Extra Stage 1 items | Stage 1 events | Stage 1 instructions/functions |', '| --- | --- | --- | --- | --- | --- | --- |', ...perSource, '', ...sections);
+
+  const body = md.join('\n') + '\n';
+  writeFileSync(ctx.driftFile ?? 'INTERFACE_DRIFT.md', body);
+  writeFileSync(join(ctx.outDir, 'INTERFACE_DRIFT.md'), body);
+  const seen = sources.reduce((n, s) => n + s.events.size + s.commands.size, 0);
+  // every kind of unresolved drift keeps the step from 'ok' (A-SYNC-1), extra Stage 1 items included
+  const status: StepReport['status'] = seen === 0 ? 'fail' : totals.missing + totals.mismatched + totals.unverified + totals.extra > 0 ? 'warn' : 'ok';
+  const details = [
+    `${totals.missing} canonical item(s) without counterpart, ${totals.mismatched} field mismatch(es), ${totals.unverified} unverified match(es), ${totals.extra} extra Stage 1 item(s); ${sources.map((s) => `${s.label}: ${s.events.size} events, ${s.commands.size} instructions/functions`).join('; ')}`,
+    ...sources.flatMap((s) => s.conflicts.map((c) => `conflict [${s.label}]: ${c}`)),
+  ];
+  return { step: 'diff', status, summary: status === 'fail' ? 'no Stage 1 interface information found' : 'INTERFACE_DRIFT.md written', details };
+}
+
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * Stage 1 names for canonical items that exist under another name, matched by hand against SPEC v1.1.2, the IDLs and
+ * the EVM interfaces (both chains' spellings; case and '_' ignored). An alias match counts as a mapping; the item's
+ * fields are still diffed. `none` records a canonical item Stage 1 has no counterpart for by design, with the reason.
+ */
+export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Record<string, string[]>; none: Record<string, string> } = {
+  events: {
+    AuctionSettled: ['RaiseSettled'],
+    AuctionFailed: ['RaiseFailed'],
+    BidRefunded: ['BidDelivered'],
+    UnitsMinted: ['UnitsAllocated'],
+    TreasuryFunded: ['ProceedsDeposited'],
+    FundsReleased: ['ReleaseClaimed'],
+    ReleasesPaused: ['ReleasePauseSet'],
+    ReleasesResumed: ['ReleasePauseSet'],
+    SplitReceipt: ['IncomeRouted'],
+    PaymentReceived: ['PayoutDistributed'],
+    PaymentRefunded: ['PaymentSettled'],
+    FeeTaken: ['PayoutDistributed'],
+    RedemptionOpened: ['SeriesRedeemed'],
+    TailPayout: ['TailDistributed'],
+    RateSnapshot: ['FxSnapshot'],
+    FxFallbackFlagged: ['FxDeviationFlagged'],
+    TransferWindowOpened: ['WindowOpened'],
+    TransferWindowCleared: ['WindowCleared'],
+    UnitsTransferred: ['OrderDelivered'],
+    CurveSeriesCreated: ['SeriesCreated'],
+    CurveGraduated: ['RaiseSettled'],
+  },
+  commands: {
+    claimRefund: ['deliver_bid'],
+    drawRelease: ['claim_release'],
+    pauseReleases: ['set_release_pause'],
+    payIn: ['pay'],
+    claimPayout: ['claim'],
+    commitWindowOrder: ['window_commit_bid', 'commit_ask', 'commitAsk'],
+    revealWindowOrder: ['reveal_order'],
+    settleAuction: ['finalize_settlement'],
+    snapshotRate: ['snapshot_fx', 'snapshot'],
+    crankBurn: ['burn_retired'],
+    crankPause: ['end_pause'],
+    openTransferWindow: ['open_window'],
+    clearTransferWindow: ['finalize_window'],
+    graduateCurve: ['complete_curve'],
+    setAllowlist: ['set_allowed'],
+    pauseNewRaises: ['set_flags'],
+    registerSplitRouter: ['init_router', 'createRouterReceiver'],
+    postSplitReceipt: ['route'],
+  },
+  none: {
+    buyCurve: 'curve buys are Meteora DBC swaps sent straight to Meteora\'s program; Merces has no buy instruction (curve mode is Solana only; EVM createSeries reverts CurveModeUnsupported)',
+    TreasuryFunded: 'no deposit event in this source; RaiseSettled and RaiseMintFinalized carry the proceeds total, so the adapter can synthesise it',
+    flagFxFallback: 'no flag command: the FX deviation flag is emitted by the snapshot and the attestor fallback rate travels with submit_report',
+  },
+};
+
+/** Curve mode is Solana only (SPEC v1.1.2 §9; EVM createSeries reverts CurveModeUnsupported): not applicable on EVM. */
+const SOLANA_ONLY = new Set(['buyCurve', 'graduateCurve', 'CurveSeriesCreated', 'CurveGraduated']);
+
+/** Field spellings that mean the same thing in both vocabularies. */
+const FIELD_ALIASES: Record<string, string[]> = { seriesId: ['series', 'series_id'], periodId: ['period'] };
+
+/** Stage 1 items that only another Merces program or contract may call: the registry write interface, inter-module calls, the transfer hook. */
+const STAGE1_INTERNAL = new Set(
+  [
+    'mark_raise_opened', 'mark_raise_result', 'mark_mint_finalized', 'mark_terminal', 'mark_curve_activated',
+    'markRaiseOpened', 'markRaiseResult', 'markMintFinalized', 'markTerminal',
+    'setProceeds', 'depositProceeds', 'confirmDeposits', 'moveUnreleasedToVault', 'initializeSupply', 'receiveGross', 'creditWindowAccrual', 'receiveRouterShare', 'clearDues',
+    'execute', 'initialize_extra_account_meta_list',
+  ].map(norm),
+);
+
+/** Names close enough to be a look-alike (one contains the other and is at least 70% of its length). */
+const lookAlike = (a: string, b: string): boolean => {
+  const [x, y] = a.length <= b.length ? [a, b] : [b, a];
+  return y.includes(x) && x.length / y.length >= 0.7;
+};
+
+/**
+ * Record an item seen in a source. Within a source, entries never overwrite each other: a names-only entry leaves the
+ * item unverified, and two entries that disagree on the field set (two ABIs with the same function name) make it
+ * unverified and are listed as a conflict.
+ */
+function put(src: Source, kind: 'events' | 'commands', name: string, fields: Set<string> | null): void {
+  const map = src[kind];
+  if (!map.has(name)) {
+    map.set(name, fields);
+    return;
+  }
+  const prev = map.get(name) ?? null;
+  if (prev === null || fields === null) {
+    map.set(name, null);
+    return;
+  }
+  const same = prev.size === fields.size && [...prev].every((f) => fields.has(f));
+  if (!same) {
+    src.conflicts.push(`${name}: entries disagree on fields ({${[...prev].join(', ')}} vs {${[...fields].join(', ')}})`);
+    map.set(name, null);
+  }
+}
+
+const newSource = (label: string, origin: string): Source => ({ label, origin, events: new Map(), commands: new Map(), conflicts: [], excluded: [], accounts: new Map(), internal: [] });
+
+function fromSchema(path: string): Source {
+  const src = newSource('schema', path);
+  const raw = JSON.parse(readFileSync(path, 'utf8')) as { events?: Record<string, { properties?: Record<string, unknown> }>; commands?: Record<string, { properties?: Record<string, unknown> }> };
+  for (const [n, s] of Object.entries(raw.events ?? {})) put(src, 'events', n, s.properties ? new Set(Object.keys(s.properties)) : null);
+  for (const [n, s] of Object.entries(raw.commands ?? {})) put(src, 'commands', n, s.properties ? new Set(Object.keys(s.properties)) : null);
+  return src;
+}
+
+/** Anchor IDL JSON: instructions with args; events whose fields live in the IDL `types` under the event's name. */
+function fromSolanaIdls(dir: string): Source {
+  const src = newSource('solana', dir);
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.json')).sort()) {
+    if (/^mock/i.test(f)) {
+      src.excluded.push(`${f} (mock program)`);
+      continue;
     }
-    if (existsSync(genEvm)) {
-      for (const f of (await import('node:fs')).readdirSync(genEvm).filter((x) => x.endsWith('.ts') && x !== 'index.ts')) {
-        const abi = JSON.parse(readFileSync(join(genEvm, f), 'utf8').replace(/^[^[]*/, '').replace(/ as const;\s*$/, '')) as { type: string; name?: string; stateMutability?: string; inputs?: { name: string }[] }[];
-        for (const item of abi) {
-          if (item.type === 'event' && item.name) put(stage1Events, item.name, new Set((item.inputs ?? []).map((i) => i.name)));
-          // view and pure functions are reads, not instructions: only state-changing functions are compared
-          if (item.type === 'function' && item.name && item.stateMutability !== 'view' && item.stateMutability !== 'pure') put(stage1Commands, item.name, new Set((item.inputs ?? []).map((i) => i.name)));
+    type Acc = { name: string; accounts?: Acc[] };
+    const idl = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { instructions?: { name: string; args?: { name: string }[]; accounts?: Acc[] }[]; events?: { name: string }[]; types?: { name: string; type?: { kind?: string; fields?: ({ name: string } | string)[] } }[] };
+    const types = new Map((idl.types ?? []).map((t) => [t.name, t]));
+    const flat = (a: Acc[] = []): string[] => a.flatMap((x) => [x.name, ...flat(x.accounts)]);
+    for (const ix of idl.instructions ?? []) {
+      if (STAGE1_INTERNAL.has(norm(ix.name))) {
+        src.internal.push(`${ix.name} (${f.replace(/\.json$/, '')})`);
+        continue;
+      }
+      put(src, 'commands', ix.name, new Set((ix.args ?? []).map((a) => a.name)));
+      src.accounts.set(ix.name, new Set(flat(ix.accounts)));
+    }
+    for (const ev of idl.events ?? []) {
+      const t = types.get(ev.name);
+      const fields = t?.type?.kind === 'struct' && Array.isArray(t.type.fields) ? new Set(t.type.fields.map((x) => (typeof x === 'string' ? x : x.name))) : null;
+      put(src, 'events', ev.name, fields);
+    }
+  }
+  return src;
+}
+
+/** Mocks and third-party plumbing that are not part of the Merces interface (listed, not diffed). */
+const EVM_EXCLUDE: [RegExp, string][] = [
+  [/^Mock/, 'mock contract'],
+  [/^TimelockController$/, 'OpenZeppelin timelock (governance plumbing)'],
+  [/^MercesUnitToken$/, 'ERC-3643 (T-REX) unit token: token-standard functions, not Merces commands'],
+  [/^MercesComplianceModule$|^MercesTokenFactory$|^MercesTokenGovernor$/, 'T-REX compliance / token deployment plumbing'],
+  [/^Groth16Verifier$/, 'generated verifier (called by the income contract)'],
+];
+
+/**
+ * EVM ABI JSON (bare array or {abi}). When interface ABIs (I*.json) are present they define the surface and the
+ * implementation ABIs that duplicate them (with upgrade and initialisation plumbing) are skipped; view and pure
+ * functions are reads, not instructions.
+ */
+function fromEvmAbis(dir: string, chain: string): Source {
+  const src = newSource(`evm:${chain}`, dir);
+  const files = readdirSync(dir).filter((x) => x.endsWith('.json')).sort();
+  const names = new Set(files.map((f) => f.replace(/\.json$/, '')));
+  for (const f of files) {
+    const n = f.replace(/\.json$/, '');
+    const ex = EVM_EXCLUDE.find(([re]) => re.test(n));
+    if (ex) {
+      src.excluded.push(`${f} (${ex[1]})`);
+      continue;
+    }
+    if (!n.startsWith('I') && names.has(`I${n}`)) {
+      src.excluded.push(`${f} (implementation; its interface I${n}.json is diffed)`);
+      continue;
+    }
+    const raw = JSON.parse(readFileSync(join(dir, f), 'utf8')) as unknown;
+    const abi = (Array.isArray(raw) ? raw : ((raw as { abi?: unknown[] }).abi ?? [])) as { type: string; name?: string; stateMutability?: string; inputs?: { name: string }[] }[];
+    const contract = n.replace(/^I(?=[A-Z])/, '').replace(/^Merces/, '');
+    for (const item of abi) {
+      if (item.type === 'event' && item.name) put(src, 'events', item.name, new Set((item.inputs ?? []).map((i) => i.name)));
+      if (item.type === 'function' && item.name && item.stateMutability !== 'view' && item.stateMutability !== 'pure') {
+        if (STAGE1_INTERNAL.has(norm(item.name))) {
+          if (!src.internal.some((x) => x.startsWith(`${item.name} `))) src.internal.push(`${item.name} (${n})`);
+          continue;
         }
+        const fields = new Set((item.inputs ?? []).map((i) => i.name));
+        const prev = src.commands.get(item.name);
+        // the same function name on two contracts with different inputs (auction and window `commitBid`) is two functions
+        const differs = prev !== undefined && prev !== null && (prev.size !== fields.size || [...prev].some((x) => !fields.has(x)));
+        put(src, 'commands', differs ? `${contract}.${item.name}` : item.name, fields);
       }
     }
   }
+  return src;
+}
 
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const findCounterpart = (name: string, pool: Iterable<string>): { key: string; exact: boolean } | null => {
+/** Fallback: names from the generated client modules (fields unknown for Solana; ABI inputs for EVM). */
+function fromGenerated(generatedDir: string): Source {
+  const src = newSource('generated', `${generatedDir} (generated clients, names only)`);
+  const genSol = join(generatedDir, 'solana');
+  const genEvm = join(generatedDir, 'evm');
+  if (existsSync(genSol)) {
+    for (const f of readdirSync(genSol).filter((x) => x.endsWith('.ts') && x !== 'index.ts')) {
+      const text = readFileSync(join(genSol, f), 'utf8');
+      for (const mm of text.matchAll(/^  (\w+): \{ discriminator/gm)) {
+        const name = mm[1]!;
+        if (text.indexOf('export const events = {') < text.indexOf(mm[0]) && text.indexOf(mm[0]) < text.indexOf('export const accounts')) put(src, 'events', name, null);
+        else if (text.indexOf(mm[0]) < text.indexOf('export const events')) put(src, 'commands', name, null);
+      }
+    }
+  }
+  if (existsSync(genEvm)) {
+    for (const f of readdirSync(genEvm).filter((x) => x.endsWith('.ts') && x !== 'index.ts')) {
+      const abi = JSON.parse(readFileSync(join(genEvm, f), 'utf8').replace(/^[^[]*/, '').replace(/ as const;\s*$/, '')) as { type: string; name?: string; stateMutability?: string; inputs?: { name: string }[] }[];
+      for (const item of abi) {
+        if (item.type === 'event' && item.name) put(src, 'events', item.name, new Set((item.inputs ?? []).map((i) => i.name)));
+        if (item.type === 'function' && item.name && item.stateMutability !== 'view' && item.stateMutability !== 'pure') put(src, 'commands', item.name, new Set((item.inputs ?? []).map((i) => i.name)));
+      }
+    }
+  }
+  return src;
+}
+
+function diffSource(src: Source): { md: string[]; missing: number; mismatched: number; unverified: number; extra: number } {
+  /** Exact name first, then a reviewed alias, then a look-alike (reported as unverified). */
+  const findCounterpart = (name: string, pool: Iterable<string>, aliases: string[] = []): { key: string; exact: boolean; alias?: boolean } | null => {
     const n = norm(name);
     const keys = [...pool];
     for (const k of keys) if (norm(k) === n) return { key: k, exact: true };
-    for (const k of keys) if (norm(k).includes(n) || n.includes(norm(k))) return { key: k, exact: false };
+    for (const a of aliases) for (const k of keys) if (norm(k) === norm(a)) return { key: k, exact: true, alias: true };
+    for (const k of keys) if (lookAlike(norm(k), n)) return { key: k, exact: false };
     return null;
   };
   /** Field-by-field comparison; returns mapping and drift lines and the number of drift items. */
-  const compareFields = (ours: string[], theirs: Set<string>, noun: 'field' | 'arg'): { mapping: string[]; drift: string[]; count: number } => {
+  const compareFields = (ours: string[], theirs: Set<string>, noun: 'field' | 'arg', accounts?: Set<string>): { mapping: string[]; drift: string[]; count: number } => {
     const mapping: string[] = [];
     const drift: string[] = [];
     const used = new Set<string>();
     for (const f of ours) {
-      const c = findCounterpart(f, theirs);
-      if (!c) drift.push(`missing ${noun} ${f}`);
-      else if (!c.exact) {
-        used.add(c.key);
-        drift.push(`unverified match ${f}←${c.key}`);
-      } else {
+      const c = findCounterpart(f, theirs, FIELD_ALIASES[f]);
+      if (c && c.exact) {
         used.add(c.key);
         mapping.push(`${f}←${c.key}`);
+        continue;
+      }
+      const a = accounts ? findCounterpart(f, accounts, FIELD_ALIASES[f]) : null;
+      if (a && a.exact) {
+        mapping.push(`${f}←${a.key} (account)`);
+        continue;
+      }
+      if (!c) drift.push(`missing ${noun} ${f}`);
+      else {
+        used.add(c.key);
+        drift.push(`unverified match ${f}←${c.key}`);
       }
     }
     for (const t of theirs) if (!used.has(t) && !ours.some((f) => norm(f) === norm(t))) drift.push(`extra ${noun} ${t}`);
     return { mapping, drift, count: drift.length };
   };
 
-  const md: string[] = ['# INTERFACE_DRIFT.md', '', `Generated by stage1:sync from ${source}.`, '', '## Events', '', '| Canonical event | Stage 1 counterpart | Field mapping | Drift |', '| --- | --- | --- | --- |'];
+  const md: string[] = ['### Events', '', '| Canonical event | Stage 1 counterpart | Field mapping | Drift |', '| --- | --- | --- | --- |'];
   let missing = 0;
   let mismatched = 0;
   let unverified = 0;
   let extra = 0;
-  const matchedStage1 = new Set<string>();
+  const matchedEvents = new Set<string>();
   for (const [name, schema] of Object.entries(eventPayloads)) {
     const ours = Object.keys((schema as unknown as { shape: Record<string, unknown> }).shape);
-    const found = findCounterpart(name, stage1Events.keys());
-    if (!found) {
-      missing++;
-      md.push(`| ${name} | **missing** | — | Stage 1 emits no counterpart; adapter must synthesise or the model must change (record why) |`);
+    if (src.label.startsWith('evm') && SOLANA_ONLY.has(name)) {
+      md.push(`| ${name} | n/a | — | curve mode is Solana only (EVM createSeries reverts CurveModeUnsupported) |`);
       continue;
     }
-    const counterpart = found.key;
-    matchedStage1.add(counterpart);
-    const nameDrift = found.exact ? [] : [`unverified name match ${name}←${counterpart}`];
+    const found = findCounterpart(name, src.events.keys(), STAGE1_ALIASES.events[name]);
+    if (!found) {
+      missing++;
+      md.push(`| ${name} | **missing** | — | ${STAGE1_ALIASES.none[name] ?? 'Stage 1 emits no counterpart; adapter must synthesise or the model must change (record why)'} |`);
+      continue;
+    }
+    matchedEvents.add(found.key);
+    const nameDrift = found.exact ? [] : [`unverified name match ${name}←${found.key}`];
+    const shown = found.alias ? `${found.key} (alias)` : found.key;
     if (!found.exact) unverified++;
-    const theirs = stage1Events.get(counterpart);
+    const theirs = src.events.get(found.key);
     if (!theirs) {
       unverified++;
-      md.push(`| ${name} | ${counterpart} | fields unknown (names only) | ${[...nameDrift, 'verify field-by-field by hand'].join('; ')} |`);
+      md.push(`| ${name} | ${shown} | fields unknown (names only) | ${[...nameDrift, 'verify field-by-field by hand'].join('; ')} |`);
       continue;
     }
     const { mapping, drift, count } = compareFields(ours, theirs, 'field');
     mismatched += count;
-    md.push(`| ${name} | ${counterpart} | ${mapping.join(', ') || '—'} | ${[...nameDrift, ...drift].join('; ') || 'none'} |`);
+    md.push(`| ${name} | ${shown} | ${mapping.join(', ') || '—'} | ${[...nameDrift, ...drift].join('; ') || 'none'} |`);
   }
-  for (const k of stage1Events.keys()) {
-    if (matchedStage1.has(k)) continue;
+  for (const k of src.events.keys()) {
+    if (matchedEvents.has(k)) continue;
     extra++;
-    md.push(`| — | ${k} | — | extra Stage 1 event, not in the canonical model |`);
+    const f = src.events.get(k);
+    md.push(`| — | ${k} | ${f ? [...f].join(', ') : 'fields unknown'} | extra Stage 1 event, not in the canonical model |`);
   }
 
-  md.push('', '## Commands', '', '| Canonical command | Stage 1 counterpart | Field mapping | Drift |', '| --- | --- | --- | --- |');
+  md.push('', '### Commands', '', '| Canonical command | Stage 1 counterpart | Field mapping | Drift |', '| --- | --- | --- | --- |');
   const matchedCmd = new Set<string>();
   for (const group of [userCommands, serviceCommands, adminCommands, routerCommands]) {
     for (const [name, schema] of Object.entries(group)) {
       const ours = Object.keys((schema as unknown as { shape: Record<string, unknown> }).shape).filter((k) => k !== 'kind');
-      const found = findCounterpart(name, stage1Commands.keys());
+      if (src.label.startsWith('evm') && SOLANA_ONLY.has(name)) {
+        md.push(`| ${name} | n/a | — | curve mode is Solana only (EVM createSeries reverts CurveModeUnsupported) |`);
+        continue;
+      }
+      const found = findCounterpart(name, src.commands.keys(), STAGE1_ALIASES.commands[name]);
       if (!found) {
         missing++;
-        md.push(`| ${name} | **missing** | — | no Stage 1 instruction/function found |`);
+        md.push(`| ${name} | **missing** | — | ${STAGE1_ALIASES.none[name] ?? 'no Stage 1 instruction/function found'} |`);
         continue;
       }
-      const counterpart = found.key;
-      matchedCmd.add(counterpart);
-      const nameDrift = found.exact ? [] : [`unverified name match ${name}←${counterpart}`];
+      matchedCmd.add(found.key);
+      const nameDrift = found.exact ? [] : [`unverified name match ${name}←${found.key}`];
+      const shown = found.alias ? `${found.key} (alias)` : found.key;
       if (!found.exact) unverified++;
-      const theirs = stage1Commands.get(counterpart);
+      const theirs = src.commands.get(found.key);
       if (!theirs) {
         unverified++;
-        md.push(`| ${name} | ${counterpart} | fields unknown | ${[...nameDrift, 'verify by hand'].join('; ')} |`);
+        md.push(`| ${name} | ${shown} | fields unknown | ${[...nameDrift, 'verify by hand'].join('; ')} |`);
         continue;
       }
-      const { mapping, drift, count } = compareFields(ours, theirs, 'arg');
+      const { mapping, drift, count } = compareFields(ours, theirs, 'arg', src.accounts.get(found.key));
       mismatched += count;
-      md.push(`| ${name} | ${counterpart} | ${mapping.join(', ') || '—'} | ${[...nameDrift, ...drift].join('; ') || 'none'} |`);
+      md.push(`| ${name} | ${shown} | ${mapping.join(', ') || '—'} | ${[...nameDrift, ...drift].join('; ') || 'none'} |`);
     }
   }
-  for (const k of stage1Commands.keys()) {
+  for (const k of src.commands.keys()) {
     if (matchedCmd.has(k)) continue;
     extra++;
-    md.push(`| — | ${k} | — | extra Stage 1 instruction, not in the canonical model |`);
+    const f = src.commands.get(k);
+    md.push(`| — | ${k} | ${f ? [...f].join(', ') || '(no args)' : 'fields unknown'} | extra Stage 1 instruction, not in the canonical model |`);
   }
-  if (conflicts.length) md.push('', '## Sources that disagree', '', ...conflicts.map((c) => `- ${c}`));
-
-  writeFileSync(ctx.driftFile ?? 'INTERFACE_DRIFT.md', md.join('\n') + '\n');
-  writeFileSync(join(ctx.outDir, 'INTERFACE_DRIFT.md'), md.join('\n') + '\n');
-  // every kind of unresolved drift keeps the step from 'ok' (A-SYNC-1), extra Stage 1 items included
-  const status: StepReport['status'] = stage1Events.size === 0 && stage1Commands.size === 0 ? 'fail' : missing + mismatched + unverified + extra > 0 ? 'warn' : 'ok';
-  details.push(`${missing} canonical item(s) without counterpart, ${mismatched} field mismatch(es), ${unverified} unverified match(es), ${extra} extra Stage 1 item(s); ${stage1Events.size} Stage 1 events, ${stage1Commands.size} instructions/functions seen`);
-  for (const c of conflicts) details.push(`conflict: ${c}`);
-  return { step: 'diff', status, summary: status === 'fail' ? 'no Stage 1 interface information found' : 'INTERFACE_DRIFT.md written', details };
+  if (src.conflicts.length) md.push('', '### Entries that disagree', '', ...src.conflicts.map((c) => `- ${c}`));
+  if (src.excluded.length || src.internal.length) {
+    md.push('', '### Not diffed', '', ...src.excluded.map((c) => `- ${c}`));
+    if (src.internal.length) md.push(`- callable only by another Merces program or contract (registry write interface, inter-module calls, transfer hook): ${src.internal.join(', ')}`);
+  }
+  md.push('');
+  return { md, missing, mismatched, unverified, extra };
 }

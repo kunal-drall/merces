@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 
@@ -47,19 +48,33 @@ export interface Stage1Location {
   problems: string[];
 }
 
-/** Locate Stage 1 through STAGE1_PATH (directory, submodule or package). Returns null when absent. */
+/** The commit a Stage 1 git checkout is at, or null when it is not one (or git is unavailable). */
+function checkoutCommit(root: string): string | null {
+  try {
+    return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Locate Stage 1 through STAGE1_PATH (directory, submodule or package). Returns null when absent.
+ * Stage 1's own manifest wins; a `stage1.map.json` in this repository is used only for a non-empty
+ * checkout, and a checkout at a different commit than the map pins is reported as a problem.
+ */
 export function locateStage1(stage1Path: string | undefined = process.env.STAGE1_PATH): Stage1Location | null {
   if (!stage1Path) return null;
   const root = resolve(stage1Path);
   if (!existsSync(root)) return null;
-  const candidates: { kind: 'manifest' | 'map'; path: string }[] = [
+  const candidates: { kind: 'manifest' | 'map'; path: string; local?: boolean }[] = [
     { kind: 'manifest', path: join(root, 'handoff', 'manifest.json') },
     { kind: 'manifest', path: join(root, 'manifest.json') },
     { kind: 'map', path: join(root, 'stage1.map.json') },
-    { kind: 'map', path: resolve('stage1.map.json') },
+    { kind: 'map', path: resolve('stage1.map.json'), local: true },
   ];
   for (const c of candidates) {
     if (!existsSync(c.path)) continue;
+    if (c.local && readdirSync(root).length === 0) continue;
     const problems: string[] = [];
     let raw: unknown;
     try {
@@ -72,6 +87,10 @@ export function locateStage1(stage1Path: string | undefined = process.env.STAGE1
     if (!parsed.success) {
       problems.push(...parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`));
       return { kind: c.kind, path: c.path, root, manifest: (raw as Stage1Manifest) ?? {}, problems };
+    }
+    if (c.local && parsed.data.commit) {
+      const head = checkoutCommit(root);
+      if (head && !head.startsWith(parsed.data.commit)) problems.push(`stage1.map.json pins ${parsed.data.commit} but the checkout is at ${head.slice(0, 7)}`);
     }
     return { kind: c.kind, path: c.path, root, manifest: parsed.data, problems };
   }

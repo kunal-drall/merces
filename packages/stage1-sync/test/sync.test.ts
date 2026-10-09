@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { adminCommands, eventPayloads, routerCommands, serviceCommands, userCommands } from '@merces/domain';
 import { interimMath, selectedMathName } from '@merces/math';
@@ -15,7 +15,10 @@ import { locateStage1 } from '@merces/chains';
 function drop(manifest: Record<string, unknown>, files: Record<string, string> = {}) {
   const root = mkdtempSync(join(tmpdir(), 'stage1-'));
   mkdirSync(join(root, 'handoff'));
-  for (const [f, c] of Object.entries(files)) writeFileSync(join(root, f), c);
+  for (const [f, c] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, f)), { recursive: true });
+    writeFileSync(join(root, f), c);
+  }
   writeFileSync(join(root, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', ...manifest }));
   const location = locateStage1(root)!;
   const outDir = mkdtempSync(join(tmpdir(), 'out-'));
@@ -53,15 +56,39 @@ describe('stage1:sync', () => {
     const drifted = structuredClone(schema);
     drifted.commands.submitReport!.properties.proofVersion = {};
     const pr = Object.keys(drifted.events.PaymentReceived!.properties);
-    drifted.events.PaymentReceived!.properties = Object.fromEntries(pr.map((k) => [({ seriesId: 'series', fee: 'feeBps', paidPerUnitWad: 'paid' } as Record<string, string>)[k] ?? k, {}]));
+    drifted.events.PaymentReceived!.properties = Object.fromEntries(pr.map((k) => [({ seriesId: 'series', fee: 'feeBps', periodId: 'periodIdx' } as Record<string, string>)[k] ?? k, {}]));
     const d = drop({ events: { schema: 'events.schema.json' } }, { 'events.schema.json': JSON.stringify(drifted) });
     const r = await diffInterfaces(d);
     expect(r.status).toBe('warn');
     const md = readFileSync(join(d.outDir, 'INTERFACE_DRIFT.md'), 'utf8');
     expect(md).toMatch(/\| submitReport \| submitReport \|.*extra arg proofVersion/);
-    expect(md).toMatch(/\| PaymentReceived \| PaymentReceived \|.*unverified match seriesId←series/);
-    expect(md).toMatch(/unverified match fee←feeBps/);
+    // `series` is a reviewed spelling of seriesId; a near name is an unverified match; anything else is missing + extra
+    expect(md).toMatch(/\| PaymentReceived \| PaymentReceived \| seriesId←series.*unverified match periodId←periodIdx/);
+    expect(md).toMatch(/missing field fee;.*extra field feeBps/);
     expect(process.cwd()).toBe(cwd);
+  });
+
+  it('Solana IDLs: reviewed aliases, series passed as an account, internal instructions and by-design gaps', async () => {
+    const idl = {
+      instructions: [
+        { name: 'claim_release', args: [], accounts: [{ name: 'issuer', signer: true }, { name: 'series' }, { name: 'treasury' }] },
+        { name: 'claim', args: [], accounts: [{ name: 'holder' }, { name: 'series' }] },
+        { name: 'mark_terminal', args: [{ name: 'status' }], accounts: [{ name: 'series' }] },
+      ],
+      events: [{ name: 'RaiseSettled' }],
+      types: [{ name: 'RaiseSettled', type: { kind: 'struct', fields: [{ name: 'series' }, { name: 'clearing_price' }] } }],
+    };
+    const d = drop({ solana: { idlDir: 'idls' } }, { 'idls/merces_protocol.json': JSON.stringify(idl) });
+    const r = await diffInterfaces(d);
+    expect(r.status).toBe('warn');
+    const md = readFileSync(join(d.outDir, 'INTERFACE_DRIFT.md'), 'utf8');
+    expect(md).toMatch(/\| drawRelease \| claim_release \(alias\) \| seriesId←series \(account\)/);
+    expect(md).toMatch(/\| AuctionSettled \| RaiseSettled \(alias\) \| seriesId←series, clearingPrice←clearing_price/);
+    expect(md).toMatch(/\| claimRefund \| \*\*missing\*\*/); // never paired with `claim` by a look-alike
+    expect(md).toMatch(/\| buyCurve \| \*\*missing\*\* \| — \| curve buys are Meteora DBC swaps/);
+    expect(md).toContain('callable only by another Merces program or contract');
+    expect(md).toMatch(/mark_terminal \(merces_protocol\)/);
+    expect(md).not.toMatch(/\| — \| mark_terminal \|/);
   });
 
   it('generates clients, diffs interfaces and replays vectors from a synthetic Stage 1 drop', async () => {
@@ -104,6 +131,7 @@ describe('stage1:sync', () => {
   });
 
   it('extra Stage 1 items, names-only sources and disagreeing sources are drift', async () => {
+    const committed = readFileSync('INTERFACE_DRIFT.md', 'utf8');
     const schema = canonicalSchema();
     const extra = structuredClone(schema) as { events: Record<string, { properties: Record<string, unknown> }>; commands: Record<string, { properties: Record<string, unknown> }> };
     extra.commands.adminSweep = { properties: { to: {}, amount: {} } };
@@ -125,7 +153,7 @@ describe('stage1:sync', () => {
     expect(md).not.toContain('getSeries'); // view functions are reads, not instructions
     expect(n.status).toBe('warn');
     // the test never wrote the committed report
-    expect(readFileSync('INTERFACE_DRIFT.md', 'utf8')).toContain('Stage 1 is not present yet');
+    expect(readFileSync('INTERFACE_DRIFT.md', 'utf8')).toBe(committed);
   });
 
   it('a chain is not ready when conformance passed on other chains but never ran on it', () => {
