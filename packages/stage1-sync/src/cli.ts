@@ -1,10 +1,12 @@
 #!/usr/bin/env tsx
+import { existsSync } from 'node:fs';
 import { runSync } from './index.ts';
 import { renderReport } from './report.ts';
 
 const args = new Set(process.argv.slice(2));
 const report = await runSync({
-  stage1Path: process.env.STAGE1_PATH,
+  // STAGE1_PATH overrides; otherwise the pinned `stage1` submodule
+  stage1Path: process.env.STAGE1_PATH ?? (existsSync('stage1/SPEC.md') ? 'stage1' : undefined),
   outDir: process.env.STAGE1_SYNC_OUT ?? 'packages/stage1-sync/out',
   generatedDir: process.env.STAGE1_SYNC_GENERATED ?? 'packages/stage1-sync/generated',
   runConformance: !args.has('--no-conformance'),

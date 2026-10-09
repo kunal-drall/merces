@@ -1,0 +1,4 @@
+[submodule "stage1"]
+	path = stage1
+	url = https://github.com/kunal-drall/merces
+	branch = claude/sweet-goodall-b7acm3

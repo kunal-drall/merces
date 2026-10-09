@@ -1,9 +1,9 @@
 {
-  "version": "stage1@5eafd41",
-  "commit": "5eafd41",
+  "version": "stage1@1bfc66b",
+  "commit": "1bfc66b",
   "branch": "claude/sweet-goodall-b7acm3",
   "specVersion": "1.1.2",
-  "_note": "Hand-written: Stage 1 ships no handoff/manifest.json. Paths are relative to STAGE1_PATH. No devnet or testnet deployment exists yet, so solana.programs and evm[].contracts are empty on purpose: the live adapters stay unavailable and auto mode keeps every chain on the simulator. The localnet/anvil rehearsal addresses are recorded under rehearsals for reference only and are never used to go live.",
+  "_note": "Hand-written: Stage 1 ships no handoff/manifest.json. Stage 1 is the `stage1` git submodule pinned at 1bfc66b (branch claude/sweet-goodall-b7acm3), whose tree is identical to 5eafd41, the commit named in the handoff. Paths are relative to the Stage 1 checkout. programs/contracts are empty on purpose: there is no devnet or testnet deployment yet.",
   "math": {
     "package": "packages/reference"
   },
@@ -51,5 +51,6 @@
     "a machine-readable events/commands schema (EVENTS.md and INTERFACES.md are prose; field sets come from the IDLs and ABIs)",
     "stablecoin mints/addresses for devnet and testnet",
     "start slot / start block for the indexer"
-  ]
+  ],
+  "tree": "aa93160afa07ac60d23cb01952982f2c4281044e"
 }

@@ -1,12 +1,13 @@
 name: stage1-sync
-# Catches Stage 1 the moment it appears: on a schedule, on demand, and whenever STAGE1_PATH (a submodule or
-# vendored drop) changes. Set the STAGE1_REPO repository variable to the Stage 1 repo to check it out.
+# Stage 1 is the pinned `stage1` submodule. This job re-runs stage1:sync against it on a schedule and on demand;
+# with the repository variable STAGE1_TRACK_REMOTE=true it first moves the submodule to the head of its tracked
+# branch (.gitmodules), so a new Stage 1 commit is caught before anyone bumps the pin.
 on:
   schedule:
     - cron: '17 */6 * * *'
   workflow_dispatch:
   push:
-    paths: ['stage1/**', 'stage1.map.json', '.gitmodules']
+    paths: ['stage1', 'stage1.map.json', '.gitmodules']
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -22,27 +23,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - name: Check out Stage 1 (if STAGE1_REPO is configured)
-        if: ${{ vars.STAGE1_REPO != '' }}
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.STAGE1_REPO }}
-          ref: ${{ vars.STAGE1_REF || 'main' }}
-          path: stage1
-          token: ${{ secrets.STAGE1_TOKEN || github.token }}
+      - name: Track the Stage 1 branch head (if STAGE1_TRACK_REMOTE is set)
+        if: ${{ vars.STAGE1_TRACK_REMOTE == 'true' }}
+        run: git submodule update --remote stage1
       - uses: pnpm/action-setup@v4
         with: { version: 10.28.0 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      # Stage 1's reference math ships as TypeScript; the math step imports its build (A-MATH-2).
-      - name: Build Stage 1 reference math (if present)
-        run: |
-          if [ -f stage1/packages/reference/package.json ]; then
-            cd stage1
-            pnpm install --frozen-lockfile --ignore-scripts --filter '@merces/reference...'
-            pnpm -r --filter '@merces/reference...' build
-          fi
+      # the lockfile may not match a moved submodule, so this job installs without --frozen-lockfile
+      - run: pnpm install
       - run: pnpm stage1:sync
         env:
           SOLANA_RPC_URL: ${{ vars.SOLANA_RPC_URL }}

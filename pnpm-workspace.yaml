@@ -1,2 +1,7 @@
 packages:
   - "packages/*"
+  # Stage 1, pinned as the `stage1` git submodule: the packages Stage 2 imports (SPEC v1.1.2 reference math,
+  # client helpers and the ProofOfIncome circuit). Built by scripts/stage1-build.mjs after install.
+  - "stage1/packages/sdk"
+  - "stage1/packages/reference"
+  - "stage1/circuits"
