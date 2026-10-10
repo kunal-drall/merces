@@ -387,7 +387,7 @@ export class SimHarness {
   }
 
   /**
-   * Fill the curve as Stage 1's `launched()` does (curve_mode.rs:91-114): buys of 400, 350 and 300 USDC by `wallets`
+   * Fill the curve as Stage 1's `launched()` does (curve_mode.rs:96-118): buys of 400, 350 and 300 USDC by `wallets`
    * (the last a partial fill at X), then, as the keeper, `completeCurve` and `collectCurveProceeds`.
    */
   async fillCurve(seriesId: string, wallets: SimWallet[] = this.backers.slice(0, 3)): Promise<void> {

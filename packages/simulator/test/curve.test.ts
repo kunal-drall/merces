@@ -35,7 +35,7 @@ async function curveSeries() {
   return { h, seriesId, s, units, usdc };
 }
 
-/** A wallet that is not on the allowlist, funded with USDC (Stage 1's buyer `d`, curve_mode.rs:102-108). */
+/** A wallet that is not on the allowlist, funded with USDC (Stage 1's buyer `d`, curve_mode.rs:102-110). */
 async function stranger(h: SimHarness, label = 'curve-stranger'): Promise<SimWallet> {
   const w = new SimWallet(h.sim.family, label);
   await h.sim.fund(w.address, 'USDC', USDC(10_000));
@@ -86,7 +86,7 @@ describe('curve mode (solana): activation', () => {
 });
 
 describe('curve mode (solana): the stand-in pool', () => {
-  // cause S3-CV, S3-NC: anyone buys (Stage 1 has no allowlist on the curve, CMT:102-108) and nothing reaches the treasury
+  // cause S3-CV, S3-NC: anyone buys (Stage 1 has no allowlist on the curve, CMT:102-110) and nothing reaches the treasury
   // while the curve bonds; was allowlisted buys minting units and funding the treasury (TreasuryFunded)
   it('lets any wallet buy; the money stays in the pool, net of the 1% fee, and no Merces event is emitted', async () => {
     const { h, seriesId, s, units, usdc } = await curveSeries();
@@ -195,7 +195,7 @@ describe('curve mode (solana): completion and proceeds', () => {
     await expectStage1Error(h.sim.submit({ kind: 'completeCurve', seriesId }, 'keeper'), 'RaiseNotOpen');
   });
 
-  // cause S3-CV: Stage 1 collect_curve_proceeds (curve.rs:1112-1214; CMT:212-237): the treasury is 0 until the partner
+  // cause S3-CV: Stage 1 collect_curve_proceeds (curve.rs:1112-1214; CMT:218-237): the treasury is 0 until the partner
   // migration fee arrives (990 USDC of X = 1,000, curve_config.json partnerMigrationFee), the partner trading fee goes to
   // the fee collector, the call is idempotent and the D4 schedule's first half is drawable at settlement
   it("funds the treasury with the partner migration fee, pays the trading fee to the fee collector and is idempotent", async () => {
@@ -320,7 +320,7 @@ describe('curve mode (solana): the sealed-bid paths and the sealed-bid exits are
 describe('curve mode (solana): base lamports', () => {
   // cause S3-UL, M2: the unit mint's supply is conserved through trades and the stand-in's hooks (the migration, a locker
   // release, a DAMM trade), which move base lamports between the protocol's accounts and wallets as Stage 1's census
-  // test mocks them (curve_mode.rs:707-765); supply − protocol-held is what wallets hold
+  // test mocks them (curve_mode.rs:708-766); supply − protocol-held is what wallets hold
   it('conserves the supply: wallets hold supply − protocol-held through trades, the migration, a locker release and a DAMM trade', async () => {
     const { h, seriesId, s, units } = await curveSeries();
     const d = await stranger(h);

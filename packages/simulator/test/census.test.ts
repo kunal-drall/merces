@@ -24,7 +24,7 @@ const INITIAL_BASE_SUPPLY = 110_363_638n; // curve_config.json expected.initialB
 const P0 = 10_000_000n; // curve_config.json expected.p0PerUnit
 const SCALE = 1_000_000n;
 
-/** Stage 1's curve report fixtures (FX) and their terms (generator :36-49): θ 60,000 USD, r 10^9 per base lamport, USD, indexing 0, salt 777. */
+/** Stage 1's curve report fixtures (FX) and their terms (generator :36-44): θ 60,000 USD, r 10^9 per base lamport, USD, indexing 0, salt 777. */
 const FX = JSON.parse(readFileSync(new URL('../../../stage1/solana/tests/fixtures/meteora/curve_reports.json', import.meta.url), 'utf8')) as {
   terms: { theta: string; r_wad_per_base_lamport: string; terms_salt: string; terms_commitment: string };
   fixtures: { name: string; units_outstanding: string; prior_income_commitment: string; income_commitment: string; payment_usd: string; proof: string }[];
@@ -33,7 +33,7 @@ const FX_TERMS: PrivateTerms = { theta: BigInt(FX.terms.theta), rWad: BigInt(FX.
 
 /**
  * A Groth16 proof from Stage 1's Solana encoding (256 bytes: pi_a with its y negated, pi_b's coordinates swapped, pi_c;
- * gen-curve-zk-fixture.mjs :70-73) back to snarkjs JSON. The inverse of Stage 1's `encodeProofForSolana`.
+ * gen-curve-zk-fixture.mjs :77-80, :87) back to snarkjs JSON. The inverse of Stage 1's `encodeProofForSolana`.
  */
 function fromSolanaProof(hex: string): Groth16ProofJson {
   const h = hex.replace(/^0x/, '');
@@ -56,7 +56,7 @@ async function curveSeries(opts: { sim?: SimulatorChain; privateTerms?: PrivateT
 }
 
 describe('curve census (solana): syncCurveUnits', () => {
-  // cause S3-CN: the census is supply − protocol-held = what the buyers hold (CMT:239-251, `assert_eq!(n, held)`); the
+  // cause S3-CN: the census is supply − protocol-held = what the buyers hold (CMT:239-249, `assert_eq!(n, held)`); the
   // chain stores it, with its time, only when one is taken; a census may be taken while the curve still sells
   it('counts what the buyers hold, stores it with its time and emits CurveUnitsSynced', async () => {
     const { h, seriesId, s, held, buyers } = await curveSeries();
@@ -81,7 +81,7 @@ describe('curve census (solana): syncCurveUnits', () => {
     expect((await h.sim.getCurve(seriesId))!.census).toMatchObject({ synced: { unitsOutstanding: SWAP_BASE.toString(), at: r.blockTime }, changedSinceSync: false });
   });
 
-  // cause S3-CN: relational on Stage 1's census test (CMT:707-768): the migration only moves protocol-held base, so the
+  // cause S3-CN: relational on Stage 1's census test (CMT:708-766): the migration only moves protocol-held base, so the
   // census is unchanged; units the issuer claims from the locker and units bought out of the DAMM pool become outstanding
   it('a migration leaves the census unchanged; a locker release and a DAMM trade raise it by exactly the units moved', async () => {
     const { h, seriesId, buyers } = await curveSeries();
@@ -102,8 +102,10 @@ describe('curve census (solana): syncCurveUnits', () => {
     expect(await census()).toBe(n0 + released);
   });
 
-  // cause S3-CN: Stage 1's refusals in its order (curve.rs:940-951): NotCurveMode on a sealed-bid series; TerminalStatus
-  // on a stored Redeemed (CMT:327: staking and re-counting stop) or Extinguished series (Retired: the fixture replay below)
+  // cause S3-CN: Stage 1's refusals in its order (curve.rs:940-948): NotCurveMode on a sealed-bid series; TerminalStatus
+  // on a stored Redeemed or Extinguished series (curve.rs:948 `is_terminal`; Retired: the fixture replay below, as CMT's
+  // "sync after retirement", :972-976). No CMT test takes a census on a Redeemed or Extinguished series (it closes staking
+  // once redeemed, :345-350): these two are the rule's, not a Stage 1 figure
   it('refuses a sealed-bid series (NotCurveMode) and a Redeemed or Extinguished one (TerminalStatus)', async () => {
     const sealed = await SimHarness.create('solana', { genesis: GENESIS });
     const raise = await sealed.runRaise();
@@ -139,7 +141,7 @@ describe('curve census (solana): syncCurveUnits', () => {
     await expectStage1Error(h.syncCurve(seriesId), 'CurveUnitsInconsistent');
   });
 
-  // cause S3-CN: extinguishment weighs the last census (exit.rs:266-270, unchanged in the engine): an unsynced curve has
+  // cause S3-CN: extinguishment weighs the last census (exit.rs:268-272, unchanged in the engine): an unsynced curve has
   // no final units, and nothing is distributed on them (Stage 1 skips `receive_final`)
   it('extinguishment weighs the last census; with none taken nothing is distributed', async () => {
     for (const synced of [true, false]) {
@@ -155,8 +157,8 @@ describe('curve census (solana): syncCurveUnits', () => {
 });
 
 describe('curve census (solana): the report gate', () => {
-  // cause S3-CN: a regular report needs a census taken at or after its period's end (CMT:262-269: "stale units" until
-  // `sync_curve_units` runs after the period); the census is the proof's public input. A tail report proves over the
+  // cause S3-CN: a regular report needs a census taken at or after its period's end (CMT:282-291: "stale units", :285-289,
+  // until `sync_curve_units` runs after the period, :290); the census is the proof's public input. A tail report proves over the
   // units at redemption and needs none (a Redeemed series cannot take one)
   it('refuses a report before any census and with a census older than the period end; accepts it after a fresh one', async () => {
     const { h, seriesId, privateTerms, terms, s, buyers } = await curveSeries();
@@ -187,7 +189,7 @@ describe('curve census (solana): the report gate', () => {
 });
 
 describe('curve census (solana): the redemption census', () => {
-  // cause S3-CN: relational on Stage 1's sandwich test (CMT:1036-1104): units parked in the DAMM v2 pool are not
+  // cause S3-CN: relational on Stage 1's sandwich test (CMT:1036-1108): units parked in the DAMM v2 pool are not
   // subtracted by `redeem`'s census, so the deposit covers every unit holders could tender and parking cannot lower it;
   // the regular census would have subtracted them. The curve read previews the count `redeem` takes (amendment M4)
   it("redeem takes its own census without the DAMM pool: parked units cannot deflate the deposit", async () => {
@@ -232,13 +234,13 @@ describe('curve census (solana): Stage 1 curve report fixture replay', () => {
    * Stage 1's worked curve series with the fixture's terms, a fill (400, 350, 300 USDC), a census of 99,999,998 base
    * lamports (the fixture's `units_outstanding`, what Stage 1's DBC leaves outside the protocol: its rounding keeps 2
    * base lamports in the pool's vault; the stand-in sells the whole swap base, so a holder sells 2 into the DAMM pool
-   * after the migration instead) and a Q1 report with the fixture's own Groth16 proof (tier 3, as CMT reports).
+   * after the migration instead) and a Q1 report with the fixture's own Groth16 proof (tier 3, as CMT reports, :138-183).
    */
   async function replay(index: 0 | 1) {
     const sim = SimulatorChain.createSync({ personality: 'solana', genesis: GENESIS, reportProofVerifier: { verify: (proof, signals) => verifyReport(proof as never, signals) } });
     const x = await curveSeries({ sim, privateTerms: FX_TERMS });
     const { h, seriesId, terms, buyers } = x;
-    // our Poseidon terms commitment over the fixture's terms is the fixture's (generator :45)
+    // our Poseidon terms commitment over the fixture's terms is the fixture's (generator :44, written at :96)
     expect(terms.termsCommitment).toBe(FX.terms.terms_commitment);
     expect(termsCommitment(FX_TERMS)).toBe(FX.terms.terms_commitment);
     await h.fillCurve(seriesId, buyers);
@@ -248,7 +250,7 @@ describe('curve census (solana): Stage 1 curve report fixture replay', () => {
     const f = FX.fixtures[index]!;
     const N = BigInt(f.units_outstanding);
     expect(x.s().unitsOutstanding).toBe(N);
-    // CMT:262-268: the period ended and the census predates its end
+    // CMT:283-289: the period ended and the census predates its end ("stale units")
     await h.sim.setTime(parsePeriod('2026Q1').end + 3_600);
     expect(f.prior_income_commitment).toBe(ZERO_INCOME_COMMITMENT);
     const publicInputs = reportPublicInputs({ termsCommitment: FX.terms.terms_commitment, unitsOutstanding: N, fxAvgWad: WAD, priorIncomeCommitment: f.prior_income_commitment, incomeCommitment: f.income_commitment, paymentStable: BigInt(f.payment_usd) });
@@ -268,8 +270,8 @@ describe('curve census (solana): Stage 1 curve report fixture replay', () => {
     return { ...x, N, due };
   }
 
-  // cause S3-CN: FX `curve_q1`: 0.1% × N × 20,000 USDC = 1,999,999,960 (CMT:270-271); the vault's accumulator is per base
-  // lamport with the exact WAD carry (CMT:278-285)
+  // cause S3-CN: FX `curve_q1`: 0.1% × N × 20,000 USDC = 1,999,999,960 (CMT:292-293); the vault's accumulator is per base
+  // lamport with the exact WAD carry (CMT:299-303)
   it('replays curve_q1: our terms commitment and census verify the fixture proof; the issuer owes 1,999,999,960', async () => {
     const { h, seriesId, s, N, due } = await replay(0);
     expect(due).toBe(1_999_999_960n);
@@ -280,8 +282,8 @@ describe('curve census (solana): Stage 1 curve report fixture replay', () => {
   }, 60_000);
 
   // cause S3-CN: FX `curve_q1_cap`: 13,999,999,720 owed, past the cap (P0 = 10 USDC, m = 2.5: 25 USDC per unit, 25 base
-  // units per base lamport, `scaled_cap_wad`, CMT:931-945): the vault accepts 25 × N = 2,499,999,950, refunds the rest
-  // and the series retires; a census is then refused (CMT:974-978)
+  // units per base lamport, `scaled_cap_wad`; CMT:928-947, the due at :929, the cap at :938-940): the vault accepts
+  // 25 × N = 2,499,999,950, refunds the rest and the series retires; a census is then refused (CMT:972-976)
   it('replays curve_q1_cap: owes 13,999,999,720, the vault accepts 25 × N and retires the series', async () => {
     const { h, seriesId, s, N, due } = await replay(1);
     expect(due).toBe(13_999_999_720n);

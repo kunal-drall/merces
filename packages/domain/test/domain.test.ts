@@ -328,7 +328,7 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
     const v = seriesTermsViolations({ ...sealed, raiseStyle: 'curve' });
     expect(v.map((x) => [x.field, x.stage1, x.code])).toEqual(CURVE_ZERO_TERMS.map((f) => [f, 'CurveTermsNotZero', 'curve-zero']));
     expect(v.map((x) => x.message)).toEqual(['lockup must be 0 on a curve series', 'wallet cap must be 0 on a curve series', 'commit duration must be 0 on a curve series', 'reveal duration must be 0 on a curve series']);
-    // Stage 1's own refusals (curve_mode.rs:630-643): lockup 1, wallet cap 1,000 bps
+    // Stage 1's own refusals (curve_mode.rs:631-644): lockup 1, wallet cap 1,000 bps
     expect(fields({ ...curve, lockupSeconds: 1 })).toEqual([['lockupSeconds', 'CurveTermsNotZero']]);
     expect(fields({ ...curve, walletCapBps: 1000 })).toEqual([['walletCapBps', 'CurveTermsNotZero']]);
     // their bounds are not checked (Stage 1 bounds its defaults there, lib.rs:517-540)
@@ -341,7 +341,7 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
   });
 
   it('a curve series needs a threshold and USDC; the sealed-only rules do not apply; the registry\'s order', () => {
-    // a zero threshold (curve_mode.rs:645-649) and a USDG quote (:625-629)
+    // a zero threshold (curve_mode.rs:645-650) and a USDG quote (:625-630)
     expect(fields({ ...curve, minimumRaise: '0' })).toEqual([['minimumRaise', 'CurveThresholdZero']]);
     expect(fields({ ...curve, stablecoin: 'USDG' })).toEqual([['stablecoin', 'CurveQuoteMintMismatch']]);
     // the minimum raise is the curve's target X: no "≤ reserve × units" (the start price is informational), and no

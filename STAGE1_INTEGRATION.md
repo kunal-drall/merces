@@ -495,6 +495,16 @@ The S3 review's confirmed findings, each fixed in its own commit ("S3 review fix
    response includes `CurveNoCap` (client regenerated). The admin monitor, one pass over every curve, carries neither,
    and the docs say so. A test walks every curve route of the OpenAPI document (nine) and checks each 200 carries the
    four fields with the notice of `GET /series/{id}/curve`, its fee split included.
+4. **Curve figures cite the right lines of Stage 1's tests (low).** `census.test.ts` cited the wrong `curve_mode.rs`
+   lines for its report gate, payment, accumulator, cap and terminal-census pins (the figures were right). Every
+   `curve_mode.rs` citation in our code was checked against the pin and re-pointed where it missed: in `census.test.ts`
+   the stale census `:282-291` ("stale units" `:285-289`, the sync after the period `:290`), the due `:292-293`, the
+   accumulator `:299-303`, the capped receipt `:928-947`, the census refused once retired `:972-976`, the census
+   `:239-249`, the migration test `:708-766` and the sandwich test `:1036-1108`; a census on a Redeemed or Extinguished
+   series now cites the rule (`curve.rs:948`), as no Stage 1 test takes one (it closes staking once redeemed,
+   `:345-350`); `staking.test.ts`'s unstake-then-claim `:892-895` and its other section cites; the engine's and the
+   harness's hook and fill cites; the registry and domain tests' curve-term refusals. Its other Stage 1 cites
+   (`exit.rs:268-272`, the fixture generator's terms `:36-44` and proof encoding `:77-80`) too.
 
 ### Adapter notes for the auction (S5)
 

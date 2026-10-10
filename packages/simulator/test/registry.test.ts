@@ -103,7 +103,7 @@ describe('createSeries on Stage 1 create_series rules (S2-CR)', () => {
     expect(types(created.events)).toEqual(['SeriesCreated', 'CurveActivated', 'RaiseOpened']); // cause S3-CV: creation activates the curve (was the toy curve's creation event)
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     expect((await h.sim.getSeries(seriesId))!.terms).toMatchObject({ lockupSeconds: 0, walletCapBps: 0, commitDurationSeconds: 0, revealDurationSeconds: 0 });
-    // any other value is refused, field by field (Stage 1 curve_mode.rs:630-643: lockup 1, wallet cap 1,000 bps)
+    // any other value is refused, field by field (Stage 1 curve_mode.rs:631-644: lockup 1, wallet cap 1,000 bps)
     for (const over of [{ lockupSeconds: 1 }, { walletCapBps: 1000 }, { commitDurationSeconds: DAY }, { revealDurationSeconds: HOUR }]) {
       const e = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, ...over }).terms }));
       expect([e.code, e.detail]).toEqual(['InvalidTerms', { stage1: 'CurveTermsNotZero' }]);
@@ -123,10 +123,10 @@ describe('createSeries on Stage 1 create_series rules (S2-CR)', () => {
   it('a curve series needs a threshold and USDC; the sealed-only rules do not apply (cause S3-CT)', async () => {
     const h = await issuerHarness('solana');
     const curve = { raiseStyle: 'curve' as const, minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' };
-    // a zero threshold (curve_mode.rs:645-649)
+    // a zero threshold (curve_mode.rs:645-650)
     const zero = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, minimumRaise: '0' }).terms }));
     expect([zero.code, zero.detail]).toEqual(['InvalidTerms', { stage1: 'CurveThresholdZero' }]);
-    // a USDG quote (curve_mode.rs:625-629): the curve quotes in USDC
+    // a USDG quote (curve_mode.rs:625-630): the curve quotes in USDC
     const usdg = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, stablecoin: 'USDG' }).terms }));
     expect([usdg.code, usdg.detail]).toEqual(['InvalidTerms', { stage1: 'CurveQuoteMintMismatch' }]);
     // the threshold is the curve's target, not bounded by reserve × units, and there is no one-unit cap rule

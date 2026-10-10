@@ -28,7 +28,7 @@ const FX_UNITS = 99_999_998n; // curve_reports.json fixtures[*].units_outstandin
 const FX_TERMS: PrivateTerms = { theta: 60_000_000_000n, rWad: 1_000_000_000n, currency: 'USD', indexingRule: 'none', termsSalt: 777n };
 
 /**
- * Stage 1's `launched()` (CMT:91-131): a curve series with the fixture's terms, `a` and `b` allowlisted, `d` not, buys of
+ * Stage 1's `launched()` (CMT:96-131): a curve series with the fixture's terms, `a` and `b` allowlisted, `d` not, buys of
  * 400, 350 and 300 USDC (the last fills the curve), then completion and collection. Stage 1's DBC leaves 2 base lamports
  * of the swap base unsold in the pool's base vault (its census is the fixture's 99,999,998); the stand-in sells all of
  * it, so those 2 go back from `d` into the pool's vault (white-box, S1 plan §2 rule 5: a figure that depends on DBC
@@ -64,20 +64,20 @@ const extinguish = (h: SimHarness, seriesId: string) => {
   return h.exec(k1, { kind: 'extinguish', seriesId, attestors: [k1.address, k2.address] }, [k2]);
 };
 
-describe('curve staking (solana): the lifecycle with exact amounts (CMT:183-426)', () => {
+describe('curve staking (solana): the lifecycle with exact amounts (CMT:186-426)', () => {
   // cause S3-ST: CMT `curve_lifecycle_activate_sync_report_claim_tender`, from the census on: registration and staking
   // gated by the allowlist, a stake leaves the census alone, the report needs a census after its period, claims pay
   // staked units only (`holder_delta(net_acc, 0, staked)`), a stake after a receipt earns nothing from it, redemption by
   // tender with the stake reserved and the wallet quota, an unregistered wallet cannot tender
   it('registers and stakes allowlisted holders, pays stakes only, redeems by tender within the quota', async () => {
     const { h, seriesId, a, b, d, s, c, units, move, usdc, report, pay } = await launched();
-    // the census: supply minus the protocol accounts = what the buyers hold (CMT:239-251)
+    // the census: supply minus the protocol accounts = what the buyers hold (CMT:239-255)
     await h.syncCurve(seriesId);
     const n = s().unitsOutstanding;
     expect(n).toBe(units(a.address) + units(b.address) + units(d.address));
     expect(n).toBe(FX_UNITS);
 
-    // claim gating: allowlisted holders register; d cannot (CMT:254-263)
+    // claim gating: allowlisted holders register; d cannot (CMT:257-265)
     await h.registerHolder(seriesId, a);
     await h.registerHolder(seriesId, b);
     await expectStage1Error(h.registerHolder(seriesId, d), 'NotAllowlisted');
@@ -90,12 +90,12 @@ describe('curve staking (solana): the lifecycle with exact amounts (CMT:183-426)
     await h.stake(seriesId, b, bStaked);
     expect(units(a.address)).toBe(0n);
     expect(units(c.accounts.stakeVault)).toBe(aUnits + bStaked);
-    // staking never changes units outstanding: the stake vault is not protocol-held (CMT:275-280)
+    // staking never changes units outstanding: the stake vault is not protocol-held (CMT:278-280)
     await h.syncCurve(seriesId);
     expect(s().unitsOutstanding).toBe(n);
     expect(s().stakedTotal).toBe(aUnits + bStaked);
 
-    // the report needs a census after its period ended (CMT:282-292): FX curve_q1 owes 1,999,999,960
+    // the report needs a census after its period ended (CMT:282-293): FX curve_q1 owes 1,999,999,960
     await h.sim.setTime(parsePeriod('2026Q1').end + 3_600);
     await expectStage1Error(h.exec(h.issuer, await report('2026Q1', USDC(80_000))), 'CurveUnitsNotSynced');
     await h.syncCurve(seriesId);
@@ -103,10 +103,10 @@ describe('curve staking (solana): the lifecycle with exact amounts (CMT:183-426)
     expect(q1.due).toBe(1_999_999_960n);
     const net = q1.due - bpsOf(q1.due, BigInt(s().terms.payoutFeeBps));
     const acc = s().vault.netAccWad;
-    // per-base-lamport accumulator with the exact WAD carry (CMT:296-301)
+    // per-base-lamport accumulator with the exact WAD carry (CMT:299-303)
     expect(acc * n + s().vault.carryWad).toBe(net * WAD);
 
-    // claims pay staked units only, exactly (CMT:303-315)
+    // claims pay staked units only, exactly (CMT:305-315)
     expect(s().vaultBalance).toBe(net);
     const [a0, b0] = [await usdc(a.address), await usdc(b.address)];
     const ca = await h.exec(a, { kind: 'claimPayout', seriesId });
@@ -129,7 +129,7 @@ describe('curve staking (solana): the lifecycle with exact amounts (CMT:183-426)
     const bStake = bStaked + 5n * SCALE;
     expect(s().positions.get(b.address)!.stakedUnits).toBe(bStake);
 
-    // redemption by tender (CMT:332-347): the deposit covers the units counted at redemption
+    // redemption by tender (CMT:332-344): the deposit covers the units counted at redemption
     const vaultMid = s().vaultBalance;
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
     const r = s().redemption!;
@@ -142,9 +142,9 @@ describe('curve staking (solana): the lifecycle with exact amounts (CMT:183-426)
     // the vault's dust (B-C11): the deposit is owed to the units counted at redemption; the unstaked units' share of the
     // payout is nobody's
     expect(BigInt((await h.sim.getVault(seriesId))!.dust)).toBe(vaultMid);
-    // staking is closed once redeemed (CMT:348-353)
+    // staking is closed once redeemed (CMT:345-350)
     await expectStage1Error(h.stake(seriesId, b, 1n), 'TerminalStatus');
-    // a tenders its whole stake, burned in the stake vault (CMT:354-366)
+    // a tenders its whole stake, burned in the stake vault (CMT:351-362)
     const supply0 = s().curve!.supply;
     const aStable0 = await usdc(a.address);
     const ta = await h.tender(seriesId, a, aUnits, 0n);
@@ -153,19 +153,19 @@ describe('curve staking (solana): the lifecycle with exact amounts (CMT:183-426)
     expect(ta.events[1]!.payload).toEqual({ seriesId, holder: a.address, units: aUnits.toString(), amount: scaledAmount(price, aUnits, SCALE).toString(), fromStake: aUnits.toString() });
     expect((await usdc(a.address)) - aStable0).toBe(scaledAmount(price, aUnits, SCALE));
     expect(s().curve!.supply).toBe(supply0 - aUnits);
-    // b tenders its stake and its wallet units, burned by its own signature (CMT:367-381)
+    // b tenders its stake and its wallet units, burned by its own signature (CMT:363-376)
     const bWallet = units(b.address);
     const bStable0 = await usdc(b.address);
     await h.tender(seriesId, b, bStake, bWallet);
     expect((await usdc(b.address)) - bStable0).toBe(scaledAmount(price, bStake + bWallet, SCALE));
     expect(units(b.address)).toBe(0n);
     expect(s().positions.get(b.address)).toMatchObject({ stakedUnits: 0n, redeemedUnits: bStake + bWallet });
-    // the unregistered holder cannot tender (CMT:382-384)
+    // the unregistered holder cannot tender (CMT:377-379)
     await expectStage1Error(h.tender(seriesId, d, 0n, 1n), 'HolderNotRegistered');
     // the census is never taken again: units outstanding stay the count at redemption
     expect(s().unitsOutstanding).toBe(n);
 
-    // the tender quota (CMT:386-426): 10 units leave the DBC base vault for a registered holder e, as a release after the
+    // the tender quota (CMT:381-425): 10 units leave the DBC base vault for a registered holder e, as a release after the
     // redemption would, and d passes its units to e (white-box, as Stage 1's test mocks it)
     const e = h.backers[3]!;
     await h.registerHolder(seriesId, e);
@@ -187,7 +187,7 @@ describe('curve staking (solana): the lifecycle with exact amounts (CMT:183-426)
   });
 });
 
-describe('curve staking (solana): the rules (CMT:770-813)', () => {
+describe('curve staking (solana): the rules (CMT:770-824)', () => {
   // cause S3-ST: CMT `curve_staking_rules_and_closed_sealed_bid_paths`: bounded by the census, allowlisted wallets only,
   // never more than staked out; de-allowlisted holders still unstake and claim (C10); the sealed-bid exits are closed
   it('refuses a stake before any census, a zero stake and an over-unstake; a removed wallet unstakes and claims, never stakes', async () => {
@@ -257,7 +257,7 @@ describe('curve staking (solana): the rules (CMT:770-813)', () => {
 });
 
 describe('curve staking (solana): unstake credits pending (owner decision 1)', () => {
-  // cause S3-ST: Stage 1's `unstake_units` settles into pending and moves no stablecoin (curve.rs:1315-1383; CMT:891-893
+  // cause S3-ST: Stage 1's `unstake_units` settles into pending and moves no stablecoin (curve.rs:1315-1383; CMT:892-895
   // unstakes, then a claim pays); SPEC §9 says "pays", the code wins. The credit stays on the holder record and any later
   // claim pays exactly it: `claim` checks neither status nor allowlist (claims.rs:182-196), and records are never closed
   it('moves no stablecoin; the pending credit is exactly what the stake earned and the next claim pays it, even after removal', async () => {
@@ -360,7 +360,7 @@ describe('one transaction of several commands on an EVM chain', () => {
   });
 });
 
-describe('curve staking (solana): extinguishment pays stakers (CMT:852-908)', () => {
+describe('curve staking (solana): extinguishment pays stakers (CMT:849-907)', () => {
   // cause S3-ST: CMT `curve_extinguishment_pays_stakers`: the unvested treasury is distributed over the last census and
   // only staked units take their share; an unstake settles it into pending first; a second claim pays nothing more
   it('distributes the unvested half over the census; stakers claim by stake; a second claimFinal pays 0', async () => {
@@ -457,7 +457,7 @@ describe('curve staking (solana): extinguishment pays stakers (CMT:852-908)', ()
   });
 });
 
-describe('curve staking (solana): retirement ends claims without burns (CMT:912-985)', () => {
+describe('curve staking (solana): retirement ends claims without burns (CMT:909-986)', () => {
   // cause S3-ST: CMT `curve_retirement_ends_claims_without_burns`: FX curve_q1_cap owes 13,999,999,720, the capping
   // receipt is truncated (refund to the issuer), staked holders keep claiming what they earned, nothing is burned,
   // staking and the census stop, unstaking stays open

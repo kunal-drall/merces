@@ -28,7 +28,7 @@ import { splitTranches } from './treasury.ts';
  *  - the unit mint's fixed supply sits in the pool's base vault from activation (Stage 1's generated config: the swap
  *    base, the migration base, the issuer's locked allocation and the leftover, `curve_config.json` `expected`); the
  *    migration, a locker release and a DAMM trade are harness hooks that only move base lamports between accounts, as
- *    Stage 1's census test mocks them (curve_mode.rs:707-768).
+ *    Stage 1's census test mocks them (curve_mode.rs:708-766).
  * Every money amount is Stage 1's arithmetic (`p0PerUnit`, `migrationFeeSplit`, `capPerUnit`, `trancheAmounts`); the
  * stand-in's own figures (the price path, the PartialFill charge) are labelled as ours.
  */
@@ -363,7 +363,7 @@ export function censusPreview(e: EngineCore, s: SimSeries): { full: CurveCensusC
 // ------------------------------------------------------------------ harness hooks (not reachable through ChainPort)
 /**
  * The stand-in's migration (DBC `migrate_damm_v2`, `create_locker`, `withdraw_leftover`), mocked as Stage 1's census
- * test mocks it (curve_mode.rs:707-738): base lamports only move. The base vault keeps `protocolBaseFee` (Meteora's base
+ * test mocks it (curve_mode.rs:708-739): base lamports only move. The base vault keeps `protocolBaseFee` (Meteora's base
  * fee), the leftover receiver takes `leftover`, the locker escrow the issuer's locked allocation and the DAMM v2 pool's
  * vault the rest. Only after the pool filled, once.
  */
@@ -383,14 +383,14 @@ export function migrateCurve(e: EngineCore, s: SimSeries, opts: { protocolBaseFe
   c.migrated = true;
 }
 
-/** The issuer claims `units` vested base lamports from the locker escrow (curve_mode.rs:739-752): they reach `to`. */
+/** The issuer claims `units` vested base lamports from the locker escrow (curve_mode.rs:740-752): they reach `to`. */
 export function releaseLockedUnits(e: EngineCore, s: SimSeries, to: string, units: bigint): void {
   const c = curveOf(s);
   moveBase(e, c, c.accounts.lockerEscrow, to, units);
 }
 
 /**
- * A secondary trade in the DAMM v2 pool (curve_mode.rs:753-765), base side only: `units > 0` moves base lamports out of
+ * A secondary trade in the DAMM v2 pool (curve_mode.rs:753-766), base side only: `units > 0` moves base lamports out of
  * the pool to `wallet` (a buy), `units < 0` from `wallet` into the pool (a sell).
  */
 export function dammTrade(e: EngineCore, s: SimSeries, wallet: string, units: bigint): void {
