@@ -10,7 +10,7 @@ import { fail } from './errors.ts';
 import { auctionPhase, cancelRaise, commitBid, openRaise, revealBid } from './auction.ts';
 import { buyCurve, graduateCurve } from './curve.ts';
 import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
-import { burnRetired, claimPayout, crankBurn, payIn, postSplitReceipt } from './payments.ts';
+import { burnRetired, claimPayout, payIn, postSplitReceipt } from './payments.ts';
 import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
 import { submitReport } from './reports.ts';
@@ -98,7 +98,6 @@ export class SimEngine implements EngineCore {
       case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit, ctx);
       case 'payIn': return payIn(this, user(), cmd, now, emit);
       case 'claimPayout': return claimPayout(this, user(), cmd, emit);
-      case 'crankBurn': service('any'); return crankBurn(this, cmd, emit);
       case 'requestPause': return requestPause(this, user(), cmd, now, emit);
       case 'approvePause': return approvePause(this, user(), cmd, now, emit);
       case 'crankPause': service('any'); return crankPause(this, cmd, now, emit);

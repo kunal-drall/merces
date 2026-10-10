@@ -30,7 +30,7 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
         const yieldBps = costBasis > 0n ? (BigInt(x.claimed_total) * 10_000n) / costBasis : 0n;
         holdings.push({
           seriesId: x.series_id, chain: x.chain, wallet: x.wallet, stablecoin: x.stablecoin, phase: x.phase, status: x.status, units: x.units, redeemedUnits: x.redeemed_units, burnedUnits: x.burned_units,
-          issuePrice: x.issue_price, capPerUnit: x.cap_per_unit, grossPaidPerUnit: grossPerUnit.toString(), claimedTotal: x.claimed_total, claimable: live?.claimable ?? '0', tailClaimable: live?.tailClaimable ?? '0', finalClaimable: live?.finalClaimable ?? '0',
+          issuePrice: x.issue_price, capPerUnit: x.cap_per_unit, grossPaidPerUnit: grossPerUnit.toString(), claimedTotal: x.claimed_total, claimable: live?.claimable ?? '0', redemptionClaimable: live?.redemptionClaimable ?? '0', tailClaimable: live?.tailClaimable ?? '0', finalClaimable: live?.finalClaimable ?? '0',
           realisedYieldBps: Number(yieldBps), lockupEndsAt: x.lockup_ends_at === null ? null : Number(x.lockup_ends_at), redemptionPrice: x.redemption_price,
         });
       }
@@ -42,7 +42,7 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
     method: 'GET', url: '/me/payouts', access: 'account',
     handler: async (_req, _reply, session) => {
       const wallets = session!.wallets.map((w) => w.address);
-      const r = await ctx.pool.query("select chain, seq, series_id, kind, amount, block_time, tx_id from money_events where wallet = any($1) and kind in ('payout','redemption_claim','refund') order by seq desc limit 500", [wallets]);
+      const r = await ctx.pool.query("select chain, seq, series_id, kind, amount, block_time, tx_id from money_events where wallet = any($1) and kind in ('payout','tail_claim','final_claim','redemption_claim','refund') order by seq desc limit 500", [wallets]);
       return { payouts: r.rows.map((x) => ({ chain: x.chain, seq: Number(x.seq), seriesId: x.series_id, kind: x.kind, amount: x.amount, at: Number(x.block_time), txId: x.tx_id })) };
     },
   });

@@ -6,7 +6,8 @@
  * The reference backend runs Stage 1's own simulator and uses none of them.
  *
  * Retired rows: SH-AUC-1 and SH-AUC-3..6 (S2: the raise runs Stage 1's settlement directly); SH-CLM-2, SH-CLM-3 and
- * SH-BRN-1 (S3: `claim_tail`, `claim_final` and `burn_retired` run as `claimTail`, `claimFinal` and `burnRetired`).
+ * SH-BRN-1 (S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run as `claimTail`, `claimFinal` and `burnRetired`);
+ * SH-CLM-1 (S3 WP3: `claim` runs as `claimPayout`, which is Stage 1's `claim`).
  */
 export interface Shim {
   id: string;
@@ -39,7 +40,6 @@ export const SHIMS: readonly Shim[] = [
   { id: 'SH-PAY-1', ops: ['pay'], call: 'payIn{periodId: open due period (else the next expected period), amount: the period payment due}', why: "Stage 1's pay has no amount or period", removedIn: 'S5', kind: 'shim' },
   { id: 'SH-PAU-1', ops: ['request_pause'], call: 'requestPause{until: t + maxPauseSeconds}', why: "Stage 1's request has no end", removedIn: 'S5', kind: 'shim' },
   { id: 'SH-PAU-2', ops: ['approve_pause'], call: 'approvePause{until: pauseEnd} sent by the attestor wallet', why: 'signatures as arguments are S4', removedIn: 'S4', kind: 'shim' },
-  { id: 'SH-CLM-1', ops: ['claim'], call: 'claimPayout', why: 'S1 claimPayout = claim + tail + final', removedIn: 'S3', kind: 'shim' },
   { id: 'SH-RED-1', ops: ['redeem'], call: 'redeem{maxPricePerUnit: U64_MAX}', why: 'Stage 1 has no slippage bound', removedIn: '—', kind: 'shim' },
   { id: 'SH-EXT-1', ops: ['extinguish'], call: 'extinguish{attestors} sent by attestors[0], attestors[1] co-signing (deduplicated)', why: 'co-signing vs signatures', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-AMD-1', ops: ['amend_terms'], call: 'amendTerms{termsCommitment, capMultipleWad, attestor} with the attestor co-signing', why: 'co-signing vs signatures', removedIn: 'S4', kind: 'shim' },

@@ -1,0 +1,19 @@
+{
+  "name": "S3k_claim_nothing",
+  "description": "Claims of nothing succeed (the zero-amount rule), the claims of 21 #48-#57 that its gate (#40) keeps from running: on 21 without its pause steps (#40-#43: the 2^64 pause end and withdraw_pause_request are S5, with the expects that count the pause nonce), the series retires at exactly its cap (#46); b1's claim pays and burns, its second claim pays and burns nothing, burn_retired of nothing is a burn of 0 (a holder already burned, a wallet that never held units), b2's units burn and its pending payout stays claimable, an allowlisted wallet that is not a registered holder is refused (a precondition, not a zero amount), and the other holders claim. Then claims of nothing again: b1 on the Retired series and the keeper's burn of an unknown wallet.",
+  "covers": ["k"],
+  "base": "21_entry_rules",
+  "segments": [
+    { "baseSteps": [0, 39] },
+    { "baseSteps": [44, 46] },
+    { "baseSteps": [48, 57] },
+    {
+      "steps": [
+        {"t": "1775088000", "op": "claim", "actor": "b1", "series": "S1", "note": "nothing pending and nothing left to burn: a claim of 0"},
+        {"t": "1775088000", "op": "claim", "actor": "b4", "series": "S1", "note": "again: a claim of 0"},
+        {"t": "1775088000", "op": "expect", "series": "S1", "balances": {"b1": {"stable": "64332500000", "units": "0"}, "b2": {"stable": "64332500000", "units": "0"}, "b3": {"stable": "64332500000", "units": "0"}, "b4": {"stable": "64332500000", "units": "0"}, "b5": {"stable": "50000000000", "units": "0"}, "issuer": {"stable": "295000000000", "units": "0"}}, "feeCollector": "5670000000", "treasury": "42000000000", "vault": "0", "auctionEscrow": "0", "ledger": {"status": "Retired", "raiseState": "Settled", "mintFinalized": true, "unitsOutstanding": "0", "unitsSold": "400", "clearingPrice": "105000000", "proceeds": "42000000000", "releasedTotal": "0", "capPerUnit": "262500000", "capMultipleWad": "2500000000000000000", "termsCommitment": "0x0bd229abee26aeb715e980713422f0785ddfd104d9d48e8896acef85aaf04858", "amendmentNonce": "0", "paidPerUnitWad": "262500000000000000000000000", "netAccWad": "249375000000000000000000000", "carryWad": "0", "carry": "0", "grossReceived": "105000000000", "feeCollected": "5250000000", "refundedToIssuer": "0", "lastAcceptedPeriod": "8104", "lastPaidPeriod": "8104", "openDuePeriod": null, "openDueAmount": "0", "routerCredit": "0", "trueupNonce": "0", "trueupDue": "0", "trueupAttestedAt": "0", "lastTrueupYear": null, "pauseNonce": "0", "pauseCount": "0", "pausedTotal": "0", "formalNoticeEmittedFor": null, "redemptionPrice": "0", "unitsAtRedemption": "0", "tailCapPerUnit": "0", "tailAccWad": "0", "tailExhausted": false, "extinguishedAt": "0", "finalAccWad": "0", "finalUnits": "0", "extinguishNonce": "0"}, "auction": {"bidCount": "4", "revealedCount": "4", "validCount": "4", "escrowTotal": "0", "auctionEscrowUnits": "0", "tallyRound": "1", "roundRejected": false, "rejectionReason": null, "clearingPrice": "105000000", "qAbove": "300", "qAt": "100", "R": "100", "unitsSold": "400", "proceeds": "42000000000", "unitsMinted": "400", "bidsProcessed": "4", "mintFinalized": true}, "holders": {"b1": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b2": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b3": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b4": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}}, "note": "as 21 #58, with the pause nonce 21 #40-#43 would have moved left at 0"}
+      ]
+    },
+    { "baseSteps": [59, 59] }
+  ]
+}

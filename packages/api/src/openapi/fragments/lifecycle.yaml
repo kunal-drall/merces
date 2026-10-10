@@ -80,18 +80,17 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [holder], properties: { holder: { type: string } } } } } }
       responses:
         '200':
-          description: Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon). The three amounts are disjoint and this claimPayout pays all of them. A holder that has not redeemed yet takes its tail after claiming the redemption, so its tail is not counted here.
+          description: "Unsigned claimPayout (Stage 1's claim), built through the PayoutClaimBuilder interface (private payouts coming soon). It pays the net payout only, on every status: the redemption, the tail and the final-pool share are their own claims (claimRedemption, claimTail, claimFinal). On a Retired series it also burns the holder's balance, also when it pays nothing."
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   tx: { type: object }
-                  claimable: { $ref: '#/components/schemas/Money', description: the net payout only; excludes the tail and the final pool }
-                  tailClaimable: { $ref: '#/components/schemas/Money', description: the tail share this claimPayout pays; 0 until the holder has redeemed units (the position shows the tail owed before that) }
-                  finalClaimable: { $ref: '#/components/schemas/Money', description: the final-pool share (after an extinguishment) }
+                  claimable: { $ref: '#/components/schemas/Money', description: what the claim pays, the net payout only }
+                  burnsUnits: { type: string, description: "the units the claim burns: on a Retired series the holder's own balance (its units less the auction units not yet delivered and those held for a window ask), else 0" }
                   builder: { type: string, enum: [public, private] }
-        '409': { description: Nothing to claim, or only a tail that is paid once the holder claims its redemption }
+        '409': { description: "Nothing to claim (reason nothing-to-claim): the claim would pay 0 and burn nothing. claimWith names the claims that would pay the holder something now (claimRedemption, claimTail, claimFinal)" }
   /series/{seriesId}/redemption/quote:
     get:
       operationId: getRedemptionQuote
@@ -135,12 +134,12 @@ paths:
       responses: { '200': { description: Cap progress and burn progress, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
   /series/{seriesId}/retirement/crank-burn:
     post:
-      operationId: crankBurn
+      operationId: burnRetiredHolders
       x-access: admin
       tags: [lifecycle]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Permissionless burn crank triggered for unclaimed holders, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: "One permissionless burnRetired (Stage 1's burn_retired) per holder that still holds units: burned counts the holders burned, refused those the chain refused (not registered)", content: { application/json: { schema: { type: object, properties: { burned: { type: integer }, refused: { type: integer } } } } } }, '409': { description: The series is not Retired (Stage 1 TerminalStatus) } }
   /series/{seriesId}/window:
     get:
       operationId: getTransferWindow

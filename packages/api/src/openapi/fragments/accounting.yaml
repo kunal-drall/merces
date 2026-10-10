@@ -123,9 +123,16 @@ components:
         payouts:
           type: object
           properties:
-            claimed: { $ref: '#/components/schemas/Money' }
-            unclaimed: { $ref: '#/components/schemas/Money', description: 'payments.netDistributed + tail.net + extinguishment.returnedToHolders − claimed (one claim pays the net payout, the tail and the final pool)' }
-            count: { type: integer }
+            claimed: { $ref: '#/components/schemas/Money', description: 'what holders claimed from the three pools: byPool.payout + byPool.tail + byPool.final (redemption principal excluded: redemption.claimed)' }
+            unclaimed: { $ref: '#/components/schemas/Money', description: 'payments.netDistributed + tail.net + extinguishment.returnedToHolders − claimed' }
+            count: { type: integer, description: 'claims that paid more than 0 (payout, tail and final claims)' }
+            byPool:
+              type: object
+              description: "claimed per pool, one per claim of Stage 1's family (S3): the net payout (claimPayout, and the pending payout and tail catch-up a redemption pays), the tail (claimTail) and the final claim (claimFinal: the pending payout and the final-pool share)"
+              properties:
+                payout: { $ref: '#/components/schemas/Money' }
+                tail: { $ref: '#/components/schemas/Money' }
+                final: { $ref: '#/components/schemas/Money' }
         refunds:
           type: object
           properties:

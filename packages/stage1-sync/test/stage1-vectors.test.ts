@@ -869,14 +869,14 @@ describe('stage1 vector runner: merces backend', () => {
     expect(NOT_YET).not.toHaveProperty('register_holder');
     for (const op of ['open_raise', 'cancel_raise', 'reveal_bid', 'begin_settlement', 'finalize_settlement', 'process_bid', 'deliver_bid', 'register_holder']) expect(STAGE1_OP_MAP[op]?.kind, op).toBe('direct');
     expect(STAGE1_OP_MAP.commit_bid).toMatchObject({ kind: 'shim', shim: 'SH-AUC-2' });
-    // cause S3-SH: the tail, final and Retired-burn claims run directly (was: SH-CLM-2, SH-CLM-3, SH-BRN-1); `claim` stays
-    // SH-CLM-1 until S3 WP3 makes claimPayout Stage 1's claim
-    for (const op of ['claim_tail', 'claim_final', 'burn_retired']) {
+    // cause S3-SH: the whole claim family runs directly: the tail, final and Retired-burn claims since WP2 (was: SH-CLM-2,
+    // SH-CLM-3, SH-BRN-1) and `claim` since WP3, when claimPayout became Stage 1's claim (was: SH-CLM-1)
+    for (const op of ['claim', 'claim_tail', 'claim_final', 'burn_retired']) {
       expect(STAGE1_OP_MAP[op], op).toMatchObject({ kind: 'direct' });
       expect(STAGE1_OP_MAP[op], op).not.toHaveProperty('shim');
       expect(SHIMS.some((r) => r.ops.includes(op)), op).toBe(false);
     }
-    expect(STAGE1_OP_MAP.claim).toMatchObject({ kind: 'shim', shim: 'SH-CLM-1' });
+    expect(STAGE1_OP_MAP.claim).toEqual({ canonical: 'claimPayout', kind: 'direct' });
   });
 
   it('vector keys become stable ed25519 verifier keys whose attestations verify', async () => {
@@ -959,14 +959,14 @@ describe('stage1 vector runner: merces backend', () => {
     // cause S2-NY: 14's prefix amends its terms too (was: 05, 11)
     expect(section).toMatch(/\| SH-AMD-1 \| `amend_terms` \|[^\n]*\| S4 \| 05, 11, 14 \|/);
     expect(section).toMatch(/\| SH-RED-1 \| `redeem` \|[^\n]*\| — \| 01, 05, 06, 09, 11, 23, 25 \|/);
-    // cause S3-SH: claim_tail, claim_final and burn_retired run directly; their rows (SH-CLM-2, SH-CLM-3, SH-BRN-1) are
-    // gone and no run went through them (was: SH-CLM-2 runner-atomic, used in 09 and 23; SH-CLM-3 in 11; SH-BRN-1 in 05)
-    for (const id of ['SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1']) {
+    // cause S3-SH: the claim family runs directly; its rows (SH-CLM-1, SH-CLM-2, SH-CLM-3, SH-BRN-1) are gone and no run
+    // went through them (was: SH-CLM-1 used in 01, 04, 05, 07, 17, 19 and 21 until WP3; SH-CLM-2 runner-atomic, used in
+    // 09 and 23; SH-CLM-3 in 11; SH-BRN-1 in 05)
+    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1']) {
       expect(md, id).not.toContain(id);
       for (const r of report.runs) expect(r.shims[id], `${r.vector} ${r.world}`).toBeUndefined();
     }
     expect(section).not.toContain('(runner-atomic)');
-    expect(section).toMatch(/\| SH-CLM-1 \| `claim` \|[^\n]*\| S3 \| 01, 04, 05, 07, 17, 19, 21 \|/);
     expect(md).toContain('## Runner-atomic reverts\n\nExpected reverts of a call');
     expect(md).toContain("None: every expected revert raised in the call's first transaction.");
     // privacy canary: no vector key, terms salt or income salt reaches the report

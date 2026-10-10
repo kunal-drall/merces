@@ -7,6 +7,10 @@ import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './hel
 /*
  * S2 cause codes:
  *  - S2-PR: push delivery (`deliverBid`; the pull refund is retired): the harness raise delivers every bid's units and refund.
+ *
+ * S3 cause codes:
+ *  - S3-Z: the zero-amount rule: a claim of nothing emits `PayoutClaimed` with zeros (was: no event);
+ *  - S3-BR: `burnRetired{holder}` replaces the S1 list burn crank (`holders[]`).
  */
 for (const personality of ['solana', 'monad'] as Personality[]) {
   describe(`simulator (${personality}) full raise-to-payout cycle`, () => {
@@ -67,14 +71,15 @@ for (const personality of ['solana', 'monad'] as Personality[]) {
       expect(types(claimed.events)).toEqual(['PayoutClaimed']);
       // the claim moved the holder's cursor to the accumulator and emptied its pending balance
       expect(await h.sim.getPosition(seriesId, h.backers[0]!.address)).toMatchObject({ claimable: '0', pending: '0', lastAccWad: v.netAccWad, claimedTotal: USDC(285).toString() });
-      // a second claim with nothing accrued is a successful no-op with no events (Stage 1's zero-amount rule, vector 21)
-      expect((await h.exec(h.backers[0]!, { kind: 'claimPayout', seriesId })).events).toEqual([]);
+      // cause S3-Z: a second claim with nothing accrued succeeds and emits its event with zeros (Stage 1's zero-amount
+      // rule, vector 21 #38; was: no event)
+      expect((await h.exec(h.backers[0]!, { kind: 'claimPayout', seriesId })).events.map((e) => [e.type, e.payload])).toEqual([['PayoutClaimed', { seriesId, holder: h.backers[0]!.address, amount: '0', burnedUnits: '0' }]]);
       // a wallet with no registration is refused (Stage 1 HolderNotRegistered, code NotFound)
       await expectStage1Error(h.exec(h.issuer, { kind: 'claimPayout', seriesId }), 'HolderNotRegistered');
       await expectChainError(h.exec(h.issuer, { kind: 'claimPayout', seriesId }), 'NotFound');
-      // nothing is due once paid (Stage 1 NothingDue); the burn crank needs a Retired series (TerminalStatus)
+      // nothing is due once paid (Stage 1 NothingDue); burnRetired needs a Retired series (TerminalStatus; cause S3-BR)
       await expectStage1Error(h.exec(h.issuer, { kind: 'payIn', seriesId, periodId: '2026Q3', amount: '0' }), 'NothingDue');
-      await expectStage1Error(h.sim.submit({ kind: 'crankBurn', seriesId, holders: [h.backers[1]!.address] }, 'keeper'), 'TerminalStatus');
+      await expectStage1Error(h.sim.submit({ kind: 'burnRetired', seriesId, holder: h.backers[1]!.address }, 'keeper'), 'TerminalStatus');
       expect((await h.sim.getSeries(seriesId))!.status).toBe('OnTime');
 
       // events are resumable from a cursor

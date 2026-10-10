@@ -17,7 +17,13 @@ import { seriesOf } from './kit.ts';
  *    NotIssuer, AmendmentAfterTerminal, UnfavourableAmendment) and `amendmentNonce` / `extinguishNonce`;
  *  - M4: on a series that redeemed, a holder's final share is weighed on its redeemed units, its remaining units being
  *    redeemed first;
- *  - S2-AD (S2): commit and reveal durations are series terms; `openRaise` derives the phase ends from them.
+ *  - S2-AD (S2): commit and reveal durations are series terms; `openRaise` derives the phase ends from them;
+ *  - S3-FN (S3): the final-pool share is `claimFinal`'s (Stage 1 `claim_final`, `FinalClaimed{units: weight, amount}`,
+ *    the claim event before the burn; was paid by `claimPayout`);
+ *  - S3-CL (S3): `claimPayout` is Stage 1's `claim`: the net payout only, no final share and no burn on an Extinguished
+ *    series;
+ *  - S3-Z (S3): a claim of nothing emits its event with zeros (was: no event);
+ *  - S3-BR (S3): `burnRetired{holder}` replaces the S1 list burn crank (`holders[]`).
  */
 
 const DAY = 86_400;
@@ -73,17 +79,24 @@ describe('amendments and extinguishment', () => {
     // a holder's share comes from the final pool, not the net payout (G7; was claimable 900)
     const pos = (await h.sim.getPosition(seriesId, h.backers[2]!.address))!;
     expect(pos).toMatchObject({ claimable: '0', finalClaimable: USDC(450).toString() });
-    // the burn crank refuses an Extinguished series (Stage 1 burn_retired: TerminalStatus); its units burn on claim
-    await expectStage1Error(h.sim.submit({ kind: 'crankBurn', seriesId, holders: [h.backers[2]!.address] }, 'keeper'), 'TerminalStatus');
-    const before = await balance(h, h.backers[2]!.address);
-    const claim = await h.exec(h.backers[2]!, { kind: 'claimPayout', seriesId });
-    expect(types(claim.events)).toEqual(['PayoutClaimed', 'UnitsBurned']);
-    expect(claim.events[0]!.payload).toMatchObject({ amount: USDC(450).toString() });
+    // cause S3-BR: burnRetired refuses an Extinguished series (Stage 1 burn_retired: TerminalStatus); its units burn at
+    // the final claim
+    await expectStage1Error(h.sim.submit({ kind: 'burnRetired', seriesId, holder: h.backers[2]!.address }, 'keeper'), 'TerminalStatus');
+    const holder = h.backers[2]!.address;
+    const before = await balance(h, holder);
+    // cause S3-CL, S3-Z: claimPayout pays the net payout only (0 here) and burns nothing on an Extinguished series
+    const net = await h.exec(h.backers[2]!, { kind: 'claimPayout', seriesId });
+    expect(net.events.map((e) => [e.type, e.payload])).toEqual([['PayoutClaimed', { seriesId, holder, amount: '0', burnedUnits: '0' }]]);
+    expect((await h.sim.getPosition(seriesId, holder))!).toMatchObject({ units: '100', finalClaimable: USDC(450).toString() });
+    // cause S3-FN: claimFinal pays the share on its 100 units, then burns them (was: claimPayout's PayoutClaimed)
+    const claim = await h.exec(h.backers[2]!, { kind: 'claimFinal', seriesId });
+    expect(types(claim.events)).toEqual(['FinalClaimed', 'UnitsBurned']);
+    expect(claim.events[0]!.payload).toEqual({ seriesId, holder, units: '100', amount: USDC(450).toString() });
     expect(claim.events[1]!.payload).toMatchObject({ units: '100', reason: 'extinguishment' });
-    expect(await balance(h, h.backers[2]!.address)).toBe(before + USDC(450));
-    expect((await h.sim.getPosition(seriesId, h.backers[2]!.address))!.finalClaimable).toBe('0');
-    // a second claim pays nothing and burns nothing
-    expect((await h.exec(h.backers[2]!, { kind: 'claimPayout', seriesId })).events).toEqual([]);
+    expect(await balance(h, holder)).toBe(before + USDC(450));
+    expect((await h.sim.getPosition(seriesId, holder))!.finalClaimable).toBe('0');
+    // cause S3-Z: a second claim pays nothing and burns nothing, and still emits its event (was: no event)
+    expect((await h.exec(h.backers[2]!, { kind: 'claimFinal', seriesId })).events.map((e) => e.payload)).toEqual([{ seriesId, holder, units: '0', amount: '0' }]);
     // the vested tranche stays drawable after the extinguishment, up to vested(extinguishedAt) (G7; was WrongStatus)
     const issuerBefore = await balance(h, h.issuer.address);
     const draw = await h.exec(h.issuer, { kind: 'drawRelease', seriesId });
@@ -130,19 +143,25 @@ describe('amendments and extinguishment', () => {
     // b0 redeemed everything before: weight 100 redeemed units (the plan's wording would have given it 0)
     expect((await h.sim.getPosition(seriesId, b0.address))!.finalClaimable).toBe(USDC(450).toString());
     expect((await h.sim.getPosition(seriesId, b1.address))!.finalClaimable).toBe(USDC(450).toString());
+    // cause S3-FN: the final claim is claimFinal's (was: claimPayout's), its event names the weight
     let before = await balance(h, b0.address);
-    const c0 = await h.exec(b0, { kind: 'claimPayout', seriesId });
-    expect(types(c0.events)).toEqual(['PayoutClaimed']);
+    const c0 = await h.exec(b0, { kind: 'claimFinal', seriesId });
+    expect(c0.events.map((e) => [e.type, e.payload])).toEqual([['FinalClaimed', { seriesId, holder: b0.address, units: '100', amount: USDC(450).toString() }]]);
     expect(await balance(h, b0.address)).toBe(before + USDC(450));
-    // b1 still holds 100 units: the redemption body runs first (900), then the final share (450), as Stage 1 pays 1,350
+    // cause S3-CL: claimPayout on the extinguished series pays b1 its net payout only (0): no redemption, no share, no burn
     before = await balance(h, b1.address);
-    const c1 = await h.exec(b1, { kind: 'claimPayout', seriesId });
-    expect(types(c1.events)).toEqual(['UnitsBurned', 'RedemptionClaimed', 'PayoutClaimed']);
+    expect((await h.exec(b1, { kind: 'claimPayout', seriesId })).events.map((e) => [e.type, e.payload])).toEqual([['PayoutClaimed', { seriesId, holder: b1.address, amount: '0', burnedUnits: '0' }]]);
+    expect((await h.sim.getPosition(seriesId, b1.address))!).toMatchObject({ units: '100', redeemedUnits: '0', finalClaimable: USDC(450).toString() });
+    // b1 still holds 100 units: claimFinal runs the redemption body first (900), then the final share (450), as Stage 1
+    // pays 1,350
+    const c1 = await h.exec(b1, { kind: 'claimFinal', seriesId });
+    expect(types(c1.events)).toEqual(['UnitsBurned', 'RedemptionClaimed', 'FinalClaimed']);
     expect(c1.events[1]!.payload).toMatchObject({ units: '100', amount: USDC(900).toString() });
-    expect(c1.events[2]!.payload).toMatchObject({ amount: USDC(450).toString() });
+    expect(c1.events[2]!.payload).toEqual({ seriesId, holder: b1.address, units: '100', amount: USDC(450).toString() });
     expect(await balance(h, b1.address)).toBe(before + USDC(1350));
     expect((await h.sim.getPosition(seriesId, b1.address))!).toMatchObject({ units: '0', redeemedUnits: '100', finalClaimable: '0' });
-    expect((await h.exec(b1, { kind: 'claimPayout', seriesId })).events).toEqual([]);
+    // cause S3-Z: again, nothing is paid and the event names the weight, its redeemed units (was: no event)
+    expect((await h.exec(b1, { kind: 'claimFinal', seriesId })).events.map((e) => e.payload)).toEqual([{ seriesId, holder: b1.address, units: '100', amount: '0' }]);
     // Stage 1's vault after the same two claims: 4,500 deposit + 2,250 final − 900 − 450 − 1,350 = 4,050
     expect(seriesOf(h.sim, seriesId).vaultBalance).toBe(USDC(4050));
   });

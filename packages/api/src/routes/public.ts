@@ -204,7 +204,7 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
     handler: async (req, _reply, session) => {
       const { seriesId } = req.params as { seriesId: string };
       const wallets = session!.wallets.map((w) => w.address);
-      const r = await ctx.pool.query("select seq, kind, wallet, amount, period_id, detail, block_time, tx_id from money_events where series_id = $1 and ((kind in ('payout','redemption_claim','refund') and wallet = any($2)) or kind in ('payment','tail','extinguishment')) order by seq", [seriesId, wallets]);
+      const r = await ctx.pool.query("select seq, kind, wallet, amount, period_id, detail, block_time, tx_id from money_events where series_id = $1 and ((kind in ('payout','tail_claim','final_claim','redemption_claim','refund') and wallet = any($2)) or kind in ('payment','tail','extinguishment')) order by seq", [seriesId, wallets]);
       return { payouts: r.rows.map((x) => ({ seq: Number(x.seq), kind: x.kind, wallet: x.wallet, amount: x.amount, periodId: x.period_id, detail: x.detail, at: Number(x.block_time), txId: x.tx_id })) };
     },
   });

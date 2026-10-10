@@ -19,7 +19,10 @@ import { seedHolder, seedPause, seedTail, seedVault, seriesOf } from './kit.ts';
  *    claims (not at redeem), the tail runs `tailSeconds` (365 days, was 360);
  *  - TV (S1 review): the tail read is Stage 1's `claimableTail` view (MercesVault.sol:747-753): a holder that has not
  *    redeemed is shown the tail on the units its redemption would redeem, since `claim_tail` redeems them first
- *    (SIM:1403-1417); the vault dust counts it too (it showed 0 and left the tail in the dust).
+ *    (SIM:1403-1417); the vault dust counts it too (it showed 0 and left the tail in the dust);
+ *  - S3-TL (S3): the tail is paid by `claimTail` (Stage 1 `claim_tail`, `TailClaimed`), which redeems a holder that has
+ *    not redeemed first; `claimPayout` (Stage 1 `claim`) pays the net payout only, never the tail (S3-CL). The amounts
+ *    are unchanged. `PositionState.redemptionClaimable` is what the redemption pays beside the pending payout.
  */
 
 const DAY = 86_400;
@@ -114,15 +117,23 @@ describe('redemption and tail', () => {
     // b0 redeemed: its tail is 8.341 × 100 = 834.1
     expect((await h.sim.getPosition(seriesId, h.backers[0]!.address))!.tailClaimable).toBe(USDC(834.1).toString());
     const b0 = await balance(h, h.backers[0]!.address);
-    await h.exec(h.backers[0]!, { kind: 'claimPayout', seriesId });
+    // cause S3-CL: claimPayout pays the net payout only, 0 here: never the tail (was: the tail, 834.1)
+    const net = await h.exec(h.backers[0]!, { kind: 'claimPayout', seriesId });
+    expect(net.events.map((e) => [e.type, (e.payload as { amount: string }).amount])).toEqual([['PayoutClaimed', '0']]);
+    expect(await balance(h, h.backers[0]!.address)).toBe(b0);
+    // cause S3-TL: claimTail pays it
+    const tail0 = await h.exec(h.backers[0]!, { kind: 'claimTail', seriesId });
+    expect(tail0.events.map((e) => [e.type, (e.payload as { amount: string }).amount])).toEqual([['TailClaimed', USDC(834.1).toString()]]);
     expect((await balance(h, h.backers[0]!.address)) - b0).toBe(USDC(834.1));
     // b1 has not redeemed yet: its position shows the same 834.1, the tail on the units its redemption would redeem
-    // (TV; was 0). claimPayout pays it once b1 redeemed: 972 + 380 + 834.1 = 2,186.1 in all (Stage 1's claim_tail)
-    expect((await h.sim.getPosition(seriesId, h.backers[1]!.address))!.tailClaimable).toBe(USDC(834.1).toString());
+    // (TV; was 0), and the redemption, 9.72 × 100. claimTail redeems it first (pending 380 and 972), then pays the tail:
+    // 2,186.1 in all (Stage 1's claim_tail; cause S3-TL: was claimRedemption then claimPayout)
+    expect((await h.sim.getPosition(seriesId, h.backers[1]!.address))!).toMatchObject({ claimable: USDC(380).toString(), redemptionClaimable: USDC(972).toString(), tailClaimable: USDC(834.1).toString() });
     const b1 = await balance(h, h.backers[1]!.address);
-    await h.exec(h.backers[1]!, { kind: 'claimRedemption', seriesId });
-    await h.exec(h.backers[1]!, { kind: 'claimPayout', seriesId });
+    const tail1 = await h.exec(h.backers[1]!, { kind: 'claimTail', seriesId });
+    expect(types(tail1.events)).toEqual(['PayoutClaimed', 'UnitsBurned', 'RedemptionClaimed', 'TailClaimed']);
     expect((await balance(h, h.backers[1]!.address)) - b1).toBe(USDC(2_186.1));
+    expect((await h.sim.getPosition(seriesId, h.backers[1]!.address))!).toMatchObject({ claimable: '0', redemptionClaimable: '0', tailClaimable: '0' });
 
     // the tail is used up: a liquidity report is refused (G5); an ordinary one is accepted with nothing due
     await h.sim.setTime(parsePeriod('2027Q2').end + DAY);
@@ -163,7 +174,7 @@ describe('redemption and tail', () => {
     expect((await balance(h, h.backers[0]!.address)) - b0).toBe(917_358_900n);
     const pos = (await h.sim.getPosition(seriesId, h.backers[0]!.address))!;
     expect(BigInt(pos.tailClaimable)).toBe(1_266_009_045n); // (6,663,205,500 − 5%) / 5, unchanged
-    await h.exec(h.backers[0]!, { kind: 'claimPayout', seriesId });
+    await h.exec(h.backers[0]!, { kind: 'claimTail', seriesId }); // cause S3-TL (was claimPayout)
     expect((await balance(h, h.backers[0]!.address)) - b0).toBe(917_358_900n + 1_266_009_045n);
     // the cap is used up: a second liquidity-event report is refused (Stage 1 NoTailDue)
     await h.sim.setTime(parsePeriod('2026Q3').end + DAY);
@@ -241,24 +252,30 @@ describe('redemption and tail', () => {
     const pos = async (w: string) => (await h.sim.getPosition(seriesId, w))!;
     for (const b of h.backers.slice(1)) expect(await pos(b.address)).toMatchObject({ claimable: '0', redeemedUnits: '0', tailClaimable: '1266009045', finalClaimable: '0' });
     expect(await pos(b0.address)).toMatchObject({ claimable: '0', redeemedUnits: '60', tailClaimable: '759605427' });
+    // the redemption still owed: 40 units at the price, no catch-up while b0's tail cursor is 0; the others' 100 units
+    expect((await pos(b0.address)).redemptionClaimable).toBe((price * 40n).toString());
+    for (const b of h.backers.slice(1)) expect((await pos(b.address)).redemptionClaimable).toBe((price * 100n).toString());
 
     // the vault: every holder's redemption and the whole tail it is owed are claims, so the dust is what is left once
     // everyone has claimed (it held the tail on every unit not yet redeemed: 440 × 12.66009045)
     const vault = (await h.sim.getVault(seriesId))!;
     const owed = price * 400n + price * 40n + 1_266_009_045n * 5n;
     expect(BigInt(vault.balance) - BigInt(vault.dust)).toBe(owed);
-    // b0 takes the tail on its 60 redeemed units (the view's figure), then redeems its 40 with the catch-up on them
+    // b0 takes the tail on its 60 redeemed units (the view's figure; cause S3-TL: claimTail, was claimPayout), then
+    // redeems its 40 with the catch-up on them, which its position now shows
     let before = await balance(h, b0.address);
-    await h.exec(b0, { kind: 'claimPayout', seriesId });
+    await h.exec(b0, { kind: 'claimTail', seriesId });
     expect((await balance(h, b0.address)) - before).toBe(759_605_427n);
+    expect((await pos(b0.address)).redemptionClaimable).toBe((price * 40n + 506_403_618n).toString());
     before = await balance(h, b0.address);
     await h.exec(b0, { kind: 'claimRedemption', seriesId });
     expect((await balance(h, b0.address)) - before).toBe(price * 40n + 506_403_618n);
-    // the others redeem (no catch-up: their tail cursors are 0), then claimPayout pays the tail their position showed
+    // the others redeem (no catch-up: their tail cursors are 0), then claimTail pays the tail their position showed
+    // (cause S3-TL: was claimPayout)
     for (const b of h.backers.slice(1)) {
       before = await balance(h, b.address);
       await h.exec(b, { kind: 'claimRedemption', seriesId });
-      await h.exec(b, { kind: 'claimPayout', seriesId });
+      await h.exec(b, { kind: 'claimTail', seriesId });
       expect((await balance(h, b.address)) - before).toBe(price * 100n + 1_266_009_045n);
       expect(await pos(b.address)).toMatchObject({ units: '0', redeemedUnits: '100', tailClaimable: '0' });
     }
@@ -302,7 +319,7 @@ describe('redemption and tail', () => {
     expect((await balance(h, b1.address)) - before).toBe(price * 100n + 123_456_789n);
     expect(seriesOf(h.sim, seriesId).positions.get(b1.address)!.lastTailAccWad).toBe(cursor);
     expect((await h.sim.getPosition(seriesId, b1.address))!.tailClaimable).toBe('26543210');
-    await h.exec(b1, { kind: 'claimPayout', seriesId });
+    await h.exec(b1, { kind: 'claimTail', seriesId }); // cause S3-TL (was claimPayout)
     expect((await balance(h, b1.address)) - before).toBe(price * 100n + 149_999_999n);
   });
 });

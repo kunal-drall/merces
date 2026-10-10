@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { SimHarness, defaultTerms } from '../src/index.ts';
 import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './helpers.ts';
 
+/*
+ * S3 cause codes:
+ *  - S3-FN: the final-pool share is `claimFinal`'s (`FinalClaimed`, then the burn; was paid by `claimPayout`).
+ */
 describe('curve mode (solana)', () => {
   async function curveSeries() {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
@@ -45,12 +49,12 @@ describe('curve mode (solana)', () => {
     expect((ex.events[1]!.payload as { returnedToHolders: string }).returnedToHolders).toBe(USDC(1050).toString());
     const s = (await h.sim.getSeries(seriesId))!;
     expect(s.final.units).toBe(s.unitsOutstanding);
-    // every buyer was registered at graduation and claims its pro-rata share; its units burn on claim
+    // every buyer was registered at graduation and claims its pro-rata share; its units burn on the final claim
     let claimed = 0n;
     for (const b of [h.backers[0]!, h.backers[1]!, h.backers[2]!]) {
       const units = BigInt((await h.sim.getPosition(seriesId, b.address))!.units);
-      const claim = await h.exec(b, { kind: 'claimPayout', seriesId });
-      expect(types(claim.events)).toEqual(['PayoutClaimed', 'UnitsBurned']);
+      const claim = await h.exec(b, { kind: 'claimFinal', seriesId }); // cause S3-FN (was claimPayout)
+      expect(types(claim.events)).toEqual(['FinalClaimed', 'UnitsBurned']);
       const amount = BigInt((claim.events[0]!.payload as { amount: string }).amount);
       expect(amount).toBe((USDC(1050) * units) / BigInt(s.unitsOutstanding));
       claimed += amount;

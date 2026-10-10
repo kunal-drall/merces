@@ -63,6 +63,18 @@ it (it may lag the chain by an indexer pass). `refunded`, the refund delivered, 
 carries it): "0" while the bid is undelivered, and null while the chain shows the bid delivered and the indexer has not
 projected the delivery yet.
 
+**Payout claims** (S3: Stage 1's claim family). `POST /series/{id}/payouts/build-claim {holder}` builds Stage 1's `claim`
+(`claimPayout`): the net payout only, on every status (`claimable`); on a Retired series it also burns the holder's own
+balance (`burnsUnits`), even when it pays nothing. The redemption, the tail and the final-pool share are other claims
+(`claimRedemption`, `claimTail`, `claimFinal`; the tail and final builders come in S3 WP4), and the position
+(`GET /series/{id}/position`, `/me/holdings`) shows each apart: `claimable`, `redemptionClaimable`, `tailClaimable`,
+`finalClaimable`. 409 with `detail.reason` `nothing-to-claim` when the claim would pay 0 and burn nothing;
+`detail.claimWith` names the claims that would pay the holder something now. A claim of nothing sent anyway succeeds
+onchain and emits its event with zeros (Stage 1's zero-amount rule); a claim never makes a wallet a holder for the API.
+Units of a Retired series also burn by the permissionless `burnRetired`, one holder per call, which the keepers send for
+every holder still holding units (the admin trigger `POST /series/{id}/retirement/crank-burn` does the same and returns
+`{burned, refused}`).
+
 **Settlement** (Stage 1 SPEC §5.2; every step is permissionless). After the reveal end a settlement runs in steps: the
 honest proposal (`beginSettlement`), the tally pages (`tallyBids`), `finalizeSettlement` (Settled, or Failed with
 NoValidBids or MinRaise; a raise that would sell no unit fails), a `processBid` per bid (the mint is final after the last:

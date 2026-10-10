@@ -173,10 +173,10 @@ export const eventPayloads = {
   FeeTaken: z.object({ ...seriesScoped, kind: feeKindSchema, amount: moneySchema, payer: addressSchema }),
   /**
    * Stage 1 `PayoutClaimed`: `amount` is the net payout the claim paid; `burnedUnits` the units the claim burns (a
-   * Retired series' balance; 0 otherwise). Inside the redemption body (`claimRedemption`, and the redemption a
+   * Retired series' balance; 0 otherwise). `claimPayout` always emits it, zeros included (SPEC's zero-amount rule),
+   * before the `UnitsBurned` of a Retired balance. Inside the redemption body (`claimRedemption`, and the redemption a
    * `claimTail` or `claimFinal` runs first) it carries the holder's pending payout and the tail catch-up, with
-   * `burnedUnits` 0 (the body's burn is its own `UnitsBurned`). Until S3 retires the bundle, `claimPayout` also pays the
-   * tail and the final-pool share in it and burns on an Extinguished series too.
+   * `burnedUnits` 0 (the body's burn is its own `UnitsBurned`), and is emitted only when that amount is above 0.
    */
   PayoutClaimed: z.object({ ...seriesScoped, holder: addressSchema, amount: moneySchema, burnedUnits: unitsSchema }),
   /** Stage 1 `TailClaimed` (`claimTail`): the tail paid on the holder's redeemed units, the tail only (0 included) */

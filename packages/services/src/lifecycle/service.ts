@@ -1,5 +1,5 @@
 import { AppError, audit, getFlag } from '@merces/core';
-import { orderCommitment, type ChainPort, type SeriesState, type UnsignedTx } from '@merces/domain';
+import { ChainError, orderCommitment, type ChainPort, type PositionState, type SeriesState, type UnsignedTx } from '@merces/domain';
 import { SeriesStatus, WAD, YEAR, capRemaining, fromPid, interim, isTerminal, periodStart, pidAt, redemptionQuote, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -59,23 +59,30 @@ export class LifecycleService {
 
   // ---- R13 payouts
   /**
-   * `claimable`, `tailClaimable` and `finalClaimable` are disjoint (net payout, tail, final pool) and are what this
-   * claimPayout pays. The position's `tailClaimable` is Stage 1's `claimableTail` view, which for a holder that has not
-   * redeemed yet counts the units its redemption would redeem (`claim_tail` redeems first). claimPayout takes the tail
-   * on redeemed units only (it has no redemption step; S3 WP3 and WP4 move the tail to `claimTail`), so such a
-   * holder's tail is left out here and claimed after `claimRedemption`. A holder with nothing else to claim gets a 409
-   * that says so.
+   * The net payout claim, Stage 1 `claim`: `claimable` is exactly what it pays, on every status. The redemption, the tail
+   * and the final-pool share are other claims (`claimRedemption`, `claimTail`, `claimFinal`), never paid by this one. On a
+   * Retired series the claim also burns the holder's balance (`burnsUnits`: its units less the auction units not yet
+   * delivered and those held for a window ask, which Stage 1 does not burn), so a holder with nothing to be paid but
+   * units to burn still gets the claim (a zero claim). Otherwise a claim that would pay 0 and burn nothing is a 409
+   * (`nothing-to-claim`) naming the claims that would pay the holder something now (`claimWith`).
    */
-  async buildClaim(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; claimable: string; tailClaimable: string; finalClaimable: string; builder: string }> {
+  async buildClaim(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; claimable: string; burnsUnits: string; builder: string }> {
     const chain = this.ctx.chainFor(seriesId);
     this.requireWallet(session, chain.chain, holder);
     const p = await chain.getPosition(seriesId, holder);
     if (!p) throw AppError.notFound('position');
-    const tailClaimable = BigInt(p.redeemedUnits) > 0n ? p.tailClaimable : '0';
-    if (BigInt(p.claimable) + BigInt(tailClaimable) + BigInt(p.finalClaimable) === 0n) {
-      throw AppError.conflict(BigInt(p.tailClaimable) > 0n ? 'nothing to claim yet: the tail is paid once the units are redeemed (claim the redemption first)' : 'nothing to claim');
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    const burnsUnits = s.status === 'Retired' ? heldUnits(p) : 0n;
+    if (BigInt(p.claimable) === 0n && burnsUnits === 0n) {
+      const claimWith = [
+        ...(BigInt(p.redemptionClaimable) > 0n ? ['claimRedemption'] : []),
+        ...(BigInt(p.tailClaimable) > 0n ? ['claimTail'] : []),
+        ...(BigInt(p.finalClaimable) > 0n ? ['claimFinal'] : []),
+      ];
+      throw AppError.conflict(claimWith.length ? `nothing to claim as a payout; claim with ${claimWith.join(', ')}` : 'nothing to claim', { reason: 'nothing-to-claim', claimWith });
     }
-    return { tx: await this.claimBuilder.build(chain, seriesId, holder), claimable: p.claimable, tailClaimable, finalClaimable: p.finalClaimable, builder: this.claimBuilder.kind };
+    return { tx: await this.claimBuilder.build(chain, seriesId, holder), claimable: p.claimable, burnsUnits: burnsUnits.toString(), builder: this.claimBuilder.kind };
   }
 
   // ---- R15 redemption
@@ -171,7 +178,7 @@ export class LifecycleService {
     const paidPerUnit = BigInt(s.paidPerUnitWad) / WAD;
     return {
       seriesId, status: s.status, retired: s.status === 'Retired', capPerUnit: s.capPerUnit, paidPerUnit: paidPerUnit.toString(), capRemaining: cap === null ? null : capRemaining(cap, BigInt(s.paidPerUnitWad)).toString(), capProgressBps: cap && cap > 0n ? Number((paidPerUnit * 10_000n) / cap) : 0,
-      unitsOutstanding: s.unitsOutstanding, holdersWithUnits: unburned.length, burnable: s.status === 'Retired', note: 'Units of a Retired series burn on claim or by the permissionless burn crank; units of an Extinguished series burn on claim only. Burned holders keep their claimable payouts.',
+      unitsOutstanding: s.unitsOutstanding, holdersWithUnits: unburned.length, burnable: s.status === 'Retired', note: 'Units of a Retired series burn on a payout claim (claimPayout, also one that pays nothing) or by the permissionless burnRetired, one holder at a time (the keepers send it for every holder still holding units); units of an Extinguished series burn at the final claim (claimFinal); a redeemed holder\'s units burn at its redemption. Burned holders keep their claimable payouts.',
     };
   }
 
@@ -223,18 +230,40 @@ export class LifecycleService {
     if (row.account_id !== session.accountId) throw AppError.forbidden();
     return { ciphertext: row.ciphertext, keyHint: row.key_hint };
   }
-  /** Admin/keeper trigger for the burn crank (the scheduler runs it too). */
-  async crankBurn(seriesId: string, by: string): Promise<{ burned: number }> {
+  /**
+   * Admin trigger for the Retired burn (the `burn.crank` keeper job runs it too): one permissionless `burnRetired` (Stage
+   * 1 `burn_retired`) per holder that still holds units (`heldUnits`: a burn of nothing would only emit a burn of 0).
+   * A Retired series only: 409 otherwise (Stage 1 refuses any other status, TerminalStatus). A holder the chain refuses
+   * (not registered, HolderNotRegistered) is skipped and counted in `refused`.
+   */
+  async burnRetiredHolders(seriesId: string, by: string): Promise<{ burned: number; refused: number }> {
     const chain = this.ctx.chainFor(seriesId);
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
-    if (s.status !== 'Retired') throw AppError.conflict(`units are burned by the crank only on a Retired series (series is ${s.status}; redeemed and extinguished units burn on claim)`);
-    const holders = (await chain.listPositions(seriesId)).filter((p) => BigInt(p.units) > 0n).map((p) => p.wallet);
-    if (!holders.length) return { burned: 0 };
-    await chain.submit({ kind: 'crankBurn', seriesId, holders }, 'keeper');
-    await audit(this.ctx.pool, { actor: by, actorRole: 'admin', action: 'retirement.crank-burn', target: seriesId, detail: { holders: holders.length } });
-    return { burned: holders.length };
+    if (s.status !== 'Retired') throw AppError.conflict(`units are burned by burnRetired only on a Retired series (series is ${s.status}; an extinguished holder's units burn at claimFinal, a redeemed holder's at its redemption)`, { stage1: 'TerminalStatus' });
+    const holders = (await chain.listPositions(seriesId)).filter((p) => heldUnits(p) > 0n).map((p) => p.wallet);
+    let burned = 0;
+    let refused = 0;
+    for (const holder of holders) {
+      try {
+        await chain.submit({ kind: 'burnRetired', seriesId, holder }, 'keeper');
+        burned++;
+      } catch (e) {
+        if (!(e instanceof ChainError) || (e.code !== 'NotFound' && e.code !== 'WrongStatus')) throw e;
+        refused++;
+      }
+    }
+    if (holders.length) await audit(this.ctx.pool, { actor: by, actorRole: 'admin', action: 'retirement.burn-retired', target: seriesId, detail: { holders: holders.length, burned, refused } });
+    return { burned, refused };
   }
+}
+
+/**
+ * The units a holder holds in its own balance (Stage 1 `unitsOf`): its units less the auction units not yet delivered
+ * and those held for a window ask. What a Retired claim or `burnRetired` burns.
+ */
+export function heldUnits(p: Pick<PositionState, 'units' | 'undeliveredUnits' | 'escrowedUnits'>): bigint {
+  return BigInt(p.units) - BigInt(p.undeliveredUnits) - BigInt(p.escrowedUnits);
 }
 
 /**

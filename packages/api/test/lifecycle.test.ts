@@ -16,6 +16,11 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *    its deadline (2027-01-31, settlement year 1), so year 0 holds no gross, D_avg = 0 and the hurdle 9 × 1.08 = 9.72
  *    decides below C_rem = 22.5 − 4 = 18.5; deposit 4,860, tail cap 8.78, b0's claim 972;
  *  - C: Stage 1's zero-amount claim is a successful no-op (SIM:1268-1282): HTTP 200 with no events.
+ * S3 cause codes:
+ *  - S3-Z: the zero-amount rule: a claim of nothing succeeds and emits its event with zeros (`PayoutClaimed{0, 0}`);
+ *  - S3-CL: the payout claim builder is Stage 1's `claim`: it returns what that claim pays (`claimable`) and the units it
+ *    burns (`burnsUnits`), and its 409 (`nothing-to-claim`) names the claims that would pay the holder something;
+ *  - S3-BR: the admin burn sends one `burnRetired` per holder still holding units, and refuses a series not Retired.
  */
 describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -55,15 +60,19 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     // R13: claim through the builder
     expect((await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, issuerTok)).statusCode).toBe(403);
     const claim = await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok);
-    expect(claim.json().builder).toBe('public');
-    expect(claim.json().claimable).toBe((USDC(2000) * 95n / 100n / 5n).toString());
+    // cause S3-CL: what the claim pays and burns, nothing of the other pools (was: tailClaimable and finalClaimable too)
+    expect(claim.json()).toMatchObject({ builder: 'public', claimable: (USDC(2000) * 95n / 100n / 5n).toString(), burnsUnits: '0' });
+    expect(claim.json()).not.toHaveProperty('tailClaimable');
+    expect(claim.json()).not.toHaveProperty('finalClaimable');
     expect((await rig.post('/tx/send', await h.backers[0]!.sign(claim.json().tx as UnsignedTx), holderTok)).json().events[0].type).toBe('PayoutClaimed');
-    expect((await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok)).statusCode).toBe(409);
-    // the builder refuses a claim with nothing in it, but the chain takes one: relayed anyway, a zero claim succeeds with
-    // no events (cause C: was 404, ChainNotFound)
+    const nothing = await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok);
+    expect(nothing.statusCode).toBe(409);
+    expect(nothing.json()).toMatchObject({ message: 'nothing to claim', detail: { reason: 'nothing-to-claim', claimWith: [] } });
+    // the builder refuses a claim with nothing in it, but the chain takes one: relayed anyway, a zero claim succeeds
+    // (cause C: was 404, ChainNotFound) and emits its event with zeros (cause S3-Z: was no event)
     const zero = await rig.post('/tx/send', await h.backers[0]!.sign(await h.sim.build({ kind: 'claimPayout', seriesId }, h.backers[0]!.address)), holderTok);
     expect(zero.statusCode, zero.body).toBe(200);
-    expect(zero.json().events).toEqual([]);
+    expect(zero.json().events.map((e: { type: string; payload: unknown }) => [e.type, e.payload])).toEqual([['PayoutClaimed', { seriesId, holder: h.backers[0]!.address, amount: '0', burnedUnits: '0' }]]);
     // a wallet that is not a registered holder is still refused: 404 with Stage 1's HolderNotRegistered
     const notHolder = await rig.post('/tx/send', await h.issuer.sign(await h.sim.build({ kind: 'claimPayout', seriesId }, h.issuer.address)), issuerTok);
     expect(notHolder.statusCode).toBe(404);
@@ -117,7 +126,10 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     expect(wsent.statusCode, wsent.body).toBe(200);
     expect((await rig.put(`/series/${other.seriesId}/window/backup`, { wallet: b1.address, ciphertext: 'age:...' }, b1Tok)).statusCode).toBe(200);
     expect((await rig.get(`/series/${other.seriesId}/window`)).json().phase).toBe('commit');
-    expect((await rig.post(`/series/${seriesId}/retirement/crank-burn`, {}, adminTok)).statusCode).toBe(409); // redeemed units burn on claim, not by crank
+    // cause S3-BR: burnRetired takes a Retired series only; redeemed units burn at their redemption
+    const burn = await rig.post(`/series/${seriesId}/retirement/crank-burn`, {}, adminTok);
+    expect(burn.statusCode).toBe(409);
+    expect(burn.json()).toMatchObject({ detail: { stage1: 'TerminalStatus' } });
     await setFlag(rig.t.pool, 'transfer_windows', false, 'test');
   });
 });

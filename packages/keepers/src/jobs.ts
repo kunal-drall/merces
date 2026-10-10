@@ -2,7 +2,7 @@ import { dispatchOutbox, enqueueOutbox, getFlag } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import { ChainError, type ChainErrorCode, type ChainPort } from '@merces/domain';
 import { parsePeriod, periodOf, periodsBetween } from '@merces/math';
-import { AuctionService, type ServiceContext } from '@merces/services';
+import { AuctionService, heldUnits, type ServiceContext } from '@merces/services';
 import type { OutboxHandler } from '@merces/core';
 
 /**
@@ -205,9 +205,13 @@ export const pauseCrankJob: KeeperJob = {
 };
 
 /**
- * Burns units of Retired series whose holders have not claimed (holders keep their claimable payouts). An Extinguished
- * series is never cranked: Stage 1 refuses it (`burn_retired` TerminalStatus), since the holder's units are its weight
- * in the final pool until it claims.
+ * Burns the units of Retired series whose holders have not claimed (holders keep their claimable payouts): one
+ * permissionless `burnRetired` (Stage 1 `burn_retired`) per holder that still holds units in its own balance
+ * (`heldUnits`: its units less the auction units not yet delivered and those held for a window ask, which Stage 1 does
+ * not burn), so nothing is sent for a holder with nothing to burn. An action is one holder burned. An Extinguished
+ * series is never cranked: Stage 1 refuses it (TerminalStatus), since the holder's units are its weight in the final
+ * pool until `claimFinal`. A holder the chain refuses with an expected code (a status that moved, WrongStatus; a holder
+ * not registered, NotFound) is skipped and the others are still sent.
  */
 export const burnCrankJob: KeeperJob = {
   name: 'burn.crank',
@@ -217,13 +221,14 @@ export const burnCrankJob: KeeperJob = {
     const errors: string[] = [];
     await forEachSettled(ctx, errors, async (chain, s) => {
       if (s.status !== 'Retired') return;
-      const holders = (await chain.listPositions(s.seriesId)).filter((p) => BigInt(p.units) > 0n).map((p) => p.wallet);
-      if (!holders.length) return;
-      try {
-        await chain.submit({ kind: 'crankBurn', seriesId: s.seriesId, holders }, 'keeper');
-        actions += holders.length;
-      } catch (e) {
-        if (!refused(e, ['WrongStatus', 'NotFound'])) throw e;
+      const holders = (await chain.listPositions(s.seriesId)).filter((p) => heldUnits(p) > 0n).map((p) => p.wallet);
+      for (const holder of holders) {
+        try {
+          await chain.submit({ kind: 'burnRetired', seriesId: s.seriesId, holder }, 'keeper');
+          actions++;
+        } catch (e) {
+          if (!refused(e, ['WrongStatus', 'NotFound'])) throw e;
+        }
       }
     });
     return { actions, errors };

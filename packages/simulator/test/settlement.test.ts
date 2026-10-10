@@ -25,7 +25,8 @@ import { seedAuction, seedBid, seriesOf } from './kit.ts';
  *  - S2-RH: `registerHolder` and `HolderRegistered`.
  *
  * S3 cause codes:
- *  - S3-BR: `burnRetired` joins the permissionless group (its own cases are in claims.test.ts).
+ *  - S3-BR: `burnRetired` joins the permissionless group (its own cases are in claims.test.ts);
+ *  - S3-FN: the final claim is `claimFinal` (was `claimPayout`, which no longer pays the final pool).
  */
 
 interface Bid { w: SimWallet; price: bigint; qty: bigint; reveal?: boolean; deposit?: bigint }
@@ -441,7 +442,7 @@ describe('the mint gate, delivery and holders', () => {
     expect(await balance(h, b0.address)).toBe(before + USDC(303) + USDC(900)); // the refund and 100 × the redemption price 9
     const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
-    const fin = await h.exec(b1, { kind: 'claimPayout', seriesId });
+    const fin = await h.exec(b1, { kind: 'claimFinal', seriesId }); // cause S3-FN
     expect(types(fin.events)[0]).toBe('BidDelivered');
     expect(fin.events[0]!.payload).toEqual({ seriesId, bidder: b1.address, units: '100', refund: USDC(202).toString() });
     expect(await h.sim.getBid(seriesId, b1.address)).toMatchObject({ delivered: true });

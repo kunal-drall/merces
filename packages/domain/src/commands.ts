@@ -87,6 +87,12 @@ export const userCommands = {
     liquidityEvent: z.boolean(),
   }),
   payIn: z.object({ kind: z.literal('payIn'), seriesId: seriesIdSchema, periodId: periodIdSchema, amount: moneySchema }),
+  /**
+   * Stage 1 `claim` (SIM:1268-1282): the holder's net payout (its pending payout) and nothing else: the tail is
+   * `claimTail`'s and the final-pool share `claimFinal`'s. HolderNotRegistered for a wallet that is not a registered
+   * holder. On a Retired series the holder's balance also burns (also when nothing is paid); on any other status nothing
+   * burns. Emits `PayoutClaimed{amount, burnedUnits}` always (0 included), then the burn.
+   */
   claimPayout: z.object({ kind: z.literal('claimPayout'), seriesId: seriesIdSchema }),
   /**
    * Stage 1 `claim_tail` (SIM:1403-1417): the tail on the holder's redeemed units since its tail cursor. NotRedeemed
@@ -118,8 +124,6 @@ export const userCommands = {
 export const serviceCommands = {
   snapshotRate: z.object({ kind: z.literal('snapshotRate'), pair: pairSchema, rateWad: wadSchema, confWad: wadSchema, publishTime: z.number().int(), /** opaque provider update payload (e.g. Pyth VAA) for live chains */ update: z.string().nullable() }),
   crankStatus: z.object({ kind: z.literal('crankStatus'), seriesId: seriesIdSchema }),
-  /** Stage 1 `burn_retired` for each listed holder, skipping a holder with no units (no event); `burnRetired` replaces it (S3) */
-  crankBurn: z.object({ kind: z.literal('crankBurn'), seriesId: seriesIdSchema, holders: z.array(addressSchema) }),
   crankPause: z.object({ kind: z.literal('crankPause'), seriesId: seriesIdSchema }),
   openTransferWindow: z.object({ kind: z.literal('openTransferWindow'), seriesId: seriesIdSchema, commitEndsAt: z.number().int(), revealEndsAt: z.number().int() }),
   clearTransferWindow: z.object({ kind: z.literal('clearTransferWindow'), seriesId: seriesIdSchema, windowId: z.number().int() }),

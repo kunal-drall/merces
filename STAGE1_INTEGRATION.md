@@ -41,7 +41,7 @@ Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitigno
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
 | diff | drift: **Solana** 4 canonical items without a counterpart, 249 field mismatches, 79 extra Stage 1 items; **Monad testnet** 2 / 210 / 89 (`INTERFACE_DRIFT.md`; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range); the new item without a counterpart on each chain is `UnitsMinted`, now a curve buy only (a Meteora DBC swap). The rest is left to the adapters' mappers (D6.2) and the rest of section B (S3–S5) |
 | math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window and curve cap and the FX family (both S5). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2) |
-| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 36/42 PASS, 42/42 at expected status`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A), 03 PASS-WITH-DIVERGENCES (DIV-NRC-1, the non-reveal hold); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, and parts on 03 at #65 exactly as recorded. 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses, and our seven S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11 and 22) pass on Stage 1's simulator, on ours and in lockstep, 35/35 runs. Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
+| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 36/42 PASS, 42/42 at expected status`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A), 03 PASS-WITH-DIVERGENCES (DIV-NRC-1, the non-reveal hold); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, and parts on 03 at #65 exactly as recorded. 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. Our eleven S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) pass on Stage 1's simulator, on ours and in lockstep, 55/55 runs. Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
 | conformance | **blocked**: no devnet or testnet deployment |
 | verdict | both chains NOT ready (diff drift; conformance not run) |
 
@@ -90,9 +90,9 @@ S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed 
   price travels on `CurveGraduated.issuePrice` (a canonical field added for it, recorded in INTERFACE_DRIFT.md) and the
   indexer sets its cap per unit from it, so the statement's C_remaining and later amendments see the chain's cap.
   A position's `tailClaimable` is Stage 1's `claimableTail` view, which counts a holder that has not redeemed yet on
-  the units its redemption would redeem (`claim_tail` redeems first), and the vault's dust counts that tail too; the
-  payout claim builder leaves it out until the holder has redeemed, since `claimPayout` has no redemption step
-  (A-REV-24). Report-deadline reminders go only to the earliest unpaid period, the one Stage 1's `deriveStatus` counts
+  the units its redemption would redeem (`claim_tail` redeems first), and the vault's dust counts that tail too; since
+  S3 WP3 only `claimTail` pays it, and the payout claim builder shows only what `claimPayout` (Stage 1's `claim`)
+  pays and burns (A-REV-24). Report-deadline reminders go only to the earliest unpaid period, the one Stage 1's `deriveStatus` counts
   from, and name the status the chain derives when they are queued and what is owed (the report or the payment); they
   had reminded every unsettled period with a hard-coded InGrace, so a series Late on an unpaid Q1 was told InGrace about
   a Q2 report the chain could not take (A-REV-25).
@@ -274,7 +274,9 @@ Open since S1, with the same defaults:
 | The EVM's 4,096-bid limit per auction (`TooManyBids`) is not enforced by the simulator's monad personality; `ChainInfo.limits.maxBidsPerAuction` reports it | S5 (adapters) |
 | Our bid commitment (SH-AUC-2): `commitBid` carries our commitment, not Stage 1's keccak over the packed price, quantity and salt | S4 |
 | One-step transfer windows; no windows flag, eligibility or fee (B.2) | S5 |
-| `claimPayout` = claim + tail + final (B.3; `register_holder` exists since S2). Since S3 WP1 the canonical `claimTail`, `claimFinal` and `burnRetired` run Stage 1's bodies, and since WP2 the vector runner sends `claim_tail`, `claim_final` and `burn_retired` as those (SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired; the S3 claim scenarios cover the paths no vector takes, in lockstep); `claim` stays SH-CLM-1 until `claimPayout` becomes Stage 1's `claim` in WP3 | S3 |
+| Canonical claim amounts per pool (S3 D3, A-CLM-2): every stablecoin amount a claim moves is in exactly one canonical event amount. `RedemptionClaimed.amount` is the principal (the chains: the total), the pending payout and the tail catch-up go in a split-out `PayoutClaimed{burnedUnits: 0}` (above 0 only); `FinalClaimed{units: weight, amount: pending + share}` (Solana: the burned units, an amount with the redemption); the claim event comes before its burn (the EVM order; Stage 1's reference simulator burns first). The adapters normalise | S5 (adapters) |
+| Solana's claim check orders and names (S3 D2): HolderNotRegistered first for every holder claim; `claim_final` NotExtinguished where Stage 1's reference and the EVM say TerminalStatus; Solana's `claim_tail` redeems any remaining balance first; DeliverFirst prepends `deliver_bid` to the redemption and final claims | S5 (adapters) |
+| No pushed claims: Stage 1 lets anyone claim for a holder (`claimFor`, any payer); the canonical claims are the holder's own (A-CLM-3) | S5 / owner |
 | No `retire_if_capped`, `withdraw_pause_request` or `end_pause` commands; `requestPause.until` advisory (B.6) | S5 |
 | `payIn` exact-amount and period guards (Stage 1's `pay` takes neither) | S5 (adapters drop them) |
 | Tier 1: no router year-to-date binding; split receipts stand in for the router credit | tier-1 milestone |
@@ -371,10 +373,17 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    tail and extinguishment through the payout accumulator.
    **S1:** Stage 1's accumulators and cursors (WP5–WP7): separate tail and final accumulators whose cursors start at 0,
    holders registered at settlement (or graduation), the tail catch-up inside the redemption claim. `claimPayout` still
-   pays claim + tail + final in one command and there is no `register_holder` command (S3).
+   paid claim + tail + final in one command and there was no `register_holder` command.
    **S2:** `registerHolder` (Stage 1's `register_holder`: an allowlisted wallet, idempotent) with `HolderRegistered`,
    which both chains emit; a winner is registered when its bid is processed. A registration holds no units and grants
    no holder access (A-AUC-9, A-REV-10). The separate claims are S3.
+   **S3 (WP1-WP3):** Stage 1's claim family (A-CLM-1): `claimPayout` is Stage 1's `claim` (the net payout only; a
+   Retired balance burns, on no other status), `claimTail` and `claimFinal` are `claim_tail` and `claim_final`, and the
+   permissionless `burnRetired{holder}` is `burn_retired` (`crankBurn` is gone; the keepers send one per holder that
+   still holds units). The zero-amount rule: a claim of nothing emits its own event with zeros, and on a Retired series
+   still burns (A-CLM-2). The indexer never creates a position from a claim and writes no money row for 0 (A-REV-10).
+   The vector runner sends `claim`, `claim_tail`, `claim_final` and `burn_retired` directly (SH-CLM-1..3 and SH-BRN-1
+   retired); the S3 claim scenarios (a)-(k) cover the paths no vector takes, in lockstep against Stage 1's simulator.
 4. *Signatures, commitments, proofs.* Attestor and report-verifier keys are **secp256k1** 20-byte addresses on both
    chains, signing Stage 1's `MERCES_*_V1` keccak messages (per-deployment domain, per-series nonces, low-s), and the
    signatures travel as **instruction arguments**; nobody co-signs (our `UnsignedTx.coSigners` and the attestor

@@ -17,6 +17,8 @@ const DAY = 86_400;
  * S2 cause codes on the pins that moved:
  *  - S2-MS: Stage 1's multi-step settlement; the keepers settle (`auction.settle`) and deliver (`auction.deliver`) in
  *    separate jobs (was one job, and before S2 the one-step settlement).
+ * S3 cause codes:
+ *  - S3-BR: `burn.crank` sends one `burnRetired{holder}` per holder still holding units (was one list burn crank, `holders[]`).
  */
 
 /** A registry of one chain, for a test that needs its own series ids, reminder ledger or a wrapped port. */
@@ -71,12 +73,18 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     await sol.reportAndPay(a.seriesId, '2026Q2', a.privateTerms, a.terms.termsCommitment, USDC(10_000), USDC(10_000));
     await sol.reportAndPay(a.seriesId, '2026Q3', a.privateTerms, a.terms.termsCommitment, USDC(10_000), USDC(500_000));
     expect((await sol.sim.getSeries(a.seriesId))!.status).toBe('Retired');
+    // cause S3-BR: one burnRetired per holder (an action is a holder burned), each burning its 100 units; none is sent
+    // once every balance is 0
+    const burnsBefore = sol.sim.engine.events.filter((e) => e.type === 'UnitsBurned').length;
     expect((await sched.runAll())['burn.crank']!.actions).toBe(5);
+    expect(sol.sim.engine.events.filter((e) => e.type === 'UnitsBurned').slice(burnsBefore).map((e) => (e.payload as { units: string }).units)).toEqual(['100', '100', '100', '100', '100']);
     expect((await sched.runAll())['burn.crank']!.actions).toBe(0);
+    expect(sol.sim.engine.events.filter((e) => e.type === 'UnitsBurned')).toHaveLength(burnsBefore + 5);
     expect((await sol.sim.getSeries(a.seriesId))!.unitsOutstanding).toBe('0');
-    // holders still claim after the burn
+    // holders still claim after the burn: the claim pays and burns nothing more
     const c = await sol.exec(sol.backers[0]!, { kind: 'claimPayout', seriesId: a.seriesId });
     expect(BigInt((c.events[0]!.payload as { amount: string }).amount)).toBeGreaterThan(0n);
+    expect(c.events.map((e) => e.type)).toEqual(['PayoutClaimed']);
   });
 
   it('rate keeper snapshots once per day per pair per chain, resolves feed ids, cross-checks Chainlink and flags deviation', async () => {

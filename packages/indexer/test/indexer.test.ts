@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { WAD, capPerUnit, parsePeriod, requiredEscrow } from '@merces/math';
-import { PgSimPersistence, SimHarness, SimulatorChain, defaultTerms } from '@merces/simulator';
+import { PgSimPersistence, SimHarness, SimWallet, SimulatorChain, defaultTerms } from '@merces/simulator';
 import { ZERO_INCOME_COMMITMENT, bidCommitment, runSettlement, type ChainPort, type DomainEvent, type EventPayload, type EventType } from '@merces/domain';
 import { Indexer, project } from '../src/index.ts';
 
@@ -18,7 +18,9 @@ const GENESIS = Date.UTC(2026, 0, 1) / 1000;
  * S3 cause codes:
  *  - S3-TL, S3-FN: `TailClaimed` and `FinalClaimed` write `tail_claim` and `final_claim` money rows (above 0 only) and
  *    add to an existing position's `claimed_total`, never creating a position (A-REV-10);
- *  - S3-Z: a burn of 0 units (`burnRetired` on a wallet holding nothing) changes nothing in the read model.
+ *  - S3-Z: a burn of 0 units (`burnRetired` on a wallet holding nothing) changes nothing in the read model;
+ *  - S3-IX: `PayoutClaimed` adds to an existing position only (it never creates one, so a registration and a claim of 0
+ *    grant no holder access, A-REV-10) and writes a `payout` money row above 0 only, with the units it burns noted.
  */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
@@ -549,6 +551,43 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect((await t.pool.query('select units_outstanding::text from series where series_id = $1', [seriesId])).rows[0].units_outstanding).toBe('300');
     // anyone may send a burn of 0 for any wallet: it adds no line to the public feed
     expect((await t.pool.query("select count(*)::int as n from activity where chain = $1 and seq > 2000000 and kind = 'UnitsBurned'", [key])).rows[0].n).toBe(0);
+  });
+
+  it('projects PayoutClaimed: positions updated never created, money rows above 0 only, the units burned noted (S3-IX)', async () => {
+    const key = 'payout-claims';
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const raise = await h.runRaise();
+    const { seriesId } = raise;
+    const [b0, b1] = [h.backers[0]!, h.backers[1]!];
+    // a wallet that is only registered (anyone may register any allowlisted wallet) and claims nothing
+    const late = new SimWallet(h.sim.family, 'registered-only-holder');
+    await h.sim.submit({ kind: 'setAllowlist', wallet: late.address, allowed: true }, 'allowlistManager');
+    await h.sim.submit({ kind: 'registerHolder', seriesId, wallet: late.address }, 'keeper');
+    const zero = await h.exec(late, { kind: 'claimPayout', seriesId });
+    expect(zero.events.map((e) => [e.type, e.payload])).toEqual([['PayoutClaimed', { seriesId, holder: late.address, amount: '0', burnedUnits: '0' }]]);
+    // the cap is met: b0's claim pays and burns its 100 units; b1's units burn first, so its claim pays only; b1 then
+    // claims again: nothing paid, nothing burned
+    await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
+    await h.reportAndPay(seriesId, '2026Q1', raise.privateTerms, raise.terms.termsCommitment, 0n, USDC(200_000));
+    await h.exec(b0, { kind: 'claimPayout', seriesId });
+    await h.sim.submit({ kind: 'burnRetired', seriesId, holder: b1.address }, 'keeper');
+    await h.exec(b1, { kind: 'claimPayout', seriesId });
+    await h.exec(b1, { kind: 'claimPayout', seriesId });
+    await h.exec(late, { kind: 'claimPayout', seriesId });
+    await idx.catchUp();
+
+    const share = (USDC(11_250) * 95n / 100n / 5n).toString();
+    const rows = (await t.pool.query("select wallet, amount::text, detail from money_events where series_id = $1 and kind = 'payout' order by seq", [seriesId])).rows;
+    expect(rows).toEqual([{ wallet: b0.address, amount: share, detail: { burnedUnits: '100' } }, { wallet: b1.address, amount: share, detail: { burnedUnits: '0' } }]);
+    const pos = async (w: string) => (await t.pool.query('select units::text, burned_units::text, claimed_total::text from positions where series_id = $1 and wallet = $2', [seriesId, w])).rows[0];
+    expect(await pos(b0.address)).toEqual({ units: '0', burned_units: '100', claimed_total: share });
+    expect(await pos(b1.address)).toEqual({ units: '0', burned_units: '100', claimed_total: share });
+    // the registered-only wallet: a registration, no position and no money row, whatever it claimed
+    expect(await pos(late.address)).toBeUndefined();
+    expect((await t.pool.query('select 1 from holder_registrations where series_id = $1 and wallet = $2', [seriesId, late.address])).rowCount).toBe(1);
+    expect((await t.pool.query('select count(*)::int as n from money_events where series_id = $1 and wallet = $2', [seriesId, late.address])).rows[0].n).toBe(0);
+    expect((await t.pool.query('select units_outstanding::text from series where series_id = $1', [seriesId])).rows[0].units_outstanding).toBe('300');
   });
 
   it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {

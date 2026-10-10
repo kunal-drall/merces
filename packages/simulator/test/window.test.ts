@@ -13,7 +13,10 @@ import { seedHolder, seedPause, seriesOf } from './kit.ts';
  *    balance, which excludes the ask escrow); a terminal series forces the window to NoMatch, which returns them;
  *  - S: an ask settles the holder first (SIM:1528) and clearing settles every asker (SIM:1606, 1634), so the stored
  *    `pending` carries what the held units earned (the claimable total does not change);
- *  - S2-PR: push delivery (`deliverBid`): the harness raise delivers every bid, so a winner's refund is already paid.
+ *  - S2-PR: push delivery (`deliverBid`): the harness raise delivers every bid, so a winner's refund is already paid;
+ *  - S3-TL: the tail is `claimTail`'s (was paid by `claimPayout` once the holder had redeemed units);
+ *  - S3-BR: `burnRetired{holder}` replaces the S1 list burn crank (`holders[]`); a holder with nothing to burn gets `UnitsBurned(0)`;
+ *  - S3-Z, S3-BU: a claim of nothing emits `PayoutClaimed` with zeros, its `burnedUnits` naming what it burns.
  * The payout figures follow from the harness terms: θ 60,000, 10% above it, a 5% payout fee, 500 units of which each
  * backer holds 100, cap 2.5 × 9 = 22.5 per unit.
  */
@@ -245,7 +248,8 @@ describe('transfer windows on a series that ended during the window', () => {
     await h.reportAndPay(seriesId, '2026Q2', privateTerms, terms.termsCommitment, USDC(10_000), USDC(2_000_000), { liquidityEvent: true });
     expect((await h.sim.getPosition(seriesId, seller.address))!.tailClaimable).toBe('633004522');
     const s1 = await balance(h, seller.address);
-    await h.exec(seller, { kind: 'claimPayout', seriesId });
+    const tail = await h.exec(seller, { kind: 'claimTail', seriesId }); // cause S3-TL (was claimPayout)
+    expect(tail.events.map((e) => [e.type, e.payload])).toEqual([['TailClaimed', { seriesId, holder: seller.address, amount: '633004522' }]]);
     expect((await balance(h, seller.address)) - s1).toBe(633_004_522n);
 
     // the stored status is terminal: clearing is forced to NoMatch whatever the book (W; SIM:1575-1581)
@@ -303,12 +307,13 @@ describe('transfer windows on a series that ended during the window', () => {
     const b1Before = await balance(h, b1.address);
     const claim = await h.exec(b1, { kind: 'claimPayout', seriesId });
     expect(types(claim.events)).toEqual(['PayoutClaimed', 'UnitsBurned']);
+    expect(claim.events[0]!.payload).toMatchObject({ amount: USDC(2_137.5).toString(), burnedUnits: '60' }); // cause S3-BU
     expect(claim.events[1]!.payload).toMatchObject({ units: '60', reason: 'cap' });
     expect((await balance(h, b1.address)) - b1Before).toBe(USDC(2_137.5));
     expect(stored(h, seriesId, b1.address)).toMatchObject({ units: 40n, escrowed: 40n });
-    // the burn crank: b1 has no free units (no-op), b3 burns its 100
-    const crank = await h.sim.submit({ kind: 'crankBurn', seriesId, holders: [b1.address, b3.address] }, 'keeper');
-    expect(crank.events.map((e) => e.payload)).toEqual([{ seriesId, holder: b3.address, units: '100', reason: 'cap' }]);
+    // cause S3-BR: burnRetired per holder: b1 has no free units (a burn of 0), b3 burns its 100
+    const crank = [...(await h.sim.submit({ kind: 'burnRetired', seriesId, holder: b1.address }, 'keeper')).events, ...(await h.sim.submit({ kind: 'burnRetired', seriesId, holder: b3.address }, 'keeper')).events];
+    expect(crank.map((e) => e.payload)).toEqual([{ seriesId, holder: b1.address, units: '0', reason: 'cap' }, { seriesId, holder: b3.address, units: '100', reason: 'cap' }]);
     expect((await h.sim.getSeries(seriesId))!.unitsOutstanding).toBe('340');
     expect(stored(h, seriesId, b2.address).pending).toBe(0n); // not settled yet
 
@@ -324,9 +329,11 @@ describe('transfer windows on a series that ended during the window', () => {
 
     // the returned units burn now: b1's 40 with nothing to pay, b2's 100 with its payout
     const again = await h.exec(b1, { kind: 'claimPayout', seriesId });
-    expect(types(again.events)).toEqual(['UnitsBurned']);
-    expect(again.events[0]!.payload).toMatchObject({ units: '40' });
-    await h.sim.submit({ kind: 'crankBurn', seriesId, holders: [b2.address] }, 'keeper');
+    // cause S3-Z: the claim of nothing emits its event with 0 and the units it burns (was: the burn alone)
+    expect(types(again.events)).toEqual(['PayoutClaimed', 'UnitsBurned']);
+    expect(again.events[0]!.payload).toMatchObject({ amount: '0', burnedUnits: '40' });
+    expect(again.events[1]!.payload).toMatchObject({ units: '40' });
+    await h.sim.submit({ kind: 'burnRetired', seriesId, holder: b2.address }, 'keeper'); // cause S3-BR
     const b2Before = await balance(h, b2.address);
     await h.exec(b2, { kind: 'claimPayout', seriesId });
     expect((await balance(h, b2.address)) - b2Before).toBe(USDC(2_137.5));

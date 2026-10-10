@@ -2171,7 +2171,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        post: operations["crankBurn"];
+        post: operations["burnRetiredHolders"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2845,11 +2845,13 @@ export type components = {
             capPerUnit?: string | null;
             grossPaidPerUnit?: string;
             claimedTotal?: components["schemas"]["Money"];
-            /** @description net payout claimable now; excludes the tail and the final pool */
+            /** @description what claimPayout (Stage 1's claim) pays now: the net payout only; excludes the redemption, the tail and the final pool */
             claimable?: components["schemas"]["Money"];
-            /** @description tail owed after a redemption (Stage 1's claimableTail view): on the redeemed units or, before the holder redeems, on the units its redemption would redeem; claimPayout pays it once the holder has claimed the redemption */
+            /** @description what the redemption pays now beside the pending payout (claimRedemption, or the redemption claimTail or claimFinal runs first): the redemption price on the units not yet redeemed plus their tail catch-up; 0 unless the series redeemed */
+            redemptionClaimable?: components["schemas"]["Money"];
+            /** @description what claimTail pays (Stage 1's claimableTail view): the tail since the holder's tail cursor on its redeemed units or, before it redeems, on the units its redemption would redeem (claimTail redeems first) */
             tailClaimable?: components["schemas"]["Money"];
-            /** @description final-pool share claimable after an extinguishment */
+            /** @description the final-pool share claimFinal pays after an extinguishment (claimFinal also pays the net payout, claimable) */
             finalClaimable?: components["schemas"]["Money"];
             realisedYieldBps?: number;
             lockupEndsAt?: number | null;
@@ -3008,10 +3010,18 @@ export type components = {
                 vaultFeesTotal?: components["schemas"]["Money"];
             };
             payouts: {
+                /** @description what holders claimed from the three pools: byPool.payout + byPool.tail + byPool.final (redemption principal excluded: redemption.claimed) */
                 claimed?: components["schemas"]["Money"];
-                /** @description payments.netDistributed + tail.net + extinguishment.returnedToHolders − claimed (one claim pays the net payout, the tail and the final pool) */
+                /** @description payments.netDistributed + tail.net + extinguishment.returnedToHolders − claimed */
                 unclaimed?: components["schemas"]["Money"];
+                /** @description claims that paid more than 0 (payout, tail and final claims) */
                 count?: number;
+                /** @description claimed per pool, one per claim of Stage 1's family (S3): the net payout (claimPayout, and the pending payout and tail catch-up a redemption pays), the tail (claimTail) and the final claim (claimFinal: the pending payout and the final-pool share) */
+                byPool?: {
+                    payout?: components["schemas"]["Money"];
+                    tail?: components["schemas"]["Money"];
+                    final?: components["schemas"]["Money"];
+                };
             };
             refunds: {
                 total?: components["schemas"]["Money"];
@@ -7677,7 +7687,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon). The three amounts are disjoint and this claimPayout pays all of them. A holder that has not redeemed yet takes its tail after claiming the redemption, so its tail is not counted here. */
+            /** @description Unsigned claimPayout (Stage 1's claim), built through the PayoutClaimBuilder interface (private payouts coming soon). It pays the net payout only, on every status: the redemption, the tail and the final-pool share are their own claims (claimRedemption, claimTail, claimFinal). On a Retired series it also burns the holder's balance, also when it pays nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7685,18 +7695,16 @@ export interface operations {
                 content: {
                     "application/json": {
                         tx?: Record<string, never>;
-                        /** @description the net payout only; excludes the tail and the final pool */
+                        /** @description what the claim pays */
                         claimable?: components["schemas"]["Money"];
-                        /** @description the tail share this claimPayout pays; 0 until the holder has redeemed units (the position shows the tail owed before that) */
-                        tailClaimable?: components["schemas"]["Money"];
-                        /** @description the final-pool share (after an extinguishment) */
-                        finalClaimable?: components["schemas"]["Money"];
+                        /** @description the units the claim burns: on a Retired series the holder's own balance (its units less the auction units not yet delivered and those held for a window ask), else 0 */
+                        burnsUnits?: string;
                         /** @enum {string} */
                         builder?: "public" | "private";
                     };
                 };
             };
-            /** @description Nothing to claim */
+            /** @description Nothing to claim (reason nothing-to-claim): the claim would pay 0 and burn nothing. claimWith names the claims that would pay the holder something now (claimRedemption, claimTail, claimFinal) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -7850,7 +7858,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    crankBurn: {
+    burnRetiredHolders: {
         parameters: {
             query?: never;
             header?: never;
@@ -7862,14 +7870,24 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Permissionless burn crank triggered for unclaimed holders */
+            /** @description One permissionless burnRetired (Stage 1's burn_retired) per holder that still holds units: burned counts the holders burned, refused those the chain refused (not registered) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        burned?: number;
+                        refused?: number;
+                    };
                 };
+            };
+            /** @description The series is not Retired (Stage 1 TerminalStatus) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

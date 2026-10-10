@@ -116,7 +116,6 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
     commitWindowOrder: ['window_commit_bid', 'commit_ask', 'commitAsk'],
     revealWindowOrder: ['reveal_order'],
     snapshotRate: ['snapshot_fx', 'snapshot'],
-    crankBurn: ['burn_retired'],
     crankPause: ['end_pause'],
     openTransferWindow: ['open_window'],
     clearTransferWindow: ['finalize_window'],

@@ -122,7 +122,9 @@ function tailCatchUp(p: SimPosition, units: bigint): bigint {
  * `redemption`).
  *
  * Events: `BidDelivered` (a pending bid), `PayoutClaimed{burnedUnits: 0}` for the pending payout and the tail catch-up
- * (when > 0; `claimPayout`'s carries the tail too), `UnitsBurned`, `RedemptionClaimed{units, amount: P_redeem × units}`.
+ * (only when > 0: it is split out of the redemption, whose own claim event carries the principal; S3 D3),
+ * `UnitsBurned`, `RedemptionClaimed{units, amount: P_redeem × units}`. This order (the burn before the redemption's own
+ * event) is Stage 1's redemption body's, kept as it is; the claim-before-burn order applies to the claim events of S3.
  */
 export function redeemBody(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): void {
   const r = s.redemption!;
@@ -199,8 +201,8 @@ function tailSince(s: SimSeries, p: SimPosition, units: bigint): bigint {
  * The tail a holder could take now, without moving its cursor: Stage 1's `claimableTail` view (MercesVault.sol:747-753)
  * and the tail `claim_tail` pays (SIM:1403-1417). It is weighed on the holder's redeemed units or, for a holder that
  * has not redeemed yet, on the units its redemption would redeem (`units − escrowed`), because `claim_tail` redeems
- * them first. 0 before a redemption. `claimTail` pays exactly this (until S3 retires the bundle, `claimPayout` also pays
- * it once the holder has redeemed).
+ * them first. 0 before a redemption. `claimTail` pays exactly this, and only `claimTail` pays it (`claimPayout` is the
+ * net payout alone).
  */
 export function claimableTail(s: SimSeries, p: SimPosition): bigint {
   if (!s.redemption) return 0n;
@@ -246,19 +248,6 @@ export function claimTail(e: EngineCore, signer: string, cmd: Extract<Command, {
   p.claimedTotal += amount;
   e.credit(p.wallet, s.terms.stablecoinMint, amount);
   emit('TailClaimed', { seriesId: s.seriesId, holder: p.wallet, amount: str(amount) });
-}
-
-/**
- * The tail a holder takes now (Stage 1 `claim_tail`'s amount on its redeemed units, SIM:1411-1412); moves its tail
- * cursor. Nothing (and no cursor move) before a redemption or for a holder with no redeemed units: `claimPayout`
- * carries the tail until S3 makes it Stage 1's `claim` (`claimTail` has the refusals and the redemption first; the read
- * side, `claimableTail`, counts those units already).
- */
-export function takeTail(_e: EngineCore, s: SimSeries, p: SimPosition): bigint {
-  if (!s.redemption || p.redeemedUnits === 0n) return 0n;
-  const amount = tailSince(s, p, p.redeemedUnits);
-  p.lastTailAccWad = s.tail.tailAccWad;
-  return amount;
 }
 
 /** The deprecated per-unit tail paid in base units (`RedemptionState.tailPaidPerUnit`), from Stage 1's WAD figure. */

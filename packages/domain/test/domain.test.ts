@@ -166,7 +166,9 @@ describe('schemas', () => {
     // the raise's wallet commands are Stage 1's four; the rest of the raise is the permissionless group
     expect(userCommandKinds.filter((k) => /Raise|Bid|Refund/.test(k))).toEqual(['openRaise', 'cancelRaise', 'commitBid', 'revealBid']);
     expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired']); // cause S3-BR
-    expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankBurn', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'graduateCurve', 'setAllowlist']);
+    // cause S3-BR: burnRetired{holder} (permissionless, above) replaces the S1 list burn crank (`holders[]`), so no service
+    // command burns any more
+    expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'graduateCurve', 'setAllowlist']);
     // submit takes both groups, each command once (the union's head is the first service command)
     expect(serviceCommandSchema.parse({ kind: 'deliverBid', seriesId: 'solana:abc', bidder: 'b' }).kind).toBe('deliverBid');
     expect(serviceCommandSchema.parse({ kind: 'snapshotRate', pair: 'EUR/USD', rateWad: '1', confWad: '0', publishTime: 1, update: null }).kind).toBe('snapshotRate');

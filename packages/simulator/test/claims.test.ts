@@ -7,7 +7,8 @@ import { seedHolder, seedTail, seedVault, seriesOf } from './kit.ts';
 
 /**
  * Stage 1's claim family (S3 WP1; SIM:624-636, 1403-1417, 1449-1475): `claimTail`, `claimFinal` and the permissionless
- * `burnRetired`. `claimPayout` still bundles the tail and the final pool until S3 WP3; nothing here uses that.
+ * `burnRetired`. `claimPayout` is Stage 1's `claim` since S3 WP3 (the money-per-event rule over every claim in every state is
+ * money-rule.test.ts).
  *
  * Every figure was computed with Stage 1's own `Simulator` (`@merces/reference`): a replay drove it through the same
  * flows as these tests (the harness's terms, 500 units at 9 USDC from bids of 12/11/10/10/9 × 100, released 50% at

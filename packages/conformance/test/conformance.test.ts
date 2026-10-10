@@ -22,6 +22,9 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *    the domain's `runSettlement`; Stage 1's error names (SettlementNotReady); `AuctionSettled` has no fee total;
  *  - S2-PR: push delivery (`deliverBid`, any wallet; the pull refund is retired): a winner's units count from processing;
  *  - S2-PU: per-bid money movement: one `FeeTaken` per processed winner.
+ * S3 cause codes:
+ *  - S3-Z: Stage 1's zero-amount rule: a claim of nothing succeeds and emits its event with zeros (`PayoutClaimed{0, 0}`);
+ *  - S3-BU: `PayoutClaimed.burnedUnits`, 0 off a Retired series.
  */
 const types = (evs: DomainEvent[]) => evs.map((e) => e.type);
 
@@ -178,10 +181,11 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const v = (await e.chain.getVault(seriesId))!;
     expect(v.balance).toBe(USDC(1425).toString());
     const claim = await exec(e, e.backers[0]!, { kind: 'claimPayout', seriesId });
-    expect((claim.events[0]!.payload as { amount: string }).amount).toBe(USDC(285).toString());
-    // a second claim with nothing accrued is a successful no-op with no events (Stage 1's zero-amount rule; cause C: was
-    // NotFound)
-    expect((await exec(e, e.backers[0]!, { kind: 'claimPayout', seriesId })).events).toEqual([]);
+    expect(claim.events[0]!.payload).toMatchObject({ amount: USDC(285).toString(), burnedUnits: '0' }); // cause S3-BU
+    // a second claim with nothing accrued succeeds and emits its event with zeros (Stage 1's zero-amount rule; cause C: was
+    // NotFound; cause S3-Z: was no event)
+    const nothing = await exec(e, e.backers[0]!, { kind: 'claimPayout', seriesId });
+    expect(nothing.events.map((x) => [x.type, x.payload])).toEqual([['PayoutClaimed', { seriesId, holder: e.backers[0]!.address, amount: '0', burnedUnits: '0' }]]);
     expect(BigInt((await e.chain.getVault(seriesId))!.balance)).toBeGreaterThanOrEqual(0n);
   });
 
@@ -215,6 +219,7 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     expect(await e.chain.isAllowlisted(e.backers[1]!.address)).toBe(false);
     const claim = await exec(e, e.backers[1]!, { kind: 'claimPayout', seriesId });
     expect(types(claim.events)).toEqual(['PayoutClaimed']);
+    expect(claim.events[0]!.payload).toMatchObject({ holder: e.backers[1]!.address, burnedUnits: '0' }); // cause S3-BU
     await expectChainError(e.chain.submit({ kind: 'setAllowlist', wallet: e.backers[1]!.address, allowed: true }, 'keeper'), 'Unauthorized');
     await e.chain.submit({ kind: 'setAllowlist', wallet: e.backers[1]!.address, allowed: true }, 'allowlistManager');
   });

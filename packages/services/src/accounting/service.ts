@@ -245,9 +245,13 @@ export class AccountingService {
     // Stage 1's C_remaining: the paid amount rounded UP, so the statement never shows more room than the chain accepts
     const remainingPerUnit = capPerUnit === null ? null : capRemaining(capPerUnit, paidPerUnitWad);
     const returnedToHolders = sum('extinguishment');
-    // what holders were given to claim: the regular net, the tail net and the final pool (a PayoutClaimed pays all three)
+    // what holders were given to claim: the regular net, the tail net and the final pool. Stage 1's claim family pays
+    // them in separate events (S3): the net payout in PayoutClaimed (with the pending payout and tail catch-up a
+    // redemption pays), the tail in TailClaimed, the pending payout and the final-pool share in FinalClaimed
     const distributable = regular.net + tail.net + returnedToHolders;
-    const claimed = sum('payout');
+    const claimedByPool = { payout: sum('payout'), tail: sum('tail_claim'), final: sum('final_claim') };
+    const claimed = claimedByPool.payout + claimedByPool.tail + claimedByPool.final;
+    const claimCount = (moneyTotals.payout?.count ?? 0) + (moneyTotals.tail_claim?.count ?? 0) + (moneyTotals.final_claim?.count ?? 0);
     const treasuryTotal = big(s.treasury_total);
     const treasuryReleased = big(s.treasury_released);
 
@@ -275,7 +279,10 @@ export class AccountingService {
       },
       payments: { grossPaidTotal: regular.gross.toString(), netDistributed: regular.net.toString(), feesTaken: regular.fee.toString(), count: regular.count },
       fees: { auction: feeByKind.auction, payout: feeByKind.payout, total: (BigInt(feeByKind.auction) + BigInt(feeByKind.payout)).toString(), vaultFeesTotal: s.fees_total },
-      payouts: { claimed: claimed.toString(), unclaimed: (distributable > claimed ? distributable - claimed : 0n).toString(), count: moneyTotals.payout?.count ?? 0 },
+      payouts: {
+        claimed: claimed.toString(), unclaimed: (distributable > claimed ? distributable - claimed : 0n).toString(), count: claimCount,
+        byPool: { payout: claimedByPool.payout.toString(), tail: claimedByPool.tail.toString(), final: claimedByPool.final.toString() },
+      },
       refunds: { total: sum('refund').toString(), bids: refunds.rows[0]?.bids ?? '0', payments: refunds.rows[0]?.payments ?? '0' },
       // an extinguishment returns the unvested proceeds to holders: they leave the treasury without being released
       treasury: { total: s.treasury_total, released: s.treasury_released, balance: (treasuryTotal - treasuryReleased - returnedToHolders).toString(), releasesPaused: s.releases_paused },

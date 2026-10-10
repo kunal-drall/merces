@@ -8,6 +8,9 @@ type Rig = Awaited<ReturnType<typeof makeRig>>;
  * S2 cause codes:
  *  - S2-PR: push delivery (`deliverBid`): the raise delivers every bid's refund (the pull refund is retired);
  *  - S2-PU: per-bid money movement: `TreasuryFunded` (and `FeeTaken`) per processed winner.
+ * S3 cause codes:
+ *  - S3-CL: Stage 1's claims pay each pool in its own event: `payouts.claimed` sums the net payout, tail and final claims,
+ *    broken down in `byPool`.
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6)).toString();
 /** the income figure fed to the device-side prover; it must never appear in any accounting response */
@@ -103,7 +106,7 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
     });
     expect(s.payments).toEqual({ grossPaidTotal: USDC(1500), netDistributed: USDC(1425), feesTaken: USDC(75), count: 1 });
     expect(s.fees).toEqual({ auction: USDC(45), payout: USDC(75), total: USDC(120), vaultFeesTotal: USDC(75) });
-    expect(s.payouts).toEqual({ claimed: USDC(285), unclaimed: USDC(1140), count: 1 });
+    expect(s.payouts).toEqual({ claimed: USDC(285), unclaimed: USDC(1140), count: 1, byPool: { payout: USDC(285), tail: '0', final: '0' } }); // cause S3-CL: byPool
     expect(s.refunds).toEqual({ total: USDC(707), bids: USDC(707), payments: '0' }); // cause S2-PR: every bid's refund is pushed (was backer 0's claim)
     expect(s.treasury).toEqual({ total: USDC(4500), released: '0', balance: USDC(4500), releasesPaused: false });
     expect(s.redemption).toEqual({ price: null, redeemedAt: null, deposit: '0', claimed: '0' });

@@ -286,8 +286,12 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     }
     case 'PayoutClaimed': {
       const p = e.payload as P<'PayoutClaimed'>;
-      await client.query('insert into positions (series_id, wallet, claimed_total, first_seq, last_seq) values ($1,$2,$3,$4,$4) on conflict (series_id, wallet) do update set claimed_total = positions.claimed_total + excluded.claimed_total, last_seq = greatest(positions.last_seq, excluded.last_seq)', [p.seriesId, p.holder, p.amount, e.seq]);
-      await money(client, e, 'payout', p.amount, { wallet: p.holder });
+      // the holder's own claim adds to an existing position only: a claim never creates one, so a wallet that only
+      // registered (anyone may register any allowlisted wallet) and sent a claim of 0 gains no holder access
+      // (A-REV-10). Stage 1's zero-amount rule makes a claim of nothing emit this event: it writes no money row. The
+      // units the claim burns (a Retired balance) are the following UnitsBurned's; they are noted in the detail
+      await client.query('update positions set claimed_total = claimed_total + $3, last_seq = greatest(last_seq, $4) where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.amount, e.seq]);
+      if (BigInt(p.amount) > 0n) await money(client, e, 'payout', p.amount, { wallet: p.holder, detail: { burnedUnits: p.burnedUnits } });
       break;
     }
     case 'SeriesRetired':

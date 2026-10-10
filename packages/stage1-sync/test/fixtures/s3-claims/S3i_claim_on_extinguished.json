@@ -1,0 +1,18 @@
+{
+  "name": "S3i_claim_on_extinguished",
+  "description": "claim on an Extinguished series pays the pending payout only: no final-pool share and no burn (the units are the holder's final-pool weight). On 11 after the extinguishment (#39) and b1's claim_final (#46): b2 claims its pending payout, a repeat pays 0, then claim_final pays its share on its 100 units and burns them. 11 then runs to its end with every holder paid as in 11.",
+  "covers": ["i"],
+  "base": "11_extinguishment",
+  "segments": [
+    { "baseSteps": [0, 47] },
+    {
+      "steps": [
+        {"t": "1783641600", "op": "claim", "actor": "b2", "series": "S1", "note": "its pending payout only; no share and no burn"},
+        {"t": "1783641600", "op": "claim", "actor": "b2", "series": "S1", "note": "again: a claim of 0"},
+        {"t": "1783641600", "op": "expect", "series": "S1", "balances": {"b1": {"stable": "44835000000", "units": "0"}, "b2": {"stable": "39585000000", "units": "100"}, "b3": {"stable": "39395000000", "units": "100"}, "b4": {"stable": "39395000000", "units": "100"}, "issuer": {"stable": "220200000000", "units": "0"}}, "feeCollector": "460000000", "treasury": "0", "vault": "16130000000", "auctionEscrow": "0", "ledger": {"status": "Extinguished", "raiseState": "Settled", "mintFinalized": true, "unitsOutstanding": "300", "unitsSold": "400", "clearingPrice": "105000000", "proceeds": "42000000000", "releasedTotal": "21000000000", "capPerUnit": "262500000", "capMultipleWad": "2500000000000000000", "termsCommitment": "0x0b6b9b6f4f65135ab86650bfff5e184c21dcc72ee1c2f5e5a88b2b63636df019", "amendmentNonce": "0", "paidPerUnitWad": "2000000000000000000000000", "netAccWad": "1900000000000000000000000", "carryWad": "0", "carry": "0", "grossReceived": "800000000", "feeCollected": "40000000", "refundedToIssuer": "0", "lastAcceptedPeriod": "8105", "lastPaidPeriod": "8104", "openDuePeriod": null, "openDueAmount": "0", "routerCredit": "0", "trueupNonce": "0", "trueupDue": "0", "trueupAttestedAt": "0", "lastTrueupYear": null, "pauseNonce": "0", "pauseCount": "0", "pausedTotal": "0", "formalNoticeEmittedFor": null, "redemptionPrice": "0", "unitsAtRedemption": "0", "tailCapPerUnit": "0", "tailAccWad": "0", "tailExhausted": false, "extinguishedAt": "1783641600", "finalAccWad": "52500000000000000000000000", "finalUnits": "400", "extinguishNonce": "1"}, "auction": {"bidCount": "4", "revealedCount": "4", "validCount": "4", "escrowTotal": "0", "auctionEscrowUnits": "0", "tallyRound": "1", "roundRejected": false, "rejectionReason": null, "clearingPrice": "105000000", "qAbove": "300", "qAt": "100", "R": "100", "unitsSold": "400", "proceeds": "42000000000", "unitsMinted": "400", "bidsProcessed": "4", "mintFinalized": true}, "holders": {"b1": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b2": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b3": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b4": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}}, "note": "b2 still holds its 100 units and is owed its final-pool share"},
+        {"t": "1783641600", "op": "claim_final", "actor": "b2", "series": "S1", "note": "its share on its 100 units, nothing pending; its units burn"}
+      ]
+    },
+    { "baseSteps": [49, 51] }
+  ]
+}

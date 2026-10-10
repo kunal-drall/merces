@@ -221,17 +221,31 @@ export interface PositionState {
   units: Units;
   /** auction units allocated to the holder and not yet delivered (part of `units`) */
   undeliveredUnits: Units;
-  /** the regular (net) payout claimable now; the tail and the final pool are separate fields, never included here */
+  /**
+   * units held for the holder's window ask (part of `units`). The holder's own balance (Stage 1 `unitsOf`, what a
+   * Retired claim or `burnRetired` burns) is `units − undeliveredUnits − escrowedUnits`
+   */
+  escrowedUnits: Units;
+  /**
+   * what `claimPayout` (Stage 1 `claim`) pays now: the net payout, `pending` plus what accrued since the holder's vault
+   * cursor. The redemption, the tail and the final pool are separate fields, never included here
+   */
   claimable: Money;
   claimedTotal: Money;
   redeemedUnits: Units;
   /**
-   * the tail owed to the holder after a redemption: Stage 1's `claimableTail` view, on its redeemed units or, before it
-   * redeems, on the units its redemption would redeem (Stage 1's `claim_tail` redeems first; until S3 the holder sends
-   * claimRedemption, then claimPayout pays it)
+   * what the holder's redemption pays now beside its pending payout (`claimRedemption`, or the redemption `claimTail` or
+   * `claimFinal` runs first): the redemption price on the units not yet redeemed (its units less those held for a window
+   * ask) plus the tail catch-up on them; 0 unless the series redeemed and is Redeemed or Extinguished
+   */
+  redemptionClaimable: Money;
+  /**
+   * what `claimTail` (Stage 1 `claim_tail`) pays as `TailClaimed`: Stage 1's `claimableTail` view, the tail since the
+   * holder's tail cursor on its redeemed units or, before it redeems, on the units its redemption would redeem
+   * (`claim_tail` redeems first, paying `redemptionClaimable` and the pending payout in the redemption's own events)
    */
   tailClaimable: Money;
-  /** the final-pool share claimable now (after an extinguishment) */
+  /** what `claimFinal` (Stage 1 `claim_final`) pays as the final-pool share after an extinguishment (it also pays `claimable`) */
   finalClaimable: Money;
   /** a Stage 1 registered holder (payouts accrue to registered holders only) */
   registered: boolean;

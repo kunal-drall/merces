@@ -121,7 +121,7 @@ function finalWeight(s: SimSeries, p: SimPosition): bigint {
   return s.redemption ? p.redeemedUnits + redeemableUnits(p) : accrualUnits(s, p);
 }
 
-/** A holder's share of the final pool it could take now, without moving its cursor (the read side of `takeFinal`). */
+/** A holder's share of the final pool it could take now, without moving its cursor (the share `claimFinal` pays on top of the net payout). */
 export function claimableFinal(s: SimSeries, p: SimPosition): bigint {
   if (s.status !== 'Extinguished' || !p.registered || p.finalClaimed) return 0n;
   return settleHolderDelta(s.final.finalAccWad, p.lastFinalAccWad, finalWeight(s, p));
@@ -133,7 +133,7 @@ export function claimableFinal(s: SimSeries, p: SimPosition): bigint {
  * them redeemed first (`redeemBody`: its pending payout, the redemption price and the tail catch-up, paid at once) and
  * its share is weighed on its redeemed units; otherwise on its accrual units. The share is
  * `floor((finalAccWad − lastFinalAccWad) × weight / WAD)`, 0 after the first final claim; moves the final cursor and
- * marks the holder claimed. The caller has delivered a pending auction bid and settled the holder.
+ * marks the holder claimed. The caller (`claimFinal`) has delivered a pending auction bid and settled the holder.
  */
 function finalShare(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): { weight: bigint; share: bigint } {
   let weight: bigint;
@@ -147,18 +147,6 @@ function finalShare(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): { 
   p.lastFinalAccWad = s.final.finalAccWad;
   p.finalClaimed = true;
   return { weight, share };
-}
-
-/**
- * A registered holder's share of the final pool of an extinguished series (Stage 1 `claim_final`'s share,
- * SIM:1449-1475; `finalShare`); nothing on any other series. A pending auction bid is delivered first
- * (`deliverPending`). The caller (`claimPayout`) settles the holder before and burns its units after; `claimFinal` is the
- * command with Stage 1's own order and event.
- */
-export function takeFinal(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): bigint {
-  if (s.status !== 'Extinguished') return 0n;
-  deliverPending(e, s, p.wallet, emit); // Stage 1's claim_final delivers a pending auction allocation first (SIM:1453)
-  return finalShare(e, s, p, emit).share;
 }
 
 /**

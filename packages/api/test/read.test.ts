@@ -3,6 +3,7 @@ import { dbTestsEnabled } from '@merces/db';
 import { parsePeriod } from '@merces/math';
 import type { DomainEvent } from '@merces/domain';
 import { project } from '@merces/indexer';
+import { SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -10,6 +11,9 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  * S2 cause codes:
  *  - S2-PR: push delivery (`deliverBid`): the raise delivers every bid's refund and units; the pull refund is retired;
  *  - S2-RH: registerHolder (`HolderRegistered`).
+ *
+ * S3 cause codes:
+ *  - S3-IX: a claim never creates a position (Stage 1's zero-amount rule lets a registered wallet with nothing send one).
  */
 
 describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
@@ -137,6 +141,27 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     const holders = (await rig.get(`/series/${seriesId}/holders`, holderTok)).json().holders as { wallet: string }[];
     expect(holders).toHaveLength(5);
     expect(holders.map((h) => h.wallet)).not.toContain(wallet);
+    expect((await rig.get(`/series/${seriesId}`)).json().holderCount).toBe(5);
+  });
+
+  // cause S3-IX: once a claim of nothing emits PayoutClaimed (Stage 1's zero-amount rule), any allowlisted wallet could
+  // register and claim 0 onchain; the claim must not open the holder tier either (A-REV-10). Sent on the chain and
+  // indexed as the indexer sees it
+  it('a wallet that only registered and sent a claim of nothing gets no position, no holder-tier access and no holding', async () => {
+    const h = rig.sol;
+    const w = new SimWallet(h.sim.family, 'registered-zero-claimer');
+    await h.sim.submit({ kind: 'setAllowlist', wallet: w.address, allowed: true }, 'allowlistManager');
+    await h.sim.submit({ kind: 'registerHolder', seriesId, wallet: w.address }, 'keeper');
+    const tok = rig.token({ accountId: 'registered-zero-claimer', wallets: [{ chain: 'solana', address: w.address }], roles: ['backer'] });
+    const sent = await rig.post('/tx/send', await w.sign(await h.sim.build({ kind: 'claimPayout', seriesId }, w.address)), tok);
+    expect(sent.statusCode, sent.body).toBe(200);
+    expect(sent.json().events.map((e: { type: string; payload: unknown }) => [e.type, e.payload])).toEqual([['PayoutClaimed', { seriesId, holder: w.address, amount: '0', burnedUnits: '0' }]]);
+    await rig.sync();
+    expect((await rig.t.pool.query('select 1 from positions where series_id = $1 and wallet = $2', [seriesId, w.address])).rowCount).toBe(0);
+    expect((await rig.t.pool.query('select 1 from money_events where series_id = $1 and wallet = $2', [seriesId, w.address])).rowCount).toBe(0);
+    for (const route of ['periods', 'vault', 'holders', 'payouts', 'position']) expect([route, (await rig.get(`/series/${seriesId}/${route}`, tok)).statusCode]).toEqual([route, 403]);
+    expect((await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: w.address }, tok)).statusCode).toBe(403);
+    expect((await rig.get('/me/holdings', tok)).json().holdings).toEqual([]);
     expect((await rig.get(`/series/${seriesId}`)).json().holderCount).toBe(5);
   });
 

@@ -73,7 +73,7 @@ export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: OpKind; sh
   deliver_bid: { canonical: 'deliverBid', kind: 'direct' },
   submit_report: { canonical: 'submitReport (Groth16 proof; attestation signed by the runner)', kind: 'shim', shim: 'SH-REP-1' },
   pay: { canonical: 'payIn (period and amount supplied by the runner)', kind: 'shim', shim: 'SH-PAY-1' },
-  claim: { canonical: 'claimPayout', kind: 'shim', shim: 'SH-CLM-1' },
+  claim: { canonical: 'claimPayout', kind: 'direct' },
   claim_release: { canonical: 'drawRelease', kind: 'direct' },
   crank_status: { canonical: 'crankStatus', kind: 'direct' },
   burn_retired: { canonical: 'burnRetired (permissionless; sent by the keeper)', kind: 'direct' },

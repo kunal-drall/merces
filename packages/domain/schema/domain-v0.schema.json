@@ -6923,34 +6923,6 @@
       ],
       "additionalProperties": false
     },
-    "crankBurn": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "crankBurn"
-        },
-        "seriesId": {
-          "type": "string",
-          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-        },
-        "holders": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          }
-        }
-      },
-      "required": [
-        "kind",
-        "seriesId",
-        "holders"
-      ],
-      "additionalProperties": false
-    },
     "crankPause": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
