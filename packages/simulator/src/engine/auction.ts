@@ -40,8 +40,8 @@ export function cancelRaise(e: EngineCore, signer: string, cmd: Extract<Command,
   s.phase = 'Cancelled';
   emit('RaiseCancelled', { seriesId: s.seriesId });
 }
-/** The reveal phase is time-derived: commitEndsAt ≤ now < revealEndsAt. */
-export function auctionPhase(s: SimSeries, now: number): 'Draft' | 'Open' | 'Reveal' | 'SettleDue' | 'Settled' | 'Failed' | 'Cancelled' {
+/** The reveal phase is time-derived: commitEndsAt ≤ now < revealEndsAt. Any other stored raise state passes through. */
+export function auctionPhase(s: SimSeries, now: number): 'Draft' | 'Open' | 'Reveal' | 'SettleDue' | 'Settling' | 'Settled' | 'Failed' | 'Cancelled' {
   if (s.phase !== 'Open') return s.phase;
   if (now < s.commitEndsAt!) return 'Open';
   if (now < s.revealEndsAt!) return 'Reveal';
@@ -87,7 +87,9 @@ export function settleAuction(e: EngineCore, cmd: Extract<Command, { kind: 'sett
       b.settled = true;
     }
     s.phase = 'Failed';
-    emit('AuctionFailed', { seriesId: s.seriesId, reason: res.reason! });
+    // Stage 1's RaiseFailed fields (S2 WP3): NoValidBids with 0s, or MinRaise with the would-be price, units and proceeds
+    const reason = res.reason === 'no-bids' ? 'NoValidBids' : 'MinRaise';
+    emit('AuctionFailed', { seriesId: s.seriesId, reason, clearingPrice: str(res.clearingPrice), unitsSold: str(res.unitsSold), proceeds: str(res.proceeds), minimumRaise: str(s.terms.minimumRaise) });
     return;
   }
   for (const b of s.bids.values()) {

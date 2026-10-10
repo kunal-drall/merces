@@ -1,10 +1,13 @@
 import { createPublicClient, erc20Abi, getAddress, http, type PublicClient } from 'viem';
 import {
   ChainError, type AdminCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
-  type TxResult, type UnsignedTx, type UserCommand,
+  type PermissionlessCommand, type TxResult, type UnsignedTx, type UserCommand,
 } from '@merces/domain';
 import { assertNotMainnet, type EvmChainConfig } from './config.ts';
 import { EvmEventMapper } from './mapping.ts';
+
+/** Stage 1 on EVM: at most 200 bids per `tallyBids` range and 4,096 bids per auction (MercesConstants.sol). */
+const EVM_LIMITS = { tallyPageMax: 200, maxBidsPerAuction: 4096 } as const satisfies ChainInfo['limits'];
 
 /**
  * EvmChain — live adapter skeleton driven purely by chain config (chainId, RPC, contract addresses, ABIs).
@@ -64,7 +67,7 @@ export class EvmChain implements ChainPort {
   async info(): Promise<ChainInfo> {
     const stablecoins: ChainInfo['stablecoins'] = {};
     for (const [k, addr] of Object.entries(this.config.stablecoins)) if (addr) stablecoins[k as 'USDC' | 'USDG'] = { mint: addr.toLowerCase(), decimals: 6 };
-    return { chain: this.chain, family: 'evm', mode: 'live', network: this.config.network, stablecoins, modules: this.config.contracts, admin: '', feeCollector: '', newRaisesPaused: false };
+    return { chain: this.chain, family: 'evm', mode: 'live', network: this.config.network, stablecoins, modules: this.config.contracts, admin: '', feeCollector: '', newRaisesPaused: false, limits: EVM_LIMITS };
   }
 
   async health(): Promise<HealthReport> {
@@ -126,7 +129,7 @@ export class EvmChain implements ChainPort {
     if (!this.abis) return this.notReady('readEvents');
     return this.notReady('readEvents(decoder)');
   }
-  async build(_command: UserCommand | AdminCommand, _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
+  async build(_command: UserCommand | AdminCommand | PermissionlessCommand, _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
     return this.notReady('build');
   }
   async send(_signed: SignedTx): Promise<TxResult> {

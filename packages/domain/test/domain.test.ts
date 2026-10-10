@@ -13,7 +13,9 @@ import {
 /*
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
- *  - S2-NRC: the non-reveal charge hold (new series record 0 bps; 0 bps applies whatever a series records).
+ *  - S2-NRC: the non-reveal charge hold (new series record 0 bps; 0 bps applies whatever a series records);
+ *  - S2-MS: multi-step settlement (Stage 1's settlement events);
+ *  - S2-RH: registerHolder (`HolderRegistered`).
  */
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
@@ -131,6 +133,8 @@ describe('schemas', () => {
   it('covers every event listed in Part D2', () => {
     const required = ['IssuerRegistered', 'SeriesCreated', 'RaiseOpened', 'RaiseCancelled', 'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'BidRefunded', 'UnitsMinted', 'TreasuryFunded', 'FundsReleased', 'ReleasesPaused', 'ReleasesResumed', 'SplitReceipt', 'ReportAccepted', 'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'SeriesRetired', 'UnitsBurned', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout', 'PauseRequested', 'PauseApproved', 'PauseEnded', 'StatusChanged', 'FormalNoticeDue', 'TermsAmended', 'SeriesExtinguished', 'RateSnapshot', 'FxFallbackFlagged', 'TransferWindowOpened', 'TransferWindowCleared', 'UnitsTransferred', 'AllowlistUpdated', 'AttestorRegistered', 'CurveSeriesCreated', 'CurveGraduated'];
     for (const r of required) expect(eventTypes).toContain(r);
+    // cause S2-MS / S2-RH: Stage 1's settlement events and holder registration, with Stage 1's names
+    for (const r of ['SettlementProposed', 'SettlementRejected', 'UnitsAllocated', 'BidDelivered', 'RaiseMintFinalized', 'HolderRegistered']) expect(eventTypes).toContain(r);
   });
   it('the committed JSON schema is up to date', () => {
     const path = fileURLToPath(new URL('../schema/domain-v0.schema.json', import.meta.url));

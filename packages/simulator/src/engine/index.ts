@@ -84,6 +84,15 @@ export class SimEngine implements EngineCore {
       case 'commitBid': return commitBid(this, user(), cmd, now, emit);
       case 'revealBid': return revealBid(this, user(), cmd, now, emit);
       case 'settleAuction': service('any'); return settleAuction(this, cmd, now, emit);
+      // Stage 1's multi-step settlement and holder registration: permissionless, implemented in S2 WP4
+      case 'beginSettlement':
+      case 'tallyBids':
+      case 'finalizeSettlement':
+      case 'processBid':
+      case 'deliverBid':
+      case 'registerHolder':
+        service('any');
+        throw new ChainError('NotImplemented', `${cmd.kind}: multi-step settlement lands in S2 WP4`);
       case 'claimRefund': return claimRefund(this, user(), cmd, emit);
       case 'drawRelease': return drawRelease(this, user(), cmd, now, emit);
       case 'pauseReleases': return pauseReleases(this, user(), cmd, emit);
@@ -173,7 +182,7 @@ export class SimEngine implements EngineCore {
     return deadlines(s, period, now);
   }
   /** The reveal phase is time-derived: commitEndsAt ≤ now < revealEndsAt. */
-  auctionPhase(s: SimSeries, now: number): 'Draft' | 'Open' | 'Reveal' | 'SettleDue' | 'Settled' | 'Failed' | 'Cancelled' {
+  auctionPhase(s: SimSeries, now: number): ReturnType<typeof auctionPhase> {
     return auctionPhase(s, now);
   }
   /** Stage 1's redemption quote at `now` (`redemptionQuote` over the vault's year ring and the live cap). */

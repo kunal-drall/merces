@@ -1,5 +1,5 @@
 import type { DomainEvent } from './events.ts';
-import type { AdminCommand, ServiceCommand, ServiceRole, SignedTx, TxResult, UnsignedTx, UserCommand } from './commands.ts';
+import type { AdminCommand, PermissionlessCommand, ServiceCommand, ServiceRole, SignedTx, TxResult, UnsignedTx, UserCommand } from './commands.ts';
 import type { Address, ChainFamily, ChainKey, ChainMode, Stablecoin } from './ids.ts';
 import type { Money } from './money.ts';
 import type {
@@ -50,11 +50,14 @@ export interface ChainPort {
   readEvents(cursor: string | null, limit: number): Promise<{ events: DomainEvent[]; nextCursor: string | null }>;
 
   // ---- write ----
-  /** Build an unsigned transaction for a user's wallet (or the admin multisig) to sign. Never signs. */
-  build(command: UserCommand | AdminCommand, signer: Address, coSigners?: Address[]): Promise<UnsignedTx>;
+  /**
+   * Build an unsigned transaction for a user's wallet (or the admin multisig) to sign. Never signs. A permissionless
+   * command may be built for any wallet (a bidder delivering its own bid, or anyone when the keepers stall).
+   */
+  build(command: UserCommand | AdminCommand | PermissionlessCommand, signer: Address, coSigners?: Address[]): Promise<UnsignedTx>;
   /** Broadcast a user-signed transaction. */
   send(signed: SignedTx): Promise<TxResult>;
-  /** Submit a permissionless or service-role transaction signed by the backend's own low-privilege key. */
+  /** Submit a permissionless or service-role transaction signed by the backend's own low-privilege key (`ServiceCommand` covers both). */
   submit(command: ServiceCommand, role: ServiceRole): Promise<TxResult>;
 }
 

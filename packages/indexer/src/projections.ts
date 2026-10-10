@@ -21,8 +21,13 @@ function summary(e: DomainEvent): string | null {
     case 'BidCommitted': return 'A sealed bid was committed';
     case 'BidRevealed': return 'A bid was revealed';
     case 'AuctionSettled': return `Auction settled: ${p.unitsSold} units sold`;
-    case 'AuctionFailed': return `Auction failed (${p.reason}); all bids refunded`;
+    case 'AuctionFailed': return `Auction failed (${p.reason}); deposits are returned to the bidders`;
     case 'UnitsMinted': return `${p.units} units minted to a holder`;
+    case 'SettlementProposed': return `Settlement proposed (round ${p.round})`;
+    case 'SettlementRejected': return `Settlement round ${p.round} rejected (${p.reason})`;
+    case 'UnitsAllocated': return `${p.units} units allocated to a bidder`;
+    case 'BidDelivered': return 'A bid was delivered';
+    case 'RaiseMintFinalized': return 'Raise minting finalised';
     case 'FundsReleased': return `Treasury tranche ${p.trancheIndex} released to the issuer`;
     case 'ReleasesPaused': return `Treasury releases paused (${p.reason})`;
     case 'ReleasesResumed': return 'Treasury releases resumed';
@@ -46,7 +51,7 @@ function summary(e: DomainEvent): string | null {
     case 'UnitsTransferred': return `${p.units} units transferred in window ${p.windowId}`;
     case 'CurveGraduated': return 'Curve graduated to the DEX';
     case 'FxFallbackFlagged': return `FX fallback flagged for ${p.pair} ${p.periodId}`;
-    default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, VerifierKeyRegistered, FeeTaken, refunds, treasury, splits: not in the public feed
+    default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, VerifierKeyRegistered, HolderRegistered, FeeTaken, refunds, treasury, splits: not in the public feed
   }
 }
 
@@ -120,11 +125,63 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
         [p.seriesId, p.settledAt, p.clearingPrice, p.unitsSold, cap, p.proceeds, e.seq, periodAt(p.settledAt)],
       );
       await money(client, e, 'treasury', p.proceeds, { detail: { clearingPrice: p.clearingPrice, unitsSold: p.unitsSold, totalFees: p.totalFees } });
+      // the auction's own results (migration 019), as finalize_settlement wrote them
+      await client.query('update series set auction_clearing_price = $2, auction_units_sold = $3, auction_proceeds = $4, auction_failure_reason = null, auction_finalized_at = $5 where series_id = $1', [p.seriesId, p.clearingPrice, p.unitsSold, p.proceeds, p.settledAt]);
       break;
     }
-    case 'AuctionFailed':
-      await client.query("update series set phase = 'Failed', last_event_seq = $2 where series_id = $1", [sid, e.seq]);
+    case 'AuctionFailed': {
+      // a failed raise keeps its price and would-be results on the auction (Stage 1); the series' issue price stays unset
+      const p = e.payload as P<'AuctionFailed'>;
+      await client.query(
+        "update series set phase = 'Failed', auction_failure_reason = $2, auction_clearing_price = $3, auction_units_sold = $4, auction_proceeds = $5, auction_finalized_at = $6, last_event_seq = $7 where series_id = $1",
+        [p.seriesId, p.reason, p.clearingPrice, p.unitsSold, p.proceeds, e.blockTime, e.seq],
+      );
       break;
+    }
+    case 'SettlementProposed': {
+      const p = e.payload as P<'SettlementProposed'>;
+      await client.query('insert into settlement_rounds (series_id, round, clearing_price, proposed_seq) values ($1,$2,$3,$4) on conflict (series_id, round) do nothing', [p.seriesId, p.round, p.clearingPrice, e.seq]);
+      await client.query("update series set phase = 'Settling', settlement_round = $2, round_rejected = false, rejection_reason = null, last_event_seq = $3 where series_id = $1", [p.seriesId, p.round, e.seq]);
+      break;
+    }
+    case 'SettlementRejected': {
+      const p = e.payload as P<'SettlementRejected'>;
+      await client.query('update settlement_rounds set rejected = true, rejection_reason = $3 where series_id = $1 and round = $2', [p.seriesId, p.round, p.reason]);
+      await client.query('update series set round_rejected = true, rejection_reason = $3, last_event_seq = $4 where series_id = $1 and settlement_round = $2', [p.seriesId, p.round, p.reason, e.seq]);
+      break;
+    }
+    case 'UnitsAllocated': {
+      // a winner processed: its units are minted to the auction escrow for it and count toward its accrual weight until
+      // delivered (SPEC §6.3), so they join the position now as undelivered units
+      const p = e.payload as P<'UnitsAllocated'>;
+      await client.query('update bids set processed = true, allocated_units = $3, cost = $4, fee = $5, pending_units = $3, pending_refund = $6 where series_id = $1 and bidder = $2', [p.seriesId, p.bidder, p.units, p.cost, p.fee, p.refund]);
+      await client.query(
+        'insert into positions (series_id, wallet, units, undelivered_units, first_seq, last_seq) values ($1,$2,$3,$3,$4,$4) on conflict (series_id, wallet) do update set units = positions.units + excluded.units, undelivered_units = positions.undelivered_units + excluded.undelivered_units, last_seq = excluded.last_seq where positions.last_seq < excluded.last_seq',
+        [p.seriesId, p.bidder, p.units, e.seq],
+      );
+      break;
+    }
+    case 'BidDelivered': {
+      // delivery implies processing (losers are processed without an event): the bid is marked processed here too
+      const p = e.payload as P<'BidDelivered'>;
+      await client.query('update bids set processed = true, delivered = true, delivered_units = $3, refunded = refunded + $4, pending_units = 0, pending_refund = 0 where series_id = $1 and bidder = $2', [p.seriesId, p.bidder, p.units, p.refund]);
+      if (BigInt(p.units) > 0n) await client.query('update positions set undelivered_units = greatest(undelivered_units - $3, 0), last_seq = greatest(last_seq, $4) where series_id = $1 and wallet = $2', [p.seriesId, p.bidder, p.units, e.seq]);
+      if (BigInt(p.refund) > 0n) await money(client, e, 'refund', p.refund, { wallet: p.bidder });
+      break;
+    }
+    case 'RaiseMintFinalized': {
+      // the last process_bid: every bid of the series is processed (losers emit nothing), and a settled raise's units
+      // become outstanding (Stage 1 sets units_outstanding here, not at settlement)
+      const p = e.payload as P<'RaiseMintFinalized'>;
+      await client.query("update series set mint_finalized = true, units_outstanding = case when phase = 'Settled' then $2::numeric else units_outstanding end, last_event_seq = $3 where series_id = $1", [p.seriesId, p.unitsSold, e.seq]);
+      await client.query('update bids set processed = true where series_id = $1', [p.seriesId]);
+      break;
+    }
+    case 'HolderRegistered': {
+      const p = e.payload as P<'HolderRegistered'>;
+      await client.query('insert into positions (series_id, wallet, registered, first_seq, last_seq) values ($1,$2,true,$3,$3) on conflict (series_id, wallet) do update set registered = true, last_seq = greatest(positions.last_seq, excluded.last_seq)', [p.seriesId, p.holder, e.seq]);
+      break;
+    }
     case 'BidRefunded': {
       const p = e.payload as P<'BidRefunded'>;
       await client.query('update bids set refunded = refunded + $3 where series_id = $1 and bidder = $2', [p.seriesId, p.bidder, p.amount]);
@@ -323,6 +380,8 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     case 'CurveGraduated': {
       const p = e.payload as P<'CurveGraduated'>;
       await client.query('update curves set graduated = true, raised = $2 where series_id = $1', [p.seriesId, p.raised]);
+      // a graduated curve's units are final at once (Stage 1 `complete_curve`)
+      await client.query('update series set mint_finalized = true where series_id = $1', [p.seriesId]);
       // graduation sets the issue price, and with it the cap per unit, as an auction's settlement does (AuctionSettled)
       const s = await client.query<{ cap_multiple_wad: string }>('select cap_multiple_wad::text from series where series_id = $1', [p.seriesId]);
       const row = s.rows[0];

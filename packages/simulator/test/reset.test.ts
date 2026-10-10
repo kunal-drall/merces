@@ -7,7 +7,8 @@ import { GENESIS } from './helpers.ts';
 
 /*
  * S2 cause codes:
- *  - S2-V3: simulator state version 3.
+ *  - S2-V3: simulator state version 3;
+ *  - S2-MS: migration 019's settlement tables are keyed by series, so a reset clears them.
  */
 describe('sim:reset guard', () => {
   it('runs only with MERCES_ALLOW_SIM_RESET=1', () => {
@@ -49,6 +50,9 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
     await pool.query("insert into terms_vault (draft_id, series_id, ciphertext, key_id, commitment) values ($1, null, 'ct', 'k1', '0x00')", [`draft-${chain}`]);
     await pool.query("insert into series_drafts (draft_id, account_id, chain, issuer, public_terms, state) values ($1, 'acct-1', $2, 'iss', '{}', 'terms_set')", [`open-draft-${chain}`, chain]);
     await pool.query("insert into reminders_sent (kind, target, recipient) values ('report-due', $1, 'iss')", [`${sid}:2026Q1`]);
+    // migration 019's settlement tables are keyed by series (cause S2-MS)
+    await pool.query("insert into settlement_rounds (series_id, round, clearing_price, proposed_seq) values ($1, 1, 9000000, 2)", [sid]);
+    await pool.query("insert into auction_deliveries (series_id, bidder, attempts, last_error) values ($1, 'bidder', 1, 'NotProcessed')", [sid]);
     await pool.query("insert into outbox (topic, payload) values ('notification', $1)", [JSON.stringify({ kind: 'payout.available', seriesId: sid })]);
     await pool.query("insert into notifications (notification_id, account_id, kind, subject, body, data, payload_hash) values ($1, 'acct-1', 'payout.available', 's', 'b', $2, $1)", [`n-${chain}`, JSON.stringify({ seriesId: sid })]);
   }
@@ -73,7 +77,7 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
     expect(report.chains).toEqual(['solana']);
     expect(report.draftsKept).toBe(1);
     const deleted = Object.fromEntries(report.deleted.map((d) => [d.table, d.rows]));
-    expect(deleted).toMatchObject({ sim_state: 1, events: 1, indexer_cursors: 1, reports: 1, series_drafts: 1, terms_vault: 1, reminders_sent: 1, outbox: 1, notifications: 1 });
+    expect(deleted).toMatchObject({ sim_state: 1, events: 1, indexer_cursors: 1, reports: 1, series_drafts: 1, terms_vault: 1, reminders_sent: 1, outbox: 1, notifications: 1, settlement_rounds: 1, auction_deliveries: 1 });
     expect(formatSimResetReport(report, prefix)).toMatch(/re-apply on each reset chain[\s\S]*registerAttestor[\s\S]*registerVerifierKey/);
 
     // the reset chain is gone, the other untouched
@@ -85,6 +89,10 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
       expect(await count(`${table} where chain = 'monad'`), table).toBe(1);
     }
     expect(await count("reports where series_id like 'monad:%'")).toBe(1);
+    for (const table of ['settlement_rounds', 'auction_deliveries']) {
+      expect(await count(`${table} where series_id like 'solana:%'`), table).toBe(0);
+      expect(await count(`${table} where series_id like 'monad:%'`), table).toBe(1);
+    }
     expect(await count("reports where series_id like 'solana:%'")).toBe(0);
     // people and paper not tied to a series stay
     expect(await count('accounts')).toBe(1);

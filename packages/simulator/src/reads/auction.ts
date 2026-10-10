@@ -6,7 +6,7 @@ import { auctionPhase } from '../engine/auction.ts';
 export function toAuctionState(seriesId: string, x: SimSeries, now: number): AuctionState {
   const phase = auctionPhase(x, now);
   return {
-    seriesId, phase: phase === 'SettleDue' ? 'Reveal' : phase, commitEndsAt: x.commitEndsAt, revealEndsAt: x.revealEndsAt, bidCount: x.bids.size, revealedCount: [...x.bids.values()].filter((b) => b.revealed).length,
+    seriesId, phase: phase === 'SettleDue' ? 'Reveal' : phase, raiseState: x.phase, commitEndsAt: x.commitEndsAt, revealEndsAt: x.revealEndsAt, bidCount: x.bids.size, revealedCount: [...x.bids.values()].filter((b) => b.revealed).length,
     clearingPrice: x.phase === 'Settled' && x.issuePrice !== null ? s(x.issuePrice) : null, unitsSold: s(x.unitsSold), proceeds: s(x.treasuryTotal),
   };
 }

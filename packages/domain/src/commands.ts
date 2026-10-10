@@ -6,6 +6,8 @@ import { seriesTermsSchema, tierSchema, fxBasisSchema } from './events.ts';
 /**
  * Canonical commands (Part D2). User commands are built into unsigned transactions for the user's wallet.
  * Service commands are submitted by the backend's own low-privilege roles (keeper, allowlist manager).
+ * Permissionless commands (Stage 1's sealed-bid settlement and holder registration) may be sent by anyone: the keeper
+ * `submit`s them, and any wallet may `build` and sign them (self-delivery, or a fallback when the keepers stall).
  * Admin commands are built for the protocol multisig.
  */
 
@@ -62,6 +64,7 @@ export const userCommands = {
   cancelRaise: z.object({ kind: z.literal('cancelRaise'), seriesId: seriesIdSchema }),
   commitBid: z.object({ kind: z.literal('commitBid'), seriesId: seriesIdSchema, commitment: hash32Schema, deposit: moneySchema }),
   revealBid: z.object({ kind: z.literal('revealBid'), seriesId: seriesIdSchema, pricePerUnit: moneySchema, quantity: unitsSchema, salt: hash32Schema }),
+  /** @deprecated one-step refund claim; Stage 1 pushes refunds with `deliverBid` (S2 removes it in WP8) */
   claimRefund: z.object({ kind: z.literal('claimRefund'), seriesId: seriesIdSchema }),
   drawRelease: z.object({ kind: z.literal('drawRelease'), seriesId: seriesIdSchema }),
   pauseReleases: z.object({ kind: z.literal('pauseReleases'), seriesId: seriesIdSchema, paused: z.boolean() }),
@@ -100,6 +103,7 @@ export const userCommands = {
 } as const;
 
 export const serviceCommands = {
+  /** @deprecated one-step settlement; Stage 1 settles with `beginSettlement` … `deliverBid` (S2 removes it in WP8) */
   settleAuction: z.object({ kind: z.literal('settleAuction'), seriesId: seriesIdSchema }),
   snapshotRate: z.object({ kind: z.literal('snapshotRate'), pair: pairSchema, rateWad: wadSchema, confWad: wadSchema, publishTime: z.number().int(), /** opaque provider update payload (e.g. Pyth VAA) for live chains */ update: z.string().nullable() }),
   crankStatus: z.object({ kind: z.literal('crankStatus'), seriesId: seriesIdSchema }),
@@ -110,6 +114,28 @@ export const serviceCommands = {
   flagFxFallback: z.object({ kind: z.literal('flagFxFallback'), pair: pairSchema, periodId: periodIdSchema, reason: z.enum(['coverage', 'deviation']) }),
   graduateCurve: z.object({ kind: z.literal('graduateCurve'), seriesId: seriesIdSchema }),
   setAllowlist: z.object({ kind: z.literal('setAllowlist'), wallet: addressSchema, allowed: z.boolean() }),
+} as const;
+
+/**
+ * Stage 1's sealed-bid settlement (SPEC §5.2) and holder registration, with Stage 1's names. Anyone may send them: the
+ * keeper `submit`s them and any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans them.
+ */
+export const permissionlessCommands = {
+  /** Stage 1 `begin_settlement`: proposes a clearing price with the proposer's tally claims; starts the next round */
+  beginSettlement: z.object({ kind: z.literal('beginSettlement'), seriesId: seriesIdSchema, clearingPrice: moneySchema, qAboveClaim: unitsSchema, qAtClaim: unitsSchema }),
+  /**
+   * Stage 1 `tally_bids`: tallies the next page of revealed bids not yet tallied this round, in reveal order, at most
+   * `min(maxBids, ChainInfo.limits.tallyPageMax)` of them (a page that overlaps tallied bids is harmless)
+   */
+  tallyBids: z.object({ kind: z.literal('tallyBids'), seriesId: seriesIdSchema, maxBids: z.number().int().min(1).optional() }),
+  /** Stage 1 `finalize_settlement`: settles, fails or rejects the round once every revealed bid is tallied */
+  finalizeSettlement: z.object({ kind: z.literal('finalizeSettlement'), seriesId: seriesIdSchema }),
+  /** Stage 1 `process_bid`: moves a bid's cost and fee to protocol accounts and records what the bidder is owed */
+  processBid: z.object({ kind: z.literal('processBid'), seriesId: seriesIdSchema, bidder: addressSchema }),
+  /** Stage 1 `deliver_bid`: pays a processed bid's refund and units to the bidder */
+  deliverBid: z.object({ kind: z.literal('deliverBid'), seriesId: seriesIdSchema, bidder: addressSchema }),
+  /** Stage 1 `register_holder`: registers an allowlisted wallet as a holder of the series (idempotent) */
+  registerHolder: z.object({ kind: z.literal('registerHolder'), seriesId: seriesIdSchema, wallet: addressSchema }),
 } as const;
 
 export const adminCommands = {
@@ -127,18 +153,33 @@ export const routerCommands = {
 } as const;
 
 export const userCommandSchema = z.discriminatedUnion('kind', Object.values(userCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'registerIssuer'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
-export const serviceCommandSchema = z.discriminatedUnion('kind', Object.values(serviceCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'settleAuction'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
+export const permissionlessCommandSchema = z.discriminatedUnion('kind', Object.values(permissionlessCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'beginSettlement'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
+/** What `ChainPort.submit` accepts: the service group and the permissionless group (each command is defined once). */
+export const serviceCommandSchema = z.discriminatedUnion('kind', [...Object.values(serviceCommands), ...Object.values(permissionlessCommands)] as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'settleAuction'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
 export const adminCommandSchema = z.discriminatedUnion('kind', Object.values(adminCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'registerAttestor'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
 
 export type UserCommand = { [K in keyof typeof userCommands]: z.infer<(typeof userCommands)[K]> }[keyof typeof userCommands];
-export type ServiceCommand = { [K in keyof typeof serviceCommands]: z.infer<(typeof serviceCommands)[K]> }[keyof typeof serviceCommands];
+export type PermissionlessCommand = { [K in keyof typeof permissionlessCommands]: z.infer<(typeof permissionlessCommands)[K]> }[keyof typeof permissionlessCommands];
+/** A command the backend submits with its own key (`ChainPort.submit`): a service-role command or a permissionless one. */
+export type ServiceCommand = { [K in keyof typeof serviceCommands]: z.infer<(typeof serviceCommands)[K]> }[keyof typeof serviceCommands] | PermissionlessCommand;
 export type AdminCommand = { [K in keyof typeof adminCommands]: z.infer<(typeof adminCommands)[K]> }[keyof typeof adminCommands];
 export type RouterCommand = z.infer<(typeof routerCommands)['postSplitReceipt']>;
 export type Command = UserCommand | ServiceCommand | AdminCommand | RouterCommand;
 export type CommandKind = Command['kind'];
 export const userCommandKinds = Object.keys(userCommands) as UserCommand['kind'][];
-export const serviceCommandKinds = Object.keys(serviceCommands) as ServiceCommand['kind'][];
+/** the service-role group only; `permissionlessCommandKinds` lists the rest of what `submit` accepts */
+export const serviceCommandKinds = Object.keys(serviceCommands) as Exclude<ServiceCommand, PermissionlessCommand>['kind'][];
+export const permissionlessCommandKinds = Object.keys(permissionlessCommands) as PermissionlessCommand['kind'][];
 export const adminCommandKinds = Object.keys(adminCommands) as AdminCommand['kind'][];
+
+/** Every command group, each command listed once, for the generated docs, the JSON schema and the interface diff. */
+export const commandGroups = [
+  { title: 'User commands', commands: userCommands },
+  { title: 'Service commands (keeper / allowlist manager)', commands: serviceCommands },
+  { title: 'Permissionless commands (keeper `submit` or any wallet `build`)', commands: permissionlessCommands },
+  { title: 'Admin commands (multisig)', commands: adminCommands },
+  { title: 'Router commands', commands: routerCommands },
+] as const;
 
 /** The backend's own onchain roles. It never holds user funds (no custody). */
 export type ServiceRole = 'keeper' | 'allowlistManager';

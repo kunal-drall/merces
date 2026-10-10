@@ -1,3 +1,4 @@
+import type { RaiseStateName } from '@merces/domain';
 import type { AuctionExpect, HolderExpect, LedgerExpect } from '@merces/math';
 import { WAD, nextExpectedPeriod } from '@merces/math';
 import type { SimSeries } from './state.ts';
@@ -48,9 +49,9 @@ export function nextExpectedPid(s: SimSeries): number {
   return nextExpectedPeriod(ledgerClock(s));
 }
 
-/** Stage 1 `RaiseState` name for our raise phase (the reveal phase is time-derived; Stage 1 keeps the raise Open). */
-export function raiseStateName(s: SimSeries): 'Draft' | 'Open' | 'Settled' | 'Failed' | 'Cancelled' {
-  return s.phase === 'Reveal' ? 'Open' : s.phase;
+/** Stage 1 `RaiseState` name: the stored raise state (the reveal phase is time-derived; Stage 1 keeps the raise Open). */
+export function raiseStateName(s: SimSeries): RaiseStateName {
+  return s.phase;
 }
 
 /** Stage 1's ledger view (SIM:1664-1709), keys in Stage 1's order. `status` is the status derived at `now`. */

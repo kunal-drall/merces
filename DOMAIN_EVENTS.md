@@ -60,10 +60,14 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `totalFees`: decimal string (base units / WAD / units)
 - `settledAt`: integer
 
-### AuctionFailed
+### AuctionFailed (amount-bearing)
 
 - `seriesId`: string
-- `reason`: `no-bids` \| `below-minimum-raise`
+- `reason`: `NoValidBids` \| `MinRaise`
+- `clearingPrice`: decimal string (base units / WAD / units)
+- `unitsSold`: decimal string (base units / WAD / units)
+- `proceeds`: decimal string (base units / WAD / units)
+- `minimumRaise`: decimal string (base units / WAD / units)
 
 ### BidRefunded (amount-bearing)
 
@@ -76,6 +80,46 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `seriesId`: string
 - `holder`: string
 - `units`: decimal string (base units / WAD / units)
+
+### SettlementProposed (amount-bearing)
+
+- `seriesId`: string
+- `clearingPrice`: decimal string (base units / WAD / units)
+- `round`: integer
+
+### SettlementRejected (amount-bearing)
+
+- `seriesId`: string
+- `round`: integer
+- `clearingPrice`: decimal string (base units / WAD / units)
+- `reason`: `ClaimMismatch` \| `InvalidClearingPrice`
+
+### UnitsAllocated (amount-bearing)
+
+- `seriesId`: string
+- `bidder`: string
+- `units`: decimal string (base units / WAD / units)
+- `cost`: decimal string (base units / WAD / units)
+- `fee`: decimal string (base units / WAD / units)
+- `refund`: decimal string (base units / WAD / units)
+
+### BidDelivered (amount-bearing)
+
+- `seriesId`: string
+- `bidder`: string
+- `units`: decimal string (base units / WAD / units)
+- `refund`: decimal string (base units / WAD / units)
+
+### RaiseMintFinalized (amount-bearing)
+
+- `seriesId`: string
+- `unitsSold`: decimal string (base units / WAD / units)
+- `proceeds`: decimal string (base units / WAD / units)
+
+### HolderRegistered
+
+- `seriesId`: string
+- `holder`: string
 
 ### TreasuryFunded (amount-bearing)
 
@@ -296,7 +340,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 ## Commands
 
-User commands are built into unsigned transactions for the user's wallet (`ChainPort.build`). Service commands are submitted by the backend's own low-privilege roles (`ChainPort.submit` as `keeper` or `allowlistManager`). Admin commands are built for the protocol multisig. The router command is posted by a registered tier-1 split router contract.
+User commands are built into unsigned transactions for the user's wallet (`ChainPort.build`). Service commands are submitted by the backend's own low-privilege roles (`ChainPort.submit` as `keeper` or `allowlistManager`). Permissionless commands (Stage 1's sealed-bid settlement and holder registration) may be sent by anyone: the keeper submits them (`ChainPort.submit`) and any wallet may build and sign them (`ChainPort.build`). Admin commands are built for the protocol multisig. The router command is posted by a registered tier-1 split router contract.
 
 ### User commands
 
@@ -336,6 +380,15 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **graduateCurve**: `seriesId`: string
 - **setAllowlist**: `wallet`: string; `allowed`: boolean
 
+### Permissionless commands (keeper `submit` or any wallet `build`)
+
+- **beginSettlement**: `seriesId`: string; `clearingPrice`: decimal string (base units / WAD / units); `qAboveClaim`: decimal string (base units / WAD / units); `qAtClaim`: decimal string (base units / WAD / units)
+- **tallyBids**: `seriesId`: string; `maxBids?`: integer
+- **finalizeSettlement**: `seriesId`: string
+- **processBid**: `seriesId`: string; `bidder`: string
+- **deliverBid**: `seriesId`: string; `bidder`: string
+- **registerHolder**: `seriesId`: string; `wallet`: string
+
 ### Admin commands (multisig)
 
 - **registerAttestor**: `attestor`: string; `active`: boolean
@@ -350,8 +403,8 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ## Additions beyond the Part D2 list
 
-- Events: `IssuanceStopped` (C11.5), `VerifierKeyRegistered` (admin registers report-verifier keys).
-- Commands: `registerIssuer`, `stopIssuance`, `pauseReleases` (the issuer's own pause, C11.1), `crankPause`, `flagFxFallback`, `clearTransferWindow`, `commitWindowOrder`, `revealWindowOrder`, `buyCurve`, `graduateCurve`, `registerVerifierKey`, `pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`, `postSplitReceipt`.
+- Events: `IssuanceStopped` (C11.5), `VerifierKeyRegistered` (admin registers report-verifier keys); Stage 1's settlement events with Stage 1's names (S2): `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`, `HolderRegistered`.
+- Commands: `registerIssuer`, `stopIssuance`, `pauseReleases` (the issuer's own pause, C11.1), `crankPause`, `flagFxFallback`, `clearTransferWindow`, `commitWindowOrder`, `revealWindowOrder`, `buyCurve`, `graduateCurve`, `registerVerifierKey`, `pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`, `postSplitReceipt`; the permissionless group with Stage 1's names (S2).
 - Each addition closes a gap between the D2 list and Part C; Stage 1 wins on names and shapes, recorded in `INTERFACE_DRIFT.md`.
 
 ## Meanings on Stage 1 (since S1)
@@ -359,6 +412,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 The shapes above are generated; these meanings changed in S1, when the simulator moved to Stage 1's rules (SPEC v1.1.2; Stage 1 wins for onchain behaviour). `ASSUMPTIONS.md` and `STAGE1_INTEGRATION.md` carry the details and the divergences still open.
 
 - **Errors.** Every `ChainError` raised on a Stage 1 path carries `detail.stage1`, Stage 1's error name (SPEC §11); the API returns it with the error.
+- **Sealed-bid settlement (S2).** Stage 1's multi-step settlement with its names: `beginSettlement` proposes a clearing price with the proposer's tally claims (`SettlementProposed`; the raise is `Settling`), `tallyBids` tallies pages of revealed bids (at most `ChainInfo.limits.tallyPageMax` each), `finalizeSettlement` settles (`AuctionSettled`), fails (`AuctionFailed`: NoValidBids, or MinRaise with the would-be price, units and proceeds) or rejects the round (`SettlementRejected`, and a new round may be proposed), `processBid` moves each bid's cost and fee to protocol accounts (`UnitsAllocated` for a winner; the last one finalises the mint, `RaiseMintFinalized`) and `deliverBid` pays the bidder its units and refund (`BidDelivered`). `registerHolder` registers an allowlisted wallet as a holder; `HolderRegistered` marks any wallet's first registration (by `registerHolder`, a winning `processBid` or a window purchase). Anyone may send them; `nextSettlementStep` plans them from the stored raise state (`AuctionState.raiseState`). A raise that would sell 0 units fails (MinRaise), as SPEC and both chains do. The simulator runs them from S2 WP4; until then it refuses them (NotImplemented).
 - **Raise phases and `openRaise` (S2).** `commitDurationSeconds` and `revealDurationSeconds` are series terms (Stage 1 bounds a sealed raise to 1 hour–30 days and 1 hour–7 days); `openRaise` takes the series only and sets the commit end to now + the commit duration and the reveal end to the commit end + the reveal duration (Stage 1 `open_raise`). `nonRevealChargeBps` is recorded at creation (0–1,000 bps on a sealed raise), but the charge is an owner hold: new series record 0, and 0 applies whatever a series records (`NON_REVEAL_CHARGE_HELD`).
 - **`SeriesTerms` deadlines.** Counted in unpaused time from the period end: OnTime while the countdown is ≤ `dueDays`, InGrace while ≤ `dueDays + graceDays`, then Late (inclusive bounds). `formalNoticeDays` counts from the **period end** (Stage 1 `formalNoticeDue`; 90 = period end + 90 days).
 - **`submitReport`.** Reports are strictly sequential (the next expected period, once ended, with no unpaid due). `priorIncomeCommitment` is the income commitment the report chains from (the previous quarter's in the same year; ZERO at a year start; a series' first report outside Q1 supplies its own, bound only by the attestation, Stage 1 A25); the chain checks the proof against the series' live terms commitment, so the command carries none. `proof` is Stage 1's Groth16 proof (`groth16-bn254`) or, only on a simulator configured for it, the mock digest; either way with Stage 1's six public inputs `[terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd]`. Commitments are Stage 1's Poseidon: terms over (θ, r, currency code, indexing rule, salt), income over (year-to-date figure, salt).

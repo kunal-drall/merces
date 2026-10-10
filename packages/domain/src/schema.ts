@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import { eventPayloads, domainEventSchema } from './events.ts';
-import { adminCommands, serviceCommands, userCommands, routerCommands } from './commands.ts';
+import { commandGroups } from './commands.ts';
 
 /** Machine-readable schema for DOMAIN_EVENTS.md (JSON Schema draft 2020-12), generated from the zod sources. */
 export function domainJsonSchema(): Record<string, unknown> {
   const events: Record<string, unknown> = {};
   for (const [name, schema] of Object.entries(eventPayloads)) events[name] = z.toJSONSchema(schema, { target: 'draft-2020-12' });
   const commands: Record<string, unknown> = {};
-  for (const group of [userCommands, serviceCommands, adminCommands, routerCommands]) {
+  for (const { commands: group } of commandGroups) {
     for (const [name, schema] of Object.entries(group)) commands[name] = z.toJSONSchema(schema, { target: 'draft-2020-12' });
   }
   return {

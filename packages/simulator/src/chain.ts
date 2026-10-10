@@ -1,13 +1,13 @@
 import {
-  ChainError, adminCommandSchema, serviceCommandSchema, userCommandSchema,
+  ChainError, adminCommandSchema, permissionlessCommandSchema, serviceCommandSchema, userCommandSchema,
   type AdminCommand, type AuctionState, type BidState, type ChainInfo, type ChainPort, type CurveState, type DomainEvent, type HealthReport,
   type Groth16ProofJson, type IssuerState, type PeriodState, type PositionState, type QuarterRateState, type RateAccumulatorState, type RedemptionState, type SeriesState,
-  type ServiceCommand, type ServiceRole, type SignedTx, type Stablecoin, type TransferWindowState, type TreasuryState, type TxResult, type UnsignedTx,
+  type PermissionlessCommand, type ServiceCommand, type ServiceRole, type SignedTx, type Stablecoin, type TransferWindowState, type TreasuryState, type TxResult, type UnsignedTx,
   type UserCommand, type VaultState,
 } from '@merces/domain';
 import { wadToDecimal } from '@merces/math';
 import { DEFAULT_GENESIS, SimClock } from './clock.ts';
-import { deriveAddress, personalityConfig, type Personality } from './addresses.ts';
+import { deriveAddress, personalityConfig, personalityLimits, type Personality } from './addresses.ts';
 import { SimEngine, type EngineOptions } from './engine.ts';
 import { SIM_STATE_VERSION, type SimState } from './state.ts';
 import { stage1View, type Stage1View } from './stage1-view.ts';
@@ -176,7 +176,7 @@ export class SimulatorChain implements ChainPort {
   // ---------------------------------------------------------------- info
   async info(): Promise<ChainInfo> {
     const st = this.state;
-    return { chain: this.chain, family: this.family, mode: 'mock', network: st.config.network, stablecoins: st.config.stablecoins, modules: { simulator: this.address('program:simulator') }, admin: st.admin, feeCollector: st.feeCollector, newRaisesPaused: st.newRaisesPaused };
+    return { chain: this.chain, family: this.family, mode: 'mock', network: st.config.network, stablecoins: st.config.stablecoins, modules: { simulator: this.address('program:simulator') }, admin: st.admin, feeCollector: st.feeCollector, newRaisesPaused: st.newRaisesPaused, limits: personalityLimits(st.config.personality) };
   }
   async health(): Promise<HealthReport> {
     return { ok: true, mode: 'mock', latency_ms: 0, detail: `simulator ${this.personality} at t=${this.clock.now()}` };
@@ -286,8 +286,13 @@ export class SimulatorChain implements ChainPort {
   }
 
   // ---------------------------------------------------------------- writes
-  async build(command: UserCommand | AdminCommand, signer: string, coSigners: string[] = []): Promise<UnsignedTx> {
-    const parsed = (userCommandSchema.safeParse(command).success ? userCommandSchema.parse(command) : adminCommandSchema.parse(command)) as UserCommand | AdminCommand;
+  async build(command: UserCommand | AdminCommand | PermissionlessCommand, signer: string, coSigners: string[] = []): Promise<UnsignedTx> {
+    // a user command, a permissionless one (any wallet may send it) or an admin one; anything else is refused here
+    const parsed = (userCommandSchema.safeParse(command).success
+      ? userCommandSchema.parse(command)
+      : permissionlessCommandSchema.safeParse(command).success
+        ? permissionlessCommandSchema.parse(command)
+        : adminCommandSchema.parse(command)) as UserCommand | AdminCommand | PermissionlessCommand;
     return { chain: this.chain, family: this.family, signer, coSigners, command: parsed, payload: JSON.stringify({ command: parsed, signer, coSigners }), encoding: 'simulator-json', summary: `${parsed.kind} on ${this.chain}`, expiresAt: null };
   }
   async send(signed: SignedTx): Promise<TxResult> {

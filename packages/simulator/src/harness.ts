@@ -1,7 +1,7 @@
 import { createHash, generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto';
 import {
   DEFAULTS, attestationMessage, bidCommitment, currencyCodeOf, hex32ToField, incomeCommitment, INDEXING_RULE_CODE, mockProve, reportPublicInputs, termsCommitment,
-  type AdminCommand, type ChainPort, type Command, type IndexingRule, type ReportProof, type SeriesTerms, type Stablecoin, type TxResult, type UserCommand, type VerifierAttestation,
+  type AdminCommand, type ChainPort, type Command, type IndexingRule, type PermissionlessCommand, type ReportProof, type SeriesTerms, type Stablecoin, type TxResult, type UserCommand, type VerifierAttestation,
 } from '@merces/domain';
 import { BN254_FR, U64_MAX, WAD, paymentStable, quarterIndex, ratePerUnit, toPid, wadFromDecimal, yearOf } from '@merces/math';
 import { SimulatorChain } from './chain.ts';
@@ -223,7 +223,8 @@ export class SimHarness {
     return this.sim;
   }
 
-  async exec(wallet: SimWallet, cmd: UserCommand | AdminCommand, coSigners: SimWallet[] = []): Promise<TxResult> {
+  /** Build, sign and send: a user or admin command, or a permissionless one sent by this wallet instead of the keeper. */
+  async exec(wallet: SimWallet, cmd: UserCommand | AdminCommand | PermissionlessCommand, coSigners: SimWallet[] = []): Promise<TxResult> {
     const tx = await this.sim.build(cmd, wallet.address, coSigners.map((c) => c.address));
     let signed = await wallet.sign(tx);
     for (const c of coSigners) signed = await c.coSign(signed);

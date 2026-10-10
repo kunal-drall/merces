@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { adminCommands, eventPayloads, routerCommands, serviceCommands, userCommands } from '@merces/domain';
+import { commandGroups, eventPayloads } from '@merces/domain';
 import { interim } from '@merces/math';
 import { renderReport, runSync, verdictsFrom, type StepReport } from '../src/index.ts';
 import { renderAnchorIdl } from '../src/idl-render.ts';
@@ -32,7 +32,7 @@ function canonicalSchema() {
   const events = Object.fromEntries(Object.entries(eventPayloads).map(([n, z]) => [n, { properties: props((z as unknown as { shape: Record<string, unknown> }).shape) }]));
   const commands: Record<string, { properties: Record<string, unknown> }> = {};
   // a command's `kind` is the discriminator, not an argument
-  for (const g of [userCommands, serviceCommands, adminCommands, routerCommands]) for (const [n, z] of Object.entries(g)) commands[n] = { properties: props((z as unknown as { shape: Record<string, unknown> }).shape, ['kind']) };
+  for (const { commands: g } of commandGroups) for (const [n, z] of Object.entries(g)) commands[n] = { properties: props((z as unknown as { shape: Record<string, unknown> }).shape, ['kind']) };
   return { events, commands };
 }
 

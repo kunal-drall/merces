@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import bs58 from 'bs58';
-import type { ChainFamily } from '@merces/domain';
+import type { ChainFamily, ChainLimits } from '@merces/domain';
 
 export type Personality = 'solana' | 'monad';
 
@@ -45,4 +45,13 @@ export function personalityConfig(p: Personality, chainKey?: string): Personalit
     network: 'simulator-monad',
     stablecoins: { USDC: { mint: deriveAddress(family, 'mint:USDC'), decimals: 6 } },
   };
+}
+
+/**
+ * The settlement limits a personality mirrors (`ChainInfo.limits`): Solana tallies at most 24 bids per page (Stage 1
+ * `TALLY_PAGE`, state.rs) with no bid limit; EVM at most 200 per page and 4,096 bids per auction (MercesConstants.sol).
+ * Derived from the personality on every read, never persisted with the chain state.
+ */
+export function personalityLimits(p: Personality): ChainLimits {
+  return p === 'solana' ? { tallyPageMax: 24, maxBidsPerAuction: null } : { tallyPageMax: 200, maxBidsPerAuction: 4096 };
 }

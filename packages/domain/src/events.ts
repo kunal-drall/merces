@@ -10,8 +10,21 @@ import { moneySchema, unitsSchema, wadSchema } from './money.ts';
 export const lifecycleStatusSchema = z.enum(['OnTime', 'InGrace', 'Late', 'Paused', 'Retired', 'Redeemed', 'Extinguished']);
 export type LifecycleStatus = z.infer<typeof lifecycleStatusSchema>;
 
-export const raisePhaseSchema = z.enum(['Draft', 'Open', 'Reveal', 'Settled', 'Failed', 'Cancelled']);
+/**
+ * The raise's phase for display: `Reveal` is time-derived (an Open raise between its commit end and its reveal end, and
+ * after the reveal end until settlement begins); `Settling` is Stage 1's state while a settlement round runs.
+ */
+export const raisePhaseSchema = z.enum(['Draft', 'Open', 'Reveal', 'Settling', 'Settled', 'Failed', 'Cancelled']);
 export type RaisePhase = z.infer<typeof raisePhaseSchema>;
+/** Stage 1's stored raise state (SPEC §5.1 `raise_state`), never time-derived: what settlement planning reads. */
+export const raiseStateSchema = z.enum(['Draft', 'Open', 'Settling', 'Settled', 'Failed', 'Cancelled']);
+export type RaiseStateName = z.infer<typeof raiseStateSchema>;
+/** Why `finalizeSettlement` rejected a round (Stage 1 `SettlementRejected.reason`; Solana codes 1 and 2) */
+export const settlementRejectionSchema = z.enum(['ClaimMismatch', 'InvalidClearingPrice']);
+export type SettlementRejection = z.infer<typeof settlementRejectionSchema>;
+/** Why a raise failed (Stage 1 `finalize_settlement` steps 1 and 5) */
+export const raiseFailureSchema = z.enum(['NoValidBids', 'MinRaise']);
+export type RaiseFailure = z.infer<typeof raiseFailureSchema>;
 
 export const raiseStyleSchema = z.enum(['sealed', 'curve']);
 export const tierSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
@@ -83,9 +96,33 @@ export const eventPayloads = {
   BidCommitted: z.object({ ...seriesScoped, bidder: addressSchema, commitment: hash32Schema, deposit: moneySchema, order: z.number().int() }),
   BidRevealed: z.object({ ...seriesScoped, bidder: addressSchema, pricePerUnit: moneySchema, quantity: unitsSchema }),
   AuctionSettled: z.object({ ...seriesScoped, clearingPrice: moneySchema, unitsSold: unitsSchema, proceeds: moneySchema, totalFees: moneySchema, settledAt: z.number().int() }),
-  AuctionFailed: z.object({ ...seriesScoped, reason: z.enum(['no-bids', 'below-minimum-raise']) }),
+  /**
+   * Stage 1 `RaiseFailed`. NoValidBids carries a price, units and proceeds of 0; MinRaise carries the price that cleared
+   * and the would-be units sold and proceeds (`unitsSold` is ours: Stage 1's event omits it, and live adapters derive it
+   * as proceeds / clearingPrice when the price is above 0, else 0). Every deposit is returned in full.
+   */
+  AuctionFailed: z.object({ ...seriesScoped, reason: raiseFailureSchema, clearingPrice: moneySchema, unitsSold: unitsSchema, proceeds: moneySchema, minimumRaise: moneySchema }),
   BidRefunded: z.object({ ...seriesScoped, bidder: addressSchema, amount: moneySchema }),
   UnitsMinted: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema }),
+  /** Stage 1 `begin_settlement`: round `round` proposes `clearingPrice` (the proposer's claims are on the auction record) */
+  SettlementProposed: z.object({ ...seriesScoped, clearingPrice: moneySchema, round: z.number().int().positive() }),
+  /** Stage 1 `finalize_settlement` refused the round's proposal; the tally stays and a new round may be proposed */
+  SettlementRejected: z.object({ ...seriesScoped, round: z.number().int().positive(), clearingPrice: moneySchema, reason: settlementRejectionSchema }),
+  /**
+   * Stage 1 `process_bid` for a winning bid: `units` minted to the auction escrow for the bidder, `cost` to the treasury,
+   * `fee` to the fee collector, `refund` owed back to the bidder; units and refund reach the bidder with `BidDelivered`.
+   * A losing, invalid or unrevealed bid, and every bid of a failed raise, is processed without an event.
+   */
+  UnitsAllocated: z.object({ ...seriesScoped, bidder: addressSchema, units: unitsSchema, cost: moneySchema, fee: moneySchema, refund: moneySchema }),
+  /** Stage 1 `deliver_bid`: the processed bid's units and refund reach the bidder */
+  BidDelivered: z.object({ ...seriesScoped, bidder: addressSchema, units: unitsSchema, refund: moneySchema }),
+  /** Stage 1: the last `process_bid` finalises the mint (`unitsOutstanding = unitsSold`); 0 and 0 for a failed raise */
+  RaiseMintFinalized: z.object({ ...seriesScoped, unitsSold: unitsSchema, proceeds: moneySchema }),
+  /**
+   * A wallet's first registration as a holder of the series (Stage 1 `registerHolder`): by `register_holder`, a winning
+   * `process_bid` or a window purchase. Payouts accrue to registered holders only.
+   */
+  HolderRegistered: z.object({ ...seriesScoped, holder: addressSchema }),
   TreasuryFunded: z.object({ ...seriesScoped, amount: moneySchema }),
   FundsReleased: z.object({ ...seriesScoped, amount: moneySchema, trancheIndex: z.number().int() }),
   ReleasesPaused: z.object({ ...seriesScoped, reason: z.enum(['Late', 'IssuerRequest']) }),
@@ -206,9 +243,13 @@ export function isEvent<T extends EventType>(e: DomainEvent, type: T): e is Doma
   return e.type === type;
 }
 
-/** Events that carry a money amount and must never appear in the public activity feed with amounts (R28). */
+/**
+ * Events that carry a money amount and must never appear in the public activity feed with amounts (R28). A label for
+ * the generated docs: the control itself is the indexer's activity `summary()`, which names no amount for any event.
+ */
 export const amountBearingEvents: ReadonlySet<EventType> = new Set<EventType>([
-  'BidCommitted', 'BidRevealed', 'AuctionSettled', 'BidRefunded', 'TreasuryFunded', 'FundsReleased', 'SplitReceipt', 'ReportAccepted',
+  'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'BidRefunded', 'SettlementProposed', 'SettlementRejected', 'UnitsAllocated',
+  'BidDelivered', 'RaiseMintFinalized', 'TreasuryFunded', 'FundsReleased', 'SplitReceipt', 'ReportAccepted',
   'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout',
   'SeriesExtinguished', 'TransferWindowCleared', 'CurveGraduated',
 ]);

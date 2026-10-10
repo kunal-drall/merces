@@ -1,4 +1,4 @@
-import type { LifecycleStatus, RaisePhase, SeriesTerms } from './events.ts';
+import type { LifecycleStatus, RaisePhase, RaiseStateName, SeriesTerms } from './events.ts';
 import type { Address, ChainFamily, ChainKey, ChainMode, Stablecoin } from './ids.ts';
 import type { Money, Units, Wad } from './money.ts';
 
@@ -16,6 +16,19 @@ export interface ChainInfo {
   admin: Address;
   feeCollector: Address;
   newRaisesPaused: boolean;
+  /** the chain's settlement limits (a property of the chain family, not of its state) */
+  limits: ChainLimits;
+}
+
+/**
+ * Settlement limits of a chain family (Stage 1 SPEC §5.2): Solana tallies at most 24 bids per page and caps no bid
+ * count; EVM tallies at most 200 per page and accepts at most 4,096 bids per auction.
+ */
+export interface ChainLimits {
+  /** the most revealed bids one `tallyBids` may tally */
+  tallyPageMax: number;
+  /** the most bids one auction accepts; null when the chain sets no limit */
+  maxBidsPerAuction: number | null;
 }
 
 export interface HealthReport {
@@ -108,7 +121,10 @@ export interface SeriesPauses {
 
 export interface AuctionState {
   seriesId: string;
+  /** for display: `Reveal` is time-derived and also covers an Open raise past its reveal end, until settlement begins */
   phase: RaisePhase;
+  /** Stage 1's stored raise state (never time-derived): what settlement planning reads, with the phase ends */
+  raiseState: RaiseStateName;
   commitEndsAt: number | null;
   revealEndsAt: number | null;
   bidCount: number;

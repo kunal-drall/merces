@@ -1,10 +1,13 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
   ChainError, type AdminCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
-  type TxResult, type UnsignedTx, type UserCommand,
+  type PermissionlessCommand, type TxResult, type UnsignedTx, type UserCommand,
 } from '@merces/domain';
 import { assertNotMainnet, checkGenesis, type SolanaChainConfig } from './config.ts';
 import { SolanaEventMapper } from './mapping.ts';
+
+/** Stage 1 on Solana: a tally page holds at most 24 Bid accounts (`TALLY_PAGE`, state.rs); no limit on the bid count. */
+const SOLANA_LIMITS = { tallyPageMax: 24, maxBidsPerAuction: null } as const satisfies ChainInfo['limits'];
 
 /**
  * SolanaChain — live adapter skeleton. It is an anti-corruption layer: everything Stage 1 actually emits or
@@ -70,7 +73,7 @@ export class SolanaChain implements ChainPort {
   async info(): Promise<ChainInfo> {
     const stablecoins: ChainInfo['stablecoins'] = {};
     for (const [k, mint] of Object.entries(this.config.stablecoins)) if (mint) stablecoins[k as 'USDC' | 'USDG'] = { mint, decimals: 6 };
-    return { chain: this.chain, family: 'solana', mode: 'live', network: this.config.cluster, stablecoins, modules: this.config.programs, admin: '', feeCollector: '', newRaisesPaused: false };
+    return { chain: this.chain, family: 'solana', mode: 'live', network: this.config.cluster, stablecoins, modules: this.config.programs, admin: '', feeCollector: '', newRaisesPaused: false, limits: SOLANA_LIMITS };
   }
 
   async health(): Promise<HealthReport> {
@@ -152,7 +155,7 @@ export class SolanaChain implements ChainPort {
     return this.notReady('readEvents(decoder)');
   }
 
-  async build(_command: UserCommand | AdminCommand, _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
+  async build(_command: UserCommand | AdminCommand | PermissionlessCommand, _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
     return this.notReady('build');
   }
   async send(_signed: SignedTx): Promise<TxResult> {

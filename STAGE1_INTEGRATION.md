@@ -212,6 +212,13 @@ knowingly still different.
 args; field renames (`price` → `pricePerUnit`, `old`/`new` → `from`/`to`, `commit_end` → `commitEndsAt`); events the
 adapter can synthesise (`TreasuryFunded` on Solana from `RaiseSettled`; `FeeTaken` from `PayoutDistributed.fee`); the
 redemption slippage guard (`maxPricePerUnit`) checked before submitting, since Stage 1's `redeem` takes no bound.
+**S2:** the settlement commands and events take Stage 1's own names (`beginSettlement` … `deliverBid`,
+`registerHolder`; `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`,
+`HolderRegistered`), so the aliases `BidRefunded` ↔ `BidDelivered`, `UnitsMinted` ↔ `UnitsAllocated`, `claimRefund` ↔
+`deliver_bid` and `settleAuction` ↔ `finalize_settlement` are gone (the four retire in S2). `AuctionFailed` keeps its
+approved alias (`RaiseFailed`) with Stage 1's fields plus one of ours: `unitsSold`, which Stage 1's event omits; the
+adapters derive it as `proceeds / clearingPrice` when the price is above 0 (exact: proceeds = price × units), else 0,
+and `reason` from the price (0: NoValidBids; otherwise MinRaise).
 
 **B. Canonical model changes (Stage 1 wins).**
 

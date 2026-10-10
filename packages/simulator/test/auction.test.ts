@@ -7,7 +7,8 @@ import { USDC, expectChainError, expectStage1Error, types } from './helpers.ts';
  * S2 cause codes on the pins that moved:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1 bounds: 1 hour–30 days, 1 hour–7 days); `openRaise`
  *    derives the phase ends from them;
- *  - S2-E: Stage 1's auction error names (`detail.stage1`) and check order.
+ *  - S2-E: Stage 1's auction error names (`detail.stage1`) and check order;
+ *  - S2-FP: a failed raise keeps its price and would-be results (`AuctionFailed`: NoValidBids or MinRaise).
  */
 const HOUR = 3_600;
 
@@ -17,9 +18,19 @@ describe('auction edge cases', () => {
     const { seriesId } = await h.runRaise({ bids: [{ backer: 0, price: USDC(10), qty: 10n }] });
     const s = (await h.sim.getSeries(seriesId))!;
     expect(s.phase).toBe('Failed');
+    // cause S2-FP: Stage 1's RaiseFailed fields: MinRaise with the would-be price, units and proceeds
+    const failed = (await h.sim.readEvents(null, 1_000)).events.find((e) => e.type === 'AuctionFailed')!;
+    expect(failed.payload).toEqual({ seriesId, reason: 'MinRaise', clearingPrice: USDC(10).toString(), unitsSold: '10', proceeds: USDC(100).toString(), minimumRaise: USDC(4000).toString() });
     await h.exec(h.backers[0]!, { kind: 'claimRefund', seriesId });
     expect(await h.sim.getBalance(h.backers[0]!.address, 'USDC')).toBe('1000000000000');
     expect(await h.sim.getBalance(h.sim.state.feeCollector, 'USDC')).toBe('0');
+  });
+  it('fails a raise with no bid as NoValidBids, with a price, units and proceeds of 0', async () => {
+    const h = await SimHarness.create('monad');
+    const { seriesId } = await h.runRaise({ bids: [] });
+    const failed = (await h.sim.readEvents(null, 1_000)).events.find((e) => e.type === 'AuctionFailed')!;
+    // cause S2-FP
+    expect(failed.payload).toEqual({ seriesId, reason: 'NoValidBids', clearingPrice: '0', unitsSold: '0', proceeds: '0', minimumRaise: USDC(4000).toString() });
   });
   it('enforces allowlist, one bid per wallet, commitment integrity and the wallet cap', async () => {
     const h = await SimHarness.create('solana');

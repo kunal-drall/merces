@@ -1,15 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
-import { WAD, capPerUnit, parsePeriod } from '@merces/math';
+import { WAD, capPerUnit, parsePeriod, requiredEscrow } from '@merces/math';
 import { PgSimPersistence, SimHarness, SimulatorChain, defaultTerms } from '@merces/simulator';
-import { ZERO_INCOME_COMMITMENT, type ChainPort, type DomainEvent } from '@merces/domain';
-import { Indexer } from '../src/index.ts';
+import { ZERO_INCOME_COMMITMENT, bidCommitment, type ChainPort, type DomainEvent, type EventPayload, type EventType } from '@merces/domain';
+import { Indexer, project } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const GENESIS = Date.UTC(2026, 0, 1) / 1000;
 /*
  * S2 cause codes:
- *  - S2-AD: commit and reveal durations are series terms, projected from SeriesCreated (migration 018).
+ *  - S2-AD: commit and reveal durations are series terms, projected from SeriesCreated (migration 018);
+ *  - S2-MS: Stage 1's settlement events, projected (migration 019);
+ *  - S2-FP: a failed raise keeps its price and would-be results;
+ *  - S2-RH: registerHolder (`HolderRegistered`).
  */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
@@ -274,6 +277,8 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const chain = (await h.sim.getSeries(seriesId))!;
     expect(chain.issuePrice).not.toBeNull();
     expect(await row()).toEqual({ phase: 'Settled', issue_price: chain.issuePrice, cap_multiple_wad: terms.capMultipleWad, cap_per_unit: chain.capPerUnit });
+    // cause S2-MS: a graduated curve's units are final at once (migration 019's mint gate)
+    expect((await t.pool.query('select mint_finalized from series where series_id = $1', [seriesId])).rows[0].mint_finalized).toBe(true);
     expect(chain.capPerUnit).toBe(capPerUnit(BigInt(terms.capMultipleWad), BigInt(chain.issuePrice!)).toString());
     // an issuer-favourable amendment: the new cap is Stage 1's capPerUnit on the projected issue price, floor. m puts
     // m × P0 / 1e18 just past 2·P0 + ½, where rounding (a SQL numeric cast) would store one more than the chain
@@ -284,6 +289,102 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const amended = (await h.sim.getSeries(seriesId))!.capPerUnit;
     expect(amended).toBe((2n * p0).toString());
     expect(await row()).toMatchObject({ cap_multiple_wad: m.toString(), cap_per_unit: amended });
+  });
+
+  // cause S2-MS (S2 WP3): the engine emits these from WP4; synthetic events on a real revealed raise drive the projections
+  it('projects the settlement events: rounds, allocations, deliveries, the mint gate and holder registration', async () => {
+    const key = 'settle-synthetic';
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const { terms } = defaultTerms(h.sim);
+    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    const seriesId = ((await h.exec(h.issuer, { kind: 'createSeries', terms })).events[0]!.payload as { seriesId: string }).seriesId;
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId });
+    const { commitEndsAt } = (await h.sim.getAuction(seriesId))!;
+    const bids = [12, 11, 10, 10, 9].map((p, i) => ({ w: h.backers[i]!, price: USDC(p), salt: '0x' + String(i + 1).padStart(2, '0').repeat(32) }));
+    for (const b of bids) await h.exec(b.w, { kind: 'commitBid', seriesId, commitment: bidCommitment({ seriesId, bidder: b.w.address, pricePerUnit: b.price, quantity: 100n, salt: b.salt }), deposit: requiredEscrow(b.price, 100n, terms.auctionFeeBps).toString() });
+    await h.sim.setTime(commitEndsAt!);
+    for (const b of bids) await h.exec(b.w, { kind: 'revealBid', seriesId, pricePerUnit: b.price.toString(), quantity: '100', salt: b.salt });
+    await idx.catchUp();
+    const b0 = bids[0]!.w.address;
+    const b4 = bids[4]!.w.address;
+
+    let seq = 1_000_000;
+    const ev = <T extends EventType>(type: T, payload: EventPayload<T>): DomainEvent => ({ chain: key, cursor: String(++seq).padStart(12, '0'), seq, blockTime: 1_780_000_000, blockRef: String(seq), txId: `synthetic-${seq}`, finality: 'finalized', type, payload }) as DomainEvent;
+    const apply = async (...events: DomainEvent[]) => {
+      const c = await t.pool.connect();
+      try {
+        await c.query('begin');
+        for (const e of events) await project(c, e);
+        await c.query('commit');
+      } catch (e) {
+        await c.query('rollback');
+        throw e;
+      } finally {
+        c.release();
+      }
+    };
+    const series = async () => (await t.pool.query('select phase, settlement_round, round_rejected, rejection_reason, mint_finalized, units_outstanding::text from series where series_id = $1', [seriesId])).rows[0];
+    const rounds = async () => (await t.pool.query('select round, clearing_price::text, rejected, rejection_reason from settlement_rounds where series_id = $1 order by round', [seriesId])).rows;
+    const bid = async (w: string) => (await t.pool.query('select processed, allocated_units::text, cost::text, fee::text, pending_units::text, pending_refund::text, delivered, delivered_units::text, refunded::text from bids where series_id = $1 and bidder = $2', [seriesId, w])).rows[0];
+    const pos = async (w: string) => (await t.pool.query('select units::text, undelivered_units::text, registered from positions where series_id = $1 and wallet = $2', [seriesId, w])).rows[0];
+
+    // a round proposed, rejected, and a second round proposed
+    await apply(ev('SettlementProposed', { seriesId, clearingPrice: USDC(10).toString(), round: 1 }));
+    expect(await series()).toMatchObject({ phase: 'Settling', settlement_round: 1, round_rejected: false, rejection_reason: null });
+    await apply(ev('SettlementRejected', { seriesId, round: 1, clearingPrice: USDC(10).toString(), reason: 'ClaimMismatch' }));
+    expect(await series()).toMatchObject({ phase: 'Settling', settlement_round: 1, round_rejected: true, rejection_reason: 'ClaimMismatch' });
+    await apply(ev('SettlementProposed', { seriesId, clearingPrice: USDC(9).toString(), round: 2 }));
+    expect(await series()).toMatchObject({ settlement_round: 2, round_rejected: false, rejection_reason: null });
+    expect(await rounds()).toEqual([
+      { round: 1, clearing_price: USDC(10).toString(), rejected: true, rejection_reason: 'ClaimMismatch' },
+      { round: 2, clearing_price: USDC(9).toString(), rejected: false, rejection_reason: null },
+    ]);
+    await apply(ev('AuctionSettled', { seriesId, clearingPrice: USDC(9).toString(), unitsSold: '500', proceeds: USDC(4500).toString(), totalFees: USDC(45).toString(), settledAt: 1_780_000_000 }));
+    expect((await t.pool.query('select auction_clearing_price::text, auction_units_sold::text, auction_proceeds::text, auction_failure_reason, auction_finalized_at::int from series where series_id = $1', [seriesId])).rows[0])
+      .toEqual({ auction_clearing_price: USDC(9).toString(), auction_units_sold: '500', auction_proceeds: USDC(4500).toString(), auction_failure_reason: null, auction_finalized_at: 1_780_000_000 });
+
+    // a winner: registered, processed (its units count from here, undelivered), then delivered
+    await apply(ev('HolderRegistered', { seriesId, holder: b0 }));
+    expect(await pos(b0)).toEqual({ units: '0', undelivered_units: '0', registered: true });
+    await apply(ev('UnitsAllocated', { seriesId, bidder: b0, units: '100', cost: USDC(900).toString(), fee: USDC(9).toString(), refund: USDC(303).toString() }));
+    expect(await bid(b0)).toMatchObject({ processed: true, allocated_units: '100', cost: USDC(900).toString(), fee: USDC(9).toString(), pending_units: '100', pending_refund: USDC(303).toString(), delivered: false });
+    expect(await pos(b0)).toEqual({ units: '100', undelivered_units: '100', registered: true });
+    await apply(ev('BidDelivered', { seriesId, bidder: b0, units: '100', refund: USDC(303).toString() }));
+    expect(await bid(b0)).toMatchObject({ processed: true, delivered: true, delivered_units: '100', refunded: USDC(303).toString(), pending_units: '0', pending_refund: '0' });
+    expect(await pos(b0)).toEqual({ units: '100', undelivered_units: '0', registered: true });
+    // a loser is processed without an event: its delivery marks it processed (S2 amendment M4)
+    expect(await bid(b4)).toMatchObject({ processed: false, delivered: false });
+    await apply(ev('BidDelivered', { seriesId, bidder: b4, units: '0', refund: USDC(909).toString() }));
+    expect(await bid(b4)).toMatchObject({ processed: true, delivered: true, delivered_units: '0', refunded: USDC(909).toString() });
+    expect(await pos(b4)).toBeUndefined();
+    const refunds = await t.pool.query("select wallet, amount::text from money_events where series_id = $1 and kind = 'refund' order by seq", [seriesId]);
+    expect(refunds.rows).toEqual([{ wallet: b0, amount: USDC(303).toString() }, { wallet: b4, amount: USDC(909).toString() }]);
+
+    // the last process finalises the mint: every bid of the series is processed (S2 amendment M4)
+    expect(await series()).toMatchObject({ mint_finalized: false });
+    await apply(ev('RaiseMintFinalized', { seriesId, unitsSold: '500', proceeds: USDC(4500).toString() }));
+    expect(await series()).toMatchObject({ phase: 'Settled', mint_finalized: true, units_outstanding: '500' });
+    expect((await t.pool.query('select count(*)::int as n from bids where series_id = $1 and processed', [seriesId])).rows[0].n).toBe(5);
+
+    // the public activity feed: rounds, reasons and unit counts, never an amount; registration is not in the feed
+    const act = await t.pool.query('select summary from activity where chain = $1 and seq > 1000000 order by seq', [key]);
+    expect(act.rows.map((r) => r.summary)).toEqual([
+      'Settlement proposed (round 1)', 'Settlement round 1 rejected (ClaimMismatch)', 'Settlement proposed (round 2)', 'Auction settled: 500 units sold',
+      '100 units allocated to a bidder', 'A bid was delivered', 'A bid was delivered', 'Raise minting finalised',
+    ]);
+  });
+
+  // cause S2-FP: a failed raise keeps its price and would-be results on the auction; the issue price stays unset
+  it('projects a failed raise\'s reason, price and would-be results, with no amount in the feed', async () => {
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'failed-raise', genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const { seriesId } = await h.runRaise({ bids: [{ backer: 0, price: USDC(10), qty: 10n }] });
+    await idx.catchUp();
+    const row = (await t.pool.query('select phase, issue_price, auction_failure_reason, auction_clearing_price::text, auction_units_sold::text, auction_proceeds::text, auction_finalized_at is not null as finalized from series where series_id = $1', [seriesId])).rows[0];
+    expect(row).toEqual({ phase: 'Failed', issue_price: null, auction_failure_reason: 'MinRaise', auction_clearing_price: USDC(10).toString(), auction_units_sold: '10', auction_proceeds: USDC(100).toString(), finalized: true });
+    const act = await t.pool.query("select summary from activity where series_id = $1 and kind = 'AuctionFailed'", [seriesId]);
+    expect(act.rows).toEqual([{ summary: 'Auction failed (MinRaise); deposits are returned to the bidders' }]);
   });
 
   it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {

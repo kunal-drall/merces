@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { stage1Path } from '@merces/chains';
-import { adminCommands, eventPayloads, routerCommands, serviceCommands, userCommands } from '@merces/domain';
+import { commandGroups, eventPayloads } from '@merces/domain';
 import type { StepReport } from '../report.ts';
 import type { StepCtx } from './generate.ts';
 
@@ -88,8 +88,6 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
   events: {
     AuctionSettled: ['RaiseSettled'],
     AuctionFailed: ['RaiseFailed'],
-    BidRefunded: ['BidDelivered'],
-    UnitsMinted: ['UnitsAllocated'],
     TreasuryFunded: ['ProceedsDeposited'],
     FundsReleased: ['ReleaseClaimed'],
     ReleasesPaused: ['ReleasePauseSet'],
@@ -109,14 +107,12 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
     CurveGraduated: ['RaiseSettled'],
   },
   commands: {
-    claimRefund: ['deliver_bid'],
     drawRelease: ['claim_release'],
     pauseReleases: ['set_release_pause'],
     payIn: ['pay'],
     claimPayout: ['claim'],
     commitWindowOrder: ['window_commit_bid', 'commit_ask', 'commitAsk'],
     revealWindowOrder: ['reveal_order'],
-    settleAuction: ['finalize_settlement'],
     snapshotRate: ['snapshot_fx', 'snapshot'],
     crankBurn: ['burn_retired'],
     crankPause: ['end_pause'],
@@ -129,6 +125,11 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
     postSplitReceipt: ['route'],
   },
   none: {
+    // S2: the one-step auction's items, retiring (deleted in S2 WP8); Stage 1's own names are canonical since S2 WP3
+    settleAuction: 'retiring (S2): Stage 1 settles in steps, beginSettlement → tallyBids → finalizeSettlement → processBid → deliverBid',
+    claimRefund: 'retiring (S2): Stage 1 has no pull refund; deliverBid pushes the refund and the units',
+    BidRefunded: 'retiring (S2): a refund reaches the bidder with BidDelivered',
+    UnitsMinted: 'curve buys only from S2 (curve buys are Meteora DBC swaps); an auction winner\'s units are UnitsAllocated',
     buyCurve: 'curve buys are Meteora DBC swaps sent straight to Meteora\'s program; Merces has no buy instruction (curve mode is Solana only; EVM createSeries reverts CurveModeUnsupported)',
     TreasuryFunded: 'no deposit event in this source; RaiseSettled and RaiseMintFinalized carry the proceeds total, so the adapter can synthesise it',
     flagFxFallback: 'no flag command: the FX deviation flag is emitted by the snapshot and the attestor fallback rate travels with submit_report',
@@ -139,7 +140,7 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
 const SOLANA_ONLY = new Set(['buyCurve', 'graduateCurve', 'CurveSeriesCreated', 'CurveGraduated']);
 
 /** Field spellings that mean the same thing in both vocabularies. */
-const FIELD_ALIASES: Record<string, string[]> = { seriesId: ['series', 'series_id'], periodId: ['period'] };
+const FIELD_ALIASES: Record<string, string[]> = { seriesId: ['series', 'series_id'], periodId: ['period'], minimumRaise: ['min_raise'] };
 
 /** Stage 1 items that only another Merces program or contract may call: the registry write interface, inter-module calls, the transfer hook. */
 const STAGE1_INTERNAL = new Set(
@@ -374,7 +375,7 @@ function diffSource(src: Source): { md: string[]; missing: number; mismatched: n
 
   md.push('', '### Commands', '', '| Canonical command | Stage 1 counterpart | Field mapping | Drift |', '| --- | --- | --- | --- |');
   const matchedCmd = new Set<string>();
-  for (const group of [userCommands, serviceCommands, adminCommands, routerCommands]) {
+  for (const { commands: group } of commandGroups) {
     for (const [name, schema] of Object.entries(group)) {
       const ours = Object.keys((schema as unknown as { shape: Record<string, unknown> }).shape).filter((k) => k !== 'kind');
       if (src.label.startsWith('evm') && SOLANA_ONLY.has(name)) {

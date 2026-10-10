@@ -1,4 +1,4 @@
-import type { LifecycleStatus, RaisePhase, Stablecoin } from '@merces/domain';
+import type { LifecycleStatus, RaiseStateName, Stablecoin } from '@merces/domain';
 import type { FinalState, Pause, TailState, VaultState as Stage1VaultState } from '@merces/math';
 import type { PersonalityConfig } from './addresses.ts';
 
@@ -204,7 +204,8 @@ export interface SimSeries {
   address: string;
   issuer: string;
   terms: SimTerms;
-  phase: RaisePhase;
+  /** Stage 1's stored raise state (`raise_state`); the reveal phase is time-derived (`auctionPhase`), never stored */
+  phase: RaiseStateName;
   status: LifecycleStatus;
   createdAt: number;
   openedAt: number | null;

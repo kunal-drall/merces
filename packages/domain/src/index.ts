@@ -8,5 +8,6 @@ export * from './hashing.ts';
 export * from './params.ts';
 export * from './terms-rules.ts';
 export * from './pause-rules.ts';
+export * from './settlement.ts';
 export * from './schema.ts';
 export * from './e2e-envelope.ts';
