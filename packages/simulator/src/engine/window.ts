@@ -1,5 +1,5 @@
 import { ChainError, orderCommitment, type Command } from '@merces/domain';
-import { interim } from '@merces/math';
+import { U64_MAX, interim } from '@merces/math';
 import type { SimSeries, SimTransferWindow } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { requireSealedBid } from './auction.ts';
@@ -78,12 +78,15 @@ export function revealWindowOrder(e: EngineCore, signer: string, cmd: Extract<Co
   const w = window(s, cmd.windowId);
   if (w.cleared || now < w.commitEndsAt || now >= w.revealEndsAt) throw new ChainError('WrongPhase', 'not in the reveal phase');
   const o = w.orders.get(signer);
+  // the commitment binds neither the side nor the window (Stage 1's keccak, SPEC §7): the side is the one committed, and
+  // a reveal naming the other side matches no order
   if (!o || o.side !== cmd.side) throw new ChainError('NotFound', 'no matching order');
   if (o.revealed) throw new ChainError('Duplicate', 'already revealed');
   const price = big(cmd.pricePerUnit);
   const qty = big(cmd.quantity);
-  const expected = orderCommitment({ seriesId: s.seriesId, windowId: w.windowId, wallet: signer, side: cmd.side, pricePerUnit: price, quantity: qty, salt: cmd.salt });
-  if (expected !== o.commitment) throw new ChainError('InvalidCommitment', 'reveal mismatch');
+  // a price or quantity outside u64 matches no commitment (the commitment builder refuses one, AmountOutOfRange)
+  const inRange = price <= U64_MAX && qty <= U64_MAX;
+  if (!inRange || orderCommitment({ wallet: signer, pricePerUnit: price, quantity: qty, salt: cmd.salt }) !== o.commitment) throw new ChainError('InvalidCommitment', 'reveal mismatch');
   if (o.side === 'buy' && price * qty > o.deposit) throw new ChainError('InsufficientFunds', 'deposit too small');
   if (o.side === 'sell' && qty > o.escrowedUnits) throw new ChainError('InsufficientFunds', 'more than escrowed');
   o.revealed = { pricePerUnit: price, quantity: qty };

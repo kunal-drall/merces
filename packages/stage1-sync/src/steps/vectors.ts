@@ -65,7 +65,7 @@ export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: OpKind; sh
   register_attestor: { canonical: 'registerAttestor', kind: 'shim', shim: 'SH-REG-2' },
   revoke_attestor: { canonical: 'registerAttestor(active=false) (Stage 1: forward-only with a 45-day grace)', kind: 'shim', shim: 'SH-REG-2' },
   register_verifier_key: { canonical: 'registerVerifierKey (ed25519; Stage 1: secp256k1)', kind: 'shim', shim: 'SH-REG-3' },
-  commit_bid: { canonical: 'commitBid (our commitment recomputed from the plaintext; u64 price and quantity)', kind: 'shim', shim: 'SH-AUC-2' },
+  commit_bid: { canonical: "commitBid (Stage 1's keccak commitment from the plaintext and the bidder's wallet; u64 price and quantity)", kind: 'direct' },
   reveal_bid: { canonical: 'revealBid', kind: 'direct' },
   begin_settlement: { canonical: 'beginSettlement (permissionless; sent by the keeper)', kind: 'direct' },
   finalize_settlement: { canonical: 'tallyBids (every page) then finalizeSettlement', kind: 'direct' },

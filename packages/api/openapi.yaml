@@ -5609,6 +5609,7 @@ paths:
         - session: []
       parameters:
         - $ref: "#/components/parameters/seriesId"
+      description: "Stage 1's bid commitment, keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (SPEC §1.3; S4, A-SIG-8), the wallet being the bidder's 32-byte form (a Solana pubkey as-is, an EVM address left-padded). It binds neither the series nor the raise: draw a fresh 32-byte salt for every bid. Nothing is stored; prefer computing it client-side."
       requestBody:
         required: true
         content:
@@ -5623,12 +5624,14 @@ paths:
               properties:
                 bidder:
                   type: string
+                  description: an address of the series' chain
                 pricePerUnit:
                   type: string
                 quantity:
                   type: string
                 salt:
                   type: string
+                  description: 32 bytes as 0x + 64 hex, fresh for every bid
       responses:
         "200":
           description: The commitment hash (nothing stored; prefer computing it client-side)
@@ -5636,6 +5639,10 @@ paths:
             application/json:
               schema:
                 type: object
+        "400":
+          description: The bidder is not an address of the series' chain
+        "422":
+          description: The salt is not 32 bytes, or the price or quantity is outside u64 (detail.stage1 AmountOutOfRange); no value is named
   /series/{seriesId}/bids/build-commit:
     post:
       operationId: buildCommitBid

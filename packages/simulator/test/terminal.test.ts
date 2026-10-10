@@ -5,6 +5,12 @@ import { SimHarness, defaultTerms } from '../src/index.ts';
 import { GENESIS, USDC, expectStage1Error, types } from './helpers.ts';
 import { seriesOf } from './kit.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 /**
  * Amendments, extinguishment and the final pool on Stage 1 (S1 plan WP7; SIM:853-865, 1419-1475).
  *
@@ -185,7 +191,8 @@ describe('amendments and extinguishment', () => {
     await h.sim.setTime(open);
     await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: open + 100, revealEndsAt: open + 200 }, 'keeper');
     const salt = '0x' + 'cd'.repeat(32);
-    const commitment = orderCommitment({ seriesId, windowId: 0, wallet: b1.address, side: 'sell', pricePerUnit: USDC(60), quantity: 40n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const commitment = orderCommitment({ wallet: b1.address, pricePerUnit: USDC(60), quantity: 40n, salt });
     await h.exec(b1, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment, deposit: '0', units: '40' });
     await h.sim.setTime(open + 100);
     await h.exec(b1, { kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'sell', pricePerUnit: USDC(60).toString(), quantity: '40', salt });

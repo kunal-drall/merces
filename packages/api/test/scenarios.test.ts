@@ -7,6 +7,12 @@ import { orderCommitment, type UnsignedTx } from '@merces/domain';
 import { parsePeriod, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { makeRig } from './helpers.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 /**
  * H1 — scenario tests at the service level, through the API, on the simulator. The chain-level twins live in
  * packages/simulator/test; these drive the same mechanics through builders, the tx relay, the read model and the
@@ -345,8 +351,10 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     await h.sim.fund(buyer, 'USDC', USDC(10_000));
     const buyerTok = rig.token({ accountId: 'tw-b', wallets: [{ chain: 'monad', address: buyer }], roles: ['backer'] });
     const salt = '0x' + 'bb'.repeat(32);
-    const sc = orderCommitment({ seriesId, windowId: win.window.windowId, wallet: seller.address, side: 'sell', pricePerUnit: USDC(10), quantity: 40n, salt });
-    const bc = orderCommitment({ seriesId, windowId: win.window.windowId, wallet: buyer, side: 'buy', pricePerUnit: USDC(11), quantity: 40n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const sc = orderCommitment({ wallet: seller.address, pricePerUnit: USDC(10), quantity: 40n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const bc = orderCommitment({ wallet: buyer, pricePerUnit: USDC(11), quantity: 40n, salt });
     await send(seller, (await rig.post(`/series/${seriesId}/window/build-commit`, { wallet: seller.address, side: 'sell', commitment: sc, deposit: '0', units: '40' }, sellerTok)).json().tx, sellerTok);
     const bcTx = (await rig.post(`/series/${seriesId}/window/build-commit`, { wallet: buyer, side: 'buy', commitment: bc, deposit: USDC(440).toString(), units: '0' }, buyerTok)).json().tx as UnsignedTx;
     expect((await rig.post('/tx/send', { tx: bcTx, signatures: { [buyer]: `sim:${buyer}` } }, buyerTok)).statusCode).toBe(200);

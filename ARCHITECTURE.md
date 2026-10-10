@@ -21,7 +21,7 @@ there), and `submit(command, role)` for the backend's two low-privilege roles. T
 ## The canonical model
 
 `@merces/domain` defines the vocabulary once: 54 events, 49 commands (schema 0.3.0), the state shapes, the commitments (Stage 1's
-Poseidon terms and income commitments; our bid and order commitments until S4 and S5), the verifier attestation
+Poseidon terms and income commitments; since S4 its keccak bid and order commitments), the verifier attestation
 message (Stage 1's report field set) and Stage 1's six report public inputs. The sealed raise uses Stage 1's names for
 its multi-step settlement (S2): the permissionless commands `beginSettlement`, `tallyBids`, `finalizeSettlement`,
 `processBid`, `deliverBid` and `registerHolder`, which the keepers submit and any wallet may build, and their events.

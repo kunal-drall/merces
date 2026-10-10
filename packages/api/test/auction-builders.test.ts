@@ -4,6 +4,12 @@ import { ChainError, bidCommitment, type SignedTx, type UnsignedTx } from '@merc
 import { defaultTerms, type SimHarness, type SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 
 /*
@@ -100,7 +106,8 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
     const notSealed = [409, { stage1: 'NotSealedBid' }];
     const bidder = h.backers[0]!.address;
     const salt = '0x' + '01'.repeat(32);
-    const commitment = bidCommitment({ seriesId, bidder, pricePerUnit: USDC(10), quantity: 1n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const commitment = bidCommitment({ bidder, pricePerUnit: USDC(10), quantity: 1n, salt });
     for (const [url, body, tok] of [
       [`/series/${seriesId}/raise/build-open`, {}, issuerTok],
       [`/series/${seriesId}/raise/build-cancel`, {}, issuerTok],

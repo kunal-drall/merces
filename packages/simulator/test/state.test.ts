@@ -7,6 +7,12 @@ import { ZERO_INCOME_COMMITMENT_HEX, derivedStatus, ledgerClock } from '../src/e
 import { GENESIS, USDC } from './helpers.ts';
 import { seedFinal, seedHolder, seedLedger, seedPause, seedTail, seedVault, seriesOf } from './kit.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json', import.meta.url);
 
 /*
@@ -196,8 +202,10 @@ describe('Stage 1 registration, first period and money views', () => {
     await h.sim.submit({ kind: 'setAllowlist', wallet: buyer, allowed: true }, 'allowlistManager');
     await h.sim.fund(buyer, 'USDC', USDC(10_000));
     const salt = '0x' + 'cc'.repeat(32);
-    await h.exec(seller, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment: orderCommitment({ seriesId, windowId: 0, wallet: seller.address, side: 'sell', pricePerUnit: USDC(10), quantity: 50n, salt }), deposit: '0', units: '50' });
-    const tx = await h.sim.build({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: orderCommitment({ seriesId, windowId: 0, wallet: buyer, side: 'buy', pricePerUnit: USDC(10.5), quantity: 50n, salt }), deposit: USDC(525).toString(), units: '0' }, buyer);
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    await h.exec(seller, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment: orderCommitment({ wallet: seller.address, pricePerUnit: USDC(10), quantity: 50n, salt }), deposit: '0', units: '50' });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const tx = await h.sim.build({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: orderCommitment({ wallet: buyer, pricePerUnit: USDC(10.5), quantity: 50n, salt }), deposit: USDC(525).toString(), units: '0' }, buyer);
     await h.sim.send({ tx, signatures: { [buyer]: `sim:${buyer}` } });
     expect(h.sim.stage1View(seriesId).money).toMatchObject({ windowEscrowStable: USDC(525).toString(), windowEscrowUnits: '50' });
     await h.sim.setTime(now + 100);

@@ -4,6 +4,12 @@ import { bidCommitment, type UnsignedTx } from '@merces/domain';
 import { AuctionService, ZERO_BID_GRACE_SECONDS } from '@merces/services';
 import { makeRig } from './helpers.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 /*
  * S2 cause codes on the pins that moved:
@@ -54,8 +60,18 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     expect(ok.json()).toMatchObject({ nonRevealChargeBps: 100, nonRevealCharge: USDC(10.1).toString() });
     // the client computes the commitment and keeps an encrypted backup
     const salt = '0x' + 'ee'.repeat(32);
-    const commitment = bidCommitment({ seriesId, bidder: backer.address, pricePerUnit: USDC(10), quantity: 100n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const commitment = bidCommitment({ bidder: backer.address, pricePerUnit: USDC(10), quantity: 100n, salt });
     expect((await rig.post(`/series/${seriesId}/bids/commitment`, { bidder: backer.address, pricePerUnit: USDC(10).toString(), quantity: '100', salt }, tok)).json().commitment).toBe(commitment);
+    // cause S4-BID: the helper hashes a bidder of the series' chain (400 otherwise) and a 32-byte salt; a short salt or a
+    // price outside u64 is 422, naming no value
+    expect((await rig.post(`/series/${seriesId}/bids/commitment`, { bidder: '11111111111111111111111111111111', pricePerUnit: '10', quantity: '100', salt }, tok)).statusCode).toBe(400);
+    const shortSalt = await rig.post(`/series/${seriesId}/bids/commitment`, { bidder: backer.address, pricePerUnit: '10', quantity: '100', salt: '0x' + 'ee'.repeat(31) }, tok);
+    expect([shortSalt.statusCode, shortSalt.json().error]).toEqual([422, 'ChainInvalidTerms']);
+    expect(shortSalt.body).not.toContain('eeee');
+    const wide = await rig.post(`/series/${seriesId}/bids/commitment`, { bidder: backer.address, pricePerUnit: (2n ** 64n).toString(), quantity: '100', salt }, tok);
+    expect([wide.statusCode, wide.json().detail]).toEqual([422, { stage1: 'AmountOutOfRange' }]);
+    expect(wide.body).not.toContain((2n ** 64n).toString());
     expect((await rig.put(`/series/${seriesId}/bids/backup`, { bidder: backer.address, ciphertext: JSON.stringify({ pricePerUnit: '10', quantity: '100', salt }) }, tok)).statusCode).toBe(400);
     expect((await rig.put(`/series/${seriesId}/bids/backup`, { bidder: backer.address, ciphertext: 'age-encryption.org/v1 QUJDREVG...', keyHint: 'ledger-1' }, tok)).statusCode).toBe(200);
     const backup = await rig.get(`/series/${seriesId}/bids/backup/${backer.address}`, tok);
@@ -73,7 +89,8 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     const b2 = h.backers[1]!;
     const tok2 = await rig.grant({ accountId: 'b1', wallets: [{ chain: 'monad', address: b2.address }], roles: ['backer'], eligible: true });
     const salt2 = '0x' + 'ef'.repeat(32);
-    const c2 = bidCommitment({ seriesId, bidder: b2.address, pricePerUnit: USDC(45), quantity: 100n, salt: salt2 });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const c2 = bidCommitment({ bidder: b2.address, pricePerUnit: USDC(45), quantity: 100n, salt: salt2 });
     await h.exec(b2, { kind: 'commitBid', seriesId, commitment: c2, deposit: USDC(4545).toString() });
     // reveal phase
     await h.sim.setTime(now + HOUR); // cause S2-AD (was now + 1000)
@@ -195,7 +212,8 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     const [lo, hi] = [h.backers[2]!, h.backers[3]!];
     const bids = [{ w: lo, price: USDC(10), salt: '0x' + 'a1'.repeat(32) }, { w: hi, price: USDC(45), salt: '0x' + 'a2'.repeat(32) }];
     for (const b of bids) {
-      const commitment = bidCommitment({ seriesId, bidder: b.w.address, pricePerUnit: b.price, quantity: 100n, salt: b.salt });
+      // cause S4-BID: Stage 1's keccak commitment, over no series or window
+      const commitment = bidCommitment({ bidder: b.w.address, pricePerUnit: b.price, quantity: 100n, salt: b.salt });
       await h.exec(b.w, { kind: 'commitBid', seriesId, commitment, deposit: ((b.price * 101n) / 100n * 100n).toString() });
     }
     await h.sim.setTime(now + HOUR); // cause S2-AD (was now + 1000)

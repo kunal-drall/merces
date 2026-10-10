@@ -8,6 +8,12 @@ import { periodOf } from '@merces/math';
 import { defaultTerms } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 
 /**
@@ -44,7 +50,8 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     const buyer = h.sim.address('wallet:edge-buyer');
     await h.sim.submit({ kind: 'setAllowlist', wallet: buyer, allowed: true }, 'allowlistManager');
     await h.sim.fund(buyer, 'USDC', USDC(10_000));
-    const bc = orderCommitment({ seriesId, windowId: w.windowId, wallet: buyer, side: 'buy', pricePerUnit: USDC(11), quantity: 40n, salt: '0x' + 'bb'.repeat(32) });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const bc = orderCommitment({ wallet: buyer, pricePerUnit: USDC(11), quantity: 40n, salt: '0x' + 'bb'.repeat(32) });
     await h.sim.send({ tx: await h.sim.build({ kind: 'commitWindowOrder', seriesId, windowId: w.windowId, side: 'buy', commitment: bc, deposit: USDC(440).toString(), units: '0' }, buyer), signatures: { [buyer]: `sim:${buyer}` } });
     expect(BigInt(await h.sim.getBalance(buyer, 'USDC'))).toBe(USDC(9_560));
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1000).toString() });

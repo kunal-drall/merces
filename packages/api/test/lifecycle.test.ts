@@ -6,6 +6,12 @@ import { parsePeriod } from '@merces/math';
 import { SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 
 /**
@@ -126,7 +132,8 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     const b1 = h.backers[1]!;
     const b1Tok = rig.token({ accountId: 'b1', wallets: [{ chain: 'monad', address: b1.address }], roles: ['backer'] });
     const salt = '0x' + 'dd'.repeat(32);
-    const c = orderCommitment({ seriesId: other.seriesId, windowId: 0, wallet: b1.address, side: 'sell', pricePerUnit: USDC(10), quantity: 10n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const c = orderCommitment({ wallet: b1.address, pricePerUnit: USDC(10), quantity: 10n, salt });
     const wc = await rig.post(`/series/${other.seriesId}/window/build-commit`, { wallet: b1.address, side: 'sell', commitment: c, deposit: '0', units: '10' }, b1Tok);
     expect(wc.statusCode).toBe(200);
     const wsent = await rig.post('/tx/send', await b1.sign(wc.json().tx as UnsignedTx), b1Tok);
@@ -269,7 +276,8 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     const now = await h.sim.now();
     await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 }, 'keeper');
     const salt = '0x' + 'cd'.repeat(32);
-    const commitment = orderCommitment({ seriesId, windowId: 0, wallet: b1.address, side: 'sell', pricePerUnit: USDC(60), quantity: 40n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const commitment = orderCommitment({ wallet: b1.address, pricePerUnit: USDC(60), quantity: 40n, salt });
     await h.exec(b1, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment, deposit: '0', units: '40' });
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
     await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);

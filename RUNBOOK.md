@@ -115,6 +115,15 @@ MERCES_ALLOW_SIM_RESET=1 pnpm --filter @merces/simulator sim:reset --chain solan
   and the issuer registrations (`registerIssuer`). `dev:mock` does this itself: it registers the verifier key at boot
   and re-seeds its synthetic cohort on an empty chain.
 
+### S4 resets: bid and order commitments (WP2)
+
+S4 WP2 switched bid and order commitments to Stage 1's keccak over the price, quantity, salt and wallet (A-SIG-8). The
+state version is unchanged (still 4), but a bid or window order committed before the switch carries our old SHA-256
+commitment and can never be revealed (CommitmentMismatch, InvalidCommitment). Reset the simulated chains with the
+commands above after deploying the WP2 build (no environment holds simulator data worth keeping); S4 WP5, WP6 and WP7
+reset them again. Clients compute the new commitment themselves (or through `POST /series/{id}/bids/commitment`) with a
+fresh 32-byte salt per bid: the commitment no longer binds the series.
+
 ### Checks before a deploy
 
 The gate (S1, kept through S2 and S3), all from the repository root with Postgres up:

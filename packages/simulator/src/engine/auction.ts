@@ -100,9 +100,10 @@ export function revealBid(e: EngineCore, signer: string, cmd: Extract<Command, {
   if (b.revealed) fail('AlreadyRevealed', 'the bid is already revealed');
   const price = big(cmd.pricePerUnit);
   const qty = big(cmd.quantity);
-  // a price or quantity outside u64 matches no commitment (the commitment builder refuses one, AmountOutOfRange)
+  // Stage 1's keccak over price, quantity, salt and the revealer's wallet (SPEC §5.2): the signer is the bidder. A price
+  // or quantity outside u64 matches no commitment (the commitment builder refuses one, AmountOutOfRange)
   const inRange = price <= U64_MAX && qty <= U64_MAX;
-  if (!inRange || bidCommitment({ seriesId: s.seriesId, bidder: signer, pricePerUnit: price, quantity: qty, salt: cmd.salt }) !== b.commitment) fail('CommitmentMismatch', 'the reveal does not match the commitment');
+  if (!inRange || bidCommitment({ bidder: signer, pricePerUnit: price, quantity: qty, salt: cmd.salt }) !== b.commitment) fail('CommitmentMismatch', 'the reveal does not match the commitment');
   const a = s.auction;
   b.revealed = { pricePerUnit: price, quantity: qty };
   b.revealIndex = a.revealedCount++;

@@ -43,7 +43,7 @@ export const windowOps: TranslatorTable = {
       const b = ctx.seriesBook(c.series);
       const w = windowBook(ctx, c.series);
       const wallet = ctx.actors.wallet(c.actor);
-      const commitment = orderCommitment({ seriesId: b.seriesId, windowId: w.windowId, wallet: wallet.address, side: 'sell', pricePerUnit: BigInt(c.price), quantity: BigInt(c.quantity), salt: hex32(c.salt, 'salt') });
+      const commitment = orderCommitment({ wallet: wallet.address, pricePerUnit: BigInt(c.price), quantity: BigInt(c.quantity), salt: hex32(c.salt, 'salt') });
       await ctx.send(wallet, { kind: 'commitWindowOrder', seriesId: b.seriesId, windowId: w.windowId, side: 'sell', commitment, deposit: '0', units: c.units });
     }),
 
@@ -52,7 +52,7 @@ export const windowOps: TranslatorTable = {
       const b = ctx.seriesBook(c.series);
       const w = windowBook(ctx, c.series);
       const wallet = ctx.actors.wallet(c.actor);
-      const commitment = orderCommitment({ seriesId: b.seriesId, windowId: w.windowId, wallet: wallet.address, side: 'buy', pricePerUnit: BigInt(c.price), quantity: BigInt(c.quantity), salt: hex32(c.salt, 'salt') });
+      const commitment = orderCommitment({ wallet: wallet.address, pricePerUnit: BigInt(c.price), quantity: BigInt(c.quantity), salt: hex32(c.salt, 'salt') });
       await ctx.send(wallet, { kind: 'commitWindowOrder', seriesId: b.seriesId, windowId: w.windowId, side: 'buy', commitment, deposit: c.escrow, units: '0' });
     }),
 

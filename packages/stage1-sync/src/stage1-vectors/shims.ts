@@ -7,7 +7,8 @@
  *
  * Retired rows: SH-AUC-1 and SH-AUC-3..6 (S2: the raise runs Stage 1's settlement directly); SH-CLM-2, SH-CLM-3 and
  * SH-BRN-1 (S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run as `claimTail`, `claimFinal` and `burnRetired`);
- * SH-CLM-1 (S3 WP3: `claim` runs as `claimPayout`, which is Stage 1's `claim`).
+ * SH-CLM-1 (S3 WP3: `claim` runs as `claimPayout`, which is Stage 1's `claim`); SH-AUC-2 (S4 WP2: `commit_bid` runs
+ * as `commitBid` with Stage 1's keccak commitment, S4 D11).
  */
 export interface Shim {
   id: string;
@@ -35,7 +36,6 @@ export const SHIMS: readonly Shim[] = [
   { id: 'SH-REG-2', ops: ['register_attestor', 'revoke_attestor'], call: 'admin registerAttestor{active}', why: 'no 45-day revocation grace modelled', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-REG-3', ops: ['register_verifier_key'], call: 'registerVerifierKey{keyId: name, ed25519 SPKI from the seed}', why: 'Stage 1 verifier keys are secp256k1', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-REG-4', ops: ['create_series'], call: 'createSeries (USDC, USD, sealed; due/grace/notice days from config.parameters; tier bitmask → object; atOffsetSeconds → afterSeconds); window durations and windowFeeBps held by the runner, their Stage 1 bounds unchecked', why: 'canonical terms lack those fields', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-AUC-2', ops: ['commit_bid'], call: 'commitBid{commitment recomputed from the plaintext by our builder, which decodes the price and quantity as u64s (AmountOutOfRange), deposit = escrow}', why: 'Stage 1 uses a keccak commitment', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-REP-1', ops: ['submit_report'], call: 'submitReport{prior, income, Groth16 proof and signals}; tier-2 attestation signed by the runner with the named key; tier 3 co-signed by the attestor', why: 'signatures are S4; proofs are real', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-PAY-1', ops: ['pay'], call: 'payIn{periodId: open due period (else the next expected period), amount: the period payment due}', why: "Stage 1's pay has no amount or period", removedIn: 'S5', kind: 'shim' },
   { id: 'SH-PAU-1', ops: ['request_pause'], call: 'requestPause{until: t + maxPauseSeconds}', why: "Stage 1's request has no end", removedIn: 'S5', kind: 'shim' },
@@ -44,8 +44,8 @@ export const SHIMS: readonly Shim[] = [
   { id: 'SH-EXT-1', ops: ['extinguish'], call: 'extinguish{attestors} sent by attestors[0], attestors[1] co-signing (deduplicated)', why: 'co-signing vs signatures', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-AMD-1', ops: ['amend_terms'], call: 'amendTerms{termsCommitment, capMultipleWad, attestor} with the attestor co-signing', why: 'co-signing vs signatures', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-WIN-1', ops: ['open_window'], call: 'keeper openTransferWindow{t + windowCommitDuration, + windowRevealDuration}; period kept by the runner', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-WIN-2', ops: ['commit_ask'], call: 'commitWindowOrder{side: sell, deposit 0, units}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-WIN-3', ops: ['window_commit_bid'], call: 'commitWindowOrder{side: buy, deposit: escrow, units 0}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
+  { id: 'SH-WIN-2', ops: ['commit_ask'], call: 'commitWindowOrder{side: sell, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit 0, units}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
+  { id: 'SH-WIN-3', ops: ['window_commit_bid'], call: 'commitWindowOrder{side: buy, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit: escrow, units 0}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-4', ops: ['reveal_order'], call: 'revealWindowOrder (side from the commit)', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-5', ops: ['begin_window_settlement'], call: 'record only, for NO_MATCH or a terminal series; a priced proposal on a live series is BLOCKED', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-6', ops: ['finalize_window'], call: 'clearTransferWindow; asserts nothing transferred where Stage 1 settles NoMatch', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },

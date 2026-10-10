@@ -1,10 +1,11 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import {
-  BN254_FR, CURRENCY_CODES, INDEXING_RULES, U64_MAX, ZERO_INCOME_COMMITMENT as ZERO_FIELD, quarterIndex, yearOf,
+  BN254_FR, CURRENCY_CODES, INDEXING_RULES, U64_MAX, ZERO_INCOME_COMMITMENT as ZERO_FIELD, bidCommitmentBytes, quarterIndex, yearOf,
   incomeCommitmentField, routerIncomeCommitmentField, termsCommitmentField,
 } from '@merces/math';
 import { ChainError } from './port.ts';
+import { wallet32Of } from './signing.ts';
 
 /**
  * Canonical hashing for commitments and attestations. All parties (device, verifier, services, simulator, live
@@ -13,7 +14,9 @@ import { ChainError } from './port.ts';
  * The report commitments and the report's public inputs are Stage 1's (SPEC v1.1.2 §1.5, §6.2; the circuit
  * `stage1/circuits`): Poseidon over BN254 through `@merces/math`, which re-exports Stage 1's own functions. Field
  * elements travel as 0x-prefixed 32-byte big-endian lowercase hex, the encoding the chains store. Bid and order
- * commitments stay SHA-256 over canonical JSON until the auction work (S2). The attestation message keeps Stage 1's
+ * commitments are Stage 1's keccak (SPEC §1.3, §5.2, §7; S4 D11): `keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖
+ * wallet_32)` through `@merces/math`'s `bidCommitmentBytes` (the SDK's `bidCommitment`); they bind neither the series nor
+ * the window, so every bid and order draws a fresh 32-byte salt (`randomSalt`). The attestation message keeps Stage 1's
  * field set in a JSON encoding until the signature work (S4) switches it to Stage 1's `MERCES_REPORT_V1` bytes.
  *
  * Errors raised here never carry the offending value: the inputs include income figures, salts and private terms.
@@ -202,37 +205,68 @@ export function mockVerify(proof: unknown, publicInputs: readonly string[]): boo
   return typeof proof === 'string' && publicInputs.length === REPORT_PUBLIC_INPUT_NAMES.length && proof === mockProve(publicInputs);
 }
 
-// ---------------------------------------------------------------- other commitments (unchanged until S2)
+// ---------------------------------------------------------------- bid and order commitments (SPEC §1.3; S4 D11)
 
 /**
- * Sealed-bid commitment = hash(seriesId, bidder, price, quantity, salt) (ours until S4, shim SH-AUC-2; Stage 1's is
- * keccak). The price and quantity must be u64s, as Stage 1's `commit_bid` decodes them (SIM:893-894; EVM checks
- * `toU64` before hashing): outside that range it throws `ChainError('InvalidTerms', …, {stage1: 'AmountOutOfRange'})`,
- * naming neither value (a bid's price and quantity stay sealed until the reveal).
+ * A sealed bid's commitment, Stage 1's own (SPEC §1.3, §5.2 `reveal_bid`; SDK `commitments.ts` `bidCommitment`, here through
+ * `@merces/math` as `bidCommitmentBytes`): `keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32)`, big-endian, as
+ * 0x + 64 lowercase hex. `bidder` is the wallet that reveals (Solana `bidder`, EVM `msg.sender`) in its chain-local form:
+ * a Solana pubkey (base58) as-is, an EVM address (`0x` + 40 hex) left-padded with 12 zero bytes (`wallet32Of`).
+ *
+ * It binds neither the series nor the raise: the same bid with the same salt commits identically in every series, so
+ * a bidder draws a fresh 32-byte salt for every bid (`randomSalt`), or equal bids could be linked across series.
+ *
+ * Refusals are `ChainError('InvalidTerms')` naming neither value (a bid's price, quantity and salt stay sealed until the
+ * reveal): the price and quantity must be u64s, as Stage 1 decodes them (`commit_bid` and `reveal_bid`, SIM:893-894;
+ * the EVM's `toU64` runs before hashing), else `{stage1: 'AmountOutOfRange'}`; the salt must be 32 bytes of 0x-hex; the
+ * bidder must be a Solana or an EVM address.
  */
-export function bidCommitment(input: { seriesId: string; bidder: string; pricePerUnit: bigint | string; quantity: bigint | string; salt: string }): string {
-  const price = bidU64(input.pricePerUnit, 'price');
-  const quantity = bidU64(input.quantity, 'quantity');
-  return hashCanonical('bid', { seriesId: input.seriesId, bidder: input.bidder, pricePerUnit: price.toString(), quantity: quantity.toString(), salt: input.salt });
+export function bidCommitment(input: { bidder: string; pricePerUnit: bigint | string; quantity: bigint | string; salt: string }): string {
+  return keccakCommitment('bid', input.bidder, input.pricePerUnit, input.quantity, input.salt);
 }
 
-/** A bid's price or quantity as a u64, else Stage 1's AmountOutOfRange (value-free). */
-function bidU64(v: bigint | string, what: 'price' | 'quantity'): bigint {
+/**
+ * A transfer-window order's commitment (an ask or a window bid): Stage 1 uses the bid's formula and layout for both
+ * (SPEC §7; `MercesWindow.revealOrder` hashes `MercesMessages.orderCommitment(p, q, salt, msg.sender)`, as
+ * `revealBid` does; Solana `reveal_order`), so this is `bidCommitment` with `wallet` the order's owner. Neither the
+ * window nor the side is bound: the side is fixed when the order is committed and a reveal must name the same one.
+ * Same refusals as `bidCommitment`.
+ */
+export function orderCommitment(input: { wallet: string; pricePerUnit: bigint | string; quantity: bigint | string; salt: string }): string {
+  return keccakCommitment('order', input.wallet, input.pricePerUnit, input.quantity, input.salt);
+}
+
+function keccakCommitment(what: 'bid' | 'order', wallet: string, pricePerUnit: bigint | string, quantity: bigint | string, salt: string): string {
+  const price = commitmentU64(pricePerUnit, what, 'price');
+  const qty = commitmentU64(quantity, what, 'quantity');
+  if (typeof salt !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(salt)) throw new ChainError('InvalidTerms', `the ${what} salt must be 32 bytes of 0x-hex`);
+  return '0x' + bytesToHex(bidCommitmentBytes(price, qty, hexToBytes(salt.slice(2)), walletOf(wallet, what)));
+}
+
+/** A bid's or order's price or quantity as a u64, else Stage 1's AmountOutOfRange (value-free). */
+function commitmentU64(v: bigint | string, what: 'bid' | 'order', field: 'price' | 'quantity'): bigint {
   try {
-    return toU64(v, what);
+    return toU64(v, field);
   } catch {
-    throw new ChainError('InvalidTerms', `the bid ${what} is out of the u64 range`, { stage1: 'AmountOutOfRange' });
+    throw new ChainError('InvalidTerms', `the ${what} ${field} is out of the u64 range`, { stage1: 'AmountOutOfRange' });
   }
 }
 
-/** Transfer-window order commitment. */
-export function orderCommitment(input: { seriesId: string; windowId: number; wallet: string; side: 'buy' | 'sell'; pricePerUnit: bigint | string; quantity: bigint | string; salt: string }): string {
-  return hashCanonical('order', { ...input, pricePerUnit: input.pricePerUnit.toString(), quantity: input.quantity.toString() });
+/**
+ * The 32-byte wallet value of a chain-local address. The two forms cannot be confused: `0x` + 40 hex is never base58
+ * (`0` is not in its alphabet), so the address's own shape names its family.
+ */
+function walletOf(address: string, what: 'bid' | 'order'): Uint8Array {
+  try {
+    return wallet32Of(address, typeof address === 'string' && /^0x[0-9a-fA-F]{40}$/.test(address) ? 'evm' : 'solana');
+  } catch {
+    throw new ChainError('InvalidTerms', `the ${what === 'bid' ? 'bidder' : 'wallet'} is not a Solana or an EVM address`);
+  }
 }
 
-/** A random 0x-hex salt for bid and order commitments (not a field element: use `randomFieldSalt` for Poseidon). */
-export function randomSalt(bytes = 32): string {
-  const b = new Uint8Array(bytes);
+/** A fresh random 32-byte salt as 0x-hex, for a bid or order commitment (not a field element: use `randomFieldSalt` for Poseidon). */
+export function randomSalt(): string {
+  const b = new Uint8Array(32);
   globalThis.crypto.getRandomValues(b);
   return '0x' + bytesToHex(b);
 }

@@ -8,6 +8,12 @@ import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './hel
 import { seriesOf } from './kit.ts';
 
 /*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
+/*
  * Curve mode on Stage 1's lifecycle (S3 WP8). Figures are Stage 1's where Stage 1 has them: P0 and the fee split from
  * merces-common `curve.rs` tests and `solana/tests/fixtures/meteora/curve_config.json` (`expected`), the lifecycle from
  * `solana/tests/tests/curve_mode.rs` (CMT); the stand-in pool's own trade figures (the constant price, the PartialFill
@@ -282,7 +288,8 @@ describe('curve mode (solana): the sealed-bid paths and the sealed-bid exits are
     const { h, seriesId } = await curveSeries();
     const b = h.backers[0]!;
     const salt = '0x' + '01'.repeat(32);
-    const commitment = bidCommitment({ seriesId, bidder: b.address, pricePerUnit: P0, quantity: 1n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const commitment = bidCommitment({ bidder: b.address, pricePerUnit: P0, quantity: 1n, salt });
     const refusals: Promise<unknown>[] = [
       h.exec(h.issuer, { kind: 'openRaise', seriesId }),
       h.exec(h.issuer, { kind: 'cancelRaise', seriesId }),

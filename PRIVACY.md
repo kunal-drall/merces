@@ -101,7 +101,7 @@ document file (A-PRIV-4).
 
 | Field | Where | Storage | Readers | Deleted when |
 | --- | --- | --- | --- | --- |
-| Bid price, quantity, salt | client; revealed onchain at reveal time | none until reveal (public afterwards) | — | — |
+| Bid price, quantity, salt | client; revealed onchain at reveal time | none until reveal (public afterwards). The commitment is Stage 1's keccak over the price, quantity, salt and wallet and binds no series or window (S4, A-SIG-8), so the client draws a fresh 32-byte salt for every bid and order: a reused salt would make equal bids in two series commit identically and link them | — | — |
 | Reveal backup | `bid_backups.ciphertext` (plaintext fields rejected) | client-encrypted | owner; server: nobody | after settlement + retention |
 | Commitment, deposit | `bids`, onchain | plain | owner, issuer; public onchain | — |
 | Auction settlement: rounds and rejections, the clearing price, units sold, proceeds, the failure reason, the mint gate | `series`, `settlement_rounds`, onchain | plain | public (`GET /series`, `GET /series/{id}/auction`; onchain); the activity feed names rounds, reasons and unit counts only, never an amount (the indexer's `summary()`) | — |

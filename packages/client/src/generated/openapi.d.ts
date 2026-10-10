@@ -1279,6 +1279,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description Stage 1's bid commitment, keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (SPEC §1.3; S4, A-SIG-8), the wallet being the bidder's 32-byte form (a Solana pubkey as-is, an EVM address left-padded). It binds neither the series nor the raise: draw a fresh 32-byte salt for every bid. Nothing is stored; prefer computing it client-side. */
         post: operations["computeBidCommitment"];
         delete?: never;
         options?: never;
@@ -6296,9 +6297,11 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @description an address of the series' chain */
                     bidder: string;
                     pricePerUnit: string;
                     quantity: string;
+                    /** @description 32 bytes as 0x + 64 hex, fresh for every bid */
                     salt: string;
                 };
             };
@@ -6312,6 +6315,20 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
+            };
+            /** @description The bidder is not an address of the series' chain */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The salt is not 32 bytes, or the price or quantity is outside u64 (detail.stage1 AmountOutOfRange); no value is named */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

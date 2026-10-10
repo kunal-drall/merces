@@ -5,6 +5,12 @@ import { PgSimPersistence, SimHarness, SimWallet, SimulatorChain, defaultTerms }
 import { ZERO_INCOME_COMMITMENT, bidCommitment, runSettlement, type ChainPort, type DomainEvent, type EventPayload, type EventType } from '@merces/domain';
 import { Indexer, project } from '../src/index.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const GENESIS = Date.UTC(2026, 0, 1) / 1000;
 /*
@@ -416,7 +422,8 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     await h.exec(h.issuer, { kind: 'openRaise', seriesId });
     const { commitEndsAt } = (await h.sim.getAuction(seriesId))!;
     const bids = [12, 11, 10, 10, 9].map((p, i) => ({ w: h.backers[i]!, price: USDC(p), salt: '0x' + String(i + 1).padStart(2, '0').repeat(32) }));
-    for (const b of bids) await h.exec(b.w, { kind: 'commitBid', seriesId, commitment: bidCommitment({ seriesId, bidder: b.w.address, pricePerUnit: b.price, quantity: 100n, salt: b.salt }), deposit: requiredEscrow(b.price, 100n, terms.auctionFeeBps).toString() });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    for (const b of bids) await h.exec(b.w, { kind: 'commitBid', seriesId, commitment: bidCommitment({ bidder: b.w.address, pricePerUnit: b.price, quantity: 100n, salt: b.salt }), deposit: requiredEscrow(b.price, 100n, terms.auctionFeeBps).toString() });
     await h.sim.setTime(commitEndsAt!);
     for (const b of bids) await h.exec(b.w, { kind: 'revealBid', seriesId, pricePerUnit: b.price.toString(), quantity: '100', salt: b.salt });
     await idx.catchUp();

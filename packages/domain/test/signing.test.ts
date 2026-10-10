@@ -95,7 +95,7 @@ describe('Stage 1 known answers through signing.ts (cause S4-KAT)', () => {
     expect(() => seriesKeyOf('not a series', 'evm')).toThrow(RangeError);
   });
 
-  it('the 2 bid commitments through bidCommitmentBytes (Stage 1\'s keccak; our hex form lands in S4 WP2)', () => {
+  it('the 2 bid commitments through bidCommitmentBytes (Stage 1\'s keccak; our hex bidCommitment and orderCommitment: domain.test.ts, cause S4-BID)', () => {
     for (const b of KA.bidCommitments) {
       const wallet = Uint8Array.from(Buffer.from(b.wallet.slice(2), 'hex'));
       expect(hex(bidCommitmentPreimage(BigInt(b.price), BigInt(b.quantity), b.salt, wallet))).toBe(b.preimage);

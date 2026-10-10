@@ -7,6 +7,12 @@ import { STAGE1_CODE, STAGE1_EVM_CODE, STAGE1_SOLANA_CODE, fail, guardStage1 } f
 import { GENESIS } from './helpers.ts';
 
 /*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
+/*
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms; `openRaise` derives the phase ends from them;
  *  - S2-CR: Stage 1's creation rules on the raise's own terms (commit 1 hour–30 days, reveal 1 hour–7 days, non-reveal
@@ -197,7 +203,8 @@ describe('Stage 1 error names on simulator errors', () => {
     })();
     await h.exec(h.issuer, { kind: 'openRaise', seriesId }); // cause S2-AD
     const w = h.backers[0]!;
-    const commitment = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: 10n, quantity: 1n, salt: '0x' + '01'.repeat(32) });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const commitment = bidCommitment({ bidder: w.address, pricePerUnit: 10n, quantity: 1n, salt: '0x' + '01'.repeat(32) });
     const e = await rejection(h.exec(w, { kind: 'commitBid', seriesId, commitment, deposit: (2_000_000_000_000n).toString() }));
     expect(e.code).toBe('InsufficientFunds');
     expect(e.detail).toEqual({ stage1: 'InsufficientEscrow' });

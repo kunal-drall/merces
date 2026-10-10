@@ -51,8 +51,10 @@ report was assembled → hardship (`POST /series/{id}/hardship`) or redemption (
 `POST …/redemption/build-redeem`).
 
 **Backer**: apply → `GET /arena`, `GET /series/{id}`, `GET /series/{id}/terms` (eligible backers only, logged) →
-`POST /series/{id}/bids/precheck` → compute the commitment client-side (or `POST …/bids/commitment`) → `POST
-…/bids/build-commit` → keep an encrypted backup (`PUT …/bids/backup`) → reveal (`POST …/bids/build-reveal`) → after the
+`POST /series/{id}/bids/precheck` → compute the commitment client-side (or `POST …/bids/commitment`): Stage 1's
+`keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32)`, which binds no series, so draw a fresh 32-byte salt for
+every bid (S4, A-SIG-8; the helper takes a bidder of the series' chain, 400 otherwise, and refuses a salt that is not 32
+bytes or a price or quantity outside u64 with 422, naming no value) → `POST …/bids/build-commit` → keep an encrypted backup (`PUT …/bids/backup`) → reveal (`POST …/bids/build-reveal`) → after the
 reveal end the keepers settle the raise in Stage 1's steps and then push every bid's refund and units (`deliverBid`): there
 is nothing to claim. "Deliver now": `POST …/bids/build-deliver {bidder, signer?}` builds Stage 1's `deliver_bid` for a
 processed, undelivered bid (`signer` defaults to the bidder and must be one of your wallets; any wallet may deliver any

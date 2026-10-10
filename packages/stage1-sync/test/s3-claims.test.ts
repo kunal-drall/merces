@@ -32,6 +32,8 @@ import {
  * S3 cause codes: S3-SC (the scenarios); S3-CL (WP3: `claim` is Stage 1's, the net payout only: (h), (i)); S3-Z (WP3:
  * the zero-amount rule: (j), (k)); S3-SH (SH-CLM-1 retired in WP3); S3R-F (S3 review fix 1: (l), a redeemed holder's
  * final share counts its open ask's escrow, as both chains weigh it, where Stage 1's simulator does not: DIV-S1I-1).
+ *
+ * S4 cause codes: S4-BID (S4 WP2: `commit_bid` runs directly with Stage 1's keccak commitment; SH-AUC-2 retired).
  */
 const VECTORS = fileURLToPath(new URL('../../../stage1/packages/vectors', import.meta.url));
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
@@ -169,7 +171,8 @@ describe('S3 claim scenarios: replay', () => {
       // cause S3-SH: no shim stands in for the claim family any more (SH-CLM-1, the last, retired in WP3); (l) runs 22's
       // S2 window through the one-step window rows (SH-WIN-1..7, until S5)
       const windows = run.id === 'S3l' ? ['SH-WIN-1', 'SH-WIN-2', 'SH-WIN-3', 'SH-WIN-4', 'SH-WIN-5', 'SH-WIN-6', 'SH-WIN-7'] : [];
-      for (const id of Object.keys(run.shims)) expect(['SH-REG-1', 'SH-REG-2', 'SH-REG-3', 'SH-REG-4', 'SH-AUC-2', 'SH-REP-1', 'SH-PAY-1', 'SH-RED-1', 'SH-EXT-1', 'SH-AMD-1', ...windows], `${run.vector} ${id}`).toContain(id);
+      // cause S4-BID: SH-AUC-2 is no longer allowed (retired in S4 WP2)
+      for (const id of Object.keys(run.shims)) expect(['SH-REG-1', 'SH-REG-2', 'SH-REG-3', 'SH-REG-4', 'SH-REP-1', 'SH-PAY-1', 'SH-RED-1', 'SH-EXT-1', 'SH-AMD-1', ...windows], `${run.vector} ${id}`).toContain(id);
       if (run.id === 'S3l') expect(Object.keys(run.shims).filter((id) => id.startsWith('SH-WIN-')).sort()).toEqual(windows);
     }
     expect(r.report.ok).toBe(true);

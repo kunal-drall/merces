@@ -1,11 +1,12 @@
 import { bidCommitment } from '@merces/domain';
 import { RunnerError } from '../errors.ts';
 import { hex32 } from '../codec.ts';
-import { direct, shim, type TranslatorTable } from './types.ts';
+import { direct, type TranslatorTable } from './types.ts';
 
 /**
  * The sealed-bid raise on Stage 1's multi-step settlement (S2): every op runs directly as the canonical command of the
- * same name and meaning, except `commit_bid`, whose commitment is ours until S4 (shim SH-AUC-2).
+ * same name and meaning. `commit_bid` carries Stage 1's keccak commitment (S4 WP2; shim SH-AUC-2 retired), which the
+ * runner computes from the vector's plaintext and the bidder's wallet, as a Stage 1 harness does.
  *
  * - `open_raise` and `cancel_raise` are the issuer's; `commit_bid` and `reveal_bid` the bidder's.
  * - The settlement steps are permissionless and the vector calls carry no actor (SIM `types.ts:99-102`): the runner
@@ -29,11 +30,12 @@ export const raiseOps: TranslatorTable = {
     }),
 
   commit_bid: (ctx, c) =>
-    shim('SH-AUC-2', async () => {
+    direct(async () => {
       const b = ctx.seriesBook(c.series);
       const bidder = ctx.actors.address(c.actor);
-      // our commitment builder decodes the price and quantity as u64s (AmountOutOfRange), as Stage 1's commit_bid does
-      const commitment = bidCommitment({ seriesId: b.seriesId, bidder, pricePerUnit: BigInt(c.price), quantity: BigInt(c.quantity), salt: hex32(c.salt, 'salt') });
+      // Stage 1's keccak(price ‖ quantity ‖ salt ‖ wallet); the builder decodes the price and quantity as u64s
+      // (AmountOutOfRange, 21#19-#20), as Stage 1's commit_bid does
+      const commitment = bidCommitment({ bidder, pricePerUnit: BigInt(c.price), quantity: BigInt(c.quantity), salt: hex32(c.salt, 'salt') });
       await ctx.send(ctx.actors.wallet(c.actor), { kind: 'commitBid', seriesId: b.seriesId, commitment, deposit: c.escrow });
     }),
 

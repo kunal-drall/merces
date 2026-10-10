@@ -78,6 +78,10 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *  - S3R-F: the register has one row again, DIV-S1I-1 (a redeemed holder's final share counts its open ask's escrow, as
  *    both chains weigh it; Stage 1's TS reference does not): a Stage 1-internal difference resolved toward both chains,
  *    met by our scenario S3l only (`s3-claims.test.ts`). No Stage 1 vector carries a divergence.
+ *
+ * S4 cause codes:
+ *  - S4-BID: `commit_bid` runs directly with Stage 1's keccak commitment (S4 D11; shim SH-AUC-2 retired), so no row of
+ *    the raise is a shim any more; the window rows SH-WIN-2/3 hash their orders the same way.
  */
 afterAll(shutdown);
 
@@ -437,9 +441,8 @@ describe('stage1 vector runner: merces backend', () => {
       expect(run.status).toBe('PASS');
       expect(run.executed).toBe(32);
       expect(run.stopped).toEqual({ index: 32, reason: 'until' });
-      // cause S2-MS: only the commitment is still a shim (SH-AUC-2, S4); the settlement steps run directly
-      expect(run.shims['SH-AUC-2']).toBeGreaterThan(0);
-      expect(Object.keys(run.shims).filter((id) => id.startsWith('SH-AUC-'))).toEqual(['SH-AUC-2']);
+      // cause S2-MS, S4-BID: the whole raise runs directly, the commitment included (SH-AUC-2 retired in S4 WP2)
+      expect(Object.keys(run.shims).filter((id) => id.startsWith('SH-AUC-'))).toEqual([]);
     }
     expect(r.ok).toBe(true);
   }, 120_000);
@@ -914,11 +917,13 @@ describe('stage1 vector runner: merces backend', () => {
     // cause S2-NY: NOT_YET and the op kind `not-yet` (were NOT_IN_S1 and `not-in-s1`)
     const notYet = Object.fromEntries(Object.entries(STAGE1_OP_MAP).filter(([, m]) => m.kind === 'not-yet').map(([op, m]) => [op, m.milestone]));
     expect(NOT_YET).toEqual(notYet);
-    // cause S2-RH, S2-MS: the raise's ops run directly since S2, `commit_bid` aside (our commitment until S4)
+    // cause S2-RH, S2-MS: the raise's ops run directly since S2; cause S4-BID: `commit_bid` too since S4 WP2 (Stage 1's
+    // keccak commitment; was shim SH-AUC-2)
     expect(NOT_YET).not.toHaveProperty('cancel_raise');
     expect(NOT_YET).not.toHaveProperty('register_holder');
-    for (const op of ['open_raise', 'cancel_raise', 'reveal_bid', 'begin_settlement', 'finalize_settlement', 'process_bid', 'deliver_bid', 'register_holder']) expect(STAGE1_OP_MAP[op]?.kind, op).toBe('direct');
-    expect(STAGE1_OP_MAP.commit_bid).toMatchObject({ kind: 'shim', shim: 'SH-AUC-2' });
+    for (const op of ['open_raise', 'cancel_raise', 'commit_bid', 'reveal_bid', 'begin_settlement', 'finalize_settlement', 'process_bid', 'deliver_bid', 'register_holder']) expect(STAGE1_OP_MAP[op]?.kind, op).toBe('direct');
+    expect(STAGE1_OP_MAP.commit_bid).not.toHaveProperty('shim');
+    expect(SHIM_BY_ID.has('SH-AUC-2')).toBe(false);
     // cause S3-SH: the whole claim family runs directly: the tail, final and Retired-burn claims since WP2 (was: SH-CLM-2,
     // SH-CLM-3, SH-BRN-1) and `claim` since WP3, when claimPayout became Stage 1's claim (was: SH-CLM-1)
     for (const op of ['claim', 'claim_tail', 'claim_final', 'burn_retired']) {
@@ -982,13 +987,10 @@ describe('stage1 vector runner: merces backend', () => {
     const section = md.slice(md.indexOf('## Shims (not parity)'));
     expect(section.length).toBeGreaterThan(0);
     for (const s of SHIM_BY_ID.values()) expect(section, s.id).toContain(`| ${s.id}`);
-    // cause S2-MS: the commitment is the raise's only shim left (SH-AUC-3..6 retired); it goes in S4. "Used in" is
-    // every vector of the report that commits a bid (computed from the runs, not pinned by hand)
-    const committing = [...new Set(report.runs.filter((r) => r.shims['SH-AUC-2']).map((r) => r.id))].sort();
-    expect(committing).toEqual([...TARGETS, ...Object.keys(PREFIX_GATES)].sort());
-    expect(section).toContain(`| SH-AUC-2 | \`commit_bid\` |`);
-    expect(section).toMatch(new RegExp(`\\| SH-AUC-2 \\| \`commit_bid\` \\|[^\\n]*\\| S4 \\| ${committing.join(', ')} \\|`));
-    expect(section).not.toMatch(/SH-AUC-[3-6]/);
+    // cause S2-MS, S4-BID: the raise has no shim left (SH-AUC-3..6 retired in S2, SH-AUC-2 in S4 WP2): no run uses an
+    // SH-AUC row and the section lists none
+    expect(report.runs.filter((r) => Object.keys(r.shims).some((id) => id.startsWith('SH-AUC-')))).toEqual([]);
+    expect(section).not.toMatch(/SH-AUC-/);
     expect(section).toMatch(/\| BLK-1 \(BLOCKED\) \| `retire_if_capped` \|/);
     // cause NRC: the known divergences section says no vector carries a divergence (was: the DIV-NRC-1 row, its five
     // entries, its lockstep parting and where the runs met it), and 03's row is PASS in full. Cause S3R-F: it lists the

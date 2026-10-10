@@ -3,6 +3,12 @@ import { CURVE_TERMS_ZEROS, bidCommitment, rateUnits, runSettlement, termsCommit
 import { WAD, capPerUnit, parsePeriod, ratePerUnit, requiredEscrow, wadFromDecimal } from '@merces/math';
 import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv } from '../src/env.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 /**
  * H2 — the behavioural contract every ChainPort implementation must satisfy. Written against the port only.
  * CONFORMANCE_CHAIN selects the target: simulator (default, both personalities), solana, evm:<chainKey>.
@@ -94,7 +100,8 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const bids = [12, 11, 10, 10, 9].map((p, i) => ({ w: e.backers[i]!, price: USDC(p), qty: 100n, salt: '0x' + (0x30 + i).toString(16).padStart(2, '0').repeat(32) }));
     const terms = (await e.chain.getSeries(seriesId))!.terms;
     for (const b of bids) {
-      const c = bidCommitment({ seriesId, bidder: b.w.address, pricePerUnit: b.price, quantity: b.qty, salt: b.salt });
+      // cause S4-BID: Stage 1's keccak commitment, over no series or window
+      const c = bidCommitment({ bidder: b.w.address, pricePerUnit: b.price, quantity: b.qty, salt: b.salt });
       const deposit = requiredEscrow(b.price, b.qty, terms.auctionFeeBps);
       const r = await exec(e, b.w, { kind: 'commitBid', seriesId, commitment: c, deposit: deposit.toString() });
       expect(types(r.events)).toEqual(['BidCommitted']);

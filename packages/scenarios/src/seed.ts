@@ -1,4 +1,4 @@
-import { bidCommitment, termsCommitment, type SeriesTerms } from '@merces/domain';
+import { bidCommitment, randomSalt, termsCommitment, type SeriesTerms } from '@merces/domain';
 import { PILOT_COHORT, stripeFixtureFor, stripeGrossUntil, type SyntheticIssuer } from '@merces/fixtures';
 import { WAD, parsePeriod, periodsBetween, ratePerUnit, requiredEscrow, wadFromDecimal } from '@merces/math';
 import { MemoryIncomeChain, assembleOnDevice, submitReportCommand } from '@merces/poi-device';
@@ -81,9 +81,10 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
     const salts: string[] = [];
     for (const [b, price] of prices.entries()) {
       const w = h.backers[b]!;
-      const salt = '0x' + (0x10 + b).toString(16).padStart(2, '0').repeat(32);
+      // a fresh salt per bid: Stage 1's commitment binds neither the series nor the raise (S4 D11)
+      const salt = randomSalt();
       salts.push(salt);
-      const c = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: price, quantity: qty, salt });
+      const c = bidCommitment({ bidder: w.address, pricePerUnit: price, quantity: qty, salt });
       const deposit = requiredEscrow(price, qty, terms.auctionFeeBps);
       await h.exec(w, { kind: 'commitBid', seriesId, commitment: c, deposit: deposit.toString() });
     }

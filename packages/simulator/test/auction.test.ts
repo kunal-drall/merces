@@ -4,6 +4,12 @@ import { SimHarness, defaultTerms } from '../src/index.ts';
 import { USDC, expectChainError, expectStage1Error, types } from './helpers.ts';
 
 /*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
+/*
  * S2 cause codes on the pins that moved:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1 bounds: 1 hour–30 days, 1 hour–7 days); `openRaise`
  *    derives the phase ends from them;
@@ -56,7 +62,8 @@ describe('auction edge cases', () => {
     await expectChainError(h.sim.send({ tx, signatures: { [stranger]: `sim:${stranger}` } }), 'NotAllowlisted');
     const w = h.backers[0]!;
     const salt = '0x' + 'aa'.repeat(32);
-    const c = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: USDC(10), quantity: 300n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const c = bidCommitment({ bidder: w.address, pricePerUnit: USDC(10), quantity: 300n, salt });
     await h.exec(w, { kind: 'commitBid', seriesId, commitment: c, deposit: USDC(3030).toString() });
     const dup = h.exec(w, { kind: 'commitBid', seriesId, commitment: c, deposit: '1' });
     await expectChainError(dup, 'Duplicate');

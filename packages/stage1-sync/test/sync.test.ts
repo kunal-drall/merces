@@ -28,6 +28,8 @@ import { locateStage1 } from '@merces/chains';
  * S4 cause codes:
  *  - S4-KAT: the `signatures` step (after `curve-port`) reproduces Stage 1's signing known answers through
  *    `@merces/math` and `@merces/domain` on every sync; a drop without them fails it (never a skip).
+ *  - S4-BID: since S4 WP2 the step also checks our hex `bidCommitment` and `orderCommitment` against KA's bid
+ *    commitments, from the bidder's chain-local address.
  */
 
 /** A Stage 1 drop with only a manifest (plus extra files written by the caller). */
@@ -242,6 +244,8 @@ describe('stage1:sync', () => {
     const total = SIGNING_REEXPORTS.length + Object.keys(SIGNING_RENAMED).length + 1;
     expect(r.details).toContain(`re-exports: ${total}/${total} signing names of @merces/math are @merces/sdk's own objects (deriveTestPrivateKey on @merces/math/testing only)`);
     expect(r.details.some((d) => d.includes('✗'))).toBe(false);
+    // cause S4-BID: KA's bid commitments through Stage 1's bytes and through our builders
+    expect(r.details).toContain('wallets: 4 through wallet32Of; domains: 2 through signingDomain; series keys: 2 through seriesKeyOf; bid commitments: 2 through bidCommitmentBytes, 2 through our bidCommitment and orderCommitment (the bidder\'s address)');
     const report = renderReport({ present: true, location: location.path, steps: [r], verdicts: [] });
     expect(report).toContain('    signatures: ok (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets)');
     expect(report).toMatch(/Stage 1 signing primitives \(signatures\): OK — Stage 1's signing known answers reproduced byte for byte/);
@@ -275,6 +279,13 @@ describe('stage1:sync', () => {
     });
     expect(unknown.status).toBe('fail');
     expect(unknown.details.some((x) => /messages\[0\] TRANSFER .*a message kind this step does not know/.test(x))).toBe(true);
+    // cause S4-BID: our builders hash the bidder's chain-local address; one whose wallet is not KA's fails the case
+    const wrongBidder = await run((k) => {
+      (k.bidCommitments as { walletNote: string }[])[1]!.walletNote = 'Solana pubkey base58 11111111111111111111111111111111';
+    });
+    expect(wrongBidder.status).toBe('fail');
+    expect(wrongBidder.details).toContain('  ✗ bid commitments[1]: wallet32Of of the solana bidder is not the wallet');
+    expect(wrongBidder.details.some((d) => d.includes('2 through bidCommitmentBytes, 1 through our bidCommitment'))).toBe(true);
     const noKeys = await run((k) => {
       delete k.testKeys;
     });

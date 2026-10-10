@@ -6,6 +6,12 @@ import { AuctionService, IdentityService } from '@merces/services';
 import { SimWallet, defaultTerms } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 /*
  * S2 cause codes:
@@ -39,8 +45,10 @@ describe.skipIf(!dbTestsEnabled())('concurrency and past-holder edges', () => {
     const ss = '0x' + 'cc'.repeat(32);
     const bs = '0x' + 'dd'.repeat(32);
     const asBuyer = async (cmd: Parameters<typeof h.sim.build>[0]) => h.sim.send({ tx: await h.sim.build(cmd, buyer), signatures: { [buyer]: `sim:${buyer}` } });
-    await h.exec(seller, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment: orderCommitment({ seriesId, windowId: 0, wallet: seller.address, side: 'sell', pricePerUnit: price, quantity: units, salt: ss }), deposit: '0', units: units.toString() });
-    await asBuyer({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: orderCommitment({ seriesId, windowId: 0, wallet: buyer, side: 'buy', pricePerUnit: price, quantity: units, salt: bs }), deposit: (price * units).toString(), units: '0' });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    await h.exec(seller, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment: orderCommitment({ wallet: seller.address, pricePerUnit: price, quantity: units, salt: ss }), deposit: '0', units: units.toString() });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    await asBuyer({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: orderCommitment({ wallet: buyer, pricePerUnit: price, quantity: units, salt: bs }), deposit: (price * units).toString(), units: '0' });
     await h.sim.setTime(now + 100);
     await h.exec(seller, { kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'sell', pricePerUnit: price.toString(), quantity: units.toString(), salt: ss });
     await asBuyer({ kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'buy', pricePerUnit: price.toString(), quantity: units.toString(), salt: bs });

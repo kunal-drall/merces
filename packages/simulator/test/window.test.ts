@@ -5,6 +5,12 @@ import { SimHarness, serialiseState, type SimWallet } from '../src/index.ts';
 import { GENESIS, USDC, types } from './helpers.ts';
 import { seedHolder, seedPause, seriesOf } from './kit.ts';
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
 /**
  * Transfer windows with Stage 1's escrow semantics on our one-step clearing (S1 plan WP8; SPEC v1.1 §7; SIM:1485-1658).
  *
@@ -51,7 +57,8 @@ const addressOf = (w: SimWallet | string) => (typeof w === 'string' ? w : w.addr
 
 async function commit(h: SimHarness, seriesId: string, who: SimWallet | string, o: Order) {
   const wallet = addressOf(who);
-  const commitment = orderCommitment({ seriesId, windowId: 0, wallet, side: o.side, pricePerUnit: o.price, quantity: o.quantity, salt: SALT });
+  // cause S4-BID: Stage 1's keccak commitment, over no series or window
+  const commitment = orderCommitment({ wallet, pricePerUnit: o.price, quantity: o.quantity, salt: SALT });
   const deposit = o.side === 'buy' ? (o.deposit ?? o.price * o.quantity) : 0n;
   return sendAs(h, who, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: o.side, commitment, deposit: deposit.toString(), units: o.side === 'sell' ? o.quantity.toString() : '0' });
 }
@@ -78,11 +85,14 @@ describe('transfer windows and allowlist', () => {
     await h.sim.submit({ kind: 'setAllowlist', wallet: buyer2, allowed: true }, 'allowlistManager');
     await h.sim.fund(buyer2, 'USDC', USDC(10_000));
     const salt = '0x' + 'cc'.repeat(32);
-    const sc = orderCommitment({ seriesId, windowId: 0, wallet: seller.address, side: 'sell', pricePerUnit: USDC(10), quantity: 50n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const sc = orderCommitment({ wallet: seller.address, pricePerUnit: USDC(10), quantity: 50n, salt });
     await h.exec(seller, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment: sc, deposit: '0', units: '50' });
-    const bc = orderCommitment({ seriesId, windowId: 0, wallet: buyer.address, side: 'buy', pricePerUnit: USDC(11), quantity: 50n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const bc = orderCommitment({ wallet: buyer.address, pricePerUnit: USDC(11), quantity: 50n, salt });
     await h.exec(buyer, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: bc, deposit: USDC(550).toString(), units: '0' });
-    const bc2 = orderCommitment({ seriesId, windowId: 0, wallet: buyer2, side: 'buy', pricePerUnit: USDC(10.5), quantity: 50n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const bc2 = orderCommitment({ wallet: buyer2, pricePerUnit: USDC(10.5), quantity: 50n, salt });
     const tx = await h.sim.build({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: bc2, deposit: USDC(525).toString(), units: '0' }, buyer2);
     await h.sim.send({ tx, signatures: { [buyer2]: `sim:${buyer2}` } });
     await h.sim.setTime(now + 100);

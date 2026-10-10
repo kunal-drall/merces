@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AppError, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import {
-  ChainError, auctionRulesOf, bidCommitment, nextSettlementStep, processingOrder, proposalFor, readSettlementView, revealedBidsOf, runSettlement, settlementOutcome, settlementStage,
+  ChainError, addressFamily, auctionRulesOf, bidCommitment, nextSettlementStep, processingOrder, proposalFor, readSettlementView, revealedBidsOf, runSettlement, settlementOutcome, settlementStage,
   type AuctionTermsInput, type ChainPort, type PermissionlessCommand, type SettlementBidView, type SettlementProposal, type SettlementStage,
   type SettlementStuckReason, type UnsignedTx,
 } from '@merces/domain';
@@ -146,9 +146,16 @@ export class AuctionService {
     return { tx: await chain.build({ kind: 'commitBid', seriesId, commitment, deposit }, bidder) };
   }
 
-  /** Helper for clients without the hashing library: compute the commitment. Nothing is stored. */
+  /**
+   * Helper for clients without the hashing library: Stage 1's keccak bid commitment (SPEC §1.3; S4 D11). Nothing is
+   * stored. The bidder must be an address of the series' chain (the commitment hashes its 32-byte wallet form, and the
+   * chain checks it against the revealing wallet); the salt must be 32 bytes, fresh for every bid, since the commitment
+   * binds neither the series nor the raise (422 otherwise, naming no value).
+   */
   commitment(seriesId: string, bidder: string, pricePerUnit: string, quantity: string, salt: string): { commitment: string } {
-    return { commitment: bidCommitment({ seriesId, bidder, pricePerUnit, quantity, salt }) };
+    const chain = this.ctx.chainFor(seriesId);
+    if (addressFamily(bidder) !== chain.family) throw AppError.badRequest(`bidder is not a ${chain.family} address`);
+    return { commitment: bidCommitment({ bidder, pricePerUnit, quantity, salt }) };
   }
 
   async buildReveal(seriesId: string, session: Session, bidder: string, pricePerUnit: string, quantity: string, salt: string): Promise<{ tx: UnsignedTx }> {
@@ -157,7 +164,7 @@ export class AuctionService {
     await this.sealedSeries(chain, seriesId);
     const bid = await chain.getBid(seriesId, bidder);
     if (!bid) throw AppError.notFound('bid');
-    if (bidCommitment({ seriesId, bidder, pricePerUnit, quantity, salt }) !== bid.commitment) throw AppError.unprocessable('these values do not match the committed bid');
+    if (bidCommitment({ bidder, pricePerUnit, quantity, salt }) !== bid.commitment) throw AppError.unprocessable('these values do not match the committed bid');
     return { tx: await chain.build({ kind: 'revealBid', seriesId, pricePerUnit, quantity, salt }, bidder) };
   }
 

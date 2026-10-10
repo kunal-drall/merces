@@ -6,12 +6,16 @@ import { randomBytes } from 'node:crypto';
 import {
   CURVE_BUYER_NOTICE, CURVE_NO_CAP, CURVE_TERMS_ZEROS, CURVE_UNAPPROVED_EARN_NOTHING, curveBeforeYouBuy, curveBuyerNotice, curveNoticeFigures, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_BOUNDS, NON_REVEAL_CHARGE_SETTING, checkNonRevealCharge, nonRevealChargeSetting, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
   amountBearingEvents, permissionlessCommandSchema,
-  ChainError, attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
+  ChainError, attestationMessage, bidCommitment, orderCommitment, randomSalt, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, permissionlessCommandKinds, serviceCommandKinds, serviceCommandSchema, termsCommitment, userCommandKinds, userCommandSchema,
   type IndexingRule,
 } from '../src/index.ts';
 
 /*
+ * S4 cause codes:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    no series, window or side; the salt is 32 bytes; the wallet is the bidder's chain-local address.
+ *
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
  *  - S2-NRC: the non-reveal charge hold (new series record 0 bps; 0 bps applies whatever a series records);
@@ -65,6 +69,7 @@ const known = JSON.parse(readFileSync(VECTORS + 'known_answers.json', 'utf8')) a
   incomeCommitments: { incomeYtd: string; incomeSalt: string; commitmentHex: string }[];
   routerIncomeCommitments: { ytdAtEnd: string; commitmentHex: string }[];
   poseidon2: { inputs: string[]; outputHex: string }[];
+  bidCommitments: { price: string; quantity: string; salt: string; wallet: string; walletNote: string; preimage: string; commitment: string }[];
 };
 const alphaOf = (code: number): string => Object.entries(CURRENCY_CODES).find(([, c]) => c === code)![0];
 const ruleOf = (code: number): IndexingRule => (Object.entries(INDEXING_RULE_CODE).find(([, c]) => c === code)![0] as IndexingRule);
@@ -127,22 +132,70 @@ describe('hashing', () => {
     // first report in Q1: ZERO
     expect(expectedPrior({ lastAcceptedPeriod: null, lastIncomePeriod: null, lastIncomeCommitment: ZERO_INCOME_COMMITMENT }, q1, other)).toBe(ZERO_INCOME_COMMITMENT);
   });
-  it('other commitments and the attestation message keep their encodings', () => {
-    expect(bidCommitment({ seriesId: 's', bidder: 'b', pricePerUnit: 10n, quantity: 5n, salt: 'x' })).toMatch(/^0x[0-9a-f]{64}$/);
-    // cause S2-E: the price and the quantity are u64s, as Stage 1's commit_bid decodes them (AmountOutOfRange, value-free)
-    const U64_MAX = 2n ** 64n - 1n;
-    expect(bidCommitment({ seriesId: 's', bidder: 'b', pricePerUnit: U64_MAX, quantity: U64_MAX.toString(), salt: 'x' })).toMatch(/^0x[0-9a-f]{64}$/);
-    for (const [pricePerUnit, quantity] of [[U64_MAX + 1n, 5n], [10n, (U64_MAX + 1n).toString()], [-1n, 5n]] as const) {
-      let err: unknown;
-      try {
-        bidCommitment({ seriesId: 's', bidder: 'b', pricePerUnit, quantity, salt: 'x' });
-      } catch (e) {
-        err = e;
-      }
-      expect(err).toBeInstanceOf(ChainError);
-      expect(err).toMatchObject({ code: 'InvalidTerms', detail: { stage1: 'AmountOutOfRange' } });
-      expect((err as Error).message).not.toMatch(/\d{5,}/);
+  it('bid and order commitments are Stage 1\'s keccak over price, quantity, salt and wallet (cause S4-BID)', () => {
+    // cause S4-BID: KA's two cases (an EVM wallet left-padded, a Solana pubkey) from the bidder's chain-local address
+    expect(known.bidCommitments).toHaveLength(2);
+    for (const b of known.bidCommitments) {
+      const sol = /base58 ([1-9A-HJ-NP-Za-km-z]{32,44})$/.exec(b.walletNote);
+      const address = sol ? sol[1]! : '0x' + b.wallet.slice(26);
+      if (!sol) expect(b.wallet.slice(2, 26)).toBe('0'.repeat(24));
+      expect(bidCommitment({ bidder: address, pricePerUnit: BigInt(b.price), quantity: b.quantity, salt: b.salt })).toBe(b.commitment);
+      expect(orderCommitment({ wallet: address, pricePerUnit: b.price, quantity: BigInt(b.quantity), salt: b.salt })).toBe(b.commitment);
+      // the salt's case does not change its bytes
+      expect(bidCommitment({ bidder: address, pricePerUnit: b.price, quantity: b.quantity, salt: b.salt.toUpperCase().replace('0X', '0x') })).toBe(b.commitment);
     }
+    const evm = '0x' + 'a1'.repeat(20);
+    const salt = '0x' + '5a'.repeat(32);
+    const base = bidCommitment({ bidder: evm, pricePerUnit: 10n, quantity: 5n, salt });
+    // an EVM address in any case is one wallet (EIP-55 or lowercase)
+    expect(bidCommitment({ bidder: '0x' + 'A1'.repeat(20), pricePerUnit: 10n, quantity: 5n, salt })).toBe(base);
+    // every input is bound: price, quantity, salt and wallet
+    expect(new Set([
+      base,
+      bidCommitment({ bidder: evm, pricePerUnit: 11n, quantity: 5n, salt }),
+      bidCommitment({ bidder: evm, pricePerUnit: 10n, quantity: 6n, salt }),
+      bidCommitment({ bidder: evm, pricePerUnit: 10n, quantity: 5n, salt: '0x' + '5b'.repeat(32) }),
+      bidCommitment({ bidder: '0x' + 'a2'.repeat(20), pricePerUnit: 10n, quantity: 5n, salt }),
+    ]).size).toBe(5);
+    // nothing else is: no series, raise, window or side, so an order of the same plaintext commits identically and
+    // every bid needs a fresh salt (randomSalt: 32 bytes, never repeated)
+    expect(orderCommitment({ wallet: evm, pricePerUnit: 10n, quantity: 5n, salt })).toBe(base);
+    const salts = new Set(Array.from({ length: 16 }, () => randomSalt()));
+    expect(salts.size).toBe(16);
+    for (const r of salts) expect(r).toMatch(/^0x[0-9a-f]{64}$/);
+
+    const refusal = (f: () => unknown): ChainError => {
+      try {
+        f();
+      } catch (e) {
+        expect(e).toBeInstanceOf(ChainError);
+        return e as ChainError;
+      }
+      throw new Error('expected a refusal');
+    };
+    // cause S2-E (kept): the price and the quantity are u64s, as Stage 1's commit_bid decodes them (AmountOutOfRange,
+    // value-free); 2^64 − 1 is a u64
+    const U64_MAX = 2n ** 64n - 1n;
+    expect(bidCommitment({ bidder: evm, pricePerUnit: U64_MAX, quantity: U64_MAX.toString(), salt })).toMatch(/^0x[0-9a-f]{64}$/);
+    for (const [pricePerUnit, quantity] of [[U64_MAX + 1n, 5n], [10n, (U64_MAX + 1n).toString()], [-1n, 5n]] as const) {
+      for (const err of [refusal(() => bidCommitment({ bidder: evm, pricePerUnit, quantity, salt })), refusal(() => orderCommitment({ wallet: evm, pricePerUnit, quantity, salt }))]) {
+        expect(err).toMatchObject({ code: 'InvalidTerms', detail: { stage1: 'AmountOutOfRange' } });
+        expect(err.message).not.toMatch(/\d{5,}/);
+      }
+    }
+    // cause S4-BID: the salt is exactly 32 bytes of 0x-hex, the wallet a Solana or an EVM address; refused value-free
+    for (const bad of ['x', '0x' + 'ab'.repeat(31), '0x' + 'ab'.repeat(33), 'ab'.repeat(32), '0x' + 'zz'.repeat(32)]) {
+      const err = refusal(() => bidCommitment({ bidder: evm, pricePerUnit: 10n, quantity: 5n, salt: bad }));
+      expect(err).toMatchObject({ code: 'InvalidTerms' });
+      expect(err.message).not.toContain('abab');
+      expect(err.detail).toBeUndefined();
+    }
+    for (const bad of ['b', '0x' + 'a1'.repeat(19), '0x' + 'a1'.repeat(32), '1'.repeat(60)]) {
+      expect(refusal(() => bidCommitment({ bidder: bad, pricePerUnit: 10n, quantity: 5n, salt }))).toMatchObject({ code: 'InvalidTerms' });
+      expect(refusal(() => orderCommitment({ wallet: bad, pricePerUnit: 10n, quantity: 5n, salt })).message).not.toContain(bad);
+    }
+  });
+  it('the attestation message keeps its encoding', () => {
     const msg = new TextDecoder().decode(attestationMessage({ seriesId: 's', periodId: '2026Q1', priorIncomeCommitment: ZERO_INCOME_COMMITMENT, incomeCommitment: '0x' + '01'.repeat(32), tier: 2, liquidityEvent: false }));
     expect(msg.startsWith('merces/attestation/v1\n')).toBe(true);
     expect(msg).toContain('"priorIncomeCommitment"');

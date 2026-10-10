@@ -9,6 +9,12 @@ import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './hel
 import { seedAuction, seedBid, seriesOf } from './kit.ts';
 
 /*
+ * S4 cause codes on the pins that moved:
+ *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
+ *    the builders take no series, window or side, and the salt is 32 bytes.
+ */
+
+/*
  * Stage 1's multi-step settlement in the engine (S2 WP4a; SPEC §5.2, SIM:928-1028). The figures of the harness raise,
  * the pro-rata margin, the 30-bid paging round and the non-reveal case were recomputed with Stage 1's own Simulator.
  *
@@ -47,7 +53,8 @@ async function raise(h: SimHarness, bids: Bid[], over: Partial<SeriesTerms> = {}
   const { commitEndsAt, revealEndsAt } = (await h.sim.getAuction(seriesId))!;
   const salt = (i: number) => '0x' + (i + 1).toString(16).padStart(2, '0').repeat(32);
   for (const [i, b] of bids.entries()) {
-    const commitment = bidCommitment({ seriesId, bidder: b.w.address, pricePerUnit: b.price, quantity: b.qty, salt: salt(i) });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const commitment = bidCommitment({ bidder: b.w.address, pricePerUnit: b.price, quantity: b.qty, salt: salt(i) });
     await h.exec(b.w, { kind: 'commitBid', seriesId, commitment, deposit: (b.deposit ?? requiredEscrow(b.price, b.qty, terms.auctionFeeBps)).toString() });
   }
   await h.sim.setTime(commitEndsAt!);
@@ -344,7 +351,8 @@ describe('Stage 1 settlement, step by step', () => {
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     const [w, v] = [h.backers[0]!, h.backers[1]!];
     const salt = '0x' + 'ab'.repeat(32);
-    const c = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: USDC(7), quantity: 50n, salt });
+    // cause S4-BID: Stage 1's keccak commitment, over no series or window
+    const c = bidCommitment({ bidder: w.address, pricePerUnit: USDC(7), quantity: 50n, salt });
     await expectStage1Error(h.exec(w, { kind: 'commitBid', seriesId, commitment: c, deposit: '1' }), 'RaiseNotOpen');
     await h.exec(h.issuer, { kind: 'openRaise', seriesId });
     const { commitEndsAt, revealEndsAt } = (await h.sim.getAuction(seriesId))!;

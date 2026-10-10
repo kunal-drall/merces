@@ -48,6 +48,15 @@ export function harnessFieldSalt(label: string): bigint {
   return BigInt('0x' + createHash('sha256').update('merces/harness-salt\n' + label).digest('hex')) % BN254_FR;
 }
 
+/**
+ * A deterministic 32-byte bid salt, distinct per label (the harness labels a bid by its series and backer). Stage 1's
+ * bid commitment binds neither the series nor the raise (S4 D11), so every bid draws its own salt: a backer's equal
+ * bids in two series never share a commitment. Test memory only; real clients draw `randomSalt()`.
+ */
+export function harnessBidSalt(label: string): string {
+  return '0x' + createHash('sha256').update('merces/harness-bid-salt\n' + label).digest('hex');
+}
+
 /** The non-reveal charge the harness's series record (bps): an explicit test value, not a default of the product. */
 export const HARNESS_NON_REVEAL_CHARGE_BPS = 100;
 
@@ -343,9 +352,9 @@ export class SimHarness {
     const salts = new Map<number, string>();
     for (const b of bids) {
       const w = this.backers[b.backer]!;
-      const salt = '0x' + (b.backer + 1).toString(16).padStart(2, '0').repeat(32);
+      const salt = harnessBidSalt(`${seriesId}:${b.backer}`);
       salts.set(b.backer, salt);
-      const commitment = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: b.price, quantity: b.qty, salt });
+      const commitment = bidCommitment({ bidder: w.address, pricePerUnit: b.price, quantity: b.qty, salt });
       const deposit = requiredEscrow(b.price, b.qty, terms.auctionFeeBps);
       await this.exec(w, { kind: 'commitBid', seriesId, commitment, deposit: deposit.toString() });
     }

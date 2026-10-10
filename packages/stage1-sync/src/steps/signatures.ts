@@ -2,12 +2,13 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { stage1Path } from '@merces/chains';
 import {
-  SIGNING_KINDS, recoverSigner, seriesKeyOf, signature65Hex, signingDigest, signingDomain, wallet32Of, type SigningFields, type SigningKind,
+  SIGNING_KINDS, bidCommitment, orderCommitment, recoverSigner, seriesKeyOf, signature65Hex, signingDigest, signingDomain, wallet32Of, type SigningFields,
+  type SigningKind,
 } from '@merces/domain';
 import * as gateway from '@merces/math';
 import {
-  MAGIC, addressFromPrivateKey, bidCommitmentBytes, bidCommitmentPreimage, fromPid, publicKeyFromPrivate, seriesKeyFromId, signDigest,
-  toChecksumAddress,
+  MAGIC, addressFromPrivateKey, bidCommitmentBytes, bidCommitmentPreimage, evmAddressFromWallet, fromPid, publicKeyFromPrivate, seriesKeyFromId,
+  signDigest, toChecksumAddress,
 } from '@merces/math';
 import * as testing from '@merces/math/testing';
 import * as sdk from '@merces/sdk';
@@ -37,7 +38,7 @@ interface KnownAnswers {
   wallets?: { kind: string; input: string; wallet: string }[];
   domains?: { name: string; chainKind: number; chainId: string; registry: string; preimage: string; domain: string }[];
   seriesKeys?: { evm?: { seriesId: string; key: string }; solana?: { base58: string; key: string } };
-  bidCommitments?: { price: string; quantity: string; salt: string; wallet: string; preimage: string; commitment: string }[];
+  bidCommitments?: { price: string; quantity: string; salt: string; wallet: string; walletNote?: string; preimage: string; commitment: string }[];
   testKeys?: { seed: string; privateKey: string; publicKey: string; address: string; addressChecksum: string }[];
   messages?: KaMessage[];
 }
@@ -86,7 +87,9 @@ function seriesKeyFor(described: string): string | null {
  * - **wallets**: `wallet32Of` (a Solana pubkey as-is, an EVM address left-padded);
  * - **domains**: `signingDomain` from each chain kind, chain id and registry;
  * - **series keys**: `seriesKeyOf` (and Stage 1's `seriesKeyFromId` for the EVM id);
- * - **bid commitments**: `bidCommitmentPreimage` and `bidCommitmentBytes` (our hex `bidCommitment` joins in S4 WP2);
+ * - **bid commitments**: `bidCommitmentPreimage` and `bidCommitmentBytes`, and since S4 WP2 what our builders send: the
+ *   domain's hex `bidCommitment` and `orderCommitment` from the bidder's chain-local address (the Solana pubkey KA's
+ *   note names, else the EVM address its padded wallet holds), whose `wallet32Of` must be KA's wallet;
  * - **messages**: `reportDigest` … `trueUpDigest` over our own domain and series key give KA's pre-image and digest,
  *   `signDigest` with the seed's key gives KA's signature byte for byte (RFC 6979), and `recoverSigner` its address.
  *
@@ -195,11 +198,19 @@ export async function checkSignatures(ctx: StepCtx): Promise<StepReport> {
 
   // bid commitments
   const bids = need('bidCommitments', ka.bidCommitments);
+  let ourBids = 0;
   for (const [i, b] of bids.entries()) {
     guard('bid commitments', `[${i}]`, () => {
       const wallet = bytes(b.wallet);
-      if (hex(bidCommitmentPreimage(BigInt(b.price), BigInt(b.quantity), b.salt, wallet)) !== b.preimage) bad('bid commitments', `[${i}]`, 'the pre-image differs');
-      else if (hex(bidCommitmentBytes(BigInt(b.price), BigInt(b.quantity), b.salt, wallet)) !== b.commitment) bad('bid commitments', `[${i}]`, 'the commitment differs');
+      if (hex(bidCommitmentPreimage(BigInt(b.price), BigInt(b.quantity), b.salt, wallet)) !== b.preimage) return bad('bid commitments', `[${i}]`, 'the pre-image differs');
+      if (hex(bidCommitmentBytes(BigInt(b.price), BigInt(b.quantity), b.salt, wallet)) !== b.commitment) return bad('bid commitments', `[${i}]`, 'the commitment differs');
+      // ours (S4 WP2): the builders take the bidder's chain-local address, as a client and the runner hold it
+      const sol = /base58 ([1-9A-HJ-NP-Za-km-z]{32,44})$/.exec(b.walletNote ?? '');
+      const [address, family] = sol ? [sol[1]!, 'solana' as const] : [evmAddressFromWallet(wallet).toLowerCase(), 'evm' as const];
+      if (hex(wallet32Of(address, family)) !== b.wallet) return bad('bid commitments', `[${i}]`, `wallet32Of of the ${family} bidder is not the wallet`);
+      if (bidCommitment({ bidder: address, pricePerUnit: b.price, quantity: b.quantity, salt: b.salt }) !== b.commitment) return bad('bid commitments', `[${i}]`, 'our bidCommitment differs');
+      if (orderCommitment({ wallet: address, pricePerUnit: b.price, quantity: b.quantity, salt: b.salt }) !== b.commitment) return bad('bid commitments', `[${i}]`, 'our orderCommitment differs');
+      ourBids++;
     });
   }
 
@@ -236,7 +247,7 @@ export async function checkSignatures(ctx: StepCtx): Promise<StepReport> {
   if (listed.length) fail(`${listed.length} known answer(s) not reproduced`);
   details.push(
     `keys: ${keys.length} from their seeds (private key, public key, address, EIP-55)`,
-    `wallets: ${wallets.length} through wallet32Of; domains: ${domains.length} through signingDomain; series keys: ${seriesKeys} through seriesKeyOf; bid commitments: ${bids.length} through bidCommitmentBytes`,
+    `wallets: ${wallets.length} through wallet32Of; domains: ${domains.length} through signingDomain; series keys: ${seriesKeys} through seriesKeyOf; bid commitments: ${bids.length} through bidCommitmentBytes, ${ourBids} through our bidCommitment and orderCommitment (the bidder's address)`,
     `messages: ${messages.length} through reportDigest … trueUpDigest (pre-image, digest), signDigest (signature byte-equal, RFC 6979) and recoverSigner (the signer's address)`,
     ...listed.slice(0, LISTED),
   );
