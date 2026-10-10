@@ -1,0 +1,16 @@
+{
+  "name": "S3a_tail_before_redeem",
+  "description": "claim_tail before any redemption is NotRedeemed, for a holder and for a stranger alike: Stage 1 checks the redemption before the registration (SIM:1405-1407), so the stranger is not told HolderNotRegistered. Built on 09's prefix to its last report before S1 redeems (#63).",
+  "covers": ["a"],
+  "base": "09_tail_clause",
+  "segments": [
+    { "baseSteps": [0, 63] },
+    {
+      "steps": [
+        {"t": "1814486400", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "b1", "series": "S1"}, "error": "NotRedeemed", "note": "a registered holder with 100 units; S1 has not redeemed"},
+        {"t": "1814486400", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "keeper", "series": "S1"}, "error": "NotRedeemed", "note": "a stranger: the redemption is checked before the registration"},
+        {"t": "1814486400", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "b4", "series": "S2"}, "error": "NotRedeemed", "note": "the other series has not redeemed either"}
+      ]
+    }
+  ]
+}

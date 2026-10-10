@@ -21,6 +21,7 @@ import { MercesWorld } from './merces-world.ts';
 import { replayLockstep } from './oracle.ts';
 import { ReferenceWorld } from './reference-world.ts';
 import { isFinding, replayVector, type VectorRun } from './run.ts';
+import { S3_CLAIM_SCENARIOS, SCENARIO_EXPECTED, loadScenarios, type Scenario } from './scenarios.ts';
 import { PERSONALITIES, type Backend, type VectorPersonality, type WorldFactory } from './world.ts';
 
 export {
@@ -48,11 +49,12 @@ export { checkRevert, type RevertOutcome } from './revert.ts';
 export { RunnerError, canonicalErrorName, classifyChainError, type Raised } from './errors.ts';
 export { verifyReportCached, proofStats, shutdown, type ProofStats } from './proofs.ts';
 export { ReferenceWorld } from './reference-world.ts';
-export { MercesWorld } from './merces-world.ts';
+export { MercesWorld, type MercesWorldOptions, type SyntheticShims } from './merces-world.ts';
 export { replayLockstep, type LockstepOptions } from './oracle.ts';
 export { TRANSLATORS, NOT_YET, translate } from './ops/index.ts';
 export { SHIMS, SHIM_BY_ID, type Shim } from './shims.ts';
 export { renderParity, renderSummary, writeParity, type ParitySource } from './report.ts';
+export { S3_CLAIM_SCENARIOS, SCENARIO_EXPECTED, loadScenario, loadScenarios, renderScenarios, type Scenario, type ScenarioFile, type ScenarioSegment } from './scenarios.ts';
 export { PERSONALITIES, type Backend, type World, type WorldFactory, type Applied, type Attempt, type OpKind, type VectorPersonality } from './world.ts';
 
 /** Worlds by backend. */
@@ -85,6 +87,11 @@ export interface RunOptions {
   until?: number;
   /** stop before the first step with this op */
   stopBefore?: string;
+  /**
+   * the expectation of every vector replayed, in place of its own (`expectedFor`, or PASS on the reference backend):
+   * our scenarios (`scenarios.ts`) are no Stage 1 vector and must PASS on every backend
+   */
+  expected?: Expected;
 }
 
 export interface RunResult extends VectorRun {
@@ -148,7 +155,7 @@ export async function runStage1Vectors(opts: RunOptions): Promise<RunReport> {
   const worlds: (VectorPersonality | undefined)[] = backend === 'reference' ? [undefined] : [...(opts.personalities?.length ? opts.personalities : PERSONALITIES)];
   const runs: RunResult[] = [];
   for (const v of vectors) {
-    const expected = backend === 'reference' ? EXPECTED_REFERENCE : expectedFor(v.id);
+    const expected = opts.expected ?? (backend === 'reference' ? EXPECTED_REFERENCE : expectedFor(v.id));
     // a prefix gate replays to its gate unless the caller names its own last step
     const until = opts.until ?? expected.until;
     const replay = {
@@ -172,4 +179,29 @@ export async function runStage1Vectors(opts: RunOptions): Promise<RunReport> {
     }
   }
   return { backend, runs, notRun, proofs: await proofStats(), ok: runs.every((r) => r.atExpected) };
+}
+
+export interface ScenarioRunOptions {
+  /** the Stage 1 vectors directory the scenarios' base vectors come from */
+  vectorsDir: string;
+  /** default: the S3 claim scenarios (`S3_CLAIM_SCENARIOS`) */
+  dir?: string;
+  /** scenario ids ("S3a") or names; default all */
+  only?: readonly string[];
+  /** default `lockstep` */
+  backend?: BackendChoice;
+  /** merces and lockstep only; default both */
+  personalities?: readonly VectorPersonality[];
+}
+
+/** Replay our scenarios (`scenarios.ts`) on a backend; each must PASS. Returns the scenarios with the report. */
+export async function runScenarios(opts: ScenarioRunOptions): Promise<{ scenarios: Scenario[]; report: RunReport }> {
+  const scenarios = loadScenarios(opts.dir ?? S3_CLAIM_SCENARIOS, opts.vectorsDir, opts.only);
+  const report = await runStage1Vectors({
+    vectors: scenarios.map((s) => s.vector),
+    backend: opts.backend ?? 'lockstep',
+    expected: SCENARIO_EXPECTED,
+    ...(opts.personalities ? { personalities: opts.personalities } : {}),
+  });
+  return { scenarios, report };
 }

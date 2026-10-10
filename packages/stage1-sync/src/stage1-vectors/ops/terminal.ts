@@ -1,5 +1,5 @@
 import { hex32 } from '../codec.ts';
-import { shim, type TranslatorTable } from './types.ts';
+import { direct, shim, type TranslatorTable } from './types.ts';
 
 /**
  * Extinguishment and amendments: Stage 1 passes attestor signatures as arguments, the canonical commands are
@@ -7,7 +7,7 @@ import { shim, type TranslatorTable } from './types.ts';
  *
  * - `extinguish` (SH-EXT-1): `extinguish{attestors}` sent by `attestors[0]` with `attestors[1]` co-signing; a repeated
  *   attestor signs once, so the chain sees the duplicate and refuses it.
- * - `claim_final` (SH-CLM-3): `claimPayout` (no `claimFinal` command in S1).
+ * - `claim_final`: `claimFinal` (direct since S3; was shim SH-CLM-3, `claimPayout`), Stage 1's body (SIM:1449-1475).
  * - `amend_terms` (SH-AMD-1): `amendTerms` signed by the issuer with the attestor co-signing.
  */
 export const terminalOps: TranslatorTable = {
@@ -20,8 +20,8 @@ export const terminalOps: TranslatorTable = {
     }),
 
   claim_final: (ctx, c) =>
-    shim('SH-CLM-3', async () => {
-      await ctx.send(ctx.actors.wallet(c.actor), { kind: 'claimPayout', seriesId: ctx.seriesBook(c.series).seriesId });
+    direct(async () => {
+      await ctx.send(ctx.actors.wallet(c.actor), { kind: 'claimFinal', seriesId: ctx.seriesBook(c.series).seriesId });
     }),
 
   amend_terms: (ctx, c) =>

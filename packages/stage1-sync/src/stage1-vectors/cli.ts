@@ -2,23 +2,26 @@
 /**
  * pnpm stage1:vectors [--backend merces|reference|lockstep] [--only 01,04] [--personality solana,monad]
  *                     [--until <step index, inclusive>] [--stop-before <op>] [--out <dir>] [--dir <vectors dir>] [--json]
+ * pnpm stage1:vectors --scenarios [--backend lockstep|merces|reference] [--only S3a,S3f] [--personality …] [--json]
  *
  * Replays Stage 1's parity vectors (S1 plan §5). The vectors directory defaults to the one the Stage 1 checkout's
  * manifest names (STAGE1_PATH, else the pinned `stage1` submodule). Backends: `merces` (default; our simulator, the
  * targets in full and the prefix-gated vectors to their gate, on both personalities, unless `--only`; `--until`
  * replaces a gate), `reference` (Stage 1's own simulator, every vector) and `lockstep` (both side by side, stopping at
- * the first step after which they disagree; a recorded parting is accepted). Exit code 0 when every run is at its
- * expected status, 1 when one is not, 2 on a usage or runner error.
+ * the first step after which they disagree; a recorded parting is accepted). `--scenarios` replays our own S3 claim
+ * scenarios instead (`scenarios.ts`; default backend `lockstep`), each of which must PASS. Exit code 0 when every run
+ * is at its expected status, 1 when one is not, 2 on a usage or runner error.
  */
 import { existsSync } from 'node:fs';
 import { relative } from 'node:path';
 import { locateStage1, stage1Path } from '@merces/chains';
-import { RunnerError, runStage1Vectors, renderSummary, shutdown, writeParity, PERSONALITIES, type BackendChoice, type VectorPersonality } from './index.ts';
+import { RunnerError, runScenarios, runStage1Vectors, renderSummary, shutdown, writeParity, PERSONALITIES, type BackendChoice, type RunReport, type VectorPersonality } from './index.ts';
 
-const USAGE = 'usage: stage1:vectors [--backend merces|reference|lockstep] [--only 01,04] [--personality solana,monad] [--until <idx>] [--stop-before <op>] [--out <dir>] [--dir <vectors dir>] [--json]';
+const USAGE = 'usage: stage1:vectors [--backend merces|reference|lockstep] [--only 01,04] [--personality solana,monad] [--until <idx>] [--stop-before <op>] [--out <dir>] [--dir <vectors dir>] [--json]\n       stage1:vectors --scenarios [--backend lockstep|merces|reference] [--only S3a,S3f] [--personality solana,monad] [--dir <vectors dir>] [--json]';
 
 interface Args {
-  backend: BackendChoice;
+  backend?: BackendChoice;
+  scenarios: boolean;
   only?: string[];
   personalities?: VectorPersonality[];
   until?: number;
@@ -29,13 +32,17 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { backend: 'merces', json: false };
+  const a: Args = { scenarios: false, json: false };
   const list = (v: string) => v.split(',').map((x) => x.trim()).filter(Boolean);
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]!;
     if (flag === '--') continue;
     if (flag === '--json') {
       a.json = true;
+      continue;
+    }
+    if (flag === '--scenarios') {
+      a.scenarios = true;
       continue;
     }
     if (flag === '--help' || flag === '-h') throw new RunnerError(USAGE);
@@ -91,14 +98,21 @@ let code = 2;
 try {
   const args = parseArgs(process.argv.slice(2));
   const src = vectorsDir(args.dir);
-  const report = await runStage1Vectors({
-    dir: src.dir,
-    backend: args.backend,
-    ...(args.only ? { only: args.only } : {}),
-    ...(args.personalities ? { personalities: args.personalities } : {}),
-    ...(args.until !== undefined ? { until: args.until } : {}),
-    ...(args.stopBefore ? { stopBefore: args.stopBefore } : {}),
-  });
+  let report: RunReport;
+  if (args.scenarios) {
+    // a scenario runs whole: no gates, and VECTOR_PARITY.md is the vectors' (pnpm stage1:sync adds the scenarios' section)
+    if (args.until !== undefined || args.stopBefore || args.out) throw new RunnerError(`--scenarios takes no --until, --stop-before or --out\n${USAGE}`);
+    report = (await runScenarios({ vectorsDir: src.dir, ...(args.backend ? { backend: args.backend } : {}), ...(args.only ? { only: args.only } : {}), ...(args.personalities ? { personalities: args.personalities } : {}) })).report;
+  } else {
+    report = await runStage1Vectors({
+      dir: src.dir,
+      backend: args.backend ?? 'merces',
+      ...(args.only ? { only: args.only } : {}),
+      ...(args.personalities ? { personalities: args.personalities } : {}),
+      ...(args.until !== undefined ? { until: args.until } : {}),
+      ...(args.stopBefore ? { stopBefore: args.stopBefore } : {}),
+    });
+  }
   if (args.json) console.log(JSON.stringify(report, (_k, v: unknown) => (typeof v === 'bigint' ? v.toString() : v), 2));
   else console.log(renderSummary([report]));
   if (args.out) console.log(`wrote ${writeParity(args.out, [report], { dir: src.label, ...(src.commit ? { commit: src.commit } : {}) })}`);

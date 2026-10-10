@@ -7,9 +7,9 @@ import { RunnerError, classifyChainError, type Raised } from './errors.ts';
 import { VectorKeyring } from './keys.ts';
 import type { LoadedVector } from './load.ts';
 import { translate, type OpContext } from './ops/index.ts';
-import type { Translation } from './ops/types.ts';
+import type { Translation, Translator, TranslatorTable } from './ops/types.ts';
 import { verifyReportCached } from './proofs.ts';
-import { SHIM_BY_ID } from './shims.ts';
+import { SHIM_BY_ID, type Shim } from './shims.ts';
 import { checkUnitSupply, mercesSnapshot, seenAfter, totalStable } from './view.ts';
 import type { Applied, Attempt, FxRequest, VectorPersonality, World, WorldOptions } from './world.ts';
 
@@ -21,6 +21,20 @@ interface OpTrace {
   committed: number;
   /** a transaction raised and left the engine's state or event log changed (before the runner restored anything) */
   leaked: boolean;
+}
+
+/**
+ * Shim rows of the caller's own and the translators that use them, for one world: tests only. No row of the shim table
+ * is runner-atomic since S3 (SH-CLM-2 became the direct `claimTail`), so the runner-atomic mechanism is exercised on a
+ * synthetic row. A translator here replaces the table's for its op; a row here is looked up before the table's.
+ */
+export interface SyntheticShims {
+  rows: readonly Shim[];
+  translators: TranslatorTable;
+}
+
+export interface MercesWorldOptions extends WorldOptions {
+  synthetic?: SyntheticShims;
 }
 
 /** What a reverted transaction must leave as it found it: the protocol state and the event log. */
@@ -42,7 +56,9 @@ function engineFingerprint(state: SimState, events: number): string {
  *   runner's bookkeeping after one) leaves state, events and bookkeeping byte-identical, as a reverted Stage 1 call
  *   does. Undoing transactions that went through is the runner's atomicity, not the engine's: such a revert is
  *   reported as runner-atomic (`Attempt.rolledBack`). A shim may send more than one transaction only if its row is
- *   marked `runnerAtomic`; the one direct op that does, `allowlist`, sends one `setAllowlist` per wallet of its list.
+ *   marked `runnerAtomic` (no row of the table is since S3; tests use a synthetic row, `SyntheticShims`); the direct
+ *   ops that do are `allowlist`, one `setAllowlist` per wallet of its list, and `finalize_settlement`, every tally page
+ *   then the finalize.
  * - Errors are compared by their Stage 1 name (`ChainError.detail.stage1`); anything else is reported by class only.
  *
  * Privacy: the vector's `witness` and `seriesPrivate` were dropped at load; the vector keys live only in `keyring`;
@@ -62,6 +78,7 @@ export class MercesWorld implements World, OpContext {
   private constructor(
     readonly vector: LoadedVector,
     readonly personality: VectorPersonality,
+    private readonly synthetic: SyntheticShims | undefined,
   ) {
     this.label = `merces/${personality}`;
     const genesis = vector.steps.length ? Number(vector.steps[0]!.t) : undefined;
@@ -77,8 +94,8 @@ export class MercesWorld implements World, OpContext {
     this.bookState = { series: {}, seen: [], windowsEnabled: vector.flags.windowsEnabled };
   }
 
-  static async create(vector: LoadedVector, opts: WorldOptions = {}): Promise<MercesWorld> {
-    const w = new MercesWorld(vector, opts.personality ?? 'solana');
+  static async create(vector: LoadedVector, opts: MercesWorldOptions = {}): Promise<MercesWorld> {
+    const w = new MercesWorld(vector, opts.personality ?? 'solana', opts.synthetic);
     // Stage 1 refuses open_raise while new raises are paused (NewRaisesPaused); so does the canonical flag (openRaise)
     if (vector.flags.newRaisesPaused) await w.send(w.actors.admin, { kind: 'pauseNewRaises', paused: true });
     return w;
@@ -156,7 +173,8 @@ export class MercesWorld implements World, OpContext {
   async attempt(call: Call): Promise<Attempt> {
     let tr: Translation;
     try {
-      tr = translate(this, call);
+      const own = this.synthetic?.translators[call.op] as Translator | undefined;
+      tr = own ? own(this, call) : translate(this, call);
     } catch (error) {
       return { ok: false, error, leaked: false, rolledBack: 0 };
     }
@@ -169,7 +187,7 @@ export class MercesWorld implements World, OpContext {
     try {
       await tr.run();
       // the shim table says which rows are runner-atomic; a row that is not must stay one transaction
-      if (op.committed > 1 && applied.kind === 'shim' && !SHIM_BY_ID.get(applied.shimId!)?.runnerAtomic) {
+      if (op.committed > 1 && applied.kind === 'shim' && !this.shimRow(applied.shimId!)?.runnerAtomic) {
         throw new RunnerError(`${call.op} went through ${op.committed} transactions, but shim row ${applied.shimId} is not marked runner-atomic`);
       }
     } catch (error) {
@@ -182,6 +200,11 @@ export class MercesWorld implements World, OpContext {
     }
     this.bookState.seen = seenAfter(this);
     return { ok: true, applied };
+  }
+
+  /** A shim row by id: the synthetic rows first (tests), then the shim table. */
+  private shimRow(id: string): Shim | undefined {
+    return this.synthetic?.rows.find((r) => r.id === id) ?? SHIM_BY_ID.get(id);
   }
 
   classify(e: unknown): Raised {

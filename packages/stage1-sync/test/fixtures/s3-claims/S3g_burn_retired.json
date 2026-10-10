@@ -1,0 +1,27 @@
+{
+  "name": "S3g_burn_retired",
+  "description": "burn_retired on 05: on a live series it is TerminalStatus; once S1 is Retired (05 #39) and b1 and b2 have claimed (05 #45-#46), a wallet that never held units gets a zero burn with no registration check, a holder's units burn while its pending payout stays claimable (05 #49), a repeat and a holder whose claim already burned its units are zero burns. On the Retired series claim_tail is NotRedeemed and claim_final TerminalStatus. 05 then runs to its end. 05 #42 (expect_revert retire_if_capped, BLK-1) is left out: no canonical command until S5, and the scenario does not need it.",
+  "covers": ["g"],
+  "base": "05_cap_hit",
+  "segments": [
+    { "baseSteps": [0, 36] },
+    {
+      "steps": [
+        {"t": "1782950400", "op": "expect_revert", "call": {"op": "burn_retired", "series": "S1", "holder": "b1"}, "error": "TerminalStatus", "note": "a live series"}
+      ]
+    },
+    { "baseSteps": [37, 41] },
+    { "baseSteps": [43, 46] },
+    {
+      "steps": [
+        {"t": "1790899200", "op": "burn_retired", "series": "S1", "holder": "keeper", "note": "never held units: a zero burn, no registration check"},
+        {"t": "1790899200", "op": "burn_retired", "series": "S1", "holder": "b3", "note": "05 #47: b3's 100 units burn, its pending payout stays"},
+        {"t": "1790899200", "op": "burn_retired", "series": "S1", "holder": "b3", "note": "a repeat: a zero burn"},
+        {"t": "1790899200", "op": "burn_retired", "series": "S1", "holder": "b1", "note": "its claim at 05 #45 burned its units: a zero burn"},
+        {"t": "1790899200", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "b4", "series": "S1"}, "error": "NotRedeemed", "note": "a Retired series never redeemed"},
+        {"t": "1790899200", "op": "expect_revert", "call": {"op": "claim_final", "actor": "b4", "series": "S1"}, "error": "TerminalStatus", "note": "Retired is not Extinguished"}
+      ]
+    },
+    { "baseSteps": [48, 53] }
+  ]
+}

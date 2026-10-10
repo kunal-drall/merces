@@ -4,6 +4,9 @@
  * shims a run used under "Shims (not parity)". Each row names the milestone that removes it.
  *
  * The reference backend runs Stage 1's own simulator and uses none of them.
+ *
+ * Retired rows: SH-AUC-1 and SH-AUC-3..6 (S2: the raise runs Stage 1's settlement directly); SH-CLM-2, SH-CLM-3 and
+ * SH-BRN-1 (S3: `claim_tail`, `claim_final` and `burn_retired` run as `claimTail`, `claimFinal` and `burnRetired`).
  */
 export interface Shim {
   id: string;
@@ -20,7 +23,8 @@ export interface Shim {
   /**
    * The row may send more than one transaction for one Stage 1 call. When a later one reverts, the runner undoes the
    * ones that went through, so the call reverts as a whole by the runner's doing, not the engine's (runner-atomic; the
-   * merces backend refuses a multi-transaction op through a row without this mark).
+   * merces backend refuses a multi-transaction op through a row without this mark). No row needs it since S3 (SH-CLM-2,
+   * the last one, became the direct `claimTail`); the mechanism stays, and a test keeps it working on a synthetic row.
    */
   runnerAtomic?: true;
 }
@@ -36,9 +40,6 @@ export const SHIMS: readonly Shim[] = [
   { id: 'SH-PAU-1', ops: ['request_pause'], call: 'requestPause{until: t + maxPauseSeconds}', why: "Stage 1's request has no end", removedIn: 'S5', kind: 'shim' },
   { id: 'SH-PAU-2', ops: ['approve_pause'], call: 'approvePause{until: pauseEnd} sent by the attestor wallet', why: 'signatures as arguments are S4', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-CLM-1', ops: ['claim'], call: 'claimPayout', why: 'S1 claimPayout = claim + tail + final', removedIn: 'S3', kind: 'shim' },
-  { id: 'SH-CLM-2', ops: ['claim_tail'], call: 'claimRedemption first when nothing is redeemed yet and units remain (SIM:1409), then claimPayout', why: 'no claimTail command', removedIn: 'S3', kind: 'shim', runnerAtomic: true },
-  { id: 'SH-CLM-3', ops: ['claim_final'], call: 'claimPayout', why: 'no claimFinal command', removedIn: 'S3', kind: 'shim' },
-  { id: 'SH-BRN-1', ops: ['burn_retired'], call: 'keeper crankBurn{holders: [holder]}', why: 'batch shape', removedIn: '—', kind: 'shim' },
   { id: 'SH-RED-1', ops: ['redeem'], call: 'redeem{maxPricePerUnit: U64_MAX}', why: 'Stage 1 has no slippage bound', removedIn: '—', kind: 'shim' },
   { id: 'SH-EXT-1', ops: ['extinguish'], call: 'extinguish{attestors} sent by attestors[0], attestors[1] co-signing (deduplicated)', why: 'co-signing vs signatures', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-AMD-1', ops: ['amend_terms'], call: 'amendTerms{termsCommitment, capMultipleWad, attestor} with the attestor co-signing', why: 'co-signing vs signatures', removedIn: 'S4', kind: 'shim' },

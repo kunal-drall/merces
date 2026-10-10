@@ -51,7 +51,7 @@ export function renderSummary(reports: readonly RunReport[]): string {
  * used ("not parity"). Public values only: vector and op names, step indices, error names, expect values.
  * Deterministic (no timings) so the committed copy changes only when results do.
  */
-export function renderParity(reports: readonly RunReport[], source: ParitySource, extra: { notes?: string[] } = {}): string {
+export function renderParity(reports: readonly RunReport[], source: ParitySource, extra: { notes?: string[]; sections?: string[] } = {}): string {
   const runs = reports.flatMap((r) => r.runs);
   const worlds = [...new Set(runs.map((r) => r.world))];
   const vectors = [...new Map([...runs.map((r) => [r.vector, r.id] as const), ...reports.flatMap((r) => r.notRun.map((n) => [n.vector, n.id] as const))]).entries()].sort(([a], [b]) => (a < b ? -1 : 1));
@@ -67,7 +67,7 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
     ...(extra.notes?.length ? [...extra.notes, ''] : []),
     '## Results',
     '',
-    `| Vector | ${worlds.join(' | ')} | Expected after S2 (merces) |`,
+    `| Vector | ${worlds.join(' | ')} | Expected after S3 (merces) |`,
     `| --- | ${worlds.map(() => '---').join(' | ')} | --- |`,
   ];
   for (const [name, id] of vectors) {
@@ -118,7 +118,7 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
   lines.push(
     '## Prefix gates',
     '',
-    "A vector that needs a later milestone is replayed on the merces backend up to its gate, the last step before the first one the merces backend cannot run yet; every step up to the gate must pass (PREFIX-PASS), so the auction prefix and everything else before the gate stays protected. Gates measured on S2: a full replay's first finding is the step after each gate, on both personalities and in lockstep.",
+    "A vector that needs a later milestone is replayed on the merces backend up to its gate, the last step before the first one the merces backend cannot run yet; every step up to the gate must pass (PREFIX-PASS), so the auction prefix and everything else before the gate stays protected. Gates measured on S2 and again on S3 WP2, unchanged: a full replay's first finding is the step after each gate, on both personalities and in lockstep.",
     '',
     '| Vector | Replayed to | Next step | The whole vector |',
     '| --- | --- | --- | --- |',
@@ -168,14 +168,18 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
     lines.push('', '## Not replayed on the merces backend', '');
     for (const n of notRun) lines.push(`- ${n.vector}: ${describeExpected(n.expected)}`);
   }
+  if (extra.sections?.length) lines.push('', ...extra.sections);
   return lines.join('\n') + '\n';
 }
 
-/** Write `VECTOR_PARITY.md` into `outDir`, with optional sections appended (the sync step adds its op inventory). */
-export function writeParity(outDir: string, reports: readonly RunReport[], source: ParitySource, extra: { notes?: string[]; appendix?: string[] } = {}): string {
+/**
+ * Write `VECTOR_PARITY.md` into `outDir`, with optional sections after the results (the sync step adds our S3 claim
+ * scenarios) and an appendix (the sync step's op inventory).
+ */
+export function writeParity(outDir: string, reports: readonly RunReport[], source: ParitySource, extra: { notes?: string[]; sections?: string[]; appendix?: string[] } = {}): string {
   mkdirSync(outDir, { recursive: true });
   const file = join(outDir, 'VECTOR_PARITY.md');
-  const body = renderParity(reports, source, extra.notes ? { notes: extra.notes } : {});
+  const body = renderParity(reports, source, { ...(extra.notes ? { notes: extra.notes } : {}), ...(extra.sections ? { sections: extra.sections } : {}) });
   writeFileSync(file, body + (extra.appendix?.length ? '\n' + extra.appendix.join('\n') + '\n' : ''));
   return file;
 }

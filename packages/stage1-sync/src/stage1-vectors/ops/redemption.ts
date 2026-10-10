@@ -6,9 +6,9 @@ import { direct, shim, type TranslatorTable } from './types.ts';
  *
  * - `redeem` (SH-RED-1): `redeem{maxPricePerUnit: U64_MAX}`; Stage 1 has no slippage bound.
  * - `claim_redemption`: `claimRedemption` (direct).
- * - `claim_tail` (SH-CLM-2): no `claimTail` command in S1. Like Stage 1 (SIM:1409), a holder that has not redeemed
- *   yet and still holds units redeems first (`claimRedemption`), then `claimPayout` pays the tail share. The two calls
- *   run atomically: if the payout fails, the redemption is undone too.
+ * - `claim_tail`: `claimTail` (direct since S3; was shim SH-CLM-2, `claimRedemption` then `claimPayout`). The engine
+ *   runs Stage 1's body in one transaction (SIM:1403-1417), the redemption first for a holder that has redeemed nothing
+ *   and still has units included.
  */
 export const redemptionOps: TranslatorTable = {
   redeem: (ctx, c) =>
@@ -22,11 +22,7 @@ export const redemptionOps: TranslatorTable = {
     }),
 
   claim_tail: (ctx, c) =>
-    shim('SH-CLM-2', async () => {
-      const seriesId = ctx.seriesBook(c.series).seriesId;
-      const wallet = ctx.actors.wallet(c.actor);
-      const p = ctx.seriesState(c.series).positions.get(wallet.address);
-      if (p && p.redeemedUnits === 0n && p.units > 0n) await ctx.send(wallet, { kind: 'claimRedemption', seriesId });
-      await ctx.send(wallet, { kind: 'claimPayout', seriesId });
+    direct(async () => {
+      await ctx.send(ctx.actors.wallet(c.actor), { kind: 'claimTail', seriesId: ctx.seriesBook(c.series).seriesId });
     }),
 };

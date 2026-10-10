@@ -10,8 +10,9 @@ import { direct, shim, type TranslatorTable } from './types.ts';
  * - `pay` (SH-PAY-1): Stage 1's `pay` names neither period nor amount; `payIn` takes the open due period (else the
  *   next expected period, amendments: never null) and the amount the chain shows due for it now (accrual included),
  *   0 when it shows nothing, so the chain itself decides NothingDue.
- * - `claim` (SH-CLM-1): `claimPayout` (in S1 it also pays tail and final shares).
- * - `burn_retired` (SH-BRN-1): keeper `crankBurn` for the one holder.
+ * - `claim` (SH-CLM-1): `claimPayout` (until WP3 it also pays the tail and final shares).
+ * - `burn_retired`: `burnRetired{holder}` (direct since S3; was shim SH-BRN-1, a one-holder `crankBurn`), Stage 1's
+ *   body (SIM:624-636). Stage 1's op carries no actor (anyone may send it), so the runner submits it as the keeper.
  */
 export const moneyOps: TranslatorTable = {
   claim_release: (ctx, c) =>
@@ -37,7 +38,7 @@ export const moneyOps: TranslatorTable = {
     }),
 
   burn_retired: (ctx, c) =>
-    shim('SH-BRN-1', async () => {
-      await ctx.submit({ kind: 'crankBurn', seriesId: ctx.seriesBook(c.series).seriesId, holders: [ctx.actors.address(c.holder)] }, 'keeper');
+    direct(async () => {
+      await ctx.submit({ kind: 'burnRetired', seriesId: ctx.seriesBook(c.series).seriesId, holder: ctx.actors.address(c.holder) }, 'keeper');
     }),
 };

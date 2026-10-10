@@ -15,6 +15,7 @@ import {
   PREFIX_GATES,
   ReferenceWorld,
   TRANSLATORS,
+  SHIMS,
   SHIM_BY_ID,
   TARGETS,
   TARGETS_S1,
@@ -38,6 +39,8 @@ import {
   waiverFor,
   type LoadedVector,
   type RunReport,
+  type Shim,
+  type SyntheticShims,
   type World,
 } from '../src/stage1-vectors/index.ts';
 import { NON_REVEAL_CHARGE_HELD } from '@merces/domain';
@@ -59,6 +62,11 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *  - S2-NY: the vectors and ops that need a later milestone are NOT-YET (was NOT-IN-S1); the targets are S1's and S2's,
  *    the prefix-gated vectors replay to their gate, and the runner's wording follows ("is not modelled yet (S5)");
  *  - S2-LS: lockstep compares every step of a raise's settlement (only a window mid-settlement is skipped until S5).
+ *
+ * S3 cause codes:
+ *  - S3-SH: `claim_tail`, `claim_final` and `burn_retired` run directly as `claimTail`, `claimFinal` and `burnRetired`
+ *    (shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired); no row of the shim table is runner-atomic any more, so the
+ *    runner-atomic mechanism is tested on a synthetic row; 22 stays gated at #75 by its windows (milestone S5).
  */
 afterAll(shutdown);
 
@@ -289,6 +297,12 @@ describe('stage1 vector runner: expectations and the op map', () => {
     for (const e of Object.values(EXPECTED)) for (const d of [...(e.divergences ?? []), ...(e.lockstep ? [e.lockstep] : [])]) expect(DIVERGENCE_BY_ID.has(d.id), d.id).toBe(true);
     expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-NRC-1']);
     expect(NON_REVEAL_CHARGE_HELD).toBe(true);
+    // cause S3-SH: the claims 22 waits for run since S3 WP2; only its windows (#76 on) wait, for S5 (was: 'S3 + S5')
+    expect(EXPECTED['22']).toMatchObject({ until: 75, milestone: 'S5', reason: 'multi-step windows (#76); its claim steps #88-#110 run once windows land' });
+    const v22 = loadVector(vectorFile('22'));
+    // the redemption and claim part of 22 is #88 (redeem) to its last step, #110, all past the gate
+    const claimSteps = v22.steps.flatMap((st, i) => (['redeem', 'claim_redemption', 'claim_tail', 'register_holder', 'extinguish', 'claim_final'].includes(st.op === 'expect_revert' ? st.call.op : st.op) ? [i] : []));
+    expect([claimSteps[0], claimSteps.at(-1), v22.steps.length - 1]).toEqual([88, 109, 110]);
   });
 
   it('a divergence is accepted only as recorded: another value at its path fails, and an entry that no longer differs is stale', () => {
@@ -695,57 +709,82 @@ describe('stage1 vector runner: merces backend', () => {
     }
   }, 120_000);
 
-  it('a multi-transaction shim that reverts in its second transaction is runner-atomic; its row must say so', async () => {
-    // 09#82: b4 never claimed its redemption, so claim_tail (SH-CLM-2) sends claimRedemption, then claimPayout
+  // cause S3-SH: no row of the shim table is runner-atomic since SH-CLM-2 became the direct claimTail, so the mechanism
+  // is exercised on a synthetic row that sends two transactions for one call (was: SH-CLM-2 at 09#82)
+  it('a multi-transaction shim that reverts in its second transaction is runner-atomic; its row must say so (synthetic row)', async () => {
+    expect(SHIMS.filter((s) => s.runnerAtomic)).toEqual([]);
+    // 09#82: b4 never claimed its redemption, so the synthetic row sends claimRedemption, then claimTail
     const src = raw('09_tail_clause');
     expect(src.steps[82]).toMatchObject({ op: 'claim_tail', actor: 'b4', series: 'S1' });
     const t = src.steps[82]!.t as string;
     const reverting = structuredClone(src);
     reverting.steps[82] = { t, op: 'expect_revert', call: { op: 'claim_tail', actor: 'b4', series: 'S1' }, error: 'NoTailDue' };
-    /** b4's claimPayout at #82 raises NoTailDue, after changing the engine when `leak` */
-    const refusePayout = (world: MercesWorld, leak: boolean) => {
+    const atomicRow: Shim = { id: 'SH-TEST-1', ops: ['claim_tail'], call: 'claimRedemption first when nothing is redeemed yet, then claimTail', why: 'test only', removedIn: '—', kind: 'shim', runnerAtomic: true };
+    const synthetic = (row: Shim): SyntheticShims => ({
+      rows: [row],
+      translators: {
+        claim_tail: (ctx, c) => ({
+          kind: 'shim',
+          shimId: row.id,
+          run: async () => {
+            const seriesId = ctx.seriesBook(c.series).seriesId;
+            const wallet = ctx.actors.wallet(c.actor);
+            const p = ctx.seriesState(c.series).positions.get(wallet.address);
+            if (p && p.redeemedUnits === 0n && p.units > 0n) await ctx.send(wallet, { kind: 'claimRedemption', seriesId });
+            await ctx.send(wallet, { kind: 'claimTail', seriesId });
+          },
+        }),
+      },
+    });
+    /** b4's claimTail at #82 raises NoTailDue, after changing the engine when `leak` */
+    const refuseTail = (world: MercesWorld, leak: boolean) => {
       const engine = world.chain.engine;
       const execute = engine.execute.bind(engine);
       const b4 = world.actors.address('b4');
       engine.execute = ((cmd, actor, ctx) => {
-        if (cmd.kind === 'claimPayout' && (actor as { signers?: string[] }).signers?.[0] === b4 && world.now() === Number(t)) {
+        if (cmd.kind === 'claimTail' && (actor as { signers?: string[] }).signers?.[0] === b4 && world.now() === Number(t)) {
           if (leak) engine.state.txCount += 1000;
-          throw new ChainError('NotPermitted', 'claimPayout refused by the test', { stage1: 'NoTailDue' });
+          throw new ChainError('NotPermitted', 'claimTail refused by the test', { stage1: 'NoTailDue' });
         }
         return execute(cmd, actor, ctx);
       }) as typeof engine.execute;
     };
-    const replay = async (vector: LoadedVector, leak?: boolean) => {
-      const world = await MercesWorld.create(vector, { personality: 'solana' });
-      if (leak !== undefined) refusePayout(world, leak);
+    const replay = async (vector: LoadedVector, row: Shim, leak?: boolean) => {
+      const world = await MercesWorld.create(vector, { personality: 'solana', synthetic: synthetic(row) });
+      if (leak !== undefined) refuseTail(world, leak);
       try {
-        return { run: await replayVector(world, vector, { until: 82 }), world };
+        return await replayVector(world, vector, { until: 82 });
       } finally {
         await world.close();
       }
     };
     const v = fromJson(reverting, '09_tail_clause');
-    // claimRedemption went through, claimPayout reverted cleanly: the runner undid the first, and says so
-    const { run } = await replay(v, false);
+    // claimRedemption went through, claimTail reverted cleanly: the runner undid the first, and says so
+    const run = await replay(v, atomicRow, false);
     expect(run.issues).toEqual([]);
     expect(run.status).toBe('PASS');
-    expect(run.runnerAtomic).toEqual([{ index: 82, op: 'expect_revert claim_tail', shimId: 'SH-CLM-2', rolledBack: 1 }]);
-    expect(run.shims['SH-CLM-2']).toBe(1);
+    expect(run.runnerAtomic).toEqual([{ index: 82, op: 'expect_revert claim_tail', shimId: 'SH-TEST-1', rolledBack: 1 }]);
+    expect(run.shims['SH-TEST-1']).toBe(1);
     const md = renderParity([{ backend: 'merces', runs: [{ ...run, expected: EXPECTED['09']!, atExpected: true }], notRun: [], proofs: { verified: 0, invalid: 0, cacheHits: 0 }, ok: true }], { dir: 'x' });
-    expect(md).toContain('- 09_tail_clause #82 `expect_revert claim_tail` (SH-CLM-2) on merces/solana: 1 transaction undone by the runner');
-    expect(md).toMatch(/\| SH-CLM-2 \(runner-atomic\) \| `claim_tail` \|[^\n]*\| 09 \|/);
+    expect(md).toContain('- 09_tail_clause #82 `expect_revert claim_tail` (SH-TEST-1) on merces/solana: 1 transaction undone by the runner');
+    // a synthetic row is the test's own: the shim table does not list it
+    expect(md).not.toContain('| SH-TEST-1');
     // the second transaction's own revert is checked against the state just before it, not the op's start
-    const leaked = (await replay(v, true)).run;
+    const leaked = await replay(v, atomicRow, true);
     expect(leaked.issues).toEqual([{ index: 82, op: 'expect_revert claim_tail', kind: 'fail', message: 'claim_tail reverted with NoTailDue but changed the state' }]);
     // a shim row not marked runner-atomic may not send two transactions for one call
-    const row = SHIM_BY_ID.get('SH-CLM-2') as { runnerAtomic?: true };
-    delete row.runnerAtomic;
+    const { runnerAtomic: _marked, ...unmarkedRow } = atomicRow;
+    const unmarked = await replay(fromJson(src, '09_tail_clause'), unmarkedRow);
+    expect(unmarked.status).toBe('FAIL');
+    expect(unmarked.issues).toEqual([{ index: 82, op: 'claim_tail', kind: 'fail', message: 'claim_tail went through 2 transactions, but shim row SH-TEST-1 is not marked runner-atomic' }]);
+    // the table's own claim_tail is one transaction (direct): the same step passes with the claimTail refused cleanly
+    const world = await MercesWorld.create(v, { personality: 'solana' });
+    refuseTail(world, false);
     try {
-      const unmarked = (await replay(fromJson(src, '09_tail_clause'))).run;
-      expect(unmarked.status).toBe('FAIL');
-      expect(unmarked.issues).toEqual([{ index: 82, op: 'claim_tail', kind: 'fail', message: 'claim_tail went through 2 transactions, but shim row SH-CLM-2 is not marked runner-atomic' }]);
+      const direct = await replayVector(world, v, { until: 82 });
+      expect([direct.status, direct.runnerAtomic, direct.shims['SH-TEST-1']]).toEqual(['PASS', [], undefined]);
     } finally {
-      row.runnerAtomic = true;
+      await world.close();
     }
   }, 120_000);
 
@@ -830,6 +869,14 @@ describe('stage1 vector runner: merces backend', () => {
     expect(NOT_YET).not.toHaveProperty('register_holder');
     for (const op of ['open_raise', 'cancel_raise', 'reveal_bid', 'begin_settlement', 'finalize_settlement', 'process_bid', 'deliver_bid', 'register_holder']) expect(STAGE1_OP_MAP[op]?.kind, op).toBe('direct');
     expect(STAGE1_OP_MAP.commit_bid).toMatchObject({ kind: 'shim', shim: 'SH-AUC-2' });
+    // cause S3-SH: the tail, final and Retired-burn claims run directly (was: SH-CLM-2, SH-CLM-3, SH-BRN-1); `claim` stays
+    // SH-CLM-1 until S3 WP3 makes claimPayout Stage 1's claim
+    for (const op of ['claim_tail', 'claim_final', 'burn_retired']) {
+      expect(STAGE1_OP_MAP[op], op).toMatchObject({ kind: 'direct' });
+      expect(STAGE1_OP_MAP[op], op).not.toHaveProperty('shim');
+      expect(SHIMS.some((r) => r.ops.includes(op)), op).toBe(false);
+    }
+    expect(STAGE1_OP_MAP.claim).toMatchObject({ kind: 'shim', shim: 'SH-CLM-1' });
   });
 
   it('vector keys become stable ed25519 verifier keys whose attestations verify', async () => {
@@ -912,7 +959,14 @@ describe('stage1 vector runner: merces backend', () => {
     // cause S2-NY: 14's prefix amends its terms too (was: 05, 11)
     expect(section).toMatch(/\| SH-AMD-1 \| `amend_terms` \|[^\n]*\| S4 \| 05, 11, 14 \|/);
     expect(section).toMatch(/\| SH-RED-1 \| `redeem` \|[^\n]*\| — \| 01, 05, 06, 09, 11, 23, 25 \|/);
-    expect(section).toMatch(/\| SH-CLM-2 \(runner-atomic\) \| `claim_tail` \|/);
+    // cause S3-SH: claim_tail, claim_final and burn_retired run directly; their rows (SH-CLM-2, SH-CLM-3, SH-BRN-1) are
+    // gone and no run went through them (was: SH-CLM-2 runner-atomic, used in 09 and 23; SH-CLM-3 in 11; SH-BRN-1 in 05)
+    for (const id of ['SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1']) {
+      expect(md, id).not.toContain(id);
+      for (const r of report.runs) expect(r.shims[id], `${r.vector} ${r.world}`).toBeUndefined();
+    }
+    expect(section).not.toContain('(runner-atomic)');
+    expect(section).toMatch(/\| SH-CLM-1 \| `claim` \|[^\n]*\| S3 \| 01, 04, 05, 07, 17, 19, 21 \|/);
     expect(md).toContain('## Runner-atomic reverts\n\nExpected reverts of a call');
     expect(md).toContain("None: every expected revert raised in the call's first transaction.");
     // privacy canary: no vector key, terms salt or income salt reaches the report

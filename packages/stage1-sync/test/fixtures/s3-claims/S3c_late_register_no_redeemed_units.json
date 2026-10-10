@@ -1,0 +1,23 @@
+{
+  "name": "S3c_late_register_no_redeemed_units",
+  "description": "A late register_holder on a redeemed series whose tail is funded (09 after #81), then claim_tail: NoRedeemedUnits. The issuer is allowlisted, registers permissionlessly with its cursors seeded to 0 and holds nothing, so there is nothing to redeem first and no tail is owed: the funded tail is not misattributed to it (the 22 #97-#98 pattern on another vector). The holders then claim their tails as in 09.",
+  "covers": ["c"],
+  "base": "09_tail_clause",
+  "segments": [
+    { "baseSteps": [0, 81] },
+    {
+      "steps": [
+        {"t": "1822694400", "op": "register_holder", "series": "S1", "holder": "issuer", "note": "allowlisted; registers on a Redeemed series with the tail funded"},
+        {"t": "1822694400", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "issuer", "series": "S1"}, "error": "NoRedeemedUnits", "note": "registered, holds and redeemed nothing"}
+      ]
+    },
+    { "baseSteps": [82, 85] },
+    {
+      "steps": [
+        {"t": "1822694400", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "issuer", "series": "S1"}, "error": "NoRedeemedUnits", "note": "still nothing after every holder claimed its tail"},
+        {"t": "1822694400", "op": "expect", "series": "S1", "balances": {"b1": {"stable": "109477500000", "units": "0"}, "b2": {"stable": "109477500000", "units": "0"}, "b3": {"stable": "109477500000", "units": "0"}, "b4": {"stable": "109477500000", "units": "0"}, "issuer": {"stable": "390000000000", "units": "0"}}, "feeCollector": "8090000000", "treasury": "42000000000", "vault": "0", "ledger": {"status": "Redeemed", "raiseState": "Settled", "mintFinalized": true, "unitsOutstanding": "0", "unitsSold": "400", "clearingPrice": "105000000", "proceeds": "42000000000", "releasedTotal": "0", "capPerUnit": "262500000", "capMultipleWad": "2500000000000000000", "termsCommitment": "0x1109d60d65f46fb02522efc35a15924e2d669c95489eaf0919e6dcd4f74e04bd", "amendmentNonce": "0", "paidPerUnitWad": "30000000000000000000000000", "netAccWad": "28500000000000000000000000", "carryWad": "0", "carry": "0", "grossReceived": "12000000000", "feeCollected": "600000000", "refundedToIssuer": "0", "lastAcceptedPeriod": "8110", "lastPaidPeriod": "8110", "openDuePeriod": null, "openDueAmount": "0", "routerCredit": "0", "trueupNonce": "0", "trueupDue": "0", "trueupAttestedAt": "0", "lastTrueupYear": null, "pauseNonce": "0", "pauseCount": "0", "pausedTotal": "0", "formalNoticeEmittedFor": null, "redemptionPrice": "150000000", "unitsAtRedemption": "400", "tailCapPerUnit": "82500000", "tailAccWad": "78375000000000000000000000", "tailExhausted": true, "extinguishedAt": "0", "finalAccWad": "0", "finalUnits": "0", "extinguishNonce": "0"}, "holders": {"b1": {"pending": "0", "redeemedUnits": "100", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b2": {"pending": "0", "redeemedUnits": "100", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b3": {"pending": "0", "redeemedUnits": "100", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b4": {"pending": "0", "redeemedUnits": "100", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "issuer": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}}, "note": "the issuer is a registered holder with nothing pending and nothing redeemed; the tail went to the four holders in full"}
+      ]
+    },
+    { "baseSteps": [87, 93] }
+  ]
+}

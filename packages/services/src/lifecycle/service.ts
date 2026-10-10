@@ -62,8 +62,9 @@ export class LifecycleService {
    * `claimable`, `tailClaimable` and `finalClaimable` are disjoint (net payout, tail, final pool) and are what this
    * claimPayout pays. The position's `tailClaimable` is Stage 1's `claimableTail` view, which for a holder that has not
    * redeemed yet counts the units its redemption would redeem (`claim_tail` redeems first). claimPayout takes the tail
-   * on redeemed units only (no `claimTail` before S3, SH-CLM-2), so such a holder's tail is left out here and claimed
-   * after `claimRedemption`. A holder with nothing else to claim gets a 409 that says so.
+   * on redeemed units only (it has no redemption step; S3 WP3 and WP4 move the tail to `claimTail`), so such a
+   * holder's tail is left out here and claimed after `claimRedemption`. A holder with nothing else to claim gets a 409
+   * that says so.
    */
   async buildClaim(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; claimable: string; tailClaimable: string; finalClaimable: string; builder: string }> {
     const chain = this.ctx.chainFor(seriesId);

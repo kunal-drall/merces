@@ -1,0 +1,22 @@
+{
+  "name": "S3b_tail_not_registered",
+  "description": "After S1 redeems (09 #64), claim_tail by a wallet that is not a registered holder is HolderNotRegistered, before the tail is funded and after (09 #80): a stranger, and the issuer, which is allowlisted but never registered (allowlist membership is not registration). The rest of 09 then runs to its end unchanged.",
+  "covers": ["b"],
+  "base": "09_tail_clause",
+  "segments": [
+    { "baseSteps": [0, 64] },
+    {
+      "steps": [
+        {"t": "1815775200", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "keeper", "series": "S1"}, "error": "HolderNotRegistered", "note": "never allowlisted, never a holder"},
+        {"t": "1815775200", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "issuer", "series": "S1"}, "error": "HolderNotRegistered", "note": "allowlisted but not a registered holder"}
+      ]
+    },
+    { "baseSteps": [65, 81] },
+    {
+      "steps": [
+        {"t": "1822694400", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "issuer", "series": "S1"}, "error": "HolderNotRegistered", "note": "the tail is funded now (#80); still not a holder"}
+      ]
+    },
+    { "baseSteps": [82, 94] }
+  ]
+}

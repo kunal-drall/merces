@@ -5,8 +5,9 @@ import { SHIM_BY_ID } from './shims.ts';
 import type { Applied } from './world.ts';
 
 /**
- * What each vector is expected to do on the merces backend after S2 (S1 plan §5.6; S2 plan §3, WP5). The reference
- * backend (Stage 1's own simulator) must PASS every vector.
+ * What each vector is expected to do on the merces backend after S2 (S1 plan §5.6; S2 plan §3, WP5), unchanged in S3:
+ * the claim family runs directly since S3 WP2 (`claim_tail`, `claim_final`, `burn_retired`) and moves no status; 22
+ * stays gated at #75 by its windows (S5). The reference backend (Stage 1's own simulator) must PASS every vector.
  *
  * - PASS / PASS-WITH-WAIVERS: a target replays in full; waivers cover blocked or n/a steps only.
  * - PASS-WITH-DIVERGENCES: a target replays in full, and the only differences are the recorded entries of a row of the
@@ -14,7 +15,8 @@ import type { Applied } from './world.ts';
  *   occurs (stale).
  * - PREFIX-PASS: a vector that needs a later milestone is replayed up to its gate (`until`, inclusive), the last step
  *   before the first one the merces backend cannot run yet; every step up to the gate must pass. Gates measured on S2
- *   (the first finding of a full replay is the step after each gate, on both personalities).
+ *   and again on S3 WP2, unchanged (the first finding of a full replay is the step after each gate, on both
+ *   personalities).
  * - NOT-YET: not replayed by default (it never reaches the auction, or stops before it); `milestone` brings it.
  */
 
@@ -128,7 +130,7 @@ export const EXPECTED: Readonly<Record<string, Expected>> = Object.freeze({
   '19': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5'] },
   '20': { status: 'PREFIX-PASS', until: 70, next: '#71 `expect_revert submit_trueup` (no tier-3 true-up)', milestone: 'S5', reason: 'tier-3 true-up' },
   '21': { status: 'PREFIX-PASS', until: 40, next: '#41 `expect_revert approve_pause` with a pause end of 2^64 (the canonical pause end is a safe integer, so it is not AmountOutOfRange), then #42 `withdraw_pause_request`', milestone: 'S5', reason: 'withdraw_pause_request; u64 pause ends' },
-  '22': { status: 'PREFIX-PASS', until: 75, next: '#76 `begin_window_settlement` with a price on a live series (one-step windows)', milestone: 'S3 + S5', reason: 'tail and final claims, multi-step windows' },
+  '22': { status: 'PREFIX-PASS', until: 75, next: '#76 `begin_window_settlement` with a price on a live series (one-step windows)', milestone: 'S5', reason: 'multi-step windows (#76); its claim steps #88-#110 run once windows land' },
   '23': { status: 'PASS', needs: ['WP3', 'WP5', 'WP6', 'WP8'] },
   '24': { status: 'NOT-YET', milestone: 'S5', reason: 'FX accumulator (inverted pair)' },
   '25': { status: 'PASS', needs: ['WP3', 'WP5', 'WP6', 'WP7', 'WP8'] },

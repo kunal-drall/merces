@@ -76,15 +76,15 @@ export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: OpKind; sh
   claim: { canonical: 'claimPayout', kind: 'shim', shim: 'SH-CLM-1' },
   claim_release: { canonical: 'drawRelease', kind: 'direct' },
   crank_status: { canonical: 'crankStatus', kind: 'direct' },
-  burn_retired: { canonical: 'crankBurn', kind: 'shim', shim: 'SH-BRN-1' },
+  burn_retired: { canonical: 'burnRetired (permissionless; sent by the keeper)', kind: 'direct' },
   request_pause: { canonical: 'requestPause (until supplied by the runner)', kind: 'shim', shim: 'SH-PAU-1' },
   withdraw_pause_request: { canonical: 'none', kind: 'not-yet', milestone: 'S5' },
   approve_pause: { canonical: 'approvePause sent by the attestor wallet', kind: 'shim', shim: 'SH-PAU-2' },
   end_pause: { canonical: 'none (crankPause ends a pause at its end only)', kind: 'not-yet', milestone: 'S5' },
   redeem: { canonical: 'redeem (no slippage bound)', kind: 'shim', shim: 'SH-RED-1' },
   claim_redemption: { canonical: 'claimRedemption', kind: 'direct' },
-  claim_tail: { canonical: 'none (claimRedemption if needed, then claimPayout)', kind: 'shim', shim: 'SH-CLM-2' },
-  claim_final: { canonical: 'none (claimPayout)', kind: 'shim', shim: 'SH-CLM-3' },
+  claim_tail: { canonical: 'claimTail', kind: 'direct' },
+  claim_final: { canonical: 'claimFinal', kind: 'direct' },
   extinguish: { canonical: 'extinguish with a co-signing attestor', kind: 'shim', shim: 'SH-EXT-1' },
   amend_terms: { canonical: 'amendTerms with a co-signing attestor', kind: 'shim', shim: 'SH-AMD-1' },
   fx_snapshot: { canonical: 'snapshotRate', kind: 'not-yet', milestone: 'S5' },
@@ -189,6 +189,7 @@ async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepRepor
   const source = { dir: label, ...(ctx.location.manifest.commit ? { commit: ctx.location.manifest.commit } : {}) };
   const details: string[] = [];
   const reports: Awaited<ReturnType<typeof runner.runStage1Vectors>>[] = [];
+  let sections: string[] = [];
   let status: StepStatus;
   let summary: string;
   try {
@@ -209,8 +210,25 @@ async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepRepor
       const diverging = merces.runs.filter((r) => r.status === 'PASS-WITH-DIVERGENCES').length;
       details.push(`merces backend: ${at}/${merces.runs.length} run(s) at expected status (${runner.TARGETS.length} targets and ${gates} prefix gates × personalities; ${diverging} run(s) with accepted divergences, see VECTOR_PARITY.md)`);
       for (const r of merces.runs.filter((x) => !x.atExpected)) details.push(`merces ${r.vector} [${r.world}]: ${r.status}, expected ${runner.describeExpected(r.expected)}`);
-      status = merces.ok ? 'ok' : 'fail';
-      summary = merces.ok ? `every target and prefix gate is at its expected status on both personalities; ${refLine}` : `${merces.runs.length - at} run(s) below their expected status: our simulator disagrees with Stage 1`;
+      // our S3 claim scenarios (S3 plan WP2): Stage 1's simulator, ours on both personalities, and the two in lockstep
+      const scenarioReports: typeof reports = [];
+      let scenarios: Awaited<ReturnType<typeof runner.runScenarios>>['scenarios'] = [];
+      for (const backend of ['reference', 'merces', 'lockstep'] as const) {
+        const r = await runner.runScenarios({ vectorsDir: dir, backend });
+        scenarios = r.scenarios;
+        scenarioReports.push(r.report);
+      }
+      sections = runner.renderScenarios(scenarios, scenarioReports);
+      const scenarioRuns = scenarioReports.flatMap((r) => r.runs);
+      const scenariosOk = scenarioReports.every((r) => r.ok);
+      details.push(`S3 claim scenarios (ours): ${scenarios.length} scenario(s), ${scenarioRuns.filter((r) => r.status === 'PASS').length}/${scenarioRuns.length} run(s) PASS on the reference, merces and lockstep backends`);
+      for (const r of scenarioRuns.filter((x) => !x.atExpected)) details.push(`scenario ${r.vector} [${r.world}]: ${r.status}, expected PASS`);
+      status = merces.ok && scenariosOk ? 'ok' : 'fail';
+      summary = !merces.ok
+        ? `${merces.runs.length - at} run(s) below their expected status: our simulator disagrees with Stage 1`
+        : scenariosOk
+          ? `every target and prefix gate is at its expected status on both personalities, and our S3 claim scenarios pass in lockstep; ${refLine}`
+          : `${scenarioRuns.filter((r) => !r.atExpected).length} S3 claim scenario run(s) do not pass: our simulator disagrees with Stage 1`;
     }
   } catch (e) {
     status = 'fail';
@@ -218,7 +236,7 @@ async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepRepor
   } finally {
     await runner.shutdown();
   }
-  runner.writeParity(ctx.outDir, reports, source, { appendix: inv.lines });
+  runner.writeParity(ctx.outDir, reports, source, { sections, appendix: inv.lines });
   details.push(`${inv.files} vectors, ${inv.steps} steps (${inv.reverts} expected reverts), ${inv.ops} distinct ops counting the calls inside reverts; see VECTOR_PARITY.md`);
   return { step: 'vectors', status, summary, details };
 }

@@ -1,0 +1,25 @@
+{
+  "name": "S3e_final_before_and_after_extinguish",
+  "description": "On 11 (extinguished at 11 #39 with half the treasury unvested): claim_final before the extinguishment is TerminalStatus. After it, b1's claim (11 #46) pays its pending payout and its share weighed on its 100 accrual units; a second claim pays 0 and burns nothing; a stranger's claim is HolderNotRegistered; burn_retired is TerminalStatus (the series is Extinguished, not Retired); claim_tail is NotRedeemed (it never redeemed). The other holders then claim as in 11.",
+  "covers": ["e"],
+  "base": "11_extinguishment",
+  "segments": [
+    { "baseSteps": [0, 38] },
+    {
+      "steps": [
+        {"t": "1783641600", "op": "expect_revert", "call": {"op": "claim_final", "actor": "b1", "series": "S1"}, "error": "TerminalStatus", "note": "a live series (a payment is due)"}
+      ]
+    },
+    { "baseSteps": [39, 47] },
+    {
+      "steps": [
+        {"t": "1783641600", "op": "claim_final", "actor": "b1", "series": "S1", "note": "again: its share was paid once, nothing is pending and nothing is left to burn"},
+        {"t": "1783641600", "op": "expect_revert", "call": {"op": "claim_final", "actor": "keeper", "series": "S1"}, "error": "HolderNotRegistered"},
+        {"t": "1783641600", "op": "expect_revert", "call": {"op": "burn_retired", "series": "S1", "holder": "b2"}, "error": "TerminalStatus", "note": "Extinguished is not Retired"},
+        {"t": "1783641600", "op": "expect_revert", "call": {"op": "claim_tail", "actor": "b2", "series": "S1"}, "error": "NotRedeemed", "note": "the series never redeemed"},
+        {"t": "1783641600", "op": "expect", "series": "S1", "balances": {"b1": {"stable": "44835000000", "units": "0"}, "b2": {"stable": "39395000000", "units": "100"}, "b3": {"stable": "39395000000", "units": "100"}, "b4": {"stable": "39395000000", "units": "100"}, "issuer": {"stable": "220200000000", "units": "0"}}, "treasury": "0", "vault": "16320000000", "ledger": {"status": "Extinguished", "raiseState": "Settled", "mintFinalized": true, "unitsOutstanding": "300", "unitsSold": "400", "clearingPrice": "105000000", "proceeds": "42000000000", "releasedTotal": "21000000000", "capPerUnit": "262500000", "capMultipleWad": "2500000000000000000", "termsCommitment": "0x0b6b9b6f4f65135ab86650bfff5e184c21dcc72ee1c2f5e5a88b2b63636df019", "amendmentNonce": "0", "paidPerUnitWad": "2000000000000000000000000", "netAccWad": "1900000000000000000000000", "carryWad": "0", "carry": "0", "grossReceived": "800000000", "feeCollected": "40000000", "refundedToIssuer": "0", "lastAcceptedPeriod": "8105", "lastPaidPeriod": "8104", "openDuePeriod": null, "openDueAmount": "0", "routerCredit": "0", "trueupNonce": "0", "trueupDue": "0", "trueupAttestedAt": "0", "lastTrueupYear": null, "pauseNonce": "0", "pauseCount": "0", "pausedTotal": "0", "formalNoticeEmittedFor": null, "redemptionPrice": "0", "unitsAtRedemption": "0", "tailCapPerUnit": "0", "tailAccWad": "0", "tailExhausted": false, "extinguishedAt": "1783641600", "finalAccWad": "52500000000000000000000000", "finalUnits": "400", "extinguishNonce": "1"}, "holders": {"b1": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b2": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b3": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}, "b4": {"pending": "0", "redeemedUnits": "0", "pendingUnits": "0", "pendingRefund": "0", "delivered": true}}, "note": "as at #47"}
+      ]
+    },
+    { "baseSteps": [48, 51] }
+  ]
+}

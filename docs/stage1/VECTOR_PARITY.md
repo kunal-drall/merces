@@ -6,7 +6,7 @@ Every `expect` compares the keys it carries, each as a whole value; every `expec
 
 ## Results
 
-| Vector | reference | merces/solana | merces/monad | Expected after S2 (merces) |
+| Vector | reference | merces/solana | merces/monad | Expected after S3 (merces) |
 | --- | --- | --- | --- | --- |
 | 01_happy_path | PASS 67/67 | PASS-WITH-WAIVERS 67/67 | PASS-WITH-WAIVERS 67/67 | PASS-WITH-WAIVERS (#32 NA-1, #34 BLK-1) |
 | 02_failed_auction | PASS 38/38 | PASS 38/38 | PASS 38/38 | PASS |
@@ -29,7 +29,7 @@ Every `expect` compares the keys it carries, each as a whole value; every `expec
 | 19_pause_while_late | PASS 60/60 | PASS 60/60 | PASS 60/60 | PASS |
 | 20_tier3_trueup | PASS 120/120 | PASS 71/120, stopped at #71 (until) | PASS 71/120, stopped at #71 (until) | PREFIX-PASS to #70, then NOT-YET (S5: tier-3 true-up) |
 | 21_entry_rules | PASS 61/61 | PASS 41/61, stopped at #41 (until) | PASS 41/61, stopped at #41 (until) | PREFIX-PASS to #40, then NOT-YET (S5: withdraw_pause_request; u64 pause ends) |
-| 22_late_holder_tail_final | PASS 111/111 | PASS 76/111, stopped at #76 (until) | PASS 76/111, stopped at #76 (until) | PREFIX-PASS to #75, then NOT-YET (S3 + S5: tail and final claims, multi-step windows) |
+| 22_late_holder_tail_final | PASS 111/111 | PASS 76/111, stopped at #76 (until) | PASS 76/111, stopped at #76 (until) | PREFIX-PASS to #75, then NOT-YET (S5: multi-step windows (#76); its claim steps #88-#110 run once windows land) |
 | 23_redeem_twice_with_tail | PASS 63/63 | PASS 63/63 | PASS 63/63 | PASS |
 | 24_inverted_fx | PASS 94/94 | — | — | NOT-YET (S5: FX accumulator (inverted pair)) |
 | 25_window_on_terminal | PASS 91/91 | PASS 91/91 | PASS 91/91 | PASS |
@@ -66,7 +66,7 @@ Stage 1 behaviour the merces backend knowingly does not mirror (the register, `s
 
 ## Prefix gates
 
-A vector that needs a later milestone is replayed on the merces backend up to its gate, the last step before the first one the merces backend cannot run yet; every step up to the gate must pass (PREFIX-PASS), so the auction prefix and everything else before the gate stays protected. Gates measured on S2: a full replay's first finding is the step after each gate, on both personalities and in lockstep.
+A vector that needs a later milestone is replayed on the merces backend up to its gate, the last step before the first one the merces backend cannot run yet; every step up to the gate must pass (PREFIX-PASS), so the auction prefix and everything else before the gate stays protected. Gates measured on S2 and again on S3 WP2, unchanged: a full replay's first finding is the step after each gate, on both personalities and in lockstep.
 
 | Vector | Replayed to | Next step | The whole vector |
 | --- | --- | --- | --- |
@@ -76,7 +76,7 @@ A vector that needs a later milestone is replayed on the merces backend up to it
 | 16_demand_limited_window | #40 | #41 `set_flags` (no canonical windows flag) | S5: multi-step transfer windows |
 | 20_tier3_trueup | #70 | #71 `expect_revert submit_trueup` (no tier-3 true-up) | S5: tier-3 true-up |
 | 21_entry_rules | #40 | #41 `expect_revert approve_pause` with a pause end of 2^64 (the canonical pause end is a safe integer, so it is not AmountOutOfRange), then #42 `withdraw_pause_request` | S5: withdraw_pause_request; u64 pause ends |
-| 22_late_holder_tail_final | #75 | #76 `begin_window_settlement` with a price on a live series (one-step windows) | S3 + S5: tail and final claims, multi-step windows |
+| 22_late_holder_tail_final | #75 | #76 `begin_window_settlement` with a price on a live series (one-step windows) | S5: multi-step windows (#76); its claim steps #88-#110 run once windows land |
 
 ## Waived steps
 
@@ -109,9 +109,6 @@ The merces backend runs these Stage 1 ops through canonical calls of another sha
 | SH-PAU-1 | `request_pause` | requestPause{until: t + maxPauseSeconds} | Stage 1's request has no end | S5 | 08, 19, 21 |
 | SH-PAU-2 | `approve_pause` | approvePause{until: pauseEnd} sent by the attestor wallet | signatures as arguments are S4 | S4 | 08, 19 |
 | SH-CLM-1 | `claim` | claimPayout | S1 claimPayout = claim + tail + final | S3 | 01, 04, 05, 07, 17, 19, 21 |
-| SH-CLM-2 (runner-atomic) | `claim_tail` | claimRedemption first when nothing is redeemed yet and units remain (SIM:1409), then claimPayout | no claimTail command | S3 | 09, 23 |
-| SH-CLM-3 | `claim_final` | claimPayout | no claimFinal command | S3 | 11 |
-| SH-BRN-1 | `burn_retired` | keeper crankBurn{holders: [holder]} | batch shape | — | 05 |
 | SH-RED-1 | `redeem` | redeem{maxPricePerUnit: U64_MAX} | Stage 1 has no slippage bound | — | 01, 05, 06, 09, 11, 23, 25 |
 | SH-EXT-1 | `extinguish` | extinguish{attestors} sent by attestors[0], attestors[1] co-signing (deduplicated) | co-signing vs signatures | S4 | 11, 25 |
 | SH-AMD-1 | `amend_terms` | amendTerms{termsCommitment, capMultipleWad, attestor} with the attestor co-signing | co-signing vs signatures | S4 | 05, 11, 14 |
@@ -135,6 +132,28 @@ Shim-derived view fields (runner bookkeeping, also not parity): `window.period`,
 - 18_report_before_finalization: NOT-YET (S5: income router (stops at #11, create_series with a router))
 - 24_inverted_fx: NOT-YET (S5: FX accumulator (inverted pair))
 
+## S3 claim scenarios (ours, lockstep against Stage 1's Simulator)
+
+The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, amendment M5), written in Stage 1's op format (`packages/stage1-sync/test/fixtures/s3-claims`, `pnpm stage1:vectors --scenarios`). Each reuses steps of a Stage 1 vector (its bootstrap, raise, reports with their proofs and payments) and adds calls of our own; its own `expect`s carry Stage 1's values, which the reference backend (Stage 1's simulator) passes, and lockstep compares the full snapshots of both backends after every step. They are ours, not Stage 1's vectors: every backend must PASS them, with no waiver and no divergence.
+
+| Scenario | Covers | Built from | reference | merces/solana | merces/monad | lockstep/solana | lockstep/monad |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S3a_tail_before_redeem | (a) | 09 #0-#63 as #0-#63; ours as #64-#66 | PASS 67/67 | PASS 67/67 | PASS 67/67 | PASS 67/67 | PASS 67/67 |
+| S3b_tail_not_registered | (b) | 09 #0-#64 as #0-#64; ours as #65-#66; 09 #65-#81 as #67-#83; ours as #84; 09 #82-#94 as #85-#97 | PASS 98/98 | PASS 98/98 | PASS 98/98 | PASS 98/98 | PASS 98/98 |
+| S3c_late_register_no_redeemed_units | (c) | 09 #0-#81 as #0-#81; ours as #82-#83; 09 #82-#85 as #84-#87; ours as #88-#89; 09 #87-#93 as #90-#96 | PASS 97/97 | PASS 97/97 | PASS 97/97 | PASS 97/97 | PASS 97/97 |
+| S3d_tail_twice | (d) | 09 #0-#64 as #0-#64; ours as #65-#67; 09 #65-#86 as #68-#89; ours as #90-#92; 09 #87-#94 as #93-#100 | PASS 101/101 | PASS 101/101 | PASS 101/101 | PASS 101/101 | PASS 101/101 |
+| S3e_final_before_and_after_extinguish | (e) | 11 #0-#38 as #0-#38; ours as #39; 11 #39-#47 as #40-#48; ours as #49-#53; 11 #48-#51 as #54-#57 | PASS 58/58 | PASS 58/58 | PASS 58/58 | PASS 58/58 | PASS 58/58 |
+| S3f_final_after_redemption | (f) | 22 #0-#70 as #0-#70; ours as #71-#81 | PASS 82/82 | PASS 82/82 | PASS 82/82 | PASS 82/82 | PASS 82/82 |
+| S3g_burn_retired | (g) | 05 #0-#36 as #0-#36; ours as #37; 05 #37-#41 as #38-#42; 05 #43-#46 as #43-#46; ours as #47-#52; 05 #48-#53 as #53-#58 | PASS 59/59 | PASS 59/59 | PASS 59/59 | PASS 59/59 | PASS 59/59 |
+
+- S3a_tail_before_redeem: claim_tail before any redemption is NotRedeemed, for a holder and for a stranger alike: Stage 1 checks the redemption before the registration (SIM:1405-1407), so the stranger is not told HolderNotRegistered. Built on 09's prefix to its last report before S1 redeems (#63).
+- S3b_tail_not_registered: After S1 redeems (09 #64), claim_tail by a wallet that is not a registered holder is HolderNotRegistered, before the tail is funded and after (09 #80): a stranger, and the issuer, which is allowlisted but never registered (allowlist membership is not registration). The rest of 09 then runs to its end unchanged.
+- S3c_late_register_no_redeemed_units: A late register_holder on a redeemed series whose tail is funded (09 after #81), then claim_tail: NoRedeemedUnits. The issuer is allowlisted, registers permissionlessly with its cursors seeded to 0 and holds nothing, so there is nothing to redeem first and no tail is owed: the funded tail is not misattributed to it (the 22 #97-#98 pattern on another vector). The holders then claim their tails as in 09.
+- S3d_tail_twice: claim_tail twice, before and after the tail is funded. b1 claims right after S1 redeems (09 #64): it redeems first (P_redeem x 100 and its pending payout) and the tail is 0; a second claim pays 0; its claim_redemption (09 #65) then redeems 0 units. Once the tail is funded (09 #80) b1's claim (09 #83) pays its whole slice from its cursor 0, and a third claim pays 0, as does b4's second claim after its redeem-first claim (09 #82). 09's own expects hold throughout.
+- S3e_final_before_and_after_extinguish: On 11 (extinguished at 11 #39 with half the treasury unvested): claim_final before the extinguishment is TerminalStatus. After it, b1's claim (11 #46) pays its pending payout and its share weighed on its 100 accrual units; a second claim pays 0 and burns nothing; a stranger's claim is HolderNotRegistered; burn_retired is TerminalStatus (the series is Extinguished, not Retired); claim_tail is NotRedeemed (it never redeemed). The other holders then claim as in 11.
+- S3f_final_after_redemption: On 22's prefix to #70, S2 (back-loaded releases: its 4th tranche vests in January 2028) redeems; claim_final before the extinguishment is TerminalStatus (Redeemed is not Extinguished); b1 claims its redemption; S2 is extinguished, so the unvested 10,500 USDC becomes the final pool over the 400 units at redemption. claim_final weighs every holder on its redeemed units: b1 (redeemed before) is paid its share only, b2 (unredeemed) is redeemed first at P_redeem and weighed on the 100 units it just redeemed, b3 runs claim_tail first (an extinguished series that redeemed still runs it: redeem first, tail 0) and then its claim_final pays the share and burns nothing; a second claim pays 0. b4 never claims: its units and its share stay.
+- S3g_burn_retired: burn_retired on 05: on a live series it is TerminalStatus; once S1 is Retired (05 #39) and b1 and b2 have claimed (05 #45-#46), a wallet that never held units gets a zero burn with no registration check, a holder's units burn while its pending payout stays claimable (05 #49), a repeat and a holder whose claim already burned its units are zero burns. On the Retired series claim_tail is NotRedeemed and claim_final TerminalStatus. 05 then runs to its end. 05 #42 (expect_revert retire_if_capped, BLK-1) is left out: no canonical command until S5, and the scenario does not need it.
+
 ## Inventory
 
 | Vector | Steps | Expect checks | Expected reverts | Ops the merces backend shims, blocks or lacks |
@@ -143,13 +162,13 @@ Shim-derived view fields (runner bookkeeping, also not parity): `window.period`,
 | 02_failed_auction.json | 38 | 4 | 7 | `commit_bid`, `create_series`, `register_attestor`, `register_issuer`, `register_verifier_key` |
 | 03_auction_edges.json | 78 | 7 | 12 | `commit_bid`, `create_series`, `register_attestor`, `register_issuer`, `register_verifier_key` |
 | 04_zero_quarters.json | 81 | 7 | 6 | `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 05_cap_hit.json | 54 | 6 | 4 | `amend_terms`, `burn_retired`, `claim`, `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
+| 05_cap_hit.json | 54 | 6 | 4 | `amend_terms`, `claim`, `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
 | 06_redemption_terms.json | 116 | 9 | 5 | `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
 | 07_late_payment.json | 59 | 10 | 2 | `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
 | 08_hardship_pause.json | 64 | 7 | 8 | `approve_pause`, `commit_bid`, `create_series`, `end_pause`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
-| 09_tail_clause.json | 95 | 7 | 4 | `claim_tail`, `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 09_tail_clause.json | 95 | 7 | 4 | `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
 | 10_transfer_window.json | 92 | 6 | 12 | `begin_window_settlement`, `claim`, `commit_ask`, `commit_bid`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `set_flags`, `submit_report`, `transfer_units`, `window_commit_bid` |
-| 11_extinguishment.json | 52 | 4 | 7 | `amend_terms`, `claim_final`, `commit_bid`, `create_series`, `extinguish`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `revoke_attestor`, `submit_report` |
+| 11_extinguishment.json | 52 | 4 | 7 | `amend_terms`, `commit_bid`, `create_series`, `extinguish`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `revoke_attestor`, `submit_report` |
 | 12_multi_series_router.json | 118 | 10 | 6 | `claim`, `close_router_period`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `resume_issuance`, `route_income`, `stop_issuance`, `submit_report` |
 | 13_fx.json | 281 | 5 | 10 | `claim`, `commit_bid`, `create_series`, `fx_snapshot`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
 | 14_amendment.json | 83 | 6 | 8 | `amend_terms`, `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
@@ -159,9 +178,9 @@ Shim-derived view fields (runner bookkeeping, also not parity): `window.period`,
 | 18_report_before_finalization.json | 51 | 6 | 5 | `claim`, `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `route_income`, `submit_report` |
 | 19_pause_while_late.json | 60 | 8 | 4 | `approve_pause`, `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report` |
 | 20_tier3_trueup.json | 120 | 11 | 12 | `claim`, `commit_bid`, `create_series`, `pay`, `pay_trueup`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report`, `submit_trueup` |
-| 21_entry_rules.json | 61 | 5 | 10 | `approve_pause`, `burn_retired`, `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
-| 22_late_holder_tail_final.json | 111 | 6 | 1 | `begin_window_settlement`, `claim_final`, `claim_tail`, `commit_ask`, `commit_bid`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
-| 23_redeem_twice_with_tail.json | 63 | 2 | 0 | `begin_window_settlement`, `claim_tail`, `commit_ask`, `commit_bid`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report` |
+| 21_entry_rules.json | 61 | 5 | 10 | `approve_pause`, `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
+| 22_late_holder_tail_final.json | 111 | 6 | 1 | `begin_window_settlement`, `commit_ask`, `commit_bid`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
+| 23_redeem_twice_with_tail.json | 63 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `commit_bid`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report` |
 | 24_inverted_fx.json | 94 | 2 | 0 | `claim`, `commit_bid`, `create_series`, `fx_snapshot`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
 | 25_window_on_terminal.json | 91 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `commit_bid`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
 
@@ -192,7 +211,7 @@ Shim-derived view fields (runner bookkeeping, also not parity): `window.period`,
 | `claim_redemption` | 21 | claimRedemption | direct |
 | `reveal_order` | 20 | revealWindowOrder | shim (SH-WIN-4) |
 | `redeem` | 17 | redeem (no slippage bound) | shim (SH-RED-1) |
-| `claim_tail` | 16 | none (claimRedemption if needed, then claimPayout) | shim (SH-CLM-2) |
+| `claim_tail` | 16 | claimTail | direct |
 | `crank_status` | 15 | crankStatus | direct |
 | `begin_window_settlement` | 14 | none (recorded; clearTransferWindow is one step) | shim (SH-WIN-5) |
 | `commit_ask` | 13 | commitWindowOrder(side=sell) | shim (SH-WIN-2) |
@@ -203,11 +222,11 @@ Shim-derived view fields (runner bookkeeping, also not parity): `window.period`,
 | `window_commit_bid` | 11 | commitWindowOrder(side=buy) | shim (SH-WIN-3) |
 | `approve_pause` | 10 | approvePause sent by the attestor wallet | shim (SH-PAU-2) |
 | `amend_terms` | 9 | amendTerms with a co-signing attestor | shim (SH-AMD-1) |
-| `claim_final` | 9 | none (claimPayout) | shim (SH-CLM-3) |
+| `claim_final` | 9 | claimFinal | direct |
 | `process_orders` | 9 | none (canonical clearing delivers inside clearTransferWindow) | shim (SH-WIN-7) |
 | `extinguish` | 6 | extinguish with a co-signing attestor | shim (SH-EXT-1) |
 | `request_pause` | 6 | requestPause (until supplied by the runner) | shim (SH-PAU-1) |
-| `burn_retired` | 5 | crankBurn | shim (SH-BRN-1) |
+| `burn_retired` | 5 | burnRetired (permissionless; sent by the keeper) | direct |
 | `retire_if_capped` | 5 | none (canonical retirement happens inside payIn; Stage 1 also retires after a cap-lowering amendment) | blocked (BLK-1) |
 | `close_router_period` | 3 | none | not yet (S5) |
 | `end_pause` | 3 | none (crankPause ends a pause at its end only) | not yet (S5) |
