@@ -1,0 +1,24 @@
+# stage1-oracle: Stage 1's own Rust (merces-common, the crate its Solana programs call) answering, case by case, for
+# the TypeScript port of its unit-scale and curve math in @merces/math (`packages/math/src/curve`, A-MATH-3).
+# `pnpm stage1:sync`'s curve-port step builds it, feeds it a deterministic corpus on stdin (one JSON case per line)
+# and compares every answer with the port's, exactly (STAGE1_INTEGRATION.md, "The curve-port gate").
+#
+# Standalone: its own workspace, one path dependency on the pinned submodule's merces-common and nothing else, so it
+# builds offline (`cargo build --release --offline`). No Cargo.lock is kept: there is no registry dependency to pin
+# (.gitignore). The toolchain is Stage 1's (`stage1/solana/rust-toolchain.toml`): the gate selects it through rustup
+# (RUSTUP_TOOLCHAIN) and CI installs it.
+[package]
+name = "stage1-oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Stage 1's merces-common answering for @merces/math's ported curve family (the stage1:sync curve-port gate)."
+
+[dependencies]
+merces-common = { path = "../../stage1/solana/crates/merces-common" }
+
+[workspace]
+
+[profile.release]
+# Stage 1's own release profile checks overflow (stage1/solana/Cargo.toml); merces-common's arithmetic is checked anyway
+overflow-checks = true

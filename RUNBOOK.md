@@ -127,7 +127,7 @@ pnpm stage1:vectors --personality solana,monad                                  
 pnpm stage1:vectors --backend reference                                         # all 25 on Stage 1's own simulator
 pnpm stage1:vectors --backend lockstep --personality solana                     # both side by side, every step
 pnpm stage1:vectors --scenarios                                                 # our S3 claim scenarios, in lockstep
-pnpm stage1:sync --no-conformance                                               # pin, drift, math, vectors
+pnpm stage1:sync --no-conformance                                               # pin, drift, math, curve port, vectors
 pnpm openapi:check                                                              # routes, openapi.yaml, access tiers
 pnpm demo:cycle                                                                 # raise to payout on both personalities
 ```
@@ -137,8 +137,10 @@ and the 7 prefix gates to their gate, on both personalities; 01 and 05 PASS-WITH
 non-reveal charge is modelled, with no accepted divergence, in lockstep too) and the reference backend with
 `OK: 25/25 PASS`;
 `stage1:vectors --scenarios` (the paths of the claim family no vector takes, built on Stage 1 vector prefixes) with
-`OK: 22/22 PASS, 22/22 at expected status` (eleven scenarios, (a)–(k), on both personalities); `stage1:sync` must report the math and vectors steps `OK` (the diff step stays
-`WARN` until the adapters are wired, and conformance needs live deployments). `openapi:check` prints `openapi.yaml matches 170 operations` (after S3) and `demo:cycle` ends with `DEMO OK`. The vector runner verifies every
+`OK: 22/22 PASS, 22/22 at expected status` (eleven scenarios, (a)–(k), on both personalities); `stage1:sync` must report the math, curve-port and vectors steps `OK` (the diff step stays
+`WARN` until the adapters are wired, and conformance needs live deployments). The curve-port step needs cargo with Stage 1's
+toolchain (`rustup toolchain install 1.97.1 --profile minimal`, the channel of `stage1/solana/rust-toolchain.toml`):
+without it the step, and the sync, fails; it must print `55/55 figures, 5,883/5,883 oracle cases` at @1bfc66b. `openapi:check` prints `openapi.yaml matches 170 operations` (after S3) and `demo:cycle` ends with `DEMO OK`. The vector runner verifies every
 embedded report proof with the ports' Groth16 verifier and never persists anything.
 
 ## Keys

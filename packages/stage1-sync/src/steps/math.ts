@@ -273,7 +273,7 @@ function writeParity(ctx: StepCtx, r: { pkg: string | null; commit: string | nul
   lines.push(
     '## Ported from Stage 1\'s Rust (A-MATH-3)',
     '',
-    `Stage 1's TypeScript has no \`unit_scale\` and no curve code, so \`@merces/math\` ports ${PORTED.length} names from merces-common (\`${MERCES_COMMON}\`) @1bfc66b, kept apart from the re-exports. They are not Stage 1 objects. At scale 1 each scale-aware one returns Stage 1's own TypeScript function's result (it calls it), so a sealed-bid series runs only Stage 1's functions; \`packages/math/test/curve.test.ts\` checks that on seeded grids and pins every figure of Stage 1's Rust tests and curve fixtures. This step checks each Rust item still exists at the checkout and is unchanged since the port (fingerprint). Stage 1 is asked to add \`unit_scale\` to its TypeScript so these become imports.`,
+    `Stage 1's TypeScript has no \`unit_scale\` and no curve code, so \`@merces/math\` ports ${PORTED.length} names from merces-common (\`${MERCES_COMMON}\`) @1bfc66b, kept apart from the re-exports. They are not Stage 1 objects. At scale 1 each scale-aware one returns Stage 1's own TypeScript function's result (it calls it), so a sealed-bid series runs only Stage 1's functions (\`packages/math/test/curve.test.ts\` checks that on seeded grids). This step checks each Rust item still exists at the checkout and is unchanged since the port (fingerprint); the \`curve-port\` step checks what the family computes against Stage 1's figures and Stage 1's Rust on every sync (below). Stage 1 is asked to add \`unit_scale\` to its TypeScript so these become imports.`,
     '',
   );
   if (r.ported) lines.push(`Check at this checkout: **${r.ported.status}**. ${r.ported.details.join(' ')}`, '');

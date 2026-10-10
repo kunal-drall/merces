@@ -36,6 +36,9 @@ export function renderReport(r: SyncReport): string {
   }
   lines.push('');
   lines.push('Verdict');
+  // the ported curve family's gate (A-MATH-3) is reported here whatever its status; a failure is also a blocker below
+  const curve = r.steps.find((s) => s.step === 'curve-port');
+  if (curve) lines.push(`  ported curve family (curve-port): ${curve.status.toUpperCase()} — ${curve.summary}`);
   for (const v of r.verdicts) {
     lines.push(`  ${v.chain}: ${v.ready ? 'READY for live' : 'NOT ready'}${v.blockers.length ? ' — blockers:' : ''}`);
     for (const b of v.blockers) lines.push(`    • ${b}`);

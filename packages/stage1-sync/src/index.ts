@@ -33,6 +33,8 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
   steps.push(await diffInterfaces(ctx));
   const { checkMathPin } = await import('./steps/math.ts');
   steps.push(await checkMathPin(ctx));
+  const { checkCurvePort } = await import('./steps/curve-port.ts');
+  steps.push(await checkCurvePort(ctx));
   const { replayVectors } = await import('./steps/vectors.ts');
   steps.push(await replayVectors(ctx));
   const { runConformance } = await import('./steps/conformance.ts');

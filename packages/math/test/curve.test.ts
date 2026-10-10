@@ -23,7 +23,6 @@ import {
   scaledAmount,
   scaledCapWad,
   settleHolderDelta,
-  swapBaseMatchesOffer,
   tailReceive,
   tailReceiveScaled,
   unitScaleFor,
@@ -42,13 +41,17 @@ import {
 
 /*
  * Cause S3-M: the curve and unit-scale family is ported from Stage 1's Rust (merces-common @1bfc66b; A-MATH-3).
- * Three kinds of pin:
+ * Cause GATE (S3 follow-up): Stage 1's figures for the family, those of merces-common's unit tests, the curve fixtures
+ * (`curve_config.json`, `curve_reports.json`) and the LiteSVM curve tests (`curve_mode.rs`), are one table with a
+ * citation per row, `packages/stage1-sync/src/curve-port/figures.ts`, which `stage1:sync`'s curve-port step checks on
+ * every sync together with a Rust oracle built from merces-common (`tools/stage1-oracle`; its test is
+ * `packages/stage1-sync/test/curve-port.test.ts`). They moved there from this file. What stays here is ours:
  *  - scale 1 is Stage 1: each scale-aware function deep-equals Stage 1's own TypeScript function on seeded grids;
- *  - every figure Stage 1's Rust tests and fixtures give is pinned, with its file and lines in the Stage 1 checkout
- *    (CM = solana/crates/merces-common/src, CMT = solana/tests/tests/curve_mode.rs,
- *    FX = solana/tests/fixtures/meteora/{curve_config,curve_reports}.json);
- *  - Stage 1's Rust properties are replayed on seeded loops, plus our own scale invariance of the vault and the tail
- *    (the same series accounted per whole unit and per base lamport), after CM properties.rs:165-205.
+ *  - our argument checks (u8/u64 arguments, refusals) and the figures of the scale helpers we chose ourselves;
+ *  - Stage 1's Rust properties replayed on seeded loops (properties.rs, curve.rs and vault.rs proptests);
+ *  - derived curve figures Stage 1 states only as relations (the price, the deposit and the capped acceptance of the
+ *    fixture series; the oracle replays their inputs against Stage 1's Rust, `corpus.ts`);
+ *  - our scale invariance of the vault and the tail (the same series accounted per whole unit and per base lamport).
  * That none of these names is a Stage 1 object is pinned with the gateway's key list (math.test.ts).
  */
 
@@ -116,9 +119,6 @@ function randomTail(r: Rng, N: bigint, scale: bigint): TailState {
     tailExhausted: r.int(0, 9) === 0,
   };
 }
-
-/** Rust's `RedemptionPrice {price, hurdle, d_avg, cap_remaining}` from a quote (`d_avg` is 0 before a full year). */
-const rustPrice = (q: ReturnType<typeof redemptionQuote>) => ({ price: q.pRedeem, hurdle: q.pHurdle, d_avg: q.dAvg ?? 0n, cap_remaining: q.cRemaining });
 
 // ---------------------------------------------------------------- scale 1 is Stage 1
 
@@ -191,10 +191,8 @@ describe('at scale 1 every scale-aware function returns Stage 1\'s own result', 
 
 // ---------------------------------------------------------------- Stage 1's Rust tests: curve.rs
 
-describe('curve.rs (CM curve.rs:13-205)', () => {
-  it('the constants and unit_scale_for (:13-22)', () => {
-    expect(CURVE_BASE_DECIMALS).toBe(6);
-    expect(CURVE_UNIT_SCALE).toBe(1_000_000n);
+describe('our argument checks and our figures for the scale helpers', () => {
+  it('unitScaleFor: 10^d up to u64, Overflow past it, a non-u8 refused (the oracle answers every u8)', () => {
     expect(unitScaleFor(CURVE_BASE_DECIMALS)).toBe(CURVE_UNIT_SCALE);
     expect(unitScaleFor(0)).toBe(1n);
     expect(unitScaleFor(19)).toBe(10n ** 19n);
@@ -203,45 +201,44 @@ describe('curve.rs (CM curve.rs:13-205)', () => {
     expect(() => unitScaleFor(256)).toThrow(/^InvalidInput/);
   });
 
-  it('p0_of_the_worked_series (:120-138)', () => {
-    expect(p0PerUnit(1_000_000_000n, 100_000_000n, 6)).toBe(10_000_000n);
-    expect(p0PerUnit(100_000_000_000n, 10_000_000_000n, 6)).toBe(10_000_000n);
-    expect(p0PerUnit(1_000_000_000n, 100_000_002n, 6)).toBe(9_999_999n);
-    expect(() => p0PerUnit(1n, 0n, 6)).toThrow(/^DivisionByZero/);
-  });
-
-  it('offer_matching_tolerates_program_rounding (:140-147)', () => {
-    expect(swapBaseMatchesOffer(100_000_000n, 100n, 6)).toBe(true);
-    expect(swapBaseMatchesOffer(99_999_998n, 100n, 6)).toBe(true);
-    expect(swapBaseMatchesOffer(101_000_000n, 100n, 6)).toBe(true);
-    expect(swapBaseMatchesOffer(98_999_999n, 100n, 6)).toBe(false);
-    expect(swapBaseMatchesOffer(102_000_000n, 100n, 6)).toBe(false);
-  });
-
-  it('migration_fee_split_matches_the_program (:149-173)', () => {
-    const x = 100_000_000_000n;
-    expect(migrationFeeSplit(x, 0, 0)).toEqual({ partner: 0n, creator: 0n });
-    expect(migrationFeeSplit(x, 20, 100)).toEqual({ partner: 0n, creator: 20_000_000_000n });
-    expect(migrationFeeSplit(x, 99, 0)).toEqual({ partner: 99_000_000_000n, creator: 0n });
-    expect(migrationFeeSplit(x, 99, 50)).toEqual({ partner: 49_500_000_000n, creator: 49_500_000_000n });
-    expect(migrationFeeSplit(750_000_000n, 10, 50)).toEqual({ partner: 37_500_000n, creator: 37_500_000n });
-    expect(migrationFeeSplit(1_000_000_000n, 99, 0)).toEqual({ partner: 990_000_000n, creator: 0n });
+  it('the curve arithmetic refuses what Rust\'s types or checks refuse', () => {
     // a percentage above 100 (Rust's precondition)
-    expect(() => migrationFeeSplit(x, 101, 0)).toThrow(/^InvalidInput/);
-    expect(() => migrationFeeSplit(x, 0, 101)).toThrow(/^InvalidInput/);
-  });
-
-  it('outstanding_and_quota (:175-184): units outstanding refuses an underflow; the quota is inclusive', () => {
-    expect(() => unitsOutstanding(110n, [10n, 0n, 363n, 0n])).toThrow(/^InvalidInput/);
-    expect(unitsOutstanding(1_000n, [10n, 20n, 30n, 40n])).toBe(900n);
-    expect(walletTenderFits(100n, 30n, 50n, 20n)).toBe(true);
-    expect(walletTenderFits(100n, 30n, 50n, 21n)).toBe(false);
+    expect(() => migrationFeeSplit(100_000_000_000n, 101, 0)).toThrow(/^InvalidInput/);
+    expect(() => migrationFeeSplit(100_000_000_000n, 0, 101)).toThrow(/^InvalidInput/);
     // checked_add past u64
     expect(() => unitsOutstanding(U64_MAX, [U64_MAX, 1n])).toThrow(/^Overflow/);
     expect(() => walletTenderFits(U64_MAX, U64_MAX, 1n, 0n)).toThrow(/^Overflow/);
+    // a negative bigint is not a u64 (Rust cannot be handed one)
     expect(() => unitsOutstanding(-1n, [])).toThrow(/^InvalidInput/);
+    expect(() => p0PerUnit(1n, 0n, 6)).toThrow(/^DivisionByZero/);
   });
 
+  it('wadPerScaledUnit (vault.rs:125-135): the scale must divide WAD', () => {
+    expect(wadPerScaledUnit(S)).toBe(10n ** 12n);
+    expect(wadPerScaledUnit(WAD)).toBe(1n);
+    expect(() => wadPerScaledUnit(0n)).toThrow(/^InvalidInput/);
+    expect(() => wadPerScaledUnit(3n)).toThrow(/^InvalidInput/);
+    expect(() => wadPerScaledUnit(10n * WAD)).toThrow(/^InvalidInput/);
+  });
+
+  it('scaledCapWad and scaledAmount (vault.rs:137-156)', () => {
+    expect(scaledCapWad(25_000_000n, S)).toBe(25n * WAD);
+    expect(scaledAmount(10_000_000n, 99_999_998n, S)).toBe(999_999_980n);
+    expect(() => scaledAmount(1n, 1n, 0n)).toThrow(/^DivisionByZero/);
+    expect(() => scaledAmount(U64_MAX, U64_MAX, 1n)).toThrow(/^Overflow/);
+  });
+
+  it('capRemainingScaled rounds the paid amount up per base lamport (redemption.rs:110-113)', () => {
+    // one wei past 2 base units per lamport is past 2,000,000 per whole unit
+    expect(capRemainingScaled(2_000_000n, 2n * WAD + 1n, S)).toBe(0n);
+    expect(capRemainingScaled(2_000_000n, 2n * WAD, S)).toBe(0n);
+    expect(capRemainingScaled(2_000_000n, 2n * WAD - 10n ** 12n, S)).toBe(1n);
+  });
+});
+
+// ---------------------------------------------------------------- Stage 1's Rust properties, seeded
+
+describe('curve.rs properties (CM curve.rs:186-205)', () => {
   it('fee_split_conserves (:188-195), seeded', () => {
     const r = rng(0x5eed_0005n);
     for (let i = 0; i < 2_000; i++) {
@@ -269,46 +266,7 @@ describe('curve.rs (CM curve.rs:13-205)', () => {
 
 // ---------------------------------------------------------------- Stage 1's Rust tests: vault.rs, redemption.rs, properties.rs
 
-describe('vault.rs (CM vault.rs:125-296)', () => {
-  it('wad_per_scaled_unit (:125-135): the scale must divide WAD', () => {
-    expect(wadPerScaledUnit(S)).toBe(10n ** 12n);
-    expect(wadPerScaledUnit(WAD)).toBe(1n);
-    expect(() => wadPerScaledUnit(0n)).toThrow(/^InvalidInput/);
-    expect(() => wadPerScaledUnit(3n)).toThrow(/^InvalidInput/);
-    expect(() => wadPerScaledUnit(10n * WAD)).toThrow(/^InvalidInput/);
-  });
-
-  it('scaled_cap_wad and scaled_amount (:137-156)', () => {
-    expect(scaledCapWad(25_000_000n, S)).toBe(25n * WAD);
-    expect(scaledAmount(10_000_000n, 99_999_998n, S)).toBe(999_999_980n);
-    expect(() => scaledAmount(1n, 1n, 0n)).toThrow(/^DivisionByZero/);
-    expect(() => scaledAmount(U64_MAX, U64_MAX, 1n)).toThrow(/^Overflow/);
-  });
-
-  it('cap_truncation_and_effective_cap (:219-247): is_capped at scale 1 and at the curve scale', () => {
-    expect(isCappedScaled({ paidPerUnitWad: 2_400_000n * WAD }, 1n, 1n)).toBe(true);
-    expect(isCappedScaled({ paidPerUnitWad: 2_400_000n * WAD }, 2_500_000n, 1n)).toBe(false);
-    // curve-mode scale: 25 USDC per unit = 25 base units per base lamport (× WAD)
-    expect(isCappedScaled({ paidPerUnitWad: 25n * WAD }, 25_000_000n, S)).toBe(true);
-    expect(isCappedScaled({ paidPerUnitWad: 25n * WAD - 1n }, 25_000_000n, S)).toBe(false);
-  });
-
-  it('plain_receipt and cap_truncation_and_effective_cap (:190-247) through the wrapper at scale 1 (Stage 1 = Rust)', () => {
-    const plain = vaultReceiveGrossScaled(newVaultState(), 1_000_000n, 100n, 2_500_000n, 1n, 500, 0).result;
-    expect(plain).toMatchObject({ accepted: 1_000_000n, refund: 0n, incWad: 10_000n * WAD, fee: 50_000n, netAdded: 950_000n, deltaAccWad: 9_500n * WAD, carryWad: 0n, retired: false });
-    const at = { ...newVaultState(), paidPerUnitWad: 2_400_000n * WAD };
-    const trunc = vaultReceiveGrossScaled(at, 20_000_000n, 100n, 2_500_000n, 1n, 500, 0).result;
-    expect(trunc).toMatchObject({ retired: true, accepted: 10_000_000n, refund: 10_000_000n, incWad: 100_000n * WAD });
-    expect(vaultReceiveGrossScaled(at, 10_000_000n, 100n, 2_500_000n, 1n, 500, 0).result).toMatchObject({ retired: true, refund: 0n });
-    expect(vaultReceiveGrossScaled(at, 9_999_999n, 100n, 2_500_000n, 1n, 500, 0).result.retired).toBe(false);
-    expect(vaultReceiveGrossScaled(at, 5n, 100n, 1n, 1n, 500, 0).result).toMatchObject({ retired: true, accepted: 0n, refund: 5n });
-  });
-
-  it('zero_units_rejected (:259-266) at the curve scale too', () => {
-    expect(() => vaultReceiveGrossScaled(newVaultState(), 1n, 0n, 1n, S, 0, 0)).toThrow(/^NoUnitsOutstanding$/);
-    expect(() => tailReceiveScaled(newTailState(1n), 1n, 0n, 0, S)).toThrow(/^NoUnitsOutstanding$/);
-  });
-
+describe('vault.rs properties (CM vault.rs:268-295)', () => {
   it('cap_never_exceeded_and_conservation (:268-295), seeded, at scale 1 and at the curve scale', () => {
     const r = rng(0x5eed_0007n);
     for (const scale of [1n, S]) {
@@ -334,38 +292,7 @@ describe('vault.rs (CM vault.rs:125-296)', () => {
   });
 });
 
-describe('redemption.rs and properties.rs (CM redemption.rs:101-262, properties.rs:165-205, :402-418)', () => {
-  const H8 = 80_000_000_000_000_000n;
-  /** The Rust test's ring, and the same ring per base lamport (`/ 10^6`). */
-  const ring = (entries: [number, bigint][], scale = 1n) => entries.reduce((g, [y, v]) => yearGrossAdd(g, y, v / scale), newYearGross());
-  const at = (scale: bigint, paid: bigint, entries: [number, bigint][], cap: bigint, t: bigint, hurdle = H8, k = 5) =>
-    rustPrice(redemptionQuoteScaled({ p0: 1_000_000n, hurdleRateWad: hurdle, payoutMultipleK: k, t, capPerUnit: cap, paidPerUnitWad: paid / scale, yearGross: ring(entries, scale), unitsOutstanding: 1n, unitScale: scale }));
-
-  it('each_term_can_decide (:170-232), at scale 1 and per base lamport', () => {
-    const y: [number, bigint][] = [[0, 300_000n * WAD], [1, 300_000n * WAD]];
-    for (const scale of [1n, S]) {
-      expect(at(scale, 0n, [], 2_500_000n, YEAR / 2n)).toMatchObject({ price: 1_040_000n, d_avg: 0n });
-      expect(at(scale, 600_000n * WAD, y, 2_500_000n, 2n * YEAR)).toEqual({ price: 1_500_000n, hurdle: 1_166_400n, d_avg: 300_000n, cap_remaining: 1_900_000n });
-      expect(at(scale, 2_000_000n * WAD, y, 2_500_000n, 2n * YEAR).price).toBe(500_000n);
-    }
-    // ceil rounding favours the issuer; a lowered cap saturates to 0 (scale 1: one wei past 2,000,000 base units)
-    expect(at(1n, 2_000_000n * WAD + 1n, y, 2_000_000n, 2n * YEAR)).toMatchObject({ cap_remaining: 0n, price: 0n });
-    // per base lamport: one wei past 2 base units per lamport is past 2,000,000 per whole unit
-    expect(rustPrice(redemptionQuoteScaled({ p0: 1_000_000n, hurdleRateWad: H8, payoutMultipleK: 5, t: 2n * YEAR, capPerUnit: 2_000_000n, paidPerUnitWad: 2n * WAD + 1n, yearGross: ring(y, S), unitsOutstanding: 1n, unitScale: S }))).toMatchObject({ cap_remaining: 0n, price: 0n });
-    expect(capRemainingScaled(2_000_000n, 2n * WAD + 1n, S)).toBe(0n);
-    expect(capRemainingScaled(2_000_000n, 2n * WAD, S)).toBe(0n);
-    expect(capRemainingScaled(2_000_000n, 2n * WAD - 10n ** 12n, S)).toBe(1n);
-  });
-
-  it('ring_retags_and_trailing_window (:234-262), at scale 1 and per base lamport', () => {
-    const entries: [number, bigint][] = [[0, 900_000n * WAD], [1, 100_000n * WAD], [2, 200_000n * WAD], [3, 300_000n * WAD], [4, 5n * WAD]];
-    for (const scale of [1n, S]) {
-      const q = at(scale, 0n, entries, 10_000_000n, 4n * YEAR, 0n, 1);
-      expect(q.d_avg).toBe(200_000n);
-      expect(q.price).toBe(1_000_000n);
-    }
-  });
-
+describe('redemption.rs properties (CM properties.rs:165-205, :402-418)', () => {
   it('redemption_price_bounds (properties.rs:165-205), seeded: the price per base lamport is the price per unit', () => {
     const r = rng(0x5eed_0008n);
     for (let i = 0; i < 1_500; i++) {
@@ -405,90 +332,46 @@ describe('redemption.rs and properties.rs (CM redemption.rs:101-262, properties.
   });
 });
 
-// ---------------------------------------------------------------- the fixtures and the LiteSVM curve tests
+// ---------------------------------------------------------------- derived figures of the fixture series
 
-describe('Stage 1\'s curve fixtures and curve_mode.rs figures', () => {
-  const N = big(curveReports.fixtures[0]!.units_outstanding); // 99,999,998 base lamports
+describe('derived figures of the fixture series (Stage 1 states them as relations; the gate checks those)', () => {
+  // the fixture series: 99,999,998 base lamports outstanding, P0 = 10 USDC, the cap 25 USDC (Parameters::DEFAULT),
+  // the payout fee 500 bps; Stage 1's own statements about it are rows of the gate's table (figures.ts `fixture.*`)
+  const N = big(curveReports.fixtures[0]!.units_outstanding);
   const P0 = big(curveConfig.expected.p0PerUnit!);
-  const cap = capPerUnit(DEFAULT_PARAMETERS.capMultipleWad, P0); // Parameters::DEFAULT (CM params.rs:48)
-  const feeBps = Number(DEFAULT_PARAMETERS.payoutFeeBps); // 500 (CM params.rs:54)
+  const cap = capPerUnit(DEFAULT_PARAMETERS.capMultipleWad, P0);
+  const feeBps = Number(DEFAULT_PARAMETERS.payoutFeeBps);
 
-  it('FX curve_config.json `expected`: P0, the offer and both migration-fee splits', () => {
-    const e = curveConfig.expected;
-    expect(p0PerUnit(big(e.migrationQuoteThreshold!), big(e.swapBaseAmount!), Number(e.tokenDecimal))).toBe(big(e.p0PerUnit!));
-    expect(P0).toBe(10_000_000n);
-    // the series offers 100 units (tests/src/curve.rs:117-122 `curve_series_args`)
-    expect(swapBaseMatchesOffer(big(e.swapBaseAmount!), 100n, Number(e.tokenDecimal))).toBe(true);
-    expect(migrationFeeSplit(big(e.migrationQuoteThreshold!), Number(e.migrationFeePercentage), Number(e.creatorMigrationFeePercentage))).toEqual({
-      partner: big(e.partnerMigrationFee!),
-      creator: big(e.creatorMigrationFee!),
-    });
-    const pda = curveConfig.pdaCreator.expected;
-    expect(p0PerUnit(big(pda.migrationQuoteThreshold!), big(pda.swapBaseAmount!), Number(pda.tokenDecimal))).toBe(big(pda.p0PerUnit!));
-    expect(migrationFeeSplit(big(pda.migrationQuoteThreshold!), Number(pda.migrationFeePercentage), Number(pda.creatorMigrationFeePercentage))).toEqual({
-      partner: big(pda.partnerMigrationFee!),
-      creator: big(pda.creatorMigrationFee!),
-    });
-    // CMT:1020-1024: on the PDA-creator pool both shares are withdrawn into the treasury, 990 USDC in all
-    const both = migrationFeeSplit(big(pda.migrationQuoteThreshold!), Number(pda.migrationFeePercentage), Number(pda.creatorMigrationFeePercentage));
-    expect(both.partner + both.creator).toBe(990n * USDC);
-  });
-
-  it('CMT:286-303 the first payment per base lamport: exact accumulator and carry, nothing capped', () => {
-    const due = big(curveReports.fixtures[0]!.payment_usd);
-    expect(due).toBe(1_999_999_960n); // CMT:293
+  it('the first payment is exact per base lamport: 20 base units gross and 19 net (×WAD), no carry', () => {
     expect(cap).toBe(25n * USDC);
-    const { state, result } = vaultReceiveGrossScaled(newVaultState(), due, N, cap, S, feeBps, 0);
-    const net = due - (due * BigInt(feeBps)) / 10_000n;
-    expect(result).toMatchObject({ accepted: due, refund: 0n, retired: false, netAdded: net });
-    // CMT:299-303: net_acc_wad × n + carry_wad == net × WAD
-    expect(state.netAccWad * N + state.carryWad).toBe(net * WAD);
-    // the fixture is exact: 20 base units gross and 19 net per base lamport (×WAD), no carry
+    const { state } = vaultReceiveGrossScaled(newVaultState(), big(curveReports.fixtures[0]!.payment_usd), N, cap, S, feeBps, 0);
     expect([state.paidPerUnitWad, state.netAccWad, state.carryWad]).toEqual([20n * WAD, 19n * WAD, 0n]);
     expect(isCappedScaled(state, cap, S)).toBe(false);
-    // CMT:312-313: a holder of `a` staked base lamports is paid holder_delta(net_acc_wad, 0, a)
+    // a holder of 10 staked units is owed holder_delta(net_acc_wad, 0, 10 × 10^6) = 190 USDC
     expect(settleHolderDelta(state.netAccWad, 0n, 10n * S)).toBe(190n * USDC);
   });
 
-  it('CMT:926-946 the past-the-cap payment retires the series per base lamport, and only per base lamport', () => {
+  it('the past-the-cap payment accepts 2,499,999,950 (n × cap_wad / WAD) and refunds the rest; Stage 1\'s scale-1 TypeScript would not cap it', () => {
     const due = big(curveReports.fixtures[1]!.payment_usd);
-    expect(due).toBe(13_999_999_720n); // CMT:929
-    const capWad = scaledCapWad(25n * USDC, S); // CMT:938
-    const { state, result } = vaultReceiveGrossScaled(newVaultState(), due, N, cap, S, feeBps, 0);
-    expect(result.retired).toBe(true);
-    expect(state.paidPerUnitWad <= capWad).toBe(true); // CMT:940
-    const accepted = (N * capWad) / WAD; // CMT:942
-    expect(result.accepted <= accepted + 1n).toBe(true); // CMT:943
+    const { result } = vaultReceiveGrossScaled(newVaultState(), due, N, cap, S, feeBps, 0);
+    expect(result.accepted).toBe((N * scaledCapWad(25n * USDC, S)) / WAD);
     expect(result.accepted).toBe(2_499_999_950n);
-    expect(result.refund).toBe(due - 2_499_999_950n); // CMT:944-947: the capping receipt refunds the excess
-    expect(state.refundedToIssuer > 0n).toBe(true);
-    expect(isCappedScaled(state, cap, S)).toBe(true);
+    expect(result.refund).toBe(due - 2_499_999_950n);
     // Stage 1's TypeScript (scale 1) would read the cap as 25 USDC per base lamport and accept everything
     expect(vaultReceiveGross(newVaultState(), due, N, cap, feeBps, 0).result).toMatchObject({ accepted: due, retired: false });
   });
 
-  it('CMT:330-344 and :349-372 the redemption per base lamport: the price, the deposit, the tenders', () => {
-    // after the first payment (20 USDC per unit paid against a 25 USDC cap): C_remaining = 5 USDC < the hurdle (≥ P0),
-    // so P_redeem = 5 USDC for any redemption time in the first year (derived; CMT asserts price > 0 and the deposit)
+  it('redeeming in the first year after the first payment: P_redeem = C_remaining = 5 USDC, deposit 499,999,990, no tail', () => {
+    // 20 USDC per unit paid against a 25 USDC cap: C_remaining = 5 USDC < the hurdle (≥ P0), for any time in year 1
     const paid = vaultReceiveGrossScaled(newVaultState(), big(curveReports.fixtures[0]!.payment_usd), N, cap, S, feeBps, 0).state;
     const r = rng(0x5eed_000an);
     for (const t of [0n, 3_600n, r.between(0n, YEAR - 1n), YEAR - 1n]) {
       const q = redemptionQuoteScaled({ p0: P0, hurdleRateWad: DEFAULT_PARAMETERS.hurdleRateWad, payoutMultipleK: Number(DEFAULT_PARAMETERS.payoutMultipleK), t, capPerUnit: cap, paidPerUnitWad: paid.paidPerUnitWad, yearGross: paid.yearGross, unitsOutstanding: N, unitScale: S });
-      expect(q).toMatchObject({ pRedeem: 5n * USDC, cRemaining: 5n * USDC, paidUnits: 20n * USDC, decidedBy: 'cap_remaining', tailCapPerUnit: 0n });
-      // CMT:340-344: deposit = scaled_amount(price, n, CURVE_UNIT_SCALE)
-      expect(q.deposit).toBe(scaledAmount(5n * USDC, N, S));
-      expect(q.deposit).toBe(499_999_990n);
+      expect(q).toMatchObject({ pRedeem: 5n * USDC, cRemaining: 5n * USDC, paidUnits: 20n * USDC, decidedBy: 'cap_remaining', tailCapPerUnit: 0n, deposit: 499_999_990n });
       expect(capRemainingScaled(cap, paid.paidPerUnitWad, S)).toBe(5n * USDC);
     }
-    // CMT:349-372: a tender of u base lamports pays scaled_amount(price, u, 10^6); 10 whole units pay 50 USDC
+    // a tender of 10 whole units pays 50 USDC
     expect(scaledAmount(5n * USDC, 10n * S, S)).toBe(50n * USDC);
-    // CMT:392-410: the wallet quota is exactly what is neither tendered nor staked
-    const tendered = 60_000_000n;
-    const staked = 15n * S;
-    const quota = N - tendered - staked;
-    expect(walletTenderFits(N, tendered, staked, quota)).toBe(true);
-    expect(walletTenderFits(N, tendered, staked, quota + 1n)).toBe(false);
-    expect(walletTenderFits(N, tendered + quota, staked, 1n)).toBe(false);
     // the tail cap is 0: any tail receipt is refunded and exhausts the tail at once
     expect(tailReceiveScaled(newTailState(0n), 1_000n, N, feeBps, S).result).toMatchObject({ accepted: 0n, refund: 1_000n, exhausted: true });
   });

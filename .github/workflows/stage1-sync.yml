@@ -1,7 +1,8 @@
 name: stage1-sync
 # Stage 1 is the pinned `stage1` submodule. This job re-runs stage1:sync against it on a schedule and on demand;
 # with the repository variable STAGE1_TRACK_REMOTE=true it first moves the submodule to the head of its tracked
-# branch (.gitmodules), so a new Stage 1 commit is caught before anyone bumps the pin.
+# branch (.gitmodules), so a new Stage 1 commit is caught before anyone bumps the pin. The sync's curve-port step runs
+# the ported curve math against Stage 1's figures and Stage 1's own Rust, so it needs a Rust toolchain (below).
 on:
   schedule:
     - cron: '17 */6 * * *'
@@ -26,6 +27,15 @@ jobs:
       - name: Track the Stage 1 branch head (if STAGE1_TRACK_REMOTE is set)
         if: ${{ vars.STAGE1_TRACK_REMOTE == 'true' }}
         run: git submodule update --remote stage1
+      # the curve-port gate builds Stage 1's merces-common (tools/stage1-oracle) with Stage 1's pinned toolchain, read
+      # after the submodule may have moved; GitHub's ubuntu runners ship rustup. No cargo fails the gate.
+      - name: Rust toolchain (Stage 1's pin, stage1/solana/rust-toolchain.toml)
+        run: |
+          channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' stage1/solana/rust-toolchain.toml)"
+          test -n "$channel"
+          rustup toolchain install "$channel" --profile minimal --no-self-update
+          rustup run "$channel" cargo --version
+          rustup run "$channel" rustc --version
       - uses: pnpm/action-setup@v4
         with: { version: 10.28.0 }
       - uses: actions/setup-node@v4

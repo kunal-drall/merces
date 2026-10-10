@@ -26,6 +26,16 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      # stage1:sync's curve-port gate (and its tests in `pnpm test`) builds Stage 1's merces-common into
+      # tools/stage1-oracle with Stage 1's pinned toolchain; GitHub's ubuntu runners ship rustup. No cargo fails the gate.
+      # The oracle builds in seconds, so its target/ is not cached.
+      - name: Rust toolchain (Stage 1's pin, stage1/solana/rust-toolchain.toml)
+        run: |
+          channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' stage1/solana/rust-toolchain.toml)"
+          test -n "$channel"
+          rustup toolchain install "$channel" --profile minimal --no-self-update
+          rustup run "$channel" cargo --version
+          rustup run "$channel" rustc --version
       - run: pnpm typecheck
       - run: pnpm openapi:check
       - run: pnpm openapi:client && git diff --exit-code -- packages/client/src/generated packages/api/openapi.yaml
@@ -34,5 +44,5 @@ jobs:
       - run: pnpm test:conformance
         env: { CONFORMANCE_CHAIN: simulator }
       - run: pnpm test:canary
-      - name: stage1:sync against the pinned submodule
+      - name: stage1:sync against the pinned submodule (the curve-port gate included)
         run: pnpm stage1:sync --no-conformance

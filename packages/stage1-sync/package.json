@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "stage1:sync — detect Stage 1 artifacts, generate typed clients, diff interfaces, check the Stage 1 math pin, replay parity vectors, run conformance, print a verdict.",
+  "description": "stage1:sync — detect Stage 1 artifacts, generate typed clients, diff interfaces, check the Stage 1 math pin, check the ported curve math against Stage 1's figures and Rust (curve-port), replay parity vectors, run conformance, print a verdict.",
   "exports": { ".": "./src/index.ts" },
   "bin": { "stage1-sync": "./src/cli.ts" },
   "dependencies": {

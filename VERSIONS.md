@@ -23,6 +23,7 @@ from the build environment and the fact must be re-verified before going live.
 | @noble/hashes | 2.4.0 | sha256 |
 | bs58 | 6.0.0 | Solana address checks |
 | snarkjs | 0.7.6 | offchain Groth16 proving and verification, through Stage 1's `@merces/circuits` (`proveReport`, `verifyReport`; pinned by `stage1/circuits`) |
+| Rust (rustc, cargo) | 1.97.1, Stage 1's pin (`stage1/solana/rust-toolchain.toml`, read at run time; checked 2026-10-10) | `stage1:sync`'s curve-port gate builds Stage 1's merces-common into `tools/stage1-oracle` with it (selected through rustup's `RUSTUP_TOOLCHAIN`); both CI workflows install it (`rustup toolchain install 1.97.1 --profile minimal`). Without cargo the gate, and so the sync, fails; another toolchain is reported (`warn`) |
 
 ## Stage 1 (imported, not rewritten)
 
@@ -32,6 +33,7 @@ from the build environment and the fact must be re-verified before going live.
 | `@merces/reference` | 0.1.0 from the submodule (`stage1/packages/reference`) | the mechanism math, used directly by `@merces/math` and the simulator |
 | `@merces/sdk` | 0.1.0 from the submodule (`stage1/packages/sdk`) | fixed point, periods, Poseidon/keccak commitments, signed messages, canonical error names |
 | `@merces/circuits` | 0.1.0 from the submodule (`stage1/circuits`) | the ProofOfIncome circuit, its development verifying key and prover (development trusted setup, Stage 1 A37) |
+| merces-common (Rust) | 0.1.0 from the submodule (`stage1/solana/crates/merces-common`) | the only dependency of `tools/stage1-oracle` (a path dependency; no registry crate, so it builds offline and keeps no `Cargo.lock`), which answers for `@merces/math`'s ported curve family in the curve-port gate |
 | build | `scripts/stage1-build.mjs` (root `postinstall`) compiles the three with this repository's TypeScript 5.9.3 | they ship TypeScript with `exports` pointing at `dist` |
 
 ## Chain tooling (verified from official repos / npm)

@@ -8,3 +8,6 @@ coverage/
 packages/stage1-sync/generated/
 packages/stage1-sync/out/
 pgdata/
+# the Stage 1 oracle of stage1:sync's curve-port gate (tools/stage1-oracle): build output, and no lockfile (no registry dependency)
+tools/stage1-oracle/target/
+tools/stage1-oracle/Cargo.lock

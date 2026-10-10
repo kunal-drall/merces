@@ -3,7 +3,7 @@
 How Stage 2 works without Stage 1 today, how it catches Stage 1 the moment it appears, and what happens then.
 This file is updated at each catch-up with what matched, what changed and what is still open.
 
-## Status (2026-10-10): Stage 1 @1bfc66b pinned, S1, S2 and S3 done; the non-reveal charge modelled (NRC)
+## Status (2026-10-10): Stage 1 @1bfc66b pinned, S1, S2 and S3 done; the non-reveal charge modelled (NRC); the curve-port gate (GATE)
 
 Stage 1 is the `stage1` git submodule, pinned at `1bfc66b` (branch `claude/sweet-goodall-b7acm3`, SPEC v1.1.2; its
 tree is identical to `5eafd41`, the commit the handoff named). Its TypeScript packages (`@merces/sdk`,
@@ -18,8 +18,9 @@ Stage 1's own parity vectors against our simulator. S2 applied the sealed-bid ra
 the owner until the S3 follow-up NRC modelled it as Stage 1's code does (the rate is the owner's setting). S3 applied
 Stage 1's claim family (B.3) and brought curve mode's staking forward as a first-class flow at the owner's direction
 (B.11, all of it but the live adapter and Meteora's venue): Stage 1's curve lifecycle, census, staking and tender, in
-base lamports, with no wallet cap. "S1 results", "S2 results", "S3 results" and "S3 follow-up: the non-reveal charge
-(NRC)" say what changed; "Owner decisions and questions" says what was decided and what is still open.
+base lamports, with no wallet cap. "S1 results", "S2 results", "S3 results", "S3 follow-up: the non-reveal charge
+(NRC)" and "S3 follow-up: the curve-port gate (GATE)" say what changed; "Owner decisions and questions" says what was
+decided and what is still open.
 
 **What the handoff was missing** (unchanged at 1bfc66b). Stage 1 ships no `handoff/manifest.json`, so
 `stage1.map.json` at this repository's root describes it by hand (A-SYNC-2). Missing (also listed in the map's
@@ -38,14 +39,15 @@ Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitigno
 (`MATH_PARITY.md`, `VECTOR_PARITY.md`; regenerate with `pnpm stage1:sync --no-conformance`, which writes them to
 `packages/stage1-sync/out`).
 
-| D6 step | Result at @1bfc66b (after S3 and NRC) |
+| D6 step | Result at @1bfc66b (after S3, NRC and GATE) |
 | --- | --- |
 | 1. `stage1:sync` | runs end to end with `--no-conformance` |
 | detect | ok: `stage1.map.json` (hand-written) over the pinned submodule |
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
 | diff | drift: **Solana** 3 canonical items without a counterpart, 220 field mismatches, 64 extra Stage 1 items; **Monad testnet** 1 / 207 / 84 (`INTERFACE_DRIFT.md`; after S3: 3 / 220 / 65 and 1 / 207 / 85; after S2: 4 / 249 / 79 and 2 / 210 / 89; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range). S3: the claim family (`claimPayout` = `claim`, `claimTail`, `claimFinal`, `burnRetired`, `PayoutClaimed.burnedUnits`, `TailClaimed`, `FinalClaimed`) matches Stage 1 exactly on both chains (WP1, WP3: 4 / 247 / 75 and 2 / 208 / 85); the curve's buy command and mint event are gone (a curve trade is `curveSwap`, a Meteora DBC `swap2`, which has no Merces counterpart by design) and `completeCurve`, `collectCurveProceeds`, `CurveActivated` and `CurveProceedsCollected` match Stage 1 by name, `issuePrice` and `settledAt` reading Stage 1's `clearing_price` and `settlement_ts` (WP8: 3 / 219 / 72 and 1 / 206 / 85); the census, `syncCurveUnits` and `CurveUnitsSynced`, matches `sync_curve_units` by name and field (WP9: 3 / 219 / 70); staking, `stakeUnits`, `unstakeUnits`, `tenderUnits{fromStake, fromWallet}`, `UnitsStaked` and `UnitsUnstaked`, matches `stake_units`, `unstake_units`, `tender_units`, `UnitsStaked` and `UnitsUnstaked` by name and field, and the one new mismatch on each chain is ours, `RedemptionClaimed.fromStake` (a curve tender's staked part, which the Solana adapter derives from the tender's arguments) (WP10: 3 / 220 / 65 and 1 / 207 / 85; unchanged by WP11-WP13). NRC: the canonical `NonRevealCharged{seriesId, bidder, charge}` matches Stage 1's `NonRevealCharged` by name and field on both chains (3 / 220 / 64 and 1 / 207 / 84). The rest is left to the adapters' mappers (D6.2) and the rest of section B (S4, S5) |
 | math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window cap and the FX family (both S5; S3 WP7: a curve raise has no cap). S3 WP5: beside them, 16 names ported from Stage 1's Rust (merces-common: the unit scale, the vault, tail and redemption at a scale, curve mode's arithmetic), because Stage 1's TypeScript has no `unit_scale`; at scale 1 each calls Stage 1's own function, and the step checks their merces-common items at the pin ("45/45 re-exports are Stage 1's own objects; 16 ported (curve, A-MATH-3)"). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2, A-MATH-3) |
-| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 03, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A); 03 PASS in full since NRC (was PASS-WITH-DIVERGENCES on DIV-NRC-1, the S2 non-reveal hold; the divergence register is empty); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, 03 in full (b8's charge at #65 agrees since NRC; it parted there as recorded under the hold). 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. Our eleven S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) pass on Stage 1's simulator, on ours and in lockstep, 55/55 runs. No shim stands in for a claim or a burn any more; the shims left are the S4 and S5 ones (registrations, our bid commitment, report and attestor signatures, `pay`, pauses, windows). Curve mode has no Stage 1 vector (its reference simulator has no curve code): its parity is relational, every figure pinned to Stage 1's LiteSVM curve tests (`curve_mode.rs`), merces-common's unit tests and properties and the curve fixtures (`curve_config.json`, `curve_reports.json`, replayed with their own Groth16 proofs). Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
+| curve-port | **ok** (S3 follow-up GATE): the ported curve family (A-MATH-3) agrees with Stage 1 on every sync: 55/55 of Stage 1's figures (one table, a citation per row: `curve_config.json` `expected` and `pdaCreator`, `curve_reports.json`, merces-common's `curve.rs`, `vault.rs` and `redemption.rs` tests, `curve_mode.rs`), and 5,883/5,883 cases of a deterministic corpus answered by Stage 1's own Rust (merces-common built into `tools/stage1-oracle` with rustc 1.97.1, Stage 1's pin), refusals included. Any disagreement, a stale citation or a missing cargo fails the sync. Snapshot: `docs/stage1/MATH_PARITY.md` ("The curve-port gate") |
+| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 03, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A); 03 PASS in full since NRC (was PASS-WITH-DIVERGENCES on DIV-NRC-1, the S2 non-reveal hold; the divergence register is empty); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, 03 in full (b8's charge at #65 agrees since NRC; it parted there as recorded under the hold). 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. Our eleven S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) pass on Stage 1's simulator, on ours and in lockstep, 55/55 runs. No shim stands in for a claim or a burn any more; the shims left are the S4 and S5 ones (registrations, our bid commitment, report and attestor signatures, `pay`, pauses, windows). Curve mode has no Stage 1 vector (its reference simulator has no curve code): its parity is relational, every figure pinned to Stage 1's LiteSVM curve tests (`curve_mode.rs`), merces-common's unit tests and properties and the curve fixtures (`curve_config.json`, `curve_reports.json`, replayed with their own Groth16 proofs); since GATE the curve-port step checks the ported math against those figures and against merces-common itself on every sync. Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
 | conformance | **blocked**: no devnet or testnet deployment |
 | verdict | both chains NOT ready (diff drift; conformance not run) |
 
@@ -370,6 +372,96 @@ What changed, by area:
 | `pnpm demo:cycle` | exits 0: `DEMO OK` on both personalities |
 | `grep -rnE "NON_REVEAL_CHARGE_HELD\|appliedNonRevealChargeBps\|DEFAULTS\.nonRevealChargeBps" packages --include=*.ts \| grep -v generated` | empty (DIV-NRC-1 is named only in comments and the report's history line) |
 
+### S3 follow-up: the curve-port gate (GATE)
+
+The owner's direction (2026-10-10): "For the curve port, add a gate that runs the ported functions against Stage 1's Rust
+fixtures on every sync." `stage1:sync` now has a step `curve-port`, after `math`
+(`packages/stage1-sync/src/steps/curve-port.ts`). `math` checks that the ported Rust items are still there and unchanged
+(a fingerprint per name); `curve-port` checks what the port computes, against Stage 1 itself, in two parts:
+
+1. **Stage 1's figures: one table** (`packages/stage1-sync/src/curve-port/figures.ts`, 55 rows). Every figure Stage 1
+   gives for something the port computes: the curve fixtures (`solana/tests/fixtures/meteora/curve_config.json`
+   `expected` and `pdaCreator`: P0, the offer, both migration-fee splits; `curve_reports.json`: the dues of both
+   payments, r per base lamport × N base lamports, through Stage 1's own `paymentUsd`), merces-common's unit tests
+   (`curve.rs`, `vault.rs` and `redemption.rs`, the latter at scale 1 and per base lamport) and the LiteSVM curve tests
+   (`curve_mode.rs`: the census after a migration, a vesting claim and a DAMM trade; the first payment's exact
+   accumulator; the past-the-cap payment's capped acceptance and refund; the redemption deposit; the tenders and the
+   quota). Each row cites the Stage 1 lines (`solana/…:from-to`) and the text they must still hold (compared without
+   whitespace), so a Stage 1 change to a figure fails the row as stale until it is re-cited; fixture rows anchor on the
+   keys and read the values, so a regenerated fixture is checked as it stands. Where Stage 1 states a relation (the
+   deposit is `scaled_amount(price, n, 10^6)`), the row checks the relation. The figures moved here from
+   `packages/math/test/curve.test.ts`, which keeps what is ours (scale 1 equals Stage 1 on seeded grids, our argument
+   checks, Stage 1's proptests replayed, the derived figures of the fixture series and our scale invariance).
+2. **Stage 1's Rust: an oracle** (`tools/stage1-oracle`): a standalone Cargo crate, its own workspace, with one path
+   dependency, the submodule's merces-common, and nothing else, so it builds offline (in about two seconds). It reads
+   one JSON case per line and answers with merces-common's functions, plus only the Solana program's own bookkeeping
+   around them where the port mirrors a program routine (cited: `common.rs` `receive_gross`/`receive_tail`, `exit.rs`'s
+   deposit and tail cap). The gate builds it with Stage 1's toolchain (`solana/rust-toolchain.toml`, 1.97.1, through
+   `RUSTUP_TOOLCHAIN`), generates a deterministic corpus (`curve-port/corpus.ts`: edge values, Stage 1's own test and
+   fixture inputs, then seeded draws within Stage 1's input ranges: 5,883 cases over 15 entry points, every one of the 16
+   ported names covered, which the step checks) and compares every answer exactly, refusals included (Rust's
+   `MathError` variants; `NoUnitsOutstanding` where the program refuses before merces-common). For another checkout
+   (`STAGE1_PATH`) it builds a copy of the crate against that checkout's merces-common, under the sync's output.
+
+No cargo, no merces-common or fixtures in the drop, or a failed build is a failure, never a skip (the owner wants a
+gate); a toolchain other than Stage 1's pin is reported (`warn`, not a blocker: the arithmetic is integer only). The
+step's result is printed in the verdict ("ported curve family (curve-port): OK — …") and, when it fails, is a blocker
+of every chain; `MATH_PARITY.md` gets a section with the counts per entry point.
+
+What the gate showed. Every figure and every case agrees at @1bfc66b. A seeded mutation fails it: the migration-fee
+split with the pool share rounded down instead of up passes all 55 figures (every Stage 1 figure is a round number) and
+fails 278 oracle cases; an off-by-one P0 fails both; a Stage 1 Rust change the port did not follow (the same rounding
+change made in a copy of merces-common) fails the oracle built against that copy. A sweep of one-line mutations of the
+port's own source was caught every time, by 24 to 346 cases each: the pool share's ceiling one off at its edge
+(`+ 98` for `+ 99`, 35 cases: the corpus puts `X × (100 − f)` on its rounding edge on purpose), `<=` for `<` at the vault
+cap, a floor for the ceiling of `C_remaining`, a ceiling for the deposit's floor, the tail fee taken on the gross, a
+four-year `D_avg` window, `<` for `<=` in the tender quota, the census refusing a supply exactly held, a two-unit offer
+tolerance, the tail cap one wei high, and a scale check that lets small non-divisors through. Outside Stage 1's input
+ranges, and so not in the corpus: a u64 running total or a u128 accumulator past its type (Rust refuses with Overflow;
+our bigints do not), and a tail accumulator above the tail cap, which cannot happen (the tail cap is fixed at
+redemption and every tail receipt is capped at it), where Rust's `receive_capped` takes the accumulator as the
+effective cap and refunds the receipt while Stage 1's TypeScript `tailReceive` (our scale-1 path; our scaled body
+mirrors it) has no effective cap and refuses on a negative amount (asked of Stage 1, below).
+
+What changed, by area:
+
+- **Gate.** `tools/stage1-oracle` (`Cargo.toml`, `src/main.rs`, a dependency-free JSON reader in `src/json.rs`; its
+  `target/` and `Cargo.lock` are ignored: there is no registry dependency to pin); `packages/stage1-sync/src/curve-port/`
+  (`family.ts`: the injectable ported family and how each case runs on our side; `corpus.ts`; `figures.ts`;
+  `oracle.ts`: cargo discovery, the toolchain, the build and the run); the step, its place in `runSync` and its line in
+  the verdict (`report.ts`).
+- **CI.** Both `ci.yml` (the test job, whose `pnpm test` runs the gate's tests and whose last step is
+  `pnpm stage1:sync --no-conformance`, on every push) and `stage1-sync.yml` (schedule, dispatch, Stage 1 pushes) install
+  Stage 1's pinned toolchain with rustup (`--profile minimal`, read from `stage1/solana/rust-toolchain.toml` after the
+  submodule may have moved) and print `cargo --version` and `rustc --version`. `target/` is not cached: the oracle builds
+  in seconds.
+- **Tests** (cause GATE). `packages/stage1-sync/test/curve-port.test.ts`: the table at the pin (every row, every
+  citation); a stale citation and a regenerated fixture fail their rows; the corpus is deterministic and covers the
+  family; the crate's one dependency; no cargo fails the step, and so does a drop without Stage 1's Rust; the step is ok
+  at the pin and writes its section; a deliberately wrong function (the rounded-down split, an off-by-one P0) fails it
+  and blocks the verdict; a Stage 1 Rust change fails the oracle. The oracle tests skip locally without cargo and run in
+  CI (`CI` set), where the toolchain is installed. `sync.test.ts` pins the step order and the failure on a drop without
+  fixtures.
+- **Docs.** `docs/stage1/MATH_PARITY.md` (the gate's section), `VERSIONS.md` (the Rust toolchain), ASSUMPTIONS A-MATH-3,
+  this file, README, RUNBOOK and ARCHITECTURE.
+
+**The GATE gate**, all green at the "S3 follow-up GATE" commit:
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | exits 0 |
+| `DATABASE_URL=… pnpm vitest run` | 71 files, 572 tests passed (the curve-port tests ran: cargo 1.97.1 present) |
+| `MERCES_TEST_DB=1 pnpm vitest run --project canary` | 2 files, 3 tests passed |
+| `CONFORMANCE_CHAIN=simulator` / `simulator:monad` `pnpm vitest run --project conformance` | 20 and 11 tests passed |
+| `pnpm stage1:vectors --personality solana,monad` | exits 0: `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)` |
+| `pnpm stage1:vectors --backend reference` | exits 0: `OK: 25/25 PASS, 25/25 at expected status` |
+| `pnpm stage1:vectors --backend lockstep --personality solana,monad` | exits 0: `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)` |
+| `pnpm stage1:sync --no-conformance` | exits 0: curve-port `OK` ("55/55 figures, 5,883/5,883 oracle cases against merces-common", built with rustc 1.97.1, Stage 1's pin), and in the verdict; math and vectors `OK`, diff `WARN` (unchanged), conformance skipped; `docs/stage1/MATH_PARITY.md` regenerated (the gate's section), `INTERFACE_DRIFT.md` and `VECTOR_PARITY.md` unchanged |
+| The same with a seeded mutation (`+ 98` for `+ 99` in `migrationFeeSplit`) | exits 1: curve-port `FAIL` (35 oracle cases), a blocker of both chains |
+| `cargo fmt --check`, `cargo clippy --release --offline -- -D warnings` in `tools/stage1-oracle` | clean |
+| `pnpm openapi:check`; `pnpm docs:events` | `openapi.yaml matches 170 operations`; no change (neither touched) |
+| `pnpm demo:cycle` | exits 0: `DEMO OK` on both personalities |
+
 ### Adapter notes for the auction (S5)
 
 What the live adapters normalise so the canonical settlement reads the same on both chains (from Stage 1's programs and
@@ -539,6 +631,15 @@ Decided (S3 follow-up NRC):
   set it. Series created under the S2 hold recorded 0 and keep it (frozen charters). The value itself is open: the
   owner sets it (RUNBOOK).
 
+Decided (S3 follow-up GATE):
+
+- **A gate for the curve port (owner direction, 2026-10-10: "For the curve port, add a gate that runs the ported
+  functions against Stage 1's Rust fixtures on every sync.").** `stage1:sync`'s `curve-port` step runs the ported
+  family against every figure of Stage 1's curve fixtures and Rust tests and against merces-common itself (a Rust
+  oracle over a deterministic corpus) and fails the sync on any disagreement, on a stale citation, and when it cannot
+  run: a Rust toolchain (Stage 1's pin) is now a requirement of `stage1:sync` (VERSIONS.md), which both CI workflows
+  install ("S3 follow-up: the curve-port gate (GATE)", A-MATH-3).
+
 Open since S3, with the default S3 uses meanwhile:
 
 1. **The curve buy builder warns, it does not refuse (S3 decision 3, A-CURVE-2).** Onchain anyone can buy on a curve
@@ -581,6 +682,11 @@ Asked of Stage 1 (S3), beside the two S2 inconsistencies above and the reference
 3. **The census a report binds.** Should a curve report bind the census taken at or after its period's end (a
    per-period snapshot) rather than the live one, so a third party's census cannot invalidate an issuer's proof between
    proving and submitting (A-CURVE-5)?
+4. **The tail's effective cap in the TypeScript reference (found by the curve-port gate; low).** Rust's tail receipt
+   is the vault's `receive_capped`, whose cap is `max(cap_wad, paid)`; `@merces/reference`'s `tailReceive` has no such
+   effective cap, so with a tail accumulator above the tail cap Rust refunds the receipt and the TypeScript refuses on a
+   negative amount. The state cannot occur (the tail cap is fixed at redemption), so this is only for the two
+   references to agree.
 
 Open since S1, with the same defaults:
 
@@ -923,7 +1029,12 @@ to the base unit; a mismatch means the simulator is wrong and is fixed.
 4. **math** — `@merces/math` runs Stage 1's functions, so the step checks the pin and the wiring: the Stage 1
    checkout is at the commit the manifest pins, and every re-exported Stage 1 name is Stage 1's own object; it also
    lists the interim families still exported (`MATH_PARITY.md` under `packages/stage1-sync/out`; A-MATH-1, A-MATH-2).
-   Behavioural parity is the vectors step's job.
+   Behavioural parity is the vectors step's job. It also fingerprints the merces-common items of the ported curve family
+   (A-MATH-3) and fails when one is missing or changed.
+4b. **curve-port** — the ported curve family against Stage 1 itself: every figure of Stage 1's curve fixtures and
+   Rust tests (one cited table; a stale citation fails) and a deterministic corpus of 5,883 cases answered by Stage 1's
+   own Rust (`tools/stage1-oracle`, merces-common built with Stage 1's toolchain), compared exactly. Any disagreement
+   fails the sync, and so does a missing cargo ("S3 follow-up: the curve-port gate (GATE)", above; A-MATH-3).
 5. **vectors** — Stage 1's own vector directory is replayed by the Stage 1 vector runner (`pnpm stage1:vectors`,
    `packages/stage1-sync/src/stage1-vectors`): on the reference backend (Stage 1's own simulator; all 25 must pass,
    proofs verified, or the runner or the checkout is broken) and on the merces backend (our simulator, both
@@ -940,8 +1051,9 @@ to the base unit; a mismatch means the simulator is wrong and is fixed.
 7. **verdict** — per chain: ready for `live` only when no step failed and both **diff** and **conformance** are `ok`
    (drift left to resolve, or conformance skipped or not run, is a blocker); otherwise the blockers.
 
-It runs in CI on a six-hour schedule and whenever `stage1/**`, `stage1.map.json` or `.gitmodules` change
-(`.github/workflows/stage1-sync.yml`; set the `STAGE1_REPO` repository variable).
+It runs in CI on every push (`.github/workflows/ci.yml`, with `--no-conformance`), on a six-hour schedule and whenever
+`stage1/**`, `stage1.map.json` or `.gitmodules` change (`.github/workflows/stage1-sync.yml`; set the `STAGE1_REPO`
+repository variable). Both workflows install Stage 1's pinned Rust toolchain for the curve-port step.
 
 ## After Stage 1 lands (D6 checklist)
 

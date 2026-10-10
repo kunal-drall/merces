@@ -139,6 +139,11 @@ describe('stage1:sync', () => {
     expect(drift).toMatch(/\| RaiseOpened \| RaiseOpened \|/);
     expect(drift).toMatch(/\| PayoutClaimed \| \*\*missing\*\*/);
     expect(by.math!.status).toBe('warn'); // no math package in the manifest
+    // cause GATE: the curve-port step runs on every sync; a drop without Stage 1's curve fixtures and merces-common
+    // cannot prove the ported curve family, which fails the sync (never a skip)
+    expect(r.steps.map((s) => s.step)).toEqual(['detect', 'generate', 'diff', 'math', 'curve-port', 'vectors', 'conformance']);
+    expect(by['curve-port']!.status).toBe('fail');
+    expect(by['curve-port']!.summary).toMatch(/curve fixtures are not in this drop/);
     expect(by.vectors!.status).toBe('ok');
     expect(r.verdicts.map((v) => v.chain)).toEqual(['solana', 'monad-testnet']);
     // unresolved drift and conformance that never ran both block live
