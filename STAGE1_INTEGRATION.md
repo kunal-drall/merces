@@ -282,8 +282,9 @@ WP13 wrote the docs and ran the gate. What changed, by area:
 one transaction from a command list, `RedemptionClaimed.fromStake` and the split-out `PayoutClaimed` decoded, the
 Solana-only names ("Adapter notes for claims and curve mode"). Meteora's venue: DBC `swap2` and its quote, Stage 1's
 config generator, the DAMM v2 migration and locker cranks, creator trading fees, `withdraw_leftover`. Activation as its
-own canonical step; reminders for wallets not linked to an account (a holder index of the mint); the transfer window's
-cap.
+own canonical step; reminders for wallets not linked to an account (a holder index of the mint). Curve units have no
+transfer windows and no cap; the sealed-bid transfer window's cap (the interim `walletCapUnits`, A-MATH-1) is S5 work
+outside curve mode.
 
 **The S3 gate**, all green at the S3 WP13 commit:
 
@@ -400,6 +401,9 @@ Open, with the default S2 uses meanwhile:
 3. **Stage 1's two internal inconsistencies (D7)** are resolved toward SPEC and both chains and should be reported to
    Stage 1: its TS reference settles a round that would sell 0 units (SPEC and both chains fail it), and its simulator's
    `RaiseMintFinalized` on a failed raise carries the would-be units and proceeds (both chains emit 0 and 0) (A-AUC-7).
+
+"S3 decision N" and "plan question N", below and in ASSUMPTIONS.md, number the S3 planning record, which is not kept
+in the repository; each is named in full where it is cited.
 
 Decided (S3):
 
