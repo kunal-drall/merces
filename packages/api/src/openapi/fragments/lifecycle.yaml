@@ -31,6 +31,24 @@ components:
         redeemable: { type: boolean }
         outcome: { type: string, enum: [redeem, retire], description: 'retire: nothing is left of the cap (C_remaining = 0), so redeem retires the series instead and takes no deposit' }
         note: { type: [string, 'null'] }
+    RedeemsFirst:
+      type: [object, 'null']
+      description: "The redemption a tail or final claim runs first, in the same transaction, for a holder that still has units to redeem (Stage 1's redemption body; its own events: PayoutClaimed for the pending payout and the tail catch-up, UnitsBurned, RedemptionClaimed); null when none runs"
+      required: [units, amount, payout]
+      properties:
+        units: { type: string, description: the units redeemed and burned (the holder's units less those held for a window ask) }
+        amount: { $ref: '#/components/schemas/Money', description: the redemption price on those units plus their tail catch-up (redemptionClaimable) }
+        payout: { $ref: '#/components/schemas/Money', description: "the holder's pending net payout, which the redemption pays too (claimable)" }
+    ClaimBuild:
+      type: object
+      description: "An unsigned claim of Stage 1's family for the holder to sign, with what it pays and burns"
+      required: [tx, amount, redeemsFirst, total, burnsUnits]
+      properties:
+        tx: { $ref: '#/components/schemas/UnsignedTx' }
+        amount: { $ref: '#/components/schemas/Money', description: "what the claim's own event pays (TailClaimed or FinalClaimed amount)" }
+        redeemsFirst: { $ref: '#/components/schemas/RedeemsFirst' }
+        total: { $ref: '#/components/schemas/Money', description: 'everything the transaction pays the holder: amount plus, when a redemption runs first, its amount and payout' }
+        burnsUnits: { type: string, description: 'every unit the transaction burns, the redeemed ones included' }
     RedemptionView:
       type: object
       description: The redemption and its tail, from Stage 1's tail state
@@ -80,7 +98,7 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [holder], properties: { holder: { type: string } } } } } }
       responses:
         '200':
-          description: "Unsigned claimPayout (Stage 1's claim), built through the PayoutClaimBuilder interface (private payouts coming soon). It pays the net payout only, on every status: the redemption, the tail and the final-pool share are their own claims (claimRedemption, claimTail, claimFinal). On a Retired series it also burns the holder's balance, also when it pays nothing."
+          description: "Unsigned claimPayout (Stage 1's claim), built through the PayoutClaimBuilder interface (private payouts coming soon). It pays the net payout only, on every status: the redemption, the tail and the final-pool share are their own claims (claimRedemption, claimTail, claimFinal; POST /series/{seriesId}/redemption/build-claim, /tail/build-claim, /final/build-claim). On a Retired series it also burns the holder's balance, also when it pays nothing."
           content:
             application/json:
               schema:
@@ -91,6 +109,48 @@ paths:
                   burnsUnits: { type: string, description: "the units the claim burns: on a Retired series the holder's own balance (its units less the auction units not yet delivered and those held for a window ask), else 0" }
                   builder: { type: string, enum: [public, private] }
         '409': { description: "Nothing to claim (reason nothing-to-claim): the claim would pay 0 and burn nothing. claimWith names the claims that would pay the holder something now (claimRedemption, claimTail, claimFinal)" }
+  /series/{seriesId}/tail/build-claim:
+    post:
+      operationId: buildClaimTail
+      x-access: holder
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [holder], properties: { holder: { type: string, description: one of the caller's wallets; it signs the claim } } } } } }
+      responses:
+        '200':
+          description: "Unsigned claimTail (Stage 1's claim_tail): the tail since the holder's tail cursor on its redeemed units (amount = tailClaimable, the TailClaimed amount). A holder that has redeemed nothing is redeemed first by the same transaction (redeemsFirst)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/ClaimBuild' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: "In Stage 1's order (detail.stage1): NotRedeemed (the series has not redeemed), HolderNotRegistered, NoRedeemedUnits (nothing redeemed and nothing left to redeem). Or nothing to claim (detail.reason nothing-to-claim): the claim would pay 0 and burn nothing; detail.claimWith names the claims that would pay the holder something now" }
+  /series/{seriesId}/final/build-claim:
+    post:
+      operationId: buildClaimFinal
+      x-access: holder
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [holder], properties: { holder: { type: string, description: one of the caller's wallets; it signs the claim } } } } } }
+      responses:
+        '200':
+          description: "Unsigned claimFinal (Stage 1's claim_final) after an extinguishment: the pending payout and the final-pool share, once (amount = claimable + finalClaimable, the FinalClaimed amount), and the holder's units burn. On a series that redeemed, a holder with units not yet redeemed is redeemed first by the same transaction (redeemsFirst, which then pays the pending payout) and weighed on its redeemed units; amount is then the share (finalClaimable)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/ClaimBuild' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: "In Stage 1's order (detail.stage1): TerminalStatus (the series is not Extinguished), HolderNotRegistered. Or nothing to claim (detail.reason nothing-to-claim; a second final claim)" }
+  /series/{seriesId}/holders/build-register:
+    post:
+      operationId: buildRegisterHolder
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet], properties: { wallet: { type: string, description: "one of the caller's wallets; it is registered and signs" } } } } } }
+      responses:
+        '200':
+          description: "Unsigned registerHolder (Stage 1's register_holder, permissionless and idempotent): payouts accrue to registered holders only, from the registration on. A wallet already registered gets alreadyRegistered true and no transaction (tx null). A registration holds no units and grants no holder access."
+          content: { application/json: { schema: { type: object, required: [tx, alreadyRegistered], properties: { tx: { oneOf: [{ $ref: '#/components/schemas/UnsignedTx' }, { type: 'null' }] }, alreadyRegistered: { type: boolean } } } } }
+        '403': { description: "The wallet is not linked to the caller's account, or it is not on the chain's allowlist (detail.stage1 NotAllowlisted)" }
+        '404': { $ref: '#/components/responses/NotFound' }
   /series/{seriesId}/redemption/quote:
     get:
       operationId: getRedemptionQuote
@@ -116,7 +176,11 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [holder], properties: { holder: { type: string } } } } } }
-      responses: { '200': { description: Unsigned claimRedemption; units burn on claim, content: { application/json: { schema: { type: object } } } } }
+      responses:
+        '200':
+          description: "Unsigned claimRedemption (Stage 1's claim_redemption); the units burn on claim. units are the units redeemed (the holder's units less those held for a window ask); amount is everything it pays: the redemption price on them and their tail catch-up (redemption, redemptionClaimable) and the pending payout (payout, claimable), which the redemption pays too."
+          content: { application/json: { schema: { type: object, required: [tx, units, amount, redemption, payout], properties: { tx: { $ref: '#/components/schemas/UnsignedTx' }, units: { type: string }, amount: { $ref: '#/components/schemas/Money' }, redemption: { $ref: '#/components/schemas/Money' }, payout: { $ref: '#/components/schemas/Money' } } } } }
+        '409': { description: 'No redemption is open (detail.stage1 NotRedeemed), or the holder has no units left to redeem' }
   /series/{seriesId}/redemption:
     get:
       operationId: getRedemption

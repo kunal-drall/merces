@@ -384,6 +384,13 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    still burns (A-CLM-2). The indexer never creates a position from a claim and writes no money row for 0 (A-REV-10).
    The vector runner sends `claim`, `claim_tail`, `claim_final` and `burn_retired` directly (SH-CLM-1..3 and SH-BRN-1
    retired); the S3 claim scenarios (a)-(k) cover the paths no vector takes, in lockstep against Stage 1's simulator.
+   **S3 WP4:** every claim and `registerHolder` is built through the chain-neutral API: `tail/build-claim`,
+   `final/build-claim` (holder tier; Stage 1's refusals in its order with `detail.stage1`; `redeemsFirst` when the claim
+   redeems the holder first; `total` and `burnsUnits` are what the relayed transaction pays and burns) and
+   `holders/build-register` (account tier, the caller's wallet; NotAllowlisted; idempotent with no transaction). The
+   redemption claim previews everything it pays (the redemption and the pending payout). Reads keep `claimable`,
+   `pending`, `redemptionClaimable`, `tailClaimable` and `finalClaimable` apart (`PositionView`, `/me/holdings`). 164
+   operations.
 4. *Signatures, commitments, proofs.* Attestor and report-verifier keys are **secp256k1** 20-byte addresses on both
    chains, signing Stage 1's `MERCES_*_V1` keccak messages (per-deployment domain, per-series nonces, low-s), and the
    signatures travel as **instruction arguments**; nobody co-signs (our `UnsignedTx.coSigners` and the attestor

@@ -10,7 +10,12 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
     handler: async (_req, _reply, session) => ({ accountId: session!.accountId, wallets: session!.wallets, roles: session!.roles, eligible: session!.eligible }),
   });
 
-  /** R20: holdings with payout history and yield only; never the issuer's income sources. */
+  /**
+   * R20: holdings with payout history and yield only; never the issuer's income sources. What each claim of Stage 1's
+   * family pays now is read live from the chain and kept apart (S3): `claimable` (`claimPayout`, of which `pending` is
+   * the part already settled into the holder's balance), `redemptionClaimable` (`claimRedemption`), `tailClaimable`
+   * (`claimTail`) and `finalClaimable` (`claimFinal`).
+   */
   defineRoute(app, ctx, {
     method: 'GET', url: '/me/holdings', access: 'account',
     handler: async (_req, _reply, session) => {
@@ -30,7 +35,7 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
         const yieldBps = costBasis > 0n ? (BigInt(x.claimed_total) * 10_000n) / costBasis : 0n;
         holdings.push({
           seriesId: x.series_id, chain: x.chain, wallet: x.wallet, stablecoin: x.stablecoin, phase: x.phase, status: x.status, units: x.units, redeemedUnits: x.redeemed_units, burnedUnits: x.burned_units,
-          issuePrice: x.issue_price, capPerUnit: x.cap_per_unit, grossPaidPerUnit: grossPerUnit.toString(), claimedTotal: x.claimed_total, claimable: live?.claimable ?? '0', redemptionClaimable: live?.redemptionClaimable ?? '0', tailClaimable: live?.tailClaimable ?? '0', finalClaimable: live?.finalClaimable ?? '0',
+          issuePrice: x.issue_price, capPerUnit: x.cap_per_unit, grossPaidPerUnit: grossPerUnit.toString(), claimedTotal: x.claimed_total, claimable: live?.claimable ?? '0', pending: live?.pending ?? '0', redemptionClaimable: live?.redemptionClaimable ?? '0', tailClaimable: live?.tailClaimable ?? '0', finalClaimable: live?.finalClaimable ?? '0',
           realisedYieldBps: Number(yieldBps), lockupEndsAt: x.lockup_ends_at === null ? null : Number(x.lockup_ends_at), redemptionPrice: x.redemption_price,
         });
       }

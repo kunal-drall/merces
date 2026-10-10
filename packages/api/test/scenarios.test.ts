@@ -27,8 +27,9 @@ import { makeRig } from './helpers.ts';
  * S3 cause codes:
  *  - S3-CL: the payout claim is Stage 1's `claim`, the net payout only; its builder's 409 names the claims that would pay
  *    (`claimWith`);
- *  - S3-TL: the tail is `claimTail`'s (relayed here until its builder lands in S3 WP4);
- *  - S3-FN: the final-pool share is `claimFinal`'s (relayed here until its builder lands in S3 WP4);
+ *  - S3-TL: the tail is `claimTail`'s, built by `POST /series/{id}/tail/build-claim` (S3 WP4; relayed raw before);
+ *  - S3-FN: the final-pool share is `claimFinal`'s, built by `POST /series/{id}/final/build-claim` (S3 WP4; relayed raw
+ *    before);
  *  - S3-BR: the admin burn sends one `burnRetired` per holder (`{burned, refused}`).
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -227,10 +228,17 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     expect(early.json().detail).toEqual({ reason: 'nothing-to-claim', claimWith: ['claimRedemption', 'claimTail'] });
     const rc = await rig.post(`/series/${seriesId}/redemption/build-claim`, { holder: h.backers[0]!.address }, holderTok);
     await send(h.backers[0]!, rc.json().tx as UnsignedTx, holderTok);
-    // cause S3-TL: claimTail pays the tail share (relayed until S3 WP4 adds its builder; was the payout claim's tailClaimable)
+    // cause S3-TL: claimTail pays the tail share, through its builder (was the payout claim's tailClaimable); b0 has
+    // redeemed, so nothing is redeemed first and the claim burns nothing
     expect((await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok)).json().detail.claimWith).toEqual(['claimTail']);
-    const tailed = await send(h.backers[0]!, await h.sim.build({ kind: 'claimTail', seriesId }, h.backers[0]!.address), holderTok);
+    const tc = await rig.post(`/series/${seriesId}/tail/build-claim`, { holder: h.backers[0]!.address }, holderTok);
+    expect(tc.statusCode, tc.body).toBe(200);
+    expect(tc.json()).toMatchObject({ amount: share.toString(), redeemsFirst: null, total: share.toString(), burnsUnits: '0' });
+    expect(tc.json().tx).toMatchObject({ signer: h.backers[0]!.address, command: { kind: 'claimTail', seriesId } });
+    const tailed = await send(h.backers[0]!, tc.json().tx as UnsignedTx, holderTok);
     expect(tailed.events.map((e) => [e.type, e.payload.amount])).toEqual([['TailClaimed', share.toString()]]);
+    // nothing left: the builder refuses a claim of nothing (the chain would take it and pay 0)
+    expect((await rig.post(`/series/${seriesId}/tail/build-claim`, { holder: h.backers[0]!.address }, holderTok)).json()).toMatchObject({ message: 'nothing to claim', detail: { reason: 'nothing-to-claim', claimWith: [] } });
     await rig.sync();
     const rows = await rig.t.pool.query("select kind, amount::text from money_events where series_id = $1 and wallet = $2 and kind in ('payout', 'tail_claim') order by seq", [seriesId, h.backers[0]!.address]);
     expect(rows.rows.at(-1)).toEqual({ kind: 'tail_claim', amount: share.toString() });
@@ -260,8 +268,12 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     // clock: the extinguishment lands in the instant the raise settled, before the 90-day tranche vests.
     // Stage 1: claim_final pays b2 450 USDC on the same flow.
     expect((await rig.get(`/series/${seriesId}/position`, holderTok)).json().positions[0]).toMatchObject({ claimable: '0', finalClaimable: USDC(450).toString() });
-    // cause S3-FN: claimFinal pays it and burns b2's 100 units (relayed until S3 WP4 adds its builder; was claimPayout)
-    const fin = await send(h.backers[2]!, await h.sim.build({ kind: 'claimFinal', seriesId }, h.backers[2]!.address), holderTok);
+    // cause S3-FN: claimFinal pays it and burns b2's 100 units, through its builder (was claimPayout); the series never
+    // redeemed, so nothing is redeemed first
+    const fc = await rig.post(`/series/${seriesId}/final/build-claim`, { holder: h.backers[2]!.address }, holderTok);
+    expect(fc.statusCode, fc.body).toBe(200);
+    expect(fc.json()).toMatchObject({ amount: USDC(450).toString(), redeemsFirst: null, total: USDC(450).toString(), burnsUnits: '100' });
+    const fin = await send(h.backers[2]!, fc.json().tx as UnsignedTx, holderTok);
     expect(fin.events.map((e) => [e.type, e.payload])).toEqual([
       ['FinalClaimed', { seriesId, holder: h.backers[2]!.address, units: '100', amount: USDC(450).toString() }],
       ['UnitsBurned', { seriesId, holder: h.backers[2]!.address, units: '100', reason: 'extinguishment' }],

@@ -87,6 +87,18 @@ const period = (d: SafeData) => (d.periodId ? `, period ${d.periodId}` : '');
 const owed = (d: SafeData, title = false) => (d.outstanding === 'payment' ? (title ? 'Payment' : 'payment') : title ? 'Report' : 'report');
 /** the series' status as the chain derived it when the notice was queued; nothing when the payload carries none (or no lifecycle status) */
 const status = (d: SafeData) => (typeof d.status === 'string' && lifecycleStatusSchema.safeParse(d.status).success ? ` Status: ${d.status}.` : '');
+/**
+ * What a holder sends once a series reaches a status that opens a claim of Stage 1's family (S3): on Redeemed the
+ * redemption (`claimRedemption`, or `claimTail`, which redeems first) and each tail payment (`claimTail`); on
+ * Extinguished the final claim (`claimFinal`: the payout still owed and the final-pool share, and the units burn). The
+ * commands only, never an amount: each holder's figures are in the app.
+ */
+const claimsFor = (to: SafeData['to']) =>
+  to === 'Redeemed'
+    ? ' Holders claim their redemption with claimRedemption (or claimTail, which redeems first) and each tail payment with claimTail.'
+    : to === 'Extinguished'
+      ? ' Holders claim the payout still owed and their share of the returned treasury with claimFinal; their units burn with it.'
+      : '';
 
 export const TEMPLATES: Record<string, Template> = {
   'application.submitted': (d) => ({ subject: 'Application submitted', body: `Application ${d.applicationId} has been submitted and is waiting for review. Status: submitted.` }),
@@ -120,7 +132,7 @@ export const TEMPLATES: Record<string, Template> = {
   'reporting.report-due-soon': (d) => ({ subject: `${owed(d, true)} due soon`, body: `The ${owed(d)} for ${series(d)}${period(d)} is due by ${fmtDate(d.dueAt)}.` }),
   'reporting.report-due': (d) => ({ subject: `${owed(d, true)} due`, body: `The ${owed(d)} for ${series(d)}${period(d)} was due by ${fmtDate(d.dueAt)} and the grace period has started. The grace period ends on ${fmtDate(d.graceEndsAt)}.${status(d)}` }),
   'reporting.grace-end': (d) => ({ subject: 'Grace period ended', body: `The grace period for ${series(d)}${period(d)} ended on ${fmtDate(d.graceEndsAt)}.${status(d)}` }),
-  'series.StatusChanged': (d) => ({ subject: 'Series status changed', body: `${series(d)} changed from ${d.from ?? '?'} to ${d.to ?? '?'}.` }),
+  'series.StatusChanged': (d) => ({ subject: 'Series status changed', body: `${series(d)} changed from ${d.from ?? '?'} to ${d.to ?? '?'}.${claimsFor(d.to)}` }),
   'series.FormalNoticeDue': (d) => ({ subject: 'Formal notice due', body: `A formal notice is due for ${series(d)}${period(d)}. Status: Late.` }),
   'series.ReleasesPaused': (d) => ({ subject: 'Treasury releases paused', body: `Treasury releases for ${series(d)} are paused. Status: ReleasesPaused.` }),
   'series.ReleasesResumed': (d) => ({ subject: 'Treasury releases resumed', body: `Treasury releases for ${series(d)} have resumed. Status: ReleasesResumed.` }),

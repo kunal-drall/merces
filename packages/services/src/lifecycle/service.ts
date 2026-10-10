@@ -7,7 +7,8 @@ import type { ServiceContext } from '../context.ts';
 /**
  * Series lifecycle builders and views that no other module owns:
  *  R6  treasury draw builder and the issuer's release pause
- *  R13 payout claim builder — behind PayoutClaimBuilder so a private implementation (E15) can be added without touching accounting
+ *  R13 payout claim builder — behind PayoutClaimBuilder so a private implementation (E15) can be added without touching accounting;
+ *      the tail and final claim builders and the holder registration builder (S3: Stage 1's claim family)
  *  R14 retirement status (cap progress, burn progress)
  *  R15 redemption quote endpoint, builders and tail tracking
  *  R19 transfer windows: builders and commitment backups, gated by the `transfer_windows` flag (built, switched off)
@@ -74,15 +75,87 @@ export class LifecycleService {
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
     const burnsUnits = s.status === 'Retired' ? heldUnits(p) : 0n;
-    if (BigInt(p.claimable) === 0n && burnsUnits === 0n) {
-      const claimWith = [
-        ...(BigInt(p.redemptionClaimable) > 0n ? ['claimRedemption'] : []),
-        ...(BigInt(p.tailClaimable) > 0n ? ['claimTail'] : []),
-        ...(BigInt(p.finalClaimable) > 0n ? ['claimFinal'] : []),
-      ];
-      throw AppError.conflict(claimWith.length ? `nothing to claim as a payout; claim with ${claimWith.join(', ')}` : 'nothing to claim', { reason: 'nothing-to-claim', claimWith });
-    }
+    if (BigInt(p.claimable) === 0n && burnsUnits === 0n) throw nothingToClaim('a payout', p, 'claimPayout');
     return { tx: await this.claimBuilder.build(chain, seriesId, holder), claimable: p.claimable, burnsUnits: burnsUnits.toString(), builder: this.claimBuilder.kind };
+  }
+
+  /**
+   * The tail claim, Stage 1 `claim_tail` (SIM:1403-1417), with its refusals in Stage 1's order so they come before the
+   * wallet signs: 409 NotRedeemed until the series redeemed (the redemption alone: an extinguished series that redeemed
+   * still pays its tail), 409 HolderNotRegistered, 409 NoRedeemedUnits for a holder that has redeemed nothing and has
+   * nothing left to redeem (its units, less those held for a window ask, are 0: a late registration).
+   *
+   * `amount` is what `TailClaimed` pays (`tailClaimable`, Stage 1's `claimableTail` view). A holder that has redeemed
+   * nothing is redeemed first by the same transaction (`redeemsFirst`): its units not held for a window ask, the
+   * redemption price on them and their tail catch-up (`amount`, `redemptionClaimable`) and its pending payout
+   * (`payout`, `claimable`), in the redemption's own events. `total` is everything the transaction pays the holder;
+   * `burnsUnits` the units it burns (the redeemed ones). Like the payout claim, a claim that would pay 0 and burn
+   * nothing is a 409 (`nothing-to-claim`, `claimWith` naming the claims that would pay the holder something now): a
+   * claim of nothing would only move the holder's tail cursor.
+   */
+  async buildClaimTail(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; amount: string; redeemsFirst: RedeemsFirst | null; total: string; burnsUnits: string }> {
+    const chain = this.ctx.chainFor(seriesId);
+    this.requireWallet(session, chain.chain, holder);
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    if (!(await chain.getRedemption(seriesId))) throw AppError.conflict('the series has not redeemed: no tail is paid before a redemption', { stage1: 'NotRedeemed' });
+    const p = await chain.getPosition(seriesId, holder);
+    if (!p) throw AppError.notFound('position');
+    if (!p.registered) throw AppError.conflict('not a registered holder of this series', { stage1: 'HolderNotRegistered' });
+    const redeemable = BigInt(p.units) - BigInt(p.escrowedUnits);
+    if (BigInt(p.redeemedUnits) === 0n && redeemable === 0n) throw AppError.conflict('the holder has redeemed no units and has none left to redeem', { stage1: 'NoRedeemedUnits' });
+    const redeemsFirst = BigInt(p.redeemedUnits) === 0n ? redemptionPreview(p, redeemable) : null;
+    const total = BigInt(p.tailClaimable) + redeemsTotal(redeemsFirst);
+    const burnsUnits = redeemsFirst ? redeemable : 0n;
+    if (total === 0n && burnsUnits === 0n) throw nothingToClaim('a tail', p, 'claimTail');
+    return { tx: await chain.build({ kind: 'claimTail', seriesId }, holder), amount: p.tailClaimable, redeemsFirst, total: total.toString(), burnsUnits: burnsUnits.toString() };
+  }
+
+  /**
+   * The final claim, Stage 1 `claim_final` (SIM:1449-1475), after an extinguishment: 409 TerminalStatus unless the
+   * series is Extinguished, 409 HolderNotRegistered. It delivers a pending auction bid first, then pays the pending payout
+   * and the final-pool share once (`FinalClaimed{units: weight, amount}`) and burns the holder's balance.
+   *
+   * On a series that redeemed, a holder with units not yet redeemed (less those held for a window ask) is redeemed first
+   * by the same transaction (`redeemsFirst`: the redemption price and the tail catch-up as `amount`, its pending payout as
+   * `payout`, in the redemption's own events) and weighed on its redeemed units; `amount` is then the share alone
+   * (`finalClaimable`). Otherwise `amount` is `claimable + finalClaimable` (the pending payout and the share). `total`
+   * is everything the transaction pays; `burnsUnits` every unit it burns (the redeemed units included): the holder's
+   * units less those held for a window ask. A claim that would pay 0 and burn nothing (a second final claim) is a 409
+   * (`nothing-to-claim`).
+   */
+  async buildClaimFinal(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; amount: string; redeemsFirst: RedeemsFirst | null; total: string; burnsUnits: string }> {
+    const chain = this.ctx.chainFor(seriesId);
+    this.requireWallet(session, chain.chain, holder);
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    if (s.status !== 'Extinguished') throw AppError.conflict(`the final claim opens once the series is extinguished (series is ${s.status})`, { stage1: 'TerminalStatus' });
+    const p = await chain.getPosition(seriesId, holder);
+    if (!p) throw AppError.notFound('position');
+    if (!p.registered) throw AppError.conflict('not a registered holder of this series', { stage1: 'HolderNotRegistered' });
+    const balance = BigInt(p.units) - BigInt(p.escrowedUnits);
+    const redeemsFirst = (await chain.getRedemption(seriesId)) && balance > 0n ? redemptionPreview(p, balance) : null;
+    const amount = BigInt(p.finalClaimable) + (redeemsFirst ? 0n : BigInt(p.claimable));
+    const total = amount + redeemsTotal(redeemsFirst);
+    if (total === 0n && balance === 0n) throw nothingToClaim('a final share', p, 'claimFinal');
+    return { tx: await chain.build({ kind: 'claimFinal', seriesId }, holder), amount: amount.toString(), redeemsFirst, total: total.toString(), burnsUnits: balance.toString() };
+  }
+
+  // ---- holder registration
+  /**
+   * Stage 1 `register_holder` (SIM:618-623) for one of the caller's wallets, which also signs it (the command is
+   * permissionless; payouts accrue to registered holders only, from the registration on). A wallet that is already a
+   * registered holder of the series gets `{alreadyRegistered: true, tx: null}` and no transaction (the command is
+   * idempotent). Otherwise 403 NotAllowlisted for a wallet not on the chain's allowlist (Stage 1's only check). A
+   * registration holds no units and grants no holder access (A-REV-10).
+   */
+  async buildRegister(seriesId: string, session: Session, wallet: string): Promise<{ tx: UnsignedTx | null; alreadyRegistered: boolean }> {
+    const chain = this.ctx.chainFor(seriesId);
+    this.requireWallet(session, chain.chain, wallet);
+    if (!(await chain.getSeries(seriesId))) throw AppError.notFound('series');
+    if ((await chain.getPosition(seriesId, wallet))?.registered) return { tx: null, alreadyRegistered: true };
+    if (!(await chain.isAllowlisted(wallet))) throw AppError.forbidden('the wallet is not on the allowlist: only an allowlisted wallet can be registered as a holder', { stage1: 'NotAllowlisted' });
+    return { tx: await chain.build({ kind: 'registerHolder', seriesId, wallet }, wallet), alreadyRegistered: false };
   }
 
   // ---- R15 redemption
@@ -128,14 +201,23 @@ export class LifecycleService {
     if (BigInt(quote.pricePerUnit as string) > BigInt(maxPricePerUnit)) throw AppError.conflict(`quoted price ${quote.pricePerUnit} exceeds maxPricePerUnit`);
     return { tx: await chain.build({ kind: 'redeem', seriesId, maxPricePerUnit }, series.issuer), quote };
   }
-  async buildClaimRedemption(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; units: string; amount: string }> {
+  /**
+   * The redemption claim, Stage 1 `claim_redemption` (SIM:1395-1401): 409 NotRedeemed until the series redeemed, 409
+   * when the holder has no units left to redeem (its units less those held for a window ask). `units` are the units it
+   * redeems (and burns); `amount` is everything it pays: the redemption price on them and their tail catch-up
+   * (`redemptionClaimable`) and the holder's pending payout (`claimable`), which the redemption pays too (`payout`; it
+   * is `PayoutClaimed` beside `RedemptionClaimed`).
+   */
+  async buildClaimRedemption(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; units: string; amount: string; redemption: string; payout: string }> {
     const chain = this.ctx.chainFor(seriesId);
     this.requireWallet(session, chain.chain, holder);
     const r = await chain.getRedemption(seriesId);
-    if (!r) throw AppError.conflict('no redemption open');
+    if (!r) throw AppError.conflict('no redemption open', { stage1: 'NotRedeemed' });
     const p = await chain.getPosition(seriesId, holder);
-    if (!p || BigInt(p.units) === 0n) throw AppError.conflict('no units to redeem');
-    return { tx: await chain.build({ kind: 'claimRedemption', seriesId }, holder), units: p.units, amount: (BigInt(p.units) * BigInt(r.pricePerUnit)).toString() };
+    const units = p ? BigInt(p.units) - BigInt(p.escrowedUnits) : 0n;
+    if (!p || units === 0n) throw AppError.conflict('no units to redeem');
+    const amount = BigInt(p.redemptionClaimable) + BigInt(p.claimable);
+    return { tx: await chain.build({ kind: 'claimRedemption', seriesId }, holder), units: units.toString(), amount: amount.toString(), redemption: p.redemptionClaimable, payout: p.claimable };
   }
   /**
    * Redemption state and tail tracking (C7) from Stage 1's tail state: the window end, the tail cap per unit, the tail
@@ -256,6 +338,41 @@ export class LifecycleService {
     if (holders.length) await audit(this.ctx.pool, { actor: by, actorRole: 'admin', action: 'retirement.burn-retired', target: seriesId, detail: { holders: holders.length, burned, refused } });
     return { burned, refused };
   }
+}
+
+/**
+ * The redemption a tail or final claim runs first for a holder that still has units to redeem (Stage 1's
+ * `claimRedemptionBody`): `units` redeemed and burned, `amount` the redemption price on them and their tail catch-up
+ * (`redemptionClaimable`), `payout` the holder's pending payout (`claimable`), which the redemption pays too.
+ */
+export interface RedeemsFirst {
+  units: string;
+  amount: string;
+  payout: string;
+}
+function redemptionPreview(p: PositionState, units: bigint): RedeemsFirst {
+  return { units: units.toString(), amount: p.redemptionClaimable, payout: p.claimable };
+}
+function redeemsTotal(r: RedeemsFirst | null): bigint {
+  return r ? BigInt(r.amount) + BigInt(r.payout) : 0n;
+}
+
+/** The claims of Stage 1's family that would pay the holder something now, in the family's order. */
+export function claimsThatPay(p: Pick<PositionState, 'claimable' | 'redemptionClaimable' | 'tailClaimable' | 'finalClaimable'>): ('claimPayout' | 'claimRedemption' | 'claimTail' | 'claimFinal')[] {
+  return [
+    ...(BigInt(p.claimable) > 0n ? (['claimPayout'] as const) : []),
+    ...(BigInt(p.redemptionClaimable) > 0n ? (['claimRedemption'] as const) : []),
+    ...(BigInt(p.tailClaimable) > 0n ? (['claimTail'] as const) : []),
+    ...(BigInt(p.finalClaimable) > 0n ? (['claimFinal'] as const) : []),
+  ];
+}
+/**
+ * A builder's 409 for a claim that would pay 0 and burn nothing: `reason` `nothing-to-claim` and `claimWith`, the other
+ * claims that would pay the holder something now (the claim itself is never listed).
+ */
+function nothingToClaim(what: string, p: PositionState, self: ReturnType<typeof claimsThatPay>[number]): AppError {
+  const claimWith = claimsThatPay(p).filter((c) => c !== self);
+  return AppError.conflict(claimWith.length ? `nothing to claim as ${what}; claim with ${claimWith.join(', ')}` : 'nothing to claim', { reason: 'nothing-to-claim', claimWith });
 }
 
 /**

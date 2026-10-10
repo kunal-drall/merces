@@ -2082,6 +2082,54 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/series/{seriesId}/tail/build-claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildClaimTail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/final/build-claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildClaimFinal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/holders/build-register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildRegisterHolder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/series/{seriesId}/redemption/quote": {
         parameters: {
             query?: never;
@@ -2524,7 +2572,7 @@ export type components = {
                 [key: string]: unknown;
             }) | null;
         };
-        /** @description A Stage 1 error name (SPEC v1.1.2 §11, `@merces/sdk` ERRORS), e.g. WrongPeriod, PaymentOutstanding, ReportTooEarly, TierNotEnabled, InvalidProof, SeriesLate, LockupActive, UnreportedPeriods, NothingDue, HolderNotRegistered, TerminalStatus, RaiseNotSettled, MintNotFinalized, UnfavourableAmendment, PauseTooLong, InsufficientEscrow, AmountOutOfRange. The sealed-bid raise and its settlement (SPEC §5.1–§5.2): NotIssuer, RaiseNotDraft, ContractHashMissing, NotAllowlisted, NewRaisesPaused, RaiseNotOpen, BidsExist, CommitPhaseClosed, BidExists, ZeroEscrow, RevealNotStarted, RevealPhaseClosed, AlreadyRevealed, CommitmentMismatch, BidNotFound, SettlementNotReady, TallyInProgress, NotSettling, TallyIncomplete, AlreadyProcessed, NotProcessed, AlreadyDelivered. */
+        /** @description A Stage 1 error name (SPEC v1.1.2 §11, `@merces/sdk` ERRORS), e.g. WrongPeriod, PaymentOutstanding, ReportTooEarly, TierNotEnabled, InvalidProof, SeriesLate, LockupActive, UnreportedPeriods, NothingDue, HolderNotRegistered, TerminalStatus, RaiseNotSettled, MintNotFinalized, UnfavourableAmendment, PauseTooLong, InsufficientEscrow, AmountOutOfRange. The sealed-bid raise and its settlement (SPEC §5.1–§5.2): NotIssuer, RaiseNotDraft, ContractHashMissing, NotAllowlisted, NewRaisesPaused, RaiseNotOpen, BidsExist, CommitPhaseClosed, BidExists, ZeroEscrow, RevealNotStarted, RevealPhaseClosed, AlreadyRevealed, CommitmentMismatch, BidNotFound, SettlementNotReady, TallyInProgress, NotSettling, TallyIncomplete, AlreadyProcessed, NotProcessed, AlreadyDelivered. The claims (S3): NotRedeemed, NoRedeemedUnits, HolderNotRegistered, TerminalStatus, NotAllowlisted (a registration). */
         Stage1ErrorName: string;
         ChainHealth: {
             chain?: string;
@@ -2847,6 +2895,8 @@ export type components = {
             claimedTotal?: components["schemas"]["Money"];
             /** @description what claimPayout (Stage 1's claim) pays now: the net payout only; excludes the redemption, the tail and the final pool */
             claimable?: components["schemas"]["Money"];
+            /** @description the part of claimable already settled into the holder's balance (Stage 1 pending); the rest accrued since the holder's vault cursor */
+            pending?: components["schemas"]["Money"];
             /** @description what the redemption pays now beside the pending payout (claimRedemption, or the redemption claimTail or claimFinal runs first): the redemption price on the units not yet redeemed plus their tail catch-up; 0 unless the series redeemed */
             redemptionClaimable?: components["schemas"]["Money"];
             /** @description what claimTail pays (Stage 1's claimableTail view): the tail since the holder's tail cursor on its redeemed units or, before it redeems, on the units its redemption would redeem (claimTail redeems first) */
@@ -2856,6 +2906,33 @@ export type components = {
             realisedYieldBps?: number;
             lockupEndsAt?: number | null;
             redemptionPrice?: string | null;
+        };
+        /** @description A holder's live position, read from the chain (S3: Stage 1's claim family). Each claimable figure is what one claim pays now; nothing is counted twice. */
+        PositionView: {
+            seriesId: string;
+            wallet: string;
+            /** @description the holder's accrual weight (Stage 1 accrual_units): its balance, its auction units not yet delivered and the units held for a window ask */
+            units: string;
+            /** @description auction units allocated and not yet delivered (part of units) */
+            undeliveredUnits: string;
+            /** @description units held for the holder's window ask (part of units); the holder's own balance is units − undeliveredUnits − escrowedUnits */
+            escrowedUnits: string;
+            /** @description what claimPayout (Stage 1's claim) pays now: pending plus what accrued since the holder's vault cursor; the net payout only */
+            claimable: components["schemas"]["Money"];
+            /** @description the part of claimable already settled into the holder's balance (Stage 1 pending) */
+            pending: components["schemas"]["Money"];
+            /** @description what claimRedemption pays now beside the pending payout: the redemption price on the units not yet redeemed plus their tail catch-up; 0 unless the series redeemed */
+            redemptionClaimable: components["schemas"]["Money"];
+            /** @description what claimTail pays as TailClaimed (Stage 1's claimableTail view); claimTail redeems a holder that has redeemed nothing first */
+            tailClaimable: components["schemas"]["Money"];
+            /** @description the final-pool share claimFinal pays once after an extinguishment (beside the pending payout) */
+            finalClaimable: components["schemas"]["Money"];
+            claimedTotal: components["schemas"]["Money"];
+            redeemedUnits: string;
+            /** @description a Stage 1 registered holder: payouts accrue to registered holders only, and every claim needs it */
+            registered: boolean;
+            /** @description the vault accumulator at the holder's last settlement (its claim cursor) */
+            lastAccWad?: components["schemas"]["Wad"];
         };
         /** @description a 32-byte value as 0x + 64 lowercase hex digits (a BN254 field element for Poseidon commitments) */
         Hash32: string;
@@ -3373,6 +3450,26 @@ export type components = {
              */
             outcome: "redeem" | "retire";
             note?: string | null;
+        };
+        /** @description The redemption a tail or final claim runs first, in the same transaction, for a holder that still has units to redeem (Stage 1's redemption body; its own events: PayoutClaimed for the pending payout and the tail catch-up, UnitsBurned, RedemptionClaimed); null when none runs */
+        RedeemsFirst: {
+            /** @description the units redeemed and burned (the holder's units less those held for a window ask) */
+            units: string;
+            /** @description the redemption price on those units plus their tail catch-up (redemptionClaimable) */
+            amount: components["schemas"]["Money"];
+            /** @description the holder's pending net payout, which the redemption pays too (claimable) */
+            payout: components["schemas"]["Money"];
+        } | null;
+        /** @description An unsigned claim of Stage 1's family for the holder to sign, with what it pays and burns */
+        ClaimBuild: {
+            tx: components["schemas"]["UnsignedTx"];
+            /** @description what the claim's own event pays (TailClaimed or FinalClaimed amount) */
+            amount: components["schemas"]["Money"];
+            redeemsFirst: components["schemas"]["RedeemsFirst"];
+            /** @description everything the transaction pays the holder: amount plus, when a redemption runs first, its amount and payout */
+            total: components["schemas"]["Money"];
+            /** @description every unit the transaction burns, the redeemed ones included */
+            burnsUnits: string;
         };
         /** @description The redemption and its tail, from Stage 1's tail state */
         RedemptionView: {
@@ -4033,13 +4130,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Live position (claimable read from the chain) */
+            /** @description The live position of each of the caller's wallets on the series' chain, read from the chain: what each claim pays now, apart (claimable and pending for claimPayout, redemptionClaimable, tailClaimable, finalClaimable) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        positions: components["schemas"]["PositionView"][];
+                    };
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -7687,7 +7786,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unsigned claimPayout (Stage 1's claim), built through the PayoutClaimBuilder interface (private payouts coming soon). It pays the net payout only, on every status: the redemption, the tail and the final-pool share are their own claims (claimRedemption, claimTail, claimFinal). On a Retired series it also burns the holder's balance, also when it pays nothing. */
+            /** @description Unsigned claimPayout (Stage 1's claim), built through the PayoutClaimBuilder interface (private payouts coming soon). It pays the net payout only, on every status: the redemption, the tail and the final-pool share are their own claims (claimRedemption, claimTail, claimFinal; POST /series/{seriesId}/redemption/build-claim, /tail/build-claim, /final/build-claim). On a Retired series it also burns the holder's balance, also when it pays nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7711,6 +7810,123 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    buildClaimTail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description one of the caller's wallets; it signs the claim */
+                    holder: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned claimTail (Stage 1's claim_tail): the tail since the holder's tail cursor on its redeemed units (amount = tailClaimable, the TailClaimed amount). A holder that has redeemed nothing is redeemed first by the same transaction (redeemsFirst). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimBuild"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description In Stage 1's order (detail.stage1): NotRedeemed (the series has not redeemed), HolderNotRegistered, NoRedeemedUnits (nothing redeemed and nothing left to redeem). Or nothing to claim (detail.reason nothing-to-claim): the claim would pay 0 and burn nothing; detail.claimWith names the claims that would pay the holder something now */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildClaimFinal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description one of the caller's wallets; it signs the claim */
+                    holder: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned claimFinal (Stage 1's claim_final) after an extinguishment: the pending payout and the final-pool share, once (amount = claimable + finalClaimable, the FinalClaimed amount), and the holder's units burn. On a series that redeemed, a holder with units not yet redeemed is redeemed first by the same transaction (redeemsFirst, which then pays the pending payout) and weighed on its redeemed units; amount is then the share (finalClaimable). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimBuild"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description In Stage 1's order (detail.stage1): TerminalStatus (the series is not Extinguished), HolderNotRegistered. Or nothing to claim (detail.reason nothing-to-claim; a second final claim) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildRegisterHolder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description one of the caller's wallets; it is registered and signs */
+                    wallet: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned registerHolder (Stage 1's register_holder, permissionless and idempotent): payouts accrue to registered holders only, from the registration on. A wallet already registered gets alreadyRegistered true and no transaction (tx null). A registration holds no units and grants no holder access. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"] | null;
+                        alreadyRegistered: boolean;
+                    };
+                };
+            };
+            /** @description The wallet is not linked to the caller's account, or it is not on the chain's allowlist (detail.stage1 NotAllowlisted) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     getRedemptionQuote: {
@@ -7800,14 +8016,27 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unsigned claimRedemption; units burn on claim */
+            /** @description Unsigned claimRedemption (Stage 1's claim_redemption); the units burn on claim. units are the units redeemed (the holder's units less those held for a window ask); amount is everything it pays: the redemption price on them and their tail catch-up (redemption, redemptionClaimable) and the pending payout (payout, claimable), which the redemption pays too. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                        units: string;
+                        amount: components["schemas"]["Money"];
+                        redemption: components["schemas"]["Money"];
+                        payout: components["schemas"]["Money"];
+                    };
                 };
+            };
+            /** @description No redemption is open (detail.stage1 NotRedeemed), or the holder has no units left to redeem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

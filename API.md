@@ -51,7 +51,7 @@ reveal end the keepers settle the raise in Stage 1's steps and then push every b
 is nothing to claim. "Deliver now": `POST …/bids/build-deliver {bidder, signer?}` builds Stage 1's `deliver_bid` for a
 processed, undelivered bid (`signer` defaults to the bidder and must be one of your wallets; any wallet may deliver any
 bid, and the bidder is always the one paid; 409 `detail.stage1` NotProcessed or AlreadyDelivered) → `GET /me/holdings`,
-`GET /series/{id}/payouts`, claims (`POST /series/{id}/payouts/build-claim`), redemption claims. Curve-mode buys (`POST /series/{id}/curve/build-buy`) need a wallet on that
+`GET /series/{id}/payouts`, claims (below). Curve-mode buys (`POST /series/{id}/curve/build-buy`) need a wallet on that
 chain's allowlist (403 otherwise) and, while the curve is bonding, stay within the wallet cap shown by
 `GET /series/{id}/curve` (`walletCap`; 422 with the remaining allowance otherwise). After graduation no cap applies. The auction preview counts every revealed bid, its bidder still allowlisted or not, as
 Stage 1's settlement does (S2).
@@ -63,17 +63,43 @@ it (it may lag the chain by an indexer pass). `refunded`, the refund delivered, 
 carries it): "0" while the bid is undelivered, and null while the chain shows the bid delivered and the indexer has not
 projected the delivery yet.
 
-**Payout claims** (S3: Stage 1's claim family). `POST /series/{id}/payouts/build-claim {holder}` builds Stage 1's `claim`
-(`claimPayout`): the net payout only, on every status (`claimable`); on a Retired series it also burns the holder's own
-balance (`burnsUnits`), even when it pays nothing. The redemption, the tail and the final-pool share are other claims
-(`claimRedemption`, `claimTail`, `claimFinal`; the tail and final builders come in S3 WP4), and the position
-(`GET /series/{id}/position`, `/me/holdings`) shows each apart: `claimable`, `redemptionClaimable`, `tailClaimable`,
-`finalClaimable`. 409 with `detail.reason` `nothing-to-claim` when the claim would pay 0 and burn nothing;
-`detail.claimWith` names the claims that would pay the holder something now. A claim of nothing sent anyway succeeds
-onchain and emits its event with zeros (Stage 1's zero-amount rule); a claim never makes a wallet a holder for the API.
-Units of a Retired series also burn by the permissionless `burnRetired`, one holder per call, which the keepers send for
-every holder still holding units (the admin trigger `POST /series/{id}/retirement/crank-burn` does the same and returns
-`{burned, refused}`).
+**Claims** (S3: Stage 1's claim family). A holder has four claims, each a transaction it signs with its own wallet (no
+one claims for another, A-CLM-3), each with a builder (holder tier, `{holder}` one of your wallets) and each figure apart
+in the position (`GET /series/{id}/position`, the `PositionView` schema, and `/me/holdings`):
+
+| Claim | Builder | Pays (the read) | Burns |
+| --- | --- | --- | --- |
+| `claimPayout` (Stage 1 `claim`) | `POST /series/{id}/payouts/build-claim` | the net payout, on every status (`claimable`; `pending` is the part already settled into the holder's balance) | on a Retired series the holder's balance (`burnsUnits`), even when it pays nothing |
+| `claimRedemption` (`claim_redemption`) | `POST /series/{id}/redemption/build-claim` | after a redemption: the price on the units not yet redeemed and their tail catch-up (`redemptionClaimable`; `redemption`) and the pending payout (`claimable`; `payout`); `amount` is both | the redeemed units |
+| `claimTail` (`claim_tail`) | `POST /series/{id}/tail/build-claim` | the tail since the holder's tail cursor on its redeemed units (`tailClaimable`; `amount`) | nothing of its own |
+| `claimFinal` (`claim_final`) | `POST /series/{id}/final/build-claim` | after an extinguishment, once: the pending payout and the final-pool share (`claimable + finalClaimable`; `amount`) | the holder's balance |
+
+- The tail and final builders return `{tx, amount, redeemsFirst, total, burnsUnits}`. A holder that still has units to
+  redeem is redeemed first by the same transaction (`claimTail` when it has redeemed nothing; `claimFinal` on a series
+  that redeemed): `redeemsFirst = {units, amount, payout}` is that redemption (the units it redeems and burns, the price
+  and catch-up, and the pending payout it pays), and `claimFinal`'s `amount` is then the share alone. `total` is everything
+  the transaction pays; `burnsUnits` every unit it burns.
+- Refusals come before the wallet signs, in Stage 1's order, with the Stage 1 name in `detail.stage1`: the tail 409
+  NotRedeemed (no redemption yet; an extinguished series that redeemed still pays its tail), HolderNotRegistered,
+  NoRedeemedUnits (nothing redeemed and nothing to redeem); the final 409 TerminalStatus (not Extinguished),
+  HolderNotRegistered; the redemption 409 NotRedeemed or no units to redeem.
+- **The zero rule.** Onchain a claim of nothing succeeds and emits its own event with zeros (`PayoutClaimed{0, burned}`,
+  `TailClaimed{0}`, `FinalClaimed{units, 0}`; Stage 1's zero-amount rule), and on a Retired series a payout claim of 0
+  still burns. The builders do not build one: a claim that would pay 0 and burn nothing is 409 with `detail.reason`
+  `nothing-to-claim` and `detail.claimWith`, the other claims that would pay the holder something now. A claim never
+  makes a wallet a holder for the API (A-REV-10).
+- Units of a Retired series also burn by the permissionless `burnRetired`, one holder per call, which the keepers send for
+  every holder still holding units (the admin trigger `POST /series/{id}/retirement/crank-burn` does the same and returns
+  `{burned, refused}`).
+- A notice of a status change to Redeemed or Extinguished names the claims to send (`claimRedemption` and `claimTail`;
+  `claimFinal`), never an amount.
+
+**Registration.** Payouts accrue only to registered holders, from the registration on. A winning bid registers its
+bidder when it is processed (and a window purchase its buyer), so a holder rarely needs to. `POST
+/series/{id}/holders/build-register {wallet}` (account tier, `wallet` one of your wallets, which signs) builds Stage 1's
+permissionless `register_holder`; an already registered wallet gets `{tx: null, alreadyRegistered: true}`, and a wallet
+not on the chain's allowlist 403 with `detail.stage1` NotAllowlisted. Every claim needs the registration, never current
+allowlist membership. A registration holds no units and opens no holder-tier route (A-REV-10).
 
 **Settlement** (Stage 1 SPEC §5.2; every step is permissionless). After the reveal end a settlement runs in steps: the
 honest proposal (`beginSettlement`), the tally pages (`tallyBids`), `finalizeSettlement` (Settled, or Failed with

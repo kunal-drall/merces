@@ -161,6 +161,9 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     expect((await rig.t.pool.query('select 1 from money_events where series_id = $1 and wallet = $2', [seriesId, w.address])).rowCount).toBe(0);
     for (const route of ['periods', 'vault', 'holders', 'payouts', 'position']) expect([route, (await rig.get(`/series/${seriesId}/${route}`, tok)).statusCode]).toEqual([route, 403]);
     expect((await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: w.address }, tok)).statusCode).toBe(403);
+    // nor the tail and final claim builders (S3 WP4), holder-tier too; its registration builder says it is registered
+    for (const pool of ['tail', 'final']) expect([pool, (await rig.post(`/series/${seriesId}/${pool}/build-claim`, { holder: w.address }, tok)).statusCode]).toEqual([pool, 403]);
+    expect((await rig.post(`/series/${seriesId}/holders/build-register`, { wallet: w.address }, tok)).json()).toEqual({ tx: null, alreadyRegistered: true });
     expect((await rig.get('/me/holdings', tok)).json().holdings).toEqual([]);
     expect((await rig.get(`/series/${seriesId}`)).json().holderCount).toBe(5);
   });

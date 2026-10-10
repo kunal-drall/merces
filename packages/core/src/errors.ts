@@ -14,8 +14,8 @@ export class AppError extends Error {
   static unauthorized(message = 'authentication required'): AppError {
     return new AppError(401, 'Unauthorized', message);
   }
-  static forbidden(message = 'not permitted for this role'): AppError {
-    return new AppError(403, 'Forbidden', message);
+  static forbidden(message = 'not permitted for this role', detail?: Record<string, unknown>): AppError {
+    return new AppError(403, 'Forbidden', message, detail);
   }
   static notFound(what: string): AppError {
     return new AppError(404, 'NotFound', `${what} not found`);

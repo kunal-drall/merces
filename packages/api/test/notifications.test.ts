@@ -187,6 +187,12 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
         expect(body).not.toContain(CANARY);
       }
     }
+    // S3 WP4: a status change that opens a claim of Stage 1's family names the command to send, never an amount
+    const changed = (to: string) => render({ kind: 'series.StatusChanged', seriesId: 's', payload: { seriesId: 's', from: 'OnTime', to } }).body;
+    expect(changed('Redeemed')).toBe('series s changed from OnTime to Redeemed. Holders claim their redemption with claimRedemption (or claimTail, which redeems first) and each tail payment with claimTail.');
+    expect(changed('Extinguished')).toBe('series s changed from OnTime to Extinguished. Holders claim the payout still owed and their share of the returned treasury with claimFinal; their units burn with it.');
+    expect(changed('Late')).toBe('series s changed from OnTime to Late.');
+    for (const to of ['Redeemed', 'Extinguished']) expect(changed(to)).not.toMatch(/\d|default/i);
     // a reported period whose payment is open: the payment is what is owed
     const pay = render({ kind: 'reporting.report-due-soon', ...base, outstanding: 'payment', status: 'OnTime' });
     expect(pay).toEqual({ subject: 'Payment due soon', body: 'The payment for series s, period 2026Q2 is due by 2026-07-31.' });
