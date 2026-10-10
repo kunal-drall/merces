@@ -1,3 +1,4 @@
+import { RaiseState } from '@merces/math';
 import { SimError, Simulator, type Call } from '@merces/reference';
 import { nonProtocol, RunnerError, type Raised } from './errors.ts';
 import type { LoadedVector } from './load.ts';
@@ -74,6 +75,26 @@ export class ReferenceWorld implements World {
       const m = e instanceof Error ? /^unit supply mismatch for [^:]+: (\d+) != (\d+)$/.exec(e.message) : null;
       throw new RunnerError(m ? `unit supply: holders and escrows hold ${m[1]}, supply is ${m[2]}` : `unit supply check raised ${nonProtocol(e).className}`);
     }
+  }
+
+  /** The vector's series names, in creation order. */
+  seriesNames(): string[] {
+    return [...this.sim.series.keys()];
+  }
+
+  /**
+   * Series whose multi-step settlement is in flight: a raise between `begin_settlement` and its last `process_bid`, or
+   * a window between `begin_window_settlement` and `process_orders`. The merces backend settles in one step, so its
+   * state is comparable with Stage 1's only outside these stretches (lockstep mode, `oracle.ts`).
+   */
+  inFlight(): string[] {
+    const out: string[] = [];
+    for (const [name, s] of this.sim.series) {
+      const raise = s.raiseState === RaiseState.Settling || ((s.raiseState === RaiseState.Settled || s.raiseState === RaiseState.Failed) && s.auction.bidsProcessed < s.bids.size);
+      const window = s.window !== null && (s.window.state === 'Settling' || s.window.state === 'NoMatch' || s.window.state === 'Settled');
+      if (raise || window) out.push(name);
+    }
+    return out;
   }
 
   async close(): Promise<void> {}

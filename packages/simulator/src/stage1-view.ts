@@ -1,7 +1,7 @@
 import type { AuctionExpect, HolderExpect, LedgerExpect } from '@merces/math';
-import { WAD } from '@merces/math';
+import { WAD, nextExpectedPeriod } from '@merces/math';
 import type { SimSeries } from './state.ts';
-import { derivedStatus, liveCapPerUnit } from './engine/ledger.ts';
+import { derivedStatus, ledgerClock, liveCapPerUnit } from './engine/ledger.ts';
 
 /**
  * Stage 1's view of one series, built from the simulator state: the shapes of the Stage 1 vector `expect` step
@@ -43,6 +43,14 @@ export function auctionEscrow(s: SimSeries): bigint {
 export function pendingRefundOf(s: SimSeries, wallet: string): bigint {
   const b = s.bids.get(wallet);
   return b && b.settled ? b.refundable : 0n;
+}
+
+/**
+ * Stage 1's next expected report period for a settled series (`nextExpectedPeriod` over its ledger clock, SPEC §6.4):
+ * the period the vector runner's `pay` shim falls back to when nothing is due.
+ */
+export function nextExpectedPid(s: SimSeries): number {
+  return nextExpectedPeriod(ledgerClock(s));
 }
 
 /** Stage 1 `RaiseState` name for our raise phase (the reveal phase is time-derived; Stage 1 keeps the raise Open). */

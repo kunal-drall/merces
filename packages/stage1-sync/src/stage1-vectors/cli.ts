@@ -4,8 +4,10 @@
  *                     [--until <step index, inclusive>] [--stop-before <op>] [--out <dir>] [--dir <vectors dir>] [--json]
  *
  * Replays Stage 1's parity vectors (S1 plan §5). The vectors directory defaults to the one the Stage 1 checkout's
- * manifest names (STAGE1_PATH, else the pinned `stage1` submodule). Exit code 0 when every run is at its expected
- * status, 1 when one is not, 2 on a usage or runner error.
+ * manifest names (STAGE1_PATH, else the pinned `stage1` submodule). Backends: `merces` (default; our simulator, the
+ * S1 targets on both personalities unless `--only`), `reference` (Stage 1's own simulator, every vector) and
+ * `lockstep` (both side by side, stopping at the first step after which they disagree). Exit code 0 when every run is
+ * at its expected status, 1 when one is not, 2 on a usage or runner error.
  */
 import { existsSync } from 'node:fs';
 import { relative } from 'node:path';

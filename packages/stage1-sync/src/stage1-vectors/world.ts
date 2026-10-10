@@ -18,6 +18,8 @@ export type OpKind = 'direct' | 'shim' | 'blocked' | 'n/a';
 export interface Applied {
   kind: OpKind;
   shimId?: string;
+  /** why a blocked or n/a op did not run (public text) */
+  note?: string;
 }
 
 /** `expect.fx` request: pair id → the periods whose quarter averages the step checks. */

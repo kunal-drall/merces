@@ -90,15 +90,24 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
   const used = new Map<string, Set<string>>();
   for (const r of runs) for (const id of Object.keys(r.shims)) (used.get(id) ?? used.set(id, new Set()).get(id)!).add(r.vector.slice(0, 2));
   for (const r of runs) for (const i of r.issues) if (i.shimId) (used.get(i.shimId) ?? used.set(i.shimId, new Set()).get(i.shimId)!).add(r.vector.slice(0, 2));
-  lines.push('', '## Shims (not parity)', '');
-  if (!used.size) lines.push('None used. The reference backend runs Stage 1\'s own simulator; the merces backend\'s shims (S1 plan §5.3) are listed here when it runs.');
-  else {
-    lines.push('| ID | Stage 1 op | Our call | Why | Removed in | Vectors |', '| --- | --- | --- | --- | --- | --- |');
-    for (const s of SHIMS) {
-      const v = used.get(s.id);
-      if (v) lines.push(`| ${s.id} | ${s.ops.map((o) => `\`${o}\``).join(', ')} | ${s.call} | ${s.why} | ${s.removedIn} | ${[...v].sort().join(', ')} |`);
-    }
+  lines.push(
+    '',
+    '## Shims (not parity)',
+    '',
+    'The merces backend runs these Stage 1 ops through canonical calls of another shape (S1 plan §5.3). A step run through a shim is executed and checked, but it is not parity for that op; `blocked` and `n/a` rows are not run at all. The reference backend runs Stage 1\'s own simulator and uses none of them. "Used in" lists the vectors of this report that went through the row.',
+    '',
+    '| ID | Stage 1 op | Our call | Why it is a shim | Removed in | Used in |',
+    '| --- | --- | --- | --- | --- | --- |',
+  );
+  for (const s of SHIMS) {
+    const v = used.get(s.id);
+    const kind = s.kind === 'shim' ? '' : ` (${s.kind.toUpperCase()})`;
+    lines.push(`| ${s.id}${kind} | ${s.ops.map((o) => `\`${o}\``).join(', ')} | ${s.call} | ${s.why} | ${s.removedIn} | ${v ? [...v].sort().join(', ') : '—'} |`);
   }
+  lines.push(
+    '',
+    'Shim-derived view fields (runner bookkeeping, also not parity): `auction.tallyRound`, `roundRejected`, `rejectionReason`, `qAbove`, `qAt`, `R`, `unitsMinted`, `bidsProcessed`, `auctionEscrowUnits`; `holders.*.pendingUnits`, `pendingRefund` (from the engine\'s `refundable`) and `delivered`; `window.period`, `state`, `tallyRound`, `roundRejected`, `branch` and `matchedUnits`.',
+  );
   const notRun = reports.flatMap((r) => r.notRun);
   if (notRun.length) {
     lines.push('', '## Not replayed on the merces backend in S1', '');

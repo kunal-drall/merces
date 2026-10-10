@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   EXPECTED_S1,
+  MercesWorld,
+  NOT_IN_S1,
   ReferenceWorld,
+  TRANSLATORS,
   SHIM_BY_ID,
   TARGETS_S1,
   atExpected,
@@ -216,9 +219,9 @@ describe('stage1 vector runner: S1 expectations and the op map', () => {
     }
   });
 
-  it('a backend that does not exist yet is refused, not silently skipped', async () => {
-    if (backendAvailable('merces')) return;
-    await expect(runStage1Vectors({ dir: VECTORS, backend: 'merces' })).rejects.toThrow(/merces backend is not available yet/);
+  it('both backends are available', () => {
+    expect(backendAvailable('reference')).toBe(true);
+    expect(backendAvailable('merces')).toBe(true);
   });
 });
 
@@ -236,5 +239,174 @@ describe('stage1:vectors CLI', () => {
       code = (e as { status: number }).status;
     }
     expect(code).toBe(2);
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// merces backend (S1 WP9b): our SimulatorChain through the translators and the shim table
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The ops of the bootstrap and of the raise (one-step settlement shims); a target's raise prefix ends before the first other op. */
+const RAISE_PREFIX_OPS = new Set(['register_attestor', 'register_verifier_key', 'allowlist', 'register_issuer', 'fund', 'create_series', 'open_raise', 'commit_bid', 'reveal_bid', 'begin_settlement', 'finalize_settlement', 'process_bid', 'deliver_bid', 'expect']);
+function raisePrefixEnd(v: LoadedVector): number {
+  const i = v.steps.findIndex((s) => !RAISE_PREFIX_OPS.has(s.op));
+  return i < 0 ? v.steps.length - 1 : i - 1;
+}
+
+describe('stage1 vector runner: merces backend', () => {
+  it('acceptance: 01 and 04 pass through the settled expect at #31 on both personalities', async () => {
+    const r = await runStage1Vectors({ dir: VECTORS, backend: 'merces', only: ['01', '04'], until: 31, personalities: ['solana', 'monad'] });
+    expect(r.runs.map((x) => `${x.id}/${x.world}`)).toEqual(['01/merces/solana', '01/merces/monad', '04/merces/solana', '04/merces/monad']);
+    for (const run of r.runs) {
+      expect(run.issues, `${run.vector} ${run.world}`).toEqual([]);
+      expect(run.status).toBe('PASS');
+      expect(run.executed).toBe(32);
+      expect(run.stopped).toEqual({ index: 32, reason: 'until' });
+      expect(run.shims['SH-AUC-3']).toBeGreaterThan(0);
+    }
+    expect(r.ok).toBe(true);
+  }, 120_000);
+
+  it('every S1 target replays its raise prefix (bootstrap, every raise, settled expects) without a finding on both personalities', async () => {
+    for (const id of TARGETS_S1) {
+      const v = loadVector(listVectorFiles(VECTORS).find((f) => f.split('/').at(-1)!.startsWith(`${id}_`))!);
+      const until = raisePrefixEnd(v);
+      expect(until, id).toBeGreaterThan(25);
+      const r = await runStage1Vectors({ vectors: [v], backend: 'merces', until });
+      expect(r.runs).toHaveLength(2);
+      for (const run of r.runs) {
+        expect(run.issues, `${run.vector} ${run.world}`).toEqual([]);
+        expect(run.executed, `${run.vector} ${run.world}`).toBe(until + 1);
+      }
+    }
+  }, 120_000);
+
+  it('lockstep: the full snapshots of both backends agree after every raise prefix', async () => {
+    const vectors = TARGETS_S1.map((id) => loadVector(listVectorFiles(VECTORS).find((f) => f.split('/').at(-1)!.startsWith(`${id}_`))!));
+    for (const v of vectors) {
+      const r = await runStage1Vectors({ vectors: [v], backend: 'lockstep', until: raisePrefixEnd(v), personalities: ['monad'] });
+      expect(r.runs[0]!.world).toBe('lockstep/monad');
+      expect(r.runs[0]!.issues, v.name).toEqual([]);
+    }
+  }, 120_000);
+
+  it('lockstep stops at the first step after which the backends disagree', async () => {
+    const src = raw('01_happy_path');
+    // an op the merces backend does not run in S1, after the settled expect: the states part there
+    src.steps.splice(32, 0, { t: src.steps[31]!.t, op: 'set_release_pause', actor: 'issuer', series: 'S1', paused: false });
+    const r = (await runStage1Vectors({ vectors: [fromJson(src, '01_happy_path')], backend: 'lockstep', personalities: ['solana'] })).runs[0]!;
+    expect(r.status).toBe('FAIL');
+    expect(r.stopped).toEqual({ index: 33, reason: 'diverged' });
+    expect(r.issues.map((i) => [i.index, i.kind, i.message])).toEqual([
+      [32, 'blocked', 'the merces backend does not run this call (set_release_pause is not in S1 (S5))'],
+      [32, 'fail', 'the merces backend did not run this action, so the states part here'],
+    ]);
+  }, 60_000);
+
+  it('a shim that finds the models disagree fails the step, and the failed op leaves no trace', async () => {
+    // b1 bids 150 units, above the 100-unit wallet cap: Stage 1 records the bid as invalid, our one-step settlement
+    // clamps it to the cap and fills it, so the two settlements differ (S2 brings Stage 1's auction)
+    const src = raw('01_happy_path');
+    for (const s of src.steps) {
+      if ((s.op === 'commit_bid' || s.op === 'reveal_bid') && s.actor === 'b1') {
+        s.quantity = '150';
+        if (s.op === 'commit_bid') s.escrow = String(120_000_000n * 150n + (120_000_000n * 150n) / 100n);
+      }
+      if (s.op === 'begin_settlement') s.qAboveClaim = '200';
+    }
+    const v = fromJson(src, '01_happy_path');
+    const i = v.steps.findIndex((s) => s.op === 'begin_settlement');
+    const world = await MercesWorld.create(v, { personality: 'monad' });
+    for (const step of v.steps.slice(0, i)) {
+      world.setTime(BigInt(step.t));
+      if (step.op !== 'expect') await world.apply(step as unknown as Parameters<typeof world.apply>[0]);
+    }
+    world.setTime(BigInt(v.steps[i]!.t));
+    const before = world.serialize();
+    await expect(world.apply(v.steps[i] as unknown as Parameters<typeof world.apply>[0])).rejects.toThrow(/settleAuction ended Settled with 400 units at 105000000; Stage 1's tally settles 300 units at 105000000/);
+    expect(world.serialize()).toBe(before);
+    const run = (await runStage1Vectors({ vectors: [v], backend: 'merces', personalities: ['solana'] })).runs[0]!;
+    expect(run.status).toBe('FAIL');
+    expect(run.issues[0]).toMatchObject({ index: i, op: 'begin_settlement', kind: 'fail' });
+    expect(run.stopped).toEqual({ index: i + 1, reason: 'diverged' });
+  }, 60_000);
+
+  it('a proposal Stage 1 would reject is BLOCKED, not run', async () => {
+    const src = raw('01_happy_path');
+    const i = src.steps.findIndex((s) => s.op === 'begin_settlement');
+    src.steps[i]!.qAtClaim = '99';
+    const run = (await runStage1Vectors({ vectors: [fromJson(src, '01_happy_path')], backend: 'merces', until: i, personalities: ['solana'] })).runs[0]!;
+    expect(run.issues).toEqual([{ index: i, op: 'begin_settlement', kind: 'blocked', message: 'cannot run on this backend yet; not run (Stage 1 rejects this proposal (ClaimMismatch); one-step settlement cannot represent a rejected round)', shimId: 'SH-AUC-3' }]);
+    expect(run.status).toBe('BLOCKED');
+  }, 60_000);
+
+  it('every op the vectors use has a translator; the S1 gaps name the same milestones as the op map', () => {
+    for (const f of listVectorFiles(VECTORS)) {
+      for (const s of loadVector(f).steps) {
+        const op = s.op === 'expect_revert' ? s.call.op : s.op;
+        if (op !== 'expect') expect(TRANSLATORS[op as keyof typeof TRANSLATORS], op).toBeDefined();
+      }
+    }
+    const notInS1 = Object.fromEntries(Object.entries(STAGE1_OP_MAP).filter(([, m]) => m.kind === 'not-in-s1').map(([op, m]) => [op, m.milestone]));
+    expect(NOT_IN_S1).toEqual(notInS1);
+  });
+
+  it('vector keys become stable ed25519 verifier keys whose attestations verify', async () => {
+    const { VectorKeyring } = await import('../src/stage1-vectors/keys.ts');
+    const { attestationMessage } = await import('@merces/domain');
+    const { createPublicKey, verify } = await import('node:crypto');
+    const v = loadVector(join(VECTORS, '04_zero_quarters.json'));
+    const a = new VectorKeyring(v.keys).ed25519('verifier1');
+    const b = new VectorKeyring(v.keys).ed25519('verifier1');
+    expect(a.publicKeyHex).toBe(b.publicKeyHex);
+    expect(new VectorKeyring(v.keys).ed25519('attestor1').publicKeyHex).not.toBe(a.publicKeyHex);
+    const fields = { seriesId: 'monad:0x' + '11'.repeat(20), periodId: '2026Q1', priorIncomeCommitment: '0x' + '00'.repeat(32), incomeCommitment: '0x' + '01'.repeat(32), tier: 2 as const, liquidityEvent: false };
+    const att = a.attest(fields);
+    expect(att.keyId).toBe('verifier1');
+    const pub = createPublicKey({ key: Buffer.from(a.publicKeyHex, 'hex'), format: 'der', type: 'spki' });
+    expect(verify(null, Buffer.from(attestationMessage(fields)), pub, Buffer.from(att.signature.slice(2), 'hex'))).toBe(true);
+  });
+
+  it('the shim table is written into VECTOR_PARITY.md under "Shims (not parity)", and a merces run carries public values only', async () => {
+    const report = await runStage1Vectors({ dir: VECTORS, backend: 'merces' });
+    expect(report.runs).toHaveLength(TARGETS_S1.length * 2);
+    expect(report.notRun).toHaveLength(25 - TARGETS_S1.length);
+    const md = renderParity([report], { dir: '$STAGE1_PATH/packages/vectors' });
+    const section = md.slice(md.indexOf('## Shims (not parity)'));
+    expect(section.length).toBeGreaterThan(0);
+    for (const s of SHIM_BY_ID.values()) expect(section, s.id).toContain(`| ${s.id}`);
+    expect(section).toMatch(/\| SH-AUC-3 \| `begin_settlement` \|[^\n]*\| S2 \| 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 \|/);
+    expect(section).toMatch(/\| BLK-1 \(BLOCKED\) \| `retire_if_capped` \|/);
+    // privacy canary: no vector key, terms salt or income salt reaches the report
+    const secrets = new Set<string>();
+    for (const f of listVectorFiles(VECTORS)) {
+      const v = JSON.parse(readFileSync(f, 'utf8')) as { keys: Record<string, { privateKey: string }>; seriesPrivate: Record<string, { termsPlain: { termsSalt: string } }>; steps: { op: string; call?: { witness?: Record<string, string> }; witness?: Record<string, string> }[] };
+      for (const k of Object.values(v.keys)) secrets.add(k.privateKey.toLowerCase()).add(k.privateKey.slice(2).toLowerCase());
+      for (const s of Object.values(v.seriesPrivate)) secrets.add(s.termsPlain.termsSalt);
+      for (const s of v.steps) {
+        const w = (s.op === 'expect_revert' ? s.call?.witness : s.witness) ?? {};
+        for (const salt of [w.incomeSalt, w.priorSalt]) if (salt && salt !== '0') secrets.add(salt);
+      }
+    }
+    const json = JSON.stringify(report).toLowerCase();
+    for (const s of secrets) {
+      expect(md.toLowerCase().includes(s)).toBe(false);
+      expect(json.includes(s)).toBe(false);
+    }
+  }, 120_000);
+
+  // WP13 turns this on by default (S1 plan WP13); until then the engine work packages bring the targets up one by one
+  it.runIf(process.env.STAGE1_VECTORS_MERCES === '1')('every S1 target is at its expected status on both personalities', async () => {
+    const report = await runStage1Vectors({ dir: VECTORS, backend: 'merces' });
+    for (const r of report.runs) expect(r.atExpected, `${r.vector} ${r.world}: ${r.status}`).toBe(true);
+  }, 120_000);
+});
+
+describe('stage1:vectors CLI: merces backend', () => {
+  it('pnpm stage1:vectors --only 01,04 --until 31 --personality solana,monad exits 0', () => {
+    const stdout = execFileSync(join(ROOT, 'node_modules/.bin/tsx'), ['packages/stage1-sync/src/stage1-vectors/cli.ts', '--only', '01,04', '--until', '31', '--personality', 'solana,monad'], { cwd: ROOT, encoding: 'utf8', timeout: 60_000 });
+    expect(stdout).toMatch(/01_happy_path \[merces\/solana\] PASS 32\/67, stopped at #32 \(until\)/);
+    expect(stdout).toMatch(/04_zero_quarters \[merces\/monad\] PASS 32\/81, stopped at #32 \(until\)/);
+    expect(stdout).toMatch(/OK: 4\/4 PASS, 4\/4 at expected status/);
   }, 120_000);
 });

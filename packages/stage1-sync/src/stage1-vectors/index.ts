@@ -4,8 +4,10 @@
  *
  * Backends:
  * - `reference`: Stage 1's own `Simulator` (`@merces/reference`). It must pass all 25; that proves this runner.
- * - `merces`: our `SimulatorChain`, per personality, through the translators and the shim table (S1 WP9b).
- * - `lockstep`: both, reporting the first field where they diverge (S1 WP9b).
+ * - `merces`: our `SimulatorChain`, per personality, through the translators and the shim table (`merces-world.ts`,
+ *   `ops/`, `shims.ts`).
+ * - `lockstep`: both side by side, per personality, stopping at the first step after which they disagree
+ *   (`oracle.ts`).
  *
  * Privacy: the runner never persists anything; vectors lose `witness` and `seriesPrivate` at load; reports carry
  * names, indices, error names and public expect values only.
@@ -14,6 +16,8 @@ import { RunnerError } from './errors.ts';
 import { EXPECTED_REFERENCE, TARGETS_S1, expectedS1, type Expected } from './expected.ts';
 import { loadVectors, selects, type LoadedVector } from './load.ts';
 import { proofStats, type ProofStats } from './proofs.ts';
+import { MercesWorld } from './merces-world.ts';
+import { replayLockstep } from './oracle.ts';
 import { ReferenceWorld } from './reference-world.ts';
 import { replayVector, type VectorRun } from './run.ts';
 import { PERSONALITIES, type Backend, type VectorPersonality, type WorldFactory } from './world.ts';
@@ -26,13 +30,17 @@ export { checkRevert, type RevertOutcome } from './revert.ts';
 export { RunnerError, canonicalErrorName, classifyChainError, type Raised } from './errors.ts';
 export { verifyReportCached, proofStats, shutdown, type ProofStats } from './proofs.ts';
 export { ReferenceWorld } from './reference-world.ts';
+export { MercesWorld } from './merces-world.ts';
+export { replayLockstep, type LockstepOptions } from './oracle.ts';
+export { TRANSLATORS, NOT_IN_S1, translate } from './ops/index.ts';
 export { SHIMS, SHIM_BY_ID, type Shim } from './shims.ts';
 export { renderParity, renderSummary, writeParity, type ParitySource } from './report.ts';
 export { PERSONALITIES, type Backend, type World, type WorldFactory, type Applied, type OpKind, type VectorPersonality } from './world.ts';
 
-/** Worlds by backend. The merces backend registers here in S1 WP9b. */
+/** Worlds by backend. */
 const FACTORIES: Partial<Record<Backend, WorldFactory>> = {
   reference: (v) => ReferenceWorld.create(v),
+  merces: (v, opts) => MercesWorld.create(v, opts),
 };
 
 export function backendAvailable(backend: Backend): boolean {
@@ -46,11 +54,11 @@ export interface RunOptions {
   dir?: string;
   /** already loaded vectors (tests replay mutated copies) */
   vectors?: LoadedVector[];
-  /** vector ids ("01") or names; default: every vector on `reference`, the S1 targets on `merces` */
+  /** vector ids ("01") or names; default: every vector on `reference`, the S1 targets on `merces` and `lockstep` */
   only?: readonly string[];
   /** default `merces` */
   backend?: BackendChoice;
-  /** merces only; default both */
+  /** merces and lockstep only; default both */
   personalities?: readonly VectorPersonality[];
   /** last step index to replay (inclusive) */
   until?: number;
@@ -67,7 +75,7 @@ export interface RunResult extends VectorRun {
 export interface RunReport {
   backend: BackendChoice;
   runs: RunResult[];
-  /** vectors not replayed on this backend, with their expectation (the merces backend replays the S1 targets only) */
+  /** vectors not replayed on this backend, with their expectation (merces and lockstep replay the S1 targets only by default) */
   notRun: { id: string; vector: string; expected: Expected }[];
   proofs: ProofStats;
   /** every run is at its expected status */
@@ -89,9 +97,8 @@ export function atExpected(run: Pick<VectorRun, 'status'>, expected: Expected): 
 /** Replay vectors on a backend. Callers that verified proofs `await shutdown()` before exiting. */
 export async function runStage1Vectors(opts: RunOptions): Promise<RunReport> {
   const backend = opts.backend ?? 'merces';
-  if (backend === 'lockstep') throw new RunnerError('the lockstep backend needs the merces backend, which arrives with S1 WP9b');
-  const factory = FACTORIES[backend];
-  if (!factory) throw new RunnerError(`the ${backend} backend is not available yet (S1 WP9b)`);
+  const factory = backend === 'lockstep' ? undefined : FACTORIES[backend];
+  if (backend !== 'lockstep' && !factory) throw new RunnerError(`the ${backend} backend is not available`);
   if (opts.until !== undefined && (!Number.isInteger(opts.until) || opts.until < 0)) throw new RunnerError('until must be a step index (an integer ≥ 0)');
 
   let vectors: LoadedVector[];
@@ -100,24 +107,30 @@ export async function runStage1Vectors(opts: RunOptions): Promise<RunReport> {
   else throw new RunnerError('no vectors: pass dir or vectors');
 
   const notRun: RunReport['notRun'] = [];
-  if (backend === 'merces' && !opts.only?.length) {
+  if (backend !== 'reference' && !opts.only?.length) {
     const targets = new Set<string>(TARGETS_S1);
     for (const v of vectors) if (!targets.has(v.id)) notRun.push({ id: v.id, vector: v.name, expected: expectedS1(v.id) });
     vectors = vectors.filter((v) => targets.has(v.id));
   }
 
-  const worlds: (VectorPersonality | undefined)[] = backend === 'merces' ? [...(opts.personalities?.length ? opts.personalities : PERSONALITIES)] : [undefined];
+  const worlds: (VectorPersonality | undefined)[] = backend === 'reference' ? [undefined] : [...(opts.personalities?.length ? opts.personalities : PERSONALITIES)];
   const runs: RunResult[] = [];
   for (const v of vectors) {
     const expected = backend === 'reference' ? EXPECTED_REFERENCE : expectedS1(v.id);
+    const replay = {
+      ...(opts.until !== undefined ? { until: opts.until } : {}),
+      ...(opts.stopBefore ? { stopBefore: opts.stopBefore } : {}),
+      ...(expected.waivers ? { waivers: expected.waivers } : {}),
+    };
     for (const personality of worlds) {
-      const world = await factory(v, personality ? { personality } : {});
+      if (backend === 'lockstep') {
+        const run = await replayLockstep(v, personality!, replay);
+        runs.push({ ...run, expected, atExpected: atExpected(run, expected) });
+        continue;
+      }
+      const world = await factory!(v, personality ? { personality } : {});
       try {
-        const run = await replayVector(world, v, {
-          ...(opts.until !== undefined ? { until: opts.until } : {}),
-          ...(opts.stopBefore ? { stopBefore: opts.stopBefore } : {}),
-          ...(expected.waivers ? { waivers: expected.waivers } : {}),
-        });
+        const run = await replayVector(world, v, replay);
         runs.push({ ...run, ...(personality ? { personality } : {}), expected, atExpected: atExpected(run, expected) });
       } finally {
         await world.close();

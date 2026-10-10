@@ -177,10 +177,10 @@ export function inventoryStage1Vectors(dir: string): Inventory {
 }
 
 /**
- * Stage 1 format: run the vector runner on the reference backend (every vector) and, once it exists (S1 WP9b), on the
- * merces backend (the S1 targets, both personalities). Status: `ok` iff every target is at its expected status;
- * `warn` while the merces backend is missing; `fail` when a target is not at its expected status or the reference
- * backend does not replay a vector (the runner or the Stage 1 checkout is broken).
+ * Stage 1 format: run the vector runner on the reference backend (every vector) and on the merces backend (the S1
+ * targets, both personalities). Status: `ok` iff every target is at its expected status; `fail` when a target is not
+ * at its expected status or the reference backend does not replay a vector (the runner or the Stage 1 checkout is
+ * broken).
  */
 async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepReport> {
   const inv = inventoryStage1Vectors(dir);
@@ -188,7 +188,6 @@ async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepRepor
   const label = dir.startsWith(ctx.location.root + '/') ? `$STAGE1_PATH/${relative(ctx.location.root, dir)}` : dir;
   const source = { dir: label, ...(ctx.location.manifest.commit ? { commit: ctx.location.manifest.commit } : {}) };
   const details: string[] = [];
-  const notes: string[] = [];
   const reports: Awaited<ReturnType<typeof runner.runStage1Vectors>>[] = [];
   let status: StepStatus;
   let summary: string;
@@ -202,10 +201,6 @@ async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepRepor
     if (!reference.ok) {
       status = 'fail';
       summary = `the reference backend does not replay ${reference.runs.length - refPass} Stage 1 vector(s): the runner or the Stage 1 checkout is broken`;
-    } else if (!runner.backendAvailable('merces')) {
-      status = 'warn';
-      summary = `${refLine}; our simulator is not replayed yet (the merces backend arrives with S1 WP9b)`;
-      notes.push("The merces backend (our `SimulatorChain` through the S1 shims) arrives with S1 WP9b. Until then only the reference backend runs: it checks the runner and the Stage 1 checkout, not our simulator.");
     } else {
       const merces = await runner.runStage1Vectors({ dir, backend: 'merces' });
       reports.push(merces);
@@ -221,7 +216,7 @@ async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepRepor
   } finally {
     await runner.shutdown();
   }
-  runner.writeParity(ctx.outDir, reports, source, { notes, appendix: inv.lines });
+  runner.writeParity(ctx.outDir, reports, source, { appendix: inv.lines });
   details.push(`${inv.files} vectors, ${inv.steps} steps (${inv.reverts} expected reverts), ${inv.ops} distinct ops counting the calls inside reverts; see VECTOR_PARITY.md`);
   return { step: 'vectors', status, summary, details };
 }

@@ -1,5 +1,5 @@
 import type { ExpectRevertStep } from '@merces/reference';
-import { canonicalErrorName, describeRaised } from './errors.ts';
+import { RunnerError, canonicalErrorName, describeRaised } from './errors.ts';
 import type { Applied, World } from './world.ts';
 
 /**
@@ -24,8 +24,10 @@ export async function checkRevert(world: World, step: ExpectRevertStep): Promise
   try {
     applied = await world.apply(step.call);
   } catch (e) {
-    const raised = world.classify(e);
     const changed = world.serialize() !== before;
+    // the world could not translate the call, or a shim's own check failed: public message, no protocol error
+    if (e instanceof RunnerError) return { result: 'fail', message: `expected revert ${expected} for ${op}: ${e.message}`, diverged: changed };
+    const raised = world.classify(e);
     if (!raised.protocol) return { result: 'fail', message: `expected revert ${expected} for ${op}, got a ${describeRaised(raised)}`, diverged: changed };
     if (canonicalErrorName(raised.name) !== expected) return { result: 'fail', message: `expected revert ${expected} for ${op}, got ${raised.name}`, diverged: changed };
     if (changed) return { result: 'fail', message: `${op} reverted with ${expected} but changed the state`, diverged: true };

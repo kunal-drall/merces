@@ -28,7 +28,8 @@ export interface VectorRun {
   id: string;
   vector: string;
   world: string;
-  backend: Backend;
+  /** `lockstep`: both backends side by side (`oracle.ts`) */
+  backend: Backend | 'lockstep';
   personality?: VectorPersonality;
   status: VectorStatus;
   /** steps replayed (expects and reverts included) */
@@ -87,7 +88,8 @@ export async function replayVector(world: World, vector: LoadedVector, opts: Rep
   const notRun = (index: number, step: Step, applied: Applied) => {
     const kind = applied.kind === 'n/a' ? 'n/a' : 'blocked';
     const waiver = opts.waivers?.find((w) => w.step === index && (!applied.shimId || w.id === applied.shimId));
-    issues.push({ index, op: opLabel(step), kind, message: kind === 'n/a' ? 'not applicable on this backend; not run' : 'cannot run on this backend yet; not run', ...(applied.shimId ? { shimId: applied.shimId } : {}), ...(waiver ? { waived: true } : {}) });
+    const what = kind === 'n/a' ? 'not applicable on this backend; not run' : 'cannot run on this backend yet; not run';
+    issues.push({ index, op: opLabel(step), kind, message: applied.note ? `${what} (${applied.note})` : what, ...(applied.shimId ? { shimId: applied.shimId } : {}), ...(waiver ? { waived: true } : {}) });
   };
   const countShim = (applied: Applied) => {
     if (applied.kind === 'shim' && applied.shimId) shims[applied.shimId] = (shims[applied.shimId] ?? 0) + 1;
@@ -132,6 +134,8 @@ export async function replayVector(world: World, vector: LoadedVector, opts: Rep
           if (applied.kind === 'blocked' || applied.kind === 'n/a') notRun(index, step, applied);
           else countShim(applied);
         } catch (e) {
+          // a shim's own check failed (the two models diverged): reported with its public message below
+          if (e instanceof RunnerError) throw e;
           const raised = world.classify(e);
           fail(index, step, raised.protocol ? `unexpected revert ${raised.name}` : `unexpected ${describeRaised(raised)}`);
           diverged = true;
