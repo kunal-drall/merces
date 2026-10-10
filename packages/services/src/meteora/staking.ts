@@ -4,6 +4,7 @@ import { scaledAmount, walletTenderFits } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 import { censusLockedBy } from '../curve-census.ts';
+import { curveNoCap, type CurveNoCapFields } from './notice.ts';
 
 /**
  * Curve staking as a first-class flow on the read and build side (S3 WP12, amendments M4 and M8; Stage 1 curve mode,
@@ -14,7 +15,8 @@ import { censusLockedBy } from '../curve-census.ts';
  *
  * Every refusal comes before the wallet signs, in Stage 1's in-handler order, with the Stage 1 name in `detail.stage1`
  * (a short wallet is the token program's refusal: `detail.code` InsufficientFunds, no Stage 1 name). Refusals and reads
- * name unit counts (public onchain balances), never an income figure.
+ * name unit counts (public onchain balances), never an income figure. Every response carries no cap and the buyer
+ * notice with the curve's figures (`curveNoCap`, ./notice.ts), as every curve read and builder does (S3 review fix 3).
  */
 
 const TERMINAL = new Set(['Retired', 'Redeemed', 'Extinguished']);
@@ -143,7 +145,7 @@ export class CurveStakingService {
    * chain, or the one `wallet` names (it must be linked). Read live from the chain: a wallet that bought and never
    * registered or staked reads too, with its units and why it does not earn.
    */
-  async walletPositions(seriesId: string, session: Session, wallet?: string): Promise<{ seriesId: string; unitScale: string; status: string; phase: string; redeemed: boolean; positions: CurveWalletPosition[] }> {
+  async walletPositions(seriesId: string, session: Session, wallet?: string): Promise<{ seriesId: string; unitScale: string; status: string; phase: string; redeemed: boolean; positions: CurveWalletPosition[] } & CurveNoCapFields> {
     const { chain, series, curve } = await this.curveSeries(seriesId);
     if (wallet) this.requireWallet(session, chain.chain, wallet);
     const wallets = wallet ? [wallet] : session.wallets.filter((w) => w.chain === chain.chain).map((w) => w.address);
@@ -178,7 +180,7 @@ export class CurveStakingService {
         unstakable: staked.toString(), tender, next,
       });
     }
-    return { seriesId, unitScale: series.unitScale, status: series.status, phase: series.phase, redeemed: series.redemption !== null, positions };
+    return { seriesId, unitScale: series.unitScale, status: series.status, phase: series.phase, redeemed: series.redemption !== null, positions, ...curveNoCap(curve) };
   }
 
   /**
@@ -190,7 +192,7 @@ export class CurveStakingService {
    * `detail.stakable` what can be staked now), 409 InsufficientFunds (`detail.code`: the wallet holds fewer units). The
    * stake earns from the next payment.
    */
-  async buildStake(seriesId: string, session: Session, wallet: string, unitsText: string): Promise<{ seriesId: string; wallet: string; units: string; steps: { step: CurveStep; tx: UnsignedTx }[]; stakedAfter: string }> {
+  async buildStake(seriesId: string, session: Session, wallet: string, unitsText: string): Promise<{ seriesId: string; wallet: string; units: string; steps: { step: CurveStep; tx: UnsignedTx }[]; stakedAfter: string } & CurveNoCapFields> {
     const { chain, series, curve } = await this.curveSeries(seriesId);
     this.requireWallet(session, chain.chain, wallet);
     const units = BigInt(unitsText);
@@ -216,7 +218,7 @@ export class CurveStakingService {
       steps.push({ step, tx: await chain.build(cmd, wallet) });
     }
     steps.push({ step: 'stakeUnits', tx: await chain.build({ kind: 'stakeUnits', seriesId, units: units.toString() }, wallet) });
-    return { seriesId, wallet, units: units.toString(), steps, stakedAfter: (staked + units).toString() };
+    return { seriesId, wallet, units: units.toString(), steps, stakedAfter: (staked + units).toString(), ...curveNoCap(curve) };
   }
 
   /**
@@ -228,8 +230,8 @@ export class CurveStakingService {
    * for 409 ZeroUnits or InsufficientStake (more than the stake): no allowlist and no status check (Stage 1).
    * `payout` is what the claim pays at the chain's current state.
    */
-  async buildUnstake(seriesId: string, session: Session, wallet: string, unitsText: string): Promise<{ seriesId: string; wallet: string; units: string; tx: UnsignedTx; commands: string[]; payout: string; stakedAfter: string }> {
-    const { chain } = await this.curveSeries(seriesId);
+  async buildUnstake(seriesId: string, session: Session, wallet: string, unitsText: string): Promise<{ seriesId: string; wallet: string; units: string; tx: UnsignedTx; commands: string[]; payout: string; stakedAfter: string } & CurveNoCapFields> {
+    const { chain, curve } = await this.curveSeries(seriesId);
     this.requireWallet(session, chain.chain, wallet);
     const units = BigInt(unitsText);
     if (units === 0n) throw conflict('ZeroUnits', 'unstake at least one base unit');
@@ -237,7 +239,7 @@ export class CurveStakingService {
     const { staked } = unitsOf(p);
     if (units > staked) throw conflict('InsufficientStake', 'more units than the wallet has staked', { stakedUnits: staked.toString() });
     const tx = await chain.build([{ kind: 'unstakeUnits', seriesId, units: units.toString() }, { kind: 'claimPayout', seriesId }], wallet);
-    return { seriesId, wallet, units: units.toString(), tx, commands: ['unstakeUnits', 'claimPayout'], payout: p?.claimable ?? '0', stakedAfter: (staked - units).toString() };
+    return { seriesId, wallet, units: units.toString(), tx, commands: ['unstakeUnits', 'claimPayout'], payout: p?.claimable ?? '0', stakedAfter: (staked - units).toString(), ...curveNoCap(curve) };
   }
 
   /**
@@ -250,7 +252,7 @@ export class CurveStakingService {
    * still tenders.
    */
   async buildTender(seriesId: string, session: Session, wallet: string, fromStakeText: string, fromWalletText: string): Promise<Record<string, unknown>> {
-    const { chain, series } = await this.curveSeries(seriesId);
+    const { chain, series, curve } = await this.curveSeries(seriesId);
     this.requireWallet(session, chain.chain, wallet);
     const r = series.redemption;
     if (!r) throw conflict('NotRedeemed', 'the series has not redeemed: there is nothing to tender for yet');
@@ -273,6 +275,7 @@ export class CurveStakingService {
     return {
       seriesId, wallet, tx, fromStake: fromStake.toString(), fromWallet: fromWallet.toString(), units: units.toString(), pricePerUnit: r.pricePerUnit,
       principal: principal.toString(), payout: payout.toString(), total: (principal + payout).toString(), quotaLeft: quotaLeft.toString(), quotaLeftAfter: (quotaLeft - fromWallet).toString(),
+      ...curveNoCap(curve),
     };
   }
 }

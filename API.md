@@ -76,12 +76,15 @@ a census would store now, the count `redeem`'s own census would take with the DA
 last stored count and its time); the redemption quote on a curve counts `redeem`'s own census (`unitsCounted:
 redemption-census`; a count of 0 blocks with NoUnitsOutstanding). Every sealed-bid builder refuses a curve series with 409 `detail.stage1`
 NotSealedBid (open, cancel, commit, reveal, deliver, the settlement step, the preview); the redemption claim builder
-refuses it with CurveUsesTender and the admin burn crank with CurveModeNoBurn. Every curve response carries the buyer
-notice (`CURVE_BUYER_NOTICE` with the curve's figures read from the chain: the trading fee and its split among Merces,
+refuses it with CurveUsesTender and the admin burn crank with CurveModeNoBurn. Every curve read and builder of a series
+carries the buyer notice (`GET /series/{id}/curve`, the quote and position reads, and the configure, swap, stake,
+unstake, tender and census builders; the admin monitor, one pass over every curve, aside) (`CURVE_BUYER_NOTICE` with the
+curve's figures read from the chain: the trading fee and its split among Merces,
 Meteora and the issuer come from the pool's config, `CurveState.tradingFeeSplitBps`, never from the notice itself;
 A-CURVE-8). **No cap:** a curve raise has no wallet cap at any stage, before or after the curve
 fills; a wallet buys and holds any number of units. Every curve read and builder says so in one statement
-(`walletCap: null`, `noCap: true`, `noCapStatement`, the schema `CurveNoCap`), and so do the series read (`noCap`,
+(`walletCap: null`, `noCap: true`, `noCapStatement`, with the `notice`: the schema `CurveNoCap`, which every curve
+route's response includes; S3 review: the position read and the stake, unstake, tender and census builders too), and so do the series read (`noCap`,
 `noCapStatement`; a curve series' `terms.walletCapBps` is Stage 1's 0, never a cap) and the transfer-window read. A curve
 draft records no lockup, no wallet cap and no raise phases (Stage 1's zeros; `POST /terms/validate` reports any other
 value per field, code `curve-zero`), a positive minimum raise (the curve's target) and USDC (S3). The auction preview counts every revealed bid, its bidder still allowlisted or not, as

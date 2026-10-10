@@ -3675,7 +3675,7 @@ export type components = {
                 total?: string;
             };
         };
-        /** @description What every curve read and builder response says about the cap: a curve raise has no wallet cap at any stage, before or after the curve fills (owner direction; Stage 1 stores the curve series' wallet cap as 0 and enforces none). The other fields depend on the operation. */
+        /** @description What every curve read and builder response says about the cap, with the buyer notice: GET /series/{seriesId}/curve, its quote and position reads, and its configure, swap, stake, unstake, tender and census builders (the admin monitor, one pass over every curve, carries neither). A curve raise has no wallet cap at any stage, before or after the curve fills (owner direction; Stage 1 stores the curve series' wallet cap as 0 and enforces none). The other fields depend on the operation. */
         CurveNoCap: {
             /** @description always null (there is no wallet cap) */
             walletCap: null;
@@ -8901,13 +8901,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One position per wallet */
+            /** @description One position per wallet, with no cap and the buyer notice */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
+                    "application/json": components["schemas"]["CurveNoCap"] & {
                         seriesId: string;
                         /** @enum {string} */
                         unitScale: "1000000";
@@ -8963,13 +8963,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The steps and the stake after them */
+            /** @description The steps and the stake after them, with no cap and the buyer notice */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
+                    "application/json": components["schemas"]["CurveNoCap"] & {
                         seriesId: string;
                         wallet: string;
                         units: string;
@@ -9026,13 +9026,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The one transaction and what its claim pays at the chain's current state */
+            /** @description The one transaction and what its claim pays at the chain's current state, with no cap and the buyer notice */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
+                    "application/json": components["schemas"]["CurveNoCap"] & {
                         seriesId: string;
                         wallet: string;
                         units: string;
@@ -9090,13 +9090,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The tender and what it pays */
+            /** @description The tender and what it pays, with no cap and the buyer notice */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
+                    "application/json": components["schemas"]["CurveNoCap"] & {
                         seriesId: string;
                         wallet: string;
                         tx: components["schemas"]["UnsignedTx"];
@@ -9158,13 +9158,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The unsigned census, what it would count now beside the count stored last, and whether it changes it */
+            /** @description The unsigned census, what it would count now beside the count stored last, and whether it changes it, with no cap and the buyer notice */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
+                    "application/json": components["schemas"]["CurveNoCap"] & {
                         seriesId: string;
                         tx: Record<string, never>;
                         census: components["schemas"]["CurveCensus"] | null;

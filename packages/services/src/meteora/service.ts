@@ -1,34 +1,23 @@
 import { AppError, audit } from '@merces/core';
-import { CURVE_BUYER_NOTICE, CURVE_NO_CAP, ChainError, curveBeforeYouBuy, curveBuyerNotice, curveNoticeFigures, type CurveBeforeYouBuy, type CurveState, type UnsignedTx } from '@merces/domain';
+import { ChainError, curveBeforeYouBuy, curveNoticeFigures, type CurveBeforeYouBuy, type CurveState, type UnsignedTx } from '@merces/domain';
 import type { DexPort, MeteoraPort } from '@merces/ports';
 import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 import { censusLockedBy } from '../curve-census.ts';
 import { advanceCurves, type CurveLifecyclePass } from './lifecycle.ts';
+import { NO_CAP, curveNoCap, curveNotice } from './notice.ts';
+
+export { NO_CAP, curveNoCap, curveNotice } from './notice.ts';
 
 /**
  * E14 — Meteora support (Solana only; R35). Orchestrates curve-mode series on Stage 1's curve lifecycle (S3 WP8): runs
  * Stage 1's oracle-driven config generator through the Meteora port, reads the curve from the chain (the simulator's
  * stand-in pool until S5) and builds trades on the curve and the USDG→USDC swap route through the DEX port. The keepers
  * complete the curve and collect its proceeds (`curve.lifecycle`, `advanceCurves` in ./lifecycle.ts; the admin monitor
- * triggers the same pass). Every response carries no cap and the buyer notice (`CURVE_BUYER_NOTICE`, with the curve's
- * own figures).
+ * triggers the same pass). Every read and builder of a curve carries no cap and the buyer notice (`CURVE_BUYER_NOTICE`,
+ * with the curve's own figures; ./notice.ts), the census builder included; the admin monitor, a pass over every curve,
+ * carries neither.
  */
-
-/**
- * "No cap" as every curve response carries it (owner direction; Stage 1 stores a curve series' wallet cap as 0): no
- * wallet cap object (`walletCap: null`), `noCap: true` and the one statement.
- */
-const NO_CAP = { walletCap: null, noCap: true, noCapStatement: CURVE_NO_CAP } as const;
-
-/**
- * The buyer notice with the curve's own figures, read from the chain (its trading fee and that fee's split among
- * Merces, Meteora and the issuer, its target, Meteora's migration fee; owner direction of 2026-10-10); the template
- * without a curve.
- */
-export function curveNotice(c: CurveState | null): string {
-  return c ? curveBuyerNotice(curveNoticeFigures(c)) : CURVE_BUYER_NOTICE;
-}
 
 /** What a wallet that is not approved gets from a curve: it can trade, never earn (Stage 1: registration and staking need the allowlist). */
 export const NOT_APPROVED =
@@ -199,7 +188,8 @@ export class MeteoraService {
    * whether that changes the count (`changes`). Refusals in Stage 1's order before the wallet signs: 409 RaiseNotOpen,
    * 409 TerminalStatus (Retired, Redeemed or Extinguished). Never while the issuer has assembled the report for the
    * series' next expected period and not submitted it: its proof is over the current census, and a census now could
-   * change the count and invalidate it (amendment H1): 409 `report-pending` until the report is submitted.
+   * change the count and invalidate it (amendment H1): 409 `report-pending` until the report is submitted. No cap and
+   * the buyer notice, as every curve builder.
    */
   async buildSync(seriesId: string, session: Session, signer: string): Promise<Record<string, unknown>> {
     const { chain, series } = await this.curveSeries(seriesId);
@@ -212,7 +202,7 @@ export class MeteoraService {
     }
     const curve = await chain.getCurve(seriesId);
     const tx = await chain.build({ kind: 'syncCurveUnits', seriesId }, signer);
-    return { seriesId, tx, census: curve?.census ?? null, changes: curve ? curve.census.changedSinceSync : true };
+    return { seriesId, tx, census: curve?.census ?? null, changes: curve ? curve.census.changedSinceSync : true, ...curveNoCap(curve) };
   }
 
   /**

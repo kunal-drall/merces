@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { perWholeUnit, type UnsignedTx } from '@merces/domain';
+import { CURVE_NO_CAP, perWholeUnit, type UnsignedTx } from '@merces/domain';
 import { WAD, capRemainingScaled, parsePeriod, scaledAmount } from '@merces/math';
 import { SimWallet, type PrivateTerms, type SimHarness } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
@@ -23,7 +24,10 @@ const SCALE = 1_000_000n;
  *    `paidPerUnitWad / WAD`, and cost bases and cap totals 10^6 times too large);
  *  - S3R-Y (S3 review fix 2): a curve holding's realised yield is on what the wallet has held, its stake, its wallet
  *    units and its tendered units (was: on its stake, the indexed `units`, so an unstake moved it and a wallet that
- *    unstaked everything read 0).
+ *    unstaked everything read 0);
+ *  - S3R-N (S3 review fix 3): every curve read and builder carries no cap and the buyer notice with the curve's figures,
+ *    the position read and the stake, unstake, tender and census builders included (was: only the curve read, the
+ *    configure step, the quote and build-swap); the tests walk every curve route of the OpenAPI document.
  */
 describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -79,6 +83,17 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
     return r.json().positions[0];
   };
   const usdc = async (w: SimWallet) => BigInt(await h.sim.getBalance(w.address, 'USDC'));
+  /**
+   * cause S3R-N: a curve route's 200 carries no cap and the buyer notice, the one `GET /series/{id}/curve` renders from
+   * the curve's figures (its trading fee and that fee's split from the pool's config); `route` names it in `walked`
+   */
+  const walked = new Set<string>();
+  const noCapOn = async (route: string, body: Record<string, unknown>) => {
+    const notice = (await rig.get(`/series/${seriesId}/curve`)).json().notice as string;
+    expect(notice, route).toContain('Every trade pays a trading fee (1%): 80% of it goes to Merces, 20% to Meteora and 0% to the issuer.');
+    expect(body, route).toMatchObject({ walletCap: null, noCap: true, noCapStatement: CURVE_NO_CAP, notice });
+    walked.add(route);
+  };
   const units = (w: SimWallet) => h.sim.curveUnitsOf(seriesId, w.address);
   /** The device's assembled report (the harness proves with mock proofs; the rig accepts them). */
   async function device(periodId: string, incomeYtdNow: bigint) {
@@ -90,8 +105,15 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
   // still sells: an approved wallet can stake through the builder's registration and census steps; one not approved
   // earns nothing and can only sell
   it('buys through build-swap; the position read shows units, what can be staked and what stops it', async () => {
+    // cause S3R-N: the curve read, the configure step and the quote carry no cap and the notice (as build-swap, below)
+    await noCapOn('/series/{seriesId}/curve', (await rig.get(`/series/${seriesId}/curve`)).json());
+    const configured = await rig.post(`/series/${seriesId}/curve/configure`, {}, issuerTok);
+    expect(configured.statusCode, configured.body).toBe(200);
+    await noCapOn('/series/{seriesId}/curve/configure', configured.json());
+    await noCapOn('/series/{seriesId}/curve/quote', (await rig.get(`/series/${seriesId}/curve/quote?wallet=${a.address}&side=buy&amountIn=${USDC(400)}`, aTok)).json());
     const boughtA = await buy(a, aTok, USDC(400));
     expect(boughtA).toMatchObject({ earns: true, warning: null, quote: { amountOut: '39600000' } });
+    await noCapOn('/series/{seriesId}/curve/build-swap', boughtA);
     await buy(b, bTok, USDC(350));
     // a wallet not approved buys too, warned it earns nothing; its buy fills the curve (the stand-in's partial fill)
     const boughtC = await buy(c, cTok, USDC(300));
@@ -110,6 +132,8 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
     // every linked wallet on the series' chain without `wallet`; a wallet not linked is refused; an account with none reads none
     const all = await rig.get(`/series/${seriesId}/curve/position`, aTok);
     expect(all.json()).toMatchObject({ seriesId, unitScale: '1000000', phase: 'Open', redeemed: false });
+    // cause S3R-N: the position read carries no cap and the notice, as every curve read (was neither)
+    await noCapOn('/series/{seriesId}/curve/position', all.json());
     expect(all.json().positions.map((p: { wallet: string }) => p.wallet)).toEqual([a.address]);
     expect((await rig.get(`/series/${seriesId}/curve/position?wallet=${b.address}`, aTok)).statusCode).toBe(403);
     expect((await rig.get(`/series/${seriesId}/curve/position`, rig.token({ accountId: 'nobody', wallets: [] }))).json().positions).toEqual([]);
@@ -137,6 +161,7 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
     const built = await rig.post(`/series/${seriesId}/curve/build-stake`, { wallet: a.address, units: '39600000' }, aTok);
     expect(built.statusCode, built.body).toBe(200);
     expect(built.json()).toMatchObject({ units: '39600000', stakedAfter: '39600000' });
+    await noCapOn('/series/{seriesId}/curve/build-stake', built.json()); // cause S3R-N (was neither)
     expect(built.json().steps.map((s: { step: string; tx: UnsignedTx }) => [s.step, s.tx.command.kind])).toEqual([['registerHolder', 'registerHolder'], ['syncCurveUnits', 'syncCurveUnits'], ['stakeUnits', 'stakeUnits']]);
     for (const s of built.json().steps) await send(s.tx, a, aTok);
     // no holder access before the stake is indexed; then the series' holder reads open
@@ -180,6 +205,10 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
     await rig.post(`/reports/${assembled.json().reportId}/submitted`, { txId: accepted.txId }, issuerTok);
     const pay = await rig.post(`/reports/${assembled.json().reportId}/build-payin`, {}, issuerTok);
     await send(pay.json().tx, h.issuer, issuerTok);
+    // cause S3R-N: the census builder carries no cap and the notice, as every curve builder (was neither)
+    const census = await rig.post(`/series/${seriesId}/curve/build-sync`, { signer: b.address }, bTok);
+    expect(census.statusCode, census.body).toBe(200);
+    await noCapOn('/series/{seriesId}/curve/build-sync', census.json());
     const open = await rig.post(`/series/${seriesId}/curve/build-stake`, { wallet: b.address, units: '15650000' }, bTok);
     expect(open.statusCode, open.body).toBe(200);
     expect(open.json().steps.map((s: { step: string }) => s.step)).toEqual(['syncCurveUnits', 'stakeUnits']);
@@ -200,6 +229,7 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
     const built = await rig.post(`/series/${seriesId}/curve/build-unstake`, { wallet: a.address, units: '19800000' }, aTok);
     expect(built.statusCode, built.body).toBe(200);
     expect(built.json()).toMatchObject({ units: '19800000', commands: ['unstakeUnits', 'claimPayout'], payout: before.claimable, stakedAfter: '19800000' });
+    await noCapOn('/series/{seriesId}/curve/build-unstake', built.json()); // cause S3R-N (was neither)
     const tx = built.json().tx as UnsignedTx;
     expect(tx.commands).toEqual([{ kind: 'unstakeUnits', seriesId, units: '19800000' }, { kind: 'claimPayout', seriesId }]);
     const u0 = await usdc(a);
@@ -290,6 +320,7 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
     expect(built.statusCode, built.body).toBe(200);
     const principal = scaledAmount(BigInt(r.pricePerUnit), 39_600_000n, SCALE);
     expect(built.json()).toMatchObject({ units: '39600000', pricePerUnit: r.pricePerUnit, principal: principal.toString(), payout: claimable.toString(), total: (principal + claimable).toString(), quotaLeft: quotaLeft.toString(), quotaLeftAfter: (quotaLeft - 19_800_000n).toString() });
+    await noCapOn('/series/{seriesId}/curve/build-tender', built.json()); // cause S3R-N (was neither)
     const u0 = await usdc(a);
     const sent = await send(built.json().tx, a, aTok);
     expect(sent.events.map((e) => e.type)).toEqual([...(claimable > 0n ? ['PayoutClaimed'] : []), 'UnitsBurned', 'RedemptionClaimed']);
@@ -306,5 +337,13 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
     expect(red.tail).toMatchObject({ paidPerUnitWad: tailWad.toString(), paidPerUnit: ((tailWad * SCALE) / WAD).toString() });
     expect(BigInt(red.tail.paidPerUnit) > tailWad / WAD).toBe(true);
     expect(red.tail.payouts).toHaveLength(1);
+  });
+
+  // cause S3R-N: every curve route of the OpenAPI document was walked above, each carrying no cap and the notice
+  it('every curve read and builder carries no cap and the buyer notice: the walk covers every curve route of the OpenAPI document', () => {
+    const doc = readFileSync(new URL('../openapi.yaml', import.meta.url), 'utf8');
+    const routes = [...doc.matchAll(/^ {2}(\/series\/\{seriesId\}\/curve[^:]*):$/gm)].map((m) => m[1]!);
+    expect(routes).toHaveLength(9);
+    expect([...walked].sort()).toEqual(routes.sort());
   });
 });

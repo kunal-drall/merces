@@ -86,19 +86,21 @@ paths:
         - { name: wallet, in: query, schema: { type: string }, description: "one of the caller's wallets; all of them on the series' chain when absent" }
       responses:
         '200':
-          description: One position per wallet
+          description: One position per wallet, with no cap and the buyer notice
           content:
             application/json:
               schema:
-                type: object
-                required: [seriesId, unitScale, status, phase, redeemed, positions]
-                properties:
-                  seriesId: { type: string }
-                  unitScale: { type: string, enum: ['1000000'] }
-                  status: { type: string }
-                  phase: { type: string }
-                  redeemed: { type: boolean, description: the series redeemed (tenders are open while the quota lasts) }
-                  positions: { type: array, items: { $ref: '#/components/schemas/CurveWalletPosition' } }
+                allOf:
+                  - $ref: '#/components/schemas/CurveNoCap'
+                  - type: object
+                    required: [seriesId, unitScale, status, phase, redeemed, positions]
+                    properties:
+                      seriesId: { type: string }
+                      unitScale: { type: string, enum: ['1000000'] }
+                      status: { type: string }
+                      phase: { type: string }
+                      redeemed: { type: boolean, description: the series redeemed (tenders are open while the quota lasts) }
+                      positions: { type: array, items: { $ref: '#/components/schemas/CurveWalletPosition' } }
         '403': { description: The wallet is not linked to the caller }
         '409': { description: Not a curve-mode series (detail.stage1 NotCurveMode) }
         '422': { description: Not a Solana series }
@@ -113,18 +115,20 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet, units], properties: { wallet: { type: string, description: "one of the caller's wallets; it signs every step" }, units: { type: string, pattern: '^\d+$', description: base lamports } } } } } }
       responses:
         '200':
-          description: The steps and the stake after them
+          description: The steps and the stake after them, with no cap and the buyer notice
           content:
             application/json:
               schema:
-                type: object
-                required: [seriesId, wallet, units, steps, stakedAfter]
-                properties:
-                  seriesId: { type: string }
-                  wallet: { type: string }
-                  units: { type: string }
-                  steps: { type: array, items: { type: object, required: [step, tx], properties: { step: { type: string, enum: [registerHolder, syncCurveUnits, stakeUnits] }, tx: { $ref: '#/components/schemas/UnsignedTx' } } } }
-                  stakedAfter: { type: string }
+                allOf:
+                  - $ref: '#/components/schemas/CurveNoCap'
+                  - type: object
+                    required: [seriesId, wallet, units, steps, stakedAfter]
+                    properties:
+                      seriesId: { type: string }
+                      wallet: { type: string }
+                      units: { type: string }
+                      steps: { type: array, items: { type: object, required: [step, tx], properties: { step: { type: string, enum: [registerHolder, syncCurveUnits, stakeUnits] }, tx: { $ref: '#/components/schemas/UnsignedTx' } } } }
+                      stakedAfter: { type: string }
         '403': { description: "The wallet is not linked to the caller, or it is not on the chain's allowlist (detail.stage1 NotAllowlisted: only an approved wallet registers and stakes; it can still sell)" }
         '409': { description: "In Stage 1's order: the raise is not Open or Settled (detail.stage1 RaiseNotOpen), the series is terminal (TerminalStatus), 0 units (ZeroUnits), the stakes would pass the units outstanding even after a census now, or a census is held by the issuer's assembled report (StakeExceedsOutstanding; detail.reason report-pending; detail.stakable), the wallet holds fewer units (detail.code InsufficientFunds); not a curve-mode series (NotCurveMode)" }
         '422': { description: Not a Solana series }
@@ -139,20 +143,22 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet, units], properties: { wallet: { type: string, description: "one of the caller's wallets; it signs" }, units: { type: string, pattern: '^\d+$', description: base lamports } } } } } }
       responses:
         '200':
-          description: The one transaction and what its claim pays at the chain's current state
+          description: The one transaction and what its claim pays at the chain's current state, with no cap and the buyer notice
           content:
             application/json:
               schema:
-                type: object
-                required: [seriesId, wallet, units, tx, commands, payout, stakedAfter]
-                properties:
-                  seriesId: { type: string }
-                  wallet: { type: string }
-                  units: { type: string }
-                  tx: { $ref: '#/components/schemas/UnsignedTx' }
-                  commands: { type: array, items: { type: string, enum: [unstakeUnits, claimPayout] } }
-                  payout: { $ref: '#/components/schemas/Money', description: "what the bundled claimPayout pays at the chain's current state: the pending payout plus what the stake earned since the holder's cursor" }
-                  stakedAfter: { type: string }
+                allOf:
+                  - $ref: '#/components/schemas/CurveNoCap'
+                  - type: object
+                    required: [seriesId, wallet, units, tx, commands, payout, stakedAfter]
+                    properties:
+                      seriesId: { type: string }
+                      wallet: { type: string }
+                      units: { type: string }
+                      tx: { $ref: '#/components/schemas/UnsignedTx' }
+                      commands: { type: array, items: { type: string, enum: [unstakeUnits, claimPayout] } }
+                      payout: { $ref: '#/components/schemas/Money', description: "what the bundled claimPayout pays at the chain's current state: the pending payout plus what the stake earned since the holder's cursor" }
+                      stakedAfter: { type: string }
         '403': { description: The wallet is not linked to the caller }
         '409': { description: '0 units (detail.stage1 ZeroUnits) or more than the stake (InsufficientStake); not a curve-mode series (NotCurveMode)' }
         '422': { description: Not a Solana series }
@@ -167,25 +173,27 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet], properties: { wallet: { type: string, description: "one of the caller's wallets; it signs" }, fromStake: { type: string, pattern: '^\d+$', default: '0' }, fromWallet: { type: string, pattern: '^\d+$', default: '0' } } } } } }
       responses:
         '200':
-          description: The tender and what it pays
+          description: The tender and what it pays, with no cap and the buyer notice
           content:
             application/json:
               schema:
-                type: object
-                required: [seriesId, wallet, tx, fromStake, fromWallet, units, pricePerUnit, principal, payout, total, quotaLeft, quotaLeftAfter]
-                properties:
-                  seriesId: { type: string }
-                  wallet: { type: string }
-                  tx: { $ref: '#/components/schemas/UnsignedTx' }
-                  fromStake: { type: string }
-                  fromWallet: { type: string }
-                  units: { type: string }
-                  pricePerUnit: { $ref: '#/components/schemas/Money', description: the redemption price per whole unit }
-                  principal: { $ref: '#/components/schemas/Money', description: 'floor(pricePerUnit × units / 10^6)' }
-                  payout: { $ref: '#/components/schemas/Money', description: the pending payout the tender also pays (its own PayoutClaimed) }
-                  total: { $ref: '#/components/schemas/Money' }
-                  quotaLeft: { type: string, description: "what is left of the wallet units' quota: units at redemption − tendered − staked" }
-                  quotaLeftAfter: { type: string }
+                allOf:
+                  - $ref: '#/components/schemas/CurveNoCap'
+                  - type: object
+                    required: [seriesId, wallet, tx, fromStake, fromWallet, units, pricePerUnit, principal, payout, total, quotaLeft, quotaLeftAfter]
+                    properties:
+                      seriesId: { type: string }
+                      wallet: { type: string }
+                      tx: { $ref: '#/components/schemas/UnsignedTx' }
+                      fromStake: { type: string }
+                      fromWallet: { type: string }
+                      units: { type: string }
+                      pricePerUnit: { $ref: '#/components/schemas/Money', description: the redemption price per whole unit }
+                      principal: { $ref: '#/components/schemas/Money', description: 'floor(pricePerUnit × units / 10^6)' }
+                      payout: { $ref: '#/components/schemas/Money', description: the pending payout the tender also pays (its own PayoutClaimed) }
+                      total: { $ref: '#/components/schemas/Money' }
+                      quotaLeft: { type: string, description: "what is left of the wallet units' quota: units at redemption − tendered − staked" }
+                      quotaLeftAfter: { type: string }
         '403': { description: The wallet is not linked to the caller }
         '409': { description: "In Stage 1's order: no redemption yet (detail.stage1 NotRedeemed), 0 units (ZeroUnits), more than the stake (InsufficientStake), the wallet units would pass the quota (TenderQuotaExhausted; detail.quotaLeft), not a registered holder (HolderNotRegistered), the wallet holds fewer units (detail.code InsufficientFunds); not a curve-mode series (NotCurveMode)" }
         '422': { description: Not a Solana series }
@@ -200,17 +208,19 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [signer], properties: { signer: { type: string, description: one of the caller's wallets } } } } } }
       responses:
         '200':
-          description: The unsigned census, what it would count now beside the count stored last, and whether it changes it
+          description: The unsigned census, what it would count now beside the count stored last, and whether it changes it, with no cap and the buyer notice
           content:
             application/json:
               schema:
-                type: object
-                required: [seriesId, tx, census, changes]
-                properties:
-                  seriesId: { type: string }
-                  tx: { type: object }
-                  census: { oneOf: [{ $ref: '#/components/schemas/CurveCensus' }, { type: 'null' }] }
-                  changes: { type: boolean }
+                allOf:
+                  - $ref: '#/components/schemas/CurveNoCap'
+                  - type: object
+                    required: [seriesId, tx, census, changes]
+                    properties:
+                      seriesId: { type: string }
+                      tx: { type: object }
+                      census: { oneOf: [{ $ref: '#/components/schemas/CurveCensus' }, { type: 'null' }] }
+                      changes: { type: boolean }
         '403': { description: The signer is not one of the caller's wallets }
         '409': { description: 'The raise is not Open or Settled (detail.stage1 RaiseNotOpen), the series is Retired, Redeemed or Extinguished (detail.stage1 TerminalStatus), or the issuer has an assembled report waiting to be submitted (detail.reason report-pending, with its periodId and reportId); not a curve-mode series' }
         '422': { description: 'Not a Solana series' }
@@ -238,7 +248,7 @@ components:
   schemas:
     CurveNoCap:
       type: object
-      description: 'What every curve read and builder response says about the cap: a curve raise has no wallet cap at any stage, before or after the curve fills (owner direction; Stage 1 stores the curve series'' wallet cap as 0 and enforces none). The other fields depend on the operation.'
+      description: 'What every curve read and builder response says about the cap, with the buyer notice: GET /series/{seriesId}/curve, its quote and position reads, and its configure, swap, stake, unstake, tender and census builders (the admin monitor, one pass over every curve, carries neither). A curve raise has no wallet cap at any stage, before or after the curve fills (owner direction; Stage 1 stores the curve series'' wallet cap as 0 and enforces none). The other fields depend on the operation.'
       required: [walletCap, noCap, noCapStatement, notice]
       additionalProperties: true
       properties:

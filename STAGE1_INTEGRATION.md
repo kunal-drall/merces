@@ -487,6 +487,14 @@ The S3 review's confirmed findings, each fixed in its own commit ("S3 review fix
    `issuePrice × (stakedUnits + walletUnits + burnedUnits) / unitScale`, read live; a sealed-bid row's is unchanged.
    Tests: the yield over a's 39.6 units (19.8 staked, 19.8 in the wallet) is 9,500 bps, and b's stays on its 35.65 units
    when it unstakes them all. OpenAPI (client regenerated) and API.md say how the basis is taken.
+3. **No cap and the buyer notice on every curve read and builder (low).** API.md, ASSUMPTIONS A-CURVE-2 and A-CURVE-8
+   and the `CurveNoCap` schema promised them on every curve read and builder, but the routes WP12 added, the position
+   read and the stake, unstake and tender builders, and the census builder carried neither. Each now carries
+   `walletCap: null`, `noCap: true`, `noCapStatement` and the notice rendered from the curve's own figures (its trading
+   fee and that fee's split from the pool's config), from one place (`services/src/meteora/notice.ts`), and its OpenAPI
+   response includes `CurveNoCap` (client regenerated). The admin monitor, one pass over every curve, carries neither,
+   and the docs say so. A test walks every curve route of the OpenAPI document (nine) and checks each 200 carries the
+   four fields with the notice of `GET /series/{id}/curve`, its fee split included.
 
 ### Adapter notes for the auction (S5)
 
