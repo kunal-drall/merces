@@ -57,7 +57,8 @@ export const attestorRateSchema = z.object({ attestor: addressSchema, rateWad: w
 export const userCommands = {
   registerIssuer: z.object({ kind: z.literal('registerIssuer') }),
   createSeries: z.object({ kind: z.literal('createSeries'), terms: seriesTermsSchema, /** simulator/testing only: fixed address for deterministic ids */ seriesAddressHint: z.string().optional() }),
-  openRaise: z.object({ kind: z.literal('openRaise'), seriesId: seriesIdSchema, commitEndsAt: z.number().int(), revealEndsAt: z.number().int() }),
+  /** Stage 1 `open_raise`: the chain sets the commit end to now + `commitDurationSeconds` and the reveal end to the commit end + `revealDurationSeconds` (the series' terms) */
+  openRaise: z.object({ kind: z.literal('openRaise'), seriesId: seriesIdSchema }),
   cancelRaise: z.object({ kind: z.literal('cancelRaise'), seriesId: seriesIdSchema }),
   commitBid: z.object({ kind: z.literal('commitBid'), seriesId: seriesIdSchema, commitment: hash32Schema, deposit: moneySchema }),
   revealBid: z.object({ kind: z.literal('revealBid'), seriesId: seriesIdSchema, pricePerUnit: moneySchema, quantity: unitsSchema, salt: hash32Schema }),

@@ -77,9 +77,11 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       const t = p.terms;
       await client.query(
         `insert into series (series_id, chain, issuer, stablecoin, stablecoin_mint, raise_style, units_offered, reserve_price, minimum_raise, cap_multiple_wad, lockup_seconds, release_schedule,
-           auction_fee_bps, payout_fee_bps, hurdle_wad, payout_multiple_k, wallet_cap_bps, due_days, grace_days, formal_notice_days, contract_hash, terms_commitment, tier_flags, reporting_currency, created_at, last_event_seq)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) on conflict (series_id) do nothing`,
-        [p.seriesId, e.chain, p.issuer, t.stablecoin, t.stablecoinMint, t.raiseStyle, t.unitsOffered, t.reservePrice, t.minimumRaise, t.capMultipleWad, t.lockupSeconds, JSON.stringify(t.releaseSchedule), t.auctionFeeBps, t.payoutFeeBps, t.hurdleWad, t.payoutMultipleK, t.walletCapBps, t.dueDays, t.graceDays, t.formalNoticeDays, t.contractHash, t.termsCommitment, JSON.stringify(t.tierFlags), t.reportingCurrency, e.blockTime, e.seq],
+           auction_fee_bps, payout_fee_bps, hurdle_wad, payout_multiple_k, wallet_cap_bps, due_days, grace_days, formal_notice_days, contract_hash, terms_commitment, tier_flags, reporting_currency, created_at, last_event_seq,
+           commit_duration_seconds, reveal_duration_seconds, non_reveal_charge_bps)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) on conflict (series_id) do nothing`,
+        [p.seriesId, e.chain, p.issuer, t.stablecoin, t.stablecoinMint, t.raiseStyle, t.unitsOffered, t.reservePrice, t.minimumRaise, t.capMultipleWad, t.lockupSeconds, JSON.stringify(t.releaseSchedule), t.auctionFeeBps, t.payoutFeeBps, t.hurdleWad, t.payoutMultipleK, t.walletCapBps, t.dueDays, t.graceDays, t.formalNoticeDays, t.contractHash, t.termsCommitment, JSON.stringify(t.tierFlags), t.reportingCurrency, e.blockTime, e.seq,
+          t.commitDurationSeconds, t.revealDurationSeconds, t.nonRevealChargeBps],
       );
       break;
     }

@@ -36,7 +36,7 @@ snapshot-and-rollback, and exactly the canonical events. Every error on a Stage 
 synchronous engine runs; the engine takes the verdict and checks the six public signals itself. Its commands live in one module per area under
 `packages/simulator/src/engine/` (registry, auction, treasury, reports, payments, holders, status, redemption, terminal,
 fx, window, curve), each a set of functions over the shared `EngineCore`; the `ChainPort` read mappers live in
-`src/reads/`. State is a plain object, version 2, carrying Stage 1's own series ledger, payout vault, tail and final
+`src/reads/`. State is a plain object, version 3 (S2), carrying Stage 1's own series ledger, payout vault, tail and final
 pool (serialisable for the Postgres persistent mode; another version is refused, and `sim:reset` clears it). Two
 personalities differ only in address format and stablecoin catalogue. Time is a controllable clock (`advanceTime`,
 `setTime`) exposed in mock mode through `/dev/advance-time`. The arithmetic is Stage 1's: `@merces/math` re-exports

@@ -1,7 +1,7 @@
 /**
  * The merces backend's own bookkeeping (S1 plan §5.2): what Stage 1's multi-step auction and window record and our
  * one-step canonical model does not (tally rounds, processed and delivered bids, minted units, window phases), plus
- * the runner-held terms canonical terms lack (durations, window fee, non-reveal bps) and the actors Stage 1 lists in
+ * the runner-held terms canonical terms lack (the window durations and fee) and the actors Stage 1 lists in
  * `balances`. Fields here are shim-derived and therefore "not parity" (VECTOR_PARITY.md).
  *
  * Plain JSON (strings for amounts) so a revert check can compare it byte for byte; it changes only when a step
@@ -36,14 +36,14 @@ export interface WindowBook {
   matchedUnits: string;
 }
 
-/** Terms canonical `SeriesTerms` lacks (shim SH-REG-4), held by the runner. */
+/**
+ * Terms canonical `SeriesTerms` lacks (shim SH-REG-4), held by the runner: the window's (S5). The raise durations and
+ * the non-reveal bps are canonical terms since S2.
+ */
 export interface RunnerTerms {
-  commitDuration: number;
-  revealDuration: number;
   windowCommitDuration: number;
   windowRevealDuration: number;
   windowFeeBps: number;
-  nonRevealChargeBps: number;
 }
 
 export interface SeriesBook {

@@ -6,14 +6,15 @@ import type { PersonalityConfig } from './addresses.ts';
  * Internal simulator state. bigint everywhere money or ratios appear.
  *
  * Version 2 (S1) carries Stage 1's own state objects beside ours: the series ledger (`SimLedger`, Stage 1's field
- * names), the payout vault, the tail and the final pool (Stage 1 types from `@merces/reference`). The version-1
- * bookkeeping those replaced (the reward-debt cursors, the series pause record, the per-year gross map, the period's
- * outstanding and accrual) is gone since S1 WP13; a persisted version-2 state that still carries it is read as before
- * and the old fields are ignored.
+ * names), the payout vault, the tail and the final pool (Stage 1 types from `@merces/reference`).
+ *
+ * Version 3 (S2) adds the raise's own terms (the commit and reveal durations and the non-reveal charge, `SimTerms`);
+ * S2 completes its layout with Stage 1's multi-step auction settlement before a version-3 build is deployed. States of
+ * another version are never upgraded in place.
  */
-export const SIM_STATE_VERSION = 2;
+export const SIM_STATE_VERSION = 3;
 
-/** A persisted simulator state from another layout. Version 1 (before S1) is never upgraded in place: reset it. */
+/** A persisted simulator state from another layout (version 1 before S1, version 2 before S2): never upgraded in place, reset it. */
 export class SimStateVersionError extends Error {
   constructor(readonly found: unknown) {
     super(`simulator state version ${String(found ?? 1)} is not supported (this build needs version ${SIM_STATE_VERSION}); reset the simulator chains with \`pnpm --filter @merces/simulator sim:reset\` (RUNBOOK.md)`);
@@ -35,6 +36,11 @@ export interface SimTerms {
   hurdleWad: bigint;
   payoutMultipleK: bigint;
   walletCapBps: bigint;
+  /** recorded as created; settlement applies `appliedNonRevealChargeBps` of it (0 while the charge is held) */
+  nonRevealChargeBps: number;
+  /** `openRaise` sets the commit end to now + this, and the reveal end to the commit end + `revealDurationSeconds` */
+  commitDurationSeconds: number;
+  revealDurationSeconds: number;
   dueDays: number;
   graceDays: number;
   formalNoticeDays: number;
@@ -287,7 +293,7 @@ export function serialiseState(s: SimState): string {
   });
 }
 
-/** Parse a persisted state. Throws `SimStateVersionError` unless it is version 2: version-1 states are never upgraded. */
+/** Parse a persisted state. Throws `SimStateVersionError` unless it is version 3: older states are never upgraded. */
 export function deserialiseState(json: string): SimState {
   const state = JSON.parse(json, (_k, v) => {
     if (v && typeof v === 'object') {

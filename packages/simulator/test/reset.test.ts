@@ -5,6 +5,10 @@ import { PgSimPersistence, SimStateVersionError, SimulatorChain } from '../src/i
 import { SimResetError, formatSimResetReport, resetSimulatorChains, simResetAllowed } from '../src/reset.ts';
 import { GENESIS } from './helpers.ts';
 
+/*
+ * S2 cause codes:
+ *  - S2-V3: simulator state version 3.
+ */
 describe('sim:reset guard', () => {
   it('runs only with MERCES_ALLOW_SIM_RESET=1', () => {
     expect(simResetAllowed({})).toBe(false);
@@ -88,9 +92,9 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
     expect(await count("outbox where payload->>'kind' = 'application.submitted'")).toBe(1);
     expect(await count("notifications where data->>'seriesId' like 'monad:%'")).toBe(1);
 
-    // a reset chain starts again from an empty version-2 state
+    // a reset chain starts again from an empty state of the current version
     const fresh = await persisted('solana');
-    expect(fresh.state.version).toBe(2);
+    expect(fresh.state.version).toBe(3); // cause S2-V3: simulator state version 3 (was 2)
     expect(await fresh.getBalance(fresh.address('wallet:x'), 'USDC')).toBe('0');
     await fresh.close();
   });

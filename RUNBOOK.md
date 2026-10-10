@@ -59,13 +59,14 @@ snarkjs keeps worker threads alive once it has verified or proved. The API, `dev
 them on SIGINT/SIGTERM (`shutdownProofSystem()`), as do `stage1:sync` and `demo:cycle` before they exit; a new CLI that
 proves or verifies must do the same, or it will not exit.
 
-### Simulator state version 2: reset
+### Simulator state version 3: reset
 
-From S1 the persisted simulator state is **version 2**: it carries Stage 1's own series ledger, payout vault, tail and
-final pool beside ours. A persisted chain of another version is never upgraded in place: `SimulatorChain.create`
-refuses it with `SimStateVersionError`, so the API and `dev:mock` stop at boot on a database that still holds a
-version-1 chain. Reset the simulated chains **before deploying the version-2 build** (no environment holds simulator
-data worth keeping):
+From S2 the persisted simulator state is **version 3**: beside Stage 1's own series ledger, payout vault, tail and final
+pool (version 2, S1), it carries the raise's own terms (the commit and reveal durations and the non-reveal charge) and
+Stage 1's multi-step auction settlement. A persisted chain of another version is never upgraded in place:
+`SimulatorChain.create` refuses it with `SimStateVersionError`, so the API and `dev:mock` stop at boot on a database
+that still holds a version-1 or version-2 chain. Reset the simulated chains **before deploying the version-3 build**
+(no environment holds simulator data worth keeping):
 
 ```
 pnpm --filter @merces/simulator sim:reset --dry-run                      # what would go, nothing deleted

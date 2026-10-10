@@ -13,8 +13,9 @@ import { direct, eventOf, shim, type TranslatorTable } from './types.ts';
  * - `register_attestor` / `revoke_attestor` (SH-REG-2): admin `registerAttestor{active}`; no 45-day revocation grace.
  * - `register_verifier_key` (SH-REG-3): admin `registerVerifierKey` with the ed25519 key derived from the vector key.
  * - `create_series` (SH-REG-4): `createSeries` in USDC with USD income, sealed; due, grace and notice days from
- *   `config.parameters`; durations, window fee and non-reveal bps held by the runner (their Stage 1 bounds are not
- *   checked: the engine's createSeries bounds only the canonical terms, as Stage 1's SIM:756-781 does).
+ *   `config.parameters`; the raise durations and the non-reveal bps are canonical terms (S2), so the engine bounds them
+ *   as Stage 1 does (SIM:759-777); the window durations and the window fee are held by the runner (S5; their Stage 1
+ *   bounds are not checked).
  */
 export const registryOps: TranslatorTable = {
   fund: (ctx, c) =>
@@ -69,6 +70,9 @@ export const registryOps: TranslatorTable = {
       hurdleWad: t.hurdleRateWad,
       payoutMultipleK: num(t.payoutMultipleK, 'payoutMultipleK'),
       walletCapBps: num(t.walletCapBps, 'walletCapBps'),
+      nonRevealChargeBps: num(t.nonRevealChargeBps, 'nonRevealChargeBps'),
+      commitDurationSeconds: num(t.commitDuration, 'commitDuration'),
+      revealDurationSeconds: num(t.revealDuration, 'revealDuration'),
       dueDays: p.reportDueDays,
       graceDays: p.graceDays,
       formalNoticeDays: p.formalNoticeDays,
@@ -79,12 +83,9 @@ export const registryOps: TranslatorTable = {
       raiseStyle: 'sealed',
     };
     const held = {
-      commitDuration: num(t.commitDuration, 'commitDuration'),
-      revealDuration: num(t.revealDuration, 'revealDuration'),
       windowCommitDuration: num(t.windowCommitDuration, 'windowCommitDuration'),
       windowRevealDuration: num(t.windowRevealDuration, 'windowRevealDuration'),
       windowFeeBps: num(t.windowFeeBps, 'windowFeeBps'),
-      nonRevealChargeBps: num(t.nonRevealChargeBps, 'nonRevealChargeBps'),
     };
     return shim('SH-REG-4', async () => {
       const r = await ctx.send(ctx.actors.wallet(c.actor), { kind: 'createSeries', terms, seriesAddressHint: ctx.actors.seriesAddress(c.series) });

@@ -7,18 +7,27 @@ import { fail } from './errors.ts';
 import { pidAtTime } from './ledger.ts';
 
 // ------------------------------------------------------------------ auction
+/**
+ * Stage 1 `open_raise` (SIM:871-883), in its order: the issuer (NotIssuer), a Draft raise (RaiseNotDraft), a contract
+ * hash (ContractHashMissing; unreachable here, as `createSeries` refuses a zero hash, kept for parity), the issuer still
+ * allowlisted (NotAllowlisted), new raises not paused (NewRaisesPaused); then our curve guard. The phase ends come from
+ * the series' terms: commit end = now + `commitDurationSeconds`, reveal end = commit end + `revealDurationSeconds`.
+ */
 export function openRaise(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'openRaise' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
   e.requireIssuer(s, signer);
-  if (s.phase !== 'Draft') throw new ChainError('WrongPhase', `series is ${s.phase}`);
-  if (s.terms.raiseStyle !== 'sealed') throw new ChainError('WrongPhase', 'curve-mode series do not run a sealed-bid raise');
+  if (s.phase !== 'Draft') fail('RaiseNotDraft', `series is ${s.phase}`);
+  if (/^0x0{64}$/.test(s.terms.contractHash)) fail('ContractHashMissing', 'contract hash not set');
+  if (!e.state.allowlist.has(s.issuer)) fail('NotAllowlisted', 'the issuer is not allowlisted');
   if (e.state.newRaisesPaused) fail('NewRaisesPaused', 'new raises are paused by the protocol admin');
-  if (cmd.commitEndsAt <= now || cmd.revealEndsAt <= cmd.commitEndsAt) throw new ChainError('InvalidTerms', 'bad auction timings');
+  if (s.terms.raiseStyle !== 'sealed') throw new ChainError('WrongPhase', 'curve-mode series do not run a sealed-bid raise');
+  const commitEndsAt = now + s.terms.commitDurationSeconds;
+  const revealEndsAt = commitEndsAt + s.terms.revealDurationSeconds;
   s.phase = 'Open';
   s.openedAt = now;
-  s.commitEndsAt = cmd.commitEndsAt;
-  s.revealEndsAt = cmd.revealEndsAt;
-  emit('RaiseOpened', { seriesId: s.seriesId, commitEndsAt: cmd.commitEndsAt, revealEndsAt: cmd.revealEndsAt });
+  s.commitEndsAt = commitEndsAt;
+  s.revealEndsAt = revealEndsAt;
+  emit('RaiseOpened', { seriesId: s.seriesId, commitEndsAt, revealEndsAt });
 }
 export function cancelRaise(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'cancelRaise' }>, emit: Emit): void {
   const s = e.series(cmd.seriesId);

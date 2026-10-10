@@ -44,6 +44,20 @@ export const seriesTermsSchema = z.object({
   hurdleWad: wadSchema,
   payoutMultipleK: z.number().int().positive(),
   walletCapBps: z.number().int().positive().max(10_000),
+  /**
+   * Stage 1's non-reveal charge (SPEC §5.2): the share of an unrevealed bid's escrow kept when the raise settles.
+   * Stage 1 bounds it to 0–1,000 bps at creation for a sealed raise. **Owner hold:** the charge is not modelled; new
+   * series record 0 (`DEFAULTS.nonRevealChargeBps`) and the engine applies 0 whatever a series records
+   * (`NON_REVEAL_CHARGE_HELD`, params.ts).
+   */
+  nonRevealChargeBps: z.number().int().nonnegative().max(10_000),
+  /**
+   * The commit phase of the sealed-bid raise, in seconds from `openRaise` (Stage 1 `commit_duration`); the reveal phase
+   * follows for `revealDurationSeconds` (Stage 1 `reveal_duration`). The chain enforces Stage 1's bounds for a sealed
+   * raise (1 hour–30 days and 1 hour–7 days); curve series carry them unchecked until S5 (Stage 1 requires 0 there).
+   */
+  commitDurationSeconds: z.number().int().nonnegative(),
+  revealDurationSeconds: z.number().int().nonnegative(),
   /** report due, in days of unpaused time after the period end (Stage 1: countdown ≤ due days is OnTime) */
   dueDays: z.number().int().positive(),
   /** grace after the due date (Stage 1: countdown ≤ due + grace days is InGrace, then Late) */

@@ -72,6 +72,13 @@ export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & {
     payoutMultipleK: DEFAULTS.payoutMultipleK,
     /** 20% in the harness so five backers can sell out a 500-unit series; the protocol default is 10% (parameter) */
     walletCapBps: 2000,
+    nonRevealChargeBps: DEFAULTS.nonRevealChargeBps,
+    /**
+     * A 3-day commit and a 1-day reveal phase in the harness (Stage 1's defaults are 7 and 2 days): every raise settles
+     * at the same instant as before S2, so the period and status figures pinned on it hold.
+     */
+    commitDurationSeconds: 3 * 86_400,
+    revealDurationSeconds: 86_400,
     dueDays: DEFAULTS.dueDays,
     graceDays: DEFAULTS.graceDays,
     formalNoticeDays: DEFAULTS.formalNoticeDays,
@@ -290,16 +297,19 @@ export class SimHarness {
     return { ytd: 0n, salt: 0n };
   }
 
-  /** Run a full sealed-bid raise: create, open, N backers bid at given prices, reveal, settle. Returns the seriesId. */
-  async runRaise(opts: { terms?: Partial<SeriesTerms>; privateTerms?: PrivateTerms; bids?: { backer: number; price: bigint; qty: bigint }[]; commitSeconds?: number; revealSeconds?: number } = {}): Promise<{ seriesId: string; terms: SeriesTerms; privateTerms: PrivateTerms; clearingPrice: bigint }> {
+  /**
+   * Run a full sealed-bid raise: create, open, N backers bid at given prices, reveal, settle. Returns the seriesId. The
+   * phase ends are the chain's (`openRaise` derives them from the terms' durations: `terms.commitDurationSeconds`,
+   * `terms.revealDurationSeconds`).
+   */
+  async runRaise(opts: { terms?: Partial<SeriesTerms>; privateTerms?: PrivateTerms; bids?: { backer: number; price: bigint; qty: bigint }[] } = {}): Promise<{ seriesId: string; terms: SeriesTerms; privateTerms: PrivateTerms; clearingPrice: bigint }> {
     const { terms, privateTerms } = defaultTerms(this.sim, { ...(opts.terms ?? {}), privateTerms: opts.privateTerms });
     if (!(await this.sim.getIssuer(this.issuer.address))) await this.exec(this.issuer, { kind: 'registerIssuer' });
     const created = await this.exec(this.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events.find((e) => e.type === 'SeriesCreated')!.payload as { seriesId: string }).seriesId;
-    const now = await this.sim.now();
-    const commitEndsAt = now + (opts.commitSeconds ?? 3 * 86_400);
-    const revealEndsAt = commitEndsAt + (opts.revealSeconds ?? 86_400);
-    await this.exec(this.issuer, { kind: 'openRaise', seriesId, commitEndsAt, revealEndsAt });
+    await this.exec(this.issuer, { kind: 'openRaise', seriesId });
+    const { commitEndsAt, revealEndsAt } = (await this.sim.getAuction(seriesId))!;
+    if (commitEndsAt === null || revealEndsAt === null) throw new Error(`harness: ${seriesId} opened without phase ends`);
     const bids = opts.bids ?? [
       { backer: 0, price: 12_000_000n, qty: 100n },
       { backer: 1, price: 11_000_000n, qty: 100n },

@@ -16,7 +16,8 @@ import { seriesOf } from './kit.ts';
  *  - E: Stage 1's check order and names (SameAttestor, InvalidAttestorSignature, RaiseNotSettled, TerminalStatus,
  *    NotIssuer, AmendmentAfterTerminal, UnfavourableAmendment) and `amendmentNonce` / `extinguishNonce`;
  *  - M4: on a series that redeemed, a holder's final share is weighed on its redeemed units, its remaining units being
- *    redeemed first.
+ *    redeemed first;
+ *  - S2-AD (S2): commit and reveal durations are series terms; `openRaise` derives the phase ends from them.
  */
 
 const DAY = 86_400;
@@ -105,8 +106,7 @@ describe('amendments and extinguishment', () => {
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     // a Draft raise (Stage 1 exit.rs: RaiseNotSettled; was cancelled by the extinguishment)
     await expectStage1Error(h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]), 'RaiseNotSettled');
-    const now = await h.sim.now();
-    await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 3 * DAY, revealEndsAt: now + 4 * DAY });
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId }); // cause S2-AD: the terms' 3-day commit and 1-day reveal
     // an Open raise (was failed with every deposit refundable)
     await expectStage1Error(h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]), 'RaiseNotSettled');
     expect((await h.sim.getSeries(seriesId))!.phase).toBe('Open');

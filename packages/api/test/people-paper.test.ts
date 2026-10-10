@@ -4,6 +4,12 @@ import { termsCommitment, type SignedTx, type UnsignedTx } from '@merces/domain'
 import { SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
+/*
+ * S2 cause codes:
+ *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults for a new series);
+ *  - S2-NRC: the non-reveal charge hold (new series record 0 bps).
+ */
+
 /** Sign in a simulator wallet through the real nonce/verify flow. */
 async function signIn(rig: Awaited<ReturnType<typeof makeRig>>, chain: string, wallet: SimWallet, linkToken?: string): Promise<string> {
   const n = await rig.post('/auth/nonce', { chain, address: wallet.address });
@@ -158,6 +164,9 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     const tx = built.json().tx as UnsignedTx;
     expect(tx.command.kind).toBe('createSeries');
     expect((tx.command as { terms: { contractHash: string; termsCommitment: string } }).terms.contractHash).toBe(signedHash);
+    // cause S2-AD / S2-NRC: the raise's own terms are filled in: Stage 1's 7-day commit and 2-day reveal, and 0 bps while
+    // the non-reveal charge is held (the series keeps 0 after the hold is lifted)
+    expect((tx.command as { terms: Record<string, unknown> }).terms).toMatchObject({ commitDurationSeconds: 604_800, revealDurationSeconds: 172_800, nonRevealChargeBps: 0 });
     // the issuer must be registered on chain first (registerIssuer), then createSeries
     const reg = await rig.sol.sim.build({ kind: 'registerIssuer' }, issuer.address);
     expect((await rig.post('/tx/send', await issuer.sign(reg), issuerTok)).statusCode).toBe(200);

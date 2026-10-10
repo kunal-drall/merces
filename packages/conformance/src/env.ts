@@ -48,6 +48,7 @@ export async function expectChainError(p: Promise<unknown>, code: string): Promi
 
 export async function simulatorEnv(personality: Personality): Promise<ConformanceEnv> {
   const h = await SimHarness.create(personality, { genesis: Date.UTC(2026, 0, 1) / 1000 });
+  const durations = { commit: 3 * 86_400, reveal: 86_400, lockup: 30 * 86_400, reportLead: 86_400 };
   return {
     name: `simulator:${personality}`,
     chain: h.sim,
@@ -58,11 +59,12 @@ export async function simulatorEnv(personality: Personality): Promise<Conformanc
     verifierKeyId: h.verifier.keyId,
     attest: (i) => h.verifier.attest(i),
     privateTerms: defaultTerms(h.sim).privateTerms,
-    terms: (over) => defaultTerms(h.sim, over).terms,
+    // the raise's phases are terms: openRaise derives the ends from these durations
+    terms: (over) => defaultTerms(h.sim, { commitDurationSeconds: durations.commit, revealDurationSeconds: durations.reveal, ...over }).terms,
     waitUntil: async (until) => {
       if ((await h.sim.now()) < until) await h.sim.setTime(until);
     },
-    durations: { commit: 3 * 86_400, reveal: 86_400, lockup: 30 * 86_400, reportLead: 86_400 },
+    durations,
     buildReport: (p) => h.buildReport(p),
     close: async () => undefined,
   };

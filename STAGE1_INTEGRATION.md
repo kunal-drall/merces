@@ -154,7 +154,7 @@ Open, with the default S1 uses meanwhile:
 
 | Divergence | Milestone |
 | --- | --- |
-| Non-reveal charge (owner hold) | after the owner decides |
+| Non-reveal charge (owner hold): not modelled. `nonRevealChargeBps` is a series term since S2 (bounded 0–1,000 bps on a sealed raise); new series record 0, live series included, and keep it (frozen charters); 0 applies whatever a series records (`NON_REVEAL_CHARGE_HELD`), so an unrevealed bid is refunded in full. Lifting the hold adds the `NonRevealCharged` event, a `nonReveal` fee kind, the bids' charge column, the accounting rows and the API fields, and drops the vector runner's DIV-NRC-1 entries (A-AUC-11) | after the owner decides |
 | One-step auction: greedy fill by price then commit order, cap clamp at allocation, de-allowlisted bidders excluded, pull refunds (B.1) | S2 |
 | One-step transfer windows; no windows flag, eligibility or fee (B.2) | S5 |
 | `claimPayout` = claim + tail + final; no explicit `register_holder` (B.3); `claim_tail` is `claimRedemption` then `claimPayout`, two transactions (runner-atomic in the vector runner) | S3 |
@@ -165,7 +165,7 @@ Open, with the default S1 uses meanwhile:
 | ed25519 signatures with co-signers, attestation v1 as canonical JSON, no revocation grace (B.4) | S4 |
 | `register_issuer` by the issuer (Stage 1: admin-only, B.7) | S5 |
 | Curve wallet cap enforced while bonding (owner: no cap) | S5 |
-| Raise and window durations, the window fee and the non-reveal charge are not series terms, so `createSeries` cannot bound them (Stage 1: ParameterOutOfBounds); every canonical term follows Stage 1's `create_series` rules (A-TERMS-4) | S2, S5 |
+| The window durations and the window fee are not series terms, so `createSeries` cannot bound them (Stage 1: ParameterOutOfBounds); the raise durations and the non-reveal charge are terms since S2, bounded on a sealed raise, and unchecked on a curve series (Stage 1 requires 0 there); every canonical term follows Stage 1's `create_series` rules (A-TERMS-4) | S5 |
 
 ### Blockers
 
@@ -282,6 +282,10 @@ redemption slippage guard (`maxPricePerUnit`) checked before submitting, since S
    (NewRaisesPaused, SIM:875), no longer `createSeries`, except that creating a curve raise, which starts it, is refused
    as Stage 1 refuses activating a curve (A-ADM-2). The creation shape (mode, FX pair, durations, non-reveal and window
    bps) and curve series with cap 0 are S2 and S5.
+   **S2:** the commit and reveal durations and the non-reveal bps are series terms, bounded as Stage 1 bounds them on a
+   sealed raise; `openRaise` takes the series only, checks Stage 1's order and derives the phase ends from the terms
+   (A-AUC-5). The charge itself stays an owner hold: new series record 0 (A-AUC-11). The window durations and fee, the
+   FX pair and curve series with cap 0 are S5.
 9. *Status and timing.* The formal notice falls at period end + 90 days (ours + 120); OnTime lasts while the
    countdown is ≤ 30 days and InGrace while ≤ 45 days (ours switches at the boundary); `D_avg` buckets a payment by its
    period's deadline, not by when it arrived; FX coverage counts trading days, and weekend snapshots revert.

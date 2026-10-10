@@ -266,6 +266,21 @@
                     "exclusiveMinimum": 0,
                     "maximum": 10000
                   },
+                  "nonRevealChargeBps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "commitDurationSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "revealDurationSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
                   "dueDays": {
                     "type": "integer",
                     "exclusiveMinimum": 0,
@@ -339,6 +354,9 @@
                   "hurdleWad",
                   "payoutMultipleK",
                   "walletCapBps",
+                  "nonRevealChargeBps",
+                  "commitDurationSeconds",
+                  "revealDurationSeconds",
                   "dueDays",
                   "graceDays",
                   "formalNoticeDays",
@@ -3671,6 +3689,21 @@
               "exclusiveMinimum": 0,
               "maximum": 10000
             },
+            "nonRevealChargeBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "commitDurationSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "revealDurationSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
             "dueDays": {
               "type": "integer",
               "exclusiveMinimum": 0,
@@ -3744,6 +3777,9 @@
             "hurdleWad",
             "payoutMultipleK",
             "walletCapBps",
+            "nonRevealChargeBps",
+            "commitDurationSeconds",
+            "revealDurationSeconds",
             "dueDays",
             "graceDays",
             "formalNoticeDays",
@@ -5080,6 +5116,21 @@
               "exclusiveMinimum": 0,
               "maximum": 10000
             },
+            "nonRevealChargeBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "commitDurationSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "revealDurationSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
             "dueDays": {
               "type": "integer",
               "exclusiveMinimum": 0,
@@ -5153,6 +5204,9 @@
             "hurdleWad",
             "payoutMultipleK",
             "walletCapBps",
+            "nonRevealChargeBps",
+            "commitDurationSeconds",
+            "revealDurationSeconds",
             "dueDays",
             "graceDays",
             "formalNoticeDays",
@@ -5185,23 +5239,11 @@
         "seriesId": {
           "type": "string",
           "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-        },
-        "commitEndsAt": {
-          "type": "integer",
-          "minimum": -9007199254740991,
-          "maximum": 9007199254740991
-        },
-        "revealEndsAt": {
-          "type": "integer",
-          "minimum": -9007199254740991,
-          "maximum": 9007199254740991
         }
       },
       "required": [
         "kind",
-        "seriesId",
-        "commitEndsAt",
-        "revealEndsAt"
+        "seriesId"
       ],
       "additionalProperties": false
     },

@@ -130,11 +130,13 @@ export class SimEngine implements EngineCore {
     if (!s) throw new ChainError('NotFound', `series ${id} not found`);
     return s;
   }
+  /** Stage 1 `requireIssuer` (NotIssuer, code Unauthorized). */
   requireIssuer(s: SimSeries, signer: string): void {
-    if (s.issuer !== signer) throw new ChainError('Unauthorized', 'only the issuer may do this');
+    if (s.issuer !== signer) fail('NotIssuer', 'only the issuer may do this');
   }
+  /** Stage 1's allowlist check (NotAllowlisted, code NotAllowlisted). */
   requireAllowlisted(wallet: string): void {
-    if (!this.state.allowlist.has(wallet)) throw new ChainError('NotAllowlisted', `${wallet} is not allowlisted`);
+    if (!this.state.allowlist.has(wallet)) fail('NotAllowlisted', `${wallet} is not allowlisted`);
   }
   requireAttestor(a: string): void {
     if (!this.state.attestors.get(a)) throw new ChainError('Unauthorized', `${a} is not a registered attestor`);

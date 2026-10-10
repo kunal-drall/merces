@@ -3,11 +3,11 @@ import { beginSettlement, finalizeSettlement, isBidValid, tallyBids, type Auctio
 import type { SimSeries } from '@merces/simulator';
 import { RunnerError } from '../errors.ts';
 import { hex32 } from '../codec.ts';
-import type { SeriesBook } from '../book.ts';
 import { direct, shim, type TranslatorTable } from './types.ts';
 
 /**
- * The sealed-bid raise on our one-step settlement (shims SH-AUC-1..6; S1 plan §5.3). The canonical `settleAuction`
+ * The sealed-bid raise on our one-step settlement (shims SH-AUC-2..6; S1 plan §5.3). `open_raise` is direct since S2
+ * (the durations are series terms). The canonical `settleAuction`
  * settles, mints and makes refunds claimable in one transaction; Stage 1 proposes a price (`begin_settlement`),
  * tallies and finalizes (`finalize_settlement`), then processes (`process_bid`) and delivers (`deliver_bid`) bid by
  * bid. The runner keeps Stage 1's round, processing and delivery bookkeeping, and checks at `begin_settlement` that our
@@ -15,15 +15,18 @@ import { direct, shim, type TranslatorTable } from './types.ts';
  * by a one-step settlement and is BLOCKED.
  */
 
-/** Stage 1's auction rules for a series (its terms plus the runner-held non-reveal bps). */
-export function auctionRules(s: SimSeries, b: SeriesBook): AuctionRules {
+/**
+ * Stage 1's auction rules for a series, from its terms. They feed only Stage 1's validity, tally and finalize here,
+ * which never read the non-reveal rate; the bps the series recorded is passed as is.
+ */
+export function auctionRules(s: SimSeries): AuctionRules {
   return {
     unitsOffered: s.terms.unitsOffered,
     reservePrice: s.terms.reservePrice,
     minRaise: s.terms.minimumRaise,
     walletCapBps: Number(s.terms.walletCapBps),
     auctionFeeBps: Number(s.terms.auctionFeeBps),
-    nonRevealChargeBps: b.terms.nonRevealChargeBps,
+    nonRevealChargeBps: s.terms.nonRevealChargeBps,
   };
 }
 
@@ -37,10 +40,8 @@ export function revealedBids(s: SimSeries, rules: AuctionRules): RevealedBid[] {
 
 export const raiseOps: TranslatorTable = {
   open_raise: (ctx, c) =>
-    shim('SH-AUC-1', async () => {
-      const b = ctx.seriesBook(c.series);
-      const commitEndsAt = ctx.now() + b.terms.commitDuration;
-      await ctx.send(ctx.actors.wallet(c.actor), { kind: 'openRaise', seriesId: b.seriesId, commitEndsAt, revealEndsAt: commitEndsAt + b.terms.revealDuration });
+    direct(async () => {
+      await ctx.send(ctx.actors.wallet(c.actor), { kind: 'openRaise', seriesId: ctx.seriesBook(c.series).seriesId });
     }),
 
   commit_bid: (ctx, c) =>
@@ -61,7 +62,7 @@ export const raiseOps: TranslatorTable = {
     const b = ctx.seriesBook(c.series);
     const s = ctx.seriesState(c.series);
     if (b.auction.round) throw new RunnerError(`begin_settlement ${c.series}: a settlement round is already open`);
-    const rules = auctionRules(s, b);
+    const rules = auctionRules(s);
     const bids = revealedBids(s, rules);
     const proposal = beginSettlement(rules.unitsOffered, BigInt(c.clearingPrice), BigInt(c.qAboveClaim), BigInt(c.qAtClaim));
     const tally = tallyBids(bids, proposal);

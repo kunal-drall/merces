@@ -37,6 +37,11 @@ const VECTORS = fileURLToPath(new URL('../../../stage1/packages/vectors', import
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const raw = (name: string) => JSON.parse(readFileSync(join(VECTORS, `${name}.json`), 'utf8')) as Record<string, unknown> & { steps: Record<string, unknown>[] };
 
+/*
+ * S2 cause codes:
+ *  - S2-CR: Stage 1's creation rules over the raise's own terms (commit and reveal durations, the non-reveal charge),
+ *    canonical since S2; `open_raise` runs directly (shim SH-AUC-1 retired).
+ */
 afterAll(shutdown);
 
 describe('stage1 vector runner: reference backend', () => {
@@ -533,10 +538,18 @@ describe('stage1 vector runner: merces backend', () => {
       [call('X12', {}, [{ atOffsetSeconds: '0', bps: '9000' }]), 'InvalidReleaseSchedule'],
       // Stage 1's order: the bounded parameters come before the release schedule
       [call('X13', { hurdleRateWad: String(WAD / 2n) }, [{ atOffsetSeconds: '7776000', bps: '5000' }, { atOffsetSeconds: '0', bps: '5000' }]), 'ParameterOutOfBounds'],
+      // cause S2-CR: the raise's own terms are canonical since S2, so the engine bounds them too
+      [call('X14', { nonRevealChargeBps: '1001' }), 'ParameterOutOfBounds'],
+      [call('X15', { commitDuration: '3599' }), 'ParameterOutOfBounds'],
+      [call('X16', { commitDuration: String(30 * 86_400 + 1) }), 'ParameterOutOfBounds'],
+      [call('X17', { revealDuration: '3599' }), 'ParameterOutOfBounds'],
+      [call('X18', { revealDuration: String(7 * 86_400 + 1) }), 'ParameterOutOfBounds'],
+      [call('X19', { commitDuration: '3599', minRaise: String(BigInt(base.terms.reservePrice!) * BigInt(base.terms.unitsOffered!) + 1n) }), 'ParameterOutOfBounds'],
     ];
-    const atBounds = call('S9', { capMultipleWad: String(2n * WAD), hurdleRateWad: String(WAD / 4n), payoutMultipleK: '20', lockupSeconds: String(5n * YEAR), walletCapBps: '100', auctionFeeBps: '1000', payoutFeeBps: '2000' }, tranches(24));
+    const atBounds = call('S9', { capMultipleWad: String(2n * WAD), hurdleRateWad: String(WAD / 4n), payoutMultipleK: '20', lockupSeconds: String(5n * YEAR), walletCapBps: '100', auctionFeeBps: '1000', payoutFeeBps: '2000', nonRevealChargeBps: '1000', commitDuration: String(30 * 86_400), revealDuration: String(7 * 86_400) }, tranches(24));
+    const atLowerBounds = call('S10', { nonRevealChargeBps: '0', commitDuration: '3600', revealDuration: '3600' });
     const t = base.t;
-    src.steps = [...src.steps.slice(0, created + 1), ...reverts.map(([c, error]) => ({ t, op: 'expect_revert', call: c, error })), { t, ...atBounds }];
+    src.steps = [...src.steps.slice(0, created + 1), ...reverts.map(([c, error]) => ({ t, op: 'expect_revert', call: c, error })), { t, ...atBounds }, { t, ...atLowerBounds }];
     const v = fromJson(src, '04_zero_quarters');
     for (const backend of ['reference', 'merces'] as const) {
       const r = await runStage1Vectors({ vectors: [v], backend, personalities: ['solana', 'monad'] });

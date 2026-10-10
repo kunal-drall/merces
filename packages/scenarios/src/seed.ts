@@ -64,16 +64,17 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
       stablecoin: issuer.stablecoin, stablecoinMint: sim.mintOf(issuer.stablecoin), unitsOffered: issuer.unitsOffered.toString(), reservePrice: issuer.reservePrice.toString(), minimumRaise: issuer.minimumRaise.toString(),
       reportingCurrency: issuer.reportingCurrency, termsCommitment: commitment, contractHash: '0x' + (0x80 + i).toString(16).padStart(2, '0').repeat(32),
       tierFlags: { tier1: issuer.tier === 1, tier2: issuer.tier === 2, tier3: issuer.tier === 3, tier4: false },
+      // a 2-day commit and a 1-day reveal phase (the cohort's timing; openRaise derives the ends from these)
+      commitDurationSeconds: 2 * 86_400, revealDurationSeconds: 86_400,
     });
     // the issuer wallet signs (not the harness default issuer)
     const exec = (cmd: Parameters<SimHarness['exec']>[1], co: SimWallet[] = []) => h.exec(wallet, cmd, co);
     await exec({ kind: 'registerIssuer' });
     const created = await exec({ kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
-    const now = await sim.now();
-    const commitEndsAt = now + 2 * 86_400;
-    const revealEndsAt = commitEndsAt + 86_400;
-    await exec({ kind: 'openRaise', seriesId, commitEndsAt, revealEndsAt });
+    await exec({ kind: 'openRaise', seriesId });
+    const { commitEndsAt, revealEndsAt } = (await sim.getAuction(seriesId))!;
+    if (commitEndsAt === null || revealEndsAt === null) throw new Error(`seed: ${seriesId} opened without phase ends`);
     // five backers bid around the reserve; the wallet cap is 10% so each takes ≤ 10% of N
     const qty = issuer.unitsOffered / 10n;
     const prices = [issuer.reservePrice + 3_000_000n, issuer.reservePrice + 2_000_000n, issuer.reservePrice + 1_000_000n, issuer.reservePrice + 1_000_000n, issuer.reservePrice];

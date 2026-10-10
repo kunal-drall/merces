@@ -5,6 +5,12 @@ import { SimHarness, defaultTerms } from '../src/index.ts';
 import { STAGE1_CODE, fail, guardStage1 } from '../src/engine/errors.ts';
 import { GENESIS } from './helpers.ts';
 
+/*
+ * S2 cause codes:
+ *  - S2-AD: commit and reveal durations are series terms; `openRaise` derives the phase ends from them;
+ *  - S2-CR: Stage 1's creation rules on the raise's own terms (commit 1 hour–30 days, reveal 1 hour–7 days, non-reveal
+ *    charge 0–1,000 bps).
+ */
 async function rejection(p: Promise<unknown>): Promise<ChainError> {
   const e = await p.then(() => null, (x: unknown) => x);
   expect(e).toBeInstanceOf(ChainError);
@@ -87,6 +93,12 @@ describe('Stage 1 error names on simulator errors', () => {
       ['wallet cap below 1%', { walletCapBps: 99 }, 'ParameterOutOfBounds'],
       ['auction fee above 10%', { auctionFeeBps: 1001 }, 'ParameterOutOfBounds'],
       ['payout fee above 20%', { payoutFeeBps: 2001 }, 'ParameterOutOfBounds'],
+      // cause S2-CR: the raise's own terms (S2), bounded on a sealed raise
+      ['non-reveal charge above 10%', { nonRevealChargeBps: 1001 }, 'ParameterOutOfBounds'],
+      ['commit phase below an hour', { commitDurationSeconds: 3599 }, 'ParameterOutOfBounds'],
+      ['commit phase above 30 days', { commitDurationSeconds: 30 * 86_400 + 1 }, 'ParameterOutOfBounds'],
+      ['reveal phase below an hour', { revealDurationSeconds: 3599 }, 'ParameterOutOfBounds'],
+      ['reveal phase above 7 days', { revealDurationSeconds: 7 * 86_400 + 1 }, 'ParameterOutOfBounds'],
       ['reserve price 0', { reservePrice: '0', minimumRaise: '0' }, 'InvalidTerms'],
       ['minimum raise above reserve × units', { minimumRaise: String(500n * 8_000_000n + 1n) }, 'InvalidTerms'],
       ['wallet cap below one unit', { unitsOffered: '9', walletCapBps: 1000, minimumRaise: '0' }, 'InvalidTerms'],
@@ -110,6 +122,10 @@ describe('Stage 1 error names on simulator errors', () => {
     expect(await h.sim.listSeries()).toHaveLength(0);
     const atBounds = defaultTerms(h.sim, { capMultipleWad: String(2n * WAD), hurdleWad: String(WAD / 4n), payoutMultipleK: 20, lockupSeconds: 5 * YEAR, walletCapBps: 100, auctionFeeBps: 1000, payoutFeeBps: 2000, releaseSchedule: tranches(24) }).terms;
     expect((await h.exec(h.issuer, { kind: 'createSeries', terms: atBounds })).events[0]!.type).toBe('SeriesCreated');
+    // cause S2-CR: the raise's own terms at their bounds, both ends
+    for (const over of [{ nonRevealChargeBps: 1000, commitDurationSeconds: 30 * 86_400, revealDurationSeconds: 7 * 86_400 }, { nonRevealChargeBps: 0, commitDurationSeconds: 3600, revealDurationSeconds: 3600 }]) {
+      expect((await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, over).terms })).events[0]!.type).toBe('SeriesCreated');
+    }
   });
 
   // Stage 1 refuses open_raise while new raises are paused (NewRaisesPaused, SIM:875), not create_series; a curve raise
@@ -121,8 +137,7 @@ describe('Stage 1 error names on simulator errors', () => {
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
     expect(created.events[0]!.type).toBe('SeriesCreated');
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
-    const now = await h.sim.now();
-    const open = await rejection(h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 86_400, revealEndsAt: now + 2 * 86_400 }));
+    const open = await rejection(h.exec(h.issuer, { kind: 'openRaise', seriesId })); // cause S2-AD: the ends come from the terms
     expect(open.code).toBe('Paused');
     expect(open.detail).toEqual({ stage1: 'NewRaisesPaused' });
     const curve = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: '2000000000', reservePrice: '5000000', unitsOffered: '1000' }).terms;
@@ -130,7 +145,7 @@ describe('Stage 1 error names on simulator errors', () => {
     expect(refused.code).toBe('Paused');
     expect(refused.detail).toEqual({ stage1: 'NewRaisesPaused' });
     await h.exec(h.admin, { kind: 'pauseNewRaises', paused: false });
-    await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 86_400, revealEndsAt: now + 2 * 86_400 });
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId });
     expect((await h.exec(h.issuer, { kind: 'createSeries', terms: curve })).events.map((x) => x.type)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
   });
 
@@ -141,8 +156,7 @@ describe('Stage 1 error names on simulator errors', () => {
       const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
       return { seriesId: (created.events[0]!.payload as { seriesId: string }).seriesId };
     })();
-    const now = await h.sim.now();
-    await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 86_400, revealEndsAt: now + 2 * 86_400 });
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId }); // cause S2-AD
     const w = h.backers[0]!;
     const commitment = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: 10n, quantity: 1n, salt: '0x' + '01'.repeat(32) });
     const e = await rejection(h.exec(w, { kind: 'commitBid', seriesId, commitment, deposit: (2_000_000_000_000n).toString() }));

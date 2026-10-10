@@ -28,9 +28,10 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   const coin = e.state.config.stablecoins[t.stablecoin];
   if (!coin) throw new ChainError('InvalidTerms', `${t.stablecoin} is not available on ${e.state.config.chain}`);
   if (coin.mint !== t.stablecoinMint) throw new ChainError('InvalidTerms', 'stablecoin mint does not match the chain catalogue');
-  // Stage 1's create_series rules in its order (SIM:756-781): the bounded parameters (ParameterOutOfBounds), units,
-  // reserve and minimum raise and the wallet cap of at least one unit (InvalidTerms), the release schedule
-  // (InvalidReleaseSchedule); the messages carry the field and the bound, never the submitted value
+  // Stage 1's create_series rules in its order (SIM:756-781): the bounded parameters (ParameterOutOfBounds; the
+  // non-reveal charge and the raise durations on a sealed raise only), units, reserve and minimum raise and the wallet
+  // cap of at least one unit (InvalidTerms), the release schedule (InvalidReleaseSchedule); the messages carry the
+  // field and the bound, never the submitted value
   const violation = seriesTermsViolations(t)[0];
   if (violation) fail(violation.stage1, violation.message);
   if (/^0x0{64}$/.test(t.contractHash)) throw new ChainError('InvalidTerms', 'contract hash required: a raise needs a signed contract');
@@ -58,6 +59,9 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
     hurdleWad: big(t.hurdleWad),
     payoutMultipleK: BigInt(t.payoutMultipleK),
     walletCapBps: BigInt(t.walletCapBps),
+    nonRevealChargeBps: t.nonRevealChargeBps,
+    commitDurationSeconds: t.commitDurationSeconds,
+    revealDurationSeconds: t.revealDurationSeconds,
     dueDays: t.dueDays,
     graceDays: t.graceDays,
     formalNoticeDays: t.formalNoticeDays,

@@ -9,7 +9,12 @@ import { seedFinal, seedHolder, seedLedger, seedPause, seedTail, seedVault, seri
 
 const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json', import.meta.url);
 
-describe('simulator state version 2', () => {
+/*
+ * S2 cause codes:
+ *  - S2-V3: simulator state version 3 (S2: the raise's own terms, Stage 1's multi-step settlement); versions 1 and 2
+ *    are refused, never upgraded.
+ */
+describe('simulator state version 3', () => {
   it('round-trips the Stage 1 vault, tail and final states and bigint pauses through serialisation and structuredClone', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
     const { seriesId } = await h.runRaise();
@@ -35,17 +40,19 @@ describe('simulator state version 2', () => {
     expect(s.vault.yearGross[0]).toEqual({ year: 0, grossWad: 5n * WAD });
     expect(s.tail.tailExhausted).toBe(true);
     expect(s.final.finalUnits).toBe(500n);
-    expect(back.version).toBe(2);
+    expect(back.version).toBe(3); // cause S2-V3 (was 2)
     expect(structuredClone(h.sim.state)).toEqual(h.sim.state);
   });
 
-  it('refuses a version-1 state instead of upgrading it', async () => {
+  it('refuses a version-1 or version-2 state instead of upgrading it', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
-    const v2 = JSON.parse(serialiseState(h.sim.state)) as Record<string, unknown>;
-    const { version: _v, ...v1 } = v2;
+    const v3 = JSON.parse(serialiseState(h.sim.state)) as Record<string, unknown>;
+    const { version: _v, ...v1 } = v3;
     expect(() => deserialiseState(JSON.stringify(v1))).toThrow(SimStateVersionError);
-    expect(() => deserialiseState(JSON.stringify({ ...v2, version: 1 }))).toThrow(/version 1 is not supported.*sim:reset/);
-    expect(() => deserialiseState(JSON.stringify(v2))).not.toThrow();
+    expect(() => deserialiseState(JSON.stringify({ ...v3, version: 1 }))).toThrow(/version 1 is not supported.*sim:reset/);
+    // cause S2-V3: a version-2 state (S1) is refused too
+    expect(() => deserialiseState(JSON.stringify({ ...v3, version: 2 }))).toThrow(/version 2 is not supported \(this build needs version 3\).*sim:reset/);
+    expect(() => deserialiseState(JSON.stringify(v3))).not.toThrow();
   });
 
   it("a fresh Draft series' Stage 1 ledger view equals vector 01 step 11", async () => {

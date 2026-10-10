@@ -141,12 +141,14 @@ export class TermsService {
     const hurdleWad = wadFromDecimal(pub.hurdle);
     const units = BigInt(pub.unitsOffered);
     // Stage 1's create_series rules (bounded parameters, units, reserve, minimum raise, a wallet cap of at least one unit,
-    // the release schedule) on the terms buildCreateSeries will send, with the fee and wallet-cap defaults it fills in,
-    // so a draft fails here, per field, instead of at createSeries
+    // the release schedule) on the terms buildCreateSeries will send, with the fee, wallet-cap, raise-duration and
+    // non-reveal defaults it fills in, so a draft fails here, per field, instead of at createSeries
     const onchain: BoundedTerms = {
       capMultipleWad: capWad.toString(), hurdleWad: hurdleWad.toString(), payoutMultipleK: pub.payoutMultipleK, lockupSeconds: pub.lockupSeconds, walletCapBps: DEFAULTS.walletCapBps,
-      auctionFeeBps: DEFAULTS.auctionFeeBps, payoutFeeBps: DEFAULTS.payoutFeeBps, dueDays: DEFAULTS.dueDays, graceDays: DEFAULTS.graceDays, formalNoticeDays: DEFAULTS.formalNoticeDays,
-      unitsOffered: pub.unitsOffered, reservePrice: pub.reservePrice, minimumRaise: pub.minimumRaise, releaseSchedule: pub.releaseSchedule,
+      auctionFeeBps: DEFAULTS.auctionFeeBps, payoutFeeBps: DEFAULTS.payoutFeeBps,
+      nonRevealChargeBps: DEFAULTS.nonRevealChargeBps, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds,
+      dueDays: DEFAULTS.dueDays, graceDays: DEFAULTS.graceDays, formalNoticeDays: DEFAULTS.formalNoticeDays,
+      unitsOffered: pub.unitsOffered, reservePrice: pub.reservePrice, minimumRaise: pub.minimumRaise, releaseSchedule: pub.releaseSchedule, raiseStyle: pub.raiseStyle,
     };
     for (const v of seriesTermsViolations(onchain)) issues.push({ field: PUBLIC_FIELD[v.field] ?? v.field, code: v.code, message: v.message });
     if (pub.tierFlags.tier4) issues.push({ field: 'tierFlags.tier4', code: 'switched-off', message: 'tier 4 self-attestation is switched off' });
@@ -272,6 +274,9 @@ export class TermsService {
     const terms: SeriesTerms = {
       stablecoin: p.stablecoin, stablecoinMint: coin.mint, unitsOffered: p.unitsOffered, reservePrice: p.reservePrice, minimumRaise: p.minimumRaise, capMultipleWad: p.capMultipleWad, lockupSeconds: p.lockupSeconds,
       releaseSchedule: p.releaseSchedule, auctionFeeBps: DEFAULTS.auctionFeeBps, payoutFeeBps: DEFAULTS.payoutFeeBps, hurdleWad: p.hurdleWad, payoutMultipleK: p.payoutMultipleK, walletCapBps: DEFAULTS.walletCapBps,
+      // the raise's phases (Stage 1's 7-day commit and 2-day reveal) and the non-reveal charge (0 while held: this
+      // series' frozen charter keeps 0 after the hold is lifted)
+      nonRevealChargeBps: DEFAULTS.nonRevealChargeBps, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds,
       dueDays: DEFAULTS.dueDays, graceDays: DEFAULTS.graceDays, formalNoticeDays: DEFAULTS.formalNoticeDays, contractHash: draft.contract_hash, termsCommitment: draft.terms_commitment, tierFlags: p.tierFlags, reportingCurrency: p.reportingCurrency, raiseStyle: p.raiseStyle,
     };
     const tx = await chain.build({ kind: 'createSeries', terms }, draft.issuer);

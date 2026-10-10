@@ -69,7 +69,7 @@ function auctionView(src: ViewSource, s: SimSeries, b: SeriesBook): Record<strin
   return {
     bidCount: e.bidCount,
     revealedCount: e.revealedCount,
-    validCount: D(revealedBids(s, auctionRules(s, b)).filter((x) => x.valid).length),
+    validCount: D(revealedBids(s, auctionRules(s)).filter((x) => x.valid).length),
     escrowTotal: e.escrowTotal,
     auctionEscrowUnits: D(auctionEscrowUnits(src, s, b)),
     tallyRound: D(a.tallyRound),

@@ -5,6 +5,13 @@ import { AuctionService } from '@merces/services';
 import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
+/*
+ * S2 cause codes on the pins that moved:
+ *  - S2-AD: commit and reveal durations are series terms (Stage 1's minimum is one hour each, where these raises opened
+ *    1,000-second phases); `openRaise` derives the phase ends from them.
+ */
+const HOUR = 3_600;
+const phases = { commitDurationSeconds: HOUR, revealDurationSeconds: HOUR }; // cause S2-AD
 
 describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -17,12 +24,12 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
 
   it('prechecks, builds commit/reveal/refund, keeps only encrypted backups, previews clearing and settles by keeper', async () => {
     const h = rig.harness('monad');
-    const { terms } = (await import('@merces/simulator')).defaultTerms(h.sim, { unitsOffered: '1000', walletCapBps: 1000 });
+    const { terms } = (await import('@merces/simulator')).defaultTerms(h.sim, { unitsOffered: '1000', walletCapBps: 1000, ...phases });
     await h.exec(h.issuer, { kind: 'registerIssuer' });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     const now = await h.sim.now();
-    await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 1000, revealEndsAt: now + 2000 });
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId }); // cause S2-AD
     await rig.sync();
     const backer = h.backers[0]!;
     const tok = await rig.grant({ accountId: 'b0', wallets: [{ chain: 'monad', address: backer.address }], roles: ['backer'], eligible: true });
@@ -58,7 +65,7 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     const c2 = bidCommitment({ seriesId, bidder: b2.address, pricePerUnit: USDC(45), quantity: 100n, salt: salt2 });
     await h.exec(b2, { kind: 'commitBid', seriesId, commitment: c2, deposit: USDC(4545).toString() });
     // reveal phase
-    await h.sim.setTime(now + 1000);
+    await h.sim.setTime(now + HOUR); // cause S2-AD (was now + 1000)
     expect((await rig.post(`/series/${seriesId}/bids/build-reveal`, { bidder: backer.address, pricePerUnit: USDC(11).toString(), quantity: '100', salt }, tok)).statusCode).toBe(422);
     const reveal = await rig.post(`/series/${seriesId}/bids/build-reveal`, { bidder: backer.address, pricePerUnit: USDC(10).toString(), quantity: '100', salt }, tok);
     expect((await rig.post('/tx/send', await backer.sign(reveal.json().tx as UnsignedTx), tok)).statusCode).toBe(200);
@@ -71,7 +78,7 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     // keeper settles when due; running it twice is harmless
     const svc = new AuctionService(rig.ctx as never);
     expect((await svc.settleDue()).settled).toEqual([]);
-    await h.sim.setTime(now + 2000);
+    await h.sim.setTime(now + 2 * HOUR); // cause S2-AD (was now + 2000)
     expect((await rig.get(`/series/${seriesId}/auction/preview`)).json().settleDue).toBe(true);
     const first = await svc.settleDue();
     expect(first.settled).toEqual([seriesId]);
@@ -90,25 +97,25 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
 
   it('the clearing preview leaves out a bidder removed from the allowlist, exactly as settlement does', async () => {
     const h = rig.harness('monad');
-    const { terms } = (await import('@merces/simulator')).defaultTerms(h.sim, { unitsOffered: '1000', walletCapBps: 1000 });
+    const { terms } = (await import('@merces/simulator')).defaultTerms(h.sim, { unitsOffered: '1000', walletCapBps: 1000, ...phases });
     await h.exec(h.issuer, { kind: 'registerIssuer' }).catch(() => undefined);
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     const now = await h.sim.now();
-    await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 1000, revealEndsAt: now + 2000 });
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId }); // cause S2-AD
     const [lo, hi] = [h.backers[2]!, h.backers[3]!];
     const bids = [{ w: lo, price: USDC(10), salt: '0x' + 'a1'.repeat(32) }, { w: hi, price: USDC(45), salt: '0x' + 'a2'.repeat(32) }];
     for (const b of bids) {
       const commitment = bidCommitment({ seriesId, bidder: b.w.address, pricePerUnit: b.price, quantity: 100n, salt: b.salt });
       await h.exec(b.w, { kind: 'commitBid', seriesId, commitment, deposit: ((b.price * 101n) / 100n * 100n).toString() });
     }
-    await h.sim.setTime(now + 1000);
+    await h.sim.setTime(now + HOUR); // cause S2-AD (was now + 1000)
     for (const b of bids) await h.exec(b.w, { kind: 'revealBid', seriesId, pricePerUnit: b.price.toString(), quantity: '100', salt: b.salt });
     // with both bids the raise clears at 10 for 200 units (2000 < 4000 minimum): projected failure
     expect((await rig.get(`/series/${seriesId}/auction/preview`)).json().projected).toMatchObject({ success: false, unitsSold: '200' });
     // the low bidder leaves the allowlist: the high bid alone clears at 45 for 100 units (4500 >= 4000)
     await h.sim.submit({ kind: 'setAllowlist', wallet: lo.address, allowed: false }, 'allowlistManager');
-    await h.sim.setTime(now + 2000);
+    await h.sim.setTime(now + 2 * HOUR); // cause S2-AD (was now + 2000)
     const pv = (await rig.get(`/series/${seriesId}/auction/preview`)).json();
     expect(pv.projected).toMatchObject({ success: true, clearingPrice: USDC(45).toString(), unitsSold: '100' });
     expect(pv.projected.allocations.map((a: { bidder: string }) => a.bidder)).toEqual([hi.address]);

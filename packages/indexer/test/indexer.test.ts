@@ -7,6 +7,10 @@ import { Indexer } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const GENESIS = Date.UTC(2026, 0, 1) / 1000;
+/*
+ * S2 cause codes:
+ *  - S2-AD: commit and reveal durations are series terms, projected from SeriesCreated (migration 018).
+ */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
   let t: Awaited<ReturnType<typeof createTestSchema>>;
@@ -52,6 +56,10 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect(solRow.gross_paid_total).toBe(USDC(1500).toString());
     const monRow = series.rows.find((r) => r.chain === 'monad')!;
     expect(monRow.series_id).toBe(b.seriesId);
+    // cause S2-AD: the raise's own terms (migration 018), as the series recorded them (the harness's 3-day commit and
+    // 1-day reveal; 0 bps while the non-reveal charge is held), and the phase ends openRaise derived from them
+    const raiseTerms = await t.pool.query('select commit_duration_seconds::text, reveal_duration_seconds::text, non_reveal_charge_bps, reveal_ends_at - commit_ends_at as reveal_seconds from series order by chain');
+    expect(raiseTerms.rows).toEqual([0, 1].map(() => ({ commit_duration_seconds: '259200', reveal_duration_seconds: '86400', non_reveal_charge_bps: 0, reveal_seconds: '86400' })));
 
     const periods = await t.pool.query('select period_id, settled, payment_due::text, paid::text from periods where series_id = $1 order by period_id', [a.seriesId]);
     expect(periods.rows.map((r) => [r.period_id, r.settled, r.paid])).toEqual([['2026Q1', true, '0'], ['2026Q2', true, '0'], ['2026Q3', true, USDC(1500).toString()]]);

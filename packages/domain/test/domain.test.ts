@@ -4,12 +4,17 @@ import { fileURLToPath } from 'node:url';
 import { BN254_FR, CURRENCY_CODES, DEFAULT_PARAMETERS } from '@merces/math';
 import { randomBytes } from 'node:crypto';
 import {
-  DEFAULTS, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
+  DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, seriesTermsViolations, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
   attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, termsCommitment, userCommandSchema,
   type IndexingRule,
 } from '../src/index.ts';
 
+/*
+ * S2 cause codes:
+ *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
+ *  - S2-NRC: the non-reveal charge hold (new series record 0 bps; 0 bps applies whatever a series records).
+ */
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
     expect(parseSeriesId(makeSeriesId('solana', 'abc'))).toEqual({ chain: 'solana', address: 'abc' });
@@ -142,6 +147,36 @@ describe('protocol defaults', () => {
     expect(DEFAULTS.maxCumulativePauseSeconds).toBe(Number(DEFAULT_PARAMETERS.maxCumulativePauseSeconds));
     expect(DEFAULTS.maxPauses).toBe(16);
     expect([DEFAULTS.dueDays, DEFAULTS.graceDays, DEFAULTS.formalNoticeDays]).toEqual([DEFAULT_PARAMETERS.reportDueDays, DEFAULT_PARAMETERS.graceDays, DEFAULT_PARAMETERS.formalNoticeDays]);
+    // cause S2-AD: the raise's phases are terms, defaulting to Stage 1's 7-day commit and 2-day reveal
+    expect([DEFAULTS.commitDurationSeconds, DEFAULTS.revealDurationSeconds]).toEqual([Number(DEFAULT_PARAMETERS.commitDuration), Number(DEFAULT_PARAMETERS.revealDuration)]);
+    expect([DEFAULTS.commitDurationSeconds, DEFAULTS.revealDurationSeconds]).toEqual([604_800, 172_800]);
+  });
+
+  // cause S2-NRC (S2 amendment M1): the owner holds the non-reveal charge; new series record 0 and settlement applies 0
+  it('hold the non-reveal charge: new series record 0 bps and 0 bps applies whatever a series records', () => {
+    expect(NON_REVEAL_CHARGE_HELD).toBe(true);
+    expect(DEFAULTS.nonRevealChargeBps).toBe(0);
+    expect(DEFAULT_PARAMETERS.nonRevealChargeBps).toBe(100); // what Stage 1 would default to
+    for (const bps of [0, 100, 1000]) expect(appliedNonRevealChargeBps(bps)).toBe(0);
+  });
+});
+
+describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)', () => {
+  const sealed: BoundedTerms = {
+    capMultipleWad: (25n * 10n ** 17n).toString(), hurdleWad: (8n * 10n ** 16n).toString(), payoutMultipleK: 5, lockupSeconds: DEFAULTS.lockupSeconds, walletCapBps: 1000, auctionFeeBps: 100, payoutFeeBps: 500,
+    nonRevealChargeBps: DEFAULTS.nonRevealChargeBps, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds,
+    dueDays: 30, graceDays: 15, formalNoticeDays: 90, unitsOffered: '500', reservePrice: '8000000', minimumRaise: '4000000000', releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], raiseStyle: 'sealed',
+  };
+  const fields = (t: BoundedTerms) => seriesTermsViolations(t).map((v) => [v.field, v.stage1]);
+  it('bounds the commit and reveal phases and the non-reveal charge of a sealed raise, in Stage 1 order', () => {
+    expect(seriesTermsViolations(sealed)).toEqual([]);
+    expect(fields({ ...sealed, revealDurationSeconds: 7 * 86_400 + 1, commitDurationSeconds: 3599, nonRevealChargeBps: 1001, payoutFeeBps: 2001 })).toEqual([
+      ['payoutFeeBps', 'ParameterOutOfBounds'], ['nonRevealChargeBps', 'ParameterOutOfBounds'], ['commitDurationSeconds', 'ParameterOutOfBounds'], ['revealDurationSeconds', 'ParameterOutOfBounds'],
+    ]);
+  });
+  it('leaves them unchecked on a curve series (Stage 1 requires 0 there; S5), and checks the rest', () => {
+    expect(fields({ ...sealed, raiseStyle: 'curve', commitDurationSeconds: 0, revealDurationSeconds: 0, nonRevealChargeBps: 5000 })).toEqual([]);
+    expect(fields({ ...sealed, raiseStyle: 'curve', commitDurationSeconds: 0, auctionFeeBps: 1001 })).toEqual([['auctionFeeBps', 'ParameterOutOfBounds']]);
   });
 });
 

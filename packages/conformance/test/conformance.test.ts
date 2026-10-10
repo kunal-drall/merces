@@ -16,6 +16,8 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *    (HolderNotRegistered, code NotFound);
  *  - P: Stage 1's approve_pause takes an active attestor's signature (InvalidAttestorSignature, code InvalidAttestation);
  *  - RD: Stage 1's claim_redemption of 0 units succeeds.
+ * S2 cause codes:
+ *  - S2-AD: commit and reveal durations are series terms; `openRaise` derives the phase ends from them.
  */
 const types = (evs: DomainEvent[]) => evs.map((e) => e.type);
 
@@ -70,9 +72,13 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
   it('runs a sealed-bid raise: commit, reveal, settle at one price with fees, pull refunds, mint within the wallet cap', async () => {
     const e = env();
     const now = await e.chain.now();
-    const commitEndsAt = now + e.durations.commit;
-    const revealEndsAt = commitEndsAt + e.durations.reveal;
-    await exec(e, e.issuer, { kind: 'openRaise', seriesId, commitEndsAt, revealEndsAt });
+    // cause S2-AD: the chain derives the phase ends from the series' durations
+    const opened = await exec(e, e.issuer, { kind: 'openRaise', seriesId });
+    const auction = (await e.chain.getAuction(seriesId))!;
+    const commitEndsAt = auction.commitEndsAt!;
+    const revealEndsAt = auction.revealEndsAt!;
+    expect(opened.events.find((x) => x.type === 'RaiseOpened')!.payload).toMatchObject({ commitEndsAt, revealEndsAt });
+    expect([commitEndsAt - now >= e.durations.commit, revealEndsAt - commitEndsAt]).toEqual([true, e.durations.reveal]);
     const bids = [12, 11, 10, 10, 9].map((p, i) => ({ w: e.backers[i]!, price: USDC(p), qty: 100n, salt: '0x' + (0x30 + i).toString(16).padStart(2, '0').repeat(32) }));
     for (const b of bids) {
       const c = bidCommitment({ seriesId, bidder: b.w.address, pricePerUnit: b.price, quantity: b.qty, salt: b.salt });
