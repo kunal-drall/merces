@@ -536,4 +536,26 @@ describe('the driver\'s step bound', () => {
     expect(rest.steps).toEqual([...Array<string>(3).fill('processBid'), ...Array<string>(5).fill('deliverBid')]);
     expect([rest.stage, rest.limited]).toEqual(['complete', undefined]);
   });
+
+  // S2 review fix: a keeper reports the steps a pass landed before a refusal (`onError: 'stop'`), where a throw loses them
+  it('runSettlement refused part-way throws by default, or stops with the steps that landed, the stage and the error', async () => {
+    const h = await SimHarness.create('monad', { genesis: GENESIS });
+    const refusal = new ChainError('ChainSpecific', 'compute budget exceeded');
+    const refusing = (bidder: string) => async (cmd: PermissionlessCommand): Promise<TxResult> => {
+      if (cmd.kind === 'processBid' && cmd.bidder === bidder) throw refusal;
+      return h.sim.submit(cmd, 'keeper');
+    };
+    const a = (await h.runRaise({ settle: 'none' })).seriesId;
+    await expect(runSettlement(h.sim, a, { until: 'process', submit: refusing(h.backers[1]!.address) })).rejects.toBe(refusal);
+    expect(await h.sim.getAuction(a)).toMatchObject({ raiseState: 'Settled', bidsProcessed: 1 }); // four steps landed all the same
+    const b = (await h.runRaise({ settle: 'none' })).seriesId;
+    const run = await runSettlement(h.sim, b, { until: 'process', submit: refusing(h.backers[1]!.address), onError: 'stop' });
+    expect(run).toMatchObject({ steps: ['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid'], stage: 'processing', error: refusal });
+    expect(run.results).toHaveLength(4);
+    // a lost race is still re-planned, not an error; an error before the first plan is thrown either way
+    const rest = await runSettlement(h.sim, b, { until: 'process', onError: 'stop' });
+    expect([rest.steps, rest.stage, rest.error]).toEqual([Array<string>(4).fill('processBid'), 'delivering', undefined]);
+    await expectChainError(runSettlement(h.sim, 'no-such-series', { until: 'process', onError: 'stop' }), 'NotFound');
+    for (const s of [a, b]) await h.settle(s, 'deliver');
+  });
 });

@@ -30,7 +30,7 @@ export const ZERO_BID_GRACE_SECONDS = 24 * 3_600;
 
 /** What one keeper pass over the settlements did (`advanceSettlements`). Value-free: names, codes and counts only. */
 export interface SettlementAdvances {
-  /** series moved on this pass, with the steps sent and the stage they reached */
+  /** series moved on this pass, with the steps sent and the stage they reached (also when a later step was refused) */
   advanced: { seriesId: string; steps: PermissionlessCommand['kind'][]; stage: SettlementStage }[];
   /** series the planner will not act on (an operator alert; `SettlementStuckReason`) */
   stuck: { seriesId: string; stage: SettlementStage; reason: SettlementStuckReason }[];
@@ -280,8 +280,10 @@ export class AuctionService {
    * says whether this pass also pushes refunds and units (S2 amendment L8). A raise that drew no bid waits
    * `ZERO_BID_GRACE_SECONDS` past its reveal end, so its issuer can still cancel it (A-AUC-12). A step another sender got
    * in first is re-planned, not a failure. Chains and series are independent (one failure never stops the rest), and
-   * every failure is a code, never a message (S2 L7; adapter messages can embed values). A series the planner will not act
-   * on is reported in `stuck` and, once per round and reason, to the admins (`auction.settlement-stuck`). The keepers'
+   * every failure is a code, never a message (S2 L7; adapter messages can embed values). A pass that sends steps and is
+   * then refused reports both: the steps that landed (`advanced`, with the stage where the refused step was planned) and
+   * the refusal (`failed`). A series the planner will not act on is reported in `stuck` and, once per round and
+   * reason, to the admins (`auction.settlement-stuck`). The keepers'
    * `auction.settle` job passes `deliver: false` and leaves delivery to `deliverDue` (its own job, with a per-bid
    * backoff). The settled, failed, mint-finalized and delivered notices come from the indexer's projection of the
    * finalized events.
@@ -297,8 +299,10 @@ export class AuctionService {
           if ((s.phase === 'Settled' || s.phase === 'Failed') && s.mintFinalized && !opts.deliver) continue;
           try {
             if (s.phase === 'Open' && (await this.inZeroBidGrace(chain, s.seriesId, now))) continue;
-            const run = await runSettlement(chain, s.seriesId, { until: opts.deliver ? 'deliver' : 'process', maxSteps, atLimit: 'stop' });
+            // a refusal ends the series' pass but keeps the steps that landed before it (`onError: 'stop'`)
+            const run = await runSettlement(chain, s.seriesId, { until: opts.deliver ? 'deliver' : 'process', maxSteps, atLimit: 'stop', onError: 'stop' });
             if (run.steps.length) out.advanced.push({ seriesId: s.seriesId, steps: run.steps, stage: run.stage });
+            if (run.error !== undefined) out.failed.push({ target: s.seriesId, error: errorCode(run.error) });
             if (run.stuck) {
               out.stuck.push({ seriesId: s.seriesId, stage: run.stage, reason: run.stuck });
               await this.noticeSettlementStuck(chain, s.seriesId, run.stuck);

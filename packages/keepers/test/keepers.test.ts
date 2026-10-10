@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { setFlag } from '@merces/core';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { makeContext } from '@merces/api';
-import { TEMPLATES, createServiceContext, safeData, type ServiceContext } from '@merces/services';
+import { AuctionService, TEMPLATES, createServiceContext, safeData, type ServiceContext } from '@merces/services';
 import { MockChainlink, MockPyth } from '@merces/ports';
 import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimulatorChain } from '@merces/simulator';
@@ -192,6 +192,55 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     expect(out2['auction.settle']!.detail).not.toContain('123456789');
     expect((await mon.sim.getAuction(b.seriesId))!.raiseState).toBe('Open');
     await mon.settle(b.seriesId, 'deliver');
+  });
+
+  // S2 review fix: a pass that lands steps and is then refused reports both, the steps (the job's actions, and the
+  // service's `advanced` entry with the stage where the refused step was planned) and the refusal, by its Stage 1 name or
+  // ChainError code only (S2 L7). It used to report 0 actions while the raise had moved from Open to Settled.
+  it('a settle pass refused part-way reports the steps that landed (actions, the advanced entry and its stage) and the refusal by code only', async () => {
+    const key = 'monad-settle-partial';
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    // the second bidder's processBid is refused with values in its message and detail (a live chain's compute or fee
+    // failure); every other step goes through
+    let refusal: ChainError = new ChainError('ChainSpecific', 'compute budget exceeded at 1400000 units', { units: 1_400_000 });
+    const sent: string[] = [];
+    const port = new Proxy(h.sim, {
+      get(target, k) {
+        if (k === 'submit') {
+          return async (c: { kind: string; bidder?: string }, as: string) => {
+            if (c.kind === 'processBid' && c.bidder === h.backers[1]!.address) throw refusal;
+            const r = await target.submit(c as never, as as never);
+            sent.push(c.kind);
+            return r;
+          };
+        }
+        const v = Reflect.get(target, k);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    const c = createServiceContext(makeContext({ pool: t.pool, chains: registryOf(key, port as never), log: silent, sessionSecret: 's', devMode: true }));
+    const landed = ['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid'];
+    // the service: the advanced entry with its stage beside the failure, both value-free
+    const a = await h.runRaise({ settle: 'none' });
+    const r = await new AuctionService(c).advanceSettlements({ deliver: false });
+    expect(r).toEqual({ advanced: [{ seriesId: a.seriesId, steps: landed, stage: 'processing' }], stuck: [], failed: [{ target: a.seriesId, error: 'ChainSpecific' }] });
+    expect(sent).toEqual(landed);
+    expect(JSON.stringify(r)).not.toMatch(/1400000|1_400_000/);
+    expect(await h.sim.getAuction(a.seriesId)).toMatchObject({ raiseState: 'Settled', bidsProcessed: 1, mintFinalized: false });
+    // the job: its actions are the steps that landed, recorded in keeper_runs, and its error names a Stage 1 error only
+    refusal = new ChainError('InsufficientFunds', 'fee payer is short by 123456789', { stage1: 'InsufficientEscrow', short: '123456789' });
+    const b = await h.runRaise({ settle: 'none' });
+    sent.length = 0;
+    const out = await new KeeperScheduler(c, [auctionSettleJob]).runAll();
+    // a's pass sends nothing (its next step is the refused one); b's lands its four steps
+    expect(out['auction.settle']).toMatchObject({ ok: false, actions: 4, detail: `errors: ${a.seriesId}: InsufficientEscrow; ${b.seriesId}: InsufficientEscrow` });
+    expect(out['auction.settle']!.detail).not.toContain('123456789');
+    expect(sent).toEqual(landed);
+    const row = await t.pool.query("select ok, actions, detail from keeper_runs where job = 'auction.settle' and chain = $1 order by id desc limit 1", [key]);
+    expect(row.rows[0]).toEqual({ ok: false, actions: 4, detail: out['auction.settle']!.detail });
+    // the next passes go on from where the chain stands
+    for (const s of [a, b]) await h.settle(s.seriesId, 'deliver');
+    expect((await h.sim.getAuction(b.seriesId))).toMatchObject({ raiseState: 'Settled', mintFinalized: true });
   });
 
   it('a settlement the planner will not act on fails each settle run with its reason and tells the admins once', async () => {

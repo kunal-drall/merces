@@ -73,9 +73,9 @@ async function forEachSettled(ctx: ServiceContext, errors: string[], fn: (chain:
 /**
  * Stage 1's sealed-bid settlement, one pass per run (`AuctionService.advanceSettlements` with `deliver: false`): the
  * proposal, the tally pages, finalize and a `processBid` per bid. Delivery is `auction.deliver`'s. Actions are the steps
- * sent; a series the planner will not act on (also told to the admins once, `auction.settlement-stuck`), or whose pass
- * raised, is an error (value-free: the series and a Stage 1 error name, ChainError code or stuck reason, never a
- * message; S2 L7).
+ * sent, including those a pass landed before a step was refused; a series the planner will not act on (also told to the
+ * admins once, `auction.settlement-stuck`), or whose pass raised or was refused, is an error (value-free: the series and
+ * a Stage 1 error name, ChainError code or stuck reason, never a message; S2 L7).
  */
 export const auctionSettleJob: KeeperJob = {
   name: 'auction.settle',

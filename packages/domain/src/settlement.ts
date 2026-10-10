@@ -291,6 +291,14 @@ export interface RunSettlementOptions {
    * `limited` set (a keeper that bounds its work per run and comes back on the next).
    */
   atLimit?: 'throw' | 'stop';
+  /**
+   * What an error does once the run has planned a step (a refused step that is not a lost race, a failed read, or
+   * `maxSteps` under `atLimit: 'throw'`): `'throw'` (the default) raises it and the steps already sent are not
+   * reported; `'stop'` returns what was sent, with the stage of the last plan (where a refused step was planned) and
+   * `error` set (a keeper that reports the steps a pass landed before a refusal). An error before the first plan is
+   * thrown either way.
+   */
+  onError?: 'throw' | 'stop';
   /** how a step is sent; the keeper's `submit` by default (a wallet may build and sign any step instead) */
   submit?: (command: PermissionlessCommand) => Promise<TxResult>;
 }
@@ -306,6 +314,11 @@ export interface SettlementRun {
   waitUntil?: number;
   /** set when the run stopped at `maxSteps` with work left (`atLimit: 'stop'`) */
   limited?: true;
+  /**
+   * set when the run stopped at an error (`onError: 'stop'`): the error as raised, which may carry values in its
+   * message, so a caller reports it by Stage 1 name or ChainError code only
+   */
+  error?: unknown;
   /** the transactions sent */
   results: TxResult[];
 }
@@ -320,8 +333,9 @@ export async function readSettlementView(port: ChainPort, seriesId: string): Pro
 /**
  * Drive a raise's settlement through the chain until `until`: plan (`nextSettlementStep`), send, re-read, again. A
  * step refused because someone else moved the settlement on (`SETTLEMENT_LOST_RACE`) is re-planned; any other refusal
- * is thrown. Stops early, without throwing, when the planner waits for the reveal end or is stuck. Used by the keepers,
- * the harness, conformance and the API's "build the next step".
+ * is thrown, or with `onError: 'stop'` ends the run with the steps already sent and `error`. Stops early, without
+ * throwing, when the planner waits for the reveal end or is stuck. Used by the keepers, the harness, conformance and
+ * the API's "build the next step".
  */
 export async function runSettlement(port: ChainPort, seriesId: string, opts: RunSettlementOptions): Promise<SettlementRun> {
   const maxSteps = opts.maxSteps ?? 256;
@@ -329,28 +343,37 @@ export async function runSettlement(port: ChainPort, seriesId: string, opts: Run
   const limits = (await port.info()).limits;
   const steps: PermissionlessCommand['kind'][] = [];
   const results: TxResult[] = [];
-  for (let attempts = 0; ; attempts++) {
-    const view = await readSettlementView(port, seriesId);
-    if (!view) throw new ChainError('NotFound', `series ${seriesId} not found`);
-    const now = await port.now();
-    const stage = settlementStage(view, now);
-    const finalized = view.auction.raiseState === 'Settled' || view.auction.raiseState === 'Failed';
-    if (opts.until === 'finalize' && finalized) return { steps, stage, results };
-    const step = nextSettlementStep(view, { now, limits, deliver: opts.until === 'deliver' });
-    if (step.kind === 'done') return { steps, stage: step.stage, results };
-    if (step.kind === 'wait') return { steps, stage: step.stage, waitUntil: step.until, results };
-    if (step.kind === 'stuck') return { steps, stage: step.stage, stuck: step.reason, results };
-    if (attempts >= maxSteps) {
-      if (opts.atLimit === 'stop') return { steps, stage: step.stage, limited: true, results };
-      throw new ChainError('ChainSpecific', `settlement of ${seriesId} did not finish within ${maxSteps} steps`);
+  /** the stage the raise stood at when the run last planned (null before the first plan) */
+  let planned: SettlementStage | null = null;
+  try {
+    for (let attempts = 0; ; attempts++) {
+      const view = await readSettlementView(port, seriesId);
+      if (!view) throw new ChainError('NotFound', `series ${seriesId} not found`);
+      const now = await port.now();
+      const stage = settlementStage(view, now);
+      const finalized = view.auction.raiseState === 'Settled' || view.auction.raiseState === 'Failed';
+      if (opts.until === 'finalize' && finalized) return { steps, stage, results };
+      const step = nextSettlementStep(view, { now, limits, deliver: opts.until === 'deliver' });
+      planned = step.stage;
+      if (step.kind === 'done') return { steps, stage: step.stage, results };
+      if (step.kind === 'wait') return { steps, stage: step.stage, waitUntil: step.until, results };
+      if (step.kind === 'stuck') return { steps, stage: step.stage, stuck: step.reason, results };
+      if (attempts >= maxSteps) {
+        if (opts.atLimit === 'stop') return { steps, stage: step.stage, limited: true, results };
+        throw new ChainError('ChainSpecific', `settlement of ${seriesId} did not finish within ${maxSteps} steps`);
+      }
+      try {
+        results.push(await submit(step.command));
+        steps.push(step.command.kind);
+      } catch (e) {
+        const name = e instanceof ChainError ? e.detail?.stage1 : undefined;
+        if (typeof name === 'string' && SETTLEMENT_LOST_RACE.has(name)) continue; // a lost race: re-read and re-plan
+        throw e;
+      }
     }
-    try {
-      results.push(await submit(step.command));
-      steps.push(step.command.kind);
-    } catch (e) {
-      const name = e instanceof ChainError ? e.detail?.stage1 : undefined;
-      if (typeof name === 'string' && SETTLEMENT_LOST_RACE.has(name)) continue; // a lost race: re-read and re-plan
-      throw e;
-    }
+  } catch (e) {
+    // the steps sent so far landed: a keeper reports them with the error rather than losing them
+    if (opts.onError === 'stop' && planned !== null) return { steps, stage: planned, error: e, results };
+    throw e;
   }
 }
