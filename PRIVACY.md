@@ -113,9 +113,10 @@ document file (A-PRIV-4).
 | Audit log (actor, action, target, codes) | `audit_log` (append-only) | plain | admin | never (immutable) |
 | Terms access log | `terms_access_log` | plain | issuer, admin | series end + retention |
 | Notifications (statuses, ids, dates) | `notifications`, `email_outbox` (mock) | plain | owner; admin views are audited | read + retention |
-| Outbox payloads | `outbox` | plain (may carry amounts owed to the issuer) | admin | after dispatch + 30 days |
+| Outbox payloads | `outbox` | plain (may carry amounts owed to the issuer, and an auction event's public onchain amounts: a delivered refund, proceeds; never income) | admin | after dispatch + 30 days |
 | Logs | process stdout | redacted (income-bearing keys censored at the sink, with Stage 1's openings and private terms: `incomeSalt`, `priorSalt`, `termsSalt`, `priorIncomeYtd`, `theta`, `rWad`, `shareRate`, `ratePerUnitWad`, `opening`, `priorOpening`, `tier3Opening`, `deviceSecret`); error messages carry no values | operators | log retention |
 | Keeper runs, reconciliation runs | `keeper_runs`, `reconciliation_runs` | plain | admin | 90 days |
+| Delivery retries (series, bidder, attempts, next attempt, Stage 1 error name or code; never a message) | `auction_deliveries` | plain | admin | when the bid is delivered |
 
 ## What is onchain (C11.2)
 

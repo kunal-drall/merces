@@ -123,20 +123,26 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   until in-flight reports land), switch `REPORT_VERIFIER_KEY_ID`, then deactivate the old key.
 - Vault key: `MERCES_VAULT_KEY_HEX` (32 bytes). Rotation re-encrypts `terms_vault`, `applications.notes_encrypted` and
   `contract_sessions.signed_document_encrypted`; the key id is stored beside each ciphertext.
-- Keeper fee payer: fund it with devnet SOL / testnet MON only; it never holds stablecoins.
+- Keeper fee payer: fund it with devnet SOL / testnet MON only; it never holds stablecoins. On Solana the settle and
+  deliver jobs also pay the rent of the accounts a winner needs (its Holder PDA at `processBid`, its token account at
+  `deliverBid` when missing), and the fee collector's token account must exist before the first `processBid` (a
+  deployment step) [reader, S2; not measured in the simulator].
 
 ## Keepers
 
 All jobs are idempotent and safe to run twice or late; each run is recorded in `keeper_runs` (`GET /admin/keepers/runs`).
 Chains and series are independent: one chain's outage or one series' error never stops the others. A chain refusal that
 only means "nothing to do" (TooEarly, WrongStatus, Duplicate …) is ignored; any other error marks the run `ok = false`
-with the chain or series and the message in `detail`, which is what to alert on. Notices for chain events (auction
-settled or failed, status changes, releases paused or resumed, pause ended, formal notice) are enqueued by the indexer
-in the transaction that projects the finalized event, not by the keepers.
+with the chain or series and the message in `detail`, which is what to alert on. The auction jobs put a Stage 1 error
+name or ChainError code in `detail` instead of the message (adapter messages can embed values; S2). Notices for chain
+events (auction settled or failed, a settlement round rejected, the mint finalized, a bid delivered, status changes,
+releases paused or resumed, pause ended, formal notice) are enqueued by the indexer in the transaction that projects the
+finalized event, not by the keepers.
 
 | Job | Interval | What it does | If it stops |
 | --- | --- | --- | --- |
-| auction.settle | 1 min | drives Stage 1's settlement of raises whose reveal phase ended (the proposal, the tally pages, finalize, a `processBid` and a `deliverBid` per bid; at most 64 steps per series per run, the next run goes on); a raise with no bid waits 24 h past its reveal end so its issuer can still cancel (A-AUC-12); a series the planner will not act on is reported as `stuck (<reason>)` | settlement and delivery delay (winners' units still accrue from processing); anyone can send the next step (`beginSettlement` … `deliverBid` are permissionless) |
+| auction.settle | 1 min | drives Stage 1's settlement of raises whose reveal phase ended: the proposal, the tally pages, finalize and a `processBid` per bid, which finalizes the mint (at most 64 steps per series per run; the next run goes on). A step someone else sent first is re-planned, not a failure. A raise with no bid waits 24 h past its reveal end so its issuer can still cancel (A-AUC-12). A series the planner will not act on fails the run as `<series>: stuck (<reason>)` and is told to the admins once per round and reason (`auction.settlement-stuck`) | settlement waits: winners' units accrue only from processing, and the money paths stay closed until the mint is final (MintNotFinalized). Anyone can send the next step: `beginSettlement`, `tallyBids`, `finalizeSettlement` and `processBid` are permissionless commands any wallet can build and sign |
+| auction.deliver | 1 min | pushes every processed, undelivered bid with `deliverBid` (Stage 1 `deliver_bid`: the refund and the units won), reading the bids from the chain; at most 64 attempts per series per run. A refused delivery fails the run as `<series> <bidder>: <code> (attempt n)` and is retried on its own backoff (1 min, 5 min, 30 min, 2 h, 12 h, then daily; `auction_deliveries` keeps the attempts, the next attempt and the code); runs in between report `n waiting` and are not failures. A bid still failing 24 h after its raise was finalized is told once to the admins and the bidder (`bid.delivery-stuck`); a bid someone else delivered first is not a failure | refunds and units wait; a processed winner's units still accrue. Any wallet can deliver a bid (`deliverBid` is permissionless): the bidder builds its own with `POST /series/{id}/bids/build-refund` |
 | auction.reveal-reminders | 10 min | reminds unrevealed bidders in the last 12 h | bidders may miss reveals |
 | status.crank | 1 h | `crankStatus` once the earliest unpaid period passes a status instant the chain has not recorded: InGrace after `dueAt`, Late after `graceEndsAt`, the formal notice at `formalNoticeAt` (period end + 30 / 45 / 90 days of unpaused time, Stage 1's inclusive bounds) | the stored and indexed status lags the derived one until any sync point; reads and money paths use the derived status, which is authoritative |
 | pause.crank | 1 h | announces hardship pauses whose approved end passed (`PauseEnded`) | events only: a pause ends by itself at its approved end (Stage 1), so the series is no longer Paused; only the notice lags |
@@ -144,7 +150,7 @@ in the transaction that projects the finalized event, not by the keepers.
 | reporting.reminders | 1 h | reminders for the earliest unpaid period only (the one Stage 1's derived status counts from; later periods wait for it): 7 days before `dueAt`, at `dueAt + 1` and at `graceEndsAt + 1`, from the chain's period read; each names what is owed (report or payment) and the series' status as the chain derives it then (A-REV-25) | issuers get no reminders |
 | rate.snapshot | 30 min | one Pyth snapshot per UTC day per pair per chain, Chainlink cross-check | coverage drops → quarters flagged for attestor rates |
 | fx.coverage | 6 h | flags quarters with < 80% coverage, opens attestor requests | reports for non-USD series block |
-| transfer.windows | 1 h | opens/clears quarterly windows (flag `transfer_windows`) | no windows |
+| transfer.windows | 1 h | opens/clears quarterly windows (flag `transfer_windows`) on series whose mint is final (a raise still processing its bids has none: MintNotFinalized) | no windows |
 | outbox.dispatch | 15 s | delivers notifications | inbox/email lag |
 
 Run a job once by hand: `tsx -e "…"` is not needed — in mock mode `dev:mock` runs the scheduler in-process; set

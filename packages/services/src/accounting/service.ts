@@ -292,8 +292,9 @@ export class AccountingService {
 
   /**
    * Compare the read model with the chain: the fee ledger per chain and stablecoin against the fee collector's
-   * balance; for every settled series the indexed gross / fee totals against the vault and the indexed treasury
-   * totals against the treasury. Every run is persisted and audited.
+   * balance; for every settled series whose mint is final the indexed gross / fee totals against the vault and the
+   * indexed treasury totals against the treasury (a raise still processing its bids is in flight and skipped; S2).
+   * Every run is persisted and audited.
    */
   async reconcile(actor: Session): Promise<ReconciliationRun> {
     const checks: ReconciliationCheck[] = [];
@@ -319,7 +320,8 @@ export class AccountingService {
       checks.push(compare('fee-collector-balance', chain.chain, null, coin, indexed.rows[0]?.total ?? '0', onchain));
     }
     for (const s of await chain.listSeries()) {
-      if (s.phase !== 'Settled') continue;
+      // a raise still processing its bids moves its treasury per processed winner: compared once the mint is final (S2)
+      if (s.phase !== 'Settled' || !s.mintFinalized) continue;
       const row = (await this.ctx.pool.query<{ gross_paid_total: string; fees_total: string; treasury_total: string; treasury_released: string }>('select gross_paid_total, fees_total, treasury_total, treasury_released from series where series_id = $1', [s.seriesId])).rows[0] ?? null;
       const vault = await chain.getVault(s.seriesId);
       const treasury = await chain.getTreasury(s.seriesId);

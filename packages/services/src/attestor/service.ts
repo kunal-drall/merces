@@ -604,6 +604,8 @@ export class AttestorService {
     if (!series) throw AppError.notFound('series');
     // Stage 1 extinguishes a settled raise only (RaiseNotSettled): not an open raise, nor an ungraduated curve
     if (series.phase !== 'Settled') throw AppError.conflict(`only a settled raise can be extinguished (the raise is ${series.phase})`);
+    // Stage 1 refuses it until the raise's last bid is processed (MintNotFinalized, S2)
+    if (!series.mintFinalized) throw AppError.conflict('the raise is still processing its bids (MintNotFinalized): it cannot be extinguished yet');
     if (series.status === 'Extinguished') throw AppError.conflict('series is already extinguished');
     const [a1, a2] = input.attestors.map((a) => normaliseAddress(a, chain.family)) as [string, string];
     if (a1 === a2) throw AppError.unprocessable('two distinct attestors are required');

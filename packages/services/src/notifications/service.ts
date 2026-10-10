@@ -97,7 +97,18 @@ export const TEMPLATES: Record<string, Template> = {
   'contract.signed': () => ({ subject: 'Contract signed', body: 'Your HEU contract and Autonomy Charter are signed. Status: signed. You can now build the createSeries transaction.' }),
   'payout.available': (d) => ({ subject: 'Payout available', body: `A payout for ${series(d)}${period(d)} is available to claim. Status: paid.` }),
   'auction.settled': (d) => ({ subject: 'Raise settled', body: `The raise for ${series(d)} has settled. Status: Settled.` }),
-  'auction.failed': (d) => ({ subject: 'Raise did not settle', body: `The raise for ${series(d)} did not settle. Status: Failed. Deposits can be reclaimed.` }),
+  // S2: the keepers push every deposit back (Stage 1 `deliver_bid`); nobody has to reclaim anything (S2 L6)
+  'auction.failed': (d) => ({ subject: 'Raise did not settle', body: `The raise for ${series(d)} did not settle. Status: Failed. Deposits are returned automatically.` }),
+  // Stage 1's multi-step settlement (S2). No template names an amount, a price, a round or a reason: the events behind
+  // them are public onchain and readable in the app.
+  'auction.settlement-rejected': (d) => ({ subject: 'Settlement proposal rejected', body: `A settlement proposal for the raise on ${series(d)} was rejected by the chain. The next proposal follows automatically. Status: Settling.` }),
+  'auction.mint-finalized': (d) =>
+    d.outcome === 'failed'
+      ? { subject: 'Raise bids processed', body: `Every bid on ${series(d)} has been processed. Status: Failed. Deposits are returned automatically.` }
+      : { subject: 'Raise minting final', body: `Every bid on ${series(d)} has been processed and the raise's units are minted. Reports, payments and treasury releases are now open. Status: Settled.` },
+  'auction.settlement-stuck': (d) => ({ subject: 'Settlement needs attention', body: `The keepers cannot move the settlement of ${series(d)} on${typeof d.outcome === 'string' && /^[A-Za-z]+$/.test(d.outcome) ? ` (${d.outcome})` : ''}. Anyone may still send the next settlement step. Status: stuck.` }),
+  'bid.delivered': (d) => ({ subject: 'Bid delivered', body: `Your bid on ${series(d)} has been delivered: any units it won and any refund are in your wallet. Status: delivered.` }),
+  'bid.delivery-stuck': (d) => ({ subject: 'Bid delivery delayed', body: `The delivery of a bid on ${series(d)} has been failing for more than a day; the keepers keep retrying. The bidder can also send the delivery from the app. Units the bid won count for payouts in the meantime. Status: delivery-delayed.` }),
   'bid.reveal-reminder': (d) => ({ subject: 'Reveal your bid', body: `Reveal your bid on ${series(d)} before ${fmtDate(d.revealEndsAt)}.` }),
   // The reporting reminders follow Stage 1's inclusive bounds: `dueAt` is the last OnTime instant and `graceEndsAt` the
   // last InGrace one. The keeper reminds only the earliest unpaid period (the one Stage 1's `deriveStatus` counts from),
@@ -126,9 +137,16 @@ function render(kind: string, d: SafeData): { subject: string; body: string } {
   return { subject: `Update: ${kind}`, body: `There is a new update (${kind})${refs ? ` on ${refs}` : ''}. Open Merces for details.` };
 }
 
-const toHolders = (kind: string) => kind === 'payout.available' || kind === 'auction.settled' || kind.startsWith('series.');
-const toAdmins = (kind: string) => kind.startsWith('fx.') || kind.startsWith('indexing.') || kind === 'application.submitted';
+/** holders and bidders of the series (a failed raise's notice reaches its bidders, whose deposits come back) */
+const toHolders = (kind: string) => kind === 'payout.available' || kind === 'auction.settled' || kind === 'auction.failed' || kind.startsWith('series.');
+const toAdmins = (kind: string) =>
+  kind.startsWith('fx.') || kind.startsWith('indexing.') || kind === 'application.submitted' || kind === 'auction.settlement-rejected' || kind === 'auction.settlement-stuck' || kind === 'bid.delivery-stuck';
 const toAttestors = (kind: string) => kind === 'fx.fallback-needed';
+/**
+ * Whether a series notice also reaches the series' issuer (the default). Not: a notice about one bid (`bid.*`, which
+ * goes to that bid's wallet, plus the admins for a stuck delivery) and an operator alert (`auction.settlement-stuck`).
+ */
+const toIssuer = (kind: string) => !kind.startsWith('bid.') && kind !== 'auction.settlement-stuck';
 
 export class NotificationsService {
   readonly channel: NotificationChannel;
@@ -155,7 +173,7 @@ export class NotificationsService {
       const row = s.rows[0];
       if (!row) throw new Error(`series ${seriesId} is not indexed yet`);
       chain = row.chain;
-      if (row.account_id) out.add(row.account_id);
+      if (row.account_id && toIssuer(kind)) out.add(row.account_id);
       if (toHolders(kind)) {
         add((await this.ctx.pool.query<{ account_id: string }>(
           `select distinct w.account_id from positions p join account_wallets w on w.chain = $2 and w.address = p.wallet

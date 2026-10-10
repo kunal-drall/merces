@@ -261,4 +261,50 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     // but preferences need an account row to attach to
     expect((await rig.put('/me/notification-preferences', { email: true, mutedKinds: [] }, stranger)).statusCode).toBe(404);
   });
+
+  // S2 WP6: the settlement notices (Stage 1's multi-step settlement and the keepers' delivery). The outbox rows carry the
+  // events' public onchain amounts (S2 L16); no inbox row, email or template does
+  it('auction notices: the new kinds render without amounts; a failed raise reaches its bidders; a delivery reaches only its bidder; the stuck kinds reach the admins', async () => {
+    const b0 = h.backers[0]!.address;
+    const b1 = h.backers[1]!.address; // a bidder with no account: nobody else gets its delivery
+    const chainNotice = (kind: string, payload: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ kind, seriesId, chain: 'solana', seq: 900_000 + Object.keys(payload).length + kind.length, txId: `tx-${kind}`, ...extra, payload: { seriesId, ...payload } });
+    const payloads = [
+      chainNotice('auction.failed', { reason: 'MinRaise', clearingPrice: CANARY, unitsSold: '10', proceeds: CANARY, minimumRaise: CANARY }),
+      chainNotice('auction.settlement-rejected', { round: 1, clearingPrice: CANARY, reason: 'ClaimMismatch' }),
+      chainNotice('auction.mint-finalized', { unitsSold: '500', proceeds: CANARY }, { outcome: 'settled' }),
+      chainNotice('bid.delivered', { bidder: b0, units: '100', refund: CANARY }, { wallet: b0 }),
+      chainNotice('bid.delivered', { bidder: b1, units: '100', refund: CANARY }, { wallet: b1 }),
+      { kind: 'auction.settlement-stuck', seriesId, outcome: 'ProposalRejected' },
+      { kind: 'bid.delivery-stuck', seriesId, wallet: b0 },
+    ];
+    for (const p of payloads) await enqueueOutbox(rig.t.pool, 'notification', p);
+    expect(await dispatch()).toMatchObject({ dispatched: payloads.length });
+    const kinds = new Set(payloads.map((p) => p.kind));
+    const mine = async (accountId: string) => (await inbox(accountId)).filter((n) => kinds.has(n.kind));
+    // the bidder: the failed raise (its deposit comes back), its own delivery and its delayed one
+    expect((await mine('acct-holder')).map((n) => n.kind).sort()).toEqual(['auction.failed', 'bid.delivered', 'bid.delivery-stuck']);
+    // the issuer: its raise's outcome and a rejected proposal; never a bidder's delivery, nor the operator alert
+    expect((await mine('acct-issuer')).map((n) => n.kind).sort()).toEqual(['auction.failed', 'auction.mint-finalized', 'auction.settlement-rejected']);
+    // the admins: the rejected proposal and both stuck kinds
+    expect((await mine('acct-admin')).map((n) => n.kind).sort()).toEqual(['auction.settlement-rejected', 'auction.settlement-stuck', 'bid.delivery-stuck']);
+    expect(await mine('acct-att')).toEqual([]);
+    // b1's delivery reached nobody: it has no account, and the issuer is not told of a bidder's delivery
+    const delivered = await rig.t.pool.query("select account_id from notifications where kind = 'bid.delivered'");
+    expect(delivered.rows).toEqual([{ account_id: 'acct-holder' }]);
+    // no amount anywhere: the only digits are the series id's and the stored data keeps ids and codes only
+    const rows = [...(await mine('acct-holder')), ...(await mine('acct-issuer')), ...(await mine('acct-admin'))];
+    for (const n of rows) {
+      expect(`${n.subject} ${n.body}`.replace(seriesId, '')).not.toMatch(/\d/);
+      expect(JSON.stringify(n.data)).not.toContain(CANARY);
+      expect(Object.keys(n.data).every((k) => ['seriesId', 'chain', 'wallet', 'outcome'].includes(k))).toBe(true);
+    }
+    expect(rows.find((n) => n.kind === 'auction.failed')!.body).toContain('Deposits are returned automatically.');
+    expect(rows.find((n) => n.kind === 'auction.mint-finalized')!.body).toMatch(/units are minted.*Status: Settled\.$/);
+    expect(rows.find((n) => n.kind === 'auction.settlement-stuck')!.body).toContain('(ProposalRejected)');
+    // a failed raise's mint notice says so; a stuck reason that is not a bare code is not printed
+    expect(TEMPLATES['auction.mint-finalized']!(safeData({ seriesId: 's', outcome: 'failed' })).body).toBe('Every bid on series s has been processed. Status: Failed. Deposits are returned automatically.');
+    expect(TEMPLATES['auction.settlement-stuck']!(safeData({ seriesId: 's', outcome: `paid ${CANARY}` })).body).not.toContain(CANARY);
+    const scan = await rig.t.pool.query("select count(*)::int as n from (select subject || body || data::text as t from notifications union all select to_address || subject || body from email_outbox) x where t like '%' || $1 || '%'", [CANARY]);
+    expect(scan.rows[0].n).toBe(0);
+  });
 });

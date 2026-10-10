@@ -1,16 +1,28 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { setFlag } from '@merces/core';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { makeContext } from '@merces/api';
 import { TEMPLATES, createServiceContext, safeData, type ServiceContext } from '@merces/services';
 import { MockChainlink, MockPyth } from '@merces/ports';
 import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimulatorChain } from '@merces/simulator';
-import { ChainError } from '@merces/domain';
+import { ChainError, type ChainPort } from '@merces/domain';
 import type { ChainRegistry } from '@merces/chains';
-import { KeeperScheduler, auctionSettleJob, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, rateKeeperJob, statusCrankJob, burnCrankJob, outboxJob } from '../src/index.ts';
+import { KeeperScheduler, auctionDeliverJob, auctionSettleJob, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, rateKeeperJob, statusCrankJob, burnCrankJob, outboxJob, transferWindowsJob } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const GENESIS = Date.UTC(2026, 0, 1) / 1000;
+const DAY = 86_400;
+/*
+ * S2 cause codes on the pins that moved:
+ *  - S2-MS: Stage 1's multi-step settlement; the keepers settle (`auction.settle`) and deliver (`auction.deliver`) in
+ *    separate jobs (was one job, and before S2 the one-step settleAuction).
+ */
+
+/** A registry of one chain, for a test that needs its own series ids, reminder ledger or a wrapped port. */
+function registryOf(key: string, port: ChainPort): ChainRegistry {
+  return { chains: new Map([[key, port]]), decisions: [], stage1: null, get: () => port, byFamily: () => port, close: async () => undefined };
+}
 
 describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () => {
   let t: Awaited<ReturnType<typeof createTestSchema>>;
@@ -156,15 +168,21 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     expect(out3['status.crank']!.detail).toMatch(/fee payer out of funds/);
   });
 
-  // cause S2-MS: the settle job drives Stage 1's steps (was the one-step settleAuction); its errors are value-free (S2 L7)
-  it('the auction job settles a due raise in Stage 1\'s steps and delivers it; a failure names the series and a code, never a message', async () => {
+  // cause S2-MS: the settle job drives Stage 1's steps (was the one-step settleAuction) and leaves delivery to the deliver
+  // job (was: both in one job); their errors are value-free (S2 L7)
+  it('the settle job takes a due raise to mint finalisation in Stage 1\'s steps and the deliver job delivers it; a failure names the series and a code, never a message', async () => {
     const a = await sol.runRaise({ settle: 'none' });
     const out = await new KeeperScheduler(ctx, [auctionSettleJob]).runAll();
-    // the proposal, one tally page, finalize, then a process and a delivery for each of the five bids
-    expect(out['auction.settle']).toMatchObject({ ok: true, actions: 13 });
+    // the proposal, one tally page, finalize, then a process for each of the five bids (cause S2-MS: was 13 steps with
+    // a delivery each)
+    expect(out['auction.settle']).toMatchObject({ ok: true, actions: 8 });
     expect(await sol.sim.getAuction(a.seriesId)).toMatchObject({ raiseState: 'Settled', mintFinalized: true, bidsProcessed: 5 });
-    expect((await sol.sim.listBids(a.seriesId)).every((b) => b.delivered)).toBe(true);
+    expect((await sol.sim.listBids(a.seriesId)).map((b) => [b.processed, b.delivered])).toEqual(Array(5).fill([true, false]));
     expect((await new KeeperScheduler(ctx, [auctionSettleJob]).runAll())['auction.settle']).toMatchObject({ ok: true, actions: 0 });
+    // the deliver job pushes every processed bid: the refunds and the units
+    expect((await new KeeperScheduler(ctx, [auctionDeliverJob]).runAll())['auction.deliver']).toMatchObject({ ok: true, actions: 5 });
+    expect((await sol.sim.listBids(a.seriesId)).every((b) => b.delivered && b.pendingRefund === '0' && b.pendingUnits === '0')).toBe(true);
+    expect((await new KeeperScheduler(ctx, [auctionDeliverJob]).runAll())['auction.deliver']).toMatchObject({ ok: true, actions: 0 });
     // a submit refused with an amount in its message: the run fails with the series and the Stage 1 name only
     const b = await mon.runRaise({ settle: 'none' });
     const flaky = new Proxy(mon.sim, { get(target, k) { if (k === 'submit') return async () => { throw new ChainError('InsufficientFunds', 'fee payer is short by 123456789', { stage1: 'InsufficientEscrow' }); }; const v = Reflect.get(target, k); return typeof v === 'function' ? v.bind(target) : v; } });
@@ -174,6 +192,151 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     expect(out2['auction.settle']!.detail).not.toContain('123456789');
     expect((await mon.sim.getAuction(b.seriesId))!.raiseState).toBe('Open');
     await mon.settle(b.seriesId, 'deliver');
+  });
+
+  it('a settlement the planner will not act on fails each settle run with its reason and tells the admins once', async () => {
+    const key = 'solana-settle-stuck';
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    // the chain reports one more valid bid than its bids show: the planner refuses to propose (ValidityMismatch)
+    const port = new Proxy(h.sim, {
+      get(target, k) {
+        if (k === 'getAuction') return async (id: string) => { const a = await target.getAuction(id); return a && { ...a, validCount: a.validCount + 1 }; };
+        const v = Reflect.get(target, k);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    const c = createServiceContext(makeContext({ pool: t.pool, chains: registryOf(key, port as never), log: silent, sessionSecret: 's', devMode: true }));
+    const { seriesId } = await h.runRaise({ settle: 'none' });
+    const job = new KeeperScheduler(c, [auctionSettleJob]);
+    for (let i = 0; i < 2; i++) expect((await job.runAll())['auction.settle']).toMatchObject({ ok: false, actions: 0, detail: `errors: ${seriesId}: stuck (ValidityMismatch)` });
+    const alerts = await t.pool.query("select payload from outbox where topic = 'notification' and payload->>'kind' = 'auction.settlement-stuck' and payload->>'seriesId' = $1", [seriesId]);
+    expect(alerts.rows.map((r) => r.payload)).toEqual([{ kind: 'auction.settlement-stuck', seriesId, outcome: 'ValidityMismatch' }]);
+    expect((await h.sim.getAuction(seriesId))!.raiseState).toBe('Open');
+  });
+
+  it('the deliver job retries a refused delivery on its own backoff, delivers every other bid, and reports one still failing a day after finalization once', async () => {
+    const key = 'monad-deliveries';
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    // the chain refuses one bidder's delivery (say its token account is gone), with a value in the message
+    let refused: string | null = null;
+    const port = new Proxy(h.sim, {
+      get(target, k) {
+        if (k === 'submit') {
+          return async (...args: Parameters<typeof target.submit>) => {
+            const cmd = args[0];
+            if (cmd.kind === 'deliverBid' && cmd.bidder === refused) throw new ChainError('ChainSpecific', 'token account missing; rent 2039280 short');
+            return target.submit(...args);
+          };
+        }
+        const v = Reflect.get(target, k);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    const c = createServiceContext(makeContext({ pool: t.pool, chains: registryOf(key, port as never), log: silent, sessionSecret: 's', devMode: true }));
+    const settle = new KeeperScheduler(c, [auctionSettleJob]);
+    const deliver = new KeeperScheduler(c, [auctionDeliverJob]);
+    const a = await h.runRaise({ settle: 'none' });
+    const stuckBidder = h.backers[2]!.address;
+    refused = stuckBidder;
+    expect((await settle.runAll())['auction.settle']).toMatchObject({ ok: true, actions: 8 });
+    const { finalizedAt } = (await h.sim.getAuction(a.seriesId))!;
+    const record = async () => (await t.pool.query<{ attempts: number; next_at: string; last_error: string; notified: boolean }>('select attempts, extract(epoch from next_attempt_at)::bigint::text as next_at, last_error, stuck_notified_at is not null as notified from auction_deliveries where series_id = $1', [a.seriesId])).rows;
+    const stuckNotices = async () => (await t.pool.query("select payload from outbox where topic = 'notification' and payload->>'kind' = 'bid.delivery-stuck' and payload->>'seriesId' = $1", [a.seriesId])).rows.map((r) => r.payload);
+    // the four others are delivered; the refusal is recorded with its code and a one-minute backoff (chain time)
+    const t0 = await h.sim.now();
+    const r1 = (await deliver.runAll())['auction.deliver']!;
+    expect(r1).toMatchObject({ ok: false, actions: 4, detail: `errors: ${a.seriesId} ${stuckBidder}: ChainSpecific (attempt 1)` });
+    expect((await h.sim.listBids(a.seriesId)).filter((b) => !b.delivered).map((b) => b.bidder)).toEqual([stuckBidder]);
+    expect(await record()).toEqual([{ attempts: 1, next_at: String(t0 + 60), last_error: 'ChainSpecific', notified: false }]);
+    // inside the backoff nothing is attempted, and the run is not a failure
+    expect((await deliver.runAll())['auction.deliver']).toMatchObject({ ok: true, actions: 0, detail: '1 waiting' });
+    expect((await record())[0]!.attempts).toBe(1);
+    // the next attempts wait 5 min, 30 min, 2 h, 12 h, then a day
+    const waits: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const { next_at } = (await record())[0]!;
+      await h.sim.setTime(Number(next_at));
+      expect((await deliver.runAll())['auction.deliver']).toMatchObject({ ok: false, actions: 0 });
+      waits.push(Number((await record())[0]!.next_at) - Number(next_at));
+    }
+    expect(waits).toEqual([300, 1_800, 7_200, 43_200, DAY, DAY]);
+    expect((await record())[0]).toMatchObject({ attempts: 7, last_error: 'ChainSpecific' });
+    // a day after finalization, once a delivery has failed: one bid.delivery-stuck to the admins and the bidder
+    expect((await h.sim.now()) >= finalizedAt! + DAY).toBe(true);
+    expect(await stuckNotices()).toEqual([{ kind: 'bid.delivery-stuck', seriesId: a.seriesId, wallet: stuckBidder }]);
+    expect((await record())[0]!.notified).toBe(true);
+    await h.sim.setTime(Number((await record())[0]!.next_at));
+    expect((await deliver.runAll())['auction.deliver']).toMatchObject({ ok: false, actions: 0 });
+    expect(await stuckNotices()).toHaveLength(1);
+    // never a message: neither the record nor the runs carry the adapter's text
+    const runs = await t.pool.query("select detail from keeper_runs where job = 'auction.deliver' and detail is not null");
+    expect(JSON.stringify([runs.rows, await record()])).not.toMatch(/2039280|token account/);
+    // the chain takes it again: delivered on the next due attempt, and the record goes
+    refused = null;
+    await h.sim.setTime(Number((await record())[0]!.next_at));
+    expect((await deliver.runAll())['auction.deliver']).toMatchObject({ ok: true, actions: 1 });
+    expect((await h.sim.listBids(a.seriesId)).every((b) => b.delivered)).toBe(true);
+    expect(await record()).toEqual([]);
+  });
+
+  it('a bid delivered by someone else is not a keeper failure: a lost race and a recorded bid delivered since both clear', async () => {
+    const key = 'solana-delivery-race';
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    let refused: string | null = null;
+    let raced: string | null = null;
+    const port = new Proxy(h.sim, {
+      get(target, k) {
+        if (k === 'submit') {
+          return async (...args: Parameters<typeof target.submit>) => {
+            const cmd = args[0];
+            if (cmd.kind === 'deliverBid' && cmd.bidder === refused) throw new ChainError('ChainSpecific', 'refused');
+            // the bidder's own delivery lands between the keeper's read and its send
+            if (cmd.kind === 'deliverBid' && cmd.bidder === raced) await h.exec(h.backers.find((w) => w.address === raced)!, { kind: 'deliverBid', seriesId: cmd.seriesId, bidder: cmd.bidder });
+            return target.submit(...args);
+          };
+        }
+        const v = Reflect.get(target, k);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    const c = createServiceContext(makeContext({ pool: t.pool, chains: registryOf(key, port as never), log: silent, sessionSecret: 's', devMode: true }));
+    const a = await h.runRaise({ settle: 'process' });
+    refused = h.backers[0]!.address;
+    raced = h.backers[1]!.address;
+    const r1 = (await new KeeperScheduler(c, [auctionDeliverJob]).runAll())['auction.deliver']!;
+    // backer 1's delivery was refused AlreadyDelivered (its own got in first): neither an error nor a record
+    expect(r1).toMatchObject({ ok: false, actions: 3, detail: `errors: ${a.seriesId} ${refused}: ChainSpecific (attempt 1)` });
+    expect((await t.pool.query('select bidder from auction_deliveries where series_id = $1', [a.seriesId])).rows).toEqual([{ bidder: refused }]);
+    // backer 0 delivers itself while the keeper waits out its backoff: the record is dropped on the next pass
+    await h.exec(h.backers[0]!, { kind: 'deliverBid', seriesId: a.seriesId, bidder: refused });
+    expect((await new KeeperScheduler(c, [auctionDeliverJob]).runAll())['auction.deliver']).toMatchObject({ ok: true, actions: 0 });
+    expect((await t.pool.query('select 1 from auction_deliveries where series_id = $1', [a.seriesId])).rowCount).toBe(0);
+    expect((await h.sim.listBids(a.seriesId)).every((b) => b.delivered)).toBe(true);
+  });
+
+  it('the transfer-windows job leaves a series still processing its bids alone (MintNotFinalized), then opens its window', async () => {
+    const key = 'solana-windows-mint';
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const c = createServiceContext(makeContext({ pool: t.pool, chains: registryOf(key, h.sim), log: silent, sessionSecret: 's', devMode: true }));
+    const a = await h.runRaise({ settle: 'finalize', terms: { lockupSeconds: 10 } });
+    await setFlag(t.pool, 'transfer_windows', true, 'test');
+    try {
+      const q = periodOf(await h.sim.now());
+      await h.sim.setTime(q.start + 15 * DAY);
+      const s = (await h.sim.getSeries(a.seriesId))!;
+      expect([s.phase, s.mintFinalized, (await h.sim.now()) >= s.lockupEndsAt!]).toEqual(['Settled', false, true]);
+      // the chain would refuse the window (MintNotFinalized): the job does not try, and the run is clean
+      await expect(h.sim.submit({ kind: 'openTransferWindow', seriesId: a.seriesId, commitEndsAt: (await h.sim.now()) + 7 * DAY, revealEndsAt: (await h.sim.now()) + 9 * DAY }, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'MintNotFinalized' } });
+      const job = new KeeperScheduler(c, [transferWindowsJob]);
+      expect((await job.runAll())['transfer.windows']).toMatchObject({ ok: true, actions: 0 });
+      expect(await h.sim.getTransferWindow(a.seriesId)).toBeNull();
+      // once the last bid is processed the window opens
+      await h.settle(a.seriesId, 'process');
+      expect((await job.runAll())['transfer.windows']).toMatchObject({ ok: true, actions: 1 });
+      expect(await h.sim.getTransferWindow(a.seriesId)).not.toBeNull();
+    } finally {
+      await setFlag(t.pool, 'transfer_windows', false, 'test');
+    }
   });
 
   it('reminders and the status crank follow Stage 1\'s instants: InGrace after dueAt, Late after graceEndsAt, formal notice at formalNoticeAt', async () => {

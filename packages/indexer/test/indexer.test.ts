@@ -424,6 +424,33 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect((await t.pool.query('select count(*)::int as n from bids where series_id = $1 and processed and delivered', [seriesId])).rows[0].n).toBe(5);
   });
 
+  // S2 WP6: the settlement's notices come from its finalized events, like every chain notice
+  it('enqueues the settlement\'s notices: a rejected round, the mint finalized with its outcome, and each delivery addressed to its bidder', async () => {
+    const key = 'auction-notices';
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const notices = async (seriesId: string) => (await t.pool.query("select payload from outbox where topic = 'notification' and payload->>'chain' = $1 and payload->>'seriesId' = $2 order by id", [key, seriesId])).rows.map((r) => r.payload as Record<string, unknown>);
+    const { seriesId } = await h.runRaise({ settle: 'none' });
+    // round 1: a wrong claim at the right price is rejected at finalize (ClaimMismatch); the keepers' honest round follows
+    await h.sim.submit({ kind: 'beginSettlement', seriesId, clearingPrice: USDC(9).toString(), qAboveClaim: '400', qAtClaim: '99' }, 'keeper');
+    await h.sim.submit({ kind: 'tallyBids', seriesId }, 'keeper');
+    await h.sim.submit({ kind: 'finalizeSettlement', seriesId }, 'keeper');
+    await h.settle(seriesId, 'deliver');
+    await idx.catchUp();
+    const settled = await notices(seriesId);
+    expect(settled.map((n) => n.kind)).toEqual(['auction.settlement-rejected', 'auction.settled', 'auction.mint-finalized', ...Array(5).fill('bid.delivered')]);
+    expect(settled[0]).toMatchObject({ seriesId, chain: key, payload: { seriesId, round: 1, reason: 'ClaimMismatch' } });
+    expect(settled[2]).toMatchObject({ outcome: 'settled', payload: { seriesId, unitsSold: '500' } });
+    // a delivery is addressed to its bidder's wallet (the notifications module routes it there and nowhere else)
+    expect(settled.slice(3).map((n) => n.wallet)).toEqual(h.backers.slice(0, 5).map((w) => w.address));
+    expect(settled.slice(3).every((n) => (n.payload as { bidder: string }).bidder === n.wallet)).toBe(true);
+    // a failed raise: its notice, the mint finalized as failed (0, 0) and the deposit's delivery
+    const failed = (await h.runRaise({ bids: [{ backer: 0, price: USDC(10), qty: 10n }] })).seriesId;
+    await idx.catchUp();
+    const f = await notices(failed);
+    expect(f.map((n) => [n.kind, n.outcome ?? null, n.wallet ?? null])).toEqual([['auction.failed', null, null], ['auction.mint-finalized', 'failed', null], ['bid.delivered', null, h.backers[0]!.address]]);
+  });
+
   // cause S2-FP: a failed raise keeps its price and would-be results on the auction; the issue price stays unset
   it('projects a failed raise\'s reason, price and would-be results, with no amount in the feed', async () => {
     const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'failed-raise', genesis: GENESIS, acceptMockProofs: true }) });

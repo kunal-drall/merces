@@ -87,13 +87,15 @@ export class LifecycleService {
    * `blockedBy`: TerminalStatus, SeriesLate (a Paused series may redeem), LockupActive, PaymentOutstanding,
    * TrueUpOutstanding (not reachable until the true-up lands, S5) and UnreportedPeriods (every ended period must be
    * reported). With no cap left (`C_remaining = 0`) `redeem` retires the series instead: `outcome` is `retire` and no
-   * deposit is taken.
+   * deposit is taken. 409 before settlement and while the raise is still processing its bids (MintNotFinalized, S2).
    */
   async quote(seriesId: string): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
     if (s.phase !== 'Settled' || s.issuePrice === null || s.capPerUnit === null || s.settledAt === null) throw AppError.conflict('series has not settled');
+    // the units outstanding (the quote's divisor) are known once the last bid is processed; `redeem` refuses before that
+    if (!s.mintFinalized) throw AppError.conflict('the raise is still processing its bids (MintNotFinalized): no redemption quote yet');
     const now = await chain.now();
     const t = BigInt(Math.max(0, now - s.settledAt));
     const ring = s.yearGross.map((y) => ({ year: y.year, grossWad: BigInt(y.grossWad) })) as unknown as YearGrossRing;

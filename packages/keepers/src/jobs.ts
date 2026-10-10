@@ -14,8 +14,9 @@ import type { OutboxHandler } from '@merces/core';
  * Failure handling: chains and series are independent, so one chain's outage or one series' error never stops
  * the others. Only the chain's expected "nothing to do" refusals (a ChainError with a known code) are swallowed;
  * every other error is collected and returned in `errors`, which the scheduler records as a failed run
- * (keeper_runs.ok = false) so a stuck series raises an alert. Chain-event notices (status changes, pause end,
- * auction settled) are enqueued by the indexer from the finalized events, not from submit results here.
+ * (keeper_runs.ok = false) so a stuck series raises an alert. The auction jobs report codes only, never a message
+ * (S2 L7: adapter messages can embed values). Chain-event notices (status changes, pause end, auction settled or failed,
+ * mint finalized, bid delivered) are enqueued by the indexer from the finalized events, not from submit results here.
  */
 export interface KeeperJob {
   name: string;
@@ -50,11 +51,16 @@ async function forEachChain(ctx: ServiceContext, errors: string[], fn: (chain: C
 
 type Series = Awaited<ReturnType<ChainPort['listSeries']>>[number];
 
-async function forEachSettled(ctx: ServiceContext, errors: string[], fn: (chain: ChainPort, s: Series, now: number) => Promise<void>): Promise<void> {
+/**
+ * Every settled series on every chain. With `requireMintFinalized`, only those whose last bid is processed (Stage 1's
+ * `mintFinalized`): the money paths and windows refuse a series before that (MintNotFinalized).
+ */
+async function forEachSettled(ctx: ServiceContext, errors: string[], fn: (chain: ChainPort, s: Series, now: number) => Promise<void>, opts: { requireMintFinalized?: boolean } = {}): Promise<void> {
   await forEachChain(ctx, errors, async (chain) => {
     const now = await chain.now();
     for (const s of await chain.listSeries()) {
       if (s.phase !== 'Settled') continue;
+      if (opts.requireMintFinalized && !s.mintFinalized) continue;
       try {
         await fn(chain, s, now);
       } catch (e) {
@@ -65,18 +71,38 @@ async function forEachSettled(ctx: ServiceContext, errors: string[], fn: (chain:
 }
 
 /**
- * Stage 1's sealed-bid settlement, one pass per run (`AuctionService.advanceSettlements`): the proposal, the tally
- * pages, finalize, a `processBid` per bid and a `deliverBid` per bid (refunds and units are pushed). Actions are the
- * steps sent; a series the planner will not act on, or whose pass raised, is an error (value-free: the series and a
- * Stage 1 error name, ChainError code or stuck reason, never a message). WP6 splits delivery into its own job.
+ * Stage 1's sealed-bid settlement, one pass per run (`AuctionService.advanceSettlements` with `deliver: false`): the
+ * proposal, the tally pages, finalize and a `processBid` per bid. Delivery is `auction.deliver`'s. Actions are the steps
+ * sent; a series the planner will not act on (also told to the admins once, `auction.settlement-stuck`), or whose pass
+ * raised, is an error (value-free: the series and a Stage 1 error name, ChainError code or stuck reason, never a
+ * message; S2 L7).
  */
 export const auctionSettleJob: KeeperJob = {
   name: 'auction.settle',
   intervalSeconds: 60,
   async run(ctx) {
-    const r = await new AuctionService(ctx).advanceSettlements({ deliver: true });
+    const r = await new AuctionService(ctx).advanceSettlements({ deliver: false });
     const errors = [...r.failed.map((f) => `${f.target}: ${f.error}`), ...r.stuck.map((x) => `${x.seriesId}: stuck (${x.reason})`)];
     return { actions: r.advanced.reduce((n, a) => n + a.steps.length, 0), errors };
+  },
+};
+
+/**
+ * Pushes every processed, undelivered bid (`AuctionService.deliverDue`: Stage 1 `deliver_bid` pays the refund and the
+ * units), each with its own backoff after a refusal (1 min, 5 min, 30 min, 2 h, 12 h, then daily); a bid still failing 24 h
+ * after its raise was finalized is told once to the admins and the bidder (`bid.delivery-stuck`). Actions are the bids
+ * delivered; a refused delivery or an unreadable chain or series is an error (value-free: the series, the bidder and a
+ * Stage 1 error name or ChainError code, never a message; S2 L7). Bids waiting out their backoff are counted in the
+ * detail, not as errors.
+ */
+export const auctionDeliverJob: KeeperJob = {
+  name: 'auction.deliver',
+  intervalSeconds: 60,
+  async run(ctx) {
+    const r = await new AuctionService(ctx).deliverDue();
+    const errors = [...r.failed.map((f) => `${f.seriesId} ${f.bidder}: ${f.error} (attempt ${f.attempts})`), ...r.errors.map((x) => `${x.target}: ${x.error}`)];
+    const detail = [r.deferred ? `${r.deferred} waiting` : null, r.stuck.length ? `${r.stuck.length} reported stuck` : null].filter(Boolean).join(', ') || undefined;
+    return { actions: r.delivered.length, errors, detail };
   },
 };
 
@@ -252,6 +278,8 @@ export const transferWindowsJob: KeeperJob = {
     const flagOn = await getFlag(ctx.pool, 'transfer_windows');
     let actions = 0;
     const errors: string[] = [];
+    // a window opens on a mint-finalized series only (Stage 1 MintNotFinalized), so one still processing its bids has no
+    // window to clear either
     await forEachSettled(ctx, errors, async (chain, s, now) => {
       // An open window is always cleared once its reveal phase is over, whatever the series' status and even with the
       // flag switched off, so buy deposits and sell escrow are never left locked (A-REV-16). Only opening is gated.
@@ -280,7 +308,7 @@ export const transferWindowsJob: KeeperJob = {
       } catch (e) {
         if (!refused(e, ['Duplicate', 'TooEarly', 'WrongStatus'])) throw e;
       }
-    });
+    }, { requireMintFinalized: true });
     return { actions, errors, detail: flagOn ? undefined : 'flag off: open windows are cleared, none opened' };
   },
 };

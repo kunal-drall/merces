@@ -79,31 +79,48 @@ describe.skipIf(!dbTestsEnabled())('concurrency and past-holder edges', () => {
     expect(eligible).toBe(state === 'approved');
   });
 
-  // cause S2-MS: Stage 1 settles in steps anyone may send; the race is now for a step (was: the one-step settlement)
-  it('a settlement step that loses the race to someone else is not a keeper failure: the keeper re-plans and finishes', async () => {
+  // cause S2-MS: Stage 1 settles in steps anyone may send; the race is now for a step (was: the one-step settlement), and
+  // the keepers settle and deliver in separate passes (`advanceSettlements`, then `deliverDue`)
+  it('a settlement step or a delivery that loses the race to someone else is not a keeper failure: the keeper re-plans and finishes', async () => {
     const h = rig.mon;
     const { seriesId } = await h.runRaise({ settle: 'none' });
-    // another sender's beginSettlement (the same honest proposal) lands between the keeper's read and its submit
+    // another sender's beginSettlement (the same honest proposal) lands between the keeper's read and its submit; later a
+    // bidder's own delivery does the same to the keeper's deliverBid
     const realSubmit = h.sim.submit.bind(h.sim);
     let raced = false;
+    let racedDelivery: string | null = null;
     h.sim.submit = async (...args: Parameters<typeof realSubmit>) => {
-      if (!raced && args[0].kind === 'beginSettlement') {
+      const cmd = args[0];
+      if (!raced && cmd.kind === 'beginSettlement') {
         raced = true;
-        await h.exec(h.backers[4]!, args[0] as PermissionlessCommand);
+        await h.exec(h.backers[4]!, cmd as PermissionlessCommand);
+      }
+      if (racedDelivery === null && cmd.kind === 'deliverBid') {
+        racedDelivery = cmd.bidder;
+        await h.exec(h.backers.find((w) => w.address === cmd.bidder)!, cmd as PermissionlessCommand);
       }
       return realSubmit(...args);
     };
     try {
-      const r = await new AuctionService(rig.ctx).advanceSettlements({ deliver: true });
+      const svc = new AuctionService(rig.ctx);
+      const r = await svc.advanceSettlements({ deliver: false });
       expect(raced).toBe(true);
       expect(r.failed).toEqual([]);
       expect(r.stuck).toEqual([]);
       // the keeper's own beginSettlement was refused (TallyInProgress) and is not among its steps
-      expect(r.advanced.find((a) => a.seriesId === seriesId)).toEqual({ seriesId, steps: ['tallyBids', 'finalizeSettlement', ...Array(5).fill('processBid'), ...Array(5).fill('deliverBid')], stage: 'complete' });
+      expect(r.advanced.find((a) => a.seriesId === seriesId)).toEqual({ seriesId, steps: ['tallyBids', 'finalizeSettlement', ...Array(5).fill('processBid')], stage: 'delivering' });
+      // the delivery pass: the bid its bidder delivered first (AlreadyDelivered) is neither a failure nor a delivery
+      const d = await svc.deliverDue();
+      expect(racedDelivery).not.toBeNull();
+      expect(d.failed).toEqual([]);
+      expect(d.errors).toEqual([]);
+      expect(d.delivered.filter((x) => x.seriesId === seriesId).map((x) => x.bidder).sort()).toEqual(h.backers.slice(0, 5).map((w) => w.address).filter((a) => a !== racedDelivery).sort());
     } finally {
       h.sim.submit = realSubmit;
     }
     expect(await h.sim.getAuction(seriesId)).toMatchObject({ raiseState: 'Settled', round: 1, mintFinalized: true, bidsProcessed: 5 });
+    expect((await h.sim.listBids(seriesId)).every((b) => b.delivered)).toBe(true);
+    expect((await rig.t.pool.query('select 1 from auction_deliveries where series_id = $1', [seriesId])).rowCount).toBe(0);
   });
 
   it('a cancelled curve raise refuses buys, in the builder and onchain', async () => {
