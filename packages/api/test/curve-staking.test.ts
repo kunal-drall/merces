@@ -136,6 +136,12 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
     await noCapOn('/series/{seriesId}/curve/position', all.json());
     expect(all.json().positions.map((p: { wallet: string }) => p.wallet)).toEqual([a.address]);
     expect((await rig.get(`/series/${seriesId}/curve/position?wallet=${b.address}`, aTok)).statusCode).toBe(403);
+    // S3 review fix 5: an admin session reads any wallet's position it names (as on every wallet builder; it holds no
+    // income data), and reads none of its own without one (PRIVACY.md lists admin as a reader)
+    const byAdmin = await rig.get(`/series/${seriesId}/curve/position?wallet=${a.address}`, adminTok);
+    expect(byAdmin.statusCode, byAdmin.body).toBe(200);
+    expect(byAdmin.json().positions).toEqual([pa]);
+    expect((await rig.get(`/series/${seriesId}/curve/position`, adminTok)).json().positions).toEqual([]);
     expect((await rig.get(`/series/${seriesId}/curve/position`, rig.token({ accountId: 'nobody', wallets: [] }))).json().positions).toEqual([]);
     expect((await rig.get(`/series/${seriesId}/curve/position`)).statusCode).toBe(401);
     // a sealed-bid series has no curve position

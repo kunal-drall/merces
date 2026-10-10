@@ -144,7 +144,9 @@ in the position (`GET /series/{id}/position`, the `PositionView` schema, and `/m
 
 **Curve staking** (S3 WP12; Stage 1 curve mode; amendments M4 and M8 and the owner's directions of 2026-10-10). On a
 curve series only staked units earn. Every route here is account tier with `wallet` one of your wallets (it signs): a
-buyer has no position row, so no holder access, until it stakes. Unit counts are base lamports (10^6 to a whole unit);
+buyer has no position row, so no holder access, until it stakes. An admin session may name any wallet, as on every
+wallet builder: it reads that wallet's curve position (unit counts, payouts and the allowlist flag, all public onchain;
+no income data) and builds its transactions, which only that wallet can sign. Unit counts are base lamports (10^6 to a whole unit);
 prices are per whole unit. Refusals come before the wallet signs, in Stage 1's order, with the Stage 1 name in
 `detail.stage1` (a short wallet: `detail.code` InsufficientFunds).
 

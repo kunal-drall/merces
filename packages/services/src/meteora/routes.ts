@@ -35,7 +35,8 @@ export function registerMeteoraRoutes(app: FastifyInstance, base: AppContext): v
     method: 'POST', url: '/series/:seriesId/curve/build-swap', access: 'account',
     handler: async (req, _r, session) => s.buildSwap(sid(req), session!, z.object({ ...swapInput, acknowledged: z.boolean().optional(), beforeYouBuyVersion: z.string().optional() }).parse(req.body)),
   });
-  // curve staking (S3 WP12): every builder on the account tier with the wallet linked (a buyer has no position row until it stakes)
+  // curve staking (S3 WP12): every builder on the account tier with the wallet linked, or any wallet for an admin session
+  // (a buyer has no position row until it stakes)
   const units = z.string().regex(/^\d+$/);
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/curve/position', access: 'account', handler: async (req, _r, session) => staking.walletPositions(sid(req), session!, z.object({ wallet: z.string().min(1).optional() }).parse(req.query).wallet) });
   defineRoute(app, ctx, {

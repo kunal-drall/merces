@@ -11,7 +11,10 @@ import { curveNoCap, type CurveNoCapFields } from './notice.ts';
  * Solana curve.rs:1250-1528). On a curve series only staked units earn: these builders take a holder from units in its
  * wallet to a stake, back out (unstaking pays in the product: one transaction of `unstakeUnits` and `claimPayout`), and
  * to a tender at a redemption, and the wallet read says where each linked wallet stands. All on the `account` tier with
- * the wallet linked to the caller: a curve buyer has no position row (no holder access) until it stakes.
+ * the wallet linked to the caller: a curve buyer has no position row (no holder access) until it stakes. An admin
+ * session may name any wallet (`requireWallet`, as on every wallet builder): the position holds no income data (unit
+ * counts, payouts and the allowlist flag, all public onchain) and a built transaction needs the wallet's signature
+ * (PRIVACY.md lists admin as a reader; S3 review).
  *
  * Every refusal comes before the wallet signs, in Stage 1's in-handler order, with the Stage 1 name in `detail.stage1`
  * (a short wallet is the token program's refusal: `detail.code` InsufficientFunds, no Stage 1 name). Refusals and reads

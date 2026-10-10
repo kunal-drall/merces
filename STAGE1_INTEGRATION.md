@@ -505,6 +505,31 @@ The S3 review's confirmed findings, each fixed in its own commit ("S3 review fix
    `:345-350`); `staking.test.ts`'s unstake-then-claim `:892-895` and its other section cites; the engine's and the
    harness's hook and fill cites; the registry and domain tests' curve-term refusals. Its other Stage 1 cites
    (`exit.rs:268-272`, the fixture generator's terms `:36-44` and proof encoding `:77-80`) too.
+5. **Admin sessions read and build a wallet's curve position (disputed, low; docs corrected).** PRIVACY.md said only
+   the account that linked the wallet reads its curve position, and API.md and A-CURVE-6 that the staking routes take
+   one of the caller's wallets, but an admin session may name any wallet there, as on every wallet builder since S1
+   (`requireWallet`'s admin bypass). The code stays (the position holds no income data: unit counts, payouts and the
+   allowlist flag, all public onchain, read live and never stored; a built transaction needs the wallet's own
+   signature; dropping the bypass here alone would set these routes apart from every other wallet builder), and the
+   docs say so: PRIVACY.md lists admin as a reader of the row (not audited, as admin's other reads of public chain
+   state), API.md "Curve staking", A-CURVE-6, the OpenAPI `wallet` parameter and the service comments. A test pins the
+   admin read.
+
+**The S3 review fixes gate**, all green at the fifth "S3 review fix" commit:
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | exits 0 |
+| `DATABASE_URL=… pnpm vitest run` | 71 files, 577 tests passed (572 before: 3 for the final share, 1 for the yield, 1 for the curve routes' walk) |
+| `MERCES_TEST_DB=1 pnpm vitest run --project canary` | 2 files, 3 tests passed |
+| `CONFORMANCE_CHAIN=simulator` / `simulator:monad` `pnpm vitest run --project conformance` | 20 and 11 tests passed |
+| `pnpm stage1:vectors --personality solana,monad` | exits 0: `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)` |
+| `pnpm stage1:vectors --backend reference` | exits 0: `OK: 25/25 PASS, 25/25 at expected status` |
+| `pnpm stage1:vectors --backend lockstep --personality solana,monad` | exits 0: `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)` |
+| `pnpm stage1:vectors --scenarios` (lockstep; also `--backend merces`) | exits 0: `OK: 22/24 PASS, 24/24 at expected status (2 runs with accepted divergences)`: S3l parts at #78 as recorded (DIV-S1I-1); `--backend reference`: `OK: 12/12 PASS` |
+| `pnpm stage1:sync --no-conformance` | exits 0: curve-port `OK` (55/55 figures, 5,883/5,883 oracle cases), math and vectors `OK` (S3 claim scenarios 60/60 runs at expected status, 4 PASS-WITH-DIVERGENCES on DIV-S1I-1), diff `WARN` (unchanged), conformance skipped; `docs/stage1/VECTOR_PARITY.md` regenerated (the register's row and S3l), `MATH_PARITY.md` and `INTERFACE_DRIFT.md` unchanged |
+| `pnpm openapi:client && pnpm openapi:check`; `pnpm docs:events` | `openapi.yaml matches 170 operations`; `DOMAIN_EVENTS.md` regenerated once (the final claim's weight), no change since |
+| `pnpm demo:cycle` | exits 0: `DEMO OK` on both personalities |
 
 ### Adapter notes for the auction (S5)
 

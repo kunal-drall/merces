@@ -8164,7 +8164,7 @@ paths:
           in: query
           schema:
             type: string
-          description: one of the caller's wallets; all of them on the series' chain when absent
+          description: "one of the caller's wallets (an admin session may name any wallet: the position holds no income data); all of the caller's on the series' chain when absent"
       responses:
         "200":
           description: One position per wallet, with no cap and the buyer notice
@@ -8200,7 +8200,7 @@ paths:
                         items:
                           $ref: "#/components/schemas/CurveWalletPosition"
         "403":
-          description: The wallet is not linked to the caller
+          description: The wallet is not linked to the caller (and the caller is not an admin)
         "409":
           description: Not a curve-mode series (detail.stage1 NotCurveMode)
         "422":

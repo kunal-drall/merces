@@ -8889,7 +8889,7 @@ export interface operations {
     getCurveWalletPositions: {
         parameters: {
             query?: {
-                /** @description one of the caller's wallets; all of them on the series' chain when absent */
+                /** @description one of the caller's wallets (an admin session may name any wallet: the position holds no income data); all of the caller's on the series' chain when absent */
                 wallet?: string;
             };
             header?: never;
@@ -8919,7 +8919,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description The wallet is not linked to the caller */
+            /** @description The wallet is not linked to the caller (and the caller is not an admin) */
             403: {
                 headers: {
                     [name: string]: unknown;
