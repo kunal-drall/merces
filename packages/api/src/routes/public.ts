@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { AppError } from '@merces/core';
 import { defineRoute } from '../app.ts';
 import type { AppContext } from '../context.ts';
-import { seriesRow } from '../serialize.ts';
+import { reportingRow, seriesRow } from '../serialize.ts';
 
 const listQuery = z.object({ chain: z.string().optional(), status: z.string().optional(), issuer: z.string().optional(), limit: z.coerce.number().int().min(1).max(200).default(50), offset: z.coerce.number().int().min(0).default(0) });
 
@@ -157,7 +157,11 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
       const live = await chain.listPeriods(seriesId);
       const idx = await ctx.pool.query('select period_id, income_commitment, fx_basis, fx_avg_wad, formal_notice_seq from periods where series_id = $1', [seriesId]);
       const byId = new Map(idx.rows.map((r) => [r.period_id, r]));
-      return { periods: live.map((p) => ({ ...p, fxBasis: byId.get(p.periodId)?.fx_basis ?? null, fxAvgWad: byId.get(p.periodId)?.fx_avg_wad ?? null, formalNoticeIssued: byId.get(p.periodId)?.formal_notice_seq != null })) };
+      const row = (await ctx.pool.query('select first_period, next_expected_period, last_accepted_period, last_paid_period, open_due_period, open_due_amount::text, formal_notice_emitted_for from series where series_id = $1', [seriesId])).rows[0];
+      return {
+        periods: live.map((p) => ({ ...p, fxBasis: byId.get(p.periodId)?.fx_basis ?? null, fxAvgWad: byId.get(p.periodId)?.fx_avg_wad ?? null, formalNoticeIssued: byId.get(p.periodId)?.formal_notice_seq != null })),
+        reporting: row ? reportingRow(row) : null,
+      };
     },
   });
 

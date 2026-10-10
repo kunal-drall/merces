@@ -182,6 +182,9 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     await rig.sync();
     view = await rig.get(`/series/${seriesId}/redemption`, holderTok);
     expect(view.json().tail.open).toBe(false);
+    // closed because the tail cap is used up (Stage 1 tailExhausted), not because time ran out
+    expect(view.json().tail).toMatchObject({ exhausted: true, paidPerUnitWad: (BigInt(quote.json().tailCapPerUnit) * 10n ** 18n).toString(), paidPerUnit: quote.json().tailCapPerUnit });
+    expect(view.json().tail.endsAt).toBeGreaterThan(await h.sim.now());
     expect(view.json().tail.payouts).toHaveLength(1);
     // a holder's tail follows its own redemption (Stage 1 sets redeemedUnits when the holder claims; cause RD: before
     // WP6 every holder was redeemed at redeem time): nothing to claim until b0 redeems, then its tail share

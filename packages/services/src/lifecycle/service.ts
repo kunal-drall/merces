@@ -1,6 +1,6 @@
 import { AppError, audit, getFlag } from '@merces/core';
 import { orderCommitment, type ChainPort, type SeriesState, type UnsignedTx } from '@merces/domain';
-import { YEAR, interim, redemptionQuote, type YearGrossRing } from '@merces/math';
+import { SeriesStatus, WAD, YEAR, capRemaining, fromPid, interim, isTerminal, periodStart, pidAt, redemptionQuote, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -71,8 +71,14 @@ export class LifecycleService {
   // ---- R15 redemption
   /**
    * The chain's own quote: Stage 1's `redemptionQuote` over the series' live cap, `paidPerUnitWad` and tagged year ring
-   * (`SeriesState.yearGross`), exactly what `redeem` computes at `now`. `boundBy` keeps the version-1 labels
-   * (`cap`, `hurdle`, `payout`) until WP11 adds Stage 1's `decidedBy`.
+   * (`SeriesState.yearGross`), exactly what `redeem` computes at `now`. `decidedBy` is Stage 1's label
+   * (`cap_remaining`, `hurdle`, `payout_multiple`); `boundBy` keeps the version-1 labels (`cap`, `hurdle`, `payout`).
+   *
+   * The blockers are Stage 1's `redeem` refusals in its own order (SIM:1328-1342), each with its error name in
+   * `blockedBy`: TerminalStatus, SeriesLate (a Paused series may redeem), LockupActive, PaymentOutstanding,
+   * TrueUpOutstanding (not reachable until the true-up lands, S5) and UnreportedPeriods (every ended period must be
+   * reported). With no cap left (`C_remaining = 0`) `redeem` retires the series instead: `outcome` is `retire` and no
+   * deposit is taken.
    */
   async quote(seriesId: string): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
@@ -85,16 +91,15 @@ export class LifecycleService {
     const q = redemptionQuote({ p0: BigInt(s.issuePrice), hurdleRateWad: BigInt(s.terms.hurdleWad), payoutMultipleK: s.terms.payoutMultipleK, t, capPerUnit: BigInt(s.capPerUnit), paidPerUnitWad: BigInt(s.paidPerUnitWad), yearGross: ring, unitsOutstanding: BigInt(s.unitsOutstanding) });
     const boundBy = q.decidedBy === 'cap_remaining' ? 'cap' : q.decidedBy === 'payout_multiple' ? 'payout' : 'hurdle';
     const payoutTerm = q.dAvg === null ? null : BigInt(s.terms.payoutMultipleK) * q.dAvg;
-    const blockers: string[] = [];
-    if (s.lockupEndsAt !== null && now < s.lockupEndsAt) blockers.push(`lockup ends at ${s.lockupEndsAt}`);
-    // Stage 1 redeem refuses a terminal or Late series; a Paused one may redeem (WP11 adds the remaining Stage 1 names)
-    if (['Retired', 'Redeemed', 'Extinguished', 'Late'].includes(s.status)) blockers.push(`status is ${s.status}`);
-    for (const p of await chain.listPeriods(seriesId)) if (!p.settled) blockers.push(`period ${p.periodId} must be reported and paid first (A-RED-1)`);
+    const { blockers, blockedBy } = redeemBlockers(s, now);
+    const retires = q.cRemaining === 0n;
     return {
       seriesId, now, lockupEndsAt: s.lockupEndsAt, unitsOutstanding: s.unitsOutstanding,
-      pricePerUnit: q.pRedeem.toString(), deposit: q.deposit.toString(), boundBy,
-      terms: { capRemaining: q.cRemaining.toString(), hurdlePrice: q.pHurdle.toString(), payoutTerm: payoutTerm === null ? null : payoutTerm.toString(), kTimesDavgYears: Number(t / YEAR), hurdleWad: s.terms.hurdleWad, payoutMultipleK: s.terms.payoutMultipleK },
-      tailCapPerUnit: q.tailCapPerUnit.toString(), blockers, redeemable: blockers.length === 0,
+      pricePerUnit: q.pRedeem.toString(), deposit: q.deposit.toString(), decidedBy: q.decidedBy, boundBy,
+      terms: { capRemaining: q.cRemaining.toString(), hurdlePrice: q.pHurdle.toString(), payoutTerm: payoutTerm === null ? null : payoutTerm.toString(), dAvg: q.dAvg === null ? null : q.dAvg.toString(), kTimesDavgYears: Number(t / YEAR), hurdleWad: s.terms.hurdleWad, payoutMultipleK: s.terms.payoutMultipleK },
+      tailCapPerUnit: q.tailCapPerUnit.toString(), blockers, blockedBy, redeemable: blockers.length === 0,
+      outcome: retires ? 'retire' : 'redeem',
+      note: retires ? 'Nothing is left of the cap (C_remaining = 0): redeem retires the series instead; no deposit is taken and no tail follows.' : null,
     };
   }
   async buildRedeem(seriesId: string, session: Session, maxPricePerUnit: string): Promise<{ tx: UnsignedTx; quote: Record<string, unknown> }> {
@@ -113,19 +118,32 @@ export class LifecycleService {
     if (!p || BigInt(p.units) === 0n) throw AppError.conflict('no units to redeem');
     return { tx: await chain.build({ kind: 'claimRedemption', seriesId }, holder), units: p.units, amount: (BigInt(p.units) * BigInt(r.pricePerUnit)).toString() };
   }
-  /** Redemption state and tail tracking (C7): window end, cap per unit, tail payouts so far. */
+  /**
+   * Redemption state and tail tracking (C7) from Stage 1's tail state: the window end, the tail cap per unit, the tail
+   * paid per unit (`paidPerUnitWad`, WAD-scaled; `paidPerUnit` floors it), `exhausted` once the cap is used up, the
+   * excess refunded to the issuer and the tail payouts so far. `open`: a tail can still be reported (the next period
+   * starts by `endsAt`, Stage 1 TailEnded) and paid (not exhausted, Stage 1 NoTailDue).
+   */
   async redemption(seriesId: string): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
     const r = await chain.getRedemption(seriesId);
     if (!r) return { seriesId, status: s.status, redemption: null, tail: null };
-    const now = await chain.now();
     const tail = await this.ctx.pool.query("select period_id, amount, detail->>'perUnit' as per_unit, block_time from money_events where series_id = $1 and kind = 'tail' order by seq", [seriesId]);
     const claims = await this.ctx.pool.query("select count(*)::int as n, coalesce(sum(amount),0)::text as total from money_events where series_id = $1 and kind = 'redemption_claim'", [seriesId]);
+    // Stage 1's tail rules (SIM:1072-1073): a period starting after `tailEndsAt` is TailEnded; a liquidity-event report
+    // is NoTailDue once the tail cap is used up (`tailExhausted`) or was zero
+    const next = s.reporting.nextExpectedPeriod;
+    const reportable = next !== null && periodStart(toPid(next)) <= BigInt(r.tailEndsAt);
+    const exhausted = r.tailExhausted || BigInt(r.tailCapPerUnit) === 0n;
     return {
       seriesId, status: s.status, redemption: r,
-      tail: { endsAt: r.tailEndsAt, open: now <= r.tailEndsAt && BigInt(r.tailCapPerUnit) > BigInt(r.tailPaidPerUnit), capPerUnit: r.tailCapPerUnit, paidPerUnit: r.tailPaidPerUnit, payouts: tail.rows.map((x) => ({ periodId: x.period_id, total: x.amount, perUnit: x.per_unit, at: Number(x.block_time) })) },
+      tail: {
+        endsAt: r.tailEndsAt, open: !exhausted && reportable, exhausted: r.tailExhausted, capPerUnit: r.tailCapPerUnit, paidPerUnitWad: r.tailPaidPerUnitWad,
+        paidPerUnit: (BigInt(r.tailPaidPerUnitWad) / WAD).toString(), refunded: r.tailRefunded, nextPeriod: next,
+        payouts: tail.rows.map((x) => ({ periodId: x.period_id, total: x.amount, perUnit: x.per_unit, at: Number(x.block_time) })),
+      },
       claims: { count: claims.rows[0]!.n, total: claims.rows[0]!.total },
     };
   }
@@ -138,9 +156,9 @@ export class LifecycleService {
     const positions = await chain.listPositions(seriesId);
     const unburned = positions.filter((p) => BigInt(p.units) > 0n);
     const cap = s.capPerUnit ? BigInt(s.capPerUnit) : null;
-    const paidPerUnit = BigInt(s.paidPerUnitWad) / 10n ** 18n;
+    const paidPerUnit = BigInt(s.paidPerUnitWad) / WAD;
     return {
-      seriesId, status: s.status, retired: s.status === 'Retired', capPerUnit: s.capPerUnit, paidPerUnit: paidPerUnit.toString(), capProgressBps: cap && cap > 0n ? Number((paidPerUnit * 10_000n) / cap) : 0,
+      seriesId, status: s.status, retired: s.status === 'Retired', capPerUnit: s.capPerUnit, paidPerUnit: paidPerUnit.toString(), capRemaining: cap === null ? null : capRemaining(cap, BigInt(s.paidPerUnitWad)).toString(), capProgressBps: cap && cap > 0n ? Number((paidPerUnit * 10_000n) / cap) : 0,
       unitsOutstanding: s.unitsOutstanding, holdersWithUnits: unburned.length, burnable: s.status === 'Retired', note: 'Units of a Retired series burn on claim or by the permissionless burn crank; units of an Extinguished series burn on claim only. Burned holders keep their claimable payouts.',
     };
   }
@@ -205,4 +223,29 @@ export class LifecycleService {
     await audit(this.ctx.pool, { actor: by, actorRole: 'admin', action: 'retirement.crank-burn', target: seriesId, detail: { holders: holders.length } });
     return { burned: holders.length };
   }
+}
+
+/**
+ * Stage 1's `redeem` refusals that a quote can see (SIM:1335-1342), in Stage 1's order: the terminal and Late checks on
+ * the derived status (Paused may redeem), the lockup, an unpaid due, an unpaid true-up, and an ended period without an
+ * accepted report. Human text and the Stage 1 error names side by side.
+ */
+export function redeemBlockers(s: SeriesState, now: number): { blockers: string[]; blockedBy: ErrorName[] } {
+  const blockers: string[] = [];
+  const blockedBy: ErrorName[] = [];
+  const add = (name: ErrorName, text: string) => {
+    blockedBy.push(name);
+    blockers.push(text);
+  };
+  if (isTerminal(SeriesStatus[s.status as keyof typeof SeriesStatus])) add('TerminalStatus', `status is ${s.status}`);
+  if (s.status === 'Late') add('SeriesLate', 'status is Late: a late series cannot redeem');
+  if (s.lockupEndsAt !== null && now < s.lockupEndsAt) add('LockupActive', `lockup ends at ${s.lockupEndsAt}`);
+  const rep = s.reporting;
+  if (BigInt(rep.openDueAmount) > 0n) add('PaymentOutstanding', `period ${rep.openDuePeriod} is reported and not paid`);
+  if (rep.firstPeriod !== null) {
+    const lastEnded = pidAt(BigInt(now)) - 1;
+    const lastAccepted = rep.lastAcceptedPeriod === null ? null : toPid(rep.lastAcceptedPeriod);
+    if (!(lastEnded < toPid(rep.firstPeriod) || (lastAccepted !== null && lastAccepted >= lastEnded))) add('UnreportedPeriods', `every ended period must be reported first: ${rep.nextExpectedPeriod} through ${fromPid(lastEnded)}`);
+  }
+  return { blockers, blockedBy };
 }

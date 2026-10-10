@@ -154,4 +154,43 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     expect(out3['status.crank']!.ok).toBe(false);
     expect(out3['status.crank']!.detail).toMatch(/fee payer out of funds/);
   });
+
+  it('reminders and the status crank follow Stage 1\'s instants: InGrace after dueAt, Late after graceEndsAt, formal notice at formalNoticeAt', async () => {
+    // a chain of its own, so the series id and the reminder ledger are fresh
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'monad-instants', genesis: GENESIS, acceptMockProofs: true }) });
+    const reg: ChainRegistry = { chains: new Map([['monad-instants', h.sim]]), decisions: [], stage1: null, get: () => h.sim, byFamily: () => h.sim, close: async () => undefined };
+    const c = createServiceContext(makeContext({ pool: t.pool, chains: reg, log: silent, sessionSecret: 's', devMode: true }));
+    const a = await h.runRaise();
+    const q = periodOf((await h.sim.getSeries(a.seriesId))!.settledAt!);
+    const p = (await h.sim.getPeriod(a.seriesId, q.id))!;
+    // Stage 1's countdown runs from the period end; OnTime while ≤ 30 days, InGrace while ≤ 45 days, notice at 90 days
+    expect([p.dueAt, p.graceEndsAt, p.formalNoticeAt]).toEqual([q.end + 30 * 86_400, q.end + 45 * 86_400, q.end + 90 * 86_400]);
+    const sched = new KeeperScheduler(c, [statusCrankJob, deadlineRemindersJob]);
+    const step = async (at: number) => {
+      await h.sim.setTime(at);
+      const r = await sched.runAll();
+      return [r['status.crank']!.actions, r['reporting.reminders']!.actions, (await h.sim.getSeries(a.seriesId))!.status];
+    };
+    const sent = async () => (await t.pool.query('select kind from reminders_sent where target = $1 order by kind', [`${a.seriesId}:${q.id}`])).rows.map((r) => r.kind);
+    // exactly 30 days: still OnTime, nothing to crank; only the due-soon reminder (G2: 'report-due' went out at dueAt)
+    expect(await step(p.dueAt)).toEqual([0, 1, 'OnTime']);
+    expect(await sent()).toEqual(['report-due-soon']);
+    // one second later: InGrace is recorded and the issuer told
+    expect(await step(p.dueAt + 1)).toEqual([1, 1, 'InGrace']);
+    expect(await sent()).toEqual(['report-due', 'report-due-soon']);
+    expect(await step(p.graceEndsAt)).toEqual([0, 0, 'InGrace']);
+    expect(await step(p.graceEndsAt + 1)).toEqual([1, 1, 'Late']);
+    expect(await sent()).toEqual(['grace-end', 'report-due', 'report-due-soon']);
+    // the formal notice is recorded at period end + 90 days, once
+    expect(await step(p.formalNoticeAt - 1)).toEqual([0, 0, 'Late']);
+    expect((await h.sim.getSeries(a.seriesId))!.formalNoticeEmittedFor).toBeNull();
+    expect(await step(p.formalNoticeAt)).toEqual([1, 0, 'Late']);
+    expect((await h.sim.getSeries(a.seriesId))!.formalNoticeEmittedFor).toBe(q.id);
+    expect(await step(p.formalNoticeAt + 3600)).toEqual([0, 0, 'Late']);
+    // the reminders carry the chain's instants
+    const notes = await t.pool.query("select payload from outbox where topic = 'notification' and payload->>'seriesId' = $1 and payload->>'kind' like 'reporting.%' order by id", [a.seriesId]);
+    expect(notes.rows.map((r) => [r.payload.kind, r.payload.dueAt, r.payload.graceEndsAt])).toEqual([
+      ['reporting.report-due-soon', p.dueAt, p.graceEndsAt], ['reporting.report-due', p.dueAt, p.graceEndsAt], ['reporting.grace-end', p.dueAt, p.graceEndsAt],
+    ]);
+  });
 });

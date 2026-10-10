@@ -101,7 +101,8 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
     expect(s.refunds).toEqual({ total: USDC(303), bids: USDC(303), payments: '0' });
     expect(s.treasury).toEqual({ total: USDC(4500), released: '0', balance: USDC(4500), releasesPaused: false });
     expect(s.redemption).toEqual({ price: null, redeemedAt: null, deposit: '0', claimed: '0' });
-    expect(s.tail).toEqual({ total: '0' });
+    // the tail is its own pool with its own fee and net (G5, WP11: was { total } only, with tail payments inside `payments`)
+    expect(s.tail).toEqual({ total: '0', fees: '0', net: '0', count: 0 });
     expect(s.extinguishment).toEqual({ extinguishedAt: null, returnedToHolders: '0' });
     expect(s.burns).toEqual({ units: '0' });
     expect(s.periods).toEqual([{ periodId: '2026Q1', tier: 2, paymentDue: USDC(1500), accrual: '0', paid: USDC(1500), splitReceived: '0', reportAccepted: true, settled: true, liquidityEvent: false }]);

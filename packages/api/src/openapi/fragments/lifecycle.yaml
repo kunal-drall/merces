@@ -1,5 +1,57 @@
 tags:
   - { name: lifecycle, description: Treasury draws, payout claims, redemption and tail, retirement, transfer windows (R6, R13, R14, R15, R19) }
+components:
+  schemas:
+    RedemptionQuote:
+      type: object
+      description: "Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee)."
+      required: [seriesId, now, pricePerUnit, deposit, decidedBy, boundBy, terms, tailCapPerUnit, blockers, blockedBy, redeemable, outcome]
+      properties:
+        seriesId: { type: string }
+        now: { type: integer }
+        lockupEndsAt: { type: [integer, 'null'] }
+        unitsOutstanding: { type: string }
+        pricePerUnit: { $ref: '#/components/schemas/Money' }
+        deposit: { $ref: '#/components/schemas/Money' }
+        decidedBy: { type: string, enum: [cap_remaining, hurdle, payout_multiple], description: "Stage 1's label for the term that set the price (a tie between the floor terms reports hurdle)" }
+        boundBy: { type: string, enum: [cap, hurdle, payout], deprecated: true, description: the version-1 label of decidedBy }
+        terms:
+          type: object
+          properties:
+            capRemaining: { $ref: '#/components/schemas/Money', description: 'C_remaining = max(capPerUnit − ceil(paidPerUnitWad / 1e18), 0)' }
+            hurdlePrice: { $ref: '#/components/schemas/Money', description: P0 compounded at the hurdle rate per whole year, then pro rata, floored each step }
+            payoutTerm: { type: [string, 'null'], description: k × D_avg; null before a full settlement year }
+            dAvg: { type: [string, 'null'], description: average annual gross per unit over the trailing min(years, 3) settlement years (payments tagged with the settlement year of their report deadline) }
+            kTimesDavgYears: { type: integer, description: whole years since settlement }
+            hurdleWad: { $ref: '#/components/schemas/Wad' }
+            payoutMultipleK: { type: integer }
+        tailCapPerUnit: { $ref: '#/components/schemas/Money', description: C_remaining − price; the tail room per unit after a redemption }
+        blockers: { type: array, items: { type: string }, description: 'why redeem would be refused now, in the order Stage 1 checks (empty: redeemable)' }
+        blockedBy: { type: array, items: { type: string, enum: [TerminalStatus, SeriesLate, LockupActive, PaymentOutstanding, TrueUpOutstanding, UnreportedPeriods] }, description: Stage 1 error names of the blockers, same order }
+        redeemable: { type: boolean }
+        outcome: { type: string, enum: [redeem, retire], description: 'retire: nothing is left of the cap (C_remaining = 0), so redeem retires the series instead and takes no deposit' }
+        note: { type: [string, 'null'] }
+    RedemptionView:
+      type: object
+      description: The redemption and its tail, from Stage 1's tail state
+      required: [seriesId, status, redemption, tail]
+      properties:
+        seriesId: { type: string }
+        status: { type: string }
+        redemption: { type: [object, 'null'] }
+        tail:
+          type: [object, 'null']
+          properties:
+            endsAt: { type: integer, description: 'redemption + tail seconds; a period starting after it can carry no tail (TailEnded)' }
+            open: { type: boolean, description: 'a tail can still be reported and paid: the next period starts by endsAt and the tail cap is not used up' }
+            exhausted: { type: boolean, description: "Stage 1's tailExhausted: the tail cap per unit has been paid in full (NoTailDue)" }
+            capPerUnit: { $ref: '#/components/schemas/Money' }
+            paidPerUnitWad: { $ref: '#/components/schemas/Wad', description: tail gross accepted per unit, WAD-scaled }
+            paidPerUnit: { $ref: '#/components/schemas/Money', description: paidPerUnitWad floored to base units }
+            refunded: { $ref: '#/components/schemas/Money', description: tail gross refunded to the issuer above the tail cap }
+            nextPeriod: { type: [string, 'null'] }
+            payouts: { type: array, items: { type: object, properties: { periodId: { type: string }, total: { type: string }, perUnit: { type: string }, at: { type: integer } } } }
+        claims: { type: object, properties: { count: { type: integer }, total: { type: string } } }
 paths:
   /series/{seriesId}/treasury/build-draw:
     post:
@@ -26,7 +78,20 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [holder], properties: { holder: { type: string } } } } } }
-      responses: { '200': { description: Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon), content: { application/json: { schema: { type: object } } } }, '409': { description: Nothing to claim } }
+      responses:
+        '200':
+          description: Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon). The three amounts are disjoint and one claimPayout pays all of them.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tx: { type: object }
+                  claimable: { $ref: '#/components/schemas/Money', description: the net payout only; excludes the tail and the final pool }
+                  tailClaimable: { $ref: '#/components/schemas/Money', description: the tail share (after the holder redeemed) }
+                  finalClaimable: { $ref: '#/components/schemas/Money', description: the final-pool share (after an extinguishment) }
+                  builder: { type: string, enum: [public, private] }
+        '409': { description: Nothing to claim }
   /series/{seriesId}/redemption/quote:
     get:
       operationId: getRedemptionQuote
@@ -34,7 +99,7 @@ paths:
       tags: [lifecycle]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Formula price (min(C_remaining, max(P_hurdle, k × D_avg))), which term binds, deposit, tail cap and blockers, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Formula price (min(C_remaining, max(P_hurdle, k × D_avg))), which term decided it, deposit, tail cap and Stage 1's blockers, content: { application/json: { schema: { $ref: '#/components/schemas/RedemptionQuote' } } } }, '409': { description: The raise has not settled } }
   /series/{seriesId}/redemption/build-redeem:
     post:
       operationId: buildRedeem
@@ -43,7 +108,7 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [maxPricePerUnit], properties: { maxPricePerUnit: { $ref: '#/components/schemas/Money' } } } } } }
-      responses: { '200': { description: Unsigned redeem (deposit = price × units outstanding; no fee), content: { application/json: { schema: { type: object } } } }, '409': { description: Lockup, status or unpaid periods block redemption } }
+      responses: { '200': { description: Unsigned redeem (deposit = price × units outstanding; no fee) with the quote it was built on, content: { application/json: { schema: { type: object, properties: { tx: { type: object }, quote: { $ref: '#/components/schemas/RedemptionQuote' } } } } } }, '409': { description: "A Stage 1 blocker (terminal or Late status, lockup, an unpaid due, an unreported ended period) or the quoted price exceeds maxPricePerUnit" } }
   /series/{seriesId}/redemption/build-claim:
     post:
       operationId: buildClaimRedemption
@@ -60,7 +125,7 @@ paths:
       tags: [lifecycle]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Redemption state and tail tracking (window end, per-unit cap, tail payouts so far), content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Redemption state and tail tracking (window end, per-unit cap, tail paid per unit, exhaustion, tail payouts so far), content: { application/json: { schema: { $ref: '#/components/schemas/RedemptionView' } } } } }
   /series/{seriesId}/retirement:
     get:
       operationId: getRetirement

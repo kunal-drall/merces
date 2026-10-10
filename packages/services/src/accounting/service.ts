@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
 import type { ChainPort } from '@merces/domain';
-import { WAD } from '@merces/math';
+import { WAD, capRemaining } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -196,6 +196,11 @@ export class AccountingService {
    * Per-series statement from the read model: gross payments against the cap (C6), fees by kind, payouts claimed,
    * refunds, treasury released vs total, redemption / tail / extinguishment totals and the period ledger. The same
    * numbers serve the admin and the issuer (who is entitled to their own statement).
+   *
+   * Every amount is shown once (Stage 1 keeps three pools): `payments` are the regular pay-ins and split receipts into
+   * the payout vault; `tail` the tail payments after a redemption (Stage 1's tail state, outside the vault's
+   * per-unit figures); `extinguishment` the unvested proceeds an extinguishment returned to holders through the final
+   * pool (the vested part stays in the treasury). The cap's remaining room is Stage 1's `C_remaining` (paid rounded up).
    */
   async statement(seriesId: string): Promise<Record<string, unknown>> {
     const sr = await this.ctx.pool.query<SeriesRow>('select * from series where series_id = $1', [seriesId]);
@@ -203,7 +208,13 @@ export class AccountingService {
     if (!s) throw AppError.notFound('series');
     const fees = await this.ctx.pool.query<{ kind: FeeKind; total: string }>('select kind, sum(amount) as total from fees_ledger where series_id = $1 group by kind', [seriesId]);
     const money = await this.ctx.pool.query<{ kind: string; total: string; n: string }>('select kind, sum(amount) as total, count(*) as n from money_events where series_id = $1 group by kind', [seriesId]);
-    const net = await this.ctx.pool.query<{ net: string }>("select coalesce(sum((detail->>'net')::numeric), 0) as net from money_events where series_id = $1 and kind = 'payment' and detail ? 'net'", [seriesId]);
+    // PaymentReceived rows by source: regular (payIn, split), tail, extinguishment
+    const bySource = await this.ctx.pool.query<{ pool: 'regular' | 'tail' | 'extinguishment'; n: string; gross: string; fee: string; net: string }>(
+      `select case when detail->>'source' in ('tail', 'extinguishment') then detail->>'source' else 'regular' end as pool, count(*) as n, coalesce(sum(amount), 0) as gross,
+              coalesce(sum((detail->>'fee')::numeric), 0) as fee, coalesce(sum((detail->>'net')::numeric), 0) as net
+       from money_events where series_id = $1 and kind = 'payment' group by 1`,
+      [seriesId],
+    );
     const refunds = await this.ctx.pool.query<{ bids: string; payments: string }>(
       "select coalesce(sum(case when detail ? 'reason' then 0 else amount end), 0) as bids, coalesce(sum(case when detail ? 'reason' then amount else 0 end), 0) as payments from money_events where series_id = $1 and kind = 'refund'",
       [seriesId],
@@ -219,13 +230,23 @@ export class AccountingService {
     for (const m of money.rows) moneyTotals[m.kind] = { count: Number(m.n), total: m.total };
     const sum = (kind: string): bigint => big(moneyTotals[kind]?.total);
 
+    const pool = (name: 'regular' | 'tail' | 'extinguishment') => {
+      const r = bySource.rows.find((x) => x.pool === name);
+      return { count: Number(r?.n ?? 0), gross: big(r?.gross), fee: big(r?.fee), net: big(r?.net) };
+    };
+    const regular = pool('regular');
+    const tail = pool('tail');
+
     const capPerUnit = s.cap_per_unit === null ? null : BigInt(s.cap_per_unit);
     const unitsSold = big(s.units_sold);
     const unitsOutstanding = big(s.units_outstanding);
     const paidPerUnitWad = big(s.paid_per_unit_wad);
     const paidPerUnit = paidPerUnitWad / WAD;
-    const remainingPerUnit = capPerUnit === null ? null : capPerUnit > paidPerUnit ? capPerUnit - paidPerUnit : 0n;
-    const netDistributed = big(net.rows[0]?.net);
+    // Stage 1's C_remaining: the paid amount rounded UP, so the statement never shows more room than the chain accepts
+    const remainingPerUnit = capPerUnit === null ? null : capRemaining(capPerUnit, paidPerUnitWad);
+    const returnedToHolders = sum('extinguishment');
+    // what holders were given to claim: the regular net, the tail net and the final pool (a PayoutClaimed pays all three)
+    const distributable = regular.net + tail.net + returnedToHolders;
     const claimed = sum('payout');
     const treasuryTotal = big(s.treasury_total);
     const treasuryReleased = big(s.treasury_released);
@@ -252,15 +273,15 @@ export class AccountingService {
         remainingTotal: remainingPerUnit === null ? null : (remainingPerUnit * unitsOutstanding).toString(),
         progressBps: capPerUnit !== null && capPerUnit > 0n ? Number((paidPerUnitWad * 10_000n) / (capPerUnit * WAD)) : null,
       },
-      payments: { grossPaidTotal: s.gross_paid_total, netDistributed: netDistributed.toString(), feesTaken: feeByKind.payout, count: moneyTotals.payment?.count ?? 0 },
+      payments: { grossPaidTotal: regular.gross.toString(), netDistributed: regular.net.toString(), feesTaken: regular.fee.toString(), count: regular.count },
       fees: { auction: feeByKind.auction, payout: feeByKind.payout, total: (BigInt(feeByKind.auction) + BigInt(feeByKind.payout)).toString(), vaultFeesTotal: s.fees_total },
-      payouts: { claimed: claimed.toString(), unclaimed: (netDistributed > claimed ? netDistributed - claimed : 0n).toString(), count: moneyTotals.payout?.count ?? 0 },
+      payouts: { claimed: claimed.toString(), unclaimed: (distributable > claimed ? distributable - claimed : 0n).toString(), count: moneyTotals.payout?.count ?? 0 },
       refunds: { total: sum('refund').toString(), bids: refunds.rows[0]?.bids ?? '0', payments: refunds.rows[0]?.payments ?? '0' },
       // an extinguishment returns the unvested proceeds to holders: they leave the treasury without being released
-      treasury: { total: s.treasury_total, released: s.treasury_released, balance: (treasuryTotal - treasuryReleased - sum('extinguishment')).toString(), releasesPaused: s.releases_paused },
+      treasury: { total: s.treasury_total, released: s.treasury_released, balance: (treasuryTotal - treasuryReleased - returnedToHolders).toString(), releasesPaused: s.releases_paused },
       redemption: { price: s.redemption_price, redeemedAt: ts(s.redeemed_at), deposit: sum('redemption').toString(), claimed: sum('redemption_claim').toString() },
-      tail: { total: sum('tail').toString() },
-      extinguishment: { extinguishedAt: ts(s.extinguished_at), returnedToHolders: sum('extinguishment').toString() },
+      tail: { total: sum('tail').toString(), fees: tail.fee.toString(), net: tail.net.toString(), count: tail.count },
+      extinguishment: { extinguishedAt: ts(s.extinguished_at), returnedToHolders: returnedToHolders.toString() },
       burns: { units: sum('burn').toString() },
       periods: periods.rows.map((p) => ({ periodId: p.period_id, tier: p.tier, paymentDue: p.payment_due, accrual: p.accrual, paid: p.paid, splitReceived: p.split_received, reportAccepted: p.report_accepted, settled: p.settled, liquidityEvent: p.liquidity_event })),
       moneyEventTotals: moneyTotals,

@@ -216,8 +216,20 @@ components:
           type: string
         message:
           type: string
+          description: human text; never an income figure, salt, opening or document (Stage 1 messages that can embed values are replaced)
         detail:
-          nullable: true
+          type:
+            - object
+            - "null"
+          description: "Structured detail. A refusal on a Stage 1 path carries `stage1`: Stage 1's canonical error name (SPEC §11), beside the chain-neutral `error` code; other keys are public facts only (ids, periods, public amounts)."
+          properties:
+            stage1:
+              $ref: "#/components/schemas/Stage1ErrorName"
+          additionalProperties: true
+    Stage1ErrorName:
+      type: string
+      description: A Stage 1 error name (SPEC v1.1.2 §11, `@merces/sdk` ERRORS), e.g. WrongPeriod, PaymentOutstanding, ReportTooEarly, TierNotEnabled, InvalidProof, SeriesLate, LockupActive, UnreportedPeriods, NothingDue, HolderNotRegistered, TerminalStatus, RaiseNotSettled, MintNotFinalized, UnfavourableAmendment, PauseTooLong, InsufficientEscrow, AmountOutOfRange.
+      pattern: ^[A-Z][A-Za-z0-9]+$
     ChainHealth:
       type: object
       properties:
@@ -433,6 +445,68 @@ components:
           type:
             - integer
             - "null"
+        firstPeriod:
+          type:
+            - string
+            - "null"
+          description: "Stage 1's reporting ledger (indexed): the settlement quarter, the first period to report"
+        nextExpectedPeriod:
+          type:
+            - string
+            - "null"
+          description: the only period a report may be submitted for next (reports are sequential); null before settlement
+        lastAcceptedPeriod:
+          type:
+            - string
+            - "null"
+        lastPaidPeriod:
+          type:
+            - string
+            - "null"
+        openDuePeriod:
+          type:
+            - string
+            - "null"
+          description: the reported period whose due is unpaid (one at a time); the next report is refused (PaymentOutstanding) until it is paid
+        paymentOutstanding:
+          type: boolean
+          description: a reported due is unpaid; its amount is served at the holder-or-issuer tier (GET /series/{seriesId}/periods, reporting.openDueAmount)
+        formalNoticeEmittedFor:
+          type:
+            - string
+            - "null"
+          description: the period whose formal notice the chain recorded (period end + 90 days of unpaused time)
+    SeriesReporting:
+      type: object
+      description: "Stage 1's reporting ledger of a series, as indexed from its events (holder-or-issuer tier: it carries the open due's amount)"
+      properties:
+        firstPeriod:
+          type:
+            - string
+            - "null"
+        nextExpectedPeriod:
+          type:
+            - string
+            - "null"
+        lastAcceptedPeriod:
+          type:
+            - string
+            - "null"
+        lastPaidPeriod:
+          type:
+            - string
+            - "null"
+        openDuePeriod:
+          type:
+            - string
+            - "null"
+        openDueAmount:
+          $ref: "#/components/schemas/Money"
+          description: the open due as reported, before lateness accrual (the open period's live paymentDue adds the accrual to date); 0 when nothing is due
+        formalNoticeEmittedFor:
+          type:
+            - string
+            - "null"
     SeriesDetail:
       allOf:
         - $ref: "#/components/schemas/Series"
@@ -471,10 +545,13 @@ components:
           type: string
         dueAt:
           type: integer
+          description: "last OnTime instant: period end + 30 days of unpaused time (Stage 1's countdown, inclusive)"
         graceEndsAt:
           type: integer
+          description: last InGrace instant (period end + 45 days unpaused); one second later the period is Late
         formalNoticeAt:
           type: integer
+          description: "first instant a formal notice is due: period end + 90 days unpaused (Stage 1 formalNoticeDue); a pause approved later moves it"
         reportAccepted:
           type: boolean
         tier:
@@ -483,6 +560,7 @@ components:
             - "null"
         paymentDue:
           $ref: "#/components/schemas/Money"
+          description: "while the period holds the open due: the live amount payIn must carry now (the due plus lateness accrual to date; a tail due without accrual); once paid: the due and accrual recomputed at payment"
         accrual:
           $ref: "#/components/schemas/Money"
         paid:
@@ -504,6 +582,11 @@ components:
           type:
             - string
             - "null"
+        priorIncomeCommitment:
+          type:
+            - string
+            - "null"
+          description: the income commitment the report chained from (Stage 1 prior chain; Poseidon(0, 0) at a year start); null until reported
         liquidityEvent:
           type: boolean
         fxBasis:
@@ -922,7 +1005,7 @@ components:
               type: integer
         cap:
           type: object
-          description: "C6: cap per unit = m × P0; remaining per unit = capPerUnit − paidPerUnitWad / 1e18"
+          description: "C6: cap per unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per unit = Stage 1's C_remaining = max(capPerUnit − ceil(paidPerUnitWad / 1e18), 0)"
           properties:
             capMultipleWad:
               $ref: "#/components/schemas/Wad"
@@ -953,6 +1036,7 @@ components:
               type:
                 - string
                 - "null"
+              description: "Stage 1's C_remaining: the paid amount rounded up, never more room than the chain accepts"
             remainingTotal:
               type:
                 - string
@@ -965,16 +1049,18 @@ components:
               description: paid / cap in basis points
         payments:
           type: object
+          description: Regular payments only (pay-ins and tier-1 split receipts into the payout vault); the tail and the extinguishment are shown under their own keys, never here.
           properties:
             grossPaidTotal:
               $ref: "#/components/schemas/Money"
-              description: lifetime gross accepted into the vault
+              description: lifetime gross accepted into the payout vault (cap refunds excluded)
             netDistributed:
               $ref: "#/components/schemas/Money"
               description: gross minus payout fees
               distributable to holders: null
             feesTaken:
               $ref: "#/components/schemas/Money"
+              description: payout fees on regular payments
             count:
               type: integer
         fees:
@@ -996,7 +1082,7 @@ components:
               $ref: "#/components/schemas/Money"
             unclaimed:
               $ref: "#/components/schemas/Money"
-              description: netDistributed − claimed
+              description: payments.netDistributed + tail.net + extinguishment.returnedToHolders − claimed (one claim pays the net payout, the tail and the final pool)
             count:
               type: integer
         refunds:
@@ -1039,9 +1125,18 @@ components:
               $ref: "#/components/schemas/Money"
         tail:
           type: object
+          description: Tail payments after a redemption (Stage 1's tail state, capped per unit at the tail cap; kept outside the payout vault's per-unit figures)
           properties:
             total:
               $ref: "#/components/schemas/Money"
+              description: tail gross accepted (the excess over the tail cap is refunded to the issuer)
+            fees:
+              $ref: "#/components/schemas/Money"
+            net:
+              $ref: "#/components/schemas/Money"
+              description: distributable to the holders that redeemed
+            count:
+              type: integer
         extinguishment:
           type: object
           properties:
@@ -1051,6 +1146,7 @@ components:
                 - "null"
             returnedToHolders:
               $ref: "#/components/schemas/Money"
+              description: the unvested proceeds only (proceeds − vested at the extinguishment), paid to holders through the final pool with no fee; the vested part stays in the treasury, drawable by the issuer
         burns:
           type: object
           properties:
@@ -1756,6 +1852,181 @@ components:
           type:
             - integer
             - "null"
+    RedemptionQuote:
+      type: object
+      description: "Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee)."
+      required:
+        - seriesId
+        - now
+        - pricePerUnit
+        - deposit
+        - decidedBy
+        - boundBy
+        - terms
+        - tailCapPerUnit
+        - blockers
+        - blockedBy
+        - redeemable
+        - outcome
+      properties:
+        seriesId:
+          type: string
+        now:
+          type: integer
+        lockupEndsAt:
+          type:
+            - integer
+            - "null"
+        unitsOutstanding:
+          type: string
+        pricePerUnit:
+          $ref: "#/components/schemas/Money"
+        deposit:
+          $ref: "#/components/schemas/Money"
+        decidedBy:
+          type: string
+          enum:
+            - cap_remaining
+            - hurdle
+            - payout_multiple
+          description: Stage 1's label for the term that set the price (a tie between the floor terms reports hurdle)
+        boundBy:
+          type: string
+          enum:
+            - cap
+            - hurdle
+            - payout
+          deprecated: true
+          description: the version-1 label of decidedBy
+        terms:
+          type: object
+          properties:
+            capRemaining:
+              $ref: "#/components/schemas/Money"
+              description: C_remaining = max(capPerUnit − ceil(paidPerUnitWad / 1e18), 0)
+            hurdlePrice:
+              $ref: "#/components/schemas/Money"
+              description: P0 compounded at the hurdle rate per whole year
+              then pro rata: null
+              floored each step: null
+            payoutTerm:
+              type:
+                - string
+                - "null"
+              description: k × D_avg; null before a full settlement year
+            dAvg:
+              type:
+                - string
+                - "null"
+              description: average annual gross per unit over the trailing min(years
+              3) settlement years (payments tagged with the settlement year of their report deadline): null
+            kTimesDavgYears:
+              type: integer
+              description: whole years since settlement
+            hurdleWad:
+              $ref: "#/components/schemas/Wad"
+            payoutMultipleK:
+              type: integer
+        tailCapPerUnit:
+          $ref: "#/components/schemas/Money"
+          description: C_remaining − price; the tail room per unit after a redemption
+        blockers:
+          type: array
+          items:
+            type: string
+          description: "why redeem would be refused now, in the order Stage 1 checks (empty: redeemable)"
+        blockedBy:
+          type: array
+          items:
+            type: string
+            enum:
+              - TerminalStatus
+              - SeriesLate
+              - LockupActive
+              - PaymentOutstanding
+              - TrueUpOutstanding
+              - UnreportedPeriods
+          description: Stage 1 error names of the blockers
+          same order: null
+        redeemable:
+          type: boolean
+        outcome:
+          type: string
+          enum:
+            - redeem
+            - retire
+          description: "retire: nothing is left of the cap (C_remaining = 0), so redeem retires the series instead and takes no deposit"
+        note:
+          type:
+            - string
+            - "null"
+    RedemptionView:
+      type: object
+      description: The redemption and its tail, from Stage 1's tail state
+      required:
+        - seriesId
+        - status
+        - redemption
+        - tail
+      properties:
+        seriesId:
+          type: string
+        status:
+          type: string
+        redemption:
+          type:
+            - object
+            - "null"
+        tail:
+          type:
+            - object
+            - "null"
+          properties:
+            endsAt:
+              type: integer
+              description: redemption + tail seconds; a period starting after it can carry no tail (TailEnded)
+            open:
+              type: boolean
+              description: "a tail can still be reported and paid: the next period starts by endsAt and the tail cap is not used up"
+            exhausted:
+              type: boolean
+              description: "Stage 1's tailExhausted: the tail cap per unit has been paid in full (NoTailDue)"
+            capPerUnit:
+              $ref: "#/components/schemas/Money"
+            paidPerUnitWad:
+              $ref: "#/components/schemas/Wad"
+              description: tail gross accepted per unit
+              WAD-scaled: null
+            paidPerUnit:
+              $ref: "#/components/schemas/Money"
+              description: paidPerUnitWad floored to base units
+            refunded:
+              $ref: "#/components/schemas/Money"
+              description: tail gross refunded to the issuer above the tail cap
+            nextPeriod:
+              type:
+                - string
+                - "null"
+            payouts:
+              type: array
+              items:
+                type: object
+                properties:
+                  periodId:
+                    type: string
+                  total:
+                    type: string
+                  perUnit:
+                    type: string
+                  at:
+                    type: integer
+        claims:
+          type: object
+          properties:
+            count:
+              type: integer
+            total:
+              type: string
     CurveWalletCap:
       type: object
       description: The wallet cap on curve buys. It applies only while the curve is bonding; after graduation units trade freely and no cap applies (A-CURVE-2).
@@ -2404,7 +2675,7 @@ paths:
         - $ref: "#/components/parameters/seriesId"
       responses:
         "200":
-          description: Periods with amounts
+          description: Periods with amounts and the series' reporting ledger
           content:
             application/json:
               schema:
@@ -2414,6 +2685,10 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Period"
+                  reporting:
+                    oneOf:
+                      - $ref: "#/components/schemas/SeriesReporting"
+                      - type: "null"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -4218,14 +4493,32 @@ paths:
             type: string
       responses:
         "200":
-          description: Unsigned payIn for exactly the remaining amount the chain reports (including accrual)
+          description: "Unsigned payIn of the series' open due (Stage 1 pay: periodId = openDuePeriod) for the live amount the chain demands now: the open due plus Stage 1's lateness accrual on a regular period, the due as reported on a tail period. Accrual grows by whole late days, so rebuild a transaction that was not sent the same day."
           content:
             application/json:
               schema:
                 type: object
+                required:
+                  - tx
+                  - periodId
+                  - amount
+                  - accrual
+                properties:
+                  tx:
+                    type: object
+                  periodId:
+                    type: string
+                    pattern: ^\d{4}Q[1-4]$
+                  amount:
+                    $ref: "#/components/schemas/Money"
+                  accrual:
+                    $ref: "#/components/schemas/Money"
         "409":
-          description: Not accepted onchain yet
-          or already paid: null
+          description: Not accepted onchain yet, already paid, or nothing due (detail.stage1 NothingDue)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /reports/{reportId}/paid:
     post:
       operationId: markReportPaid
@@ -5994,11 +6287,28 @@ paths:
                   type: string
       responses:
         "200":
-          description: Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon)
+          description: Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon). The three amounts are disjoint and one claimPayout pays all of them.
           content:
             application/json:
               schema:
                 type: object
+                properties:
+                  tx:
+                    type: object
+                  claimable:
+                    $ref: "#/components/schemas/Money"
+                    description: the net payout only; excludes the tail and the final pool
+                  tailClaimable:
+                    $ref: "#/components/schemas/Money"
+                    description: the tail share (after the holder redeemed)
+                  finalClaimable:
+                    $ref: "#/components/schemas/Money"
+                    description: the final-pool share (after an extinguishment)
+                  builder:
+                    type: string
+                    enum:
+                      - public
+                      - private
         "409":
           description: Nothing to claim
   /series/{seriesId}/redemption/quote:
@@ -6016,13 +6326,15 @@ paths:
           description: Formula price (min(C_remaining
           max(P_hurdle: null
           k × D_avg))): null
-          which term binds: null
+          which term decided it: null
           deposit: null
-          tail cap and blockers: null
+          tail cap and Stage 1's blockers: null
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/RedemptionQuote"
+        "409":
+          description: The raise has not settled
   /series/{seriesId}/redemption/build-redeem:
     post:
       operationId: buildRedeem
@@ -6046,14 +6358,18 @@ paths:
                   $ref: "#/components/schemas/Money"
       responses:
         "200":
-          description: Unsigned redeem (deposit = price × units outstanding; no fee)
+          description: Unsigned redeem (deposit = price × units outstanding; no fee) with the quote it was built on
           content:
             application/json:
               schema:
                 type: object
+                properties:
+                  tx:
+                    type: object
+                  quote:
+                    $ref: "#/components/schemas/RedemptionQuote"
         "409":
-          description: Lockup
-          status or unpaid periods block redemption: null
+          description: A Stage 1 blocker (terminal or Late status, lockup, an unpaid due, an unreported ended period) or the quoted price exceeds maxPricePerUnit
   /series/{seriesId}/redemption/build-claim:
     post:
       operationId: buildClaimRedemption
@@ -6096,11 +6412,13 @@ paths:
         "200":
           description: Redemption state and tail tracking (window end
           per-unit cap: null
+          tail paid per unit: null
+          exhaustion: null
           tail payouts so far): null
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/RedemptionView"
   /series/{seriesId}/retirement:
     get:
       operationId: getRetirement

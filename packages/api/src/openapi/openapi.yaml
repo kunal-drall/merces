@@ -37,7 +37,19 @@ components:
     Error:
       type: object
       required: [error, message]
-      properties: { error: { type: string }, message: { type: string }, detail: { nullable: true } }
+      properties:
+        error: { type: string }
+        message: { type: string, description: 'human text; never an income figure, salt, opening or document (Stage 1 messages that can embed values are replaced)' }
+        detail:
+          type: [object, 'null']
+          description: 'Structured detail. A refusal on a Stage 1 path carries `stage1`: Stage 1''s canonical error name (SPEC §11), beside the chain-neutral `error` code; other keys are public facts only (ids, periods, public amounts).'
+          properties:
+            stage1: { $ref: '#/components/schemas/Stage1ErrorName' }
+          additionalProperties: true
+    Stage1ErrorName:
+      type: string
+      description: 'A Stage 1 error name (SPEC v1.1.2 §11, `@merces/sdk` ERRORS), e.g. WrongPeriod, PaymentOutstanding, ReportTooEarly, TierNotEnabled, InvalidProof, SeriesLate, LockupActive, UnreportedPeriods, NothingDue, HolderNotRegistered, TerminalStatus, RaiseNotSettled, MintNotFinalized, UnfavourableAmendment, PauseTooLong, InsufficientEscrow, AmountOutOfRange.'
+      pattern: '^[A-Z][A-Za-z0-9]+$'
     ChainHealth:
       type: object
       properties:
@@ -117,6 +129,24 @@ components:
         releasesPaused: { type: boolean }
         redeemedAt: { type: [integer, 'null'] }
         extinguishedAt: { type: [integer, 'null'] }
+        firstPeriod: { type: [string, 'null'], description: "Stage 1's reporting ledger (indexed): the settlement quarter, the first period to report" }
+        nextExpectedPeriod: { type: [string, 'null'], description: the only period a report may be submitted for next (reports are sequential); null before settlement }
+        lastAcceptedPeriod: { type: [string, 'null'] }
+        lastPaidPeriod: { type: [string, 'null'] }
+        openDuePeriod: { type: [string, 'null'], description: 'the reported period whose due is unpaid (one at a time); the next report is refused (PaymentOutstanding) until it is paid' }
+        paymentOutstanding: { type: boolean, description: 'a reported due is unpaid; its amount is served at the holder-or-issuer tier (GET /series/{seriesId}/periods, reporting.openDueAmount)' }
+        formalNoticeEmittedFor: { type: [string, 'null'], description: the period whose formal notice the chain recorded (period end + 90 days of unpaused time) }
+    SeriesReporting:
+      type: object
+      description: "Stage 1's reporting ledger of a series, as indexed from its events (holder-or-issuer tier: it carries the open due's amount)"
+      properties:
+        firstPeriod: { type: [string, 'null'] }
+        nextExpectedPeriod: { type: [string, 'null'] }
+        lastAcceptedPeriod: { type: [string, 'null'] }
+        lastPaidPeriod: { type: [string, 'null'] }
+        openDuePeriod: { type: [string, 'null'] }
+        openDueAmount: { $ref: '#/components/schemas/Money', description: "the open due as reported, before lateness accrual (the open period's live paymentDue adds the accrual to date); 0 when nothing is due" }
+        formalNoticeEmittedFor: { type: [string, 'null'] }
     SeriesDetail:
       allOf:
         - $ref: '#/components/schemas/Series'
@@ -139,18 +169,19 @@ components:
       properties:
         seriesId: { type: string }
         periodId: { type: string }
-        dueAt: { type: integer }
-        graceEndsAt: { type: integer }
-        formalNoticeAt: { type: integer }
+        dueAt: { type: integer, description: "last OnTime instant: period end + 30 days of unpaused time (Stage 1's countdown, inclusive)" }
+        graceEndsAt: { type: integer, description: last InGrace instant (period end + 45 days unpaused); one second later the period is Late }
+        formalNoticeAt: { type: integer, description: 'first instant a formal notice is due: period end + 90 days unpaused (Stage 1 formalNoticeDue); a pause approved later moves it' }
         reportAccepted: { type: boolean }
         tier: { type: [integer, 'null'] }
-        paymentDue: { $ref: '#/components/schemas/Money' }
+        paymentDue: { $ref: '#/components/schemas/Money', description: 'while the period holds the open due: the live amount payIn must carry now (the due plus lateness accrual to date; a tail due without accrual); once paid: the due and accrual recomputed at payment' }
         accrual: { $ref: '#/components/schemas/Money' }
         paid: { $ref: '#/components/schemas/Money' }
         splitReceived: { $ref: '#/components/schemas/Money' }
         settled: { type: boolean }
         standing: { type: string, enum: [NotDue, OnTime, InGrace, Late, FormalNoticeDue, Deferred] }
         incomeCommitment: { type: [string, 'null'] }
+        priorIncomeCommitment: { type: [string, 'null'], description: 'the income commitment the report chained from (Stage 1 prior chain; Poseidon(0, 0) at a year start); null until reported' }
         liquidityEvent: { type: boolean }
         fxBasis: { type: [string, 'null'] }
         fxAvgWad: { type: [string, 'null'] }
@@ -307,7 +338,7 @@ paths:
       tags: [public]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Periods with amounts, content: { application/json: { schema: { type: object, properties: { periods: { type: array, items: { $ref: '#/components/schemas/Period' } } } } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+      responses: { '200': { description: Periods with amounts and the series' reporting ledger, content: { application/json: { schema: { type: object, properties: { periods: { type: array, items: { $ref: '#/components/schemas/Period' } }, reporting: { oneOf: [{ $ref: '#/components/schemas/SeriesReporting' }, { type: 'null' }] } } } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
   /series/{seriesId}/treasury:
     get:
       operationId: getTreasury
@@ -880,7 +911,20 @@ paths:
       tags: [reporting]
       security: [{ session: [] }]
       parameters: [{ name: reportId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: Unsigned payIn for exactly the remaining amount the chain reports (including accrual), content: { application/json: { schema: { type: object } } } }, '409': { description: Not accepted onchain yet, or already paid } }
+      responses:
+        '200':
+          description: "Unsigned payIn of the series' open due (Stage 1 pay: periodId = openDuePeriod) for the live amount the chain demands now: the open due plus Stage 1's lateness accrual on a regular period, the due as reported on a tail period. Accrual grows by whole late days, so rebuild a transaction that was not sent the same day."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tx, periodId, amount, accrual]
+                properties:
+                  tx: { type: object }
+                  periodId: { type: string, pattern: '^\d{4}Q[1-4]$' }
+                  amount: { $ref: '#/components/schemas/Money' }
+                  accrual: { $ref: '#/components/schemas/Money' }
+        '409': { description: 'Not accepted onchain yet, already paid, or nothing due (detail.stage1 NothingDue)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /reports/{reportId}/paid:
     post:
       operationId: markReportPaid

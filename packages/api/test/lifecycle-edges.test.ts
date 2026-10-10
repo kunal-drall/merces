@@ -61,8 +61,10 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     const half = (BigInt(st.treasury.total) / 2n).toString();
     expect(st.treasury).toMatchObject({ released: '0', balance: half });
     expect(st.extinguishment.returnedToHolders).toBe(half);
-    expect(st.payments.grossPaidTotal).toBe('0');
-    expect(st.payments.netDistributed).toBe(half);
+    // the unvested proceeds are shown once, under the extinguishment: no issuer payment, nothing in `payments`
+    // (G7, WP11: was payments.netDistributed = half), still unclaimed by the holders
+    expect(st.payments).toEqual({ grossPaidTotal: '0', netDistributed: '0', feesTaken: '0', count: 0 });
+    expect(st.payouts.unclaimed).toBe(half);
   });
 
   it('an ungraduated curve: buys fund the treasury in the read model; the raise can be neither cancelled nor extinguished', async () => {

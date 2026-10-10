@@ -176,6 +176,24 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect(await ledgerRow()).toMatchObject({ last_paid_period: '2026Q2', open_due_period: null, open_due_amount: '0', formal_notice_emitted_for: '2026Q3' });
   });
 
+  it('projects the cap per unit with Stage 1\'s floor at settlement and after an amendment (never SQL rounding)', async () => {
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'amended', genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
+    const a = await h.runRaise();
+    const cap = async () => (await t.pool.query('select cap_multiple_wad::text, cap_per_unit::text from series where series_id = $1', [a.seriesId])).rows[0];
+    await idx.catchUp();
+    expect(await cap()).toEqual({ cap_multiple_wad: a.terms.capMultipleWad, cap_per_unit: (await h.sim.getSeries(a.seriesId))!.capPerUnit });
+    // m × P0 / 1e18 = 21,600,000.500000004: Stage 1 floors to 21,600,000; a numeric(38,0) division rounds it up to 21,600,001
+    const m = 2_400_000_055_555_555_556n;
+    expect(a.clearingPrice).toBe(USDC(9));
+    await h.exec(h.issuer, { kind: 'amendTerms', seriesId: a.seriesId, termsCommitment: a.terms.termsCommitment, capMultipleWad: m.toString(), attestor: h.attestors[0]!.address }, [h.attestors[0]!]);
+    await idx.catchUp();
+    expect((await h.sim.getSeries(a.seriesId))!.capPerUnit).toBe('21600000');
+    expect(await cap()).toEqual({ cap_multiple_wad: m.toString(), cap_per_unit: '21600000' });
+    const sql = (await t.pool.query('select ($1::numeric * $2::numeric / 1000000000000000000)::numeric(38,0)::text as v', [m.toString(), USDC(9).toString()])).rows[0].v;
+    expect(sql).toBe('21600001'); // what the old SQL projection stored
+  });
+
   it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {
     const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'isolated', genesis: GENESIS, acceptMockProofs: true }) });
     await h.runRaise();

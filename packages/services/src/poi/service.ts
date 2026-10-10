@@ -2,7 +2,7 @@ import { createPublicKey, verify as edVerify } from 'node:crypto';
 import { z } from 'zod';
 import { AppError, enqueueOutbox, getFlag } from '@merces/core';
 import { attestationMessage, expectedPrior, fieldToHex32, reportPublicInputs, reportProofSchema, verifierAttestationSchema, type UnsignedTx, type UserCommand } from '@merces/domain';
-import { interim, WAD, fromPid, parsePeriod, periodsBetween, toPid, yearOf } from '@merces/math';
+import { WAD, fromPid, parsePeriod, periodsBetween, projectDeadlines, statusParamsOf, toPid, yearOf } from '@merces/math';
 import { SOURCE_DEFINITIONS, type IncomeSourceKind } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -46,7 +46,12 @@ export class ProofOfIncomeService {
     return { chain, series: s };
   }
 
-  /** The issuer's reporting schedule: every reportable quarter with deadlines, standing and what is still needed. */
+  /**
+   * The issuer's reporting schedule: every reportable quarter with deadlines, standing and what is still needed. The
+   * deadlines and standings are the chain's (Stage 1's countdown in unpaused time from the period end: OnTime while
+   * ≤ 30 days, InGrace while ≤ 45 days, formal notice at 90 days); the quarter still running gets its projected due
+   * instant from `projectDeadlines` (a pause running now is counted; one approved later moves it).
+   */
   async schedule(seriesId: string, session: Session): Promise<Record<string, unknown>> {
     const { chain, series } = await this.seriesForIssuer(seriesId, session);
     const now = await chain.now();
@@ -54,7 +59,12 @@ export class ProofOfIncomeService {
     const reports = await this.ctx.pool.query('select period_id, report_id, state, tier, source from reports where series_id = $1 and state <> $2 order by created_at', [seriesId, 'superseded']);
     const byPeriod = new Map(reports.rows.map((r) => [r.period_id, r]));
     const current = parsePeriodSafe(now);
-    const upcoming = series.settledAt !== null && current && current.end > now ? { periodId: current.id, endsAt: current.end, dueAt: interim.deadlinesFor(current, { dueDays: series.terms.dueDays, graceDays: series.terms.graceDays, formalNoticeDays: series.terms.formalNoticeDays }).dueAt } : null;
+    // every pause recorded so far ended before `now` < the period's end except the one running now, so it is the only
+    // one that can count against the running quarter's countdown
+    const running = series.pauses.current ? [{ start: BigInt(series.pauses.current.start), end: BigInt(series.pauses.current.end) }] : [];
+    const upcoming = series.settledAt !== null && current && current.end > now
+      ? { periodId: current.id, endsAt: current.end, dueAt: Number(projectDeadlines(toPid(current.id), running, BigInt(now), statusParamsOf(series.terms)).dueAt) }
+      : null;
     return {
       seriesId, status: series.status, now, reportingCurrency: series.terms.reportingCurrency, fxBasis: series.terms.reportingCurrency === 'USD' ? 'unity' : 'accumulator', tierFlags: series.terms.tierFlags,
       periods: live.map((p) => ({ ...p, report: byPeriod.get(p.periodId) ? { reportId: byPeriod.get(p.periodId)!.report_id, state: byPeriod.get(p.periodId)!.state } : null, nextStep: nextStep(p, byPeriod.get(p.periodId)?.state) })),
@@ -241,7 +251,13 @@ export class ProofOfIncomeService {
     return this.getReport(reportId);
   }
 
-  async buildPayIn(reportId: string, session: Session): Promise<{ tx: UnsignedTx; amount: string; accrual: string }> {
+  /**
+   * payIn for the series' open due (Stage 1 `pay`: one open due at a time, `openDuePeriod`), for the live amount the
+   * chain will demand now: the open due plus Stage 1's lateness accrual to `now` on a regular period, the due as
+   * reported on a tail period (the chain's period read). Accrual grows by whole late days, so a transaction built just
+   * before a day boundary and sent after it is refused; build it again.
+   */
+  async buildPayIn(reportId: string, session: Session): Promise<{ tx: UnsignedTx; periodId: string; amount: string; accrual: string }> {
     const r = await this.ctx.pool.query('select series_id, period_id from reports where report_id = $1', [reportId]);
     const x = r.rows[0];
     if (!x) throw AppError.notFound('report');
@@ -249,9 +265,13 @@ export class ProofOfIncomeService {
     const p = await chain.getPeriod(x.series_id, x.period_id);
     if (!p || !p.reportAccepted) throw AppError.conflict('the chain has not accepted a report for this period yet');
     if (p.settled) throw AppError.conflict('period already paid');
-    const amount = (BigInt(p.paymentDue) - BigInt(p.paid)).toString();
-    const tx = await chain.build({ kind: 'payIn', seriesId: x.series_id, periodId: x.period_id, amount }, series.issuer);
-    return { tx, amount, accrual: p.accrual };
+    const rep = series.reporting;
+    if (BigInt(rep.openDueAmount) === 0n || rep.openDuePeriod === null) throw new AppError(409, 'Conflict', 'nothing is due', { stage1: 'NothingDue' });
+    // reports are sequential and each needs the previous due paid, so an unpaid accepted report is the open due
+    if (rep.openDuePeriod !== x.period_id) throw new AppError(409, 'Conflict', `the open due is for ${rep.openDuePeriod}`, { openDuePeriod: rep.openDuePeriod });
+    const amount = p.paymentDue;
+    const tx = await chain.build({ kind: 'payIn', seriesId: x.series_id, periodId: rep.openDuePeriod, amount }, series.issuer);
+    return { tx, periodId: rep.openDuePeriod, amount, accrual: p.accrual };
   }
 
   async markPaid(reportId: string, session: Session, txId: string): Promise<Record<string, unknown>> {
@@ -275,12 +295,15 @@ export class ProofOfIncomeService {
     return { seriesId, periodId, splitReceived: p?.splitReceived ?? '0', receipts: rows.rows.map((r) => ({ seq: Number(r.seq), amount: r.amount, router: r.wallet, at: Number(r.block_time), txId: r.tx_id })) };
   }
 
-  /** Deadlines for the keeper's reminders (E7/E12): returns upcoming milestones for every unsettled period of a series. */
+  /**
+   * Deadlines for the keeper's reminders (E7/E12): the milestones of every unsettled period, as the chain reads them:
+   * `dueAt` / `graceEndsAt` are the last OnTime / InGrace instants and `formalNoticeAt` the first formal-notice instant
+   * (`projectDeadlines`), the standing is Stage 1's (`standingOf`).
+   */
   async deadlines(seriesId: string): Promise<{ periodId: string; dueAt: number; graceEndsAt: number; formalNoticeAt: number; standing: string }[]> {
     const chain = this.ctx.chainFor(seriesId);
     const periods = await chain.listPeriods(seriesId);
-    const now = await chain.now();
-    return periods.filter((p) => !p.settled).map((p) => ({ periodId: p.periodId, dueAt: p.dueAt, graceEndsAt: p.graceEndsAt, formalNoticeAt: p.formalNoticeAt, standing: interim.periodStanding({ dueAt: p.dueAt, graceEndsAt: p.graceEndsAt, formalNoticeAt: p.formalNoticeAt }, now, false) }));
+    return periods.filter((p) => !p.settled).map((p) => ({ periodId: p.periodId, dueAt: p.dueAt, graceEndsAt: p.graceEndsAt, formalNoticeAt: p.formalNoticeAt, standing: p.standing }));
   }
 }
 

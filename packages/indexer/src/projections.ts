@@ -1,7 +1,7 @@
 import type { PoolClient } from '@merces/db';
 import type { DomainEvent, EventPayload } from '@merces/domain';
 import { DEFAULTS } from '@merces/domain';
-import { fromPid, interim, pidAt, toPid } from '@merces/math';
+import { capPerUnit, fromPid, pidAt, toPid } from '@merces/math';
 
 type P<T extends DomainEvent['type']> = EventPayload<T>;
 
@@ -110,7 +110,8 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       const p = e.payload as P<'AuctionSettled'>;
       const s = await client.query<{ cap_multiple_wad: string; lockup_seconds: string }>('select cap_multiple_wad, lockup_seconds from series where series_id = $1', [p.seriesId]);
       const row = s.rows[0];
-      const cap = row ? interim.perUnitCap(BigInt(row.cap_multiple_wad), BigInt(p.clearingPrice)).toString() : null;
+      // Stage 1's cap per unit, `mulDiv(capMultipleWad, P0, WAD)` (floor), the figure the chain enforces
+      const cap = row ? capPerUnit(BigInt(row.cap_multiple_wad), BigInt(p.clearingPrice)).toString() : null;
       await client.query(
         // the reporting ledger starts at the settlement quarter (Stage 1 first_period, SIM:972)
         "update series set phase = 'Settled', settled_at = $2, issue_price = $3, units_sold = $4, units_outstanding = $4, cap_per_unit = $5, treasury_total = $6, lockup_ends_at = $2 + lockup_seconds, first_period = $8, next_expected_period = coalesce(next_expected_period, $8), last_event_seq = $7 where series_id = $1",
@@ -262,7 +263,12 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     }
     case 'TermsAmended': {
       const p = e.payload as P<'TermsAmended'>;
-      await client.query('update series set terms_commitment = $2, cap_multiple_wad = $3, cap_per_unit = case when issue_price is null then null else ($3::numeric * issue_price) / 1000000000000000000 end, last_event_seq = $4 where series_id = $1', [p.seriesId, p.termsCommitment, p.capMultipleWad, e.seq]);
+      // the live cap per unit after the amendment, computed here with Stage 1's `capPerUnit` (floor): a SQL `numeric`
+      // division into numeric(38,0) rounds half up (2.5e18 × 105,000,001 gives 262,500,003 where the chain has 262,500,002)
+      const s = await client.query<{ issue_price: string | null }>('select issue_price::text from series where series_id = $1', [p.seriesId]);
+      const issuePrice = s.rows[0]?.issue_price ?? null;
+      const cap = issuePrice === null ? null : capPerUnit(BigInt(p.capMultipleWad), BigInt(issuePrice)).toString();
+      await client.query('update series set terms_commitment = $2, cap_multiple_wad = $3, cap_per_unit = $4, last_event_seq = $5 where series_id = $1', [p.seriesId, p.termsCommitment, p.capMultipleWad, cap, e.seq]);
       break;
     }
     case 'SeriesExtinguished': {

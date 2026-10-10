@@ -48,7 +48,9 @@ async function forEachChain(ctx: ServiceContext, errors: string[], fn: (chain: C
   }
 }
 
-async function forEachSettled(ctx: ServiceContext, errors: string[], fn: (chain: ChainPort, s: Awaited<ReturnType<ChainPort['listSeries']>>[number], now: number) => Promise<void>): Promise<void> {
+type Series = Awaited<ReturnType<ChainPort['listSeries']>>[number];
+
+async function forEachSettled(ctx: ServiceContext, errors: string[], fn: (chain: ChainPort, s: Series, now: number) => Promise<void>): Promise<void> {
   await forEachChain(ctx, errors, async (chain) => {
     const now = await chain.now();
     for (const s of await chain.listSeries()) {
@@ -81,15 +83,49 @@ export const revealRemindersJob: KeeperJob = {
   },
 };
 
-/** crankStatus on every live series whose standing may have changed; the chain emits StatusChanged / FormalNoticeDue. */
+/**
+ * The status milestones of a series that time alone moves (Stage 1 `deriveStatus` on the earliest unpaid period:
+ * `openDuePeriod` while a due is open, else the next expected period): InGrace at the first instant after `dueAt`
+ * (countdown > 30 days), Late at the first instant after `graceEndsAt` (> 45 days) and the formal notice at
+ * `formalNoticeAt` (≥ 90 days). The instants are the chain's period read (`projectDeadlines`, counted in unpaused time
+ * from the period end); only those already reached are returned.
+ */
+export async function reachedMilestones(chain: ChainPort, s: Series, now: number): Promise<{ periodId: string; milestones: ('InGrace' | 'Late' | 'FormalNotice')[] } | null> {
+  const rep = s.reporting;
+  const periodId = BigInt(rep.openDueAmount) > 0n && rep.openDuePeriod !== null ? rep.openDuePeriod : rep.nextExpectedPeriod;
+  if (periodId === null) return null;
+  const p = await chain.getPeriod(s.seriesId, periodId);
+  if (!p) return null;
+  const milestones: ('InGrace' | 'Late' | 'FormalNotice')[] = [];
+  if (now > p.dueAt) milestones.push('InGrace');
+  if (now > p.graceEndsAt) milestones.push('Late');
+  if (now >= p.formalNoticeAt) milestones.push('FormalNotice');
+  return { periodId, milestones };
+}
+
+/**
+ * crankStatus (Stage 1 `crank_status`) when a status milestone of the earliest unpaid period has been reached and the
+ * chain has not recorded it yet: the formal notice when `formalNoticeEmittedFor` is another period; InGrace / Late when
+ * the indexed status (the status the chain last stored, from its StatusChanged events) differs from the status derived
+ * now. A series the indexer has not projected yet is cranked whenever a milestone is reached (a crank with nothing to
+ * record emits nothing). Paused series are left to the pause crank, terminal ones are never cranked. The chain emits
+ * StatusChanged / FormalNoticeDue and the release-block events.
+ */
 export const statusCrankJob: KeeperJob = {
   name: 'status.crank',
   intervalSeconds: 3600,
   async run(ctx) {
     let actions = 0;
     const errors: string[] = [];
-    await forEachSettled(ctx, errors, async (chain, s) => {
+    await forEachSettled(ctx, errors, async (chain, s, now) => {
       if (['Retired', 'Redeemed', 'Extinguished', 'Paused'].includes(s.status)) return;
+      const reached = await reachedMilestones(chain, s, now);
+      if (!reached || reached.milestones.length === 0) return;
+      const noticePending = reached.milestones.includes('FormalNotice') && s.formalNoticeEmittedFor !== reached.periodId;
+      if (!noticePending) {
+        const indexed = await ctx.pool.query<{ status: string }>('select status from series where series_id = $1', [s.seriesId]);
+        if (indexed.rows[0] && indexed.rows[0].status === s.status) return;
+      }
       try {
         const r = await chain.submit({ kind: 'crankStatus', seriesId: s.seriesId }, 'keeper');
         if (r.events.length) actions++;
@@ -150,7 +186,12 @@ export const burnCrankJob: KeeperJob = {
   },
 };
 
-/** Report-deadline reminders (C8): 7 days before due, at due, at grace end. Recorded once per milestone. */
+/**
+ * Report-deadline reminders (C8), at the chain's instants (`projectDeadlines`, Stage 1's inclusive bounds): 7 days
+ * before `dueAt` (the last OnTime instant), at the first InGrace instant (`dueAt + 1`: more than 30 days of unpaused
+ * time since the period end) and at the first Late instant (`graceEndsAt + 1`: more than 45 days). Recorded once per
+ * milestone.
+ */
 export const deadlineRemindersJob: KeeperJob = {
   name: 'reporting.reminders',
   intervalSeconds: 3600,
@@ -161,7 +202,7 @@ export const deadlineRemindersJob: KeeperJob = {
       if (['Retired', 'Redeemed', 'Extinguished', 'Paused'].includes(s.status)) return;
       for (const p of await chain.listPeriods(s.seriesId)) {
         if (p.settled) continue;
-        const milestones: [string, number][] = [['report-due-soon', p.dueAt - 7 * 86_400], ['report-due', p.dueAt], ['grace-end', p.graceEndsAt]];
+        const milestones: [string, number][] = [['report-due-soon', p.dueAt - 7 * 86_400], ['report-due', p.dueAt + 1], ['grace-end', p.graceEndsAt + 1]];
         for (const [kind, at] of milestones) {
           if (now < at) continue;
           // the ledger row and the notice commit together: a crash between them can neither lose nor repeat it

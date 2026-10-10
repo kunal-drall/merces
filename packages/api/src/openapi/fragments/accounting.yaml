@@ -92,7 +92,7 @@ components:
           properties: { auctionFeeBps: { type: integer }, payoutFeeBps: { type: integer } }
         cap:
           type: object
-          description: "C6: cap per unit = m × P0; remaining per unit = capPerUnit − paidPerUnitWad / 1e18"
+          description: "C6: cap per unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per unit = Stage 1's C_remaining = max(capPerUnit − ceil(paidPerUnitWad / 1e18), 0)"
           properties:
             capMultipleWad: { $ref: '#/components/schemas/Wad' }
             issuePrice: { type: [string, 'null'] }
@@ -102,15 +102,16 @@ components:
             total: { type: [string, 'null'], description: perUnit × unitsSold }
             paidPerUnitWad: { $ref: '#/components/schemas/Wad' }
             paidPerUnit: { $ref: '#/components/schemas/Money' }
-            remainingPerUnit: { type: [string, 'null'] }
+            remainingPerUnit: { type: [string, 'null'], description: "Stage 1's C_remaining: the paid amount rounded up, never more room than the chain accepts" }
             remainingTotal: { type: [string, 'null'], description: remainingPerUnit × unitsOutstanding }
             progressBps: { type: [integer, 'null'], description: paid / cap in basis points }
         payments:
           type: object
+          description: Regular payments only (pay-ins and tier-1 split receipts into the payout vault); the tail and the extinguishment are shown under their own keys, never here.
           properties:
-            grossPaidTotal: { $ref: '#/components/schemas/Money', description: lifetime gross accepted into the vault }
+            grossPaidTotal: { $ref: '#/components/schemas/Money', description: lifetime gross accepted into the payout vault (cap refunds excluded) }
             netDistributed: { $ref: '#/components/schemas/Money', description: gross minus payout fees, distributable to holders }
-            feesTaken: { $ref: '#/components/schemas/Money' }
+            feesTaken: { $ref: '#/components/schemas/Money', description: payout fees on regular payments }
             count: { type: integer }
         fees:
           type: object
@@ -123,7 +124,7 @@ components:
           type: object
           properties:
             claimed: { $ref: '#/components/schemas/Money' }
-            unclaimed: { $ref: '#/components/schemas/Money', description: netDistributed − claimed }
+            unclaimed: { $ref: '#/components/schemas/Money', description: 'payments.netDistributed + tail.net + extinguishment.returnedToHolders − claimed (one claim pays the net payout, the tail and the final pool)' }
             count: { type: integer }
         refunds:
           type: object
@@ -147,12 +148,17 @@ components:
             claimed: { $ref: '#/components/schemas/Money' }
         tail:
           type: object
-          properties: { total: { $ref: '#/components/schemas/Money' } }
+          description: Tail payments after a redemption (Stage 1's tail state, capped per unit at the tail cap; kept outside the payout vault's per-unit figures)
+          properties:
+            total: { $ref: '#/components/schemas/Money', description: tail gross accepted (the excess over the tail cap is refunded to the issuer) }
+            fees: { $ref: '#/components/schemas/Money' }
+            net: { $ref: '#/components/schemas/Money', description: distributable to the holders that redeemed }
+            count: { type: integer }
         extinguishment:
           type: object
           properties:
             extinguishedAt: { type: [integer, 'null'] }
-            returnedToHolders: { $ref: '#/components/schemas/Money' }
+            returnedToHolders: { $ref: '#/components/schemas/Money', description: 'the unvested proceeds only (proceeds − vested at the extinguishment), paid to holders through the final pool with no fee; the vested part stays in the treasury, drawable by the issuer' }
         burns:
           type: object
           properties: { units: { type: string } }

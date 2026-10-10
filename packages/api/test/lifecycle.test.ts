@@ -56,12 +56,14 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     const settledAt = (await h.sim.getSeries(seriesId))!.settledAt!;
     let quote = await rig.get(`/series/${seriesId}/redemption/quote`, holderTok);
     expect(quote.json().blockers.some((b: string) => b.includes('lockup'))).toBe(true);
+    expect(quote.json().blockedBy).toEqual(['LockupActive']); // Stage 1's error name beside the text
     expect((await rig.post(`/series/${seriesId}/redemption/build-redeem`, { maxPricePerUnit: USDC(100).toString() }, issuerTok)).statusCode).toBe(409);
     await h.sim.setTime(settledAt + 365 * 86_400 + 10);
     quote = await rig.get(`/series/${seriesId}/redemption/quote`, issuerTok);
     // Stage 1's quote over the year ring: the 2026Q4 payment is tagged with settlement year 1 (its deadline), so
     // k × D_avg = 0 and the hurdle 9.72 decides below C_rem 18.5 (G6; was 18.5 bound by the cap, payoutTerm 20, deposit 9,250)
     expect(quote.json()).toMatchObject({ redeemable: true, pricePerUnit: USDC(9.72).toString(), boundBy: 'hurdle', deposit: USDC(4_860).toString(), tailCapPerUnit: USDC(8.78).toString() });
+    expect(quote.json()).toMatchObject({ decidedBy: 'hurdle', blockedBy: [], outcome: 'redeem', terms: { dAvg: '0', capRemaining: USDC(18.5).toString() } });
     expect(quote.json().terms.hurdlePrice).toBe(USDC(9.72).toString());
     expect(quote.json().terms.payoutTerm).toBe('0');
     const redeem = await rig.post(`/series/${seriesId}/redemption/build-redeem`, { maxPricePerUnit: USDC(9.72).toString() }, issuerTok);
@@ -74,6 +76,8 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     const red = await rig.get(`/series/${seriesId}/redemption`, holderTok);
     expect(red.json().status).toBe('Redeemed');
     expect(red.json().tail.open).toBe(true); // the hurdle decided: 18.5 − 9.72 = 8.78 per unit of tail room (G6; was closed)
+    // Stage 1's tail state: nothing paid yet, not exhausted
+    expect(red.json().tail).toMatchObject({ capPerUnit: USDC(8.78).toString(), paidPerUnitWad: '0', paidPerUnit: '0', exhausted: false, refunded: '0' });
     expect(red.json().claims.count).toBe(1);
     // R19: windows switched off → 403; on → builders work after lockup
     const win = await rig.get(`/series/${seriesId}/window`);

@@ -2459,9 +2459,17 @@ export type components = {
         Wad: string;
         Error: {
             error: string;
+            /** @description human text; never an income figure, salt, opening or document (Stage 1 messages that can embed values are replaced) */
             message: string;
-            detail?: unknown;
+            /** @description Structured detail. A refusal on a Stage 1 path carries `stage1`: Stage 1's canonical error name (SPEC §11), beside the chain-neutral `error` code; other keys are public facts only (ids, periods, public amounts). */
+            detail?: ({
+                stage1?: components["schemas"]["Stage1ErrorName"];
+            } & {
+                [key: string]: unknown;
+            }) | null;
         };
+        /** @description A Stage 1 error name (SPEC v1.1.2 §11, `@merces/sdk` ERRORS), e.g. WrongPeriod, PaymentOutstanding, ReportTooEarly, TierNotEnabled, InvalidProof, SeriesLate, LockupActive, UnreportedPeriods, NothingDue, HolderNotRegistered, TerminalStatus, RaiseNotSettled, MintNotFinalized, UnfavourableAmendment, PauseTooLong, InsufficientEscrow, AmountOutOfRange. */
+        Stage1ErrorName: string;
         ChainHealth: {
             chain?: string;
             /** @enum {string} */
@@ -2548,6 +2556,29 @@ export type components = {
             releasesPaused?: boolean;
             redeemedAt?: number | null;
             extinguishedAt?: number | null;
+            /** @description Stage 1's reporting ledger (indexed): the settlement quarter, the first period to report */
+            firstPeriod?: string | null;
+            /** @description the only period a report may be submitted for next (reports are sequential); null before settlement */
+            nextExpectedPeriod?: string | null;
+            lastAcceptedPeriod?: string | null;
+            lastPaidPeriod?: string | null;
+            /** @description the reported period whose due is unpaid (one at a time); the next report is refused (PaymentOutstanding) until it is paid */
+            openDuePeriod?: string | null;
+            /** @description a reported due is unpaid; its amount is served at the holder-or-issuer tier (GET /series/{seriesId}/periods, reporting.openDueAmount) */
+            paymentOutstanding?: boolean;
+            /** @description the period whose formal notice the chain recorded (period end + 90 days of unpaused time) */
+            formalNoticeEmittedFor?: string | null;
+        };
+        /** @description Stage 1's reporting ledger of a series, as indexed from its events (holder-or-issuer tier: it carries the open due's amount) */
+        SeriesReporting: {
+            firstPeriod?: string | null;
+            nextExpectedPeriod?: string | null;
+            lastAcceptedPeriod?: string | null;
+            lastPaidPeriod?: string | null;
+            openDuePeriod?: string | null;
+            /** @description the open due as reported, before lateness accrual (the open period's live paymentDue adds the accrual to date); 0 when nothing is due */
+            openDueAmount?: components["schemas"]["Money"];
+            formalNoticeEmittedFor?: string | null;
         };
         SeriesDetail: components["schemas"]["Series"] & {
             holderCount?: number;
@@ -2565,11 +2596,15 @@ export type components = {
         Period: {
             seriesId?: string;
             periodId?: string;
+            /** @description last OnTime instant: period end + 30 days of unpaused time (Stage 1's countdown, inclusive) */
             dueAt?: number;
+            /** @description last InGrace instant (period end + 45 days unpaused); one second later the period is Late */
             graceEndsAt?: number;
+            /** @description first instant a formal notice is due: period end + 90 days unpaused (Stage 1 formalNoticeDue); a pause approved later moves it */
             formalNoticeAt?: number;
             reportAccepted?: boolean;
             tier?: number | null;
+            /** @description while the period holds the open due: the live amount payIn must carry now (the due plus lateness accrual to date; a tail due without accrual); once paid: the due and accrual recomputed at payment */
             paymentDue?: components["schemas"]["Money"];
             accrual?: components["schemas"]["Money"];
             paid?: components["schemas"]["Money"];
@@ -2578,6 +2613,8 @@ export type components = {
             /** @enum {string} */
             standing?: "NotDue" | "OnTime" | "InGrace" | "Late" | "FormalNoticeDue" | "Deferred";
             incomeCommitment?: string | null;
+            /** @description the income commitment the report chained from (Stage 1 prior chain; Poseidon(0, 0) at a year start); null until reported */
+            priorIncomeCommitment?: string | null;
             liquidityEvent?: boolean;
             fxBasis?: string | null;
             fxAvgWad?: string | null;
@@ -2722,7 +2759,7 @@ export type components = {
                 auctionFeeBps?: number;
                 payoutFeeBps?: number;
             };
-            /** @description C6: cap per unit = m × P0; remaining per unit = capPerUnit − paidPerUnitWad / 1e18 */
+            /** @description C6: cap per unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per unit = Stage 1's C_remaining = max(capPerUnit − ceil(paidPerUnitWad / 1e18), 0) */
             cap: {
                 capMultipleWad?: components["schemas"]["Wad"];
                 issuePrice?: string | null;
@@ -2734,17 +2771,20 @@ export type components = {
                 total?: string | null;
                 paidPerUnitWad?: components["schemas"]["Wad"];
                 paidPerUnit?: components["schemas"]["Money"];
+                /** @description Stage 1's C_remaining: the paid amount rounded up, never more room than the chain accepts */
                 remainingPerUnit?: string | null;
                 /** @description remainingPerUnit × unitsOutstanding */
                 remainingTotal?: string | null;
                 /** @description paid / cap in basis points */
                 progressBps?: number | null;
             };
+            /** @description Regular payments only (pay-ins and tier-1 split receipts into the payout vault); the tail and the extinguishment are shown under their own keys, never here. */
             payments: {
-                /** @description lifetime gross accepted into the vault */
+                /** @description lifetime gross accepted into the payout vault (cap refunds excluded) */
                 grossPaidTotal?: components["schemas"]["Money"];
                 /** @description gross minus payout fees */
                 netDistributed?: components["schemas"]["Money"];
+                /** @description payout fees on regular payments */
                 feesTaken?: components["schemas"]["Money"];
                 count?: number;
             };
@@ -2757,7 +2797,7 @@ export type components = {
             };
             payouts: {
                 claimed?: components["schemas"]["Money"];
-                /** @description netDistributed − claimed */
+                /** @description payments.netDistributed + tail.net + extinguishment.returnedToHolders − claimed (one claim pays the net payout, the tail and the final pool) */
                 unclaimed?: components["schemas"]["Money"];
                 count?: number;
             };
@@ -2780,11 +2820,18 @@ export type components = {
                 deposit?: components["schemas"]["Money"];
                 claimed?: components["schemas"]["Money"];
             };
+            /** @description Tail payments after a redemption (Stage 1's tail state, capped per unit at the tail cap; kept outside the payout vault's per-unit figures) */
             tail: {
+                /** @description tail gross accepted (the excess over the tail cap is refunded to the issuer) */
                 total?: components["schemas"]["Money"];
+                fees?: components["schemas"]["Money"];
+                /** @description distributable to the holders that redeemed */
+                net?: components["schemas"]["Money"];
+                count?: number;
             };
             extinguishment: {
                 extinguishedAt?: number | null;
+                /** @description the unvested proceeds only (proceeds − vested at the extinguishment), paid to holders through the final pool with no fee; the vested part stays in the treasury, drawable by the issuer */
                 returnedToHolders?: components["schemas"]["Money"];
             };
             burns: {
@@ -3055,6 +3102,85 @@ export type components = {
             encoding?: string;
             summary?: string;
             expiresAt?: number | null;
+        };
+        /** @description Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee). */
+        RedemptionQuote: {
+            seriesId: string;
+            now: number;
+            lockupEndsAt?: number | null;
+            unitsOutstanding?: string;
+            pricePerUnit: components["schemas"]["Money"];
+            deposit: components["schemas"]["Money"];
+            /**
+             * @description Stage 1's label for the term that set the price (a tie between the floor terms reports hurdle)
+             * @enum {string}
+             */
+            decidedBy: "cap_remaining" | "hurdle" | "payout_multiple";
+            /**
+             * @deprecated
+             * @description the version-1 label of decidedBy
+             * @enum {string}
+             */
+            boundBy: "cap" | "hurdle" | "payout";
+            terms: {
+                /** @description C_remaining = max(capPerUnit − ceil(paidPerUnitWad / 1e18), 0) */
+                capRemaining?: components["schemas"]["Money"];
+                /** @description P0 compounded at the hurdle rate per whole year */
+                hurdlePrice?: components["schemas"]["Money"];
+                /** @description k × D_avg; null before a full settlement year */
+                payoutTerm?: string | null;
+                /** @description average annual gross per unit over the trailing min(years */
+                dAvg?: string | null;
+                /** @description whole years since settlement */
+                kTimesDavgYears?: number;
+                hurdleWad?: components["schemas"]["Wad"];
+                payoutMultipleK?: number;
+            };
+            /** @description C_remaining − price; the tail room per unit after a redemption */
+            tailCapPerUnit: components["schemas"]["Money"];
+            /** @description why redeem would be refused now, in the order Stage 1 checks (empty: redeemable) */
+            blockers: string[];
+            /** @description Stage 1 error names of the blockers */
+            blockedBy: ("TerminalStatus" | "SeriesLate" | "LockupActive" | "PaymentOutstanding" | "TrueUpOutstanding" | "UnreportedPeriods")[];
+            redeemable: boolean;
+            /**
+             * @description retire: nothing is left of the cap (C_remaining = 0), so redeem retires the series instead and takes no deposit
+             * @enum {string}
+             */
+            outcome: "redeem" | "retire";
+            note?: string | null;
+        };
+        /** @description The redemption and its tail, from Stage 1's tail state */
+        RedemptionView: {
+            seriesId: string;
+            status: string;
+            redemption: Record<string, never> | null;
+            tail: {
+                /** @description redemption + tail seconds; a period starting after it can carry no tail (TailEnded) */
+                endsAt?: number;
+                /** @description a tail can still be reported and paid: the next period starts by endsAt and the tail cap is not used up */
+                open?: boolean;
+                /** @description Stage 1's tailExhausted: the tail cap per unit has been paid in full (NoTailDue) */
+                exhausted?: boolean;
+                capPerUnit?: components["schemas"]["Money"];
+                /** @description tail gross accepted per unit */
+                paidPerUnitWad?: components["schemas"]["Wad"];
+                /** @description paidPerUnitWad floored to base units */
+                paidPerUnit?: components["schemas"]["Money"];
+                /** @description tail gross refunded to the issuer above the tail cap */
+                refunded?: components["schemas"]["Money"];
+                nextPeriod?: string | null;
+                payouts?: {
+                    periodId?: string;
+                    total?: string;
+                    perUnit?: string;
+                    at?: number;
+                }[];
+            } | null;
+            claims?: {
+                count?: number;
+                total?: string;
+            };
         };
         /** @description The wallet cap on curve buys. It applies only while the curve is bonding; after graduation units trade freely and no cap applies (A-CURVE-2). */
         CurveWalletCap: {
@@ -3555,7 +3681,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Periods with amounts */
+            /** @description Periods with amounts and the series' reporting ledger */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3563,6 +3689,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         periods?: components["schemas"]["Period"][];
+                        reporting?: components["schemas"]["SeriesReporting"] | null;
                     };
                 };
             };
@@ -5372,21 +5499,28 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Unsigned payIn for exactly the remaining amount the chain reports (including accrual) */
+            /** @description Unsigned payIn of the series' open due (Stage 1 pay: periodId = openDuePeriod) for the live amount the chain demands now: the open due plus Stage 1's lateness accrual on a regular period, the due as reported on a tail period. Accrual grows by whole late days, so rebuild a transaction that was not sent the same day. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        tx: Record<string, never>;
+                        periodId: string;
+                        amount: components["schemas"]["Money"];
+                        accrual: components["schemas"]["Money"];
+                    };
                 };
             };
-            /** @description Not accepted onchain yet */
+            /** @description Not accepted onchain yet, already paid, or nothing due (detail.stage1 NothingDue) */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -7179,13 +7313,23 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon) */
+            /** @description Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon). The three amounts are disjoint and one claimPayout pays all of them. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        tx?: Record<string, never>;
+                        /** @description the net payout only; excludes the tail and the final pool */
+                        claimable?: components["schemas"]["Money"];
+                        /** @description the tail share (after the holder redeemed) */
+                        tailClaimable?: components["schemas"]["Money"];
+                        /** @description the final-pool share (after an extinguishment) */
+                        finalClaimable?: components["schemas"]["Money"];
+                        /** @enum {string} */
+                        builder?: "public" | "private";
+                    };
                 };
             };
             /** @description Nothing to claim */
@@ -7215,8 +7359,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["RedemptionQuote"];
                 };
+            };
+            /** @description The raise has not settled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -7238,16 +7389,19 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unsigned redeem (deposit = price × units outstanding; no fee) */
+            /** @description Unsigned redeem (deposit = price × units outstanding; no fee) with the quote it was built on */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        tx?: Record<string, never>;
+                        quote?: components["schemas"]["RedemptionQuote"];
+                    };
                 };
             };
-            /** @description Lockup */
+            /** @description A Stage 1 blocker (terminal or Late status, lockup, an unpaid due, an unreported ended period) or the quoted price exceeds maxPricePerUnit */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -7303,7 +7457,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["RedemptionView"];
                 };
             };
         };

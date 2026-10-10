@@ -95,8 +95,12 @@ export const TEMPLATES: Record<string, Template> = {
   'auction.settled': (d) => ({ subject: 'Raise settled', body: `The raise for ${series(d)} has settled. Status: Settled.` }),
   'auction.failed': (d) => ({ subject: 'Raise did not settle', body: `The raise for ${series(d)} did not settle. Status: Failed. Deposits can be reclaimed.` }),
   'bid.reveal-reminder': (d) => ({ subject: 'Reveal your bid', body: `Reveal your bid on ${series(d)} before ${fmtDate(d.revealEndsAt)}.` }),
-  'reporting.report-due-soon': (d) => ({ subject: 'Report due soon', body: `The report for ${series(d)}${period(d)} is due on ${fmtDate(d.dueAt)}.` }),
-  'reporting.report-due': (d) => ({ subject: 'Report due', body: `The report for ${series(d)}${period(d)} is due on ${fmtDate(d.dueAt)}. The grace period ends on ${fmtDate(d.graceEndsAt)}. Status: InGrace.` }),
+  // The reporting reminders follow Stage 1's inclusive bounds: `dueAt` is the last OnTime instant and `graceEndsAt` the
+  // last InGrace one. The keeper sends 'report-due' only once `dueAt` has passed (countdown > 30 days, the first
+  // InGrace instant) and 'grace-end' once `graceEndsAt` has passed (> 45 days, Late); before `dueAt` the period is
+  // still OnTime, so only 'report-due-soon' (which names no status) can go out then.
+  'reporting.report-due-soon': (d) => ({ subject: 'Report due soon', body: `The report for ${series(d)}${period(d)} is due by ${fmtDate(d.dueAt)}.` }),
+  'reporting.report-due': (d) => ({ subject: 'Report due', body: `The report for ${series(d)}${period(d)} was due by ${fmtDate(d.dueAt)} and the grace period has started. The grace period ends on ${fmtDate(d.graceEndsAt)}. Status: InGrace.` }),
   'reporting.grace-end': (d) => ({ subject: 'Grace period ended', body: `The grace period for ${series(d)}${period(d)} ended on ${fmtDate(d.graceEndsAt)}. Status: Late.` }),
   'series.StatusChanged': (d) => ({ subject: 'Series status changed', body: `${series(d)} changed from ${d.from ?? '?'} to ${d.to ?? '?'}.` }),
   'series.FormalNoticeDue': (d) => ({ subject: 'Formal notice due', body: `A formal notice is due for ${series(d)}${period(d)}. Status: Late.` }),
