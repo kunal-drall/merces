@@ -79,7 +79,10 @@ Secrets never enter the repository: `.env.example` lists names only; development
   it logs a warning at startup, and a process with a live chain refuses to start with it set. Never on a live chain.
 - Stage 1 error messages can embed the values they range-check, so calls into Stage 1's math, prover and verifier are
   wrapped (`guardStage1` in the engine, `paymentStable` in `@merces/math`, error codes in the device and the verifier):
-  errors carry codes and Stage 1 error names (`detail.stage1`), never a submitted value. The canary covers it.
+  errors carry codes and Stage 1 error names (`detail.stage1`), never a submitted value. The canary covers it: a
+  year-to-date figure of 2^64 or more at the device and the verifier, and a report for an ended, chained period with a
+  payment of 2^64 or more at the API's wrap of the circuit's range check. Each probe pins the exact status, error code
+  and message, so a probe stopped by an earlier check (for example "the period has not ended") fails the canary.
 
 ## The report verifier (most sensitive component)
 

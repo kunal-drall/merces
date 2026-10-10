@@ -94,6 +94,12 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
           const stray = await rig.post(`/series/${seriesId}/reports`, { ...assembled, incomeYtd: ytd.toString() }, issuerTok);
           expect(stray.statusCode).toBe(400);
           expect(stray.body).not.toContain(ytd.toString());
+          // a payment no u64 holds reaches the circuit's range check, which the API wraps: a fixed message, no value
+          const tooBig = (1n << 64n).toString();
+          const unfit = await rig.post(`/series/${seriesId}/reports`, { ...assembled, paymentStable: tooBig }, issuerTok);
+          expect(unfit.statusCode, unfit.body).toBe(422);
+          expect(unfit.json()).toEqual({ error: 'Unprocessable', message: 'the report does not fit the circuit: the series terms commitment is not a Poseidon commitment, or an amount is out of range', detail: null });
+          expect(unfit.body).not.toContain(tooBig);
         }
         // 3. assemble through the API (offchain verification) → unsigned submitReport
         const rep = await rig.post(`/series/${seriesId}/reports`, assembled, issuerTok, { 'idempotency-key': `rep-${personality}-${q}` });

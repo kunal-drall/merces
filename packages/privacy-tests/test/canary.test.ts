@@ -5,7 +5,7 @@ import { logCapture, createLogger } from '@merces/core';
 import { WAD, parsePeriod, ratePerUnit } from '@merces/math';
 import { DeviceError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, generateE2eKeyPair, openTier3Opening, sealTier3Opening, type DevicePrivateTerms } from '@merces/poi-device';
 import { SimWallet } from '@merces/simulator';
-import { E2E_TIER3_OPENING, attestationMessage, parseE2eEnvelope, type UnsignedTx } from '@merces/domain';
+import { E2E_TIER3_OPENING, attestationMessage, parseE2eEnvelope, reportPublicInputs, type UnsignedTx } from '@merces/domain';
 import { makeRig } from '../../api/test/helpers.ts';
 
 /**
@@ -130,10 +130,24 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     expect(sent1.statusCode, sent1.body).toBe(200);
     await payIfDue(rep1.json().reportId, sent1.json().events);
 
-    // 2. a failing report (commitment the proof does not cover) and a verifier refusal, so error paths run too
-    const badRes = await post(`/series/${seriesId}/reports`, { ...q1.assembled, periodId: '2026Q2', incomeCommitment: '0x' + 'ab'.repeat(32) }, issuerTok);
-    expect(badRes.statusCode).toBeGreaterThanOrEqual(400);
+    // 2. a failing report (commitment the proof does not cover) and a verifier refusal, so error paths run too. The API
+    //    probes name 2026Q2 after it has ended and chain from Q1, so they pass the period, sequence, open-due and prior
+    //    checks and stop at the check each was written for; each pins its status, code and message, so a probe that
+    //    stops earlier fails (S1 review: sent before 2026Q2 ended, they all stopped at 409 "the period has not ended",
+    //    and an assertion of >= 400 hid it)
+    await h.sim.setTime(parsePeriod('2026Q2').end + 86_400);
+    const chainedQ2 = { ...q1.assembled, periodId: '2026Q2', priorIncomeCommitment: q1.entry.incomeCommitment };
+    const uncovered = '0x' + '1b'.repeat(32); // a field element (the report fits the circuit) that Q1's proof does not cover
+    const badRes = await post(`/series/${seriesId}/reports`, { ...chainedQ2, incomeCommitment: uncovered }, issuerTok);
+    expect(badRes.statusCode, badRes.body).toBe(422);
+    const claimed = reportPublicInputs({ termsCommitment: raise.terms.termsCommitment, unitsOutstanding: 500n, fxAvgWad: WAD, priorIncomeCommitment: q1.entry.incomeCommitment, incomeCommitment: uncovered, paymentStable: q1.assembled.paymentStable });
+    expect(badRes.json()).toEqual({ error: 'Unprocessable', message: 'public inputs do not match the series terms, units, prior, payment or FX basis', detail: { expected: claimed } });
     errorReports.push(badRes.body);
+    // the same report with public inputs that claim the commitment reaches Stage 1's Groth16 verifier, which refuses it
+    const forged = await post(`/series/${seriesId}/reports`, { ...chainedQ2, incomeCommitment: uncovered, proof: { ...q1.assembled.proof, publicInputs: claimed } }, issuerTok);
+    expect(forged.statusCode, forged.body).toBe(422);
+    expect(forged.json()).toEqual({ error: 'Unprocessable', message: 'proof does not verify', detail: null });
+    errorReports.push(forged.body);
     const refused = await rig.verifier.attest({ seriesId, periodId: '2026Q1', tier: 2, source: 'stripe', reportingCurrency: 'USD', zktlsProof: zk1, incomeSalt: '1', incomeCommitment: q1.assembled.incomeCommitment, priorIncomeCommitment: q1.assembled.priorIncomeCommitment });
     errorReports.push(JSON.stringify(refused));
 
@@ -146,13 +160,24 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     const hugeAttest = await rig.verifier.attest({ seriesId, periodId: '2026Q2', tier: 2, source: 'stripe', reportingCurrency: 'USD', zktlsProof: zkHuge, incomeSalt: '5', incomeCommitment: q1.assembled.incomeCommitment, priorIncomeCommitment: q1.assembled.incomeCommitment, priorOpening: { incomeYtd: q1.entry.incomeYtd.toString(), incomeSalt: q1.entry.incomeSalt.toString() }, priorAttestation: q1.entry.attestation });
     expect(hugeAttest).toEqual({ ok: false, code: 'not-field' });
     errorReports.push(JSON.stringify(hugeAttest));
-    // a client that sends a figure or an opening to the API is refused without an echo, and nothing is stored
-    expect((await post(`/series/${seriesId}/reports`, { ...q1.assembled, periodId: '2026Q2', incomeYtd: CANARY_HUGE.toString() }, issuerTok)).statusCode).toBe(400);
-    expect((await post(`/series/${seriesId}/reports`, { ...q1.assembled, periodId: '2026Q2', priorOpening: { incomeYtd: CANARY_INCOME.toString(), incomeSalt: q1.entry.incomeSalt.toString() } }, issuerTok)).statusCode).toBe(400);
-    expect((await post(`/series/${seriesId}/reports`, { ...q1.assembled, periodId: '2026Q2', paymentStable: CANARY_HUGE.toString() }, issuerTok)).statusCode).toBeGreaterThanOrEqual(400);
+    // a client that sends a figure or an opening to the API is refused by the strict schema, naming the key only
+    for (const [key, value] of [['incomeYtd', CANARY_HUGE.toString()], ['priorOpening', { incomeYtd: CANARY_INCOME.toString(), incomeSalt: q1.entry.incomeSalt.toString() }]] as const) {
+      const r = await post(`/series/${seriesId}/reports`, { ...chainedQ2, [key]: value }, issuerTok);
+      expect(r.statusCode, r.body).toBe(400);
+      expect(r.json()).toMatchObject({ error: 'BadRequest', message: 'validation failed', detail: { issues: [expect.objectContaining({ code: 'unrecognized_keys', keys: [key] })] } });
+      errorReports.push(r.body);
+    }
+    // a payment no u64 holds reaches the API's wrap of the circuit's range check (Stage 1's range errors name the
+    // value): a fixed message, never the figure
+    const hugePay = await post(`/series/${seriesId}/reports`, { ...chainedQ2, paymentStable: CANARY_HUGE.toString() }, issuerTok);
+    expect(hugePay.statusCode, hugePay.body).toBe(422);
+    expect(hugePay.json()).toEqual({ error: 'Unprocessable', message: 'the report does not fit the circuit: the series terms commitment is not a Poseidon commitment, or an amount is out of range', detail: null });
+    errorReports.push(hugePay.body);
+    // and every refused probe stored nothing
+    expect((await rig.t.pool.query('select count(*)::int as n from reports where series_id = $1', [seriesId])).rows[0].n).toBe(1);
 
-    // 4. tier-2 Q2 chained from Q1: the prior opening goes to the report verifier only
-    await h.sim.setTime(parsePeriod('2026Q2').end + 86_400);
+    // 4. tier-2 Q2 chained from Q1 (the clock is past 2026Q2's end since step 2): the prior opening goes to the report
+    //    verifier only
     const prior2 = (await get(`/series/${seriesId}/reporting/prior`)).json();
     expect(prior2).toMatchObject({ periodId: '2026Q2', rule: 'chained', expectedPriorIncomeCommitment: q1.entry.incomeCommitment });
     const zk2 = rig.zktls.prove({ source: 'stripe', seriesId, periodId: '2026Q2', figure: CANARY_INCOME_Q2, currency: 'USD', coversUntil: parsePeriod('2026Q2').end, owner: h.issuer.address });

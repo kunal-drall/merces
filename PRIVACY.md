@@ -4,7 +4,9 @@ A map of every personal data field: where it lives, who can read it, and when it
 income at rest** — income figures, income documents and hardship reasons are never written to a database, a log, a
 queue or an error report. The canary test (`pnpm test:canary`) pushes distinctive values through every income flow and
 scans every table, the captured logs, the outbox/jobs rows and error responses for them, written out or encoded in hex or
-base64; one hit fails CI.
+base64; one hit fails CI. Its error-path probes (a report whose commitment the proof does not cover, a forged proof, a
+payment no u64 holds, a stray figure or opening) are sent for a period that has ended and chain from the last report,
+so each reaches the check it was written for, and each pins the exact status, error code and message.
 
 Retention periods are an open question (Part J.9). Until Kunal sets them, nothing is deleted automatically; the
 "deleted when" column records the intended rule.
