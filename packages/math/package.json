@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Merces mechanism math. Stage 1's reference math (@merces/reference, SPEC v1.1.2) is the implementation; this package re-exports it with the few helpers Stage 1 does not have, and a unit-scale and curve family ported from Stage 1's Rust (A-MATH-3).",
+  "description": "Merces mechanism math. Stage 1's reference math (@merces/reference, SPEC v1.1.2) is the implementation; this package re-exports it with the few helpers Stage 1 does not have, and a unit-scale and curve family ported from Stage 1's Rust (A-MATH-3). Since S4 also Stage 1's signing primitives (messages, secp256k1, domain, series key, keccak bid commitment), with the test-key derivation on the subpath `@merces/math/testing`.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
     "test": "vitest run"

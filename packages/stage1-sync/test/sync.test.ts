@@ -11,6 +11,8 @@ import { renderReport, runSync, verdictsFrom, type StepReport } from '../src/ind
 import { renderAnchorIdl } from '../src/idl-render.ts';
 import { diffInterfaces } from '../src/steps/diff.ts';
 import { INTERIM_FAMILIES, MERCES_COMMON, PORTED, REFERENCE_REEXPORTS, checkMathPin, checkPorted, interimRemaining, portedFingerprint, rustItem } from '../src/steps/math.ts';
+import { SIGNING_REEXPORTS, SIGNING_RENAMED, checkSignatures, knownAnswersPath } from '../src/steps/signatures.ts';
+import * as sdk from '@merces/sdk';
 import { locateStage1 } from '@merces/chains';
 
 /*
@@ -23,6 +25,9 @@ import { locateStage1 } from '@merces/chains';
  *  - S3-CV: Stage 1's curve lifecycle vocabulary: `curveSwap` (a Meteora DBC swap2; was the toy curve's buy command),
  *    `completeCurve` and `collectCurveProceeds` with Stage 1's names (was a service graduation command under an alias),
  *    and no mint event for a curve buy.
+ * S4 cause codes:
+ *  - S4-KAT: the `signatures` step (after `curve-port`) reproduces Stage 1's signing known answers through
+ *    `@merces/math` and `@merces/domain` on every sync; a drop without them fails it (never a skip).
  */
 
 /** A Stage 1 drop with only a manifest (plus extra files written by the caller). */
@@ -141,9 +146,13 @@ describe('stage1:sync', () => {
     expect(by.math!.status).toBe('warn'); // no math package in the manifest
     // cause GATE: the curve-port step runs on every sync; a drop without Stage 1's curve fixtures and merces-common
     // cannot prove the ported curve family, which fails the sync (never a skip)
-    expect(r.steps.map((s) => s.step)).toEqual(['detect', 'generate', 'diff', 'math', 'curve-port', 'vectors', 'conformance']);
+    // cause S4-KAT: the signatures step runs after curve-port; a drop without Stage 1's known answers fails it
+    expect(r.steps.map((s) => s.step)).toEqual(['detect', 'generate', 'diff', 'math', 'curve-port', 'signatures', 'vectors', 'conformance']);
     expect(by['curve-port']!.status).toBe('fail');
     expect(by['curve-port']!.summary).toMatch(/curve fixtures are not in this drop/);
+    expect(by.signatures!.status).toBe('fail');
+    expect(by.signatures!.summary).toMatch(/known answers \(known_answers\.json beside the vectors\) are not in this drop/);
+    expect(renderReport(r)).toMatch(/Stage 1 signing primitives \(signatures\): FAIL/);
     expect(by.vectors!.status).toBe('ok');
     expect(r.verdicts.map((v) => v.chain)).toEqual(['solana', 'monad-testnet']);
     // unresolved drift and conformance that never ran both block live
@@ -221,6 +230,56 @@ describe('stage1:sync', () => {
     expect(md).toContain('## Ported from Stage 1\'s Rust (A-MATH-3)');
     expect(md).toContain('Check at this checkout: **ok**.');
     for (const p of PORTED) expect(md).toContain(`| \`${p.name}\` |`);
+  });
+
+  it('signatures (S4-KAT): ok on the pinned submodule, every known answer reproduced, and in the verdict', async () => {
+    const location = locateStage1('stage1')!;
+    const ctx = { location, outDir: mkdtempSync(join(tmpdir(), 'out-')), generatedDir: mkdtempSync(join(tmpdir(), 'gen-')) };
+    expect(knownAnswersPath(ctx)).toBe(join(location.root, 'packages/vectors/known_answers.json'));
+    const r = await checkSignatures(ctx);
+    expect(r.status, r.details.join('\n')).toBe('ok');
+    expect(r.details[0]).toBe('signatures: ok (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets)');
+    const total = SIGNING_REEXPORTS.length + Object.keys(SIGNING_RENAMED).length + 1;
+    expect(r.details).toContain(`re-exports: ${total}/${total} signing names of @merces/math are @merces/sdk's own objects (deriveTestPrivateKey on @merces/math/testing only)`);
+    expect(r.details.some((d) => d.includes('✗'))).toBe(false);
+    const report = renderReport({ present: true, location: location.path, steps: [r], verdicts: [] });
+    expect(report).toContain('    signatures: ok (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets)');
+    expect(report).toMatch(/Stage 1 signing primitives \(signatures\): OK — Stage 1's signing known answers reproduced byte for byte/);
+    // the list is exactly the signing names the gateway re-exports from the SDK, each the SDK's own object
+    const gw = gateway as unknown as Record<string, unknown>;
+    for (const n of SIGNING_REEXPORTS) expect(gw[n], n).toBe((sdk as unknown as Record<string, unknown>)[n]);
+    expect(gw.bidCommitmentBytes).toBe(sdk.bidCommitment);
+  });
+
+  it('signatures (S4-KAT): a known answer we do not reproduce, an unknown message kind or a missing section fails', async () => {
+    const ka = JSON.parse(readFileSync('stage1/packages/vectors/known_answers.json', 'utf8')) as Record<string, unknown> & { messages: { kind: string; digest: string }[]; wallets: { wallet: string }[] };
+    const run = async (edit: (k: typeof ka) => void) => {
+      const k = structuredClone(ka);
+      edit(k);
+      const d = drop({ vectors: 'packages/vectors' }, { 'packages/vectors/known_answers.json': JSON.stringify(k) });
+      return checkSignatures(d);
+    };
+    const intact = await run(() => undefined);
+    expect(intact.status, intact.details.join('\n')).toBe('ok');
+    const tampered = await run((k) => {
+      k.messages[3]!.digest = '0x' + '00'.repeat(32);
+      k.wallets[2]!.wallet = '0x' + '00'.repeat(32);
+    });
+    expect(tampered.status).toBe('fail');
+    expect(tampered.details[0]).toBe('signatures: FAIL (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets)');
+    expect(tampered.details).toContain('  ✗ messages[3] FX (evm-monad-testnet): the digest differs');
+    expect(tampered.details).toContain('  ✗ wallets[2] evm: wallet32Of differs');
+    expect(tampered.summary).toMatch(/2 known answer\(s\) not reproduced/);
+    const unknown = await run((k) => {
+      k.messages[0]!.kind = 'TRANSFER';
+    });
+    expect(unknown.status).toBe('fail');
+    expect(unknown.details.some((x) => /messages\[0\] TRANSFER .*a message kind this step does not know/.test(x))).toBe(true);
+    const noKeys = await run((k) => {
+      delete k.testKeys;
+    });
+    expect(noKeys.status).toBe('fail');
+    expect(noKeys.summary).toMatch(/the known answers have no testKeys/);
   });
 
   it('math (S3-M): PORTED is exactly the ported family @merces/math exports, none of it a Stage 1 object', () => {

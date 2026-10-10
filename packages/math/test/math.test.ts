@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import * as sdk from '@merces/sdk';
 import * as ref from '@merces/reference';
 import * as gateway from '../src/index.ts';
+import * as testing from '../src/testing.ts';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   DAY,
   PAYMENT_RANGE_ERROR,
@@ -56,6 +60,11 @@ import {
  *  - S3-M: a segregated family is ported from Stage 1's Rust (merces-common @1bfc66b; A-MATH-3): the unit scale, the
  *    vault, tail and redemption at a scale, and curve mode's arithmetic. They are ours, not Stage 1 objects; at scale 1
  *    the scale-aware ones return Stage 1's own results (`curve.test.ts`).
+ *
+ * S4 cause codes:
+ *  - S4-G: `@merces/math` re-exports Stage 1's signing primitives (the six signed messages, secp256k1 signing and
+ *    recovery, the domain, the series key, the keccak bid commitment as `bidCommitmentBytes`, the wallet encodings,
+ *    keccak256); the test-key derivation is only on `@merces/math/testing`, behind a grep gate.
  */
 
 // ---------------------------------------------------------------- the gateway
@@ -69,9 +78,17 @@ const SDK_REEXPORTS = [
   'ERRORS', 'ERROR_ALIASES', 'isErrorName',
   'BN254_FR', 'assertField', 'poseidon2', 'poseidon5', 'CURRENCY_CODES', 'INDEXING_RULES',
   'U64_MAX', 'ZERO_INCOME_COMMITMENT', 'bytes32ToField', 'fieldToBytes32',
+  // cause S4-G: Stage 1's signing primitives (SPEC §1.3-§1.4)
+  'MAGIC', 'reportAttestationMessage', 'fxFallbackMessage', 'amendmentMessage', 'pauseApprovalMessage', 'extinguishMessage', 'trueUpMessage',
+  'SECP256K1_N', 'SECP256K1_HALF_N', 'isLowS', 'signDigest', 'parseSignature', 'publicKeyFromPrivate', 'addressFromPublicKey', 'addressFromPrivateKey', 'recoverAddress', 'verifySignature', 'toChecksumAddress',
+  'ChainKind', 'SOLANA_CLUSTER_TAGS', 'EVM_CHAIN_IDS', 'bidCommitmentPreimage', 'computeDomain', 'seriesKeyFromId',
+  'walletFromSolanaPubkey', 'walletFromEvmAddress', 'evmAddressFromWallet', 'keccak256',
 ] as const;
-/** Stage 1's commitment helpers, renamed: they return the field element (`@merces/domain` returns the 0x-hex). */
-const SDK_RENAMED = { termsCommitmentField: 'termsCommitment', incomeCommitmentField: 'incomeCommitment', routerIncomeCommitmentField: 'routerIncomeCommitment' } as const;
+/**
+ * Stage 1's helpers, renamed: the Poseidon commitments return the field element (`@merces/domain` returns the 0x-hex);
+ * cause S4-G: the keccak bid commitment returns bytes (`@merces/domain`'s `bidCommitment` returns the 0x-hex).
+ */
+const SDK_RENAMED = { termsCommitmentField: 'termsCommitment', incomeCommitmentField: 'incomeCommitment', routerIncomeCommitmentField: 'routerIncomeCommitment', bidCommitmentBytes: 'bidCommitment' } as const;
 const REFERENCE_REEXPORTS = [
   'isTerminal', 'deadlineSeconds', 'graceSeconds', 'noticeSeconds', 'countdown', 'nextExpectedPeriod', 'earliestUnpaid', 'deriveStatus', 'isLateUnderlying', 'lateDays', 'lateAccrual', 'formalNoticeDue', 'pauseApprovalError',
   'newVaultState', 'capPerUnit', 'capEffWad', 'isCapped', 'vaultReceiveGross', 'settleHolderDelta', 'accumulate',
@@ -111,6 +128,10 @@ describe('@merces/math gateway', () => {
     // deliberately not re-exported; the auction's cap is `walletCapUnitsAtAuction` (cause S2-G)
     expect(keys).not.toContain('quarterPayment');
     expect(keys).not.toContain('walletCapUnits');
+    // cause S4-G: Stage 1's test-key derivation is only on `@merces/math/testing`, and the SDK's `bidCommitment` only
+    // under its byte-returning name (the domain's `bidCommitment` is the hex one)
+    expect(keys).not.toContain('deriveTestPrivateKey');
+    expect(keys).not.toContain('bidCommitment');
     expect(gateway.walletCapUnitsAtAuction).toBe(ref.walletCapUnitsAtAuction);
     expect(gateway.redemptionQuote).toBe(ref.redemptionQuote);
   });
@@ -124,6 +145,77 @@ describe('@merces/math gateway', () => {
     ].sort());
     // the interim cap is not Stage 1's (S5 moves the window to Stage 1's)
     expect(interim.walletCapUnits).not.toBe((ref as unknown as Record<string, unknown>).walletCapUnits);
+  });
+});
+
+/** The repository root (packages/math/test → ../../..). */
+const REPO = fileURLToPath(new URL('../../../', import.meta.url));
+
+/**
+ * The only production `src` files that may name Stage 1's test-key derivation or import `@merces/math/testing` (cause
+ * S4-G). Each S4 WP that needs a published test key adds its file here, reviewed: the vector runner and `stage1:sync`
+ * (they replay Stage 1's known answers and vectors), and later the simulator harness, the local KMS and the dev seeds.
+ * Services, the API, the keepers, the indexer, the report verifier and the device tool never may.
+ */
+const TESTING_IMPORTERS = new Set([
+  'packages/math/src/testing.ts',
+  'packages/stage1-sync/src/steps/signatures.ts',
+]);
+
+/** True when the code (comments stripped: the gateway's own JSDoc names the subpath) names the derivation or the subpath. */
+function namesTestKeys(text: string): boolean {
+  const code = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  return /deriveTestPrivateKey|@merces\/math\/testing/.test(code);
+}
+
+function srcFiles(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(dir)) {
+      if (e === 'node_modules' || e === 'generated') continue;
+      const p = join(dir, e);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(ts|mts|js|mjs)$/.test(e)) out.push(p);
+    }
+  };
+  for (const pkg of readdirSync(join(REPO, 'packages'))) {
+    const src = join(REPO, 'packages', pkg, 'src');
+    try {
+      if (statSync(src).isDirectory()) walk(src);
+    } catch {
+      // a package without src
+    }
+  }
+  return out;
+}
+
+describe('@merces/math/testing (cause S4-G)', () => {
+  it('exports exactly Stage 1\'s own deriveTestPrivateKey', () => {
+    expect(Object.keys(testing)).toEqual(['deriveTestPrivateKey']);
+    expect(testing.deriveTestPrivateKey).toBe(sdk.deriveTestPrivateKey);
+  });
+  it('the package maps the subpath, and the derivation is Stage 1\'s (known answer: attestor1)', () => {
+    const pkg = JSON.parse(readFileSync(join(REPO, 'packages/math/package.json'), 'utf8')) as { exports: Record<string, string> };
+    expect(pkg.exports).toEqual({ '.': './src/index.ts', './testing': './src/testing.ts' });
+    const known = JSON.parse(readFileSync(join(REPO, 'stage1/packages/vectors/known_answers.json'), 'utf8')) as { testKeys: { seed: string; privateKey: string }[] };
+    const a1 = known.testKeys.find((k) => k.seed === 'attestor1')!;
+    expect('0x' + Buffer.from(testing.deriveTestPrivateKey('attestor1')).toString('hex')).toBe(a1.privateKey);
+  });
+  it('grep gate: no production src outside the reviewed list names the test-key derivation or imports the subpath', () => {
+    const offenders: string[] = [];
+    for (const f of srcFiles()) {
+      const rel = relative(REPO, f).split('\\').join('/');
+      if (TESTING_IMPORTERS.has(rel)) continue;
+      if (namesTestKeys(readFileSync(f, 'utf8'))) offenders.push(rel);
+    }
+    expect(offenders).toEqual([]);
+    // the gate sees code, not comments
+    expect(namesTestKeys("import { deriveTestPrivateKey } from '@merces/math/testing';")).toBe(true);
+    expect(namesTestKeys("const u = 'https://x';\nconst k = deriveTestPrivateKey('seed');")).toBe(true);
+    expect(namesTestKeys("const m = await import('@merces/math/testing');")).toBe(true);
+    expect(namesTestKeys('/** see `@merces/math/testing` */\n// deriveTestPrivateKey stays out\nconst x = 1;')).toBe(false);
+    // the reviewed importers exist (a stale entry would let a renamed file slip through unnoticed)
+    for (const f of TESTING_IMPORTERS) expect(statSync(join(REPO, f)).isFile(), f).toBe(true);
   });
 });
 

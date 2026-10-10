@@ -1,3 +1,5 @@
+import { EVM_TESTNET_CHAIN_IDS } from '@merces/domain';
+
 export interface EvmChainConfig {
   /** chain key used in ids, e.g. "monad" */
   chain: string;
@@ -29,22 +31,11 @@ export const EVM_KNOWN = {
 } as const;
 
 /**
- * EVM chain ids this backend may connect to. Fail closed: anything not listed is refused, so a new network needs
- * a deliberate code change here, and only testnets belong in it. Ids checked against ethereum-lists/chains
- * (_data/chains/eip155-<id>.json) on 2026-10-08.
+ * Refuses an EVM chain off the testnet allow-list, or one whose name or RPC says mainnet. The allow-list
+ * (`EVM_TESTNET_CHAIN_IDS`) and its mainnet tripwire live in `@merces/domain` (signing.ts) since S4 (D6), seeded from
+ * Stage 1's own constants, so this connection guard and every signer read one list; the tripwire runs when that module
+ * loads. Local dev chains (31337) are allowed for signing only (`assertSigningNetwork` with `allowLocal`), never here.
  */
-export const EVM_TESTNET_CHAIN_IDS: ReadonlyMap<number, string> = new Map([
-  [10143, 'Monad Testnet'],
-  [11155111, 'Ethereum Sepolia'],
-  [84532, 'Base Sepolia'],
-  [421614, 'Arbitrum Sepolia'],
-  [11155420, 'OP Sepolia'],
-]);
-
-/** Known mainnet ids, kept as a tripwire so a mainnet can never be added to the allow-list by mistake. */
-const KNOWN_MAINNET_IDS = new Set([1, 10, 56, 100, 137, 143, 324, 8453, 42161, 42170, 43114, 59144, 81457, 534352]);
-for (const id of EVM_TESTNET_CHAIN_IDS.keys()) if (KNOWN_MAINNET_IDS.has(id)) throw new Error(`EVM allow-list contains mainnet chain id ${id}`);
-
 export function assertNotMainnet(cfg: EvmChainConfig): void {
   if (!EVM_TESTNET_CHAIN_IDS.has(cfg.chainId)) {
     throw new Error(`Merces Stage 2 only connects to allow-listed EVM testnets; chainId ${cfg.chainId} is not one (ground rule: never touch mainnet)`);

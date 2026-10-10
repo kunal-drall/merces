@@ -82,6 +82,21 @@ export interface WalletSigner {
   signMessage(message: Uint8Array): Promise<string>;
 }
 
+/**
+ * A secp256k1 key that signs a raw 32-byte digest, Stage 1's signature (SPEC §1.4): the report verifier's KMS key, the
+ * test and simulator keys, the attestor's own device keystore. It never hashes and never prefixes (a Stage 1 digest is
+ * already the keccak256 of a `MERCES_*` pre-image), and it returns `0x` + 130 hex, `r ‖ s ‖ v`, low `s`, `v ∈ {27, 28}`.
+ * Attestor keys implement it only on the attestor's device: the backend never holds one (S4 D2, no custody). Before it
+ * signs, every implementation refuses a domain off the allow-list or on a mainnet (`assertSigningNetwork`, S4 D6).
+ * `WalletSigner.signMessage` stays for sign-in only.
+ */
+export interface DigestSigner {
+  /** the key's 20-byte address: 0x + 40 lowercase hex */
+  readonly address: string;
+  /** signs `digest` (0x + 64 hex) as it is */
+  signDigest(digest: string): Promise<string>;
+}
+
 export class ChainError extends Error {
   constructor(
     public readonly code: ChainErrorCode,

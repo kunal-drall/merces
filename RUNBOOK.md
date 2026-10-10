@@ -37,7 +37,8 @@ unavailable.
 
 Mainnet is refused in every mode. Solana accepts only devnet, testnet or loopback localnet, and checks the RPC's
 genesis hash against the configured cluster; EVM accepts only chain ids in the testnet allow-list
-(`EVM_TESTNET_CHAIN_IDS` in `packages/chain-evm/src/config.ts`) and checks the RPC serves that id. A refused config or
+(`EVM_TESTNET_CHAIN_IDS` in `packages/domain/src/signing.ts` since S4, beside its mainnet tripwire; every signer reads the
+same list) and checks the RPC serves that id. A refused config or
 RPC stops the process under `live`; under `auto` the chain falls back to the simulator and the refusal is the logged
 reason. A new testnet is added to the allow-list in code, never through configuration.
 

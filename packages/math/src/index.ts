@@ -14,6 +14,12 @@
  * At scale 1 each scale-aware function returns Stage 1's own function's result (it calls it), so sealed-bid series
  * still run only Stage 1's functions; `stage1:sync` lists the family as ported and checks its Rust sources at the pin.
  *
+ * Since S4 it is also the one gateway to Stage 1's signing primitives (A-SIG-1): the six signed messages, secp256k1
+ * signing and recovery, the deployment domain, the series key, the keccak bid commitment and the wallet encodings, all
+ * Stage 1's own objects. Stage 1's test-key derivation (`deriveTestPrivateKey`) is deliberately not exported here: it
+ * lives on the subpath `@merces/math/testing`, which only tests, the harness, the vector runner, the local KMS and the
+ * dev seeds may import (a grep gate in `test/math.test.ts` keeps it out of every other `src`).
+ *
  * The interim Merces math (Part C) survives only under `interim.*`, and since S2 only the window cap (`walletCapUnits`;
  * S5; a curve raise has no cap since S3) and the FX family (`quarterAverageRate`, `coverageOk`, `deviationBps`, `withinBand`,
  * `pythToWad`; S5). The sealed-bid auction is Stage 1's family below (S2).
@@ -82,6 +88,45 @@ export {
   ZERO_INCOME_COMMITMENT,
   bytes32ToField,
   fieldToBytes32,
+  // signed messages (SPEC §1.4, messages.ts): the digest is the raw keccak256 of the pre-image, no EIP-191 prefix.
+  // `@merces/domain` wraps them as hex-in, hex-out `reportDigest` … `trueUpDigest` (signing.ts); these keep the SDK's names.
+  MAGIC,
+  reportAttestationMessage,
+  fxFallbackMessage,
+  amendmentMessage,
+  pauseApprovalMessage,
+  extinguishMessage,
+  trueUpMessage,
+  type MagicName,
+  type SignedMessage,
+  // secp256k1 signatures (SPEC §1.4, signatures.ts): 65 bytes r ‖ s ‖ v, v ∈ {27, 28}, low-s; a key is its 20-byte
+  // address. The test-key derivation is not here: it is `@merces/math/testing` (test, harness and dev seeds only).
+  SECP256K1_N,
+  SECP256K1_HALF_N,
+  isLowS,
+  signDigest,
+  parseSignature,
+  publicKeyFromPrivate,
+  addressFromPublicKey,
+  addressFromPrivateKey,
+  recoverAddress,
+  verifySignature,
+  toChecksumAddress,
+  type Signature65,
+  // keccak commitments and identifiers (SPEC §1.3, commitments.ts). Stage 1's `bidCommitment(price, quantity, salt,
+  // wallet32)` returns bytes and is `bidCommitmentBytes` here; `@merces/domain`'s `bidCommitment` returns the 0x-hex.
+  ChainKind,
+  SOLANA_CLUSTER_TAGS,
+  EVM_CHAIN_IDS,
+  bidCommitment as bidCommitmentBytes,
+  bidCommitmentPreimage,
+  computeDomain,
+  seriesKeyFromId,
+  // wallets (32 bytes on both chains, bytes.ts) and keccak256 (hash.ts)
+  walletFromSolanaPubkey,
+  walletFromEvmAddress,
+  evmAddressFromWallet,
+  keccak256,
 } from '@merces/sdk';
 
 // ---------------------------------------------------------------- Stage 1 reference math (@merces/reference)

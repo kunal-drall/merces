@@ -2,12 +2,19 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { createHash, createPublicKey, verify as edVerify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { privateKeyToAccount } from 'viem/accounts';
-import { mockProve, type Groth16ProofJson } from '@merces/domain';
+import { hashMessage } from 'viem';
+import { mockProve, personalMessageDigest, recoverSigner, type Groth16ProofJson } from '@merces/domain';
 import {
   AesGcmVault, Groth16ReportVerifier, LocalKms, MockESign, MockIdentityCheck, MockProofVerifier, ed25519RawToSpki, proverArtifactFile, reportProofSystemFromEnv, reportProofVerifier,
   shutdownProofSystem, signInMessage, stage1ProverArtifacts, verifyWalletSignature,
 } from '../src/index.ts';
 import { resolveSecret } from '../src/secrets.ts';
+
+/*
+ * S4 cause codes:
+ *  - S4-G: Stage 1's signing primitives through `@merces/math` and `@merces/domain` (signing.ts): the EIP-191 link-proof
+ *    digest agrees with viem.
+ */
 
 describe('LocalKms', () => {
   it('derives stable ed25519 keys and produces verifiable signatures', async () => {
@@ -46,6 +53,15 @@ describe('wallet signatures', () => {
     const signature = await acct.signMessage({ message });
     expect(await verifyWalletSignature({ family: 'evm', address: acct.address.toLowerCase(), message, signature })).toBe(true);
     expect(await verifyWalletSignature({ family: 'evm', address: '0x' + '22'.repeat(20), message, signature })).toBe(false);
+  });
+  it('cause S4-G: personalMessageDigest (the EIP-191 link-proof digest) is viem\'s hashMessage, and a personal_sign recovers through recoverSigner', async () => {
+    const acct = privateKeyToAccount(('0x' + '11'.repeat(32)) as `0x${string}`);
+    const sign = signInMessage({ domain: 'merces.test', chain: 'monad', address: acct.address.toLowerCase(), nonce: 'n', issuedAt: 'now' });
+    for (const message of ['', 'hello world', 'é ✓ 漢字', sign, 'x'.repeat(1000)]) expect(personalMessageDigest(message), message.slice(0, 20)).toBe(hashMessage(message));
+    const raw = new Uint8Array([0, 1, 2, 0x19, 255]);
+    expect(personalMessageDigest(raw)).toBe(hashMessage({ raw }));
+    const signature = await acct.signMessage({ message: sign });
+    expect(recoverSigner(personalMessageDigest(sign), signature)).toBe(acct.address.toLowerCase());
   });
   it('verifies Solana ed25519 signatures', async () => {
     const kms = new LocalKms('solana-user');

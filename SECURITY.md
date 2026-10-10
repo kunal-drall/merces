@@ -98,8 +98,9 @@ providers (`responseRedactions[].hash`) are adopted (Part J.3), the verifier can
 
 - Mainnet is refused in every mode, failing closed. Solana accepts only devnet, testnet or loopback localnet and checks
   the RPC's genesis hash against the configured cluster (the mainnet-beta hash is always refused). EVM accepts only chain
-  ids on the testnet allow-list (`EVM_TESTNET_CHAIN_IDS`) and checks the RPC serves that id; the list grows only by a
-  reviewed code change. A refusal stops the process under `live`; under `auto` the chain stays on the simulator.
+  ids on the testnet allow-list (`EVM_TESTNET_CHAIN_IDS`, in `@merces/domain` signing.ts since S4 with its mainnet
+  tripwire seeded from Stage 1's constants; every signer refuses a mainnet domain through the same list) and checks the
+  RPC serves that id; the list grows only by a reviewed code change. A refusal stops the process under `live`; under `auto` the chain stays on the simulator.
 - Money-bearing reads and the event stream use finalized commitment; `confirmed` events are parked, never projected.
 - `auto` mode uses a live adapter only when a manifest entry exists, a health check (RPC reachable, network allowed,
   programs or contracts deployed) passes, and the adapter is wired to the generated Stage 1 clients; otherwise the

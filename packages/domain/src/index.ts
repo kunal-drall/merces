@@ -5,6 +5,7 @@ export * from './commands.ts';
 export * from './state.ts';
 export * from './port.ts';
 export * from './hashing.ts';
+export * from './signing.ts';
 export * from './params.ts';
 export * from './terms-rules.ts';
 export * from './pause-rules.ts';

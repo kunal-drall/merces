@@ -39,6 +39,9 @@ export function renderReport(r: SyncReport): string {
   // the ported curve family's gate (A-MATH-3) is reported here whatever its status; a failure is also a blocker below
   const curve = r.steps.find((s) => s.step === 'curve-port');
   if (curve) lines.push(`  ported curve family (curve-port): ${curve.status.toUpperCase()} — ${curve.summary}`);
+  // Stage 1's signing primitives (S4): its known answers through @merces/math and @merces/domain; a failure is a blocker
+  const signatures = r.steps.find((s) => s.step === 'signatures');
+  if (signatures) lines.push(`  Stage 1 signing primitives (signatures): ${signatures.status.toUpperCase()} — ${signatures.summary}`);
   for (const v of r.verdicts) {
     lines.push(`  ${v.chain}: ${v.ready ? 'READY for live' : 'NOT ready'}${v.blockers.length ? ' — blockers:' : ''}`);
     for (const b of v.blockers) lines.push(`    • ${b}`);
