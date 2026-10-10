@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { orderCommitment } from '@merces/domain';
 import { WAD, ZERO_INCOME_COMMITMENT, toPid, type LedgerExpect } from '@merces/math';
-import { SimHarness, SimStateVersionError, defaultTerms, deserialiseState, pendingRefundOf, serialiseState } from '../src/index.ts';
+import { SimHarness, SimStateVersionError, balanceUnits, defaultTerms, deserialiseState, pendingRefundOf, serialiseState } from '../src/index.ts';
 import { ZERO_INCOME_COMMITMENT_HEX, derivedStatus, ledgerClock } from '../src/engine/ledger.ts';
 import { GENESIS, USDC } from './helpers.ts';
 import { seedFinal, seedHolder, seedLedger, seedPause, seedTail, seedVault, seriesOf } from './kit.ts';
@@ -12,7 +12,10 @@ const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json',
 /*
  * S2 cause codes:
  *  - S2-V3: simulator state version 3 (S2: the raise's own terms, Stage 1's multi-step settlement); versions 1 and 2
- *    are refused, never upgraded.
+ *    are refused, never upgraded;
+ *  - S2-MS: multi-step settlement: the engine owns every auction and holder field of Stage 1's view (the runner's
+ *    bookkeeping is no longer needed); the raise settles, then processes, then delivers;
+ *  - S2-PR: push delivery (`deliverBid`): refunds wait in the auction escrow until delivered (`claimRefund` retired).
  */
 describe('simulator state version 3', () => {
   it('round-trips the Stage 1 vault, tail and final states and bigint pauses through serialisation and structuredClone', async () => {
@@ -70,7 +73,7 @@ describe('simulator state version 3', () => {
       // same values and the same key order (Stage 1 compares the whole object)
       expect(JSON.stringify(view.ledger)).toBe(JSON.stringify(step.ledger));
       expect(view.money).toEqual({ treasury: step.treasury, vault: step.vault, auctionEscrow: step.auctionEscrow });
-      for (const [k, v] of Object.entries(view.auction)) expect([k, v]).toEqual([k, step.auction![k]]);
+      expect(JSON.stringify(view.auction)).toBe(JSON.stringify(step.auction)); // cause S2-MS: the whole auction view (was the engine's fields)
       expect(view.holders).toEqual(step.holders);
     }
   });
@@ -94,11 +97,15 @@ describe('simulator state version 3', () => {
 });
 
 describe('Stage 1 registration, first period and money views', () => {
-  it('settlement sets the first period and registers every allocated bidder; the auction escrow is the unclaimed refunds', async () => {
+  // cause S2-MS, S2-PR: the raise settles, processes every bid, then delivers (was one settlement and pull refunds)
+  it('finalize sets the first period; processing registers every winner; the auction escrow holds the refunds until delivered', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    const { seriesId } = await h.runRaise({ bids: [{ backer: 0, price: 12_000_000n, qty: 100n }, { backer: 1, price: 11_000_000n, qty: 100n }, { backer: 2, price: 10_000_000n, qty: 100n }, { backer: 3, price: 10_000_000n, qty: 100n }, { backer: 4, price: 9_000_000n, qty: 100n }] });
+    const { seriesId } = await h.runRaise({ settle: 'finalize', bids: [{ backer: 0, price: 12_000_000n, qty: 100n }, { backer: 1, price: 11_000_000n, qty: 100n }, { backer: 2, price: 10_000_000n, qty: 100n }, { backer: 3, price: 10_000_000n, qty: 100n }, { backer: 4, price: 9_000_000n, qty: 100n }] });
     const s = seriesOf(h.sim, seriesId);
-    expect(s.ledger.firstPeriod).toBe(toPid('2026Q1'));
+    expect(s.ledger.firstPeriod).toBe(toPid('2026Q1')); // set at finalize (SIM:972)
+    expect(h.sim.stage1View(seriesId).ledger).toMatchObject({ raiseState: 'Settled', mintFinalized: false, unitsOutstanding: '0', unitsSold: '500' });
+    expect(Object.keys(h.sim.stage1View(seriesId).holders)).toEqual([]);
+    await h.settle(seriesId, 'process');
     for (const b of h.backers) expect(s.positions.get(b.address)).toMatchObject({ registered: true, lastNetAccWad: 0n, lastTailAccWad: 0n, lastFinalAccWad: 0n, finalClaimed: false });
     const view = h.sim.stage1View(seriesId);
     expect(view.ledger.raiseState).toBe('Settled');
@@ -106,19 +113,24 @@ describe('Stage 1 registration, first period and money views', () => {
     expect(view.auction.mintFinalized).toBe(true);
     expect(view.ledger.capPerUnit).toBe(USDC(22.5).toString());
     expect(Object.keys(view.holders)).toEqual(h.backers.map((b) => b.address).sort());
-    const refundable = [...s.bids.values()].reduce((a, b) => a + b.refundable, 0n);
-    expect(refundable).toBeGreaterThan(0n);
-    expect(view.money).toEqual({ treasury: USDC(4500).toString(), vault: '0', auctionEscrow: refundable.toString() });
-    expect(view.auction.escrowTotal).toBe(view.money.auctionEscrow);
-    expect(pendingRefundOf(s, h.backers[0]!.address)).toBe(s.bids.get(h.backers[0]!.address)!.refundable);
-    // a refund leaves the escrow: the sum never goes negative (amendment M1)
-    const first = s.bids.get(h.backers[0]!.address)!.refundable;
-    await h.exec(h.backers[0]!, { kind: 'claimRefund', seriesId });
-    expect(h.sim.stage1View(seriesId).money.auctionEscrow).toBe((refundable - first).toString());
-    for (const b of h.backers.slice(1)) await h.exec(b, { kind: 'claimRefund', seriesId }).catch(() => undefined);
-    expect(h.sim.stage1View(seriesId).money.auctionEscrow).toBe('0');
+    // refunds 303 + 202 + 101 + 101 + 0 wait in the escrow, with every winner's 100 units
+    const pending = [...s.bids.values()].reduce((a, b) => a + b.pendingRefund, 0n);
+    expect(pending).toBe(USDC(707));
+    expect(view.money).toEqual({ treasury: USDC(4500).toString(), vault: '0', auctionEscrow: USDC(707).toString() });
+    expect(view.auction).toMatchObject({ escrowTotal: view.money.auctionEscrow, auctionEscrowUnits: '500', unitsMinted: '500', bidsProcessed: '5', R: '100' });
+    expect(pendingRefundOf(s, h.backers[0]!.address)).toBe(USDC(303));
+    expect(view.holders[h.backers[0]!.address]).toEqual({ pending: '0', redeemedUnits: '0', pendingUnits: '100', pendingRefund: USDC(303).toString(), delivered: false });
+    expect(balanceUnits(s, h.backers[0]!.address)).toBe(0n);
+    // a delivery leaves the escrow: the sum never goes negative (amendment M1)
+    await h.exec(h.backers[0]!, { kind: 'deliverBid', seriesId, bidder: h.backers[0]!.address });
+    expect(h.sim.stage1View(seriesId).money.auctionEscrow).toBe(USDC(404).toString());
+    expect(balanceUnits(s, h.backers[0]!.address)).toBe(100n);
+    await h.settle(seriesId, 'deliver');
+    const after = h.sim.stage1View(seriesId);
+    expect([after.money.auctionEscrow, after.auction.auctionEscrowUnits]).toEqual(['0', '0']);
+    expect(after.holders[h.backers[4]!.address]).toEqual({ pending: '0', redeemedUnits: '0', pendingUnits: '0', pendingRefund: '0', delivered: true });
     const pos = (await h.sim.getPosition(seriesId, h.backers[0]!.address))!;
-    expect(pos).toMatchObject({ registered: true, pending: '0', lastAccWad: '0', finalClaimable: '0', tailClaimable: '0' });
+    expect(pos).toMatchObject({ registered: true, pending: '0', lastAccWad: '0', finalClaimable: '0', tailClaimable: '0', units: '100', undeliveredUnits: '0' });
     expect('rewardDebt' in pos).toBe(false);
     const series = (await h.sim.getSeries(seriesId))!;
     expect(series.reporting.firstPeriod).toBe('2026Q1');

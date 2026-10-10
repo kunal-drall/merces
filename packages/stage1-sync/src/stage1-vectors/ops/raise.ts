@@ -110,7 +110,7 @@ export const raiseOps: TranslatorTable = {
       if (a.processed.includes(c.bidder)) throw new RunnerError(`process_bid ${c.series}: ${c.bidder} was already processed`);
       a.processed.push(c.bidder);
       a.bidsProcessed += 1;
-      a.unitsMinted = (BigInt(a.unitsMinted) + bid.allocatedUnits).toString();
+      a.unitsMinted = (BigInt(a.unitsMinted) + bid.allocation).toString();
     }),
 
   deliver_bid: (ctx, c) =>
@@ -119,8 +119,10 @@ export const raiseOps: TranslatorTable = {
       if (!b.auction.processed.includes(c.bidder)) throw new RunnerError(`deliver_bid ${c.series}: ${c.bidder} was not processed`);
       if (b.auction.delivered.includes(c.bidder)) throw new RunnerError(`deliver_bid ${c.series}: ${c.bidder} was already delivered`);
       const bid = ctx.seriesState(c.series).bids.get(ctx.actors.address(c.bidder));
-      // units were minted at settlement; only a refund moves (claimRefund refuses a zero refund)
-      if (bid && bid.refundable > 0n) await ctx.send(ctx.actors.wallet(c.bidder), { kind: 'claimRefund', seriesId: b.seriesId });
+      // the engine delivers the bid (its refund and its units: Stage 1's Retired burn and window asks count delivered
+      // units only); a bid the engine already delivered (a redemption or final claim delivers first) is left alone.
+      // S2 WP4b runs deliver_bid direct.
+      if (bid && bid.processed && !bid.delivered) await ctx.submit({ kind: 'deliverBid', seriesId: b.seriesId, bidder: bid.bidder }, 'keeper');
       ctx.seriesBook(c.series).auction.delivered.push(c.bidder);
     }),
 };

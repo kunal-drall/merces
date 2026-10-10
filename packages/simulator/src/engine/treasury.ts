@@ -3,6 +3,7 @@ import { releasable } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { str, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
+import { mintFinalized } from './ledger.ts';
 import { releasesBlockedByLateness, syncStatus } from './status.ts';
 
 // ------------------------------------------------------------------ treasury
@@ -21,8 +22,8 @@ export function releasableNow(s: SimSeries, now: number): bigint {
 }
 
 /**
- * `claim_release` (SIM:1030-1044): NotIssuer, RaiseNotSettled, ReleasesPaused (the issuer's own pause), SeriesLate
- * (derived Late, or late underneath a hardship pause), NothingVested. Draws every vested tranche not drawn yet
+ * `claim_release` (SIM:1030-1044): NotIssuer, RaiseNotSettled, MintNotFinalized, ReleasesPaused (the issuer's own
+ * pause), SeriesLate (derived Late, or late underneath a hardship pause), NothingVested. Draws every vested tranche not drawn yet
  * (`FundsReleased` per tranche), credits the issuer, then `syncStatus`. Releases continue after the series turns
  * terminal, up to what had vested at the extinguishment.
  */
@@ -30,6 +31,7 @@ export function drawRelease(e: EngineCore, signer: string, cmd: Extract<Command,
   const s = e.series(cmd.seriesId);
   if (s.issuer !== signer) fail('NotIssuer', 'only the issuer may draw releases');
   if (s.phase !== 'Settled') fail('RaiseNotSettled', 'the raise has not settled');
+  if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids'); // SIM:1034
   if (s.releasesPausedByIssuer) fail('ReleasesPaused', 'the issuer has paused releases');
   if (releasesBlockedByLateness(s, now)) fail('SeriesLate', 'releases are blocked while the series is late');
   const amount = releasableNow(s, now);

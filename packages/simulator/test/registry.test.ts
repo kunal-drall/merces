@@ -124,8 +124,10 @@ describe('openRaise on Stage 1 open_raise (S2-AD, S2-E)', () => {
     // the issuer check comes first (SIM:873-874)
     const strangerAgain = await rejection(h.exec(stranger, { kind: 'openRaise', seriesId }));
     expect(strangerAgain.detail).toEqual({ stage1: 'NotIssuer' });
-    // a cancelled raise is not Draft either
+    // a cancelled raise is not Draft either (cause S2-E: Stage 1 cancels an Open raise only; a Draft one is RaiseNotOpen)
     const cancelled = await create(h);
+    expect((await rejection(h.exec(h.issuer, { kind: 'cancelRaise', seriesId: cancelled }))).detail).toEqual({ stage1: 'RaiseNotOpen' });
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId: cancelled });
     await h.exec(h.issuer, { kind: 'cancelRaise', seriesId: cancelled });
     expect((await rejection(h.exec(h.issuer, { kind: 'openRaise', seriesId: cancelled }))).detail).toEqual({ stage1: 'RaiseNotDraft' });
   });

@@ -1,4 +1,4 @@
-import type { LifecycleStatus, RaisePhase, RaiseStateName, SeriesTerms } from './events.ts';
+import type { LifecycleStatus, RaiseFailure, RaisePhase, RaiseStateName, SeriesTerms, SettlementRejection } from './events.ts';
 import type { Address, ChainFamily, ChainKey, ChainMode, Stablecoin } from './ids.ts';
 import type { Money, Units, Wad } from './money.ts';
 
@@ -87,6 +87,11 @@ export interface SeriesState {
   final: { accWad: Wad; units: Units; distributed: Money };
   amendmentNonce: number;
   extinguishNonce: number;
+  /**
+   * Stage 1's mint gate: a sealed raise's last bid is processed (or a curve graduated). Payments, reports, releases,
+   * redemption, extinguishment and windows wait for it (MintNotFinalized).
+   */
+  mintFinalized: boolean;
 }
 
 export interface SeriesReporting {
@@ -119,6 +124,11 @@ export interface SeriesPauses {
   current: { start: number; end: number } | null;
 }
 
+/**
+ * A sealed-bid raise's auction record (Stage 1 SPEC §5.1–§5.2, the simulator's `SimAuction`). Amounts are the chain's,
+ * all public: the escrow, the current round's proposal and running tally, and the results `finalizeSettlement` wrote
+ * (for a MinRaise failure, the would-be price, units and proceeds).
+ */
 export interface AuctionState {
   seriesId: string;
   /** for display: `Reveal` is time-derived and also covers an Open raise past its reveal end, until settlement begins */
@@ -129,9 +139,35 @@ export interface AuctionState {
   revealEndsAt: number | null;
   bidCount: number;
   revealedCount: number;
+  /** revealed bids valid under Stage 1's rule (fixed at reveal) */
+  validCount: number;
+  /** stablecoin the auction holds: the deposits, less what processing moved out, less the refunds delivered */
+  escrowTotal: Money;
+  /** units minted to winners and not yet delivered */
+  escrowUnits: Units;
+  /** Stage 1 `tally_round`: 0 before the first proposal */
+  round: number;
+  roundRejected: boolean;
+  rejectionReason: SettlementRejection | null;
+  /** the current round's proposal (the rejected one while `roundRejected`); null before the first */
+  proposal: { clearingPrice: Money; qAboveClaim: Units; qAtClaim: Units; rClaim: Units } | null;
+  /** the current round's running tally */
+  tally: { talliedCount: number; qAbove: Units; qAt: Units; allocSum: Units; minValidPrice: Money | null };
+  /** the price `finalizeSettlement` cleared (kept on a MinRaise failure); null before it and when no bid was valid */
   clearingPrice: Money | null;
+  qAbove: Units;
+  qAt: Units;
+  /** units for the bids exactly at the clearing price (`r_claim` of the accepted round; 0 when failed) */
+  R: Units;
   unitsSold: Units;
   proceeds: Money;
+  /** when `finalizeSettlement` settled or failed the raise */
+  finalizedAt: number | null;
+  failureReason: RaiseFailure | null;
+  bidsProcessed: number;
+  unitsMinted: Units;
+  /** the last bid is processed: the money paths open (Stage 1 MintNotFinalized until then) */
+  mintFinalized: boolean;
 }
 
 export interface BidState {
@@ -139,10 +175,25 @@ export interface BidState {
   bidder: Address;
   commitment: string;
   deposit: Money;
+  /** commit order */
   order: number;
   revealed: { pricePerUnit: Money; quantity: Units } | null;
+  /** Stage 1 `reveal_index`; null until revealed */
+  revealIndex: number | null;
+  /** fixed at reveal (Stage 1 `isBidValid`); null until revealed */
+  valid: boolean | null;
+  /** the settlement round that last tallied the bid (0: never) */
+  talliedRound: number;
+  processed: boolean;
+  /** units allocated when processed */
   allocatedUnits: Units;
+  /** units and refund owed to the bidder until delivered ("0" once delivered) */
+  pendingUnits: Units;
+  pendingRefund: Money;
+  delivered: boolean;
+  /** @deprecated the refund delivered so far (the delivered `pendingRefund`); the read model keeps the history (S2 WP7) */
   refunded: Money;
+  /** @deprecated `processed` (S2 WP7) */
   settled: boolean;
 }
 
@@ -167,7 +218,13 @@ export interface VaultState {
 export interface PositionState {
   seriesId: string;
   wallet: Address;
+  /**
+   * the holder's accrual weight (Stage 1 `accrual_units`): its balance, its auction units not yet delivered
+   * (`undeliveredUnits`) and the units held for a window ask
+   */
   units: Units;
+  /** auction units allocated to the holder and not yet delivered (part of `units`) */
+  undeliveredUnits: Units;
   /** the regular (net) payout claimable now; the tail and the final pool are separate fields, never included here */
   claimable: Money;
   claimedTotal: Money;

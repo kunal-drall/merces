@@ -40,7 +40,8 @@ const raw = (name: string) => JSON.parse(readFileSync(join(VECTORS, `${name}.jso
 /*
  * S2 cause codes:
  *  - S2-CR: Stage 1's creation rules over the raise's own terms (commit and reveal durations, the non-reveal charge),
- *    canonical since S2; `open_raise` runs directly (shim SH-AUC-1 retired).
+ *    canonical since S2; `open_raise` runs directly (shim SH-AUC-1 retired);
+ *  - S2-VR: a bid's validity is fixed at reveal (Stage 1 `isBidValid`): an over-cap bid is invalid and refunded in full.
  */
 afterAll(shutdown);
 
@@ -362,9 +363,10 @@ describe('stage1 vector runner: merces backend', () => {
     ]);
   }, 60_000);
 
-  it('a shim that finds the models disagree fails the step, and the failed op leaves no trace', async () => {
-    // b1 bids 150 units, above the 100-unit wallet cap: Stage 1 records the bid as invalid, our one-step settlement
-    // clamps it to the cap and fills it, so the two settlements differ (S2 brings Stage 1's auction)
+  // cause S2-VR: validity is fixed at reveal on both backends (was: the one-step settlement clamped the over-cap bid to
+  // the cap and filled it, so the SH-AUC-3 shim found the models disagree and failed the step)
+  it('an over-cap bid is invalid on both backends: the settlements agree, and lockstep agrees through the raise', async () => {
+    // b1 bids 150 units, above the 100-unit wallet cap: Stage 1 records the bid as invalid and refunds it in full
     const src = raw('01_happy_path');
     for (const s of src.steps) {
       if ((s.op === 'commit_bid' || s.op === 'reveal_bid') && s.actor === 'b1') {
@@ -376,18 +378,16 @@ describe('stage1 vector runner: merces backend', () => {
     const v = fromJson(src, '01_happy_path');
     const i = v.steps.findIndex((s) => s.op === 'begin_settlement');
     const world = await MercesWorld.create(v, { personality: 'monad' });
-    for (const step of v.steps.slice(0, i)) {
+    for (const step of v.steps.slice(0, i + 1)) {
       world.setTime(BigInt(step.t));
       if (step.op !== 'expect') await world.apply(step as unknown as Parameters<typeof world.apply>[0]);
     }
-    world.setTime(BigInt(v.steps[i]!.t));
-    const before = world.serialize();
-    await expect(world.apply(v.steps[i] as unknown as Parameters<typeof world.apply>[0])).rejects.toThrow(/settleAuction ended Settled with 400 units at 105000000; Stage 1's tally settles 300 units at 105000000/);
-    expect(world.serialize()).toBe(before);
-    const run = (await runStage1Vectors({ vectors: [v], backend: 'merces', personalities: ['solana'] })).runs[0]!;
-    expect(run.status).toBe('FAIL');
-    expect(run.issues[0]).toMatchObject({ index: i, op: 'begin_settlement', kind: 'fail' });
-    expect(run.stopped).toEqual({ index: i + 1, reason: 'diverged' });
+    const series = [...world.chain.state.series.values()][0]!;
+    const b1 = series.bids.get(world.actors.address('b1'))!;
+    expect([b1.valid, b1.revealed?.quantity]).toEqual([false, 150n]);
+    expect([series.phase, series.unitsSold, series.issuePrice]).toEqual(['Settled', 300n, 105_000_000n]);
+    const lock = (await runStage1Vectors({ vectors: [v], backend: 'lockstep', until: raisePrefixEnd(v), personalities: ['monad'] })).runs[0]!;
+    expect(lock.issues).toEqual([]);
   }, 60_000);
 
   it('a proposal Stage 1 would reject is BLOCKED, not run', async () => {

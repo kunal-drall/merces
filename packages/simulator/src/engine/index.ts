@@ -7,13 +7,15 @@ import type { SimClock } from '../clock.ts';
 import type { SimSeries, SimState } from '../state.ts';
 import { balKey, type EngineCore, type EngineOptions, type Emit, type ExecContext } from './core.ts';
 import { fail } from './errors.ts';
-import { auctionPhase, cancelRaise, claimRefund, commitBid, openRaise, revealBid, settleAuction } from './auction.ts';
+import { auctionPhase, cancelRaise, commitBid, openRaise, revealBid } from './auction.ts';
+import { claimRefund, settleAuction } from './composite.ts';
 import { buyCurve, graduateCurve } from './curve.ts';
 import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
 import { claimPayout, crankBurn, payIn, postSplitReceipt } from './payments.ts';
 import { claimRedemption, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
 import { submitReport } from './reports.ts';
+import { beginSettlement, deliverBid, finalizeSettlement, processBid, registerHolder, tallyBids } from './settlement.ts';
 import { accrualNow, approvePause, crankPause, crankStatus, deadlines, reportablePeriods, requestPause, type PeriodDeadlines } from './status.ts';
 import { amendTerms, extinguish } from './terminal.ts';
 import { drawRelease, pauseReleases } from './treasury.ts';
@@ -83,16 +85,15 @@ export class SimEngine implements EngineCore {
       case 'cancelRaise': return cancelRaise(this, user(), cmd, emit);
       case 'commitBid': return commitBid(this, user(), cmd, now, emit);
       case 'revealBid': return revealBid(this, user(), cmd, now, emit);
+      // Stage 1's multi-step settlement and holder registration: permissionless (any wallet, or the keeper)
+      case 'beginSettlement': service('any'); return beginSettlement(this, cmd, now, emit);
+      case 'tallyBids': service('any'); return tallyBids(this, cmd, emit);
+      case 'finalizeSettlement': service('any'); return finalizeSettlement(this, cmd, now, emit);
+      case 'processBid': service('any'); return processBid(this, cmd, emit);
+      case 'deliverBid': service('any'); return deliverBid(this, cmd, emit);
+      case 'registerHolder': service('any'); return registerHolder(this, cmd, emit);
+      // deprecated composites over those steps (S2 WP4b moves their callers, WP8 removes them)
       case 'settleAuction': service('any'); return settleAuction(this, cmd, now, emit);
-      // Stage 1's multi-step settlement and holder registration: permissionless, implemented in S2 WP4
-      case 'beginSettlement':
-      case 'tallyBids':
-      case 'finalizeSettlement':
-      case 'processBid':
-      case 'deliverBid':
-      case 'registerHolder':
-        service('any');
-        throw new ChainError('NotImplemented', `${cmd.kind}: multi-step settlement lands in S2 WP4`);
       case 'claimRefund': return claimRefund(this, user(), cmd, emit);
       case 'drawRelease': return drawRelease(this, user(), cmd, now, emit);
       case 'pauseReleases': return pauseReleases(this, user(), cmd, emit);
@@ -181,7 +182,7 @@ export class SimEngine implements EngineCore {
   deadlines(s: SimSeries, period: Period, now: number): PeriodDeadlines {
     return deadlines(s, period, now);
   }
-  /** The reveal phase is time-derived: commitEndsAt ≤ now < revealEndsAt. */
+  /** For display: an Open raise split by time into its commit, reveal and settle-due phases (see `auctionPhase`). */
   auctionPhase(s: SimSeries, now: number): ReturnType<typeof auctionPhase> {
     return auctionPhase(s, now);
   }

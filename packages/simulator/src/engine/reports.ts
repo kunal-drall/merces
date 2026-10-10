@@ -1,11 +1,11 @@
 import { createPublicKey, verify as edVerify } from 'node:crypto';
 import { DEFAULTS, attestationMessage, expectedPrior, hex32ToField, mockVerify, reportPublicInputs, type Command } from '@merces/domain';
-import { U64_MAX, WAD, nextExpectedPeriod, periodEnd, periodStart } from '@merces/math';
+import { WAD, nextExpectedPeriod, periodEnd, periodStart } from '@merces/math';
 import type { SimSeries } from '../state.ts';
-import { str, type EngineCore, type Emit, type ExecContext } from './core.ts';
+import { str, u64, type EngineCore, type Emit, type ExecContext } from './core.ts';
 import { fail } from './errors.ts';
 import { quarterRate } from './fx.ts';
-import { derivedStatus, ledgerClock, periodIdOf, pidOf } from './ledger.ts';
+import { derivedStatus, ledgerClock, mintFinalized, periodIdOf, pidOf } from './ledger.ts';
 import { periodRecord, syncStatus } from './status.ts';
 
 type SubmitReport = Extract<Command, { kind: 'submitReport' }>;
@@ -17,8 +17,8 @@ type SubmitReport = Extract<Command, { kind: 'submitReport' }>;
  *  1. the issuer signs (NotIssuer)                          9. a report already stored (WrongPeriod)
  *  2. the raise settled (RaiseNotSettled)                   10. tail: TailEnded, NoTailDue
  *  3. entry ranges (AmountOutOfRange, InvalidProof)         11. tier (TierNotEnabled)
- *  4. Stage 1's MintNotFinalized: not applicable, our       12. FX (FxMismatch, FxFallbackRequired,
- *     mint happens at settlement                                FxFallbackNotAllowed, InvalidAttestorSignature)
+ *  4. the mint is final: the last bid is processed          12. FX (FxMismatch, FxFallbackRequired,
+ *     (MintNotFinalized)                                        FxFallbackNotAllowed, InvalidAttestorSignature)
  *  5. derived status Retired/Extinguished (TerminalStatus)  13. the prior chain (InvalidProof)
  *  6. the next expected period (WrongPeriod)                14. the six public signals (InvalidProof)
  *  7. the period has ended (ReportTooEarly)                 15. the proof (InvalidProof)
@@ -40,6 +40,8 @@ export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport
   const fxAvgWad = u64(cmd.fxAvgWad);
   fieldOrInvalidProof(cmd.incomeCommitment);
   fieldOrInvalidProof(cmd.priorIncomeCommitment);
+  // 4. the mint is final (SIM:1062)
+  if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids');
   // 5-9. preconditions on the derived status and the ledger clock
   const l = s.ledger;
   const status = derivedStatus(s, now);
@@ -131,17 +133,6 @@ function expectedSignals(s: SimSeries, units: bigint, fxAvgWad: bigint, prior: s
 function sameDecimal(a: string, b: string | undefined): boolean {
   if (typeof b !== 'string' || !/^\d{1,78}$/.test(b)) return false;
   return BigInt(a) === BigInt(b);
-}
-
-function u64(x: string): bigint {
-  let v: bigint;
-  try {
-    v = BigInt(x);
-  } catch {
-    return fail('AmountOutOfRange', 'amount is not an integer');
-  }
-  if (v < 0n || v > U64_MAX) fail('AmountOutOfRange', 'amount is out of the u64 range');
-  return v;
 }
 
 function fieldOrInvalidProof(h: string): void {

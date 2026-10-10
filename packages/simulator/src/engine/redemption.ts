@@ -5,6 +5,7 @@ import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
 import { burnUnits, settleHolder } from './holders.ts';
 import { derivedStatus, liveCapPerUnit, mintFinalized, retire, setStatus } from './ledger.ts';
+import { deliverPending } from './settlement.ts';
 import { syncStatus } from './status.ts';
 
 /**
@@ -37,7 +38,7 @@ export function quote(s: SimSeries, now: number): RedemptionQuote {
  * Stage 1 `redeem` (SIM:1328-1367). Checks, in order:
  *
  *  1. the issuer signs (NotIssuer);
- *  2. the raise settled (RaiseNotSettled; MintNotFinalized cannot follow, our mint happens at settlement);
+ *  2. the raise settled (RaiseNotSettled) and its last bid is processed (MintNotFinalized);
  *  3. the derived status is not terminal (TerminalStatus) and not Late (SeriesLate); **Paused is allowed**;
  *  4. the lockup has ended (LockupActive);
  *  5. nothing is due (PaymentOutstanding) and no true-up is due (TrueUpOutstanding; 0 until S5);
@@ -54,7 +55,7 @@ export function redeem(e: EngineCore, signer: string, cmd: Extract<Command, { ki
   const s = e.series(cmd.seriesId);
   if (s.issuer !== signer) fail('NotIssuer', 'only the issuer may redeem');
   if (s.phase !== 'Settled') fail('RaiseNotSettled', 'the raise has not settled');
-  if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise has not settled');
+  if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids');
   const l = s.ledger;
   const status = derivedStatus(s, now);
   if (TERMINAL.has(status)) fail('TerminalStatus', `series is ${status}`);
@@ -96,7 +97,11 @@ export function claimRedemption(e: EngineCore, signer: string, cmd: Extract<Comm
   redeemBody(e, s, p, emit);
 }
 
-/** The units a holder's redemption would redeem now: its units less those held for a window ask (never burned). */
+/**
+ * The units a holder's redemption would redeem now: its units less those held for a window ask (never burned). Its
+ * auction units not yet delivered count: the redemption delivers them first (S2 amendment M2, so the reads that do not
+ * deliver, `claimableRedemption`, do not undercount).
+ */
 export function redeemableUnits(p: SimPosition): bigint {
   return p.units - p.escrowed;
 }
@@ -111,15 +116,17 @@ function tailCatchUp(p: SimPosition, units: bigint): bigint {
 
 /**
  * A holder's redemption body (Stage 1 `claimRedemptionBody`, SIM:1375-1393), the cross-module contract for
- * `claimRedemption` and the final claim: settle the holder (HolderNotRegistered), redeem its units not held for a
- * window ask (`units − escrowed`, added to `redeemedUnits`), pay `pending + P_redeem × units + tail catch-up` from the
- * vault, burn those units (reason `redemption`).
+ * `claimRedemption` and the final claim: deliver its auction bid if still pending (`deliverPending`: the refund and the
+ * units), settle the holder (HolderNotRegistered), redeem its units not held for a window ask (`units − escrowed`,
+ * added to `redeemedUnits`), pay `pending + P_redeem × units + tail catch-up` from the vault, burn those units (reason
+ * `redemption`).
  *
- * Events: `PayoutClaimed` for the pending payout and the tail catch-up (when > 0; `claimPayout`'s carries the tail
- * too), `UnitsBurned`, `RedemptionClaimed{units, amount: P_redeem × units}`.
+ * Events: `BidDelivered` (a pending bid), `PayoutClaimed` for the pending payout and the tail catch-up (when > 0;
+ * `claimPayout`'s carries the tail too), `UnitsBurned`, `RedemptionClaimed{units, amount: P_redeem × units}`.
  */
 export function redeemBody(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): void {
   const r = s.redemption!;
+  deliverPending(e, s, p.wallet, emit); // Stage 1 delivers a pending auction allocation first (SIM:1376)
   settleHolder(e, s, p);
   const units = redeemableUnits(p);
   p.redeemedUnits += units;

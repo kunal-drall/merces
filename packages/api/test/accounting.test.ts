@@ -20,7 +20,9 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
   beforeAll(async () => {
     rig = await makeRig();
     // default raise: 500 units, bids 12/11/10/10/9 USDC × 100 → clears at 9 USDC, proceeds 4,500 USDC, 1% auction fee = 45 USDC (one FeeTaken per winning bidder)
-    const a = await rig.sol.runRaise();
+    // refunds stay pending (processed, not delivered) so backer 0 claims its own below; S2 WP4b moves this to push
+    // delivery and drops `settle`
+    const a = await rig.sol.runRaise({ settle: 'process' });
     seriesId = a.seriesId;
     await rig.sol.sim.setTime(parsePeriod('2026Q1').end + 86_400);
     // θ = 60,000 USD, share rate 10%: YTD income 75,000 → payment 1,500 USDC; 5% payout fee = 75 USDC; net 1,425 USDC

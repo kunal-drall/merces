@@ -2,7 +2,7 @@ import type { IssuerState, SeriesState } from '@merces/domain';
 import { nextExpectedPeriod } from '@merces/math';
 import type { SimIssuer, SimSeries } from '../state.ts';
 import { str as s } from '../engine/core.ts';
-import { derivedStatus, ledgerClock, liveCapPerUnit, periodIdOf } from '../engine/ledger.ts';
+import { derivedStatus, ledgerClock, liveCapPerUnit, mintFinalized, periodIdOf } from '../engine/ledger.ts';
 import { releasesBlockedByLateness } from '../engine/status.ts';
 import { toRedemption } from './redemption.ts';
 
@@ -57,6 +57,6 @@ export function toSeriesState(chain: string, x: SimSeries, now: number): SeriesS
     formalNoticeEmittedFor: pid(l.formalNoticeEmittedFor), carryWad: s(x.vault.carryWad), refundedToIssuer: s(x.vault.refundedToIssuer),
     yearGross: x.vault.yearGross.map((y) => ({ year: y.year, grossWad: s(y.grossWad) })),
     final: { accWad: s(x.final.finalAccWad), units: s(x.final.finalUnits), distributed: s(x.final.unreleasedDistributed) },
-    amendmentNonce: Number(l.amendmentNonce), extinguishNonce: Number(l.extinguishNonce),
+    amendmentNonce: Number(l.amendmentNonce), extinguishNonce: Number(l.extinguishNonce), mintFinalized: mintFinalized(x),
   };
 }

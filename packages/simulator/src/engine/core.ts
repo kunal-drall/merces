@@ -1,6 +1,8 @@
 import type { EventPayload, EventType, Groth16ProofJson, LifecycleStatus } from '@merces/domain';
+import { U64_MAX } from '@merces/math';
 import type { SimClock } from '../clock.ts';
 import type { SimSeries, SimState } from '../state.ts';
+import { fail } from './errors.ts';
 
 /** Checks a Groth16 report proof against its six public signals (Stage 1's verifier, `@merces/circuits` `verifyReport`). */
 export interface ReportProofVerifier {
@@ -55,4 +57,16 @@ export function str(x: bigint): string {
 }
 export function balKey(wallet: string, mint: string): string {
   return `${wallet}|${mint}`;
+}
+
+/** A decimal amount as Stage 1 decodes it: a u64, else AmountOutOfRange (the message names no value). */
+export function u64(x: string): bigint {
+  let v: bigint;
+  try {
+    v = BigInt(x);
+  } catch {
+    return fail('AmountOutOfRange', 'amount is not an integer');
+  }
+  if (v < 0n || v > U64_MAX) fail('AmountOutOfRange', 'amount is out of the u64 range');
+  return v;
 }

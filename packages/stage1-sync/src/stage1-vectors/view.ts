@@ -42,7 +42,7 @@ function seriesOf(src: ViewSource, name: string): { s: SimSeries; b: SeriesBook 
 function undelivered(src: ViewSource, s: SimSeries, b: SeriesBook, name: string): { units: bigint; refund: bigint } {
   if (!b.auction.processed.includes(name) || b.auction.delivered.includes(name)) return { units: 0n, refund: 0n };
   const address = src.actors.address(name);
-  return { units: s.bids.get(address)?.allocatedUnits ?? 0n, refund: pendingRefundOf(s, address) };
+  return { units: s.bids.get(address)?.allocation ?? 0n, refund: pendingRefundOf(s, address) };
 }
 
 /** What Stage 1's account of `name` holds of a series. */

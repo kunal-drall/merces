@@ -4,6 +4,10 @@ import { SimHarness, type Personality } from '../src/index.ts';
 import { DEFAULTS } from '@merces/domain';
 import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './helpers.ts';
 
+/*
+ * S2 cause codes:
+ *  - S2-PR: push delivery (`deliverBid`; `claimRefund` retired): the harness raise delivers every bid's units and refund.
+ */
 for (const personality of ['solana', 'monad'] as Personality[]) {
   describe(`simulator (${personality}) full raise-to-payout cycle`, () => {
     it('runs auction → treasury → reports → payouts → claims with correct money', async () => {
@@ -19,10 +23,9 @@ for (const personality of ['solana', 'monad'] as Personality[]) {
       expect(treasury.total).toBe(USDC(4500).toString());
       // auction fee 1% of 4500 = 45 at the fee collector
       expect(await h.sim.getBalance(h.sim.state.feeCollector, 'USDC')).toBe(USDC(45).toString());
-      // winners get their excess deposit back
+      // winners get their excess deposit back (cause S2-PR: delivered by the harness raise, no claimRefund)
       const bid0 = (await h.sim.getBid(seriesId, h.backers[0]!.address))!;
       expect(bid0.allocatedUnits).toBe('100');
-      await h.exec(h.backers[0]!, { kind: 'claimRefund', seriesId });
       const bal0 = BigInt(await h.sim.getBalance(h.backers[0]!.address, 'USDC'));
       expect(bal0).toBe(1_000_000_000_000n - USDC(900) - USDC(9));
 

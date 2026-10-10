@@ -53,6 +53,24 @@ export const STAGE1_CODE = {
   InsufficientEscrow: 'InsufficientFunds',
   NoUnitsOutstanding: 'WrongStatus',
   MintNotFinalized: 'WrongPhase',
+  // the sealed-bid raise and its multi-step settlement (S2; codes kept from the one-step auction)
+  RaiseNotOpen: 'WrongPhase',
+  CommitPhaseClosed: 'WrongPhase',
+  RevealNotStarted: 'WrongPhase',
+  RevealPhaseClosed: 'WrongPhase',
+  TallyInProgress: 'WrongPhase',
+  TallyIncomplete: 'WrongPhase',
+  NotSettling: 'WrongPhase',
+  NotProcessed: 'WrongPhase',
+  BidExists: 'Duplicate',
+  AlreadyRevealed: 'Duplicate',
+  AlreadyProcessed: 'Duplicate',
+  AlreadyDelivered: 'Duplicate',
+  BidsExist: 'TooLate',
+  ZeroEscrow: 'InvalidTerms',
+  BidNotFound: 'NotFound',
+  CommitmentMismatch: 'InvalidCommitment',
+  SettlementNotReady: 'TooEarly',
 } as const satisfies Partial<Record<ErrorName, ChainErrorCode>>;
 
 /** The Stage 1 error names the simulator raises. */

@@ -104,9 +104,9 @@ export class AuctionService {
     const a = (await chain.getAuction(seriesId))!;
     const now = await chain.now();
     const bids = await chain.listBids(seriesId);
-    // settlement drops revealed bids whose bidder has since left the allowlist; the projection must do the same
-    const allowed = await Promise.all(bids.map((b) => (b.revealed ? chain.isAllowlisted(b.bidder) : false)));
-    const revealed = bids.filter((b, i) => b.revealed && allowed[i]).map((b) => ({ bidder: b.bidder, pricePerUnit: BigInt(b.revealed!.pricePerUnit), quantity: BigInt(b.revealed!.quantity), order: b.order }));
+    // every revealed bid counts, its bidder still allowlisted or not: Stage 1 checks the allowlist at commit only, and
+    // settles and delivers a bidder removed since (S2; the projection moves to Stage 1's math in S2 WP4b)
+    const revealed = bids.filter((b) => b.revealed).map((b) => ({ bidder: b.bidder, pricePerUnit: BigInt(b.revealed!.pricePerUnit), quantity: BigInt(b.revealed!.quantity), order: b.order }));
     const res = interim.clearAuction({ bids: revealed, unitsOffered: BigInt(s.terms.unitsOffered), reservePrice: BigInt(s.terms.reservePrice), minimumRaise: BigInt(s.terms.minimumRaise), walletCapUnits: interim.walletCapUnits(BigInt(s.terms.unitsOffered), BigInt(s.terms.walletCapBps)), auctionFeeBps: BigInt(s.terms.auctionFeeBps) });
     const settleDue = s.phase === 'Open' && a.revealEndsAt !== null && now >= a.revealEndsAt;
     return {

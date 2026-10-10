@@ -1,9 +1,10 @@
 import { createHash, generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto';
 import {
-  DEFAULTS, attestationMessage, bidCommitment, currencyCodeOf, hex32ToField, incomeCommitment, INDEXING_RULE_CODE, mockProve, reportPublicInputs, termsCommitment,
-  type AdminCommand, type ChainPort, type Command, type IndexingRule, type PermissionlessCommand, type ReportProof, type SeriesTerms, type Stablecoin, type TxResult, type UserCommand, type VerifierAttestation,
+  DEFAULTS, attestationMessage, bidCommitment, currencyCodeOf, hex32ToField, incomeCommitment, INDEXING_RULE_CODE, mockProve, reportPublicInputs, runSettlement, termsCommitment,
+  type AdminCommand, type ChainPort, type Command, type IndexingRule, type PermissionlessCommand, type RaiseFailure, type ReportProof, type SeriesTerms, type SettlementGoal, type SettlementRun,
+  type Stablecoin, type TxResult, type UserCommand, type VerifierAttestation,
 } from '@merces/domain';
-import { BN254_FR, U64_MAX, WAD, paymentStable, quarterIndex, ratePerUnit, toPid, wadFromDecimal, yearOf } from '@merces/math';
+import { BN254_FR, U64_MAX, WAD, paymentStable, quarterIndex, ratePerUnit, requiredEscrow, toPid, wadFromDecimal, yearOf } from '@merces/math';
 import { SimulatorChain } from './chain.ts';
 import { SimWallet, simAdminWallet } from './wallets.ts';
 import type { Personality } from './addresses.ts';
@@ -299,11 +300,15 @@ export class SimHarness {
   }
 
   /**
-   * Run a full sealed-bid raise: create, open, N backers bid at given prices, reveal, settle. Returns the seriesId. The
-   * phase ends are the chain's (`openRaise` derives them from the terms' durations: `terms.commitDurationSeconds`,
-   * `terms.revealDurationSeconds`).
+   * Run a full sealed-bid raise: create, open, N backers bid at given prices (each depositing Stage 1's
+   * `requiredEscrow`), reveal, then settle with Stage 1's steps through `runSettlement` as the keeper, up to `settle`:
+   * `'none'` leaves the raise Open at its reveal end, `'finalize'` stops once it is Settled or Failed, `'process'` once
+   * every bid is processed (the mint is final; refunds and units wait for `deliverBid`), `'deliver'` (the default) once
+   * every bid is delivered too. The phase ends are the chain's (`openRaise` derives them from the terms'
+   * durations). `clearingPrice` is the settled price (0 when the raise failed or did not finalize); `failureReason` is
+   * the auction's.
    */
-  async runRaise(opts: { terms?: Partial<SeriesTerms>; privateTerms?: PrivateTerms; bids?: { backer: number; price: bigint; qty: bigint }[] } = {}): Promise<{ seriesId: string; terms: SeriesTerms; privateTerms: PrivateTerms; clearingPrice: bigint }> {
+  async runRaise(opts: { terms?: Partial<SeriesTerms>; privateTerms?: PrivateTerms; bids?: { backer: number; price: bigint; qty: bigint }[]; settle?: 'none' | SettlementGoal } = {}): Promise<{ seriesId: string; terms: SeriesTerms; privateTerms: PrivateTerms; clearingPrice: bigint; failureReason: RaiseFailure | null }> {
     const { terms, privateTerms } = defaultTerms(this.sim, { ...(opts.terms ?? {}), privateTerms: opts.privateTerms });
     if (!(await this.sim.getIssuer(this.issuer.address))) await this.exec(this.issuer, { kind: 'registerIssuer' });
     const created = await this.exec(this.issuer, { kind: 'createSeries', terms });
@@ -324,7 +329,7 @@ export class SimHarness {
       const salt = '0x' + (b.backer + 1).toString(16).padStart(2, '0').repeat(32);
       salts.set(b.backer, salt);
       const commitment = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: b.price, quantity: b.qty, salt });
-      const deposit = b.price * b.qty + (b.price * b.qty * BigInt(terms.auctionFeeBps)) / 10_000n;
+      const deposit = requiredEscrow(b.price, b.qty, terms.auctionFeeBps);
       await this.exec(w, { kind: 'commitBid', seriesId, commitment, deposit: deposit.toString() });
     }
     await this.sim.setTime(commitEndsAt);
@@ -333,10 +338,22 @@ export class SimHarness {
       await this.exec(w, { kind: 'revealBid', seriesId, pricePerUnit: b.price.toString(), quantity: b.qty.toString(), salt: salts.get(b.backer)! });
     }
     await this.sim.setTime(revealEndsAt);
-    const settled = await this.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper');
-    const ev = settled.events.find((e) => e.type === 'AuctionSettled');
-    const clearingPrice = ev ? BigInt((ev.payload as { clearingPrice: string }).clearingPrice) : 0n;
-    return { seriesId, terms, privateTerms, clearingPrice };
+    const settle = opts.settle ?? 'deliver';
+    if (settle !== 'none') await this.settle(seriesId, settle);
+    const a = (await this.sim.getAuction(seriesId))!;
+    const clearingPrice = a.raiseState === 'Settled' ? BigInt(a.clearingPrice ?? '0') : 0n;
+    return { seriesId, terms, privateTerms, clearingPrice, failureReason: a.failureReason };
+  }
+
+  /**
+   * Settle a raise with Stage 1's steps, as the keeper, up to `until` (`runSettlement`). Throws when the planner is
+   * stuck or must wait for the reveal end.
+   */
+  async settle(seriesId: string, until: SettlementGoal): Promise<SettlementRun> {
+    const run = await runSettlement(this.sim, seriesId, { until });
+    if (run.stuck) throw new Error(`harness: settlement of ${seriesId} is stuck (${run.stuck})`);
+    if (run.waitUntil !== undefined) throw new Error(`harness: settlement of ${seriesId} waits until ${run.waitUntil}`);
+    return run;
   }
 
   /**

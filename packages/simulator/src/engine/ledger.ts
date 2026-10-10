@@ -76,12 +76,11 @@ export function derivedStatus(s: SimSeries, now: number): LifecycleStatus {
 
 /**
  * Stage 1's `mintFinalized` (the money gate, SPEC §6.1), the one source for the engine and the ledger and auction
- * views. Stage 1 sets it after the last `process_bid` of a settled raise, and of a failed one (SIM:978-984); our
- * settlement processes every bid in the same step, so a raise is mint-finalized exactly when it settled or failed. A
- * curve series is when it graduated (graduation settles it).
+ * views: the auction record's flag, which the last `processBid` of a settled or failed raise sets (SIM:978-984;
+ * `finalizeMint` in engine/settlement.ts), and a curve's graduation.
  */
 export function mintFinalized(s: SimSeries): boolean {
-  return s.phase === 'Settled' || s.phase === 'Failed';
+  return s.auction.mintFinalized;
 }
 
 /** `cap_per_unit()` read live from the (amendable) cap multiple and the clearing price (SIM:370-372); 0 before settlement. */

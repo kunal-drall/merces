@@ -668,13 +668,17 @@
               "quantity": {
                 "type": "string",
                 "pattern": "^\\d+$"
+              },
+              "valid": {
+                "type": "boolean"
               }
             },
             "required": [
               "seriesId",
               "bidder",
               "pricePerUnit",
-              "quantity"
+              "quantity",
+              "valid"
             ],
             "additionalProperties": false
           }
@@ -762,7 +766,6 @@
               "clearingPrice",
               "unitsSold",
               "proceeds",
-              "totalFees",
               "settledAt"
             ],
             "additionalProperties": false
@@ -4381,13 +4384,17 @@
         "quantity": {
           "type": "string",
           "pattern": "^\\d+$"
+        },
+        "valid": {
+          "type": "boolean"
         }
       },
       "required": [
         "seriesId",
         "bidder",
         "pricePerUnit",
-        "quantity"
+        "quantity",
+        "valid"
       ],
       "additionalProperties": false
     },
@@ -4426,7 +4433,6 @@
         "clearingPrice",
         "unitsSold",
         "proceeds",
-        "totalFees",
         "settledAt"
       ],
       "additionalProperties": false

@@ -2,10 +2,11 @@ import {
   beginSettlement, claimsFor, finalizeSettlement, findClearingPrice, isBidValid, tallyBids,
   type AuctionRules, type FinalizeOutcome, type Proposal, type RevealedBid, type Tally,
 } from '@merces/math';
-import type { PermissionlessCommand } from './commands.ts';
+import type { PermissionlessCommand, TxResult } from './commands.ts';
 import type { RaiseStateName } from './events.ts';
 import type { Money, Units } from './money.ts';
 import { appliedNonRevealChargeBps } from './params.ts';
+import { ChainError, type ChainPort } from './port.ts';
 import type { ChainLimits } from './state.ts';
 
 /**
@@ -78,7 +79,7 @@ export function proposalFor(bids: readonly RevealedBid[], unitsOffered: bigint):
 
 // ------------------------------------------------------------------ views
 
-/** The auction fields the planner reads. Structural: the chain's `AuctionState` satisfies it once S2 WP4 lands. */
+/** The auction fields the planner reads. Structural: the chain's `AuctionState` satisfies it. */
 export interface SettlementAuctionView {
   seriesId: string;
   /** Stage 1's stored raise state; never the display phase (whose `Reveal` also covers an Open raise past its reveal end) */
@@ -97,7 +98,7 @@ export interface SettlementAuctionView {
   mintFinalized: boolean;
 }
 
-/** The bid fields the planner reads. Structural: the chain's `BidState` satisfies it once S2 WP4 lands. */
+/** The bid fields the planner reads. Structural: the chain's `BidState` satisfies it. */
 export interface SettlementBidView {
   bidder: string;
   deposit: Money;
@@ -266,4 +267,80 @@ function propose(view: SettlementView, submit: (c: PermissionlessCommand) => Set
   const last = a.proposal;
   if (a.roundRejected && last && BigInt(last.clearingPrice) === mine.clearingPrice && BigInt(last.qAboveClaim) === mine.qAboveClaim && BigInt(last.qAtClaim) === mine.qAtClaim) return stuck('ProposalAlreadyRejected');
   return submit({ kind: 'beginSettlement', seriesId: a.seriesId, clearingPrice: mine.clearingPrice.toString(), qAboveClaim: mine.qAboveClaim.toString(), qAtClaim: mine.qAtClaim.toString() });
+}
+
+// ------------------------------------------------------------------ driver
+
+/**
+ * Stage 1 refusals that mean another sender moved the settlement on between our read and our submit (anyone may send
+ * every step): the driver re-reads and re-plans instead of failing.
+ */
+export const SETTLEMENT_LOST_RACE: ReadonlySet<string> = new Set([
+  'TallyInProgress', 'NotSettling', 'TallyIncomplete', 'SettlementNotReady', 'RaiseNotOpen', 'RaiseNotSettled', 'AlreadyProcessed', 'NotProcessed', 'AlreadyDelivered',
+]);
+
+/** Where `runSettlement` stops: after `finalizeSettlement`, after the last `processBid` (the mint is final), or after every delivery. */
+export type SettlementGoal = 'finalize' | 'process' | 'deliver';
+
+export interface RunSettlementOptions {
+  until: SettlementGoal;
+  /** a bound on submits and re-plans (default 256) */
+  maxSteps?: number;
+  /** how a step is sent; the keeper's `submit` by default (a wallet may build and sign any step instead) */
+  submit?: (command: PermissionlessCommand) => Promise<TxResult>;
+}
+
+export interface SettlementRun {
+  /** the commands sent, in order */
+  steps: PermissionlessCommand['kind'][];
+  /** the stage the raise stands at when the run stops */
+  stage: SettlementStage;
+  /** set when the planner will not act (an operator alert) */
+  stuck?: SettlementStuckReason;
+  /** set when the run stopped to wait for the chain clock (the reveal end) */
+  waitUntil?: number;
+  /** the transactions sent */
+  results: TxResult[];
+}
+
+/** The planner's view of a series, read through the port; null when the chain has no such series. */
+export async function readSettlementView(port: ChainPort, seriesId: string): Promise<SettlementView | null> {
+  const [series, auction, bids] = await Promise.all([port.getSeries(seriesId), port.getAuction(seriesId), port.listBids(seriesId)]);
+  if (!series || !auction) return null;
+  return { auction, bids, terms: series.terms };
+}
+
+/**
+ * Drive a raise's settlement through the chain until `until`: plan (`nextSettlementStep`), send, re-read, again. A
+ * step refused because someone else moved the settlement on (`SETTLEMENT_LOST_RACE`) is re-planned; any other refusal
+ * is thrown. Stops early, without throwing, when the planner waits for the reveal end or is stuck. Used by the keepers,
+ * the harness, conformance and the API's "build the next step".
+ */
+export async function runSettlement(port: ChainPort, seriesId: string, opts: RunSettlementOptions): Promise<SettlementRun> {
+  const maxSteps = opts.maxSteps ?? 256;
+  const submit = opts.submit ?? ((command: PermissionlessCommand) => port.submit(command, 'keeper'));
+  const limits = (await port.info()).limits;
+  const steps: PermissionlessCommand['kind'][] = [];
+  const results: TxResult[] = [];
+  for (let attempts = 0; ; attempts++) {
+    const view = await readSettlementView(port, seriesId);
+    if (!view) throw new ChainError('NotFound', `series ${seriesId} not found`);
+    const now = await port.now();
+    const stage = settlementStage(view, now);
+    const finalized = view.auction.raiseState === 'Settled' || view.auction.raiseState === 'Failed';
+    if (opts.until === 'finalize' && finalized) return { steps, stage, results };
+    const step = nextSettlementStep(view, { now, limits, deliver: opts.until === 'deliver' });
+    if (step.kind === 'done') return { steps, stage: step.stage, results };
+    if (step.kind === 'wait') return { steps, stage: step.stage, waitUntil: step.until, results };
+    if (step.kind === 'stuck') return { steps, stage: step.stage, stuck: step.reason, results };
+    if (attempts >= maxSteps) throw new ChainError('ChainSpecific', `settlement of ${seriesId} did not finish within ${maxSteps} steps`);
+    try {
+      results.push(await submit(step.command));
+      steps.push(step.command.kind);
+    } catch (e) {
+      const name = e instanceof ChainError ? e.detail?.stage1 : undefined;
+      if (typeof name === 'string' && SETTLEMENT_LOST_RACE.has(name)) continue; // a lost race: re-read and re-plan
+      throw e;
+    }
+  }
 }

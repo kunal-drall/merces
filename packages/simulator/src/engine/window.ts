@@ -3,7 +3,8 @@ import { interim } from '@merces/math';
 import type { SimSeries, SimTransferWindow } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
-import { position, registerHolder, setUnits, settleHolder } from './holders.ts';
+import { heldUnits, position, registerHolder, setUnits, settleHolder } from './holders.ts';
+import { mintFinalized } from './ledger.ts';
 import { syncStatus } from './status.ts';
 
 /**
@@ -21,12 +22,16 @@ import { syncStatus } from './status.ts';
  */
 
 // ------------------------------------------------------------------ open, commit, reveal
-/** `open_window`: our checks (the lockup one with Stage 1's `LockupActive`), then `syncStatus` (SIM:1497), then the window. */
+/**
+ * `open_window`: our checks (the mint gate with Stage 1's `MintNotFinalized`, the lockup one with `LockupActive`), then
+ * `syncStatus` (SIM:1497), then the window.
+ */
 export function openTransferWindow(e: EngineCore, cmd: Extract<Command, { kind: 'openTransferWindow' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
   // curve units trade freely on the DEX pool after graduation (A-CURVE-2): no window, so no window cap or allowlist
   if (s.curve) throw new ChainError('WrongPhase', 'curve units trade on the DEX pool, not in transfer windows');
   if (s.phase !== 'Settled' || TERMINAL.has(s.status)) throw new ChainError('WrongStatus', 'series cannot open a window');
+  if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids'); // SIM:1489
   if (now < s.settledAt! + s.terms.lockupSeconds) fail('LockupActive', 'the lockup has not ended'); // code TooEarly, as before
   if (s.transferWindows.some((w) => !w.cleared)) throw new ChainError('Duplicate', 'a window is already open');
   if (cmd.commitEndsAt <= now || cmd.revealEndsAt <= cmd.commitEndsAt) throw new ChainError('InvalidTerms', 'bad window timings');
@@ -59,7 +64,8 @@ export function commitWindowOrder(e: EngineCore, signer: string, cmd: Extract<Co
     w.orders.set(signer, { wallet: signer, side: 'buy', commitment: cmd.commitment, deposit, escrowedUnits: 0n, order: w.orders.size, revealed: null });
   } else {
     const p = s.positions.get(signer);
-    if (!p || p.units - p.escrowed < units || units <= 0n) throw new ChainError('InsufficientFunds', 'not enough free units');
+    // an ask escrows units the account holds (Stage 1 `unitsOf`): not those already asked, nor auction units undelivered
+    if (!p || heldUnits(s, p) < units || units <= 0n) throw new ChainError('InsufficientFunds', 'not enough free units');
     settleHolder(e, s, p); // Stage 1 settles before the units move into the ask escrow (SIM:1528)
     p.escrowed += units; // units stay in the position (payouts keep accruing on them); they just cannot be sold twice
     w.orders.set(signer, { wallet: signer, side: 'sell', commitment: cmd.commitment, deposit: 0n, escrowedUnits: units, order: w.orders.size, revealed: null });
@@ -160,7 +166,7 @@ export function clearTransferWindow(e: EngineCore, cmd: Extract<Command, { kind:
     seller.escrowed -= f.units;
     setUnits(s, seller, seller.units - f.units);
     setUnits(s, buyer, buyer.units + f.units);
-    registerHolder(s, buyer); // a window buyer with a fill becomes a registered holder (SIM:1647)
+    registerHolder(s, buyer, emit); // a window buyer with a fill becomes a registered holder (SIM:1647; HolderRegistered)
     const amount = f.units * clearing;
     const buyOrder = w.orders.get(f.buyer)!;
     buyOrder.deposit -= amount;

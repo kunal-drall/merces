@@ -16,7 +16,9 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
   let strangerTok: string;
   beforeAll(async () => {
     rig = await makeRig();
-    const a = await rig.sol.runRaise();
+    // refunds stay pending (processed, not delivered) for the pull-refund pins below (build-refund, refundable); S2 WP4b
+    // moves them to push delivery and drops `settle`
+    const a = await rig.sol.runRaise({ settle: 'process' });
     seriesId = a.seriesId;
     monSeriesId = (await rig.mon.runRaise()).seriesId;
     await rig.sol.sim.setTime(parsePeriod('2026Q3').end + 86_400);

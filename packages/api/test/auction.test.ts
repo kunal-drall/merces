@@ -8,7 +8,9 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 /*
  * S2 cause codes on the pins that moved:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's minimum is one hour each, where these raises opened
- *    1,000-second phases); `openRaise` derives the phase ends from them.
+ *    1,000-second phases); `openRaise` derives the phase ends from them;
+ *  - S2-DA: a bidder removed from the allowlist after committing stays valid, is settled and is delivered (A-REV-2
+ *    withdrawn).
  */
 const HOUR = 3_600;
 const phases = { commitDurationSeconds: HOUR, revealDurationSeconds: HOUR }; // cause S2-AD
@@ -95,7 +97,9 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     expect(notified.rows.map((r) => r.kind)).toContain('auction.failed');
   });
 
-  it('the clearing preview leaves out a bidder removed from the allowlist, exactly as settlement does', async () => {
+  // cause S2-DA: Stage 1 checks the allowlist at commit only: a bidder removed afterwards stays in the settlement (and so
+  // in the preview) and is delivered (was: both left it out, A-REV-2 withdrawn)
+  it('the clearing preview keeps a bidder removed from the allowlist, exactly as settlement does, and the bidder is delivered', async () => {
     const h = rig.harness('monad');
     const { terms } = (await import('@merces/simulator')).defaultTerms(h.sim, { unitsOffered: '1000', walletCapBps: 1000, ...phases });
     await h.exec(h.issuer, { kind: 'registerIssuer' }).catch(() => undefined);
@@ -113,16 +117,19 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     for (const b of bids) await h.exec(b.w, { kind: 'revealBid', seriesId, pricePerUnit: b.price.toString(), quantity: '100', salt: b.salt });
     // with both bids the raise clears at 10 for 200 units (2000 < 4000 minimum): projected failure
     expect((await rig.get(`/series/${seriesId}/auction/preview`)).json().projected).toMatchObject({ success: false, unitsSold: '200' });
-    // the low bidder leaves the allowlist: the high bid alone clears at 45 for 100 units (4500 >= 4000)
+    // the low bidder leaves the allowlist: its bid still counts, so the projection does not change
     await h.sim.submit({ kind: 'setAllowlist', wallet: lo.address, allowed: false }, 'allowlistManager');
     await h.sim.setTime(now + 2 * HOUR); // cause S2-AD (was now + 2000)
     const pv = (await rig.get(`/series/${seriesId}/auction/preview`)).json();
-    expect(pv.projected).toMatchObject({ success: true, clearingPrice: USDC(45).toString(), unitsSold: '100' });
-    expect(pv.projected.allocations.map((a: { bidder: string }) => a.bidder)).toEqual([hi.address]);
+    expect(pv.projected).toMatchObject({ success: false, clearingPrice: USDC(10).toString(), unitsSold: '200' });
     await h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper');
-    const s = (await h.sim.getSeries(seriesId))!;
-    expect(s.phase).toBe('Settled');
-    expect({ clearingPrice: s.issuePrice, unitsSold: s.unitsSold }).toEqual({ clearingPrice: pv.projected.clearingPrice, unitsSold: pv.projected.unitsSold });
+    expect((await h.sim.getSeries(seriesId))!.phase).toBe('Failed');
+    expect(await h.sim.getAuction(seriesId)).toMatchObject({ failureReason: 'MinRaise', clearingPrice: pv.projected.clearingPrice, unitsSold: pv.projected.unitsSold });
+    // the removed bidder is delivered its deposit in full (any wallet may deliver it)
+    const before = BigInt(await h.sim.getBalance(lo.address, 'USDC'));
+    await h.exec(hi, { kind: 'deliverBid', seriesId, bidder: lo.address });
+    expect(BigInt(await h.sim.getBalance(lo.address, 'USDC')) - before).toBe(USDC(1010));
+    expect(await h.sim.isAllowlisted(lo.address)).toBe(false);
     await h.sim.submit({ kind: 'setAllowlist', wallet: lo.address, allowed: true }, 'allowlistManager');
   });
 });

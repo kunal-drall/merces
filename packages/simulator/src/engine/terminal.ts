@@ -6,6 +6,7 @@ import { fail } from './errors.ts';
 import { accrualUnits } from './holders.ts';
 import { liveCapPerUnit, mintFinalized, setStatus } from './ledger.ts';
 import { redeemBody, redeemableUnits } from './redemption.ts';
+import { deliverPending } from './settlement.ts';
 import { syncReleaseBlock, syncStatus } from './status.ts';
 
 /**
@@ -76,7 +77,7 @@ export function extinguish(e: EngineCore, signers: string[], cmd: Extract<Comman
   requireCoSigningAttestor(e, signers, a1, 'an extinguishment');
   requireCoSigningAttestor(e, signers, a2, 'an extinguishment');
   if (s.phase !== 'Settled') fail('RaiseNotSettled', 'the raise has not settled');
-  if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise has not settled');
+  if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids');
   if (s.status === 'Extinguished') fail('TerminalStatus', 'already extinguished');
   const wasRedeemed = s.status === 'Redeemed';
   const finalUnits = wasRedeemed ? s.redemption!.unitsAtRedemption : s.unitsOutstanding;
@@ -132,10 +133,12 @@ export function claimableFinal(s: SimSeries, p: SimPosition): bigint {
  * not held for a window ask has them redeemed first (`redeemBody`: the redemption price and the tail catch-up, paid at
  * once) and its share is weighed on its redeemed units; otherwise on its accrual units.
  * `floor((finalAccWad − lastFinalAccWad) × weight / WAD)`, 0 after the first final claim; moves the final cursor and
- * marks the holder claimed. The caller (`claimPayout`) settles the holder before and burns its units after.
+ * marks the holder claimed. A pending auction bid is delivered first (`deliverPending`). The caller (`claimPayout`)
+ * settles the holder before and burns its units after.
  */
 export function takeFinal(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): bigint {
   if (s.status !== 'Extinguished') return 0n;
+  deliverPending(e, s, p.wallet, emit); // Stage 1's claim_final delivers a pending auction allocation first (SIM:1453)
   let weight: bigint;
   if (s.redemption) {
     if (redeemableUnits(p) > 0n) redeemBody(e, s, p, emit);

@@ -24,19 +24,34 @@ export function position(s: SimSeries, wallet: string): SimPosition {
 /**
  * Stage 1 `registerHolder` (SIM:406-416): idempotent. Sets the net cursor to the live `vault.netAccWad`; the tail and
  * final cursors start at 0, so a holder registered after a redemption or extinguishment still gets its full slice.
- * Runs where Stage 1 registers holders: auction allocation, curve graduation, a window buy fill.
+ * The first registration emits `HolderRegistered` (as both chains do) when `emit` is given: the `registerHolder`
+ * command, a winning `processBid` and a window buy fill. A curve's graduation registers its buyers without the event
+ * (the curve is ours until S5).
  */
-export function registerHolder(s: SimSeries, p: SimPosition): void {
+export function registerHolder(s: SimSeries, p: SimPosition, emit?: Emit): void {
   if (p.registered) return;
   p.registered = true;
   p.lastNetAccWad = s.vault.netAccWad;
   p.lastTailAccWad = 0n;
   p.lastFinalAccWad = 0n;
+  emit?.('HolderRegistered', { seriesId: s.seriesId, holder: p.wallet });
+}
+/** Auction units allocated to `wallet` and not yet delivered (Stage 1 `pending_units` of a processed, undelivered bid). */
+export function undeliveredUnits(s: SimSeries, wallet: string): bigint {
+  const b = s.bids.get(wallet);
+  return b && b.processed && !b.delivered ? b.pendingUnits : 0n;
+}
+/**
+ * The units a holder's account holds (Stage 1 `unitsOf`): its units less those held for a window ask and those
+ * allocated but not yet delivered. What a window ask may escrow and what a Retired burn burns.
+ */
+export function heldUnits(s: SimSeries, p: SimPosition): bigint {
+  return p.units - p.escrowed - undeliveredUnits(s, p.wallet);
 }
 /**
  * The units a holder's payouts accrue on (Stage 1 `accrual_units`, SPEC §6.1: balance + undelivered auction units +
- * ask-escrow units). Our raise delivers at settlement and window asks keep their units in `units` (`escrowed` marks
- * them), so it is `units`.
+ * ask-escrow units). `units` holds all three: a processed winner's units join it at `processBid` (delivery moves
+ * none), and a window ask keeps its units there (`escrowed` marks them).
  */
 export function accrualUnits(_s: SimSeries, p: SimPosition): bigint {
   return p.units;

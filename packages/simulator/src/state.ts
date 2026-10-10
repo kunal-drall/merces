@@ -1,5 +1,5 @@
 import type { LifecycleStatus, RaiseStateName, Stablecoin } from '@merces/domain';
-import type { FinalState, Pause, TailState, VaultState as Stage1VaultState } from '@merces/math';
+import type { FinalState, Pause, Proposal, TailState, VaultState as Stage1VaultState } from '@merces/math';
 import type { PersonalityConfig } from './addresses.ts';
 
 /**
@@ -8,9 +8,9 @@ import type { PersonalityConfig } from './addresses.ts';
  * Version 2 (S1) carries Stage 1's own state objects beside ours: the series ledger (`SimLedger`, Stage 1's field
  * names), the payout vault, the tail and the final pool (Stage 1 types from `@merces/reference`).
  *
- * Version 3 (S2) adds the raise's own terms (the commit and reveal durations and the non-reveal charge, `SimTerms`);
- * S2 completes its layout with Stage 1's multi-step auction settlement before a version-3 build is deployed. States of
- * another version are never upgraded in place.
+ * Version 3 (S2) adds the raise's own terms (the commit and reveal durations and the non-reveal charge, `SimTerms`)
+ * and Stage 1's multi-step auction settlement (`SimAuction`, `SimBid`). States of another version are never upgraded in
+ * place.
  */
 export const SIM_STATE_VERSION = 3;
 
@@ -51,17 +51,87 @@ export interface SimTerms {
   raiseStyle: 'sealed' | 'curve';
 }
 
+/** A sealed bid (Stage 1 `Bid`, SIM:66-80; SPEC.md:281-286). The bid commitment stays ours until S4. */
 export interface SimBid {
   bidder: string;
   commitment: string;
+  /** Stage 1 `escrow` */
   deposit: bigint;
+  /** commit order */
   order: number;
   revealed: { pricePerUnit: bigint; quantity: bigint } | null;
-  allocatedUnits: bigint;
-  /** set at settlement; claimRefund pays it out */
-  refundable: bigint;
-  refunded: bigint;
-  settled: boolean;
+  /** Stage 1 `reveal_index`: -1 until revealed */
+  revealIndex: number;
+  /** fixed at reveal (Stage 1 `isBidValid`; never reverts the reveal); false until revealed */
+  valid: boolean;
+  /** the settlement round that last tallied this bid (0: never), so an overlapping page skips it */
+  talliedRound: number;
+  processed: boolean;
+  /** units allocated when processed (Stage 1 `allocation`) */
+  allocation: bigint;
+  /** units and stablecoin owed to the bidder from processing; `deliverBid` pays them (kept after delivery, as Stage 1 does) */
+  pendingUnits: bigint;
+  pendingRefund: bigint;
+  delivered: boolean;
+}
+
+/** One round's running tally (Stage 1 `Tally`): the sum of every `tallyBids` page of the round. */
+export interface SimTally {
+  qAbove: bigint;
+  qAt: bigint;
+  allocSum: bigint;
+  /** lowest valid revealed price tallied; null while none */
+  minValidPrice: bigint | null;
+  talliedCount: number;
+}
+
+/**
+ * The sealed-bid auction record (Stage 1 `Auction` with the series' `revealedCount` and `escrowTotal`, SIM:179-196;
+ * SPEC.md:268-280). The engine only orders the steps, stores what Stage 1's math returns and moves balances.
+ */
+export interface SimAuction {
+  /** stablecoin held: deposits, less cost and fee at processing, less refunds at delivery (Stage 1 `escrowTotal`) */
+  escrowTotal: bigint;
+  revealedCount: number;
+  validCount: number;
+  /** Stage 1 `tally_round`: 0 before the first proposal */
+  tallyRound: number;
+  roundRejected: boolean;
+  rejectionReason: 'ClaimMismatch' | 'InvalidClearingPrice' | null;
+  /** the current round's proposal (Stage 1 `beginSettlement`); null before the first */
+  proposal: Proposal | null;
+  tally: SimTally;
+  // results, written once by finalizeSettlement (for a MinRaise failure the would-be values)
+  /** null before finalize and when no bid was valid (Stage 1 keeps 0) */
+  clearingPrice: bigint | null;
+  qAbove: bigint;
+  qAt: bigint;
+  R: bigint;
+  unitsSold: bigint;
+  proceeds: bigint;
+  failureReason: 'NoValidBids' | 'MinRaise' | null;
+  finalizedAt: number | null;
+  // processing
+  bidsProcessed: number;
+  unitsMinted: bigint;
+  /** Stage 1's money gate (SPEC §6.1): set by the last `processBid` (or a curve's graduation) */
+  mintFinalized: boolean;
+  /** units minted to winners and not yet delivered */
+  escrowUnits: bigint;
+}
+
+/** A fresh auction record (Stage 1 initial values, SIM:807). */
+export function newAuction(): SimAuction {
+  return {
+    escrowTotal: 0n, revealedCount: 0, validCount: 0, tallyRound: 0, roundRejected: false, rejectionReason: null, proposal: null, tally: emptyTally(),
+    clearingPrice: null, qAbove: 0n, qAt: 0n, R: 0n, unitsSold: 0n, proceeds: 0n, failureReason: null, finalizedAt: null,
+    bidsProcessed: 0, unitsMinted: 0n, mintFinalized: false, escrowUnits: 0n,
+  };
+}
+
+/** A round's tally before its first page. */
+export function emptyTally(): SimTally {
+  return { qAbove: 0n, qAt: 0n, allocSum: 0n, minValidPrice: null, talliedCount: 0 };
 }
 
 export interface SimPosition {
@@ -212,8 +282,11 @@ export interface SimSeries {
   commitEndsAt: number | null;
   revealEndsAt: number | null;
   settledAt: number | null;
+  /** a settled raise's clearing price (or a graduated curve's price); null otherwise (a failed raise's price is `auction.clearingPrice`) */
   issuePrice: bigint | null;
+  /** a settled raise's units sold (or a curve's); 0 otherwise */
   unitsSold: bigint;
+  /** 0 until the mint is final (`auction.mintFinalized`): Stage 1 sets it after the last `processBid` */
   unitsOutstanding: bigint;
   capPerUnit: bigint | null;
   vaultBalance: bigint;
@@ -226,6 +299,8 @@ export interface SimSeries {
   releasesPausedByIssuer: boolean;
   bids: Map<string, SimBid>;
   bidOrder: number;
+  /** the sealed-bid auction (Stage 1's record; a curve series keeps the initial one, with `mintFinalized` set at graduation) */
+  auction: SimAuction;
   positions: Map<string, SimPosition>;
   periods: Map<string, SimPeriod>;
   redemption: SimRedemption | null;

@@ -94,8 +94,21 @@ export const eventPayloads = {
   RaiseOpened: z.object({ ...seriesScoped, commitEndsAt: z.number().int(), revealEndsAt: z.number().int() }),
   RaiseCancelled: z.object({ ...seriesScoped }),
   BidCommitted: z.object({ ...seriesScoped, bidder: addressSchema, commitment: hash32Schema, deposit: moneySchema, order: z.number().int() }),
-  BidRevealed: z.object({ ...seriesScoped, bidder: addressSchema, pricePerUnit: moneySchema, quantity: unitsSchema }),
-  AuctionSettled: z.object({ ...seriesScoped, clearingPrice: moneySchema, unitsSold: unitsSchema, proceeds: moneySchema, totalFees: moneySchema, settledAt: z.number().int() }),
+  /** Stage 1 `BidRevealed`: `valid` is fixed at reveal (Stage 1 `isBidValid`); an invalid bid is refunded in full */
+  BidRevealed: z.object({ ...seriesScoped, bidder: addressSchema, pricePerUnit: moneySchema, quantity: unitsSchema, valid: z.boolean() }),
+  /**
+   * Stage 1 `RaiseSettled` (`finalize_settlement`): the clearing price, units sold and proceeds, at `settledAt`. The fees
+   * are not known yet: each winner's fee is taken when it is processed (`UnitsAllocated.fee`, `FeeTaken`).
+   */
+  AuctionSettled: z.object({
+    ...seriesScoped, clearingPrice: moneySchema, unitsSold: unitsSchema, proceeds: moneySchema,
+    /**
+     * @deprecated set only by the one-step `settleAuction` composite (Σ fees of the bids it processes); Stage 1's event
+     * has no such field. Removed with the composite's last callers (S2 WP4b).
+     */
+    totalFees: moneySchema.optional(),
+    settledAt: z.number().int(),
+  }),
   /**
    * Stage 1 `RaiseFailed`. NoValidBids carries a price, units and proceeds of 0; MinRaise carries the price that cleared
    * and the would-be units sold and proceeds (`unitsSold` is ours: Stage 1's event omits it, and live adapters derive it

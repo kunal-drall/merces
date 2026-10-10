@@ -1,6 +1,6 @@
 import type { FinalState, TailState, VaultState } from '@merces/math';
 import type { SimulatorChain } from '../src/chain.ts';
-import type { SimLedger, SimPosition, SimSeries } from '../src/state.ts';
+import type { SimAuction, SimBid, SimLedger, SimPosition, SimSeries } from '../src/state.ts';
 import { position, registerHolder } from '../src/engine/holders.ts';
 
 /**
@@ -68,4 +68,26 @@ export function seedHolder(chain: SimulatorChain, seriesId: string, wallet: stri
   if (register) registerHolder(s, p);
   Object.assign(p, fields);
   return p;
+}
+
+/** Overwrite auction-record fields (Stage 1's `Auction`; `tally` and `proposal` are replaced whole when given). */
+export function seedAuction(chain: SimulatorChain, seriesId: string, patch: Partial<SimAuction>): SimAuction {
+  const s = seriesOf(chain, seriesId);
+  Object.assign(s.auction, patch);
+  return s.auction;
+}
+
+/**
+ * Create or overwrite a bid (Stage 1's `Bid`). A new bid starts committed and unrevealed, in the next commit order;
+ * nothing is debited and the auction's counts and escrow are left alone (patch them with `seedAuction`).
+ */
+export function seedBid(chain: SimulatorChain, seriesId: string, bidder: string, patch: Partial<SimBid> = {}): SimBid {
+  const s = seriesOf(chain, seriesId);
+  let b = s.bids.get(bidder);
+  if (!b) {
+    b = { bidder, commitment: '0x' + '00'.repeat(32), deposit: 0n, order: s.bidOrder++, revealed: null, revealIndex: -1, valid: false, talliedRound: 0, processed: false, allocation: 0n, pendingUnits: 0n, pendingRefund: 0n, delivered: false };
+    s.bids.set(bidder, b);
+  }
+  Object.assign(b, patch);
+  return b;
 }

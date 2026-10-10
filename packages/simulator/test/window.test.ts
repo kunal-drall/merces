@@ -12,7 +12,8 @@ import { seedHolder, seedPause, seriesOf } from './kit.ts';
  *  - W: a redemption, a final claim or a Retired burn never burns the units held for a window ask (Stage 1 burns the
  *    balance, which excludes the ask escrow); a terminal series forces the window to NoMatch, which returns them;
  *  - S: an ask settles the holder first (SIM:1528) and clearing settles every asker (SIM:1606, 1634), so the stored
- *    `pending` carries what the held units earned (the claimable total does not change).
+ *    `pending` carries what the held units earned (the claimable total does not change);
+ *  - S2-PR: push delivery (`deliverBid`): the harness raise delivers every bid, so a winner's refund is already paid.
  * The payout figures follow from the harness terms: θ 60,000, 10% above it, a 5% payout fee, 500 units of which each
  * backer holds 100, cap 2.5 × 9 = 22.5 per unit.
  */
@@ -92,7 +93,8 @@ describe('transfer windows and allowlist', () => {
     expect(transfers).toEqual([{ seriesId, from: seller.address, to: buyer2, units: '50', windowId: 0 }]);
     expect((await h.sim.getPosition(seriesId, buyer2))!.units).toBe('50');
     expect((await h.sim.getPosition(seriesId, seller.address))!.units).toBe('50');
-    expect(await h.sim.getBalance(seller.address, 'USDC')).toBe((1_000_000_000_000n - USDC(1111) + USDC(525)).toString()); // deposit 1111 still partly refundable
+    // cause S2-PR: the deposit 1111 less cost 900 and fee 9 came back at delivery (+ 202; was still claimable)
+    expect(await h.sim.getBalance(seller.address, 'USDC')).toBe((1_000_000_000_000n - USDC(1111) + USDC(202) + USDC(525)).toString());
   });
 });
 

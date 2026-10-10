@@ -43,6 +43,7 @@ export function graduate(s: SimSeries, now: number, emit: Emit): void {
   c.graduated = true;
   s.phase = 'Settled';
   s.settledAt = now;
+  s.auction.mintFinalized = true; // the curve's units are minted as bought: graduation opens the money paths
   s.ledger.firstPeriod = pidAtTime(now);
   // every curve buyer becomes a registered holder at graduation, as Stage 1 registers allocated bidders at settlement
   for (const p of s.positions.values()) if (p.units > 0n) registerHolder(s, p);

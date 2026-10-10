@@ -1,12 +1,11 @@
-import { ChainError, bidCommitment, type Command } from '@merces/domain';
-import { bpsOf, capPerUnit, interim } from '@merces/math';
+import { ChainError, auctionRulesOf, bidCommitment, type Command } from '@merces/domain';
+import { isBidValid } from '@merces/math';
 import type { SimSeries } from '../state.ts';
-import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
-import { position, registerHolder, setUnits } from './holders.ts';
+import { TERMINAL, big, u64, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
-import { pidAtTime } from './ledger.ts';
 
-// ------------------------------------------------------------------ auction
+// ------------------------------------------------------------------ the sealed-bid raise: open, cancel, commit, reveal
+// (settlement: ./settlement.ts; the deprecated one-step composites: ./composite.ts)
 /**
  * Stage 1 `open_raise` (SIM:871-883), in its order: the issuer (NotIssuer), a Draft raise (RaiseNotDraft), a contract
  * hash (ContractHashMissing; unreachable here, as `createSeries` refuses a zero hash, kept for parity), the issuer still
@@ -29,111 +28,78 @@ export function openRaise(e: EngineCore, signer: string, cmd: Extract<Command, {
   s.revealEndsAt = revealEndsAt;
   emit('RaiseOpened', { seriesId: s.seriesId, commitEndsAt, revealEndsAt });
 }
+/**
+ * Stage 1 `cancel_raise` (SIM:578-585) for a sealed raise: the issuer (NotIssuer), an Open raise (RaiseNotOpen), no bid
+ * yet (BidsExist). No time check: a raise with no bid can be cancelled after its reveal end. A curve series keeps our
+ * rules (S5): cancellable while Draft or Open, not terminal, with no curve units minted.
+ */
 export function cancelRaise(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'cancelRaise' }>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
   e.requireIssuer(s, signer);
-  if (s.phase !== 'Open' && s.phase !== 'Draft') throw new ChainError('WrongPhase', `series is ${s.phase}`);
-  if (TERMINAL.has(s.status)) throw new ChainError('WrongStatus', `series is ${s.status}`);
-  if (s.bids.size > 0) throw new ChainError('TooLate', 'bids exist; the raise can no longer be cancelled');
-  // curve buyers already hold units backed by the treasury: cancelling would strand them (A-CURVE-3)
-  if (s.curve && s.unitsOutstanding > 0n) throw new ChainError('TooLate', 'curve units exist; the raise can no longer be cancelled');
+  if (s.curve) {
+    if (s.phase !== 'Open' && s.phase !== 'Draft') throw new ChainError('WrongPhase', `series is ${s.phase}`);
+    if (TERMINAL.has(s.status)) throw new ChainError('WrongStatus', `series is ${s.status}`);
+    // curve buyers already hold units backed by the treasury: cancelling would strand them (A-CURVE-3)
+    if (s.unitsOutstanding > 0n) throw new ChainError('TooLate', 'curve units exist; the raise can no longer be cancelled');
+  } else {
+    if (s.phase !== 'Open') fail('RaiseNotOpen', `the raise is ${s.phase}`);
+    if (s.bids.size > 0) fail('BidsExist', 'bids exist; the raise can no longer be cancelled');
+  }
   s.phase = 'Cancelled';
   emit('RaiseCancelled', { seriesId: s.seriesId });
 }
-/** The reveal phase is time-derived: commitEndsAt ≤ now < revealEndsAt. Any other stored raise state passes through. */
+/**
+ * For display: the stored raise state, with an Open raise split by time into its commit phase (`Open`), its reveal
+ * phase (`Reveal`, commitEndsAt ≤ now < revealEndsAt) and `SettleDue` after the reveal end. Any other state (Settling
+ * included) passes through.
+ */
 export function auctionPhase(s: SimSeries, now: number): 'Draft' | 'Open' | 'Reveal' | 'SettleDue' | 'Settling' | 'Settled' | 'Failed' | 'Cancelled' {
   if (s.phase !== 'Open') return s.phase;
   if (now < s.commitEndsAt!) return 'Open';
   if (now < s.revealEndsAt!) return 'Reveal';
   return 'SettleDue';
 }
+/**
+ * Stage 1 `commit_bid` (SIM:885-899), in its order: an Open raise (RaiseNotOpen), an allowlisted bidder
+ * (NotAllowlisted), the commit phase (CommitPhaseClosed), one bid per wallet (BidExists), the escrow as a u64
+ * (AmountOutOfRange) and above 0 (ZeroEscrow); then the escrow is debited (InsufficientEscrow) into the auction escrow.
+ */
 export function commitBid(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'commitBid' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
+  if (s.phase !== 'Open') fail('RaiseNotOpen', `the raise is ${s.phase}`);
   e.requireAllowlisted(signer);
-  if (auctionPhase(s, now) !== 'Open') throw new ChainError('WrongPhase', 'commit phase is over or not started');
-  if (s.bids.has(signer)) throw new ChainError('Duplicate', 'one bid per wallet (A-AUC-2)');
-  const deposit = big(cmd.deposit);
-  if (deposit <= 0n) throw new ChainError('InvalidTerms', 'deposit must be positive');
+  if (now >= s.commitEndsAt!) fail('CommitPhaseClosed', 'the commit phase is over');
+  if (s.bids.has(signer)) fail('BidExists', 'one bid per wallet (A-AUC-2)');
+  const deposit = u64(cmd.deposit);
+  if (deposit === 0n) fail('ZeroEscrow', 'the deposit must be above 0');
   e.debit(signer, s.terms.stablecoinMint, deposit);
+  s.auction.escrowTotal += deposit;
   const order = s.bidOrder++;
-  s.bids.set(signer, { bidder: signer, commitment: cmd.commitment, deposit, order, revealed: null, allocatedUnits: 0n, refundable: 0n, refunded: 0n, settled: false });
+  s.bids.set(signer, { bidder: signer, commitment: cmd.commitment, deposit, order, revealed: null, revealIndex: -1, valid: false, talliedRound: 0, processed: false, allocation: 0n, pendingUnits: 0n, pendingRefund: 0n, delivered: false });
   emit('BidCommitted', { seriesId: s.seriesId, bidder: signer, commitment: cmd.commitment, deposit: cmd.deposit, order });
 }
+/**
+ * Stage 1 `reveal_bid` (SIM:901-915), in its order: an Open raise (RaiseNotOpen), the reveal phase (RevealNotStarted,
+ * RevealPhaseClosed), a bid (BidNotFound), not yet revealed (AlreadyRevealed), the commitment (CommitmentMismatch). The
+ * reveal never fails on validity: Stage 1's `isBidValid` (reserve, quantity within the wallet cap, escrow covering
+ * `requiredEscrow`) is fixed on the bid, and an invalid bid is refunded in full at processing. No allowlist check.
+ */
 export function revealBid(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'revealBid' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
-  if (auctionPhase(s, now) !== 'Reveal') throw new ChainError('WrongPhase', 'not in the reveal phase');
+  if (s.phase !== 'Open') fail('RaiseNotOpen', `the raise is ${s.phase}`);
+  if (now < s.commitEndsAt!) fail('RevealNotStarted', 'the reveal phase has not started');
+  if (now >= s.revealEndsAt!) fail('RevealPhaseClosed', 'the reveal phase is over');
   const b = s.bids.get(signer);
-  if (!b) throw new ChainError('NotFound', 'no bid to reveal');
-  if (b.revealed) throw new ChainError('Duplicate', 'already revealed');
+  if (!b) fail('BidNotFound', 'no bid to reveal');
+  if (b.revealed) fail('AlreadyRevealed', 'the bid is already revealed');
   const price = big(cmd.pricePerUnit);
   const qty = big(cmd.quantity);
   const expected = bidCommitment({ seriesId: s.seriesId, bidder: signer, pricePerUnit: price, quantity: qty, salt: cmd.salt });
-  if (expected !== b.commitment) throw new ChainError('InvalidCommitment', 'reveal does not match the commitment');
-  const needed = price * qty + bpsOf(price * qty, s.terms.auctionFeeBps);
-  if (needed > b.deposit) throw new ChainError('InsufficientFunds', 'deposit does not cover price × quantity plus the fee');
+  if (expected !== b.commitment) fail('CommitmentMismatch', 'the reveal does not match the commitment');
+  const a = s.auction;
   b.revealed = { pricePerUnit: price, quantity: qty };
-  emit('BidRevealed', { seriesId: s.seriesId, bidder: signer, pricePerUnit: cmd.pricePerUnit, quantity: cmd.quantity });
-}
-export function settleAuction(e: EngineCore, cmd: Extract<Command, { kind: 'settleAuction' }>, now: number, emit: Emit): void {
-  const s = e.series(cmd.seriesId);
-  if (auctionPhase(s, now) !== 'SettleDue') throw new ChainError('TooEarly', 'reveal phase has not ended');
-  const mint = s.terms.stablecoinMint;
-  // a bidder removed from the allowlist between commit and settlement is excluded (its deposit is refundable), never a reason to brick settlement (C10)
-  const revealed = [...s.bids.values()].filter((b) => b.revealed && e.state.allowlist.has(b.bidder)).map((b) => ({ bidder: b.bidder, pricePerUnit: b.revealed!.pricePerUnit, quantity: b.revealed!.quantity, order: b.order }));
-  const res = interim.clearAuction({ bids: revealed, unitsOffered: s.terms.unitsOffered, reservePrice: s.terms.reservePrice, minimumRaise: s.terms.minimumRaise, walletCapUnits: interim.walletCapUnits(s.terms.unitsOffered, s.terms.walletCapBps), auctionFeeBps: s.terms.auctionFeeBps });
-  if (!res.success) {
-    for (const b of s.bids.values()) {
-      b.refundable = b.deposit;
-      b.settled = true;
-    }
-    s.phase = 'Failed';
-    // Stage 1's RaiseFailed fields (S2 WP3): NoValidBids with 0s, or MinRaise with the would-be price, units and proceeds
-    const reason = res.reason === 'no-bids' ? 'NoValidBids' : 'MinRaise';
-    emit('AuctionFailed', { seriesId: s.seriesId, reason, clearingPrice: str(res.clearingPrice), unitsSold: str(res.unitsSold), proceeds: str(res.proceeds), minimumRaise: str(s.terms.minimumRaise) });
-    return;
-  }
-  for (const b of s.bids.values()) {
-    const alloc = res.allocations.find((a) => a.bidder === b.bidder);
-    if (alloc) {
-      b.allocatedUnits = alloc.units;
-      b.refundable = b.deposit - alloc.amount - alloc.fee;
-      e.credit(e.state.feeCollector, mint, alloc.fee);
-      emit('FeeTaken', { seriesId: s.seriesId, kind: 'auction', amount: str(alloc.fee), payer: b.bidder });
-      const p = position(s, b.bidder);
-      setUnits(s, p, p.units + alloc.units);
-      registerHolder(s, p); // Stage 1 registers every allocated bidder (SIM:1005)
-      emit('UnitsMinted', { seriesId: s.seriesId, holder: b.bidder, units: str(alloc.units) });
-    } else {
-      b.refundable = b.deposit;
-    }
-    b.settled = true;
-  }
-  s.phase = 'Settled';
-  s.settledAt = now;
-  s.ledger.firstPeriod = pidAtTime(now); // SIM:972
-  s.issuePrice = res.clearingPrice;
-  s.unitsSold = res.unitsSold;
-  s.unitsOutstanding = res.unitsSold;
-  s.capPerUnit = capPerUnit(s.terms.capMultipleWad, res.clearingPrice); // Stage 1's floor(m × P0 / WAD)
-  s.treasuryTotal = res.proceeds;
-  let allocated = 0n;
-  s.tranches = s.terms.releaseSchedule.map((t, i, arr) => {
-    const amount = i === arr.length - 1 ? res.proceeds - allocated : bpsOf(res.proceeds, BigInt(t.bps));
-    allocated += amount;
-    return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false, returned: false };
-  });
-  emit('AuctionSettled', { seriesId: s.seriesId, clearingPrice: str(res.clearingPrice), unitsSold: str(res.unitsSold), proceeds: str(res.proceeds), totalFees: str(res.totalFees), settledAt: now });
-  emit('TreasuryFunded', { seriesId: s.seriesId, amount: str(res.proceeds) });
-}
-export function claimRefund(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'claimRefund' }>, emit: Emit): void {
-  const s = e.series(cmd.seriesId);
-  const b = s.bids.get(signer);
-  if (!b) throw new ChainError('NotFound', 'no bid');
-  if (!b.settled) throw new ChainError('TooEarly', 'auction not settled');
-  if (b.refundable === 0n) throw new ChainError('NotFound', 'nothing to refund');
-  const amount = b.refundable;
-  b.refundable = 0n;
-  b.refunded += amount;
-  e.credit(signer, s.terms.stablecoinMint, amount);
-  emit('BidRefunded', { seriesId: s.seriesId, bidder: signer, amount: str(amount) });
+  b.revealIndex = a.revealedCount++;
+  b.valid = isBidValid(price, qty, b.deposit, auctionRulesOf(s.terms));
+  if (b.valid) a.validCount += 1;
+  emit('BidRevealed', { seriesId: s.seriesId, bidder: signer, pricePerUnit: cmd.pricePerUnit, quantity: cmd.quantity, valid: b.valid });
 }
