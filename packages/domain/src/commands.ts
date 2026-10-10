@@ -232,7 +232,31 @@ export const permissionlessCommands = {
 } as const;
 
 export const adminCommands = {
-  registerAttestor: z.object({ kind: z.literal('registerAttestor'), attestor: addressSchema, active: z.boolean() }),
+  /**
+   * Stage 1 `register_attestor` / `registerAttestor` (merces_registry lib.rs:218-236; MercesRegistry.sol:287-289, :315-329;
+   * SIM:535-536): the admin registers (or re-activates) an attestor key; `revokedAt` returns to 0. A zero address is
+   * refused (`ZeroAttestorAddress` on Solana, `ZeroAddress` on the EVM). Registering a key that is already active
+   * re-emits `AttestorRegistered` on Solana and changes nothing, and reverts `KeyAlreadyActive` on the EVM: each
+   * simulator personality behaves as its chain does (S4 D9). Emits `AttestorRegistered`.
+   */
+  registerAttestor: z.object({ kind: z.literal('registerAttestor'), attestor: addressSchema }),
+  /**
+   * Stage 1 `revoke_attestor` / `revokeAttestor` (lib.rs:238-260; MercesRegistry.sol:291-295, :331-345; SIM:538-539):
+   * forward-only revocation (SPEC §1.4): the key stops being active and `revokedAt` = now. Report and FX signatures of a
+   * period that ended at or before `revokedAt` stay valid for `KEY_GRACE_SECONDS` (45 days); every other signature
+   * needs an active key. Refused for a key that is not active (`KeyAlreadyRevoked`, or Anchor's `AccountNotInitialized`
+   * for a key never registered, on Solana; `KeyNotRegistered` on the EVM) and for the last active attestor key
+   * (`LastKeyOfKind` on Solana, `LastActiveKey` on the EVM). Stage 1's reference simulator has no last-key rule; both
+   * chains do, and ours follows them (DIV-S1I-2). Emits `AttestorRevoked`.
+   */
+  revokeAttestor: z.object({ kind: z.literal('revokeAttestor'), attestor: addressSchema }),
+  /**
+   * Replace one attestor key with another in one transaction: register `to`, then revoke `from` (EVM `rotateAttestor`,
+   * MercesRegistry.sol:297-300; Solana has no rotate instruction, so its adapter sends `register_attestor(to)` and
+   * `revoke_attestor(from)` as two instructions of one transaction, S5). Either both apply or neither: a refused revoke
+   * undoes the registration. Each step keeps its chain's rules (the EVM refuses a `to` that is already active).
+   */
+  rotateAttestor: z.object({ kind: z.literal('rotateAttestor'), from: addressSchema, to: addressSchema }),
   registerVerifierKey: z.object({ kind: z.literal('registerVerifierKey'), keyId: z.string(), publicKey: z.string(), active: z.boolean() }),
   pauseNewRaises: z.object({ kind: z.literal('pauseNewRaises'), paused: z.boolean() }),
   setFeeCollector: z.object({ kind: z.literal('setFeeCollector'), feeCollector: addressSchema }),

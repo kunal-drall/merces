@@ -77,7 +77,7 @@ export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport
   if (!enabled) fail('TierNotEnabled', `tier ${cmd.tier} is not enabled for this series`);
   if (cmd.tier === 1 && (f.tier2 || f.tier3 || f.tier4)) fail('TierNotEnabled', 'tier 1 reports only on a pure tier-1 series');
   // 12. FX
-  checkFx(e, s, signers, cmd, fxAvgWad);
+  checkFx(e, s, signers, cmd, fxAvgWad, now);
   // 13. the prior chain (SPEC §6.2 step 5)
   const prior = expectedPrior(l, pid, cmd.priorIncomeCommitment);
   if (prior !== cmd.priorIncomeCommitment) fail('InvalidProof', 'prior income commitment does not chain');
@@ -98,7 +98,8 @@ export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport
   // 16. source binding, after the proof
   if (cmd.tier === 2) verifyVerifierAttestation(e, cmd, prior);
   else if (cmd.tier === 3) {
-    if (!cmd.attestor || !signers.includes(cmd.attestor) || !e.state.attestors.get(cmd.attestor)) fail('InvalidAttestorSignature', 'tier 3 needs a registered attestor as co-signer');
+    // an active key, or one revoked after the period ended within Stage 1's grace (SPEC §1.4; SIM:332-338 reportKeyValid)
+    if (!cmd.attestor || !signers.includes(cmd.attestor) || !e.attestorUsable(cmd.attestor, now, { reportPeriod: cmd.periodId })) fail('InvalidAttestorSignature', 'tier 3 needs a usable attestor as co-signer');
   }
 
   // effects (SIM:1131-1148)
@@ -164,7 +165,7 @@ function periodPid(periodId: string): number {
 }
 
 /** FX (SIM:1075-1094 order). The accumulator and attestor-fallback branches are ours until S5 moves FX to Stage 1. */
-function checkFx(e: EngineCore, s: SimSeries, signers: string[], cmd: SubmitReport, fx: bigint): void {
+function checkFx(e: EngineCore, s: SimSeries, signers: string[], cmd: SubmitReport, fx: bigint, now: number): void {
   if (s.terms.reportingCurrency === 'USD') {
     // stablecoin income: no pair, the rate is 1
     if (fx !== WAD || cmd.fxBasis === 'accumulator') fail('FxMismatch', 'stablecoin income requires unity FX');
@@ -181,7 +182,9 @@ function checkFx(e: EngineCore, s: SimSeries, signers: string[], cmd: SubmitRepo
   }
   if (cmd.fxBasis !== 'attestor' || !cmd.attestorRate) fail('FxFallbackRequired', 'the accumulator rate is unavailable or flagged; an attestor rate is required');
   const a = cmd.attestorRate;
-  if (!signers.includes(a.attestor) || !e.state.attestors.get(a.attestor)) fail('InvalidAttestorSignature', 'the FX rate needs a registered attestor as co-signer');
+  // the key may be revoked after the period ended, within Stage 1's grace (both chains: income.rs:340-356, MercesIncome.sol:168;
+  // Stage 1's reference does not, SIM:1092: DIV-S1I-3)
+  if (!signers.includes(a.attestor) || !e.attestorUsable(a.attestor, now, { reportPeriod: cmd.periodId })) fail('InvalidAttestorSignature', 'the FX rate needs a usable attestor as co-signer');
   if (BigInt(a.rateWad) !== fx || a.pair !== cmd.pair) fail('FxMismatch', 'attestor rate does not match the report');
 }
 

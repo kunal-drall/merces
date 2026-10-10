@@ -1,7 +1,7 @@
 import { createPublicKey, verify as edVerify } from 'node:crypto';
 import { z } from 'zod';
 import { AppError, enqueueOutbox, getFlag } from '@merces/core';
-import { attestationMessage, expectedPrior, fieldToHex32, reportPublicInputs, reportProofSchema, verifierAttestationSchema, type UnsignedTx, type UserCommand } from '@merces/domain';
+import { attestationMessage, expectedPrior, fieldToHex32, keyUsable, reportPublicInputs, reportProofSchema, verifierAttestationSchema, type UnsignedTx, type UserCommand } from '@merces/domain';
 import { WAD, fromPid, parsePeriod, periodsBetween, projectDeadlines, statusParamsOf, toPid, yearOf } from '@merces/math';
 import { SOURCE_DEFINITIONS, type IncomeSourceKind } from '@merces/ports';
 import type { Session } from '@merces/api';
@@ -205,8 +205,10 @@ export class ProofOfIncomeService {
     }
     if (input.tier === 3) {
       if (!input.attestor) throw AppError.unprocessable('tier 3 needs the attestor who will co-sign');
-      const registered = await chain.listAttestors();
-      if (!registered.includes(input.attestor)) throw AppError.unprocessable('tier 3 attestor is not registered onchain');
+      // the chain's registry decides (S4 D5): an active key, or one revoked after this period ended and still within
+      // Stage 1's 45-day grace, may attest the quarter (forward-only revocation, SPEC §1.4)
+      const key = await chain.getSignerKey('attestor', input.attestor);
+      if (!key || !keyUsable(key, await chain.now(), { reportPeriod: input.periodId })) throw AppError.unprocessable('tier 3 attestor is not usable onchain for this quarter (not registered, or revoked before the quarter ended or more than 45 days ago)');
       // the attestor signed this quarter's case over the same commitments and liquidity flag (E10, M7)
       const signed = await this.ctx.pool.query("select 1 from tier3_cases where series_id = $1 and period_id = $2 and state = 'signed' and attestor = $3 and income_commitment = $4 and prior_income_commitment = $5 and liquidity_event = $6", [seriesId, input.periodId, input.attestor, input.incomeCommitment, prior, input.liquidityEvent]);
       if (!signed.rowCount) throw AppError.unprocessable('tier 3 needs the chosen attestor\'s signed case for this quarter over the same commitments');

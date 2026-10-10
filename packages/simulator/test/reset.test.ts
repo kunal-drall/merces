@@ -11,6 +11,9 @@ import { GENESIS } from './helpers.ts';
  *
  * S3 cause codes:
  *  - S3-V4: simulator state version 4.
+ *
+ * S4 cause codes:
+ *  - S4-V5: simulator state version 5 (S4 WP5: Stage 1's key registry).
  */
 describe('sim:reset guard', () => {
   it('runs only with MERCES_ALLOW_SIM_RESET=1', () => {
@@ -106,7 +109,7 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
 
     // a reset chain starts again from an empty state of the current version
     const fresh = await persisted('solana');
-    expect(fresh.state.version).toBe(4); // cause S3-V4: simulator state version 4 (was 3)
+    expect(fresh.state.version).toBe(5); // cause S4-V5: simulator state version 5 (was 4; S3-V4: was 3)
     expect(await fresh.getBalance(fresh.address('wallet:x'), 'USDC')).toBe('0');
     await fresh.close();
   });

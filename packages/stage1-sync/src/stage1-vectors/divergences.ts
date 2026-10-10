@@ -27,10 +27,15 @@ export interface DivergenceRow {
   seen: string;
   /** what lifting it changes, in order */
   lift: string[];
+  /**
+   * Our merces-only scenarios that show it with an `expect_revert` of their own (a rule Stage 1's reference does not
+   * model at all, so there is no `expect` value and no lockstep parting to record: the row has no entries).
+   */
+  shownBy?: string[];
 }
 
 /**
- * One row since the S3 review (DIV-S1I-1). DIV-NRC-1 (vector 03, the five fields of b8's 1% charge and its lockstep
+ * Two rows: DIV-S1I-1 (S3 review) and DIV-S1I-2 (S4 WP5). DIV-NRC-1 (vector 03, the five fields of b8's 1% charge and its lockstep
  * parting at #65) went when the non-reveal charge was modelled as Stage 1 models it (S3 follow-up NRC), and 03 is PASS
  * in full. No Stage 1 vector carries a divergence.
  *
@@ -39,6 +44,10 @@ export interface DivergenceRow {
  * Solana programs disagree, the merces backend follows both programs, so it differs from the reference backend where a
  * run reaches the case. No Stage 1 vector does; our scenario S3l does (`scenarios.ts`, `SCENARIO_EXPECTATIONS`), and its
  * entries live there.
+ *
+ * DIV-S1I-2 is another: the last-key rule. Stage 1's reference revokes the last active key (the call succeeds), both
+ * chains refuse it, so the backends cannot part on a value: the refusal is an `expect_revert` of the merces-only scenario
+ * S4d (S4 amendment fix 1), and the row has no `expect` or lockstep entry.
  */
 export const DIVERGENCES: readonly DivergenceRow[] = Object.freeze([
   {
@@ -54,6 +63,20 @@ export const DIVERGENCES: readonly DivergenceRow[] = Object.freeze([
       "its entries go stale and fail the run until they are removed from `SCENARIO_EXPECTATIONS`,",
       'and the row goes.',
     ],
+  },
+  {
+    id: 'DIV-S1I-2',
+    title: 'the last active key of a kind cannot be revoked (Stage 1 internal, resolved toward both chains)',
+    what:
+      "Revoking an attestor (or verifier) key when it is the last active key of its kind: Stage 1's Solana program refuses it with `LastKeyOfKind` (merces_registry lib.rs:239-245, `attestor_count >= 2`) and its EVM contract with `LastActiveKey` (MercesRegistry.sol:331-335, `active == 1`); Stage 1's TS reference simulator revokes it (simulator.ts:535-546: `revoke_attestor` and `revoke_verifier_key` set the key inactive with no check). The merces backend refuses it as both chains do, each personality under its chain's name (S4 D5, D9).",
+    why: "Stage 1 wins, and its SPEC and both of its programs refuse it (SPEC §1.4, SPEC.md:96: \"The registry refuses to revoke the last active key of a kind unless a replacement is registered in the same transaction\"); only its TS reference lets the last key go, and the live adapters must agree with the chains. The canonical model has no Stage 1 name for the case (each chain names it), so the expect_revert names it per personality. Reported to Stage 1.",
+    milestone: "until Stage 1's TS reference refuses the last key (reported to Stage 1)",
+    seen: "our S4 signature scenario S4d (11's prefix, then attestor2 and attestor1 revoked in turn), which runs on the merces backend only: the reference has no last-key rule, so lockstep (which needs both sides to succeed or both to revert) cannot compare it; no Stage 1 vector revokes the last key",
+    lift: [
+      "When Stage 1's reference refuses the last key, S4d runs on every backend (its expect_revert then needs Stage 1's canonical name for the case, or stays per personality on the merces backend),",
+      'and the row goes.',
+    ],
+    shownBy: ['S4d'],
   },
 ]);
 

@@ -62,8 +62,8 @@ export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: OpKind; sh
   open_raise: { canonical: 'openRaise (the phase ends from the series durations)', kind: 'direct' },
   cancel_raise: { canonical: 'cancelRaise', kind: 'direct' },
   allowlist: { canonical: 'setAllowlist', kind: 'direct' },
-  register_attestor: { canonical: 'registerAttestor', kind: 'shim', shim: 'SH-REG-2' },
-  revoke_attestor: { canonical: 'registerAttestor(active=false) (Stage 1: forward-only with a 45-day grace)', kind: 'shim', shim: 'SH-REG-2' },
+  register_attestor: { canonical: "registerAttestor of the vector key's 20-byte address (each personality's registry rules)", kind: 'direct' },
+  revoke_attestor: { canonical: 'revokeAttestor (forward-only, the 45-day grace on report and FX signatures, never the last active key)', kind: 'direct' },
   register_verifier_key: { canonical: 'registerVerifierKey (ed25519; Stage 1: secp256k1)', kind: 'shim', shim: 'SH-REG-3' },
   commit_bid: { canonical: "commitBid (Stage 1's keccak commitment from the plaintext and the bidder's wallet; u64 price and quantity)", kind: 'direct' },
   reveal_bid: { canonical: 'revealBid', kind: 'direct' },
@@ -210,26 +210,30 @@ async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepRepor
       const diverging = merces.runs.filter((r) => r.status === 'PASS-WITH-DIVERGENCES').length;
       details.push(`merces backend: ${at}/${merces.runs.length} run(s) at expected status (${runner.TARGETS.length} targets and ${gates} prefix gates × personalities; ${diverging} run(s) with accepted divergences, see VECTOR_PARITY.md)`);
       for (const r of merces.runs.filter((x) => !x.atExpected)) details.push(`merces ${r.vector} [${r.world}]: ${r.status}, expected ${runner.describeExpected(r.expected)}`);
-      // our S3 claim scenarios (S3 plan WP2): Stage 1's simulator, ours on both personalities, and the two in lockstep
+      // our scenarios (the S3 claim set, S3 plan WP2; the S4 signature set, S4 plan §4): Stage 1's simulator, ours on
+      // both personalities, and the two in lockstep; a merces-only scenario (S4d) runs on the merces backend alone
       const scenarioReports: typeof reports = [];
       let scenarios: Awaited<ReturnType<typeof runner.runScenarios>>['scenarios'] = [];
+      let skipped = 0;
       for (const backend of ['reference', 'merces', 'lockstep'] as const) {
         const r = await runner.runScenarios({ vectorsDir: dir, backend });
         scenarios = r.scenarios;
+        skipped += r.skipped.length;
         scenarioReports.push(r.report);
       }
       sections = runner.renderScenarios(scenarios, scenarioReports);
       const scenarioRuns = scenarioReports.flatMap((r) => r.runs);
       const scenariosOk = scenarioReports.every((r) => r.ok);
       const scenarioDiverging = scenarioRuns.filter((r) => r.status === 'PASS-WITH-DIVERGENCES').length;
-      details.push(`S3 claim scenarios (ours): ${scenarios.length} scenario(s), ${scenarioRuns.filter((r) => r.status === 'PASS').length}/${scenarioRuns.length} run(s) PASS on the reference, merces and lockstep backends${scenarioDiverging ? `, ${scenarioDiverging} PASS-WITH-DIVERGENCES on a recorded Stage 1-internal difference resolved toward both chains (see VECTOR_PARITY.md)` : ''}; ${scenarioRuns.filter((r) => r.atExpected).length}/${scenarioRuns.length} at expected status`);
+      const sets = runner.SCENARIO_SETS.map((x) => `${scenarios.filter((s) => runner.scenarioSetOf(s) === x).length} ${x.id}`).join(', ');
+      details.push(`our scenarios: ${scenarios.length} (${sets}), ${scenarioRuns.filter((r) => r.status === 'PASS').length}/${scenarioRuns.length} run(s) PASS on the reference, merces and lockstep backends${scenarioDiverging ? `, ${scenarioDiverging} PASS-WITH-DIVERGENCES on a recorded Stage 1-internal difference resolved toward both chains (see VECTOR_PARITY.md)` : ''}${skipped ? `, ${skipped} backend(s) skipped by merces-only scenarios` : ''}; ${scenarioRuns.filter((r) => r.atExpected).length}/${scenarioRuns.length} at expected status`);
       for (const r of scenarioRuns.filter((x) => !x.atExpected)) details.push(`scenario ${r.vector} [${r.world}]: ${r.status}, expected ${runner.describeExpected(r.expected)}`);
       status = merces.ok && scenariosOk ? 'ok' : 'fail';
       summary = !merces.ok
         ? `${merces.runs.length - at} run(s) below their expected status: our simulator disagrees with Stage 1`
         : scenariosOk
-          ? `every target and prefix gate is at its expected status on both personalities, and our S3 claim scenarios are at theirs in lockstep; ${refLine}`
-          : `${scenarioRuns.filter((r) => !r.atExpected).length} S3 claim scenario run(s) are below their expected status: our simulator disagrees with Stage 1`;
+          ? `every target and prefix gate is at its expected status on both personalities, and our scenarios are at theirs (in lockstep where Stage 1's simulator models the rule); ${refLine}`
+          : `${scenarioRuns.filter((r) => !r.atExpected).length} scenario run(s) of ours are below their expected status: our simulator disagrees with Stage 1`;
     }
   } catch (e) {
     status = 'fail';

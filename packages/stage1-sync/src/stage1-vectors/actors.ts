@@ -1,5 +1,6 @@
 import type { ChainFamily } from '@merces/domain';
 import { SimWallet, deriveAddress, simAdminWallet } from '@merces/simulator';
+import { RunnerError } from './errors.ts';
 
 /**
  * Vector actors as simulator wallets (S1 plan §5.1 `actors.ts`, target-vectors reader §7).
@@ -9,6 +10,12 @@ import { SimWallet, deriveAddress, simAdminWallet } from '@merces/simulator';
  * addresses of their own family. `keeper` is an ordinary wallet: Stage 1 uses it as the permissionless caller of
  * user-shaped calls (`claim` by a non-holder). The admin multisig is `simAdminWallet`; the allowlist manager and the
  * keeper role submit service commands. The fee collector is the chain's own `state.feeCollector`, not an actor.
+ *
+ * A name the vector gives a key (`keys[name]`: `attestor1`, `attestor2`, `verifier1`, …) is that key's 20-byte address
+ * on both personalities (S4 WP5): `register_attestor` registers `keys[name].address`, as Stage 1's harnesses do
+ * (vectors README:48-50). Its wallet is the **transitional co-signing wallet** at the key's address: the flows that
+ * still take an attestor's co-signature instead of its signature (pause approval, amendment, extinguishment, tier-3 and
+ * FX reports) sign with it until each moves to Stage 1's signatures (S4 WP9-WP12), and it is gone in S4 WP13.
  */
 export class Actors {
   readonly admin: SimWallet;
@@ -19,16 +26,25 @@ export class Actors {
     readonly family: ChainFamily,
     readonly vectorName: string,
     known: readonly string[] = [],
+    private readonly keys: Readonly<Record<string, { address?: unknown }>> = {},
   ) {
     this.admin = simAdminWallet(family);
     for (const n of known) this.wallet(n);
   }
 
-  /** The wallet of a vector name (created on first use). */
+  /** The 20-byte address of vector key `name`, lowercase, or undefined when the vector has no such key. */
+  keyAddress(name: string): string | undefined {
+    const a = this.keys[name]?.address;
+    if (a === undefined) return undefined;
+    if (typeof a !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(a)) throw new RunnerError(`the vector's key ${name} has no 20-byte address`);
+    return a.toLowerCase();
+  }
+
+  /** The wallet of a vector name (created on first use): a key's own address for a name with a vector key. */
   wallet(name: string): SimWallet {
     let w = this.wallets.get(name);
     if (!w) {
-      w = new SimWallet(this.family, `v:${this.vectorName}:${name}`);
+      w = new SimWallet(this.family, `v:${this.vectorName}:${name}`, this.keyAddress(name));
       this.wallets.set(name, w);
       this.names.set(w.address, name);
     }

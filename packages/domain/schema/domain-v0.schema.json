@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://merces.dev/schema/domain-v0.json",
   "title": "Merces canonical domain model v0",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "envelope": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "oneOf": [
@@ -3879,14 +3879,80 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 64
+              }
+            },
+            "required": [
+              "attestor"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "AttestorRevoked"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "attestor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
               },
-              "active": {
-                "type": "boolean"
+              "revokedAt": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
               }
             },
             "required": [
               "attestor",
-              "active"
+              "revokedAt"
             ],
             "additionalProperties": false
           }
@@ -6061,14 +6127,31 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64
+        }
+      },
+      "required": [
+        "attestor"
+      ],
+      "additionalProperties": false
+    },
+    "AttestorRevoked": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "attestor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
         },
-        "active": {
-          "type": "boolean"
+        "revokedAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         }
       },
       "required": [
         "attestor",
-        "active"
+        "revokedAt"
       ],
       "additionalProperties": false
     },
@@ -7881,15 +7964,57 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64
-        },
-        "active": {
-          "type": "boolean"
         }
       },
       "required": [
         "kind",
-        "attestor",
-        "active"
+        "attestor"
+      ],
+      "additionalProperties": false
+    },
+    "revokeAttestor": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "revokeAttestor"
+        },
+        "attestor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "kind",
+        "attestor"
+      ],
+      "additionalProperties": false
+    },
+    "rotateAttestor": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "rotateAttestor"
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "kind",
+        "from",
+        "to"
       ],
       "additionalProperties": false
     },

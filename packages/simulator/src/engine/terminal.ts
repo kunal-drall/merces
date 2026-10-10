@@ -15,9 +15,9 @@ import { syncReleaseBlock, syncStatus } from './status.ts';
  * `settleHolderDelta` for a holder's share of it.
  */
 
-/** A co-signing attestor must be registered and active (Stage 1 `requireActiveAttestor`; no revocation grace here). */
-function requireCoSigningAttestor(e: EngineCore, signers: string[], attestor: string, what: string): void {
-  if (!signers.includes(attestor) || !e.state.attestors.get(attestor)) fail('InvalidAttestorSignature', `${what} needs an active attestor as co-signer`);
+/** A co-signing attestor must be registered and active (Stage 1 `requireActiveAttestor`; no revocation grace here, S4 D5). */
+function requireCoSigningAttestor(e: EngineCore, signers: string[], attestor: string, now: number, what: string): void {
+  if (!signers.includes(attestor) || !e.attestorUsable(attestor, now)) fail('InvalidAttestorSignature', `${what} needs an active attestor as co-signer`);
 }
 
 // ------------------------------------------------------------------ amendments
@@ -36,7 +36,7 @@ export function amendTerms(e: EngineCore, signers: string[], cmd: Extract<Comman
   const s = e.series(cmd.seriesId);
   if (signers[0] !== s.issuer) fail('NotIssuer', 'only the issuer may amend the terms');
   if (TERMINAL.has(s.status)) fail('AmendmentAfterTerminal', `series is ${s.status}`);
-  requireCoSigningAttestor(e, signers, cmd.attestor, 'an amendment');
+  requireCoSigningAttestor(e, signers, cmd.attestor, now, 'an amendment');
   const newCap = big(cmd.capMultipleWad);
   const b = PARAMETER_BOUNDS.capMultipleWad;
   if (newCap > s.terms.capMultipleWad || newCap < b.min || newCap > b.max) fail('UnfavourableAmendment', 'the cap multiple may only decrease, within [2, 3]');
@@ -75,8 +75,8 @@ export function extinguish(e: EngineCore, signers: string[], cmd: Extract<Comman
   const s = e.series(cmd.seriesId);
   const [a1, a2] = cmd.attestors as [string, string];
   if (a1 === a2) fail('SameAttestor', 'two distinct attestors are required');
-  requireCoSigningAttestor(e, signers, a1, 'an extinguishment');
-  requireCoSigningAttestor(e, signers, a2, 'an extinguishment');
+  requireCoSigningAttestor(e, signers, a1, now, 'an extinguishment');
+  requireCoSigningAttestor(e, signers, a2, now, 'an extinguishment');
   if (s.phase !== 'Settled') fail('RaiseNotSettled', 'the raise has not settled');
   if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids');
   if (s.status === 'Extinguished') fail('TerminalStatus', 'already extinguished');

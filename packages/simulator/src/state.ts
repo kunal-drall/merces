@@ -15,11 +15,15 @@ import type { PersonalityConfig } from './addresses.ts';
  * `Ledger.unit_scale`), the stake and tender totals and the census time, and each holder's `stakedUnits`. Every money
  * path takes the unit scale through `@merces/math`'s scale-aware family (Stage 1's own functions at scale 1). The
  * curve record (`SimCurve`: the stand-in pool, its base-mint accounts and its proceeds) was completed under the same
- * version before anything was deployed (S3 WP8). States of another version are never upgraded in place.
+ * version before anything was deployed (S3 WP8).
+ *
+ * Version 5 (S4) holds Stage 1's key registry: each attestor key is a `SimKey` (`{active, revokedAt}`, Stage 1's
+ * `AttestorKey` / EVM `KeyInfo`), so a revoked key keeps its revocation time for Stage 1's 45-day grace on report and
+ * FX signatures (was a boolean). States of another version are never upgraded in place.
  */
-export const SIM_STATE_VERSION = 4;
+export const SIM_STATE_VERSION = 5;
 
-/** A persisted simulator state from another layout (version 1 before S1, 2 before S2, 3 before S3): never upgraded in place, reset it. */
+/** A persisted simulator state from another layout (version 1 before S1, 2 before S2, 3 before S3, 4 before S4): never upgraded in place, reset it. */
 export class SimStateVersionError extends Error {
   constructor(readonly found: unknown) {
     super(`simulator state version ${String(found ?? 1)} is not supported (this build needs version ${SIM_STATE_VERSION}); reset the simulator chains with \`pnpm --filter @merces/simulator sim:reset\` (RUNBOOK.md)`);
@@ -433,6 +437,16 @@ export interface SimRateAccumulator {
   days: { dayIndex: number; rateWad: bigint; cumSumWad: bigint; cumCount: number }[];
 }
 
+/**
+ * A registered signing key (Stage 1 `AttestorKey {addr20, active, revoked_at}`, registry state.rs; EVM `KeyInfo
+ * {registered, active, revokedAt}`, MercesTypes.sol): a key in the map is registered. `revokedAt` is the unix time of its
+ * last revocation, null while it was never revoked or since it was registered again (Stage 1 stores 0).
+ */
+export interface SimKey {
+  active: boolean;
+  revokedAt: number | null;
+}
+
 export interface SimState {
   /** layout version; persisted states of another version are refused (see `deserialiseState`) */
   version: typeof SIM_STATE_VERSION;
@@ -446,7 +460,8 @@ export interface SimState {
   txCount: number;
   balances: Map<string, bigint>;
   allowlist: Set<string>;
-  attestors: Map<string, boolean>;
+  /** Stage 1's attestor registry by address: active keys and revoked ones (with their revocation time) */
+  attestors: Map<string, SimKey>;
   verifierKeys: Map<string, { publicKey: string; active: boolean }>;
   issuers: Map<string, SimIssuer>;
   series: Map<string, SimSeries>;
@@ -464,7 +479,7 @@ export function serialiseState(s: SimState): string {
   });
 }
 
-/** Parse a persisted state. Throws `SimStateVersionError` unless it is version 4: older states are never upgraded. */
+/** Parse a persisted state. Throws `SimStateVersionError` unless it is version 5: older states are never upgraded. */
 export function deserialiseState(json: string): SimState {
   const state = JSON.parse(json, (_k, v) => {
     if (v && typeof v === 'object') {

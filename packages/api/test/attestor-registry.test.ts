@@ -13,6 +13,11 @@ function e2e(plain: string): string {
   return Buffer.concat([iv, c.update(plain, 'utf8'), c.final(), c.getAuthTag()]).toString('base64');
 }
 
+/*
+ * S4 cause codes:
+ *  - S4-REG: Stage 1's key registry (S4 WP5): a deactivation is `revokeAttestor`, a registration `registerAttestor{attestor}`.
+ */
+
 /** A-M5-2: attestor access follows the indexed onchain registry of the addressed wallet itself, chain by chain. */
 describe.skipIf(!dbTestsEnabled())('attestor access follows the indexed registry, wallet by wallet', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -36,7 +41,7 @@ describe.skipIf(!dbTestsEnabled())('attestor access follows the indexed registry
     expect((await rig.get(`/attestor/hardship/${hardshipId}`, both)).statusCode).toBe(200);
 
     // the multisig deactivates the monad wallet; once indexed, its cases close to this account
-    await h.exec(h.admin, { kind: 'registerAttestor', attestor: h.attestors[0]!.address, active: false });
+    await h.exec(h.admin, { kind: 'revokeAttestor', attestor: h.attestors[0]!.address }); // cause S4-REG (was registerAttestor{active: false})
     await rig.sync();
     expect((await rig.get(`/attestor/queue`, both)).statusCode).toBe(200); // the solana registration still passes the tier
     expect((await rig.get(`/attestor/queue`, both)).json().hardship.map((x: { hardshipId: string }) => x.hardshipId)).not.toContain(hardshipId);
@@ -71,7 +76,7 @@ describe.skipIf(!dbTestsEnabled())('attestor access follows the indexed registry
     await rig.sync();
     await seedAmendment('monad', seriesId, m.issuer.address, 'amend-late');
     const late = new SimWallet('evm', 'late-attestor');
-    await m.exec(m.admin, { kind: 'registerAttestor', attestor: late.address, active: true }); // onchain, not indexed yet
+    await m.exec(m.admin, { kind: 'registerAttestor', attestor: late.address }); // onchain, not indexed yet; cause S4-REG (was {active: true})
     const viaSolana = rig.token({ accountId: 'att-late', roles: [], wallets: [{ chain: 'solana', address: rig.sol.attestors[0]!.address }, { chain: 'monad', address: late.address }] });
     expect((await rig.post('/attestor/amendments/amend-late/attest', { attestorWallet: late.address, approve: true }, viaSolana)).statusCode).toBe(422);
     const admin = rig.token({ accountId: 'adm-att', roles: ['admin'], wallets: [{ chain: 'monad', address: late.address }] });
@@ -91,7 +96,7 @@ describe.skipIf(!dbTestsEnabled())('attestor access follows the indexed registry
     await new IdentityService(rig.ctx).seedAccount({ accountId: 'att-y', wallets: [{ chain: 'solana', address: rig.sol.attestors[1]!.address, family: 'solana' }, { chain: 'monad', address: monAtt, family: 'evm' }], roles: [], eligible: false });
     const tok = rig.token({ accountId: 'att-y', roles: [], wallets: [{ chain: 'solana', address: rig.sol.attestors[1]!.address }, { chain: 'monad', address: monAtt }] });
     expect((await rig.get(`/series/${seriesId}/amendments`, tok)).statusCode).toBe(200);
-    await m.exec(m.admin, { kind: 'registerAttestor', attestor: monAtt, active: false });
+    await m.exec(m.admin, { kind: 'revokeAttestor', attestor: monAtt }); // cause S4-REG (was registerAttestor{active: false})
     await rig.sync();
     // the solana registration no longer opens the monad series' amendments
     expect((await rig.get(`/series/${seriesId}/amendments`, tok)).statusCode).toBe(403);

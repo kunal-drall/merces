@@ -398,7 +398,11 @@ if (KEY_GRACE_SECONDS !== 3_888_000) throw new Error('KEY_GRACE_SECONDS is not S
 /** A registered key as the chain holds it (Stage 1 `AttestorKey` / `VerifierKey`, EVM `KeyInfo`). */
 export interface SignerKeyState {
   kind: SignerKind;
-  /** 0x + 40 lowercase hex */
+  /**
+   * The key's address as the chain registered it: 0x + 40 lowercase hex (a secp256k1 key's 20-byte address). Until
+   * S4 WP7 makes attestor addresses 20-byte keys everywhere, a simulator chain may also hold an attestor registered
+   * under a wallet address of its family (the transitional co-signing attestors).
+   */
   address: string;
   active: boolean;
   /** unix seconds; null while the key was never revoked */

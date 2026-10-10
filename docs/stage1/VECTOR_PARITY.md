@@ -64,6 +64,16 @@ No Stage 1 vector carries a divergence: DIV-NRC-1 (the non-reveal charge, held i
 
 Not reached by a Stage 1 vector; reached by our scenario S3l (see "S3 claim scenarios").
 
+### DIV-S1I-2: the last active key of a kind cannot be revoked (Stage 1 internal, resolved toward both chains)
+
+- What: Revoking an attestor (or verifier) key when it is the last active key of its kind: Stage 1's Solana program refuses it with `LastKeyOfKind` (merces_registry lib.rs:239-245, `attestor_count >= 2`) and its EVM contract with `LastActiveKey` (MercesRegistry.sol:331-335, `active == 1`); Stage 1's TS reference simulator revokes it (simulator.ts:535-546: `revoke_attestor` and `revoke_verifier_key` set the key inactive with no check). The merces backend refuses it as both chains do, each personality under its chain's name (S4 D5, D9).
+- Why: Stage 1 wins, and its SPEC and both of its programs refuse it (SPEC §1.4, SPEC.md:96: "The registry refuses to revoke the last active key of a kind unless a replacement is registered in the same transaction"); only its TS reference lets the last key go, and the live adapters must agree with the chains. The canonical model has no Stage 1 name for the case (each chain names it), so the expect_revert names it per personality. Reported to Stage 1.
+- Seen: our S4 signature scenario S4d (11's prefix, then attestor2 and attestor1 revoked in turn), which runs on the merces backend only: the reference has no last-key rule, so lockstep (which needs both sides to succeed or both to revert) cannot compare it; no Stage 1 vector revokes the last key
+- Until: until Stage 1's TS reference refuses the last key (reported to Stage 1)
+- Lifting it: When Stage 1's reference refuses the last key, S4d runs on every backend (its expect_revert then needs Stage 1's canonical name for the case, or stays per personality on the merces backend), and the row goes.
+
+No entries: not reached by a Stage 1 vector; shown by our merces-only scenario S4d, as an expected revert (see "S4 signature scenarios").
+
 ## Prefix gates
 
 A vector that needs a later milestone is replayed on the merces backend up to its gate, the last step before the first one the merces backend cannot run yet; every step up to the gate must pass (PREFIX-PASS), so the auction prefix and everything else before the gate stays protected. Gates measured on S2 and again on S3 WP2, unchanged: a full replay's first finding is the step after each gate, on both personalities and in lockstep.
@@ -100,7 +110,6 @@ The merces backend runs these Stage 1 ops through canonical calls of another sha
 | ID | Stage 1 op | Our call | Why it is a shim | Removed in | Used in |
 | --- | --- | --- | --- | --- | --- |
 | SH-REG-1 | `register_issuer` | registerIssuer signed by that wallet | Stage 1 registers issuers admin-only (STAGE1_INTEGRATION.md B.7) | S5 | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 14, 15, 16, 17, 19, 20, 21, 22, 23, 25 |
-| SH-REG-2 | `register_attestor`, `revoke_attestor` | admin registerAttestor{active} | no 45-day revocation grace modelled | S4 | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 14, 15, 16, 17, 19, 20, 21, 22, 23, 25 |
 | SH-REG-3 | `register_verifier_key` | registerVerifierKey{keyId: name, ed25519 SPKI from the seed} | Stage 1 verifier keys are secp256k1 | S4 | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 14, 15, 16, 17, 19, 20, 21, 22, 23, 25 |
 | SH-REG-4 | `create_series` | createSeries (USDC, USD, sealed; due/grace/notice days from config.parameters; tier bitmask → object; atOffsetSeconds → afterSeconds); window durations and windowFeeBps held by the runner, their Stage 1 bounds unchecked | canonical terms lack those fields | S5 | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 14, 15, 16, 17, 19, 20, 21, 22, 23, 25 |
 | SH-REP-1 | `submit_report` | submitReport{prior, income, Groth16 proof and signals}; tier-2 attestation signed by the runner with the named key; tier 3 co-signed by the attestor | signatures are S4; proofs are real | S4 | 01, 04, 05, 06, 07, 08, 09, 10, 11, 14, 15, 16, 17, 19, 20, 22, 23, 25 |
@@ -162,35 +171,45 @@ The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, a
 - S3k_claim_nothing: Claims of nothing succeed (the zero-amount rule), the claims of 21 #48-#57 that its gate (#40) keeps from running: on 21 without its pause steps (#40-#43: the 2^64 pause end and withdraw_pause_request are S5, with the expects that count the pause nonce), the series retires at exactly its cap (#46); b1's claim pays and burns, its second claim pays and burns nothing, burn_retired of nothing is a burn of 0 (a holder already burned, a wallet that never held units), b2's units burn and its pending payout stays claimable, an allowlisted wallet that is not a registered holder is refused (a precondition, not a zero amount), and the other holders claim. Then claims of nothing again: b1 on the Retired series and the keeper's burn of an unknown wallet.
 - S3l_final_with_open_ask_after_redemption: On 22's prefix to #70 and S2's window up to its reveals (#79-#83: b1 asks 40 of its 100 units, b5 bids for them), S2 redeems with the ask still open and is extinguished: the unvested 10,500 USDC is the final pool over the 400 units at redemption, 26.25 a unit. b1's claim_final redeems its 60 free units first; both Stage 1 chains then weigh its share on its redeemed units plus the 40 in the ask's escrow (MercesVault.sol:658, claims.rs:486-490), 2,625 USDC, as for every other 100-unit holder, and so do we. Stage 1's TS reference weighs it on the 60 redeemed units only (SIM:1460), 1,575 USDC; when the window ends in NoMatch on the terminal series (#84-#86) and returns the 40 units, b1's second claim_final redeems them at P_redeem with a share of 0, so 1,050 USDC stays in its vault for good, where ours (as both chains) ends at 0. The expects carry Stage 1's simulator's values: the merces backend differs from them on exactly b1's balance and the vault (DIV-S1I-1, a Stage 1-internal difference resolved toward both chains; reported to Stage 1), and the backends part in lockstep right after b1's first claim_final. Expected on the merces and lockstep backends: PASS-WITH-DIVERGENCES (DIV-S1I-1: 4 field(s) at #79, #87; lockstep parts at #78).
 
+## S4 signature scenarios (ours)
+
+Stage 1's key registry and signatures on paths no Stage 1 vector takes (S4 plan §4), written in Stage 1's op format (`packages/stage1-sync/test/fixtures/s4-signatures`, `pnpm stage1:vectors --scenarios`). Where Stage 1's reference models the rule (a key's revocation grace), a scenario runs on the reference, the merces backend and in lockstep, like the S3 scenarios. Where only Stage 1's chains do (the last-key rule: Stage 1's reference revokes the last key, both chains refuse it, DIV-S1I-2), the scenario runs on the merces backend only, its `expect_revert` naming each personality's own error (Solana `LastKeyOfKind`, EVM `LastActiveKey`), and the reference and lockstep columns read "not run".
+
+| Scenario | Covers | Built from | reference | merces/solana | merces/monad | lockstep/solana | lockstep/monad |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| S4d_last_attestor_key | (d) | 11 #0-#34 as #0-#34; ours as #35-#41 | not run (merces only) | PASS 42/42 | PASS 42/42 | not run (merces only) | not run (merces only) |
+
+- S4d_last_attestor_key: The last active attestor key cannot be revoked (S4 D5, D9; amendment fix 1). On 11's prefix to its expect after the 2026Q3 report (#34), with attestor1 and attestor2 registered: attestor2 is revoked, so attestor1 is the last active key and its revocation is refused, each personality under its chain's name (Solana LastKeyOfKind, merces_registry lib.rs:242-245; EVM LastActiveKey, MercesRegistry.sol:333-335). Revoking attestor2 again is refused as a key that is not active (KeyAlreadyRevoked on Solana, KeyNotRegistered on the EVM). attestor2 is registered again (active, its revocation cleared), so attestor1 may now go; an extinguishment naming the revoked attestor1 is then refused (extinguishment needs active keys, no grace), and attestor2, alone again, cannot be revoked. Stage 1's reference simulator revokes with no last-key check (simulator.ts:535-546), so this runs on the merces backend only, not on the reference or in lockstep (DIV-S1I-2).
+
 ## Inventory
 
 | Vector | Steps | Expect checks | Expected reverts | Ops the merces backend shims, blocks or lacks |
 | --- | --- | --- | --- | --- |
-| 01_happy_path.json | 67 | 10 | 9 | `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report`, `transfer_units` |
-| 02_failed_auction.json | 38 | 4 | 7 | `create_series`, `register_attestor`, `register_issuer`, `register_verifier_key` |
-| 03_auction_edges.json | 78 | 7 | 12 | `create_series`, `register_attestor`, `register_issuer`, `register_verifier_key` |
-| 04_zero_quarters.json | 81 | 7 | 6 | `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 05_cap_hit.json | 54 | 6 | 4 | `amend_terms`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
-| 06_redemption_terms.json | 116 | 9 | 5 | `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 07_late_payment.json | 59 | 10 | 2 | `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 08_hardship_pause.json | 64 | 7 | 8 | `approve_pause`, `create_series`, `end_pause`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
-| 09_tail_clause.json | 95 | 7 | 4 | `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 10_transfer_window.json | 92 | 6 | 12 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `set_flags`, `submit_report`, `transfer_units`, `window_commit_bid` |
-| 11_extinguishment.json | 52 | 4 | 7 | `amend_terms`, `create_series`, `extinguish`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `revoke_attestor`, `submit_report` |
-| 12_multi_series_router.json | 118 | 10 | 6 | `close_router_period`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `resume_issuance`, `route_income`, `stop_issuance`, `submit_report` |
-| 13_fx.json | 281 | 5 | 10 | `create_series`, `fx_snapshot`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
-| 14_amendment.json | 83 | 6 | 8 | `amend_terms`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
-| 15_zero_valid_bids.json | 35 | 4 | 7 | `create_series`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 16_demand_limited_window.json | 77 | 6 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `set_flags`, `submit_report`, `window_commit_bid` |
-| 17_undelivered_winner.json | 51 | 4 | 4 | `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 18_report_before_finalization.json | 51 | 6 | 5 | `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `route_income`, `submit_report` |
-| 19_pause_while_late.json | 60 | 8 | 4 | `approve_pause`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report` |
-| 20_tier3_trueup.json | 120 | 11 | 12 | `create_series`, `pay`, `pay_trueup`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report`, `submit_trueup` |
-| 21_entry_rules.json | 61 | 5 | 10 | `approve_pause`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
-| 22_late_holder_tail_final.json | 111 | 6 | 1 | `begin_window_settlement`, `commit_ask`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
-| 23_redeem_twice_with_tail.json | 63 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report` |
-| 24_inverted_fx.json | 94 | 2 | 0 | `create_series`, `fx_snapshot`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
-| 25_window_on_terminal.json | 91 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
+| 01_happy_path.json | 67 | 10 | 9 | `create_series`, `pay`, `redeem`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report`, `transfer_units` |
+| 02_failed_auction.json | 38 | 4 | 7 | `create_series`, `register_issuer`, `register_verifier_key` |
+| 03_auction_edges.json | 78 | 7 | 12 | `create_series`, `register_issuer`, `register_verifier_key` |
+| 04_zero_quarters.json | 81 | 7 | 6 | `create_series`, `pay`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 05_cap_hit.json | 54 | 6 | 4 | `amend_terms`, `create_series`, `pay`, `redeem`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
+| 06_redemption_terms.json | 116 | 9 | 5 | `create_series`, `pay`, `redeem`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 07_late_payment.json | 59 | 10 | 2 | `create_series`, `pay`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 08_hardship_pause.json | 64 | 7 | 8 | `approve_pause`, `create_series`, `end_pause`, `pay`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
+| 09_tail_clause.json | 95 | 7 | 4 | `create_series`, `pay`, `redeem`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 10_transfer_window.json | 92 | 6 | 12 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_issuer`, `register_verifier_key`, `reveal_order`, `set_flags`, `submit_report`, `transfer_units`, `window_commit_bid` |
+| 11_extinguishment.json | 52 | 4 | 7 | `amend_terms`, `create_series`, `extinguish`, `pay`, `redeem`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 12_multi_series_router.json | 118 | 10 | 6 | `close_router_period`, `create_series`, `pay`, `register_issuer`, `register_verifier_key`, `resume_issuance`, `route_income`, `stop_issuance`, `submit_report` |
+| 13_fx.json | 281 | 5 | 10 | `create_series`, `fx_snapshot`, `pay`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
+| 14_amendment.json | 83 | 6 | 8 | `amend_terms`, `create_series`, `pay`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
+| 15_zero_valid_bids.json | 35 | 4 | 7 | `create_series`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 16_demand_limited_window.json | 77 | 6 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_issuer`, `register_verifier_key`, `reveal_order`, `set_flags`, `submit_report`, `window_commit_bid` |
+| 17_undelivered_winner.json | 51 | 4 | 4 | `create_series`, `pay`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 18_report_before_finalization.json | 51 | 6 | 5 | `create_series`, `pay`, `redeem`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `route_income`, `submit_report` |
+| 19_pause_while_late.json | 60 | 8 | 4 | `approve_pause`, `create_series`, `pay`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report` |
+| 20_tier3_trueup.json | 120 | 11 | 12 | `create_series`, `pay`, `pay_trueup`, `redeem`, `register_issuer`, `register_verifier_key`, `submit_report`, `submit_trueup` |
+| 21_entry_rules.json | 61 | 5 | 10 | `approve_pause`, `create_series`, `pay`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
+| 22_late_holder_tail_final.json | 111 | 6 | 1 | `begin_window_settlement`, `commit_ask`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
+| 23_redeem_twice_with_tail.json | 63 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report` |
+| 24_inverted_fx.json | 94 | 2 | 0 | `create_series`, `fx_snapshot`, `pay`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
+| 25_window_on_terminal.json | 91 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
 
 ### Ops used and how they run on the merces backend
 
@@ -207,7 +226,7 @@ The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, a
 | `fund` | 136 | simulator fund (test faucet) | harness |
 | `pay` | 87 | payIn (period and amount supplied by the runner) | shim (SH-PAY-1) |
 | `claim` | 81 | claimPayout | direct |
-| `register_attestor` | 51 | registerAttestor | shim (SH-REG-2) |
+| `register_attestor` | 51 | registerAttestor of the vector key's 20-byte address (each personality's registry rules) | direct |
 | `begin_settlement` | 42 | beginSettlement (permissionless; sent by the keeper) | direct |
 | `claim_release` | 41 | drawRelease | direct |
 | `create_series` | 41 | createSeries (window durations and fee held by the runner) | shim (SH-REG-4) |
@@ -246,7 +265,7 @@ The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, a
 | `transfer_units` | 2 | none: a direct unit transfer, used only inside expect_revert (DirectTransferForbidden); the canonical model has no transfer to refuse | n/a (NA-1) |
 | `cancel_raise` | 1 | cancelRaise | direct |
 | `resume_issuance` | 1 | none | not yet (S5) |
-| `revoke_attestor` | 1 | registerAttestor(active=false) (Stage 1: forward-only with a 45-day grace) | shim (SH-REG-2) |
+| `revoke_attestor` | 1 | revokeAttestor (forward-only, the 45-day grace on report and FX signatures, never the last active key) | direct |
 | `stop_issuance` | 1 | stopIssuance | not yet (S5) |
 
 ### Expect fields

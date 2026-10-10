@@ -9,7 +9,8 @@ import { GENESIS } from './helpers.ts';
 /*
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
- *    the builders take no series, window or side, and the salt is 32 bytes.
+ *    the builders take no series, window or side, and the salt is 32 bytes;
+ *  - S4-ERR: the key registry's error names, each personality's own chain's (S4 D9).
  */
 
 /*
@@ -42,11 +43,21 @@ describe('Stage 1 error names on simulator errors', () => {
     const solana = read('solana/programs/merces_protocol/src/error.rs') + read('solana/programs/merces_registry/src/error.rs');
     const evm = read('evm/src/types/MercesErrors.sol');
     expect(Object.keys(STAGE1_SOLANA_CODE).length).toBeGreaterThan(0);
+    // cause S4-ERR (D9; amendment D9): AccountNotInitialized is Anchor's built-in error 3012, which Stage 1's error.rs
+    // files do not declare; Stage 1's own LiteSVM harness names it (vectors.rs `ACCOUNT_NOT_INITIALIZED: u32 = 3012`, the
+    // code an instruction on a key account that was never created fails with), so its existence is checked there
+    const harness = read('solana/tests/src/vectors.rs');
     for (const name of Object.keys(STAGE1_SOLANA_CODE)) {
       expect(isErrorName(name), name).toBe(false);
-      expect(solana, name).toMatch(new RegExp(`^\\s+${name},\\s*$`, 'm'));
+      if (name === 'AccountNotInitialized') {
+        expect(solana, name).not.toMatch(new RegExp(`^\\s+${name},\\s*$`, 'm'));
+        expect(harness, name).toMatch(/^const ACCOUNT_NOT_INITIALIZED: u32 = 3012;$/m);
+      } else expect(solana, name).toMatch(new RegExp(`^\\s+${name},\\s*$`, 'm'));
       expect(Object.keys(STAGE1_CODE), name).not.toContain(name);
     }
+    // cause S4-ERR: the key registry's names, each personality's own (S4 D9)
+    for (const name of ['ZeroAttestorAddress', 'KeyAlreadyRevoked', 'LastKeyOfKind', 'AccountNotInitialized']) expect(Object.keys(STAGE1_SOLANA_CODE)).toContain(name);
+    for (const name of ['ZeroAddress', 'KeyAlreadyActive', 'KeyNotRegistered', 'LastActiveKey']) expect(Object.keys(STAGE1_EVM_CODE)).toContain(name);
     for (const name of Object.keys(STAGE1_EVM_CODE)) {
       expect(isErrorName(name), name).toBe(false);
       expect(evm, name).toMatch(new RegExp(`^error ${name}\\(`, 'm'));

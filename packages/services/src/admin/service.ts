@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AppError, audit, getFlag, listFlags, setFlag } from '@merces/core';
-import { addressFamily, normaliseAddress, type AdminCommand, type ChainPort, type UnsignedTx } from '@merces/domain';
+import { addressFamily, keyGraceUntil, normaliseAddress, type AdminCommand, type ChainPort, type UnsignedTx } from '@merces/domain';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -143,25 +143,45 @@ export class AdminService {
     return { request: await this.getRequest(id), tx };
   }
 
+  /**
+   * `active: true` builds Stage 1's `registerAttestor` and `active: false` its `revokeAttestor` (forward-only, S4 WP5)
+   * for the multisig. The registry's rules are checked against the chain first, with one 409 per case on every chain
+   * (S4 D9; the chains raise their own names for them): registering a key that is already active
+   * (`detail.reason: key-already-active`; the EVM reverts KeyAlreadyActive, Solana would re-emit), revoking a key that
+   * is not active (`key-not-active`), and revoking the last active key (`last-active-key`: rotate to a new key instead;
+   * Solana LastKeyOfKind, EVM LastActiveKey). The chain itself is read (`getSignerKey`, `listSignerKeys`), not the
+   * read model, so a registration the indexer has not caught up with still counts.
+   */
   async registerAttestor(input: z.infer<typeof registerAttestorSchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
     const port = this.port(input.chain);
     const wallet = normaliseAddress(input.wallet, port.family);
     if (addressFamily(wallet) !== port.family) throw AppError.badRequest(`wallet is not a ${port.family} address`);
     const acc = await this.ctx.pool.query('select 1 from accounts where account_id = $1', [input.accountId]);
     if (!acc.rowCount) throw AppError.notFound('account');
-    // the proposal names the account that will act as attestor: it must have proven it holds this wallet, or the
-    // registry would give attestor access to whoever links the wallet instead
-    const linked = await this.ctx.pool.query('select 1 from account_wallets where chain = $1 and address = $2 and account_id = $3', [input.chain, wallet, input.accountId]);
-    if (!linked.rowCount) throw AppError.unprocessable('the wallet is not linked to that account; the account must link it (sign in with it) first');
+    if (input.active) {
+      // the proposal names the account that will act as attestor: it must have proven it holds this wallet, or the
+      // registry would give attestor access to whoever links the wallet instead. A revocation grants nothing, so it
+      // needs no link: an admin can always end a key's access
+      const linked = await this.ctx.pool.query('select 1 from account_wallets where chain = $1 and address = $2 and account_id = $3', [input.chain, wallet, input.accountId]);
+      if (!linked.rowCount) throw AppError.unprocessable('the wallet is not linked to that account; the account must link it (sign in with it) first');
+    }
+    const key = await port.getSignerKey('attestor', wallet);
+    if (input.active && key?.active) throw AppError.conflict('the attestor key is already active on this chain', { reason: 'key-already-active' });
+    if (!input.active) {
+      if (!key?.active) throw AppError.conflict('the attestor key is not active on this chain: there is nothing to revoke', { reason: 'key-not-active' });
+      const active = (await port.listSignerKeys('attestor')).filter((k) => k.active).length;
+      if (active <= 1) throw AppError.conflict('the last active attestor key of a chain cannot be revoked: rotate it to a new key instead', { reason: 'last-active-key' });
+    }
     const meta = { accountId: input.accountId, jurisdiction: input.jurisdiction ?? null, kind: input.kind ?? null };
-    const r = await this.propose(input.chain, { kind: 'registerAttestor', attestor: wallet, active: input.active }, admin, meta);
+    const command: AdminCommand = input.active ? { kind: 'registerAttestor', attestor: wallet } : { kind: 'revokeAttestor', attestor: wallet };
+    const r = await this.propose(input.chain, command, admin, meta);
     // A proposal grants nothing (A-M5-2): attestor access starts when the multisig's registerAttestor is onchain and
-    // indexed, and ends when a deactivation is indexed. Until then the account sees no hardship cases or documents.
+    // indexed, and ends when the revocation is indexed. Until then the account sees no hardship cases or documents.
     await this.ctx.pool.query(
       'insert into attestor_proposals (chain, wallet, account_id, active, request_id, proposed_by) values ($1,$2,$3,$4,$5,$6) on conflict (chain, wallet) do update set account_id = excluded.account_id, active = excluded.active, request_id = excluded.request_id, proposed_by = excluded.proposed_by, proposed_at = now()',
       [input.chain, wallet, input.accountId, input.active, r.request.requestId, admin.accountId],
     );
-    await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'attestor.register', target: `${input.chain}:${wallet}`, detail: { requestId: r.request.requestId, ...meta, active: input.active } });
+    await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: input.active ? 'attestor.register' : 'attestor.revoke', target: `${input.chain}:${wallet}`, detail: { requestId: r.request.requestId, ...meta, active: input.active } });
     return r;
   }
 
@@ -173,9 +193,10 @@ export class AdminService {
    */
   async listAttestors(): Promise<Record<string, unknown>[]> {
     const r = await this.ctx.pool.query(
-      `select x.chain, x.wallet, coalesce(w.account_id, x.account_id) as account_id, x.proposed_active, x.request_id, x.proposed_by, x.proposed_at, x.onchain_active
+      `select x.chain, x.wallet, coalesce(w.account_id, x.account_id) as account_id, x.proposed_active, x.request_id, x.proposed_by, x.proposed_at, x.onchain_active,
+              x.registered_at, x.revoked_at
          from (select coalesce(p.chain, a.chain) as chain, coalesce(p.wallet, a.attestor) as wallet, p.account_id, p.active as proposed_active,
-                      p.request_id, p.proposed_by, p.proposed_at, a.active as onchain_active
+                      p.request_id, p.proposed_by, p.proposed_at, a.active as onchain_active, a.registered_at, a.revoked_at
                  from attestor_proposals p full outer join attestors a on a.chain = p.chain and a.attestor = p.wallet) x
          left join account_wallets w on w.chain = x.chain and w.address = x.wallet
         order by 1, 2`,
@@ -183,7 +204,11 @@ export class AdminService {
     return r.rows.map((x) => {
       const onchain = x.onchain_active === true;
       const status = onchain ? (x.proposed_active === false ? 'deactivation-pending' : 'registered') : x.proposed_active === true ? 'pending-onchain' : 'inactive';
-      return { chain: x.chain, wallet: x.wallet, accountId: x.account_id ?? null, status, onchainActive: onchain, proposal: x.proposed_by ? { active: x.proposed_active, requestId: x.request_id, proposedBy: x.proposed_by, proposedAt: x.proposed_at } : null };
+      // indexed registry times (unix seconds; S4 WP5): when the key last became active, and its forward-only revocation,
+      // after which report and FX signatures of ended periods stay valid on the chain until graceUntil
+      const registeredAt = x.registered_at === null || x.registered_at === undefined ? null : Number(x.registered_at);
+      const revokedAt = x.revoked_at === null || x.revoked_at === undefined ? null : Number(x.revoked_at);
+      return { chain: x.chain, wallet: x.wallet, accountId: x.account_id ?? null, status, onchainActive: onchain, registeredAt, revokedAt, graceUntil: keyGraceUntil(revokedAt), proposal: x.proposed_by ? { active: x.proposed_active, requestId: x.request_id, proposedBy: x.proposed_by, proposedAt: x.proposed_at } : null };
     });
   }
 
@@ -231,9 +256,17 @@ export class AdminService {
     const port = this.port(req.chain);
     const cmd = req.command;
     switch (cmd.kind) {
-      case 'registerAttestor': {
-        const listed = (await port.listAttestors()).includes(cmd.attestor);
-        return listed === cmd.active;
+      // the registry as the chain holds it (S4 WP5): a registration shows as an active key, a revocation as a revoked one
+      // with its revocation time, a rotation as both
+      case 'registerAttestor':
+        return (await port.getSignerKey('attestor', cmd.attestor))?.active === true;
+      case 'revokeAttestor': {
+        const k = await port.getSignerKey('attestor', cmd.attestor);
+        return !!k && !k.active && k.revokedAt !== null;
+      }
+      case 'rotateAttestor': {
+        const [from, to] = await Promise.all([port.getSignerKey('attestor', cmd.from), port.getSignerKey('attestor', cmd.to)]);
+        return to?.active === true && !!from && !from.active && from.revokedAt !== null;
       }
       case 'registerVerifierKey': {
         const key = (await port.listVerifierKeys()).find((k) => k.keyId === cmd.keyId);

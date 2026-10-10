@@ -12,7 +12,9 @@ import { seedFinal, seedHolder, seedLedger, seedPause, seedTail, seedVault, seri
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes;
  *  - S4-CTX: the series read carries the series key and Stage 1's four signing nonces as u64 decimal strings (S4 D7;
- *    the pause nonce was `pauses.nonce`, a number).
+ *    the pause nonce was `pauses.nonce`, a number);
+ *  - S4-V5: simulator state version 5 (S4 WP5: each attestor key is `{active, revokedAt}`, Stage 1's key record; was a
+ *    boolean); versions 1 to 4 are refused, never upgraded.
  */
 
 const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json', import.meta.url);
@@ -31,7 +33,7 @@ const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json',
  *  - S3-UL: a curve series keeps base lamports (unit scale 10^6) from its creation.
  *  - S3-CV: a curve's completion settles at the pool's finish time and registers nobody (Stage 1 complete_curve).
  */
-describe('simulator state version 4', () => {
+describe('simulator state version 5', () => { // cause S4-V5 (was version 4)
   it('round-trips the Stage 1 vault, tail and final states and bigint pauses through serialisation and structuredClone', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
     const { seriesId } = await h.runRaise();
@@ -60,21 +62,35 @@ describe('simulator state version 4', () => {
     expect(s.tail.tailExhausted).toBe(true);
     expect(s.final.finalUnits).toBe(500n);
     expect([s.unitScale, s.stakedTotal, s.tenderedTotal, s.unitsSyncedAt, s.positions.get(h.backers[0]!.address)!.stakedUnits]).toEqual([1_000_000n, 7n, 3n, now, 7n]);
-    expect(back.version).toBe(4); // cause S3-V4 (was 3)
+    expect(back.version).toBe(5); // cause S4-V5 (was 4; S3-V4: was 3)
     expect(structuredClone(h.sim.state)).toEqual(h.sim.state);
   });
 
-  it('refuses a version-1, version-2 or version-3 state instead of upgrading it', async () => {
+  it('refuses a version-1, -2, -3 or -4 state instead of upgrading it', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
-    const v4 = JSON.parse(serialiseState(h.sim.state)) as Record<string, unknown>;
-    const { version: _v, ...v1 } = v4;
+    const v5 = JSON.parse(serialiseState(h.sim.state)) as Record<string, unknown>;
+    const { version: _v, ...v1 } = v5;
     expect(() => deserialiseState(JSON.stringify(v1))).toThrow(SimStateVersionError);
-    expect(() => deserialiseState(JSON.stringify({ ...v4, version: 1 }))).toThrow(/version 1 is not supported.*sim:reset/);
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 1 }))).toThrow(/version 1 is not supported.*sim:reset/);
     // cause S2-V3: a version-2 state (S1) is refused too
-    expect(() => deserialiseState(JSON.stringify({ ...v4, version: 2 }))).toThrow(/version 2 is not supported \(this build needs version 4\).*sim:reset/); // cause S3-V4 (was version 3)
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 2 }))).toThrow(/version 2 is not supported \(this build needs version 5\).*sim:reset/); // cause S4-V5 (was version 4; S3-V4: was 3)
     // cause S3-V4: a version-3 state (S2) is refused too
-    expect(() => deserialiseState(JSON.stringify({ ...v4, version: 3 }))).toThrow(/version 3 is not supported \(this build needs version 4\).*sim:reset/);
-    expect(() => deserialiseState(JSON.stringify(v4))).not.toThrow();
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 3 }))).toThrow(/version 3 is not supported \(this build needs version 5\).*sim:reset/); // cause S4-V5 (was version 4)
+    // cause S4-V5: a version-4 state (S3, attestors as booleans) is refused too
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 4 }))).toThrow(/version 4 is not supported \(this build needs version 5\).*sim:reset/);
+    expect(() => deserialiseState(JSON.stringify(v5))).not.toThrow();
+  });
+
+  it('round-trips the key registry: active and revoked attestor keys with their revocation times (S4-V5)', async () => {
+    const h = await SimHarness.create('solana', { genesis: GENESIS });
+    const [a1, a2] = h.attestors;
+    await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a2!.address });
+    const at = await h.sim.now();
+    expect(h.sim.state.attestors.get(a1!.address)).toEqual({ active: true, revokedAt: null });
+    expect(h.sim.state.attestors.get(a2!.address)).toEqual({ active: false, revokedAt: at });
+    const back = deserialiseState(serialiseState(h.sim.state));
+    expect(back.attestors).toEqual(h.sim.state.attestors);
+    expect([...back.attestors.entries()]).toEqual([[a1!.address, { active: true, revokedAt: null }], [a2!.address, { active: false, revokedAt: at }]]);
   });
 
   it('a new series has its scale (1, or 10^6 on a curve), no stake, no tender and no census; a new holder has no stake (S3-V4)', async () => {

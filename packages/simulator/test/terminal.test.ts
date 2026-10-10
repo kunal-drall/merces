@@ -10,7 +10,9 @@ import { seriesOf } from './kit.ts';
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes;
  *  - S4-CTX: the series read carries Stage 1's signing nonces as `nonces {pause, amendment, extinguish, trueup}`, u64
- *    decimal strings (S4 D7; were `amendmentNonce` / `extinguishNonce` numbers).
+ *    decimal strings (S4 D7; were `amendmentNonce` / `extinguishNonce` numbers);
+ *  - S4-REG: Stage 1's key registry: `registerAttestor{attestor}` and `revokeAttestor{attestor}` (forward-only, with the
+ *    45-day grace and the last-key rule; S4 WP5; was `registerAttestor{attestor, active}`).
  */
 
 /**
@@ -72,9 +74,9 @@ describe('amendments and extinguishment', () => {
     const extinguish = (attestors: [string, string], coSigners = [a2]) => h.exec(a1, { kind: 'extinguish', seriesId, attestors }, coSigners);
     await expectStage1Error(extinguish([a1.address, a1.address], []), 'SameAttestor'); // E: was InvalidTerms
     await expectStage1Error(extinguish([a1.address, a2.address], []), 'InvalidAttestorSignature'); // E: was Unauthorized
-    await h.exec(h.admin, { kind: 'registerAttestor', attestor: a2.address, active: false });
+    await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a2.address }); // cause S4-REG (was registerAttestor{active: false})
     await expectStage1Error(extinguish([a1.address, a2.address]), 'InvalidAttestorSignature'); // a revoked attestor (vector 11 #37)
-    await h.exec(h.admin, { kind: 'registerAttestor', attestor: a2.address, active: true });
+    await h.exec(h.admin, { kind: 'registerAttestor', attestor: a2.address }); // cause S4-REG (was {active: true})
     const ex = await extinguish([a1.address, a2.address]);
     expect(types(ex.events)).toEqual(['PaymentReceived', 'SeriesExtinguished', 'StatusChanged']);
     expect(ex.events[0]!.payload).toMatchObject({ source: 'extinguishment', gross: USDC(2250).toString(), fee: '0', net: USDC(2250).toString() });

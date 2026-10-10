@@ -9,7 +9,7 @@ import { curveRegularReport, reportUnits, requireCensusFor, requireCensusUnchang
 
 /**
  * E10 — attestor service (R10, R16, R26, C8.5–6, C11.6).
- * Attestors are accounts with the `attestor` role whose wallets the chain has registered (`listAttestors`).
+ * Attestors are accounts with the `attestor` role whose wallets the chain has registered (`getSignerKey('attestor', …)`, indexed in `attestors`).
  * This service tracks the work that needs an attestor's signature and builds the transactions they sign:
  *  - hardship pauses: the issuer's reason and evidence reach the chosen attestor as END-TO-END ciphertext the
  *    server stores opaque and never decrypts; holders only ever see statuses and dates;

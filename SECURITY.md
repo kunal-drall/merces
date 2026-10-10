@@ -54,6 +54,12 @@ Secrets never enter the repository: `.env.example` lists names only; development
 - The `attestor` tier is the indexed onchain registry, read live: a wallet of the session must be registered and
   active in `attestors`. Proposing an attestor grants nothing; an indexed deactivation ends access at once (A-M5-2).
   Each case, document or decision also requires the addressed wallet itself to be active and indexed on its chain.
+  Since S4 WP5 a deactivation is Stage 1's forward-only revocation (A-SIG-4): the chain still accepts the revoked key's
+  report (tier 3) and FX signatures for periods that ended by its revocation until 45 days after it (Stage 1's design,
+  so no revocation manufactures lateness), and never its pause, amendment or extinguishment signatures. A compromised
+  key's in-flight report and FX signatures therefore stay usable for that window: the residual risk is accepted as
+  Stage 1 designed it (S4 owner question 3's default), and the RUNBOOK's key section says to check the reports accepted
+  under a revoked key. The last active attestor key of a chain cannot be revoked (both chains): rotate instead.
 - The `holder` tier means holding or having held units of the series (a position row, so a seller can still claim what
   accrued); a bid alone never grants it, so losing or refunded bidders do not see the holder list or payment amounts.
 - Session tokens are HMAC-signed with `MERCES_SESSION_SECRET`. The published development default is accepted only

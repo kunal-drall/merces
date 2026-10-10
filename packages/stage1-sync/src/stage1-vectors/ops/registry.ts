@@ -1,7 +1,7 @@
 import type { SeriesTerms } from '@merces/domain';
 import { RunnerError } from '../errors.ts';
 import { ZERO_HASH32, hex32, num, tierFlagsOf } from '../codec.ts';
-import { direct, eventOf, shim, type TranslatorTable } from './types.ts';
+import { direct, eventOf, shim, type OpContext, type TranslatorTable } from './types.ts';
 
 /**
  * Registry ops: the faucet, the allowlist, issuer / attestor / verifier-key registration and series creation.
@@ -9,13 +9,23 @@ import { direct, eventOf, shim, type TranslatorTable } from './types.ts';
  * - `fund`: the simulator faucet (direct).
  * - `allowlist`: one `setAllowlist` per wallet from the allowlist manager (direct; atomic as one step).
  * - `register_issuer` (SH-REG-1): `registerIssuer` signed by that wallet; Stage 1 registers issuers admin-only.
- * - `register_attestor` / `revoke_attestor` (SH-REG-2): admin `registerAttestor{active}`; no 45-day revocation grace.
+ * - `register_attestor` / `revoke_attestor`: admin `registerAttestor` / `revokeAttestor` of the vector key's own 20-byte
+ *   address (direct since S4 WP5; was SH-REG-2): Stage 1's registry with forward-only revocation, the 45-day grace on
+ *   report and FX signatures and the last-key rule, each personality with its chain's names. A name without a vector
+ *   key is a runner error.
  * - `register_verifier_key` (SH-REG-3): admin `registerVerifierKey` with the ed25519 key derived from the vector key.
  * - `create_series` (SH-REG-4): `createSeries` in USDC with USD income, sealed; due, grace and notice days from
  *   `config.parameters`; the raise durations and the non-reveal bps are canonical terms (S2), so the engine bounds them
  *   as Stage 1 does (SIM:759-777); the window durations and the window fee are held by the runner (S5; their Stage 1
  *   bounds are not checked).
  */
+/** The 20-byte address of the vector key a registry op names (Stage 1's harnesses register the key's address). */
+function keyAddressOf(ctx: OpContext, name: string): string {
+  const a = ctx.actors.keyAddress(name);
+  if (!a) throw new RunnerError(`the vector has no key named ${name}`);
+  return a;
+}
+
 export const registryOps: TranslatorTable = {
   fund: (ctx, c) =>
     direct(async () => {
@@ -32,15 +42,19 @@ export const registryOps: TranslatorTable = {
       await ctx.send(ctx.actors.wallet(c.wallet), { kind: 'registerIssuer' });
     }),
 
-  register_attestor: (ctx, c) =>
-    shim('SH-REG-2', async () => {
-      await ctx.send(ctx.actors.admin, { kind: 'registerAttestor', attestor: ctx.actors.address(c.key), active: true });
-    }),
+  register_attestor: (ctx, c) => {
+    const attestor = keyAddressOf(ctx, c.key);
+    return direct(async () => {
+      await ctx.send(ctx.actors.admin, { kind: 'registerAttestor', attestor });
+    });
+  },
 
-  revoke_attestor: (ctx, c) =>
-    shim('SH-REG-2', async () => {
-      await ctx.send(ctx.actors.admin, { kind: 'registerAttestor', attestor: ctx.actors.address(c.key), active: false });
-    }),
+  revoke_attestor: (ctx, c) => {
+    const attestor = keyAddressOf(ctx, c.key);
+    return direct(async () => {
+      await ctx.send(ctx.actors.admin, { kind: 'revokeAttestor', attestor });
+    });
+  },
 
   register_verifier_key: (ctx, c) =>
     shim('SH-REG-3', async () => {

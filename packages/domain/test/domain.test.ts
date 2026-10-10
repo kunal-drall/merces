@@ -5,7 +5,7 @@ import { BN254_FR, CURRENCY_CODES, DEFAULT_PARAMETERS } from '@merces/math';
 import { randomBytes } from 'node:crypto';
 import {
   CURVE_BUYER_NOTICE, CURVE_NO_CAP, CURVE_TERMS_ZEROS, CURVE_UNAPPROVED_EARN_NOTHING, curveBeforeYouBuy, curveBuyerNotice, curveNoticeFigures, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_BOUNDS, NON_REVEAL_CHARGE_SETTING, checkNonRevealCharge, nonRevealChargeSetting, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
-  amountBearingEvents, permissionlessCommandSchema,
+  adminCommandKinds, adminCommandSchema, amountBearingEvents, permissionlessCommandSchema,
   ChainError, attestationMessage, bidCommitment, orderCommitment, randomSalt, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, permissionlessCommandKinds, serviceCommandKinds, serviceCommandSchema, termsCommitment, userCommandKinds, userCommandSchema,
   type IndexingRule,
@@ -14,7 +14,8 @@ import {
 /*
  * S4 cause codes:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
- *    no series, window or side; the salt is 32 bytes; the wallet is the bidder's chain-local address.
+ *    no series, window or side; the salt is 32 bytes; the wallet is the bidder's chain-local address;
+ *  - S4-REG: Stage 1's key registry (S4 WP5): register, forward-only revoke and rotate, with their events; schema 0.4.0.
  *
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
@@ -230,7 +231,7 @@ describe('schemas', () => {
     expect(() => userCommandSchema.parse({ kind: 'payIn', seriesId: 'solana:abc', periodId: '2026Q5', amount: '1' })).toThrow();
   });
   it('covers every event listed in Part D2', () => {
-    const required = ['IssuerRegistered', 'SeriesCreated', 'RaiseOpened', 'RaiseCancelled', 'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'TreasuryFunded', 'FundsReleased', 'ReleasesPaused', 'ReleasesResumed', 'SplitReceipt', 'ReportAccepted', 'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'SeriesRetired', 'UnitsBurned', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout', 'PauseRequested', 'PauseApproved', 'PauseEnded', 'StatusChanged', 'FormalNoticeDue', 'TermsAmended', 'SeriesExtinguished', 'RateSnapshot', 'FxFallbackFlagged', 'TransferWindowOpened', 'TransferWindowCleared', 'UnitsTransferred', 'AllowlistUpdated', 'AttestorRegistered', 'CurveGraduated'];
+    const required = ['IssuerRegistered', 'SeriesCreated', 'RaiseOpened', 'RaiseCancelled', 'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'TreasuryFunded', 'FundsReleased', 'ReleasesPaused', 'ReleasesResumed', 'SplitReceipt', 'ReportAccepted', 'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'SeriesRetired', 'UnitsBurned', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout', 'PauseRequested', 'PauseApproved', 'PauseEnded', 'StatusChanged', 'FormalNoticeDue', 'TermsAmended', 'SeriesExtinguished', 'RateSnapshot', 'FxFallbackFlagged', 'TransferWindowOpened', 'TransferWindowCleared', 'UnitsTransferred', 'AllowlistUpdated', 'AttestorRegistered', 'AttestorRevoked', 'CurveGraduated'];
     for (const r of required) expect(eventTypes).toContain(r);
     // cause S3-CV: a curve's buys are Meteora's (no Merces mint event) and its creation is Stage 1's activation
     // (CurveActivated; was the toy curve's creation event); its proceeds arrive with CurveProceedsCollected
@@ -241,6 +242,21 @@ describe('schemas', () => {
     // cause S2-PR: a bid's refund reaches the bidder with BidDelivered (the pull refund's event is retired); the one
     // refund event left is a payment's
     expect(eventTypes.filter((t) => /Refund/.test(t))).toEqual(['PaymentRefunded']);
+  });
+  it("has Stage 1's key registry: registerAttestor, revokeAttestor, rotateAttestor, AttestorRegistered and AttestorRevoked (cause S4-REG)", () => {
+    const env = { chain: 'solana', cursor: '000000000001', seq: 1, blockTime: 1, blockRef: '1', txId: 't', finality: 'finalized' as const };
+    const a = '0x' + '11'.repeat(20);
+    const b = '0x' + '22'.repeat(20);
+    expect(adminCommandKinds.filter((k) => /Attestor/.test(k))).toEqual(['registerAttestor', 'revokeAttestor', 'rotateAttestor']);
+    expect(adminCommandSchema.parse({ kind: 'registerAttestor', attestor: a })).toEqual({ kind: 'registerAttestor', attestor: a });
+    expect(adminCommandSchema.parse({ kind: 'revokeAttestor', attestor: a })).toEqual({ kind: 'revokeAttestor', attestor: a });
+    expect(adminCommandSchema.parse({ kind: 'rotateAttestor', from: a, to: b })).toEqual({ kind: 'rotateAttestor', from: a, to: b });
+    // the boolean registration is gone: Stage 1 registers, and revokes forward-only
+    expect((adminCommandSchema.parse({ kind: 'registerAttestor', attestor: a, active: false }) as Record<string, unknown>).active).toBeUndefined();
+    expect(parseDomainEvent({ ...env, type: 'AttestorRegistered', payload: { attestor: a } }).payload).toEqual({ attestor: a });
+    expect(parseDomainEvent({ ...env, type: 'AttestorRevoked', payload: { attestor: a, revokedAt: 1_790_000_000 } }).payload).toEqual({ attestor: a, revokedAt: 1_790_000_000 });
+    expect(() => parseDomainEvent({ ...env, type: 'AttestorRevoked', payload: { attestor: a } })).toThrow();
+    for (const t of ['AttestorRegistered', 'AttestorRevoked'] as const) expect(amountBearingEvents.has(t as never)).toBe(false);
   });
   it('has no one-step settlement or pull refund (cause S2-MS, S2-PR: Stage 1 settles in steps and delivers)', () => {
     // the raise's wallet commands are Stage 1's four; the rest of the raise is the permissionless group
@@ -284,8 +300,8 @@ describe('schemas', () => {
     }
     expect(() => parseDomainEvent({ ...env, type: 'PayoutClaimed', payload: { seriesId: sid, holder: 'h', amount: '5' } })).toThrow(); // S3-BU: required
     expect(() => parseDomainEvent({ ...env, type: 'FinalClaimed', payload: { seriesId: sid, holder: 'h', amount: '5' } })).toThrow();
-    // the domain schema version that carries them
-    expect(domainJsonSchema().version).toBe('0.3.0');
+    // the domain schema version that carries them (cause S4-REG: 0.4.0 since S4 WP5's key registry; was 0.3.0)
+    expect(domainJsonSchema().version).toBe('0.4.0');
   });
   it('has Stage 1\'s curve staking: stakeUnits, unstakeUnits, tenderUnits, UnitsStaked, UnitsUnstaked, RedemptionClaimed.fromStake (cause S3-ST)', () => {
     const env = { chain: 'solana', cursor: '000000000001', seq: 1, blockTime: 1, blockRef: '1', txId: 't', finality: 'finalized' as const };

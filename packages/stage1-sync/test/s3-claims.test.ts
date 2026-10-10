@@ -33,7 +33,9 @@ import {
  * the zero-amount rule: (j), (k)); S3-SH (SH-CLM-1 retired in WP3); S3R-F (S3 review fix 1: (l), a redeemed holder's
  * final share counts its open ask's escrow, as both chains weigh it, where Stage 1's simulator does not: DIV-S1I-1).
  *
- * S4 cause codes: S4-BID (S4 WP2: `commit_bid` runs directly with Stage 1's keccak commitment; SH-AUC-2 retired).
+ * S4 cause codes: S4-BID (S4 WP2: `commit_bid` runs directly with Stage 1's keccak commitment; SH-AUC-2 retired); S4-SH
+ * (S4 WP5: `register_attestor` and `revoke_attestor` run directly; SH-REG-2 retired); S4-REG (S4 WP5: the scenario
+ * runner loads every set by default, S3's and S4's; these tests name the S3 set).
  */
 const VECTORS = fileURLToPath(new URL('../../../stage1/packages/vectors', import.meta.url));
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
@@ -142,7 +144,7 @@ describe('S3 claim scenarios: replay', () => {
   let scenarios: Scenario[] = [];
 
   it("Stage 1's own simulator passes every scenario, its own expects included", async () => {
-    const r = await runScenarios({ vectorsDir: VECTORS, backend: 'reference' });
+    const r = await runScenarios({ vectorsDir: VECTORS, backend: 'reference', dir: S3_CLAIM_SCENARIOS }); // cause S4-REG: the S3 set only (the S4 set has its own test)
     scenarios = r.scenarios;
     reports.reference = r.report;
     expect(r.report.runs.map((x) => [x.id, x.world, x.status, x.executed === x.total])).toEqual(scenarios.map((s) => [s.vector.id, 'reference', 'PASS', true]));
@@ -152,7 +154,7 @@ describe('S3 claim scenarios: replay', () => {
 
   // cause S3R-F: (l) is PASS-WITH-DIVERGENCES on exactly its DIV-S1I-1 entries (was: every scenario PASS, 22 runs)
   it('the merces backend passes every scenario on both personalities, the claims running directly; (l) differs from Stage 1\'s simulator only as recorded', async () => {
-    const r = await runScenarios({ vectorsDir: VECTORS, backend: 'merces' });
+    const r = await runScenarios({ vectorsDir: VECTORS, backend: 'merces', dir: S3_CLAIM_SCENARIOS }); // cause S4-REG
     reports.merces = r.report;
     expect(r.report.runs).toHaveLength(24);
     for (const run of r.report.runs) {
@@ -172,7 +174,8 @@ describe('S3 claim scenarios: replay', () => {
       // S2 window through the one-step window rows (SH-WIN-1..7, until S5)
       const windows = run.id === 'S3l' ? ['SH-WIN-1', 'SH-WIN-2', 'SH-WIN-3', 'SH-WIN-4', 'SH-WIN-5', 'SH-WIN-6', 'SH-WIN-7'] : [];
       // cause S4-BID: SH-AUC-2 is no longer allowed (retired in S4 WP2)
-      for (const id of Object.keys(run.shims)) expect(['SH-REG-1', 'SH-REG-2', 'SH-REG-3', 'SH-REG-4', 'SH-REP-1', 'SH-PAY-1', 'SH-RED-1', 'SH-EXT-1', 'SH-AMD-1', ...windows], `${run.vector} ${id}`).toContain(id);
+      // cause S4-SH: SH-REG-2 is no longer allowed (retired in S4 WP5)
+      for (const id of Object.keys(run.shims)) expect(['SH-REG-1', 'SH-REG-3', 'SH-REG-4', 'SH-REP-1', 'SH-PAY-1', 'SH-RED-1', 'SH-EXT-1', 'SH-AMD-1', ...windows], `${run.vector} ${id}`).toContain(id);
       if (run.id === 'S3l') expect(Object.keys(run.shims).filter((id) => id.startsWith('SH-WIN-')).sort()).toEqual(windows);
     }
     expect(r.report.ok).toBe(true);
@@ -180,7 +183,7 @@ describe('S3 claim scenarios: replay', () => {
 
   // cause S3R-F: (l) parts right after b1's first claim_final, as recorded (was: every scenario PASS in lockstep)
   it('lockstep: the full snapshots of both backends agree after every step of every scenario, on both personalities; (l) parts where recorded', async () => {
-    const r = await runScenarios({ vectorsDir: VECTORS });
+    const r = await runScenarios({ vectorsDir: VECTORS, dir: S3_CLAIM_SCENARIOS }); // cause S4-REG
     reports.lockstep = r.report;
     expect(r.report.backend).toBe('lockstep');
     expect(r.report.runs.map((x) => `${x.id}/${x.world}`)).toEqual(scenarios.flatMap((s) => [`${s.vector.id}/lockstep/solana`, `${s.vector.id}/lockstep/monad`]));

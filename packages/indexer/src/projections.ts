@@ -58,7 +58,7 @@ function summary(e: DomainEvent): string | null {
     case 'UnitsStaked': return `${p.units} base units staked`;
     case 'UnitsUnstaked': return `${p.units} base units unstaked`;
     case 'FxFallbackFlagged': return `FX fallback flagged for ${p.pair} ${p.periodId}`;
-    default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, VerifierKeyRegistered, HolderRegistered, FeeTaken, refunds, treasury, splits, curve proceeds: not in the public feed
+    default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, AttestorRevoked, VerifierKeyRegistered, HolderRegistered, FeeTaken, refunds, treasury, splits, curve proceeds: not in the public feed
   }
 }
 
@@ -428,8 +428,29 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       break;
     }
     case 'AttestorRegistered': {
+      // Stage 1's registration (S4 WP5): the key is active again and its revocation is cleared. `registered_at` is when
+      // it became active: Solana re-emits the event for a key that is already active (merces_registry lib.rs:218-236),
+      // which keeps it. `updated_seq` keeps a replayed or older event from undoing a later one
       const p = e.payload as P<'AttestorRegistered'>;
-      await client.query('insert into attestors (chain, attestor, active) values ($1,$2,$3) on conflict (chain, attestor) do update set active = excluded.active', [e.chain, p.attestor, p.active]);
+      await client.query(
+        `insert into attestors (chain, attestor, active, registered_at, revoked_at, updated_seq) values ($1,$2,true,$3,null,$4)
+         on conflict (chain, attestor) do update set active = true, revoked_at = null,
+           registered_at = case when attestors.active then attestors.registered_at else excluded.registered_at end, updated_seq = excluded.updated_seq
+         where attestors.updated_seq < excluded.updated_seq`,
+        [e.chain, p.attestor, e.blockTime, e.seq],
+      );
+      break;
+    }
+    case 'AttestorRevoked': {
+      // forward-only revocation: access ends at once (A-M5-2); report and FX signatures of periods that ended by
+      // `revoked_at` stay valid on the chain for 45 days (Stage 1's grace), which the services read from the chain
+      const p = e.payload as P<'AttestorRevoked'>;
+      await client.query(
+        `insert into attestors (chain, attestor, active, revoked_at, updated_seq) values ($1,$2,false,$3,$4)
+         on conflict (chain, attestor) do update set active = false, revoked_at = excluded.revoked_at, updated_seq = excluded.updated_seq
+         where attestors.updated_seq < excluded.updated_seq`,
+        [e.chain, p.attestor, p.revokedAt, e.seq],
+      );
       break;
     }
     case 'TransferWindowOpened': {

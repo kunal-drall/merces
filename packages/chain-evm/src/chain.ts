@@ -118,7 +118,12 @@ export class EvmChain implements ChainPort {
   async getRateAccumulator(): Promise<never> { return this.notReady('getRateAccumulator'); }
   async getQuarterRate(): Promise<never> { return this.notReady('getQuarterRate'); }
   async isAllowlisted(): Promise<never> { return this.notReady('isAllowlisted'); }
-  async listAttestors(): Promise<never> { return this.notReady('listAttestors'); }
+  /**
+   * S5: `MercesRegistry.attestorKey(addr)` / `verifierKey(addr)` (`KeyInfo{registered, active, revokedAt}`, MercesRegistry.sol:184-190)
+   * as `SignerKeyState`; the list from the `AttestorRegistered` / `AttestorRevoked` (and verifier) logs.
+   */
+  async getSignerKey(): Promise<never> { return this.notReady('getSignerKey'); }
+  async listSignerKeys(): Promise<never> { return this.notReady('listSignerKeys'); }
   async listVerifierKeys(): Promise<never> { return this.notReady('listVerifierKeys'); }
   async getTransferWindow(): Promise<never> { return this.notReady('getTransferWindow'); }
   async getCurve(): Promise<null> { return null; } // curve mode is Solana-only

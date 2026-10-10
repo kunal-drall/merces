@@ -6,7 +6,9 @@ import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv
 /*
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
- *    the builders take no series, window or side, and the salt is 32 bytes.
+ *    the builders take no series, window or side, and the salt is 32 bytes;
+ *  - S4-REG: Stage 1's key registry (S4 WP5): `registerAttestor{attestor}` (the boolean `active` is gone; a revocation is
+ *    `revokeAttestor`).
  * S4 cause codes on new checks:
  *  - S4-CTX: the signing context (S4 D6, D7): a chain's signing domain is null or one a signer may sign for (local ids on
  *    a mock chain only, never a mainnet); a new series reads its Stage 1 series key and four nonces at 0.
@@ -236,7 +238,7 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     // admin holds no registration (Stage 1 HolderNotRegistered; cause C: still NotFound, unlike a registered holder's zero
     // claim); the call itself is open to any holder
     await expectChainError(exec(e, e.admin, { kind: 'claimPayout', seriesId }), 'NotFound');
-    await expectChainError(exec(e, e.backers[0]!, { kind: 'registerAttestor', attestor: e.backers[0]!.address, active: true }), 'Unauthorized');
+    await expectChainError(exec(e, e.backers[0]!, { kind: 'registerAttestor', attestor: e.backers[0]!.address }), 'Unauthorized'); // cause S4-REG: Stage 1's registerAttestor{attestor} (was {…, active})
     await e.chain.submit({ kind: 'setAllowlist', wallet: e.backers[1]!.address, allowed: false }, 'allowlistManager');
     expect(await e.chain.isAllowlisted(e.backers[1]!.address)).toBe(false);
     const claim = await exec(e, e.backers[1]!, { kind: 'claimPayout', seriesId });

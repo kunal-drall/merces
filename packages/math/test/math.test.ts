@@ -163,6 +163,9 @@ const TESTING_IMPORTERS = new Set([
   'packages/math/src/testing.ts',
   'packages/stage1-sync/src/steps/signatures.ts',
   'packages/ports/src/kms.ts',
+  // S4 WP5 (cause S4-REG): the vector runner's scenario loader checks a scenario's own keys are Stage 1's published test
+  // keys for their seeds (`<scenario id>:<name>`)
+  'packages/stage1-sync/src/stage1-vectors/scenarios.ts',
 ]);
 
 /** True when the code (comments stripped: the gateway's own JSDoc names the subpath) names the derivation or the subpath. */

@@ -8,8 +8,9 @@
  * manifest names (STAGE1_PATH, else the pinned `stage1` submodule). Backends: `merces` (default; our simulator, the
  * targets in full and the prefix-gated vectors to their gate, on both personalities, unless `--only`; `--until`
  * replaces a gate), `reference` (Stage 1's own simulator, every vector) and `lockstep` (both side by side, stopping at
- * the first step after which they disagree; a recorded parting is accepted). `--scenarios` replays our own S3 claim
- * scenarios instead (`scenarios.ts`; default backend `lockstep`), each of which must PASS. Exit code 0 when every run
+ * the first step after which they disagree; a recorded parting is accepted). `--scenarios` replays our own scenarios
+ * instead (`scenarios.ts`: the S3 claim and S4 signature sets; default backend `lockstep`), each of which must be at its
+ * expected status; a scenario that does not run on the backend (S4d runs on `merces` only) is named and skipped. Exit code 0 when every run
  * is at its expected status, 1 when one is not, 2 on a usage or runner error.
  */
 import { existsSync } from 'node:fs';
@@ -99,10 +100,14 @@ try {
   const args = parseArgs(process.argv.slice(2));
   const src = vectorsDir(args.dir);
   let report: RunReport;
+  let skipped: string[] = [];
   if (args.scenarios) {
     // a scenario runs whole: no gates, and VECTOR_PARITY.md is the vectors' (pnpm stage1:sync adds the scenarios' section)
     if (args.until !== undefined || args.stopBefore || args.out) throw new RunnerError(`--scenarios takes no --until, --stop-before or --out\n${USAGE}`);
-    report = (await runScenarios({ vectorsDir: src.dir, ...(args.backend ? { backend: args.backend } : {}), ...(args.only ? { only: args.only } : {}), ...(args.personalities ? { personalities: args.personalities } : {}) })).report;
+    const r = await runScenarios({ vectorsDir: src.dir, ...(args.backend ? { backend: args.backend } : {}), ...(args.only ? { only: args.only } : {}), ...(args.personalities ? { personalities: args.personalities } : {}) });
+    report = r.report;
+    // a scenario that does not run on this backend (a merces-only one on the reference or in lockstep) is named, not run
+    skipped = r.skipped.map((s) => `  skip ${s.vector.name}: runs on ${s.backends.join(', ')} only`);
   } else {
     report = await runStage1Vectors({
       dir: src.dir,
@@ -114,7 +119,7 @@ try {
     });
   }
   if (args.json) console.log(JSON.stringify(report, (_k, v: unknown) => (typeof v === 'bigint' ? v.toString() : v), 2));
-  else console.log(renderSummary([report]));
+  else console.log([renderSummary([report]), ...skipped].join('\n'));
   if (args.out) console.log(`wrote ${writeParity(args.out, [report], { dir: src.label, ...(src.commit ? { commit: src.commit } : {}) })}`);
   const pass = report.runs.filter((r) => r.status === 'PASS').length;
   // prefix runs replay to their gate (PREFIX-PASS) and count as PASS when every step up to it passed

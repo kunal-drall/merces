@@ -8,7 +8,9 @@
  * Retired rows: SH-AUC-1 and SH-AUC-3..6 (S2: the raise runs Stage 1's settlement directly); SH-CLM-2, SH-CLM-3 and
  * SH-BRN-1 (S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run as `claimTail`, `claimFinal` and `burnRetired`);
  * SH-CLM-1 (S3 WP3: `claim` runs as `claimPayout`, which is Stage 1's `claim`); SH-AUC-2 (S4 WP2: `commit_bid` runs
- * as `commitBid` with Stage 1's keccak commitment, S4 D11).
+ * as `commitBid` with Stage 1's keccak commitment, S4 D11); SH-REG-2 (S4 WP5: `register_attestor` and `revoke_attestor` run
+ * as `registerAttestor` and `revokeAttestor` of the vector key's address, Stage 1's registry with its grace and last-key
+ * rule).
  */
 export interface Shim {
   id: string;
@@ -33,7 +35,6 @@ export interface Shim {
 
 export const SHIMS: readonly Shim[] = [
   { id: 'SH-REG-1', ops: ['register_issuer'], call: 'registerIssuer signed by that wallet', why: 'Stage 1 registers issuers admin-only (STAGE1_INTEGRATION.md B.7)', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-REG-2', ops: ['register_attestor', 'revoke_attestor'], call: 'admin registerAttestor{active}', why: 'no 45-day revocation grace modelled', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-REG-3', ops: ['register_verifier_key'], call: 'registerVerifierKey{keyId: name, ed25519 SPKI from the seed}', why: 'Stage 1 verifier keys are secp256k1', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-REG-4', ops: ['create_series'], call: 'createSeries (USDC, USD, sealed; due/grace/notice days from config.parameters; tier bitmask → object; atOffsetSeconds → afterSeconds); window durations and windowFeeBps held by the runner, their Stage 1 bounds unchecked', why: 'canonical terms lack those fields', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-REP-1', ops: ['submit_report'], call: 'submitReport{prior, income, Groth16 proof and signals}; tier-2 attestation signed by the runner with the named key; tier 3 co-signed by the attestor', why: 'signatures are S4; proofs are real', removedIn: 'S4', kind: 'shim' },

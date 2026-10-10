@@ -21,7 +21,7 @@ import { MercesWorld } from './merces-world.ts';
 import { replayLockstep } from './oracle.ts';
 import { ReferenceWorld } from './reference-world.ts';
 import { isFinding, replayVector, type VectorRun } from './run.ts';
-import { S3_CLAIM_SCENARIOS, loadScenarios, scenarioExpected, type Scenario } from './scenarios.ts';
+import { SCENARIO_SETS, loadScenarios, runsOn, scenarioExpected, type Scenario } from './scenarios.ts';
 import { PERSONALITIES, type Backend, type VectorPersonality, type WorldFactory } from './world.ts';
 
 export {
@@ -54,7 +54,25 @@ export { replayLockstep, type LockstepOptions } from './oracle.ts';
 export { TRANSLATORS, NOT_YET, translate } from './ops/index.ts';
 export { SHIMS, SHIM_BY_ID, type Shim } from './shims.ts';
 export { renderParity, renderSummary, writeParity, type ParitySource } from './report.ts';
-export { S3_CLAIM_SCENARIOS, SCENARIO_EXPECTED, SCENARIO_EXPECTATIONS, scenarioExpected, loadScenario, loadScenarios, renderScenarios, type Scenario, type ScenarioFile, type ScenarioSegment } from './scenarios.ts';
+export {
+  S3_CLAIM_SCENARIOS,
+  S4_SIGNATURE_SCENARIOS,
+  SCENARIO_SETS,
+  SCENARIO_BACKENDS,
+  SCENARIO_EXPECTED,
+  SCENARIO_EXPECTATIONS,
+  scenarioExpected,
+  scenarioSetOf,
+  runsOn,
+  loadScenario,
+  loadScenarios,
+  renderScenarios,
+  type Scenario,
+  type ScenarioFile,
+  type ScenarioKey,
+  type ScenarioSegment,
+  type ScenarioSet,
+} from './scenarios.ts';
 export { PERSONALITIES, type Backend, type World, type WorldFactory, type Applied, type Attempt, type OpKind, type VectorPersonality } from './world.ts';
 
 /** Worlds by backend. */
@@ -185,8 +203,8 @@ export async function runStage1Vectors(opts: RunOptions): Promise<RunReport> {
 export interface ScenarioRunOptions {
   /** the Stage 1 vectors directory the scenarios' base vectors come from */
   vectorsDir: string;
-  /** default: the S3 claim scenarios (`S3_CLAIM_SCENARIOS`) */
-  dir?: string;
+  /** a scenarios directory, or several; default every set (`SCENARIO_SETS`: the S3 claim and S4 signature scenarios) */
+  dir?: string | readonly string[];
   /** scenario ids ("S3a") or names; default all */
   only?: readonly string[];
   /** default `lockstep` */
@@ -197,17 +215,19 @@ export interface ScenarioRunOptions {
 
 /**
  * Replay our scenarios (`scenarios.ts`) on a backend; each must PASS, or be at its `SCENARIO_EXPECTATIONS` entry on the
- * merces and lockstep backends (a Stage 1-internal difference resolved toward both chains). Returns the scenarios with
- * the report.
+ * merces and lockstep backends (a Stage 1-internal difference resolved toward both chains). A scenario that does not
+ * run on the backend (`backends`, e.g. a merces-only one on the reference or in lockstep) is left out of the report and
+ * listed in `skipped`. Returns every scenario loaded with the report.
  */
-export async function runScenarios(opts: ScenarioRunOptions): Promise<{ scenarios: Scenario[]; report: RunReport }> {
-  const scenarios = loadScenarios(opts.dir ?? S3_CLAIM_SCENARIOS, opts.vectorsDir, opts.only);
+export async function runScenarios(opts: ScenarioRunOptions): Promise<{ scenarios: Scenario[]; report: RunReport; skipped: Scenario[] }> {
+  const scenarios = loadScenarios(opts.dir ?? SCENARIO_SETS.map((x) => x.dir), opts.vectorsDir, opts.only);
   const backend = opts.backend ?? 'lockstep';
+  const run = scenarios.filter((s) => runsOn(s, backend));
   const report = await runStage1Vectors({
-    vectors: scenarios.map((s) => s.vector),
+    vectors: run.map((s) => s.vector),
     backend,
     expected: (v) => scenarioExpected(v.id, backend),
     ...(opts.personalities ? { personalities: opts.personalities } : {}),
   });
-  return { scenarios, report };
+  return { scenarios, report, skipped: scenarios.filter((s) => !runsOn(s, backend)) };
 }

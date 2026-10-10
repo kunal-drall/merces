@@ -142,7 +142,7 @@ export function requestPause(e: EngineCore, signer: string, cmd: Extract<Command
 export function approvePause(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'approvePause' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
   const l = s.ledger;
-  if (!e.state.attestors.get(signer)) fail('InvalidAttestorSignature', 'the approver is not an active attestor');
+  if (!e.attestorUsable(signer, now)) fail('InvalidAttestorSignature', 'the approver is not an active attestor'); // active only: no grace
   if (!l.pauseRequested) fail('PauseNotRequested', 'no pause request is pending');
   if (!Number.isSafeInteger(cmd.until) || cmd.until < 0 || BigInt(cmd.until) > U64_MAX) fail('AmountOutOfRange', 'pause end is out of the u64 range');
   const t = BigInt(now);

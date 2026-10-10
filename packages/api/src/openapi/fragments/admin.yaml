@@ -39,13 +39,13 @@ components:
       required: [requestId, kind, chain, command, state, txId, createdBy, meta, createdAt]
       properties:
         requestId: { type: string }
-        kind: { type: string, enum: [registerAttestor, registerVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] }
+        kind: { type: string, enum: [registerAttestor, revokeAttestor, rotateAttestor, registerVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] }
         chain: { type: string }
         command: { type: object, description: the canonical AdminCommand as built }
         state: { type: string, enum: [proposed, sent, confirmed] }
         txId: { type: [string, 'null'] }
         createdBy: { type: string, description: admin account id }
-        meta: { type: object, description: "registerAttestor: {accountId, jurisdiction, kind}" }
+        meta: { type: object, description: "registerAttestor and revokeAttestor: {accountId, jurisdiction, kind}" }
         createdAt: { type: string, format: date-time }
         sentAt: { type: [string, 'null'], format: date-time }
         confirmedAt: { type: [string, 'null'], format: date-time }
@@ -66,7 +66,7 @@ components:
         chain: { type: string }
         wallet: { type: string, description: the attestor's signing wallet on that chain }
         accountId: { type: string, description: the Merces account proposed as attestor; it gains attestor access only once this wallet's registration is onchain and indexed }
-        active: { type: boolean, description: false deactivates an attestor onchain }
+        active: { type: boolean, description: "true builds Stage 1's registerAttestor; false its revokeAttestor (forward-only: report and FX signatures of periods that ended by the revocation stay valid onchain for 45 days; access ends once the revocation is indexed). The registry's rules are checked against the chain first (409)." }
         jurisdiction: { type: string, minLength: 2, maxLength: 2, description: ISO 3166-1 alpha-2 }
         kind: { type: string, enum: [CA, CPA] }
     AdminRegisterVerifierKey:
@@ -248,13 +248,16 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [chain, wallet, status, onchainActive]
+                      required: [chain, wallet, status, onchainActive, registeredAt, revokedAt, graceUntil]
                       properties:
                         chain: { type: string }
                         wallet: { type: string }
                         accountId: { type: [string, 'null'] }
                         status: { type: string, enum: [registered, pending-onchain, deactivation-pending, inactive] }
                         onchainActive: { type: boolean }
+                        registeredAt: { type: [integer, 'null'], description: unix seconds the key last became active (indexed AttestorRegistered); null before it was indexed or for rows indexed before S4 }
+                        revokedAt: { type: [integer, 'null'], description: unix seconds of its forward-only revocation (indexed AttestorRevoked); null while active }
+                        graceUntil: { type: [integer, 'null'], description: "revokedAt + 45 days: until then report and FX signatures of periods that ended by revokedAt stay valid onchain (Stage 1's grace); attestor access ended at revokedAt" }
                         proposal: { type: [object, 'null'] }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -263,7 +266,7 @@ paths:
       x-access: admin
       tags: [admin]
       security: [{ session: [] }]
-      summary: Build registerAttestor for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); audited
+      summary: Build Stage 1's registerAttestor (active true) or revokeAttestor (active false) for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed and ends when the revocation is, A-M5-2); the registry's rules are checked against the chain first; audited
       parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRegisterAttestor' } } } }
       responses:
@@ -272,7 +275,8 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: The account does not exist, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '409': { description: Idempotency key reused with a different body, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: "The registry refuses it on this chain, before anything is built (detail.reason: key-already-active, registering a key that is active; key-not-active, revoking a key that is revoked or was never registered; last-active-key, revoking the chain's last active attestor key: rotate to a new key instead), or the idempotency key was reused with a different body", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: A registration whose wallet is not linked to the named account, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /admin/tx-requests:
     get:
       operationId: adminListTxRequests
@@ -282,7 +286,7 @@ paths:
       summary: Multisig requests, newest first
       parameters:
         - { name: chain, in: query, schema: { type: string } }
-        - { name: kind, in: query, schema: { type: string, enum: [registerAttestor, registerVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] } }
+        - { name: kind, in: query, schema: { type: string, enum: [registerAttestor, revokeAttestor, rotateAttestor, registerVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] } }
         - { name: state, in: query, schema: { type: string, enum: [proposed, sent, confirmed] } }
         - $ref: '#/components/parameters/adminLimit'
       responses:
@@ -295,7 +299,7 @@ paths:
       x-access: admin
       tags: [admin]
       security: [{ session: [] }]
-      summary: Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (listAttestors, listVerifierKeys, info); audited
+      summary: Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (getSignerKey, listVerifierKeys, info); audited
       parameters: [{ $ref: '#/components/parameters/adminRequestId' }, { $ref: '#/components/parameters/adminIdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxSent' } } } }
       responses:

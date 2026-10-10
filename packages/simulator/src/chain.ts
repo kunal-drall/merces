@@ -2,8 +2,8 @@ import {
   ChainError, adminCommandSchema, permissionlessCommandSchema, serviceCommandSchema, userCommandSchema,
   type AuctionState, type BuildableCommand, type BidState, type ChainInfo, type ChainPort, type CurveState, type CurveSwapQuote, type DomainEvent, type HealthReport,
   type Groth16ProofJson, type IssuerState, type PeriodState, type PositionState, type QuarterRateState, type RateAccumulatorState, type RedemptionState, type SeriesState,
-  type ServiceCommand, type ServiceRole, type SignedTx, type Stablecoin, type TransferWindowState, type TreasuryState, type TxResult, type UnsignedTx,
-  type VaultState,
+  type ServiceCommand, type ServiceRole, type SignedTx, type SignerKeyState, type SignerKind, type Stablecoin, type TransferWindowState, type TreasuryState,
+  type TxResult, type UnsignedTx, type VaultState,
 } from '@merces/domain';
 import { wadToDecimal } from '@merces/math';
 import { DEFAULT_GENESIS, SimClock } from './clock.ts';
@@ -16,6 +16,7 @@ import { toAuctionState, toBid } from './reads/auction.ts';
 import { toCurveState, toCurveSwapQuote } from './reads/curve.ts';
 import { curveOf, dammTrade, migrateCurve, releaseLockedUnits } from './engine/curve.ts';
 import { balKey } from './engine/core.ts';
+import { attestorKeyState } from './engine/keys.ts';
 import { toQuarterRate, toRateAccumulator } from './reads/fx.ts';
 import { listPeriodStates, toPeriodState } from './reads/periods.ts';
 import { getPositionState, listPositionStates } from './reads/positions.ts';
@@ -291,8 +292,14 @@ export class SimulatorChain implements ChainPort {
   async isAllowlisted(wallet: string): Promise<boolean> {
     return this.state.allowlist.has(wallet);
   }
-  async listAttestors(): Promise<string[]> {
-    return [...this.state.attestors.entries()].filter(([, a]) => a).map(([k]) => k);
+  async getSignerKey(kind: SignerKind, address: string): Promise<SignerKeyState | null> {
+    if (kind !== 'attestor') throw new ChainError('NotImplemented', 'verifier keys by address arrive with S4 WP6 (listVerifierKeys until then)');
+    const k = this.state.attestors.get(address);
+    return k ? attestorKeyState(address, k) : null;
+  }
+  async listSignerKeys(kind: SignerKind): Promise<SignerKeyState[]> {
+    if (kind !== 'attestor') throw new ChainError('NotImplemented', 'verifier keys by address arrive with S4 WP6 (listVerifierKeys until then)');
+    return [...this.state.attestors.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([a, k]) => attestorKeyState(a, k));
   }
   async listVerifierKeys(): Promise<{ keyId: string; publicKey: string }[]> {
     return [...this.state.verifierKeys.entries()].filter(([, v]) => v.active).map(([keyId, v]) => ({ keyId, publicKey: v.publicKey }));

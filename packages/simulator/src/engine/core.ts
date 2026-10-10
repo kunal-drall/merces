@@ -40,7 +40,11 @@ export interface EngineCore {
   series(id: string): SimSeries;
   requireIssuer(s: SimSeries, signer: string): void;
   requireAllowlisted(wallet: string): void;
-  requireAttestor(a: string): void;
+  /**
+   * Whether attestor key `a` may sign at `now`: an active key, or with `reportPeriod` (report and FX signatures only) a
+   * key revoked after that period ended, within Stage 1's 45-day grace (`keys.ts` `attestorUsable`, S4 D5).
+   */
+  attestorUsable(a: string, now: number, opts?: { reportPeriod?: string }): boolean;
   credit(wallet: string, mint: string, amount: bigint): void;
   debit(wallet: string, mint: string, amount: bigint): void;
 }

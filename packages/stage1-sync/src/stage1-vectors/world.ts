@@ -48,6 +48,8 @@ export interface World {
   readonly backend: Backend;
   /** "reference", "merces/solana", … */
   readonly label: string;
+  /** the simulator personality of a merces world; the reference backend has none */
+  readonly personality?: VectorPersonality;
   /** Warp the clock to `t` (the vector's block time) before a step, `expect` and `expect_revert` included (SIM:475-482). */
   setTime(t: bigint): void;
   /** Run one action. Throws what the protocol raised when it reverts. */

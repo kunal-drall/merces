@@ -325,7 +325,11 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 ### AttestorRegistered
 
 - `attestor`: string
-- `active`: boolean
+
+### AttestorRevoked
+
+- `attestor`: string
+- `revokedAt`: integer
 
 ### VerifierKeyRegistered
 
@@ -438,7 +442,9 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### Admin commands (multisig)
 
-- **registerAttestor**: `attestor`: string; `active`: boolean
+- **registerAttestor**: `attestor`: string
+- **revokeAttestor**: `attestor`: string
+- **rotateAttestor**: `from`: string; `to`: string
 - **registerVerifierKey**: `keyId`: string; `publicKey`: string; `active`: boolean
 - **pauseNewRaises**: `paused`: boolean
 - **setFeeCollector**: `feeCollector`: string

@@ -1,0 +1,21 @@
+{
+  "name": "S4d_last_attestor_key",
+  "description": "The last active attestor key cannot be revoked (S4 D5, D9; amendment fix 1). On 11's prefix to its expect after the 2026Q3 report (#34), with attestor1 and attestor2 registered: attestor2 is revoked, so attestor1 is the last active key and its revocation is refused, each personality under its chain's name (Solana LastKeyOfKind, merces_registry lib.rs:242-245; EVM LastActiveKey, MercesRegistry.sol:333-335). Revoking attestor2 again is refused as a key that is not active (KeyAlreadyRevoked on Solana, KeyNotRegistered on the EVM). attestor2 is registered again (active, its revocation cleared), so attestor1 may now go; an extinguishment naming the revoked attestor1 is then refused (extinguishment needs active keys, no grace), and attestor2, alone again, cannot be revoked. Stage 1's reference simulator revokes with no last-key check (simulator.ts:535-546), so this runs on the merces backend only, not on the reference or in lockstep (DIV-S1I-2).",
+  "covers": ["d"],
+  "base": "11_extinguishment",
+  "backends": ["merces"],
+  "segments": [
+    { "baseSteps": [0, 34] },
+    {
+      "steps": [
+        {"t": "1783641600", "op": "revoke_attestor", "key": "attestor2", "note": "two active keys: attestor2 may go, attestor1 is left"},
+        {"t": "1783641600", "op": "expect_revert", "call": {"op": "revoke_attestor", "key": "attestor1"}, "error": "LastKeyOfKind", "errorByPersonality": {"solana": "LastKeyOfKind", "monad": "LastActiveKey"}, "note": "the last active attestor key: both chains refuse it, each under its own name"},
+        {"t": "1783641600", "op": "expect_revert", "call": {"op": "revoke_attestor", "key": "attestor2"}, "error": "KeyAlreadyRevoked", "errorByPersonality": {"solana": "KeyAlreadyRevoked", "monad": "KeyNotRegistered"}, "note": "a key that is not active cannot be revoked again"},
+        {"t": "1783641600", "op": "register_attestor", "key": "attestor2", "note": "re-registered: active again, its revocation cleared"},
+        {"t": "1783641600", "op": "revoke_attestor", "key": "attestor1", "note": "two active keys again: attestor1 may go now (a rotation is this register then this revoke)"},
+        {"t": "1783641600", "op": "expect_revert", "call": {"op": "extinguish", "series": "S1", "attestors": ["attestor1", "attestor2"]}, "error": "InvalidAttestorSignature", "note": "attestor1 is revoked: an extinguishment needs two active keys (no grace)"},
+        {"t": "1783641600", "op": "expect_revert", "call": {"op": "revoke_attestor", "key": "attestor2"}, "error": "LastKeyOfKind", "errorByPersonality": {"solana": "LastKeyOfKind", "monad": "LastActiveKey"}, "note": "attestor2 is the last active key now"}
+      ]
+    }
+  ]
+}

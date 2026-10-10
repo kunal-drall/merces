@@ -107,6 +107,16 @@ export const STAGE1_SOLANA_CODE = {
   InsufficientStake: 'InsufficientFunds',
   StakeExceedsOutstanding: 'WrongStatus',
   TenderQuotaExhausted: 'WrongStatus',
+  // the key registry (S4 WP5, D9; merces_registry lib.rs:218-260): a zero key address, a revoke of a key that is not
+  // active, and a revoke that would leave no active key of its kind (`attestor_count >= 2`). The codes are shared with
+  // the EVM's names for the same cases, so each case has one chain-neutral code on both personalities
+  ZeroAttestorAddress: 'InvalidTerms',
+  KeyAlreadyRevoked: 'WrongStatus',
+  LastKeyOfKind: 'NotPermitted',
+  // Anchor's built-in error 3012 (not in Stage 1's error.rs): a revoke of a key whose account was never created (the
+  // key was never registered). errors.test.ts checks Stage 1's own harness constant for it
+  // (solana/tests/src/vectors.rs `ACCOUNT_NOT_INITIALIZED: u32 = 3012`)
+  AccountNotInitialized: 'WrongStatus',
 } as const satisfies Record<string, ChainErrorCode>;
 
 /**
@@ -116,6 +126,13 @@ export const STAGE1_SOLANA_CODE = {
 export const STAGE1_EVM_CODE = {
   // the EVM registry refuses curve mode right after the issuer check (MercesRegistry.sol:479-481)
   CurveModeUnsupported: 'NotPermitted',
+  // the key registry (S4 WP5, D9; MercesRegistry.sol:315-345): a zero key address, a register of a key that is
+  // already active, a revoke of a key that is not active (revoked or never registered alike), and a revoke of the last
+  // active key; codes as the Solana names for the same cases
+  ZeroAddress: 'InvalidTerms',
+  KeyAlreadyActive: 'Duplicate',
+  KeyNotRegistered: 'WrongStatus',
+  LastActiveKey: 'NotPermitted',
 } as const satisfies Record<string, ChainErrorCode>;
 
 /** Every Stage 1 error name and its code: the chain-neutral names, then each chain's own. */

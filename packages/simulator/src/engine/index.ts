@@ -13,6 +13,7 @@ import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
 import { burnRetired, claimPayout, payIn, postSplitReceipt } from './payments.ts';
 import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
+import { attestorUsable, registerAttestor, revokeAttestor, rotateAttestor } from './keys.ts';
 import { submitReport } from './reports.ts';
 import { stakeUnits, tenderUnits, unstakeUnits } from './stake.ts';
 import { beginSettlement, deliverBid, finalizeSettlement, processBid, registerHolder, tallyBids } from './settlement.ts';
@@ -136,7 +137,10 @@ export class SimEngine implements EngineCore {
       case 'unstakeUnits': return unstakeUnits(this, user(), cmd, emit);
       case 'tenderUnits': return tenderUnits(this, user(), cmd, emit);
       case 'setAllowlist': service('allowlistManager'); return setAllowlist(this, cmd, emit);
-      case 'registerAttestor': admin(); this.state.attestors.set(cmd.attestor, cmd.active); emit('AttestorRegistered', { attestor: cmd.attestor, active: cmd.active }); return;
+      // Stage 1's key registry (S4 WP5): each personality's rules and names (keys.ts)
+      case 'registerAttestor': admin(); return registerAttestor(this, cmd.attestor, emit);
+      case 'revokeAttestor': admin(); return revokeAttestor(this, cmd.attestor, now, emit);
+      case 'rotateAttestor': admin(); return rotateAttestor(this, cmd, now, emit);
       case 'registerVerifierKey': admin(); this.state.verifierKeys.set(cmd.keyId, { publicKey: cmd.publicKey, active: cmd.active }); emit('VerifierKeyRegistered', { keyId: cmd.keyId, publicKey: cmd.publicKey, active: cmd.active }); return;
       case 'pauseNewRaises': admin(); this.state.newRaisesPaused = cmd.paused; return;
       case 'setFeeCollector': admin(); this.state.feeCollector = cmd.feeCollector; return;
@@ -166,8 +170,8 @@ export class SimEngine implements EngineCore {
   requireAllowlisted(wallet: string): void {
     if (!this.state.allowlist.has(wallet)) fail('NotAllowlisted', `${wallet} is not allowlisted`);
   }
-  requireAttestor(a: string): void {
-    if (!this.state.attestors.get(a)) throw new ChainError('Unauthorized', `${a} is not a registered attestor`);
+  attestorUsable(a: string, now: number, opts: { reportPeriod?: string } = {}): boolean {
+    return attestorUsable(this, a, now, opts);
   }
   balance(wallet: string, mint: string): bigint {
     return this.state.balances.get(balKey(wallet, mint)) ?? 0n;

@@ -1,9 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import type { UnsignedTx } from '@merces/domain';
+import { KEY_GRACE_SECONDS, type UnsignedTx } from '@merces/domain';
 import { SimWallet } from '@merces/simulator';
 import { IdentityService } from '@merces/services';
 import { makeRig } from './helpers.ts';
+
+/*
+ * S4 cause codes:
+ *  - S4-REG: Stage 1's key registry (S4 WP5): an attestor's deactivation is `revokeAttestor` (forward-only, with its
+ *    revocation time), the chain read is `getSignerKey`, and the registry's rules are checked first (one 409 per case).
+ */
 
 /**
  * E13 admin API. The admin never signs: every chain action comes back as an UnsignedTx for the multisig, which the
@@ -37,7 +43,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
   it('registers an attestor: build for the multisig → sign → send → mark sent → confirmed; attestor access starts only once the registration is indexed', async () => {
     const w = new SimWallet('solana', 'attestor-new');
     await new IdentityService(rig.ctx).seedAccount({ accountId: 'att-new', wallets: [{ chain: 'solana', address: w.address, family: 'solana' }], roles: ['backer'], eligible: false });
-    expect(await rig.sol.sim.listAttestors()).not.toContain(w.address);
+    expect(await rig.sol.sim.getSignerKey('attestor', w.address)).toBeNull(); // cause S4-REG (was listAttestors)
 
     // unknown account → 404; wrong-family wallet → 400
     expect((await rig.post('/admin/attestors', { chain: 'solana', wallet: w.address, accountId: 'nobody', active: true }, adminTok)).statusCode).toBe(404);
@@ -51,7 +57,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect(request.kind).toBe('registerAttestor');
     expect(request.createdBy).toBe('admin-1');
     expect(request.meta).toEqual({ accountId: 'att-new', jurisdiction: 'GB', kind: 'CA' });
-    expect(tx.command).toEqual({ kind: 'registerAttestor', attestor: w.address, active: true });
+    expect(tx.command).toEqual({ kind: 'registerAttestor', attestor: w.address }); // cause S4-REG (was {…, active: true})
     expect(tx.signer).toBe((await rig.sol.sim.info()).admin);
     // idempotent replay returns the same request
     const replay = await rig.post('/admin/attestors', body, adminTok, { 'idempotency-key': 'att-1' });
@@ -73,7 +79,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     const bogus = await rig.post(`/admin/tx-requests/${request.requestId}/sent`, { txId: 'not-yet' }, adminTok);
     expect(bogus.statusCode).toBe(200);
     expect(bogus.json().state).toBe('sent');
-    expect(await rig.sol.sim.listAttestors()).not.toContain(w.address);
+    expect(await rig.sol.sim.getSignerKey('attestor', w.address)).toBeNull(); // cause S4-REG
 
     // the multisig signs and the admin relays; the backend never signed
     const txId = await relay(tx);
@@ -82,7 +88,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect(marked.json().state).toBe('confirmed');
     expect(marked.json().txId).toBe(txId);
     expect(marked.json().confirmedAt).toBeTruthy();
-    expect(await rig.sol.sim.listAttestors()).toContain(w.address);
+    expect((await rig.sol.sim.getSignerKey('attestor', w.address))?.active).toBe(true); // cause S4-REG
     // onchain but not yet indexed: still no access; once indexed, the attestor routes open and the session carries the role
     expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(403);
     await rig.sync();
@@ -105,14 +111,50 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect(sent.json().entries.map((e: { detail: { confirmed: boolean } }) => e.detail.confirmed)).toEqual([true, false]);
     await expect(rig.t.pool.query('delete from audit_log where actor = $1', ['admin-1'])).rejects.toThrow(/append-only/);
 
-    // deactivation: proposing it changes nothing until it is onchain and indexed; then access ends at once
+    // cause S4-REG: registering a key that is already active is refused before anything is built (the EVM reverts
+    // KeyAlreadyActive, Solana would re-emit): one 409 on every chain
+    const dup = await rig.post('/admin/attestors', body, adminTok);
+    expect([dup.statusCode, dup.json().detail]).toEqual([409, { reason: 'key-already-active' }]);
+
+    // deactivation is Stage 1's forward-only revocation (cause S4-REG: revokeAttestor; was registerAttestor{active:
+    // false}): proposing it changes nothing until it is onchain and indexed; then access ends at once
     const off = await rig.post('/admin/attestors', { ...body, active: false }, adminTok);
+    expect(off.statusCode).toBe(201);
+    expect([off.json().request.kind, off.json().tx.command]).toEqual(['revokeAttestor', { kind: 'revokeAttestor', attestor: w.address }]);
     expect((await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { wallet: string }) => a.wallet === w.address).status).toBe('deactivation-pending');
     expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(200);
-    await relay(off.json().tx as UnsignedTx);
+    const offTx = await relay(off.json().tx as UnsignedTx);
+    const revokedAt = (await rig.sol.sim.getSignerKey('attestor', w.address))!.revokedAt!;
+    expect(revokedAt).toBe(await rig.sol.sim.now());
+    expect((await rig.post(`/admin/tx-requests/${off.json().request.requestId}/sent`, { txId: offTx }, adminTok)).json().state).toBe('confirmed'); // the chain shows the revocation
     await rig.sync();
     expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(403);
     expect((await new IdentityService(rig.ctx).sessionFor('att-new')).roles).not.toContain('attestor');
+    // the indexed registry keeps when the key became active and when it was revoked, and the grace end that follows
+    const row = (await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { wallet: string }) => a.wallet === w.address);
+    expect(row).toMatchObject({ status: 'inactive', onchainActive: false, revokedAt, graceUntil: revokedAt + KEY_GRACE_SECONDS });
+    expect(typeof row.registeredAt).toBe('number');
+    expect((await rig.get(`/admin/audit-log?actor=admin-1&target=solana:${w.address}`, adminTok)).json().entries.map((e: { action: string }) => e.action)).toEqual(['attestor.revoke', 'attestor.register']);
+    // a key that is not active cannot be revoked again (KeyAlreadyRevoked / KeyNotRegistered onchain): 409, nothing built
+    const again = await rig.post('/admin/attestors', { ...body, active: false }, adminTok);
+    expect([again.statusCode, again.json().detail]).toEqual([409, { reason: 'key-not-active' }]);
+    const unknown = await rig.post('/admin/attestors', { ...body, wallet: new SimWallet('solana', 'never-registered').address, active: false }, adminTok);
+    expect([unknown.statusCode, unknown.json().detail]).toEqual([409, { reason: 'key-not-active' }]);
+  });
+
+  it('the last active attestor key of a chain cannot be revoked: 409 last-active-key, rotate instead (cause S4-REG)', async () => {
+    const m = rig.mon;
+    const [a1, a2] = m.attestors as [SimWallet, SimWallet];
+    await new IdentityService(rig.ctx).seedAccount({ accountId: 'att-mon-last', wallets: [{ chain: 'monad', address: a1.address, family: 'evm' }], roles: ['backer'], eligible: false });
+    await m.exec(m.admin, { kind: 'revokeAttestor', attestor: a2.address }); // a1 is the chain's last active key
+    try {
+      const last = await rig.post('/admin/attestors', { chain: 'monad', wallet: a1.address, accountId: 'att-mon-last', active: false }, adminTok);
+      expect([last.statusCode, last.json().detail]).toEqual([409, { reason: 'last-active-key' }]);
+      expect(last.json().message).toMatch(/rotate/);
+      expect((await rig.t.pool.query("select 1 from admin_tx_requests where chain = 'monad' and kind = 'revokeAttestor'")).rowCount).toBe(0);
+    } finally {
+      await m.exec(m.admin, { kind: 'registerAttestor', attestor: a2.address });
+    }
   });
 
   it('registers a verifier key and pauses/resumes new raises through tracked multisig requests', async () => {

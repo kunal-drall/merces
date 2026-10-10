@@ -257,7 +257,14 @@ export const eventPayloads = {
   TransferWindowCleared: z.object({ ...seriesScoped, windowId: z.number().int(), clearingPrice: moneySchema, unitsTransferred: unitsSchema }),
   UnitsTransferred: z.object({ ...seriesScoped, from: addressSchema, to: addressSchema, units: unitsSchema, windowId: z.number().int() }),
   AllowlistUpdated: z.object({ wallet: addressSchema, allowed: z.boolean() }),
-  AttestorRegistered: z.object({ attestor: addressSchema, active: z.boolean() }),
+  /** Stage 1's `AttestorRegistered{addr}` (registry events; MercesRegistry.sol:321): the key is active, `revokedAt` 0. */
+  AttestorRegistered: z.object({ attestor: addressSchema }),
+  /**
+   * Stage 1's `AttestorRevoked{addr, revoked_at}` (MercesRegistry.sol:340): the key is revoked at `revokedAt` (unix
+   * seconds, the block time). Report and FX signatures of periods that ended by then stay valid until
+   * `revokedAt + KEY_GRACE_SECONDS`.
+   */
+  AttestorRevoked: z.object({ attestor: addressSchema, revokedAt: z.number().int() }),
   VerifierKeyRegistered: z.object({ keyId: z.string(), publicKey: z.string(), active: z.boolean() }),
   /**
    * Stage 1's registry `CurveActivated` (registry events.rs:172-180): a curve series is created and activated at once

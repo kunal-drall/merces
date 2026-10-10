@@ -88,7 +88,7 @@ export class MercesWorld implements World, OpContext {
       acceptMockProofs: false,
       reportProofVerifier: { verify: (proof, publicInputs) => verifyReportCached(proof, publicInputs) },
     });
-    this.actors = new Actors(this.chain.family, vector.name, vector.actors);
+    this.actors = new Actors(this.chain.family, vector.name, vector.actors, vector.keys);
     this.keyring = new VectorKeyring(vector.keys);
     this.mint = this.chain.mintOf('USDC');
     this.bookState = { series: {}, seen: [], windowsEnabled: vector.flags.windowsEnabled };

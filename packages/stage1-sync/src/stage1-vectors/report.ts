@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { brief } from './compare.ts';
 import { DIVERGENCES } from './divergences.ts';
 import { EXPECTED, describeExpected, expectedFor } from './expected.ts';
-import { SCENARIO_EXPECTATIONS } from './scenarios.ts';
+import { SCENARIO_EXPECTATIONS, SCENARIO_SETS } from './scenarios.ts';
 import type { RunReport, RunResult } from './index.ts';
 import { isFinding } from './run.ts';
 import { SHIMS } from './shims.ts';
@@ -15,6 +15,12 @@ export interface ParitySource {
 }
 
 const MAX_DIFFS_SHOWN = 12;
+
+/** The VECTOR_PARITY.md section of a scenario id's set ("S3 claim scenarios", "S4 signature scenarios"). */
+function sectionOf(id: string): string {
+  const set = SCENARIO_SETS.find((x) => id.startsWith(x.id));
+  return set ? set.title.replace(/ \(.*$/, '') : 'our scenarios';
+}
 
 function cell(r: RunResult | undefined): string {
   if (!r) return '—';
@@ -101,19 +107,25 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
   if (!DIVERGENCES.length) lines.push('None: the register is empty.', '');
   if (!Object.values(EXPECTED).some((e) => e.divergences?.length || e.lockstep)) lines.push('No Stage 1 vector carries a divergence: DIV-NRC-1 (the non-reveal charge, held in S2), the only row a vector ever met, went when the charge was modelled as Stage 1 models it (S3 follow-up NRC); 03 replays in full.', '');
   for (const row of DIVERGENCES) {
-    lines.push(`### ${row.id}: ${row.title}`, '', `- What: ${row.what}`, `- Why: ${row.why}`, `- Seen: ${row.seen}`, `- Until: ${row.milestone}`, `- Lifting it: ${row.lift.join(' ')}`, '', '| Vector or scenario | Step | Field | Stage 1 | Ours |', '| --- | --- | --- | --- | --- |');
+    lines.push(`### ${row.id}: ${row.title}`, '', `- What: ${row.what}`, `- Why: ${row.why}`, `- Seen: ${row.seen}`, `- Until: ${row.milestone}`, `- Lifting it: ${row.lift.join(' ')}`, '');
     const entries = [
       ...Object.entries(EXPECTED).sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, e]) => [vectors.find(([, vid]) => vid === id)?.[0] ?? id, e] as const),
       ...Object.entries(SCENARIO_EXPECTATIONS).sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, e]) => [`scenario ${id}`, e] as const),
     ];
+    const table: string[] = [];
     for (const [name, e] of entries) {
-      for (const d of (e.divergences ?? []).filter((x) => x.id === row.id)) lines.push(`| ${name} | #${d.step} | \`${d.path}\` | ${brief(d.stage1)} | ${brief(d.ours)} |`);
-      if (e.lockstep?.id === row.id) for (const d of e.lockstep.diffs) lines.push(`| ${name} (lockstep) | after #${e.lockstep.divergesAt} | \`${d.path}\` | ${brief(d.stage1)} | ${brief(d.ours)} |`);
+      for (const d of (e.divergences ?? []).filter((x) => x.id === row.id)) table.push(`| ${name} | #${d.step} | \`${d.path}\` | ${brief(d.stage1)} | ${brief(d.ours)} |`);
+      if (e.lockstep?.id === row.id) for (const d of e.lockstep.diffs) table.push(`| ${name} (lockstep) | after #${e.lockstep.divergesAt} | \`${d.path}\` | ${brief(d.stage1)} | ${brief(d.ours)} |`);
     }
+    // a row shown only by a merces-only scenario's expected revert has no entries, and no table
+    if (table.length) lines.push('| Vector or scenario | Step | Field | Stage 1 | Ours |', '| --- | --- | --- | --- | --- |', ...table, '');
     const seen = runs.filter((r) => r.issues.some((i) => i.kind === 'divergence' && i.divergence === row.id));
     const scenarios = Object.entries(SCENARIO_EXPECTATIONS).filter(([, e]) => e.lockstep?.id === row.id || e.divergences?.some((d) => d.id === row.id)).map(([id]) => id);
-    lines.push('');
-    if (!seen.length) lines.push(scenarios.length ? `Not reached by a Stage 1 vector; reached by our scenario${scenarios.length > 1 ? 's' : ''} ${scenarios.join(', ')} (see "S3 claim scenarios").` : 'Not reached by the runs of this report.');
+    if (!seen.length) {
+      if (scenarios.length) lines.push(`Not reached by a Stage 1 vector; reached by our scenario${scenarios.length > 1 ? 's' : ''} ${scenarios.join(', ')} (see "${sectionOf(scenarios[0]!)}").`);
+      else if (row.shownBy?.length) lines.push(`No entries: not reached by a Stage 1 vector; shown by our merces-only scenario${row.shownBy.length > 1 ? 's' : ''} ${row.shownBy.join(', ')}, as an expected revert (see "${sectionOf(row.shownBy[0]!)}").`);
+      else lines.push('Not reached by the runs of this report.');
+    }
     for (const r of seen) {
       const at = r.issues.filter((i) => i.kind === 'divergence' && i.divergence === row.id);
       lines.push(`- ${r.vector} on ${r.world}: ${at.map((i) => `#${i.index} (${i.diffs?.length ?? 0} field${(i.diffs?.length ?? 0) > 1 ? 's' : ''})`).join(', ')}, as recorded`);
@@ -180,7 +192,7 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
 }
 
 /**
- * Write `VECTOR_PARITY.md` into `outDir`, with optional sections after the results (the sync step adds our S3 claim
+ * Write `VECTOR_PARITY.md` into `outDir`, with optional sections after the results (the sync step adds our scenario sets,
  * scenarios) and an appendix (the sync step's op inventory).
  */
 export function writeParity(outDir: string, reports: readonly RunReport[], source: ParitySource, extra: { notes?: string[]; sections?: string[]; appendix?: string[] } = {}): string {

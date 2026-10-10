@@ -1616,7 +1616,7 @@ export type paths = {
         /** Attestor proposals beside the indexed onchain registry; only an indexed active registration gives attestor access */
         get: operations["adminListAttestors"];
         put?: never;
-        /** Build registerAttestor for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); audited */
+        /** Build Stage 1's registerAttestor (active true) or revokeAttestor (active false) for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed and ends when the revocation is, A-M5-2); the registry's rules are checked against the chain first; audited */
         post: operations["adminRegisterAttestor"];
         delete?: never;
         options?: never;
@@ -1650,7 +1650,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (listAttestors, listVerifierKeys, info); audited */
+        /** Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (getSignerKey, listVerifierKeys, info); audited */
         post: operations["adminTxRequestSent"];
         delete?: never;
         options?: never;
@@ -3397,7 +3397,7 @@ export type components = {
         AdminTxRequest: {
             requestId: string;
             /** @enum {string} */
-            kind: "registerAttestor" | "registerVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
+            kind: "registerAttestor" | "revokeAttestor" | "rotateAttestor" | "registerVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
             chain: string;
             /** @description the canonical AdminCommand as built */
             command: Record<string, never>;
@@ -3406,7 +3406,7 @@ export type components = {
             txId: string | null;
             /** @description admin account id */
             createdBy: string;
-            /** @description registerAttestor: {accountId, jurisdiction, kind} */
+            /** @description registerAttestor and revokeAttestor: {accountId, jurisdiction, kind} */
             meta: Record<string, never>;
             /** Format: date-time */
             createdAt: string;
@@ -3429,7 +3429,7 @@ export type components = {
             wallet: string;
             /** @description the Merces account proposed as attestor; it gains attestor access only once this wallet's registration is onchain and indexed */
             accountId: string;
-            /** @description false deactivates an attestor onchain */
+            /** @description true builds Stage 1's registerAttestor; false its revokeAttestor (forward-only: report and FX signatures of periods that ended by the revocation stay valid onchain for 45 days; access ends once the revocation is indexed). The registry's rules are checked against the chain first (409). */
             active: boolean;
             /** @description ISO 3166-1 alpha-2 */
             jurisdiction?: string;
@@ -7093,6 +7093,12 @@ export interface operations {
                             /** @enum {string} */
                             status: "registered" | "pending-onchain" | "deactivation-pending" | "inactive";
                             onchainActive: boolean;
+                            /** @description unix seconds the key last became active (indexed AttestorRegistered); null before it was indexed or for rows indexed before S4 */
+                            registeredAt: number | null;
+                            /** @description unix seconds of its forward-only revocation (indexed AttestorRevoked); null while active */
+                            revokedAt: number | null;
+                            /** @description revokedAt + 45 days: until then report and FX signatures of periods that ended by revokedAt stay valid onchain (Stage 1's grace); attestor access ended at revokedAt */
+                            graceUntil: number | null;
                             proposal?: Record<string, never> | null;
                         }[];
                     };
@@ -7146,8 +7152,17 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Idempotency key reused with a different body */
+            /** @description The registry refuses it on this chain, before anything is built (detail.reason: key-already-active, registering a key that is active; key-not-active, revoking a key that is revoked or was never registered; last-active-key, revoking the chain's last active attestor key: rotate to a new key instead), or the idempotency key was reused with a different body */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A registration whose wallet is not linked to the named account */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7161,7 +7176,7 @@ export interface operations {
         parameters: {
             query?: {
                 chain?: string;
-                kind?: "registerAttestor" | "registerVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
+                kind?: "registerAttestor" | "revokeAttestor" | "rotateAttestor" | "registerVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
                 state?: "proposed" | "sent" | "confirmed";
                 limit?: components["parameters"]["adminLimit"];
             };

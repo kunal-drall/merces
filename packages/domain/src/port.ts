@@ -2,6 +2,7 @@ import type { DomainEvent } from './events.ts';
 import type { BuildableCommand, ServiceCommand, ServiceRole, SignedTx, TxResult, UnsignedTx } from './commands.ts';
 import type { Address, ChainFamily, ChainKey, ChainMode, Stablecoin } from './ids.ts';
 import type { Money } from './money.ts';
+import type { SignerKeyState, SignerKind } from './signing.ts';
 import type {
   AuctionState, BidState, ChainInfo, CurveState, CurveSwapQuote, HealthReport, IssuerState, PeriodState, PositionState, QuarterRateState,
   RateAccumulatorState, RedemptionState, SeriesState, TransferWindowState, TreasuryState, VaultState,
@@ -39,7 +40,16 @@ export interface ChainPort {
   getRateAccumulator(pair: string): Promise<RateAccumulatorState | null>;
   getQuarterRate(pair: string, periodId: string): Promise<QuarterRateState | null>;
   isAllowlisted(wallet: Address): Promise<boolean>;
-  listAttestors(): Promise<Address[]>;
+  /**
+   * A registered key of `kind` as the chain holds it (Stage 1 `AttestorKey` / `VerifierKey`, the EVM's `attestorKey` /
+   * `verifierKey` views), active or revoked, with its `revokedAt` and `graceUntil`; null for a key never registered.
+   * Usability is `keyUsable(key, now, {reportPeriod?})`: an active key, or a revoked one within Stage 1's grace for a
+   * report or FX signature of a period that ended by its revocation (S4 D5). Kind `verifier` arrives with S4 WP6
+   * (NotImplemented until then; `listVerifierKeys` serves the verifier keys meanwhile).
+   */
+  getSignerKey(kind: SignerKind, address: Address): Promise<SignerKeyState | null>;
+  /** Every registered key of `kind`, active and revoked (revoked keys carry `revokedAt` and `graceUntil`). */
+  listSignerKeys(kind: SignerKind): Promise<SignerKeyState[]>;
   listVerifierKeys(): Promise<{ keyId: string; publicKey: string }[]>;
   getTransferWindow(seriesId: string): Promise<TransferWindowState | null>;
   getCurve(seriesId: string): Promise<CurveState | null>;

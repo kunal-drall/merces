@@ -214,7 +214,11 @@ settling, and settled series.
 attestations, extinguishment transactions (two signers).
 
 **Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
-(`GET /admin/attestors`) and verifier-key registration (multisig transactions), accounting and reconciliation (the fee
+(`GET /admin/attestors`, with each key's registration and revocation times and its grace end) and the attestor key
+registry (`POST /admin/attestors`: `active: true` builds Stage 1's `registerAttestor`, `active: false` its forward-only
+`revokeAttestor`, for the multisig; the chain's registry is checked first and a key already active, a revoke of a key
+that is not active, or of the chain's last active attestor key, answers 409 with `detail.reason` `key-already-active`,
+`key-not-active` or `last-active-key`, nothing built), verifier-key registration (multisig transactions), accounting and reconciliation (the fee
 ledger's kinds: `auction`, `payout`, `curveTrading`, and `nonReveal` for the non-reveal charge, paid by the bidder),
 notification backlog, keeper runs, audit log.
 

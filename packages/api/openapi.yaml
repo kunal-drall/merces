@@ -1852,6 +1852,8 @@ components:
           type: string
           enum:
             - registerAttestor
+            - revokeAttestor
+            - rotateAttestor
             - registerVerifierKey
             - pauseNewRaises
             - setFeeCollector
@@ -1876,7 +1878,7 @@ components:
           description: admin account id
         meta:
           type: object
-          description: "registerAttestor: {accountId, jurisdiction, kind}"
+          description: "registerAttestor and revokeAttestor: {accountId, jurisdiction, kind}"
         createdAt:
           type: string
           format: date-time
@@ -1926,7 +1928,7 @@ components:
           description: the Merces account proposed as attestor; it gains attestor access only once this wallet's registration is onchain and indexed
         active:
           type: boolean
-          description: false deactivates an attestor onchain
+          description: "true builds Stage 1's registerAttestor; false its revokeAttestor (forward-only: report and FX signatures of periods that ended by the revocation stay valid onchain for 45 days; access ends once the revocation is indexed). The registry's rules are checked against the chain first (409)."
         jurisdiction:
           type: string
           minLength: 2
@@ -6432,6 +6434,9 @@ paths:
                         - wallet
                         - status
                         - onchainActive
+                        - registeredAt
+                        - revokedAt
+                        - graceUntil
                       properties:
                         chain:
                           type: string
@@ -6450,6 +6455,21 @@ paths:
                             - inactive
                         onchainActive:
                           type: boolean
+                        registeredAt:
+                          type:
+                            - integer
+                            - "null"
+                          description: unix seconds the key last became active (indexed AttestorRegistered); null before it was indexed or for rows indexed before S4
+                        revokedAt:
+                          type:
+                            - integer
+                            - "null"
+                          description: unix seconds of its forward-only revocation (indexed AttestorRevoked); null while active
+                        graceUntil:
+                          type:
+                            - integer
+                            - "null"
+                          description: "revokedAt + 45 days: until then report and FX signatures of periods that ended by revokedAt stay valid onchain (Stage 1's grace); attestor access ended at revokedAt"
                         proposal:
                           type:
                             - object
@@ -6465,7 +6485,7 @@ paths:
         - admin
       security:
         - session: []
-      summary: Build registerAttestor for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); audited
+      summary: Build Stage 1's registerAttestor (active true) or revokeAttestor (active false) for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed and ends when the revocation is, A-M5-2); the registry's rules are checked against the chain first; audited
       parameters:
         - $ref: "#/components/parameters/adminIdempotencyKey"
       requestBody:
@@ -6498,7 +6518,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "409":
-          description: Idempotency key reused with a different body
+          description: "The registry refuses it on this chain, before anything is built (detail.reason: key-already-active, registering a key that is active; key-not-active, revoking a key that is revoked or was never registered; last-active-key, revoking the chain's last active attestor key: rotate to a new key instead), or the idempotency key was reused with a different body"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: A registration whose wallet is not linked to the named account
           content:
             application/json:
               schema:
@@ -6523,6 +6549,8 @@ paths:
             type: string
             enum:
               - registerAttestor
+              - revokeAttestor
+              - rotateAttestor
               - registerVerifierKey
               - pauseNewRaises
               - setFeeCollector
@@ -6562,7 +6590,7 @@ paths:
         - admin
       security:
         - session: []
-      summary: Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (listAttestors, listVerifierKeys, info); audited
+      summary: Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (getSignerKey, listVerifierKeys, info); audited
       parameters:
         - $ref: "#/components/parameters/adminRequestId"
         - $ref: "#/components/parameters/adminIdempotencyKey"

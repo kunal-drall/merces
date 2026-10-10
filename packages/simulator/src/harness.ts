@@ -231,7 +231,7 @@ export class SimHarness {
 
   /** Registers attestors and the verifier key, allowlists everyone, funds wallets. */
   async bootstrap(): Promise<void> {
-    for (const a of this.attestors) await this.exec(this.admin, { kind: 'registerAttestor', attestor: a.address, active: true });
+    for (const a of this.attestors) await this.exec(this.admin, { kind: 'registerAttestor', attestor: a.address });
     await this.exec(this.admin, { kind: 'registerVerifierKey', keyId: this.verifier.keyId, publicKey: this.verifier.publicKeyHex, active: true });
     for (const w of [this.issuer, ...this.backers]) await this.sim.submit({ kind: 'setAllowlist', wallet: w.address, allowed: true }, 'allowlistManager');
     const coins: Stablecoin[] = this.sim.personality === 'solana' ? ['USDC', 'USDG'] : ['USDC'];

@@ -2,7 +2,7 @@
  * `pnpm --filter @merces/simulator sim:reset [--chain solana,monad] [--prefix sim] [--dry-run]`
  *
  * Deletes the persisted simulator chains (state, events, indexer projections and the off-chain rows keyed by their
- * series), see reset.ts and RUNBOOK.md "Simulator state version 4: reset". Refuses unless MERCES_ALLOW_SIM_RESET=1;
+ * series), see reset.ts and RUNBOOK.md "Simulator state version 5: reset". Refuses unless MERCES_ALLOW_SIM_RESET=1;
  * `--dry-run` (allowed without it) prints what would be deleted and rolls back.
  * DATABASE_URL selects the database; MERCES_SIM_KEY the key prefix (as for the API and dev:mock).
  */

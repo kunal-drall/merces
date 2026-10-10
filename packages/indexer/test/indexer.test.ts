@@ -9,6 +9,9 @@ import { Indexer, project } from '../src/index.ts';
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes.
+ * S4 cause codes on new checks:
+ *  - S4-REG: Stage 1's key registry (S4 WP5, migration 023): `AttestorRegistered` and `AttestorRevoked` with their times,
+ *    guarded by `updated_seq`; not in the public feed.
  */
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -141,6 +144,42 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const gap: DomainEvent = { ...fin, seq: fin.seq + 5, cursor: String(fin.seq + 5).padStart(12, '0') };
     expect(await idx.apply(key, [gap], gap.cursor)).toBe(0);
     expect((await idx.cursor(key)).lastSeq).toBe(fin.seq);
+  });
+
+  // cause S4-REG (S4 WP5, migration 023): Stage 1's registry projected with its times; neither event is in the feed
+  it('projects the key registry: a registration with its time, a forward-only revocation with its own, a re-registration that clears it; an older event never undoes a later one', async () => {
+    const key = 'monad-keys-test';
+    const h = await SimHarness.create('monad', { genesis: GENESIS, sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const [a1, a2] = h.attestors as [SimWallet, SimWallet];
+    const row = async (a: string) => (await t.pool.query('select active, registered_at::int as registered_at, revoked_at::int as revoked_at, updated_seq::int as updated_seq from attestors where chain = $1 and attestor = $2', [key, a])).rows[0];
+    await idx.catchUp();
+    const registeredAt = (await row(a2.address)).registered_at;
+    expect(await row(a2.address)).toMatchObject({ active: true, revoked_at: null });
+    expect(registeredAt).toBe(GENESIS);
+    await h.sim.setTime(GENESIS + 86_400);
+    await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a2.address });
+    await idx.catchUp();
+    expect(await row(a2.address)).toMatchObject({ active: false, registered_at: registeredAt, revoked_at: GENESIS + 86_400 });
+    await h.sim.setTime(GENESIS + 2 * 86_400);
+    await h.exec(h.admin, { kind: 'registerAttestor', attestor: a2.address });
+    await idx.catchUp();
+    const back = await row(a2.address);
+    expect(back).toMatchObject({ active: true, registered_at: GENESIS + 2 * 86_400, revoked_at: null });
+    // a replayed older event (the revocation) changes nothing: `updated_seq` guards the row
+    const revoked = (await h.sim.readEvents(null, 1000)).events.find((e) => e.type === 'AttestorRevoked')!;
+    const c = await t.pool.connect();
+    try {
+      await project(c, revoked);
+      // Solana's re-emit for a key that is already active keeps the time it became active
+      await project(c, { ...revoked, seq: back.updated_seq + 100, cursor: 'x', type: 'AttestorRegistered', payload: { attestor: a2.address }, blockTime: GENESIS + 9 * 86_400 } as DomainEvent);
+    } finally {
+      c.release();
+    }
+    expect(await row(a2.address)).toMatchObject({ active: true, registered_at: GENESIS + 2 * 86_400, revoked_at: null });
+    expect((await row(a1.address)).active).toBe(true);
+    // registrations and revocations are not in the public feed
+    expect((await t.pool.query("select count(*)::int as n from activity where chain = $1 and kind like 'Attestor%'", [key])).rows[0].n).toBe(0);
   });
 
   it('enqueues chain notices in the projection transaction, one per event, so repeated transitions each notify', async () => {

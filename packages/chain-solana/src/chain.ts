@@ -135,7 +135,12 @@ export class SolanaChain implements ChainPort {
   async getRateAccumulator(): Promise<never> { return this.notReady('getRateAccumulator'); }
   async getQuarterRate(): Promise<never> { return this.notReady('getQuarterRate'); }
   async isAllowlisted(): Promise<never> { return this.notReady('isAllowlisted'); }
-  async listAttestors(): Promise<never> { return this.notReady('listAttestors'); }
+  /**
+   * S5: the registry's key account (`[b"attestor"|b"verifier", addr20]`, merces_registry state.rs) as `SignerKeyState`;
+   * the list from a `getProgramAccounts` scan of that account type.
+   */
+  async getSignerKey(): Promise<never> { return this.notReady('getSignerKey'); }
+  async listSignerKeys(): Promise<never> { return this.notReady('listSignerKeys'); }
   async listVerifierKeys(): Promise<never> { return this.notReady('listVerifierKeys'); }
   async getTransferWindow(): Promise<never> { return this.notReady('getTransferWindow'); }
   async getCurve(): Promise<never> { return this.notReady('getCurve'); }

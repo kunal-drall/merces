@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   DIVERGENCES,
   DIVERGENCE_BY_ID,
+  SCENARIO_EXPECTATIONS,
   EXPECTED,
   MercesWorld,
   NOT_YET,
@@ -81,7 +82,10 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *
  * S4 cause codes:
  *  - S4-BID: `commit_bid` runs directly with Stage 1's keccak commitment (S4 D11; shim SH-AUC-2 retired), so no row of
- *    the raise is a shim any more; the window rows SH-WIN-2/3 hash their orders the same way.
+ *    the raise is a shim any more; the window rows SH-WIN-2/3 hash their orders the same way;
+ *  - S4-SH: `register_attestor` and `revoke_attestor` run directly as Stage 1's registry (`registerAttestor` /
+ *    `revokeAttestor` of the vector key's 20-byte address; S4 WP5; shim SH-REG-2 retired);
+ *  - S4-REG: the register gains DIV-S1I-2 (the last-key rule), shown by our merces-only scenario S4d with no entries.
  */
 afterAll(shutdown);
 
@@ -321,10 +325,13 @@ describe('stage1 vector runner: expectations and the op map', () => {
       expect([e.divergences, e.lockstep], id).toEqual([undefined, undefined]);
       expect(e.status, id).not.toBe('PASS-WITH-DIVERGENCES');
     }
-    // DIV-NRC-1 went with the non-reveal charge modelled, and 03 is PASS. Cause S3R-F: the register's one row is
-    // DIV-S1I-1, which only our scenario S3l meets (was: the register empty)
-    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-1']);
-    expect(DIVERGENCE_BY_ID.size).toBe(1);
+    // DIV-NRC-1 went with the non-reveal charge modelled, and 03 is PASS. Cause S3R-F: the register's first row is
+    // DIV-S1I-1, which only our scenario S3l meets (was: the register empty). Cause S4-REG: DIV-S1I-2, the last-key rule,
+    // which only our merces-only scenario S4d shows, as an expected revert: no entry anywhere (amendment fix 1)
+    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-1', 'DIV-S1I-2']);
+    expect(DIVERGENCE_BY_ID.size).toBe(2);
+    expect(DIVERGENCE_BY_ID.get('DIV-S1I-2')?.shownBy).toEqual(['S4d']);
+    expect(Object.values(SCENARIO_EXPECTATIONS).filter((e) => e.divergences?.some((d) => d.id === 'DIV-S1I-2') || e.lockstep?.id === 'DIV-S1I-2')).toEqual([]);
     expect(EXPECTED['03']).toMatchObject({ status: 'PASS' });
     // the test-only divergence's Stage 1 values are vector 03's own, each at an expect step; its parting is b8's process_bid
     const v03 = loadVector(vectorFile('03'));
@@ -443,6 +450,8 @@ describe('stage1 vector runner: merces backend', () => {
       expect(run.stopped).toEqual({ index: 32, reason: 'until' });
       // cause S2-MS, S4-BID: the whole raise runs directly, the commitment included (SH-AUC-2 retired in S4 WP2)
       expect(Object.keys(run.shims).filter((id) => id.startsWith('SH-AUC-'))).toEqual([]);
+      // cause S4-SH: the attestor registrations of the bootstrap run directly (SH-REG-2 retired in S4 WP5)
+      expect(run.shims['SH-REG-2']).toBeUndefined();
     }
     expect(r.ok).toBe(true);
   }, 120_000);
@@ -932,6 +941,13 @@ describe('stage1 vector runner: merces backend', () => {
       expect(SHIMS.some((r) => r.ops.includes(op)), op).toBe(false);
     }
     expect(STAGE1_OP_MAP.claim).toEqual({ canonical: 'claimPayout', kind: 'direct' });
+    // cause S4-SH: Stage 1's attestor registry runs directly since S4 WP5 (was: shim SH-REG-2, a boolean registration)
+    for (const op of ['register_attestor', 'revoke_attestor']) {
+      expect(STAGE1_OP_MAP[op], op).toMatchObject({ kind: 'direct' });
+      expect(STAGE1_OP_MAP[op], op).not.toHaveProperty('shim');
+      expect(SHIMS.some((r) => r.ops.includes(op)), op).toBe(false);
+    }
+    expect(SHIM_BY_ID.has('SH-REG-2')).toBe(false);
   });
 
   it('vector keys become stable ed25519 verifier keys whose attestations verify', async () => {
@@ -998,7 +1014,12 @@ describe('stage1 vector runner: merces backend', () => {
     const known = md.slice(md.indexOf('## Known divergences (not parity)'), md.indexOf('## Prefix gates'));
     expect(known).toContain('No Stage 1 vector carries a divergence: DIV-NRC-1 (the non-reveal charge, held in S2), the only row a vector ever met, went when the charge was modelled');
     expect(known).not.toContain('None: the register is empty');
-    expect(known.match(/^### .*$/gm)).toEqual(["### DIV-S1I-1: a redeemed holder's final share counts the units in its open window ask (Stage 1 internal, resolved toward both chains)"]);
+    // cause S4-REG: and DIV-S1I-2, the last-key rule, which our merces-only scenario S4d shows with no entries
+    expect(known.match(/^### .*$/gm)).toEqual([
+      "### DIV-S1I-1: a redeemed holder's final share counts the units in its open window ask (Stage 1 internal, resolved toward both chains)",
+      '### DIV-S1I-2: the last active key of a kind cannot be revoked (Stage 1 internal, resolved toward both chains)',
+    ]);
+    expect(known).toContain('No entries: not reached by a Stage 1 vector; shown by our merces-only scenario S4d, as an expected revert (see "S4 signature scenarios").');
     expect(known).toContain('| scenario S3l | #79 | `balances.b1.stable` | "69260161480" | "70310161480" |');
     expect(known).toContain('| scenario S3l | #87 | `vault` | "1050000000" | "0" |');
     expect(known).toContain('| scenario S3l (lockstep) | after #78 | `S2.vault` | "54517581720" | "53467581720" |');
@@ -1020,7 +1041,8 @@ describe('stage1 vector runner: merces backend', () => {
     // cause S3-SH: the claim family runs directly; its rows (SH-CLM-1, SH-CLM-2, SH-CLM-3, SH-BRN-1) are gone and no run
     // went through them (was: SH-CLM-1 used in 01, 04, 05, 07, 17, 19 and 21 until WP3; SH-CLM-2 runner-atomic, used in
     // 09 and 23; SH-CLM-3 in 11; SH-BRN-1 in 05)
-    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1']) {
+    // cause S4-SH: likewise SH-REG-2 (Stage 1's attestor registry runs directly since S4 WP5)
+    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1', 'SH-REG-2']) {
       expect(md, id).not.toContain(id);
       for (const r of report.runs) expect(r.shims[id], `${r.vector} ${r.world}`).toBeUndefined();
     }

@@ -20,7 +20,7 @@ there), and `submit(command, role)` for the backend's two low-privilege roles. T
 
 ## The canonical model
 
-`@merces/domain` defines the vocabulary once: 54 events, 49 commands (schema 0.3.0), the state shapes, the commitments (Stage 1's
+`@merces/domain` defines the vocabulary once: 55 events, 51 commands (schema 0.4.0; S4 WP5 added Stage 1's `revokeAttestor`, `rotateAttestor` and `AttestorRevoked`), the state shapes, the commitments (Stage 1's
 Poseidon terms and income commitments; since S4 its keccak bid and order commitments), the verifier attestation
 message (Stage 1's report field set) and Stage 1's six report public inputs. The sealed raise uses Stage 1's names for
 its multi-step settlement (S2): the permissionless commands `beginSettlement`, `tallyBids`, `finalizeSettlement`,

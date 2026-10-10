@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 
 /**
  * `sim:reset` (S1 plan D6, amendment M3): discard persisted simulator chains and everything keyed to them, so a new
- * simulator state layout (version 4 since S3) starts from an empty chain. Simulator states are never upgraded in place.
+ * simulator state layout (version 5 since S4) starts from an empty chain. Simulator states are never upgraded in place.
  *
  * For the named simulator chains only (never TRUNCATE, never another chain's rows), in one transaction:
  * - the simulator state and event log (`sim_state`, `sim_events`, key `<prefix>:<chain>`);
@@ -30,7 +30,7 @@ export const SIM_RESET_CHAIN_TABLES = [
 /** What has to be redone on each reset chain, printed by the CLI. */
 export const SIM_RESET_REAPPLY = [
   'allowlist entries (setAllowlist for every approved wallet)',
-  'attestors (registerAttestor)',
+  'attestor keys (registerAttestor; revoked keys and their revocation times are gone too)',
   'report-verifier keys (registerVerifierKey)',
   'issuer registrations (registerIssuer)',
 ] as const;

@@ -77,7 +77,15 @@ delivery (Stage 1's code); a failed raise charges nothing. The rate is the owner
   registry copies the admin's protocol default (`set_defaults`) into each series whatever the transaction says, so keep
   the setting equal to the chain's default; the adapter then reads each series' recorded rate back.
 
-### Simulator state version 4: reset
+### Simulator state version 5: reset
+
+From S4 WP5 the persisted simulator state is **version 5**: Stage 1's key registry, each attestor key with its
+revocation time (`{active, revokedAt}`; version 4 held a boolean), so a revoked key keeps Stage 1's 45-day grace on
+report and FX signatures. Migration 023 adds the registry times to the read model's `attestors` table
+(`registered_at`, `revoked_at`, `updated_seq`; rows indexed before it keep their state, with no times, and the next
+event about the key overwrites them) and re-expresses the admin requests stored before S4 (`registerAttestor{active:
+false}` becomes the `revokeAttestor` it now is). Reset the simulated chains **after deploying the WP5 build** with
+the commands below; S4 WP6 and WP7 reset them again. Before version 5:
 
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final
 pool (version 2, S1), the raise's own terms and Stage 1's multi-step auction settlement (version 3, S2), it carries each
@@ -87,8 +95,8 @@ WP8: the DBC stand-in pool, its base-mint accounts, P0 and what was collected), 
 anything was deployed. Migration 020 reshapes the read model's `curves` table (the old rows are dropped with it; a reset
 re-indexes them). A persisted chain of another version is never
 upgraded in place: `SimulatorChain.create` refuses it with `SimStateVersionError`, so the API and `dev:mock` stop at
-boot on a database that still holds a version-1, -2 or -3 chain. Reset the simulated chains **before deploying the
-version-4 build**, and again after S3 WP8 (no environment holds simulator data worth keeping):
+boot on a database that still holds a version-1, -2, -3 or (since S4 WP5) -4 chain. Reset the simulated chains
+**before deploying the version-4 build**, and again after S3 WP8 (no environment holds simulator data worth keeping):
 
 ```
 pnpm --filter @merces/simulator sim:reset --dry-run                      # what would go, nothing deleted
@@ -120,8 +128,8 @@ MERCES_ALLOW_SIM_RESET=1 pnpm --filter @merces/simulator sim:reset --chain solan
 S4 WP2 switched bid and order commitments to Stage 1's keccak over the price, quantity, salt and wallet (A-SIG-8). The
 state version is unchanged (still 4), but a bid or window order committed before the switch carries our old SHA-256
 commitment and can never be revealed (CommitmentMismatch, InvalidCommitment). Reset the simulated chains with the
-commands above after deploying the WP2 build (no environment holds simulator data worth keeping); S4 WP5, WP6 and WP7
-reset them again. Clients compute the new commitment themselves (or through `POST /series/{id}/bids/commitment`) with a
+commands above after deploying the WP2 build (no environment holds simulator data worth keeping); S4 WP5 (state
+version 5, above), WP6 and WP7 reset them again. Clients compute the new commitment themselves (or through `POST /series/{id}/bids/commitment`) with a
 fresh 32-byte salt per bid: the commitment no longer binds the series.
 
 ### Checks before a deploy
@@ -171,6 +179,17 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   `ECDSA_SHA_256` and `MessageType=DIGEST`; GCP: `EC_SIGN_SECP256K1_SHA256` at HSM protection level, the digest in
   `digest.sha256` unverified; HashiCorp Vault transit has no secp256k1 key). Rotation = register the new verifier key
   (keep the old one active until in-flight reports land), switch `REPORT_VERIFIER_KEY_ID`, then deactivate the old key.
+- Attestor keys (S4 WP5, A-SIG-4): the multisig registers, revokes and rotates them on each chain (Stage 1's
+  registry). `POST /admin/attestors` with `active: true` builds `registerAttestor`, with `active: false` the
+  forward-only `revokeAttestor`; the admin service reads the chain's registry first and refuses with 409 (nothing
+  built) a key that is already active (`key-already-active`), a revoke of a key that is not active (`key-not-active`)
+  and a revoke of the chain's last active attestor key (`last-active-key`: both chains refuse it). To replace a key,
+  register the new one first (or send `rotateAttestor{from, to}` from the multisig: register then revoke in one
+  transaction), then revoke the old one. Attestor access ends as soon as the revocation is indexed; report (tier 3) and
+  FX signatures the old key made for periods that ended by its revocation stay valid onchain until `revokedAt` + 45
+  days (`GET /admin/attestors` shows `revokedAt` and `graceUntil`), so a compromised key's in-flight signatures stay
+  usable for that long: check the reports accepted under a revoked key in that window. Pause approvals, amendments and
+  extinguishments need an active key.
 - Vault key: `MERCES_VAULT_KEY_HEX` (32 bytes). Rotation re-encrypts `terms_vault`, `applications.notes_encrypted` and
   `contract_sessions.signed_document_encrypted`; the key id is stored beside each ciphertext.
 - Keeper fee payer: fund it with devnet SOL / testnet MON only; it never holds stablecoins. On Solana the settle and
