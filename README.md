@@ -37,7 +37,7 @@ pnpm openapi:check                       # routes ⇄ openapi.yaml ⇄ access ti
 
 | Area | Packages |
 | --- | --- |
-| Mechanism math | `@merces/math` — the gateway to Stage 1's math (`@merces/sdk`, `@merces/reference` from the `stage1` submodule), plus the interim window and curve cap and FX family (both S5); the sealed raise runs Stage 1's auction family (S2) |
+| Mechanism math | `@merces/math` — the gateway to Stage 1's math (`@merces/sdk`, `@merces/reference` from the `stage1` submodule), plus the interim window and curve cap and FX family (both S5); the sealed raise runs Stage 1's auction family (S2); the unit-scale and curve family is ported from Stage 1's Rust until its TypeScript has one (S3, A-MATH-3) |
 | Canonical model + `ChainPort` | `@merces/domain` — events, commands, state, hashing; `DOMAIN_EVENTS.md` and a JSON schema generated from it |
 | Simulator | `@merces/simulator` — two personalities (`solana`: USDC+USDG, base58; `monad`: USDC, EVM), time travel, Postgres persistence |
 | Live adapters | `@merces/chain-solana`, `@merces/chain-evm` (config-driven; mainnet refused), `@merces/chains` (mock / live / auto) |

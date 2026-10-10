@@ -8,6 +8,12 @@
  * Beside them sit the few helpers Stage 1 has no counterpart for: the `"YYYYQn"` period codec, decimal parsing, the
  * term builder's per-unit rate, a value-free payment wrapper, deadline projection and a display cap.
  *
+ * Since S3 a segregated family is ported from Stage 1's Rust (merces-common @1bfc66b; A-MATH-3), because Stage 1's
+ * TypeScript has no `unit_scale` and no curve code: the unit scale, the vault, tail and redemption at a scale, and
+ * curve mode's P0, offer check, units outstanding, migration-fee split and tender quota. They are not Stage 1 objects.
+ * At scale 1 each scale-aware function returns Stage 1's own function's result (it calls it), so sealed-bid series
+ * still run only Stage 1's functions; `stage1:sync` lists the family as ported and checks its Rust sources at the pin.
+ *
  * The interim Merces math (Part C) survives only under `interim.*`, and since S2 only the window and curve cap
  * (`walletCapUnits`; S5) and the FX family (`quarterAverageRate`, `coverageOk`, `deviationBps`, `withinBand`,
  * `pythToWad`; S5). The sealed-bid auction is Stage 1's family below (S2).
@@ -166,3 +172,31 @@ export { ratePerUnit } from './rate.ts';
 export { paymentStable, PAYMENT_RANGE_ERROR, type PaymentInputs } from './payment.ts';
 export { statusParamsOf, projectDeadlines, standingOf, type StatusTerms, type ProjectedDeadlines, type Standing } from './status.ts';
 export { capRemaining } from './cap.ts';
+
+// ---------------------------------------------------------------- curve (ported from merces-common @1bfc66b; not Stage 1 objects)
+// A-MATH-3. Stage 1's TypeScript has no `unit_scale`; until it ships one these are ports of its Rust, pinned to Stage 1's
+// Rust tests and fixtures. At scale 1 the scale-aware ones call Stage 1's own function (`vaultReceiveGross`,
+// `tailReceive`, `redemptionQuote`, `isCapped`; `capRemainingScaled` our `capRemaining`, Stage 1's `C_remaining`).
+export {
+  // the unit scale (curve.rs:13-22, vault.rs:125-156)
+  CURVE_BASE_DECIMALS,
+  CURVE_UNIT_SCALE,
+  unitScaleFor,
+  wadPerScaledUnit,
+  scaledCapWad,
+  scaledAmount,
+  // the vault, the tail and the redemption at a scale (vault.rs:48-78, :167-170; redemption.rs:101-141)
+  isCappedScaled,
+  vaultReceiveGrossScaled,
+  tailReceiveScaled,
+  capRemainingScaled,
+  redemptionQuoteScaled,
+  type RedemptionInputsScaled,
+  // curve mode (curve.rs:24-112)
+  p0PerUnit,
+  swapBaseMatchesOffer,
+  unitsOutstanding,
+  migrationFeeSplit,
+  walletTenderFits,
+  type MigrationFeeSplit,
+} from './curve/index.ts';

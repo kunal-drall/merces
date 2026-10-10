@@ -40,7 +40,7 @@ Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitigno
 | detect | ok: `stage1.map.json` (hand-written) over the pinned submodule |
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
 | diff | drift: **Solana** 4 canonical items without a counterpart, 249 field mismatches, 79 extra Stage 1 items; **Monad testnet** 2 / 210 / 89 (`INTERFACE_DRIFT.md`; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range); the new item without a counterpart on each chain is `UnitsMinted`, now a curve buy only (a Meteora DBC swap). The rest is left to the adapters' mappers (D6.2) and the rest of section B (S3–S5) |
-| math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window and curve cap and the FX family (both S5). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2) |
+| math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window and curve cap and the FX family (both S5). S3 WP5: beside them, 16 names ported from Stage 1's Rust (merces-common: the unit scale, the vault, tail and redemption at a scale, curve mode's arithmetic), because Stage 1's TypeScript has no `unit_scale`; at scale 1 each calls Stage 1's own function, and the step checks their merces-common items at the pin ("45/45 re-exports are Stage 1's own objects; 16 ported (curve, A-MATH-3)"). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2, A-MATH-3) |
 | vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 36/42 PASS, 42/42 at expected status`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A), 03 PASS-WITH-DIVERGENCES (DIV-NRC-1, the non-reveal hold); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, and parts on 03 at #65 exactly as recorded. 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. Our eleven S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) pass on Stage 1's simulator, on ours and in lockstep, 55/55 runs. Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
 | conformance | **blocked**: no devnet or testnet deployment |
 | verdict | both chains NOT ready (diff drift; conformance not run) |
@@ -254,6 +254,17 @@ Open, with the default S2 uses meanwhile:
    Stage 1: its TS reference settles a round that would sell 0 units (SPEC and both chains fail it), and its simulator's
    `RaiseMintFinalized` on a failed raise carries the would-be units and proceeds (both chains emit 0 and 0) (A-AUC-7).
 
+Open since S3, with the default S3 uses meanwhile (recorded by the work package that implements it):
+
+1. **Scale-aware math is ported (S3 decision 2, A-MATH-3).** Stage 1's TypeScript has no `unit_scale` (its
+   `vaultReceiveGross`, `tailReceive`, `redemptionQuote` and `isCapped` take whole units only) and no curve code, so
+   `@merces/math` ports 16 names from merces-common @1bfc66b (`vault.rs:48-170`, `redemption.rs:101-141`,
+   `curve.rs:13-112`) as a segregated family. At scale 1 each scale-aware one calls Stage 1's own function (tested on
+   seeded grids), so sealed-bid series run only Stage 1's functions; every curve figure is pinned to Stage 1's Rust
+   tests and fixtures. This bends A-MATH-1 ("import, don't rewrite"); the alternative is to block curve staking on
+   Stage 1's TypeScript. Asked of Stage 1: add `unit_scale` to its TypeScript (and the curve functions), so the port
+   becomes an import (see "Known gaps").
+
 Open since S1, with the same defaults:
 
 1. **Who attests `liquidityEvent` for tier 2?** zkTLS data cannot show a liquidity event. Default: the report
@@ -279,6 +290,7 @@ Open since S1, with the same defaults:
 | No pushed claims: Stage 1 lets anyone claim for a holder (`claimFor`, any payer); the canonical claims are the holder's own (A-CLM-3) | S5 / owner |
 | No `retire_if_capped`, `withdraw_pause_request` or `end_pause` commands; `requestPause.until` advisory (B.6) | S5 |
 | `payIn` exact-amount and period guards (Stage 1's `pay` takes neither) | S5 (adapters drop them) |
+| Scale-aware math is ported from merces-common @1bfc66b (A-MATH-3, S3 WP5): 16 names in `@merces/math` (`src/curve`), not Stage 1 objects; scale 1 runs Stage 1's own functions; `stage1:sync` fails when one of their merces-common items changes | until Stage 1 ships TypeScript counterparts |
 | Tier 1: no router year-to-date binding; split receipts stand in for the router credit | tier-1 milestone |
 | True-up, the FX accumulator (trading-day coverage) and the `tier4Enabled` flag (B.6, B.9) | S5 |
 | ed25519 signatures with co-signers, attestation v1 as canonical JSON, no revocation grace (B.4) | S4 |
@@ -585,4 +597,9 @@ State at @1bfc66b (the same tree as @5eafd41):
 - Report-verifier signatures: Stage 1 verifies **secp256k1** report attestations onchain (SPEC §1.4), not ed25519;
   B.4 of the review, S4.
 - Curve buyers' money and the wallet cap: answered (see "The two curve questions" above).
+- Scale-aware TypeScript math (S3, A-MATH-3): Stage 1's reference math has no `unit_scale`, so `vaultReceiveGross`,
+  `tailReceive`, `redemptionQuote` and `isCapped` cannot account a curve series per base lamport, and curve mode's
+  arithmetic (`p0_per_unit`, `units_outstanding`, `migration_fee_split`, `wallet_tender_fits`, `scaled_amount`) exists
+  only in Rust. Asked: add them to `@merces/reference` (the scale as a trailing argument, 1 for sealed bid), so
+  `@merces/math` re-exports them and the port goes.
 - Devnet and testnet deployments: still missing (blockers above).

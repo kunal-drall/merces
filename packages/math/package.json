@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Merces mechanism math. Stage 1's reference math (@merces/reference, SPEC v1.1.2) is the implementation; this package re-exports it with the few helpers Stage 1 does not have.",
+  "description": "Merces mechanism math. Stage 1's reference math (@merces/reference, SPEC v1.1.2) is the implementation; this package re-exports it with the few helpers Stage 1 does not have, and a unit-scale and curve family ported from Stage 1's Rust (A-MATH-3).",
   "exports": {
     ".": "./src/index.ts"
   },

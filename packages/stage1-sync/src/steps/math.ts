@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -24,6 +25,102 @@ export const REFERENCE_REEXPORTS = [
   // auction (SPEC §5.1-5.2; S2)
   'walletCapUnitsAtAuction', 'requiredEscrow', 'isBidValid', 'beginSettlement', 'tallyBids', 'isClearingPriceValid', 'finalizeSettlement', 'marginalAllocation', 'processBid', 'claimsFor', 'findClearingPrice',
 ] as const;
+
+/** Where the ported family's Rust lives in a Stage 1 checkout (merces-common, "CM"). */
+export const MERCES_COMMON = 'solana/crates/merces-common/src';
+
+const CURVE_ONLY = 'none (curve mode only)';
+
+/**
+ * The family `@merces/math` ports from Stage 1's Rust (S3, A-MATH-3), because Stage 1's TypeScript has no `unit_scale`
+ * and no curve code. They are ours, not Stage 1 objects; at scale 1 the scale-aware ones call Stage 1's own TypeScript
+ * function (`scale1` says what each is at scale 1, as the parity report prints it). Each names the merces-common items
+ * it ports (`file:item` under MERCES_COMMON; the Solana program only calls them, e.g. `receive_tail` in
+ * `common.rs:595-612` and the deposit in `exit.rs:125`) and a fingerprint of their source at the port (`sha`: the
+ * first 16 hex digits of a sha256 over the items' text, in order), so a Stage 1 bump that removes or changes one fails
+ * the math step until the port is redone or becomes an import.
+ */
+export const PORTED: readonly { name: string; rust: readonly string[]; scale1: string; sha: string }[] = [
+  { name: 'CURVE_BASE_DECIMALS', rust: ['curve.rs:CURVE_BASE_DECIMALS'], scale1: CURVE_ONLY, sha: 'b3fd9a1209dabc43' },
+  { name: 'CURVE_UNIT_SCALE', rust: ['curve.rs:CURVE_UNIT_SCALE'], scale1: CURVE_ONLY, sha: 'c5f54ea10bf80b20' },
+  { name: 'unitScaleFor', rust: ['curve.rs:unit_scale_for'], scale1: CURVE_ONLY, sha: '8099035cfbf8d289' },
+  { name: 'wadPerScaledUnit', rust: ['vault.rs:wad_per_scaled_unit'], scale1: "Stage 1's `WAD`", sha: 'aed6006fe56ea4ba' },
+  { name: 'scaledCapWad', rust: ['vault.rs:scaled_cap_wad'], scale1: "Stage 1's `cap × WAD` (`capEffWad(cap, 0)`)", sha: 'd672878bdf6cfce2' },
+  { name: 'scaledAmount', rust: ['vault.rs:scaled_amount'], scale1: "Stage 1's `P_redeem × units` (`redemptionQuote`'s deposit)", sha: '340845fe87bf5330' },
+  { name: 'isCappedScaled', rust: ['vault.rs:is_capped'], scale1: "Stage 1's `isCapped`", sha: '54f3bb53005159b2' },
+  { name: 'vaultReceiveGrossScaled', rust: ['vault.rs:receive_capped', 'vault.rs:distribute', 'vault.rs:scaled_cap_wad'], scale1: "Stage 1's `vaultReceiveGross`", sha: 'e520145cc7823336' },
+  { name: 'tailReceiveScaled', rust: ['vault.rs:receive_capped', 'vault.rs:scaled_cap_wad'], scale1: "Stage 1's `tailReceive`", sha: '2dcd8a3a53600fc1' },
+  { name: 'capRemainingScaled', rust: ['redemption.rs:redemption_price'], scale1: "Stage 1's `redemptionQuote(…).cRemaining` (our `capRemaining`)", sha: '646af69bd10d2474' },
+  { name: 'redemptionQuoteScaled', rust: ['redemption.rs:redemption_price', 'vault.rs:scaled_amount'], scale1: "Stage 1's `redemptionQuote`", sha: '94a605cdaf67f4c6' },
+  { name: 'p0PerUnit', rust: ['curve.rs:p0_per_unit'], scale1: CURVE_ONLY, sha: 'b66b2b0e7a003a03' },
+  { name: 'swapBaseMatchesOffer', rust: ['curve.rs:swap_base_matches_offer'], scale1: CURVE_ONLY, sha: '4a88a1f45b237a50' },
+  { name: 'unitsOutstanding', rust: ['curve.rs:units_outstanding'], scale1: CURVE_ONLY, sha: '4c3cfb602b8aee08' },
+  { name: 'migrationFeeSplit', rust: ['curve.rs:migration_fee_split'], scale1: CURVE_ONLY, sha: 'a69c44d72fdbb25b' },
+  { name: 'walletTenderFits', rust: ['curve.rs:wallet_tender_fits'], scale1: CURVE_ONLY, sha: 'cf07edba4454aa1e' },
+];
+
+/**
+ * The source text of one merces-common item (`file:item`) in a checkout: a `const` line, or a `fn` from its signature
+ * to the closing brace at its own indentation (rustfmt's layout). Null when the file or the item is missing.
+ */
+export function rustItem(root: string, ref: string): string | null {
+  const [file, item] = ref.split(':') as [string, string];
+  const path = join(root, MERCES_COMMON, file);
+  if (!existsSync(path)) return null;
+  const lines = readFileSync(path, 'utf8').split('\n');
+  const head = new RegExp(`^(\\s*)(?:pub(?:\\([a-z]+\\))? )?(const|fn) ${item}\\b`);
+  const start = lines.findIndex((l) => head.test(l));
+  if (start < 0) return null;
+  const [, indent, kind] = head.exec(lines[start]!)!;
+  if (kind === 'const') return lines[start]!;
+  const end = lines.findIndex((l, i) => i > start && l === `${indent}}`);
+  return end < 0 ? null : lines.slice(start, end + 1).join('\n');
+}
+
+/** The fingerprint of a ported name's Rust items (null when one is missing). */
+export function portedFingerprint(root: string, rust: readonly string[]): string | null {
+  const texts = rust.map((r) => rustItem(root, r));
+  if (texts.some((t) => t === null)) return null;
+  return createHash('sha256').update(texts.join('\n\u0000\n')).digest('hex').slice(0, 16);
+}
+
+/**
+ * Checks the ported family against a checkout: every name exported by `@merces/math`, every Rust item still there and
+ * unchanged since the port, and none yet exported by Stage 1's math package (then the port should become an import).
+ * Without the Rust crate in the drop nothing can be checked ("warn").
+ */
+export function checkPorted(root: string, stage1Math: Record<string, unknown>): { status: 'ok' | 'warn' | 'fail'; details: string[] } {
+  const ours = gateway as unknown as Record<string, unknown>;
+  const details: string[] = [];
+  let status: 'ok' | 'warn' | 'fail' = 'ok';
+  const notExported = PORTED.filter((p) => !(p.name in ours)).map((p) => p.name);
+  if (notExported.length) {
+    status = 'fail';
+    details.push(`@merces/math does not export the ported names: ${notExported.join(', ')}`);
+  }
+  const imported = PORTED.filter((p) => p.name in stage1Math).map((p) => p.name);
+  if (imported.length) {
+    if (status === 'ok') status = 'warn';
+    details.push(`Stage 1's math now exports ${imported.join(', ')}: replace the port with an import (A-MATH-3)`);
+  }
+  if (!existsSync(join(root, MERCES_COMMON))) {
+    if (status === 'ok') status = 'warn';
+    details.push(`ported family not checked: ${MERCES_COMMON} is not in this drop`);
+    return { status, details };
+  }
+  const missing: string[] = [];
+  const changed: string[] = [];
+  for (const p of PORTED) {
+    const sha = portedFingerprint(root, p.rust);
+    if (sha === null) missing.push(`${p.name} (${p.rust.filter((r) => rustItem(root, r) === null).join(', ')})`);
+    else if (sha !== p.sha) changed.push(`${p.name} (${p.rust.join(', ')})`);
+  }
+  if (missing.length) details.push(`merces-common items of ported names missing at this checkout: ${missing.join('; ')}`);
+  if (changed.length) details.push(`merces-common items changed since the port (re-port, then update PORTED's fingerprint): ${changed.join('; ')}`);
+  if (missing.length || changed.length) status = 'fail';
+  else details.push(`ported family: the merces-common items of all ${PORTED.length} names present and unchanged since the port (@1bfc66b)`);
+  return { status, details };
+}
 
 /**
  * The interim (Part C) math still exported under `interim`, by family. S1 moved every other family to Stage 1's own
@@ -57,8 +154,10 @@ export function interimRemaining(keys: readonly string[] = Object.keys(gateway.i
  * the pin and the wiring, and this step checks both:
  * - the Stage 1 checkout is at the commit the manifest (`stage1.map.json`) pins;
  * - every name in REFERENCE_REEXPORTS is the identical object exported by the checkout's math package.
- * "ok" needs both. A drop that names no math package, pins no commit or is not a git checkout cannot be checked
- * ("warn"); a checkout at another commit, a missing or substituted function, or an unloadable package is "fail".
+ * "ok" needs both, and the ported family (PORTED, A-MATH-3) whole: exported by `@merces/math`, its merces-common items
+ * present and unchanged since the port, none yet exported by Stage 1's math (then it should become an import, "warn").
+ * A drop that names no math package, pins no commit or is not a git checkout cannot be checked ("warn"); a checkout at
+ * another commit, a missing or substituted function, an unloadable package or a stale port is "fail".
  * Writes MATH_PARITY.md (snapshot committed as docs/stage1/MATH_PARITY.md).
  */
 export async function checkMathPin(ctx: StepCtx): Promise<StepReport> {
@@ -107,9 +206,12 @@ export async function checkMathPin(ctx: StepCtx): Promise<StepReport> {
   const missing = REFERENCE_REEXPORTS.filter((n) => !(n in mod));
   const substituted = REFERENCE_REEXPORTS.filter((n) => n in mod && ours[n] !== mod[n]);
   const identical = REFERENCE_REEXPORTS.length - missing.length - substituted.length;
-  details.push(`${identical}/${REFERENCE_REEXPORTS.length} re-exports are Stage 1's own objects`);
+  details.push(`${identical}/${REFERENCE_REEXPORTS.length} re-exports are Stage 1's own objects; ${PORTED.length} ported (curve, A-MATH-3)`);
   if (missing.length) details.push(`Stage 1 ${pkg} no longer exports: ${missing.join(', ')}`);
   if (substituted.length) details.push(`@merces/math exports a different object than Stage 1 for: ${substituted.join(', ')}`);
+  // the ported family (A-MATH-3): its Rust sources at this checkout
+  const ported = checkPorted(ctx.location.root, mod);
+  details.push(...ported.details);
   details.push(`interim families remaining: ${remaining.map((f) => f.family).join(', ') || 'none'}`);
 
   const wired = missing.length === 0 && substituted.length === 0;
@@ -120,12 +222,15 @@ export async function checkMathPin(ctx: StepCtx): Promise<StepReport> {
     verdict: wired ? `imported at ${commit}` : `NOT imported faithfully at ${commit} (${[...missing.map((n) => `${n} missing`), ...substituted.map((n) => `${n} substituted`)].join(', ')})`,
     remaining,
     identical,
+    ported,
   });
-  if (!wired || pin === 'fail') {
-    return { step: 'math', status: 'fail', summary: !wired ? 'Stage 1 math is not what @merces/math re-exports (see MATH_PARITY.md)' : 'Stage 1 checkout is not at the pinned commit', details };
+  if (!wired || pin === 'fail' || ported.status === 'fail') {
+    const summary = !wired ? 'Stage 1 math is not what @merces/math re-exports (see MATH_PARITY.md)' : pin === 'fail' ? 'Stage 1 checkout is not at the pinned commit' : 'the ported curve family no longer matches Stage 1\'s Rust at this checkout (see MATH_PARITY.md)';
+    return { step: 'math', status: 'fail', summary, details };
   }
   if (pin === 'warn') return { step: 'math', status: 'warn', summary: 'Stage 1 math wired through @merces/math; the pin could not be checked', details };
-  return { step: 'math', status: 'ok', summary: `Stage 1 math imported at ${commit}; @merces/math re-exports Stage 1's own functions`, details };
+  if (ported.status === 'warn') return { step: 'math', status: 'warn', summary: `Stage 1 math imported at ${commit}; the ported curve family needs attention (see MATH_PARITY.md)`, details };
+  return { step: 'math', status: 'ok', summary: `Stage 1 math imported at ${commit}; @merces/math re-exports Stage 1's own functions, beside ${PORTED.length} ported from its Rust (A-MATH-3)`, details };
 }
 
 function relativeName(ctx: StepCtx): string {
@@ -143,7 +248,7 @@ function checkoutHead(root: string): string | null {
   }
 }
 
-function writeParity(ctx: StepCtx, r: { pkg: string | null; commit: string | null; verdict: string; remaining: { family: string; names: string[] }[]; identical?: number }): void {
+function writeParity(ctx: StepCtx, r: { pkg: string | null; commit: string | null; verdict: string; remaining: { family: string; names: string[] }[]; identical?: number; ported?: { status: 'ok' | 'warn' | 'fail'; details: string[] } }): void {
   const families = r.remaining.map((f) => f.family).join(', ') || 'none';
   const lines = [
     '# MATH_PARITY.md',
@@ -165,6 +270,16 @@ function writeParity(ctx: StepCtx, r: { pkg: string | null; commit: string | nul
     for (const f of r.remaining) lines.push(`| ${f.family} | ${f.names.map((n) => `\`${n}\``).join(', ')} |`);
     lines.push('');
   }
+  lines.push(
+    '## Ported from Stage 1\'s Rust (A-MATH-3)',
+    '',
+    `Stage 1's TypeScript has no \`unit_scale\` and no curve code, so \`@merces/math\` ports ${PORTED.length} names from merces-common (\`${MERCES_COMMON}\`) @1bfc66b, kept apart from the re-exports. They are not Stage 1 objects. At scale 1 each scale-aware one returns Stage 1's own TypeScript function's result (it calls it), so a sealed-bid series runs only Stage 1's functions; \`packages/math/test/curve.test.ts\` checks that on seeded grids and pins every figure of Stage 1's Rust tests and curve fixtures. This step checks each Rust item still exists at the checkout and is unchanged since the port (fingerprint). Stage 1 is asked to add \`unit_scale\` to its TypeScript so these become imports.`,
+    '',
+  );
+  if (r.ported) lines.push(`Check at this checkout: **${r.ported.status}**. ${r.ported.details.join(' ')}`, '');
+  lines.push('| Ported name | merces-common items | At scale 1 (in Stage 1 TypeScript) |', '| --- | --- | --- |');
+  for (const p of PORTED) lines.push(`| \`${p.name}\` | ${p.rust.map((x) => `\`${x}\``).join(', ')} | ${p.scale1} |`);
+  lines.push('');
   writeFileSync(join(ctx.outDir, 'MATH_PARITY.md'), lines.join('\n'));
 }
 

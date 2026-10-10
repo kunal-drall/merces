@@ -1,20 +1,24 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { commandGroups, eventPayloads } from '@merces/domain';
+import * as gateway from '@merces/math';
 import { interim } from '@merces/math';
+import * as reference from '@merces/reference';
 import { renderReport, runSync, verdictsFrom, type StepReport } from '../src/index.ts';
 import { renderAnchorIdl } from '../src/idl-render.ts';
 import { diffInterfaces } from '../src/steps/diff.ts';
-import { INTERIM_FAMILIES, REFERENCE_REEXPORTS, checkMathPin, interimRemaining } from '../src/steps/math.ts';
+import { INTERIM_FAMILIES, MERCES_COMMON, PORTED, REFERENCE_REEXPORTS, checkMathPin, checkPorted, interimRemaining, portedFingerprint, rustItem } from '../src/steps/math.ts';
 import { locateStage1 } from '@merces/chains';
 
 /*
  * S2 cause codes:
  *  - S2-MS: multi-step settlement with Stage 1's names (the one-step settlement and the pull refund are retired);
  *  - S2-G: the interim auction family is retired; the interim cap left is the window and curve cap (S5).
+ * S3 cause codes:
+ *  - S3-M: the math step lists the curve family ported from merces-common (A-MATH-3) and checks its Rust at the pin.
  */
 
 /** A Stage 1 drop with only a manifest (plus extra files written by the caller). */
@@ -193,11 +197,71 @@ describe('stage1:sync', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'out-'));
     const r = await checkMathPin({ location, outDir, generatedDir: mkdtempSync(join(tmpdir(), 'gen-')) });
     expect(r.status, r.details.join('\n')).toBe('ok');
-    expect(r.details).toContain(`${REFERENCE_REEXPORTS.length}/${REFERENCE_REEXPORTS.length} re-exports are Stage 1's own objects`);
+    // cause S3-M: the ported family is counted apart and its Rust checked at the pin
+    expect(r.details).toContain(`${REFERENCE_REEXPORTS.length}/${REFERENCE_REEXPORTS.length} re-exports are Stage 1's own objects; ${PORTED.length} ported (curve, A-MATH-3)`);
+    expect(r.details).toContain(`ported family: the merces-common items of all ${PORTED.length} names present and unchanged since the port (@1bfc66b)`);
+    expect(r.summary).toMatch(/beside 16 ported from its Rust \(A-MATH-3\)/);
     const md = readFileSync(join(outDir, 'MATH_PARITY.md'), 'utf8');
     // cause S2-G: the interim auction family is gone; the window and curve cap (S5) and the FX family (S5) remain
     expect(md).toMatch(new RegExp(`^Stage 1 math imported at ${pinned}; interim families remaining: .*window and curve cap \\(S5\\)`, 'm'));
     expect(md).not.toMatch(/auction \(S2\)/);
+    expect(md).toContain('## Ported from Stage 1\'s Rust (A-MATH-3)');
+    expect(md).toContain('Check at this checkout: **ok**.');
+    for (const p of PORTED) expect(md).toContain(`| \`${p.name}\` |`);
+  });
+
+  it('math (S3-M): PORTED is exactly the ported family @merces/math exports, none of it a Stage 1 object', () => {
+    expect(PORTED.map((p) => p.name)).toEqual([
+      'CURVE_BASE_DECIMALS', 'CURVE_UNIT_SCALE', 'unitScaleFor', 'wadPerScaledUnit', 'scaledCapWad', 'scaledAmount',
+      'isCappedScaled', 'vaultReceiveGrossScaled', 'tailReceiveScaled', 'capRemainingScaled', 'redemptionQuoteScaled',
+      'p0PerUnit', 'swapBaseMatchesOffer', 'unitsOutstanding', 'migrationFeeSplit', 'walletTenderFits',
+    ]);
+    const gw = gateway as unknown as Record<string, unknown>;
+    const ref = reference as unknown as Record<string, unknown>;
+    for (const p of PORTED) {
+      expect(p.name in gw, p.name).toBe(true);
+      expect(p.name in ref, p.name).toBe(false);
+      expect(p.sha, p.name).toMatch(/^[0-9a-f]{16}$/);
+    }
+    // the ported names are the gateway's only exports outside Stage 1's, our helpers and `interim` (math.test.ts pins
+    // the full key list); every scale-aware one names the Stage 1 function it is at scale 1
+    expect(PORTED.filter((p) => /Scaled$/.test(p.name)).every((p) => p.scale1.startsWith("Stage 1's"))).toBe(true);
+  });
+
+  it('math (S3-M): the ported family\'s Rust is checked item by item (present, unchanged, not yet a Stage 1 import)', () => {
+    // a drop with a copy of merces-common at the pin: ok
+    const root = mkdtempSync(join(tmpdir(), 'stage1-cm-'));
+    mkdirSync(join(root, MERCES_COMMON), { recursive: true });
+    for (const f of ['curve.rs', 'vault.rs', 'redemption.rs']) copyFileSync(join('stage1', MERCES_COMMON, f), join(root, MERCES_COMMON, f));
+    expect(checkPorted(root, {})).toEqual({ status: 'ok', details: [`ported family: the merces-common items of all ${PORTED.length} names present and unchanged since the port (@1bfc66b)`] });
+    // the items: a const line, a top-level fn to its closing brace, a private fn
+    expect(rustItem(root, 'curve.rs:CURVE_UNIT_SCALE')).toBe('pub const CURVE_UNIT_SCALE: u64 = 1_000_000;');
+    const p0 = rustItem(root, 'curve.rs:p0_per_unit')!;
+    expect(p0.split('\n')[0]).toBe('pub fn p0_per_unit(');
+    expect(p0.endsWith('\n}')).toBe(true);
+    expect(rustItem(root, 'vault.rs:distribute')!.startsWith('fn distribute(')).toBe(true);
+    expect(rustItem(root, 'vault.rs:no_such_fn')).toBeNull();
+    // a changed body: only the names that port it fail
+    const curve = join(root, MERCES_COMMON, 'curve.rs');
+    const src = readFileSync(curve, 'utf8');
+    writeFileSync(curve, src.replace('.checked_add(99)', '.checked_add(98)'));
+    const changed = checkPorted(root, {});
+    expect(changed.status).toBe('fail');
+    expect(changed.details.join('\n')).toMatch(/changed since the port .*: migrationFeeSplit \(curve\.rs:migration_fee_split\)$/m);
+    // a removed item
+    writeFileSync(curve, src.replace('pub fn wallet_tender_fits(', 'pub fn wallet_tender_fits_v2('));
+    const gone = checkPorted(root, {});
+    expect(gone.status).toBe('fail');
+    expect(gone.details.join('\n')).toMatch(/missing at this checkout: walletTenderFits \(curve\.rs:wallet_tender_fits\)/);
+    // the fingerprint ignores nothing but the other items
+    writeFileSync(curve, src);
+    expect(portedFingerprint(root, PORTED.find((p) => p.name === 'p0PerUnit')!.rust)).toBe(PORTED.find((p) => p.name === 'p0PerUnit')!.sha);
+    // Stage 1's math exporting a ported name: replace the port with an import
+    const imported = checkPorted(root, { p0PerUnit: () => 0n });
+    expect(imported.status).toBe('warn');
+    expect(imported.details[0]).toMatch(/Stage 1's math now exports p0PerUnit: replace the port with an import/);
+    // a drop without the Rust crate cannot be checked
+    expect(checkPorted(mkdtempSync(join(tmpdir(), 'stage1-none-')), {})).toEqual({ status: 'warn', details: [`ported family not checked: ${MERCES_COMMON} is not in this drop`] });
   });
 
   it('math: a substituted function, a missing export or another commit fails; an unpinned drop only warns', async () => {

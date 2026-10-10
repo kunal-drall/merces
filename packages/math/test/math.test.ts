@@ -52,6 +52,9 @@ import {
  *    required escrow, validity at reveal, begin/tally/finalize, per-bid processing, honest claims and the clearing
  *    price); the interim auction family is retired (its callers moved to Stage 1's steps), and the interim cap left
  *    under `interim` is the window and curve cap (S5).
+ *  - S3-M: a segregated family is ported from Stage 1's Rust (merces-common @1bfc66b; A-MATH-3): the unit scale, the
+ *    vault, tail and redemption at a scale, and curve mode's arithmetic. They are ours, not Stage 1 objects; at scale 1
+ *    the scale-aware ones return Stage 1's own results (`curve.test.ts`).
  */
 
 // ---------------------------------------------------------------- the gateway
@@ -78,6 +81,13 @@ const REFERENCE_REEXPORTS = [
   'walletCapUnitsAtAuction', 'requiredEscrow', 'isBidValid', 'beginSettlement', 'tallyBids', 'isClearingPriceValid', 'finalizeSettlement', 'marginalAllocation', 'processBid', 'claimsFor', 'findClearingPrice',
 ] as const;
 
+/** cause S3-M: ported from merces-common @1bfc66b (A-MATH-3); `stage1:sync` lists them as ported. */
+const PORTED = [
+  'CURVE_BASE_DECIMALS', 'CURVE_UNIT_SCALE', 'unitScaleFor', 'wadPerScaledUnit', 'scaledCapWad', 'scaledAmount',
+  'isCappedScaled', 'vaultReceiveGrossScaled', 'tailReceiveScaled', 'capRemainingScaled', 'redemptionQuoteScaled',
+  'p0PerUnit', 'swapBaseMatchesOffer', 'unitsOutstanding', 'migrationFeeSplit', 'walletTenderFits',
+] as const;
+
 describe('@merces/math gateway', () => {
   it('re-exports Stage 1\'s own objects, not copies', () => {
     const gw = gateway as unknown as Record<string, unknown>;
@@ -86,10 +96,16 @@ describe('@merces/math gateway', () => {
     for (const [ours, theirs] of Object.entries(SDK_RENAMED)) expect(gw[ours], ours).toBe((sdk as unknown as Record<string, unknown>)[theirs]);
     for (const n of REFERENCE_REEXPORTS) expect(gw[n], n).toBe((ref as unknown as Record<string, unknown>)[n]);
   });
-  it('exports exactly Stage 1, our helpers and `interim` (no swap machinery, no other top-level interim name)', () => {
+  it('exports exactly Stage 1, our helpers, the ported curve family and `interim` (no swap machinery, no other top-level interim name)', () => {
     const ours = ['periodOf', 'periodOfPid', 'periodFrom', 'parsePeriod', 'periodsBetween', 'toPid', 'fromPid', 'wadFromDecimal', 'wadToDecimal', 'utcDayIndex', 'ratePerUnit', 'paymentStable', 'PAYMENT_RANGE_ERROR', 'statusParamsOf', 'projectDeadlines', 'standingOf', 'capRemaining'];
     const keys = Object.keys(gateway);
-    expect([...keys].sort()).toEqual([...SDK_REEXPORTS, 'pidAt', ...Object.keys(SDK_RENAMED), ...REFERENCE_REEXPORTS, ...ours, 'interim'].sort());
+    // cause S3-M: the ported family (16 names) sits beside Stage 1's, and none of it is a Stage 1 object
+    expect([...keys].sort()).toEqual([...SDK_REEXPORTS, 'pidAt', ...Object.keys(SDK_RENAMED), ...REFERENCE_REEXPORTS, ...ours, ...PORTED, 'interim'].sort());
+    const stage1 = new Set<unknown>([...Object.values(sdk), ...Object.values(ref)].filter((v) => typeof v === 'function'));
+    for (const n of PORTED) {
+      expect(n in sdk || n in ref, n).toBe(false);
+      expect(stage1.has((gateway as unknown as Record<string, unknown>)[n]), n).toBe(false);
+    }
     // Stage 1's positional quarterPayment (θ third) and Stage 1's `walletCapUnits` (the redemption-window cap, S5) are
     // deliberately not re-exported; the auction's cap is `walletCapUnitsAtAuction` (cause S2-G)
     expect(keys).not.toContain('quarterPayment');
