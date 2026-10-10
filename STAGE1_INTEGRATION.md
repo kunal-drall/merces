@@ -88,6 +88,10 @@ S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed 
   every path, as Stage 1's `retire` does (a split receipt that reaches the cap left it open); a graduated curve's issue
   price travels on `CurveGraduated.issuePrice` (a canonical field added for it, recorded in INTERFACE_DRIFT.md) and the
   indexer sets its cap per unit from it, so the statement's C_remaining and later amendments see the chain's cap.
+  A position's `tailClaimable` is Stage 1's `claimableTail` view, which counts a holder that has not redeemed yet on
+  the units its redemption would redeem (`claim_tail` redeems first), and the vault's dust counts that tail too; the
+  payout claim builder leaves it out until the holder has redeemed, since `claimPayout` has no redemption step
+  (A-REV-24).
 - **Vector runner (WP9a, WP9b, WP13).** `pnpm stage1:vectors` (`packages/stage1-sync/src/stage1-vectors`): a
   reference backend (Stage 1's own simulator), a merces backend (our `SimulatorChain` through op translators and the
   shim table, never persisted, real Groth16 verification with the ports' verifier) and a lockstep oracle that names

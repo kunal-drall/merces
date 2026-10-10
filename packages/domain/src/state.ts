@@ -156,7 +156,11 @@ export interface PositionState {
   claimable: Money;
   claimedTotal: Money;
   redeemedUnits: Units;
-  /** the tail claimable now (after a redemption) */
+  /**
+   * the tail owed to the holder after a redemption: Stage 1's `claimableTail` view, on its redeemed units or, before it
+   * redeems, on the units its redemption would redeem (Stage 1's `claim_tail` redeems first; until S3 the holder sends
+   * claimRedemption, then claimPayout pays it)
+   */
   tailClaimable: Money;
   /** the final-pool share claimable now (after an extinguishment) */
   finalClaimable: Money;

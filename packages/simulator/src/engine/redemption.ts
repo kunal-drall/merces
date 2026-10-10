@@ -184,22 +184,40 @@ export function payTail(e: EngineCore, s: SimSeries, payer: string, p: SimPeriod
   emit('TailPayout', { seriesId, periodId, perUnit: str(result.accepted / N), total: str(result.accepted) });
 }
 
-/** The tail a holder accrued since its tail cursor: `floor((tailAccWad − lastTailAccWad) × redeemedUnits / WAD)`. */
-function tailSince(s: SimSeries, p: SimPosition): bigint {
-  return s.redemption && p.redeemedUnits > 0n ? settleHolderDelta(s.tail.tailAccWad, p.lastTailAccWad, p.redeemedUnits) : 0n;
-}
-/** The tail a holder could take now, without moving its cursor (the read side of `takeTail`). */
-export function claimableTail(s: SimSeries, p: SimPosition): bigint {
-  return tailSince(s, p);
+/** The tail on `units` since the holder's tail cursor: `floor((tailAccWad − lastTailAccWad) × units / WAD)`. */
+function tailSince(s: SimSeries, p: SimPosition, units: bigint): bigint {
+  return settleHolderDelta(s.tail.tailAccWad, p.lastTailAccWad, units);
 }
 /**
- * The tail a holder takes now (Stage 1 `claim_tail`'s amount, SIM:1403-1417); moves its tail cursor. Nothing (and no
- * cursor move) before a redemption or for a holder with no redeemed units: `claimPayout` carries it until S3 adds
- * `claimTail` with its own refusals.
+ * The tail a holder could take now, without moving its cursor: Stage 1's `claimableTail` view (MercesVault.sol:747-753)
+ * and the tail `claim_tail` pays (SIM:1403-1417). It is weighed on the holder's redeemed units or, for a holder that
+ * has not redeemed yet, on the units its redemption would redeem (`units − escrowed`), because `claim_tail` redeems
+ * them first. 0 before a redemption. Until S3 adds `claimTail`, such a holder sends `claimRedemption` and then
+ * `claimPayout` takes this tail (SH-CLM-2).
+ */
+export function claimableTail(s: SimSeries, p: SimPosition): bigint {
+  if (!s.redemption) return 0n;
+  return tailSince(s, p, p.redeemedUnits > 0n ? p.redeemedUnits : redeemableUnits(p));
+}
+/**
+ * The tail a holder is owed from its tail cursor on, for the vault dust read: on its redeemed units and on the units
+ * its redemption would still redeem. The `[0, lastTailAccWad]` slice on those units is the catch-up
+ * `claimableRedemption` counts, so nothing is counted twice. Stage 1 pays exactly this sum through `claim_redemption`
+ * then `claim_tail`. It differs from `claimableTail` only for a holder that redeemed some units and has more to
+ * redeem: `claim_tail` pays on the redeemed units now, and the rest arrives with the next redemption.
+ */
+export function tailOwed(s: SimSeries, p: SimPosition): bigint {
+  return s.redemption ? tailSince(s, p, p.redeemedUnits + redeemableUnits(p)) : 0n;
+}
+/**
+ * The tail a holder takes now (Stage 1 `claim_tail`'s amount on its redeemed units, SIM:1411-1412); moves its tail
+ * cursor. Nothing (and no cursor move) before a redemption or for a holder with no redeemed units: `claimPayout`
+ * carries the tail until S3 adds `claimTail` with its own refusals and its redemption first (the read side,
+ * `claimableTail`, counts those units already).
  */
 export function takeTail(_e: EngineCore, s: SimSeries, p: SimPosition): bigint {
   if (!s.redemption || p.redeemedUnits === 0n) return 0n;
-  const amount = tailSince(s, p);
+  const amount = tailSince(s, p, p.redeemedUnits);
   p.lastTailAccWad = s.tail.tailAccWad;
   return amount;
 }

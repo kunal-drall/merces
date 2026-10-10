@@ -2637,6 +2637,7 @@ export type components = {
             claimedTotal?: components["schemas"]["Money"];
             /** @description net payout claimable now; excludes the tail and the final pool */
             claimable?: components["schemas"]["Money"];
+            /** @description tail owed after a redemption (Stage 1's claimableTail view): on the redeemed units or, before the holder redeems, on the units its redemption would redeem; claimPayout pays it once the holder has claimed the redemption */
             tailClaimable?: components["schemas"]["Money"];
             /** @description final-pool share claimable after an extinguishment */
             finalClaimable?: components["schemas"]["Money"];
@@ -3737,7 +3738,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Vault balances */
+            /** @description Vault balances; dust is what the vault holds beyond every holder's claim (net payout, redemption with its tail catch-up, the tail owed including holders that have not redeemed yet, the final pool) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7316,7 +7317,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon). The three amounts are disjoint and one claimPayout pays all of them. */
+            /** @description Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon). The three amounts are disjoint and this claimPayout pays all of them. A holder that has not redeemed yet takes its tail after claiming the redemption, so its tail is not counted here. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7326,7 +7327,7 @@ export interface operations {
                         tx?: Record<string, never>;
                         /** @description the net payout only; excludes the tail and the final pool */
                         claimable?: components["schemas"]["Money"];
-                        /** @description the tail share (after the holder redeemed) */
+                        /** @description the tail share this claimPayout pays; 0 until the holder has redeemed units (the position shows the tail owed before that) */
                         tailClaimable?: components["schemas"]["Money"];
                         /** @description the final-pool share (after an extinguishment) */
                         finalClaimable?: components["schemas"]["Money"];

@@ -206,11 +206,20 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     expect(view.json().tail.payouts).toHaveLength(1);
     // a holder's tail follows its own redemption (Stage 1 sets redeemedUnits when the holder claims; cause RD: before
     // WP6 every holder was redeemed at redeem time): nothing to claim until b0 redeems, then its tail share
-    expect((await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok)).statusCode).toBe(409);
+    const share = (BigInt(payout.total) * 95n / 100n) / 5n;
+    // the position and the vault already count it (TV, S1 review): Stage 1's claimableTail view weighs an unredeemed
+    // holder's tail on the units its redemption would redeem, and the vault's dust no longer holds the whole net tail
+    const position = (await rig.get(`/series/${seriesId}/position`, holderTok)).json().positions[0];
+    expect(position).toMatchObject({ redeemedUnits: '0', tailClaimable: share.toString() });
+    const vault = (await rig.get(`/series/${seriesId}/vault`, holderTok)).json();
+    expect(BigInt(vault.dust)).toBeLessThan(share);
+    const early = await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok);
+    expect(early.statusCode).toBe(409);
+    expect(early.json().message).toMatch(/claim the redemption first/);
     const rc = await rig.post(`/series/${seriesId}/redemption/build-claim`, { holder: h.backers[0]!.address }, holderTok);
     await send(h.backers[0]!, rc.json().tx as UnsignedTx, holderTok);
     const claim = await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok);
-    expect(BigInt(claim.json().tailClaimable)).toBe((BigInt(payout.total) * 95n / 100n) / 5n);
+    expect(BigInt(claim.json().tailClaimable)).toBe(share);
   });
 
   it('extinguishment: two attestors end all claims; unvested treasury returns to holders; nothing else is owed', async () => {

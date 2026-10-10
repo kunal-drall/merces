@@ -80,7 +80,7 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [holder], properties: { holder: { type: string } } } } } }
       responses:
         '200':
-          description: Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon). The three amounts are disjoint and one claimPayout pays all of them.
+          description: Unsigned claimPayout with the claimable amounts; built through the PayoutClaimBuilder interface (private payouts coming soon). The three amounts are disjoint and this claimPayout pays all of them. A holder that has not redeemed yet takes its tail after claiming the redemption, so its tail is not counted here.
           content:
             application/json:
               schema:
@@ -88,10 +88,10 @@ paths:
                 properties:
                   tx: { type: object }
                   claimable: { $ref: '#/components/schemas/Money', description: the net payout only; excludes the tail and the final pool }
-                  tailClaimable: { $ref: '#/components/schemas/Money', description: the tail share (after the holder redeemed) }
+                  tailClaimable: { $ref: '#/components/schemas/Money', description: the tail share this claimPayout pays; 0 until the holder has redeemed units (the position shows the tail owed before that) }
                   finalClaimable: { $ref: '#/components/schemas/Money', description: the final-pool share (after an extinguishment) }
                   builder: { type: string, enum: [public, private] }
-        '409': { description: Nothing to claim }
+        '409': { description: Nothing to claim, or only a tail that is paid once the holder claims its redemption }
   /series/{seriesId}/redemption/quote:
     get:
       operationId: getRedemptionQuote

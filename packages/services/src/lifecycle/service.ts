@@ -58,14 +58,23 @@ export class LifecycleService {
   }
 
   // ---- R13 payouts
-  /** `claimable`, `tailClaimable` and `finalClaimable` are disjoint (net payout, tail, final pool); one claimPayout pays all three. */
+  /**
+   * `claimable`, `tailClaimable` and `finalClaimable` are disjoint (net payout, tail, final pool) and are what this
+   * claimPayout pays. The position's `tailClaimable` is Stage 1's `claimableTail` view, which for a holder that has not
+   * redeemed yet counts the units its redemption would redeem (`claim_tail` redeems first). claimPayout takes the tail
+   * on redeemed units only (no `claimTail` before S3, SH-CLM-2), so such a holder's tail is left out here and claimed
+   * after `claimRedemption`. A holder with nothing else to claim gets a 409 that says so.
+   */
   async buildClaim(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; claimable: string; tailClaimable: string; finalClaimable: string; builder: string }> {
     const chain = this.ctx.chainFor(seriesId);
     this.requireWallet(session, chain.chain, holder);
     const p = await chain.getPosition(seriesId, holder);
     if (!p) throw AppError.notFound('position');
-    if (BigInt(p.claimable) + BigInt(p.tailClaimable) + BigInt(p.finalClaimable) === 0n) throw AppError.conflict('nothing to claim');
-    return { tx: await this.claimBuilder.build(chain, seriesId, holder), claimable: p.claimable, tailClaimable: p.tailClaimable, finalClaimable: p.finalClaimable, builder: this.claimBuilder.kind };
+    const tailClaimable = BigInt(p.redeemedUnits) > 0n ? p.tailClaimable : '0';
+    if (BigInt(p.claimable) + BigInt(tailClaimable) + BigInt(p.finalClaimable) === 0n) {
+      throw AppError.conflict(BigInt(p.tailClaimable) > 0n ? 'nothing to claim yet: the tail is paid once the units are redeemed (claim the redemption first)' : 'nothing to claim');
+    }
+    return { tx: await this.claimBuilder.build(chain, seriesId, holder), claimable: p.claimable, tailClaimable, finalClaimable: p.finalClaimable, builder: this.claimBuilder.kind };
   }
 
   // ---- R15 redemption

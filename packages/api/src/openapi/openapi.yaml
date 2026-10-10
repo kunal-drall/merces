@@ -203,7 +203,7 @@ components:
         grossPaidPerUnit: { type: string }
         claimedTotal: { $ref: '#/components/schemas/Money' }
         claimable: { $ref: '#/components/schemas/Money', description: 'net payout claimable now; excludes the tail and the final pool' }
-        tailClaimable: { $ref: '#/components/schemas/Money' }
+        tailClaimable: { $ref: '#/components/schemas/Money', description: "tail owed after a redemption (Stage 1's claimableTail view): on the redeemed units or, before the holder redeems, on the units its redemption would redeem; claimPayout pays it once the holder has claimed the redemption" }
         finalClaimable: { $ref: '#/components/schemas/Money', description: 'final-pool share claimable after an extinguishment' }
         realisedYieldBps: { type: integer }
         lockupEndsAt: { type: [integer, 'null'] }
@@ -354,7 +354,7 @@ paths:
       tags: [public]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Vault balances, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+      responses: { '200': { description: "Vault balances; dust is what the vault holds beyond every holder's claim (net payout, redemption with its tail catch-up, the tail owed including holders that have not redeemed yet, the final pool)", content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
   /series/{seriesId}/holders:
     get:
       operationId: getHolders
