@@ -167,6 +167,26 @@ describe('window escrow on Stage 1', () => {
     expect((await balance(h, b1.address)) - b1Before).toBe(USDC(760));
   });
 
+  it('opening a window during the lockup fails with Stage 1 LockupActive and changes nothing', async () => {
+    const { h, seriesId, settledAt } = await settled(30 * DAY);
+    const lockupEnd = settledAt + 30 * DAY;
+    await h.sim.setTime(lockupEnd - 1);
+    const before = serialiseState(h.sim.state);
+    const e = await h.sim
+      .submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: lockupEnd + 100, revealEndsAt: lockupEnd + 200 }, 'keeper')
+      .then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ChainError);
+    // the Stage 1 name (SIM:1494) on the same code as before, so the HTTP status is unchanged
+    expect((e as ChainError).code).toBe('TooEarly');
+    expect((e as ChainError).detail?.stage1).toBe('LockupActive');
+    expect(serialiseState(h.sim.state)).toBe(before);
+    expect(seriesOf(h.sim, seriesId).transferWindows).toHaveLength(0);
+    // the lockup ends at settlement + lockupSeconds exactly (Stage 1 fails only while now < that)
+    await h.sim.setTime(lockupEnd);
+    const r = await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: lockupEnd + 100, revealEndsAt: lockupEnd + 200 }, 'keeper');
+    expect(types(r.events)).toContain('TransferWindowOpened');
+  });
+
   it('opening a window is a status sync point', async () => {
     const { h, seriesId, terms, privateTerms } = await settled(30 * DAY);
     await h.sim.setTime(parsePeriod('2026Q1').end + DAY);

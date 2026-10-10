@@ -2,6 +2,7 @@ import { ChainError, orderCommitment, type Command } from '@merces/domain';
 import { interim } from '@merces/math';
 import type { SimSeries, SimTransferWindow } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
+import { fail } from './errors.ts';
 import { position, registerHolder, setUnits, settleHolder } from './holders.ts';
 import { syncStatus } from './status.ts';
 
@@ -14,18 +15,19 @@ import { syncStatus } from './status.ts';
  *  - clearing settles every asker before its escrow is returned or sold (SIM:1599-1615, 1629-1638);
  *  - a series whose stored status is terminal never trades: the window is forced to NoMatch (SIM:1575-1581), every buy
  *    deposit is refunded and every ask's escrow returned;
- *  - opening a window is a `syncStatus` point (SIM:1497).
+ *  - opening a window during the lockup fails with Stage 1's `LockupActive` (SIM:1494; code TooEarly), and opening is a
+ *    `syncStatus` point (SIM:1497).
  * Eligibility (`WindowNotEligible`), the windows flag and the window fee are S5.
  */
 
 // ------------------------------------------------------------------ open, commit, reveal
-/** `open_window`: our checks, then `syncStatus` (SIM:1497), then the window. */
+/** `open_window`: our checks (the lockup one with Stage 1's `LockupActive`), then `syncStatus` (SIM:1497), then the window. */
 export function openTransferWindow(e: EngineCore, cmd: Extract<Command, { kind: 'openTransferWindow' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
   // curve units trade freely on the DEX pool after graduation (A-CURVE-2): no window, so no window cap or allowlist
   if (s.curve) throw new ChainError('WrongPhase', 'curve units trade on the DEX pool, not in transfer windows');
   if (s.phase !== 'Settled' || TERMINAL.has(s.status)) throw new ChainError('WrongStatus', 'series cannot open a window');
-  if (now < s.settledAt! + s.terms.lockupSeconds) throw new ChainError('TooEarly', 'lockup has not ended');
+  if (now < s.settledAt! + s.terms.lockupSeconds) fail('LockupActive', 'the lockup has not ended'); // code TooEarly, as before
   if (s.transferWindows.some((w) => !w.cleared)) throw new ChainError('Duplicate', 'a window is already open');
   if (cmd.commitEndsAt <= now || cmd.revealEndsAt <= cmd.commitEndsAt) throw new ChainError('InvalidTerms', 'bad window timings');
   syncStatus(e, s, now, emit);
