@@ -101,7 +101,10 @@ export const statusCrankJob: KeeperJob = {
   },
 };
 
-/** Ends approved pauses whose end date passed. */
+/**
+ * Announces hardship pauses whose end passed (`PauseEnded`). Events only: a pause ends by itself at its approved end
+ * (Stage 1), so the series is no longer Paused by then; `pause.approvedUntil` is the oldest pause not yet announced.
+ */
 export const pauseCrankJob: KeeperJob = {
   name: 'pause.crank',
   intervalSeconds: 3600,
@@ -109,7 +112,7 @@ export const pauseCrankJob: KeeperJob = {
     let actions = 0;
     const errors: string[] = [];
     await forEachSettled(ctx, errors, async (chain, s, now) => {
-      if (s.status !== 'Paused' || !s.pause?.approvedUntil || now < s.pause.approvedUntil) return;
+      if (!s.pause?.approvedUntil || now < s.pause.approvedUntil) return;
       try {
         await chain.submit({ kind: 'crankPause', seriesId: s.seriesId }, 'keeper');
         actions++;

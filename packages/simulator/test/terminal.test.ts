@@ -27,6 +27,9 @@ describe('amendments and extinguishment', () => {
     expect(returned).toBe(USDC(4500).toString());
     const pos = (await h.sim.getPosition(seriesId, h.backers[2]!.address))!;
     expect(pos.claimable).toBe(USDC(900).toString());
-    await expectChainError(h.exec(h.issuer, { kind: 'drawRelease', seriesId }), 'WrongStatus');
+    // releases are no longer refused for being Extinguished (Stage 1 claim_release): vested tranches stay drawable up to
+    // what had vested at the extinguishment. Today's extinguishment still returns the whole treasury, so nothing is
+    // left to draw (WP7 returns only the unvested part).
+    await expectStage1Error(h.exec(h.issuer, { kind: 'drawRelease', seriesId }), 'NothingVested');
   });
 });

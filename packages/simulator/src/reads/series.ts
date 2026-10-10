@@ -2,7 +2,8 @@ import type { IssuerState, SeriesState } from '@merces/domain';
 import { nextExpectedPeriod } from '@merces/math';
 import type { SimIssuer, SimSeries } from '../state.ts';
 import { str as s } from '../engine/core.ts';
-import { ledgerClock, periodIdOf } from '../engine/ledger.ts';
+import { derivedStatus, ledgerClock, periodIdOf } from '../engine/ledger.ts';
+import { releasesBlockedByLateness } from '../engine/status.ts';
 import { toRedemption } from './redemption.ts';
 
 const pid = (p: number | null): string | null => (p === null ? null : periodIdOf(p));
@@ -10,6 +11,23 @@ const pid = (p: number | null): string | null => (p === null ? null : periodIdOf
 export function toIssuerState(i: SimIssuer): IssuerState {
   return { issuer: i.issuer, registeredAt: i.registeredAt, issuanceStopped: i.issuanceStopped, seriesIds: [...i.seriesIds] };
 }
+/**
+ * The deprecated single-pause view (`SeriesState.pause`), from the ledger: the pending request's advisory end, and the
+ * oldest recorded pause whose end has not been announced (`crankPause`) — the running pause, or one that ended and
+ * waits for its `PauseEnded`. Null when neither exists. `pauses` is the Stage 1 view.
+ */
+function legacyPause(x: SimSeries): SeriesState['pause'] {
+  const l = x.ledger;
+  const unannounced = l.pauses[l.pauseEndedEmitted] ?? null;
+  if (!l.pauseRequested && !unannounced) return null;
+  return {
+    requestedUntil: l.pauseRequested && l.pauseRequestedUntil !== null ? Number(l.pauseRequestedUntil) : null,
+    approvedUntil: unannounced ? Number(unannounced.end) : null,
+    startedAt: unannounced ? Number(unannounced.start) : null,
+  };
+}
+
+/** `status` is the status derived at `now` (Stage 1 `deriveStatus`): a hardship pause ends on its own at its end. */
 export function toSeriesState(chain: string, x: SimSeries, now: number): SeriesState {
   const t = x.terms;
   const l = x.ledger;
@@ -21,9 +39,9 @@ export function toSeriesState(chain: string, x: SimSeries, now: number): SeriesS
       releaseSchedule: t.releaseSchedule.map((r) => ({ ...r })), auctionFeeBps: Number(t.auctionFeeBps), payoutFeeBps: Number(t.payoutFeeBps), hurdleWad: s(t.hurdleWad), payoutMultipleK: Number(t.payoutMultipleK), walletCapBps: Number(t.walletCapBps),
       dueDays: t.dueDays, graceDays: t.graceDays, formalNoticeDays: t.formalNoticeDays, contractHash: t.contractHash, termsCommitment: t.termsCommitment, tierFlags: { ...t.tierFlags }, reportingCurrency: t.reportingCurrency, raiseStyle: t.raiseStyle,
     },
-    phase: x.phase, status: x.status, createdAt: x.createdAt, openedAt: x.openedAt, settledAt: x.settledAt, issuePrice: x.issuePrice === null ? null : s(x.issuePrice), unitsSold: s(x.unitsSold), unitsOutstanding: s(x.unitsOutstanding),
+    phase: x.phase, status: derivedStatus(x, now), createdAt: x.createdAt, openedAt: x.openedAt, settledAt: x.settledAt, issuePrice: x.issuePrice === null ? null : s(x.issuePrice), unitsSold: s(x.unitsSold), unitsOutstanding: s(x.unitsOutstanding),
     capPerUnit: x.capPerUnit === null ? null : s(x.capPerUnit), paidPerUnitWad: s(x.paidPerUnitWad), accNetWad: s(x.accNetWad), lockupEndsAt: x.settledAt === null ? null : x.settledAt + t.lockupSeconds,
-    releasesPaused: x.releasesPausedLate || x.releasesPausedByIssuer, releasesPausedByIssuer: x.releasesPausedByIssuer, pause: x.pause ? { ...x.pause } : null, pausedSecondsTotal: x.pausedSecondsTotal,
+    releasesPaused: x.releasesPausedByIssuer || releasesBlockedByLateness(x, now), releasesPausedByIssuer: x.releasesPausedByIssuer, pause: legacyPause(x), pausedSecondsTotal: Number(l.pausedTotal),
     redemption: x.redemption ? toRedemption(x) : null, extinguishedAt: x.extinguishedAt, grossPaidTotal: s(x.grossPaidTotal), feesTotal: s(x.feesTotal),
     reporting: {
       firstPeriod: pid(l.firstPeriod),

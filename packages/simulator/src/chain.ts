@@ -213,7 +213,7 @@ export class SimulatorChain implements ChainPort {
   async getTreasury(seriesId: string): Promise<TreasuryState | null> {
     const x = this.state.series.get(seriesId);
     if (!x) return null;
-    return toTreasuryState(seriesId, x);
+    return toTreasuryState(seriesId, x, this.clock.now());
   }
   async getVault(seriesId: string): Promise<VaultState | null> {
     const x = this.state.series.get(seriesId);

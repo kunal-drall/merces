@@ -44,8 +44,11 @@ export const seriesTermsSchema = z.object({
   hurdleWad: wadSchema,
   payoutMultipleK: z.number().int().positive(),
   walletCapBps: z.number().int().positive().max(10_000),
+  /** report due, in days of unpaused time after the period end (Stage 1: countdown ≤ due days is OnTime) */
   dueDays: z.number().int().positive(),
+  /** grace after the due date (Stage 1: countdown ≤ due + grace days is InGrace, then Late) */
   graceDays: z.number().int().nonnegative(),
+  /** formal notice, in days of unpaused time after the **period end** (Stage 1 `formalNoticeDue`; 90 = period end + 90 days) */
   formalNoticeDays: z.number().int().positive(),
   contractHash: hash32Schema,
   termsCommitment: hash32Schema,

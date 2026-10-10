@@ -1,10 +1,23 @@
 import { ChainError, type Command } from '@merces/domain';
-import { interim, periodsBetween, toPid, type Period } from '@merces/math';
+import {
+  U64_MAX, earliestUnpaid, formalNoticeDue, isLateUnderlying, isPausedAt, lateAccrual, pauseApprovalError, periodsBetween, projectDeadlines, toPid,
+  type Period,
+} from '@merces/math';
 import type { SimPeriod, SimSeries } from '../state.ts';
 import { TERMINAL, type EngineCore, type Emit } from './core.ts';
-import { setStatus } from './ledger.ts';
+import { fail } from './errors.ts';
+import { derivedStatus, ledgerClock, pauseBounds, periodIdOf, setStatus, statusParams } from './ledger.ts';
 
 export { setStatus };
+
+/**
+ * Status, formal notice, hardship pauses and the release block (SPEC v1.1 §6.4), on Stage 1's own functions.
+ *
+ * Status is derived from the ledger clock at `now` (`derivedStatus`, Stage 1 `deriveStatus`); the stored status
+ * (`SimSeries.status`) is what the last sync point recorded and is authoritative only for the terminal states.
+ * `syncStatus` mirrors Stage 1's `sync_status` (SIM:375-395) and runs only at Stage 1's sync points (`SYNC_POINTS`).
+ * A hardship pause ends by itself at its approved end (`isPausedAt` clips at `now`); `crankPause` only announces it.
+ */
 
 /** Completed quarters a settled series must report, oldest first (A-REP-1: the settlement quarter counts). */
 export function reportablePeriods(s: SimSeries, now: number): Period[] {
@@ -22,108 +35,156 @@ export function periodRecord(s: SimSeries, periodId: string): SimPeriod {
   }
   return p;
 }
-/** Seconds of approved pause overlapping [from, now). Deadlines shift by this (C8.5). */
-export function pausedSecondsSince(s: SimSeries, from: number, now: number): number {
-  let total = 0;
-  const intervals = [...s.pauseIntervals];
-  if (s.status === 'Paused' && s.pause?.startedAt != null) intervals.push({ from: s.pause.startedAt, to: now });
-  for (const iv of intervals) {
-    const a = Math.max(iv.from, from);
-    const b = Math.min(iv.to, now);
-    if (b > a) total += b - a;
-  }
-  return total;
-}
-/** Simple-interest accrual on the outstanding amount, from the end of grace to `now`; the deadlines already shift by paused seconds. */
-export function accrualNow(s: SimSeries, period: Period, outstanding: bigint, now: number): bigint {
-  return interim.lateAccrual(outstanding, s.terms.hurdleWad, interim.daysLate(deadlines(s, period, now).graceEndsAt, now));
-}
-export function deadlines(s: SimSeries, period: Period, now: number): interim.Deadlines {
-  return interim.deadlinesFor(period, { dueDays: s.terms.dueDays, graceDays: s.terms.graceDays, formalNoticeDays: s.terms.formalNoticeDays, pausedSeconds: pausedSecondsSince(s, period.end, now) });
-}
 export function isPeriodSettled(s: SimSeries, periodId: string): boolean {
   const p = s.periods.get(periodId);
   return !!p && p.settled;
 }
-/** Derive OnTime/InGrace/Late from unsettled completed periods. */
-export function derivedStanding(s: SimSeries, now: number): { status: 'OnTime' | 'InGrace' | 'Late'; worst: Period | null } {
-  let status: 'OnTime' | 'InGrace' | 'Late' = 'OnTime';
-  let worst: Period | null = null;
-  for (const p of reportablePeriods(s, now)) {
-    if (isPeriodSettled(s, p.id)) continue;
-    const st = interim.periodStanding(deadlines(s, p, now), now, false);
-    if (st === 'Late' || st === 'FormalNoticeDue') {
-      status = 'Late';
-      worst = worst ?? p;
-    } else if (st === 'InGrace' && status === 'OnTime') {
-      status = 'InGrace';
-      worst = worst ?? p;
-    }
-  }
-  return { status, worst };
+
+// ------------------------------------------------------------------ deadlines and accrual (Stage 1)
+/** A period's deadline instants (unix seconds): last OnTime instant, last InGrace instant, first formal-notice instant. */
+export interface PeriodDeadlines {
+  dueAt: number;
+  graceEndsAt: number;
+  formalNoticeAt: number;
 }
-/** After a payment or report: if the issuer is current again, lift the Late pause. */
+
+/**
+ * The instants at which `period`'s countdown (unpaused seconds since the period end) passes Stage 1's bounds, given the
+ * pauses recorded as of `now` (`projectDeadlines`, pinned to `deriveStatus`/`formalNoticeDue`). Formal notice is
+ * period end + 90 days of unpaused time.
+ */
+export function deadlines(s: SimSeries, period: Period, now: number): PeriodDeadlines {
+  const d = projectDeadlines(toPid(period.id), s.ledger.pauses, BigInt(now), statusParams(s));
+  return { dueAt: Number(d.dueAt), graceEndsAt: Number(d.graceEndsAt), formalNoticeAt: Number(d.formalNoticeAt) };
+}
+
+/**
+ * Lateness accrual on `amount` owed for `period` at `now`: Stage 1's `lateAccrual` (hurdle × whole late days / 365,
+ * late days counted in unpaused time after report due + grace).
+ */
+export function accrualNow(s: SimSeries, period: Period, amount: bigint, now: number): bigint {
+  return lateAccrual(toPid(period.id), amount, ledgerClock(s), BigInt(now), statusParams(s));
+}
+
+// ------------------------------------------------------------------ release block
+/**
+ * Releases are blocked by lateness: the derived status is Late, or the series is late underneath a hardship pause
+ * (Stage 1 `is_late_underlying`, which ignores Paused). Never before settlement; never on a terminal series.
+ */
+export function releasesBlockedByLateness(s: SimSeries, now: number): boolean {
+  if (s.phase !== 'Settled') return false;
+  return derivedStatus(s, now) === 'Late' || isLateUnderlying(ledgerClock(s), BigInt(now), statusParams(s));
+}
+
+/**
+ * Events only: record the lateness block in `ledger.releasesBlockedLate` and announce a change with
+ * `ReleasesPaused('Late')` / `ReleasesResumed`, unless the issuer has paused releases (then the issuer's pause is
+ * what readers see). `drawRelease` never reads the stored flag; it checks the block live.
+ */
+export function syncReleaseBlock(s: SimSeries, now: number, emit: Emit): void {
+  const blocked = releasesBlockedByLateness(s, now);
+  const l = s.ledger;
+  if (blocked === l.releasesBlockedLate) return;
+  l.releasesBlockedLate = blocked;
+  if (s.releasesPausedByIssuer) return;
+  if (blocked) emit('ReleasesPaused', { seriesId: s.seriesId, reason: 'Late' });
+  else emit('ReleasesResumed', { seriesId: s.seriesId });
+}
+
+// ------------------------------------------------------------------ sync_status
+/**
+ * Stage 1's `sync_status` (SIM:375-395): on a settled series, store the derived status (`StatusChanged`); unless the
+ * stored status is terminal, record the formal notice of the earliest unpaid period once (`formalNoticeEmittedFor`,
+ * `FormalNoticeDue`) when its countdown reached the notice bound. Then the release-block events. The true-up notice is
+ * not reachable until S5 (`trueupDue` stays 0). Runs only at the sync points (`SYNC_POINTS` in ledger.ts).
+ */
 export function syncStatus(_e: EngineCore, s: SimSeries, now: number, emit: Emit): void {
-  if (TERMINAL.has(s.status) || s.status === 'Paused') return;
-  const { status } = derivedStanding(s, now);
-  setStatus(s, status, emit);
-  if (status === 'Late') {
-    if (!s.releasesPausedLate) {
-      s.releasesPausedLate = true;
-      if (!s.releasesPausedByIssuer) emit('ReleasesPaused', { seriesId: s.seriesId, reason: 'Late' });
+  if (s.phase !== 'Settled') return;
+  setStatus(s, derivedStatus(s, now), emit);
+  if (!TERMINAL.has(s.status)) {
+    const l = s.ledger;
+    const c = ledgerClock(s);
+    const p = earliestUnpaid(c);
+    if (formalNoticeDue(p, c, BigInt(now), statusParams(s)) && l.formalNoticeEmittedFor !== p) {
+      l.formalNoticeEmittedFor = p;
+      emit('FormalNoticeDue', { seriesId: s.seriesId, periodId: periodIdOf(p) });
     }
-  } else if (s.releasesPausedLate) {
-    s.releasesPausedLate = false;
-    if (!s.releasesPausedByIssuer) emit('ReleasesResumed', { seriesId: s.seriesId });
   }
+  syncReleaseBlock(s, now, emit);
 }
 
 // ------------------------------------------------------------------ pauses and status
+/**
+ * `request_pause` (SIM:650-661): the issuer asks for a hardship pause. Not refused while paused or while a request is
+ * pending. `cmd.until` is advisory: stored (`ledger.pauseRequestedUntil`) and emitted, never enforced onchain; the
+ * attestor service holds the approval to it.
+ */
 export function requestPause(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'requestPause' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
-  e.requireIssuer(s, signer);
-  if (s.phase !== 'Settled' || TERMINAL.has(s.status) || s.status === 'Paused') throw new ChainError('WrongStatus', `cannot request a pause while ${s.status}`);
-  if (cmd.until <= now) throw new ChainError('InvalidTerms', 'pause end must be in the future');
-  s.pause = { requestedUntil: cmd.until, approvedUntil: null, startedAt: null };
+  if (s.issuer !== signer) fail('NotIssuer', 'only the issuer may request a pause');
+  if (s.phase !== 'Settled') fail('RaiseNotSettled', 'the raise has not settled');
+  const status = derivedStatus(s, now);
+  if (TERMINAL.has(status)) fail('TerminalStatus', `series is ${status}`);
+  const l = s.ledger;
+  l.pauseRequested = true;
+  l.pauseRequestedAt = BigInt(now);
+  l.pauseNonce += 1n;
+  l.pauseRequestedUntil = BigInt(cmd.until);
   emit('PauseRequested', { seriesId: s.seriesId, until: cmd.until });
 }
+
+/**
+ * `approve_pause` (SIM:1284-1297): an active attestor approves the pending request with the pause end. Bounds from
+ * Stage 1's `pauseApprovalError` (end in the future, not already paused, ≤ 1 year, ≤ 2 years in total, ≤ 16 pauses).
+ * The pause counts from now; `pausedTotal` grows by its whole length at approval. Then `syncStatus` (Paused).
+ */
 export function approvePause(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'approvePause' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
-  e.requireAttestor(signer);
-  if (!s.pause || s.pause.requestedUntil === null || s.pause.startedAt !== null) throw new ChainError('WrongStatus', 'no pending pause request');
-  if (cmd.until <= now || cmd.until > s.pause.requestedUntil) throw new ChainError('InvalidTerms', 'approved end must be in the future and not after the requested end');
-  s.pause.approvedUntil = cmd.until;
-  s.pause.startedAt = now;
+  const l = s.ledger;
+  if (!e.state.attestors.get(signer)) fail('InvalidAttestorSignature', 'the approver is not an active attestor');
+  if (!l.pauseRequested) fail('PauseNotRequested', 'no pause request is pending');
+  if (!Number.isSafeInteger(cmd.until) || cmd.until < 0 || BigInt(cmd.until) > U64_MAX) fail('AmountOutOfRange', 'pause end is out of the u64 range');
+  const t = BigInt(now);
+  const end = BigInt(cmd.until);
+  const err = pauseApprovalError(l.pauses, l.pausedTotal, t, end, pauseBounds());
+  if (err) fail(err, PAUSE_ERROR_MESSAGE[err]);
+  l.pauses.push({ start: t, end });
+  l.pausedTotal += end - t;
+  l.pauseRequested = false;
+  l.pauseRequestedUntil = null;
   emit('PauseApproved', { seriesId: s.seriesId, attestor: signer, until: cmd.until });
-  setStatus(s, 'Paused', emit);
+  syncStatus(e, s, now, emit);
 }
+const PAUSE_ERROR_MESSAGE = {
+  InvalidPauseEnd: 'pause end must be in the future',
+  AlreadyPaused: 'a pause is already running',
+  PauseTooLong: 'pause exceeds the per-pause or cumulative limit',
+  TooManyPauses: 'the series has used all its pauses',
+} as const;
+
+/**
+ * Announce the end of hardship pauses (events only; not a Stage 1 op). A pause already stops at its approved end on
+ * its own; this emits `PauseEnded{pausedSeconds}` for every recorded pause that ended and was not announced yet, then
+ * runs `syncStatus`. A pause still running: TooEarly. Nothing to announce: WrongStatus.
+ */
 export function crankPause(e: EngineCore, cmd: Extract<Command, { kind: 'crankPause' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
-  if (s.status !== 'Paused' || !s.pause?.startedAt || s.pause.approvedUntil === null) throw new ChainError('WrongStatus', 'not paused');
-  if (now < s.pause.approvedUntil) throw new ChainError('TooEarly', 'pause has not ended');
-  const paused = s.pause.approvedUntil - s.pause.startedAt;
-  s.pauseIntervals.push({ from: s.pause.startedAt, to: s.pause.approvedUntil });
-  s.pausedSecondsTotal += paused;
-  s.pause = null;
-  emit('PauseEnded', { seriesId: s.seriesId, pausedSeconds: paused });
-  s.status = 'OnTime';
-  const { status } = derivedStanding(s, now);
-  s.status = 'Paused';
-  setStatus(s, status, emit);
-  syncStatus(e, s, now, emit);
-}
-export function crankStatus(e: EngineCore, cmd: Extract<Command, { kind: 'crankStatus' }>, now: number, emit: Emit): void {
-  const s = e.series(cmd.seriesId);
-  if (s.phase !== 'Settled') throw new ChainError('WrongPhase', 'auction not settled');
-  if (TERMINAL.has(s.status) || s.status === 'Paused') return;
-  syncStatus(e, s, now, emit);
-  for (const per of reportablePeriods(s, now)) {
-    if (isPeriodSettled(s, per.id)) continue;
-    const st = interim.periodStanding(deadlines(s, per, now), now, false);
-    const p = periodRecord(s, per.id);
-    if (st === 'FormalNoticeDue' && !p.formalNoticeEmitted) {
-      p.formalNoticeEmitted = true;
-      emit('FormalNoticeDue', { seriesId: s.seriesId, periodId: per.id });
-    }
+  const l = s.ledger;
+  const t = BigInt(now);
+  let announced = 0;
+  while (l.pauseEndedEmitted < l.pauses.length) {
+    const p = l.pauses[l.pauseEndedEmitted]!;
+    if (p.end > t) break;
+    emit('PauseEnded', { seriesId: s.seriesId, pausedSeconds: Number(p.end - p.start) });
+    l.pauseEndedEmitted += 1;
+    announced += 1;
   }
+  if (announced > 0) return syncStatus(e, s, now, emit);
+  if (isPausedAt(l.pauses, t)) throw new ChainError('TooEarly', 'the pause has not ended');
+  fail('NotPaused', 'no pause has ended since the last announcement');
+}
+
+/** `crank_status` (SIM:645-648): `syncStatus` only; a successful no-op before settlement. */
+export function crankStatus(e: EngineCore, cmd: Extract<Command, { kind: 'crankStatus' }>, now: number, emit: Emit): void {
+  syncStatus(e, e.series(cmd.seriesId), now, emit);
 }

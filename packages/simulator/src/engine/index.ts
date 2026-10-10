@@ -2,7 +2,7 @@ import {
   ChainError, parseSeriesId,
   type Command, type DomainEvent, type EventPayload, type EventType, type ServiceRole, type TxResult,
 } from '@merces/domain';
-import type { interim, Period } from '@merces/math';
+import type { Period } from '@merces/math';
 import type { SimClock } from '../clock.ts';
 import type { SimSeries, SimState } from '../state.ts';
 import { balKey, type EngineCore, type EngineOptions, type Emit, type ExecContext } from './core.ts';
@@ -14,7 +14,7 @@ import { claimPayout, crankBurn, payIn, postSplitReceipt } from './payments.ts';
 import { annualGrossPerUnit, claimRedemption, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
 import { submitReport } from './reports.ts';
-import { accrualNow, approvePause, crankPause, crankStatus, deadlines, derivedStanding, pausedSecondsSince, reportablePeriods, requestPause } from './status.ts';
+import { accrualNow, approvePause, crankPause, crankStatus, deadlines, reportablePeriods, requestPause, type PeriodDeadlines } from './status.ts';
 import { amendTerms, extinguish } from './terminal.ts';
 import { drawRelease, pauseReleases } from './treasury.ts';
 import { clearTransferWindow, commitWindowOrder, openTransferWindow, revealWindowOrder } from './window.ts';
@@ -162,20 +162,13 @@ export class SimEngine implements EngineCore {
   reportablePeriods(s: SimSeries, now: number): Period[] {
     return reportablePeriods(s, now);
   }
-  /** Seconds of approved pause overlapping [from, now). Deadlines shift by this (C8.5). */
-  pausedSecondsSince(s: SimSeries, from: number, now: number): number {
-    return pausedSecondsSince(s, from, now);
+  /** Stage 1's lateness accrual on `amount` owed for `period` at `now` (`lateAccrual`, unpaused late days). */
+  accrualNow(s: SimSeries, period: Period, amount: bigint, now: number): bigint {
+    return accrualNow(s, period, amount, now);
   }
-  /** Simple-interest accrual on the outstanding amount, from the end of grace to `now`; the deadlines already shift by paused seconds. */
-  accrualNow(s: SimSeries, period: Period, outstanding: bigint, now: number): bigint {
-    return accrualNow(s, period, outstanding, now);
-  }
-  deadlines(s: SimSeries, period: Period, now: number): interim.Deadlines {
+  /** The period's deadline instants from Stage 1's countdown (`projectDeadlines`): due, grace end, formal notice. */
+  deadlines(s: SimSeries, period: Period, now: number): PeriodDeadlines {
     return deadlines(s, period, now);
-  }
-  /** Derive OnTime/InGrace/Late from unsettled completed periods. */
-  derivedStanding(s: SimSeries, now: number): { status: 'OnTime' | 'InGrace' | 'Late'; worst: Period | null } {
-    return derivedStanding(s, now);
   }
   /** Per-unit gross for each FULL year since settlement (for D_avg). */
   annualGrossPerUnit(s: SimSeries, now: number): bigint[] {

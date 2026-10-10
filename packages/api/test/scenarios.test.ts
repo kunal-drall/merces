@@ -105,7 +105,8 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     const p1 = periods.json().periods.find((p: { periodId: string }) => p.periodId === '2026Q1');
     expect(p1.accrual).toBe(accrual.toString());
     expect(p1.formalNoticeIssued).toBe(true);
-    expect((await rig.get(`/series/${seriesId}/status`)).json().status).toBe('InGrace'); // Q2 now in grace
+    // cause G2: Q2 ended exactly 30 days ago, and Stage 1 counts a countdown of ≤ 30 days as OnTime (was InGrace)
+    expect((await rig.get(`/series/${seriesId}/status`)).json().status).toBe('OnTime');
     // nothing slashed: the treasury balance is intact and drawable again
     const draw = await rig.post(`/series/${seriesId}/treasury/build-draw`, {}, issuerTok);
     expect(draw.statusCode).toBe(200);

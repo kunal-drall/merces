@@ -4,7 +4,7 @@ import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { burn, settlePosition } from './holders.ts';
 import { payTail, takeTail, yearIndex } from './redemption.ts';
-import { accrualNow, periodRecord, setStatus, syncStatus } from './status.ts';
+import { accrualNow, periodRecord, setStatus, syncReleaseBlock, syncStatus } from './status.ts';
 import { takeFinal } from './terminal.ts';
 
 /** Common path for money entering the vault: fee, cap, accumulator, events. Returns accepted gross. */
@@ -36,11 +36,9 @@ export function receivePayment(e: EngineCore, s: SimSeries, payer: string, gross
   if (cap.retired && s.status !== 'Retired') {
     setStatus(s, 'Retired', emit);
     emit('SeriesRetired', { seriesId: s.seriesId, paidPerUnitWad: str(s.paidPerUnitWad) });
-    if (s.releasesPausedLate) {
-      // nothing more is owed once the cap is reached: the Late pause ends with the obligation
-      s.releasesPausedLate = false;
-      if (!s.releasesPausedByIssuer) emit('ReleasesResumed', { seriesId: s.seriesId });
-    }
+    // nothing more is owed once the cap is reached: the lateness block ends with the obligation (a split receipt has
+    // no sync point after it, so the release events are settled here)
+    syncReleaseBlock(s, now, emit);
   }
   return { accepted, refunded: cap.refunded, net };
 }

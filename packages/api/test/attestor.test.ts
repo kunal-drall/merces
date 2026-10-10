@@ -270,7 +270,9 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(approveTx.signer).toBe(att.address);
     const approved = await rig.post('/tx/send', await att.sign(approveTx), attTok);
     expect(approved.statusCode, JSON.stringify(approved.json())).toBe(200);
-    expect(approved.json().events.map((e: { type: string }) => e.type)).toEqual(['PauseApproved', 'StatusChanged']);
+    // cause P: approve_pause is a Stage 1 sync point; this series has reported nothing for more than 90 days after its
+    // first period ended, so the formal notice and the lateness release block are recorded with the approval
+    expect(approved.json().events.map((e: { type: string }) => e.type)).toEqual(['PauseApproved', 'StatusChanged', 'FormalNoticeDue', 'ReleasesPaused']);
     expect((await h.sim.getSeries(seriesId))!.status).toBe('Paused');
     await rig.sync();
     expect((await rig.get(`/series/${seriesId}/status`)).json().status).toBe('Paused');

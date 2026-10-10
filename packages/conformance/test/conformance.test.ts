@@ -182,7 +182,8 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const now = await e.chain.now();
     const until = now + 10 * 86_400;
     await exec(e, e.issuer, { kind: 'requestPause', seriesId, until });
-    await expectChainError(exec(e, e.backers[0]!, { kind: 'approvePause', seriesId, until }), 'Unauthorized');
+    // Stage 1 approve_pause: a signer that is not an active attestor is InvalidAttestorSignature (code InvalidAttestation)
+    await expectChainError(exec(e, e.backers[0]!, { kind: 'approvePause', seriesId, until }), 'InvalidAttestation');
     const ap = await exec(e, e.attestors[0]!, { kind: 'approvePause', seriesId, until });
     expect(types(ap.events)).toEqual(['PauseApproved', 'StatusChanged']);
     expect((await e.chain.getSeries(seriesId))!.status).toBe('Paused');

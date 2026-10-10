@@ -2,16 +2,26 @@ import { describe, expect, it } from 'vitest';
 import { ChainError } from '@merces/domain';
 import { parsePeriod } from '@merces/math';
 import { SimHarness, defaultTerms } from '../src/index.ts';
-import { GENESIS, expectChainError } from './helpers.ts';
+import { seriesOf } from './kit.ts';
+import { GENESIS, expectChainError, expectStage1Error, types } from './helpers.ts';
 
 describe('autonomy charter invariants (C11)', () => {
-  it('C11.1 releases follow the schedule with no approval; only Late or the issuer pause them', async () => {
+  it('C11.1 releases follow the schedule with no approval; only lateness (derived) or the issuer pause them', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const { seriesId } = await h.runRaise();
     await h.exec(h.issuer, { kind: 'pauseReleases', seriesId, paused: true });
-    await expectChainError(h.exec(h.issuer, { kind: 'drawRelease', seriesId }), 'Paused');
+    await expectStage1Error(h.exec(h.issuer, { kind: 'drawRelease', seriesId }), 'ReleasesPaused');
     await h.exec(h.issuer, { kind: 'pauseReleases', seriesId, paused: false });
-    await h.exec(h.issuer, { kind: 'drawRelease', seriesId });
+    const d = await h.exec(h.issuer, { kind: 'drawRelease', seriesId });
+    expect(types(d.events)).toEqual(['FundsReleased']);
+    await expectStage1Error(h.exec(h.issuer, { kind: 'drawRelease', seriesId }), 'NothingVested');
+    // the second tranche has vested, but the series is Late (derived at `now`, no crank needed): blocked
+    await h.sim.setTime(parsePeriod('2026Q1').end + 45 * 86_400 + 1);
+    expect(seriesOf(h.sim, seriesId).status).toBe('OnTime');
+    await expectStage1Error(h.exec(h.issuer, { kind: 'drawRelease', seriesId }), 'SeriesLate');
+    // the issuer's own pause is checked first
+    await h.exec(h.issuer, { kind: 'pauseReleases', seriesId, paused: true });
+    await expectStage1Error(h.exec(h.issuer, { kind: 'drawRelease', seriesId }), 'ReleasesPaused');
     // nobody else can pause: attestor/admin/backer have no such command path (the only pause inputs are the issuer flag and Late)
     const tx = await h.sim.build({ kind: 'pauseReleases', seriesId, paused: true }, h.admin.address);
     await expectChainError(h.sim.send({ tx, signatures: { [h.admin.address]: `sim:${h.admin.address}` } }), 'Unauthorized');
