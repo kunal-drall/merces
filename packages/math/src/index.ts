@@ -8,10 +8,9 @@
  * Beside them sit the few helpers Stage 1 has no counterpart for: the `"YYYYQn"` period codec, decimal parsing, the
  * term builder's per-unit rate, a value-free payment wrapper, deadline projection and a display cap.
  *
- * The interim Merces math (Part C) survives only under `interim.*`, and since the end of S1 only the auction family
- * (`clearAuction`, `walletCapUnits`, `bidDeposit`, `auctionFee`; S2 moves its callers to Stage 1's auction family below
- * and deletes it in WP8) and the FX family (`quarterAverageRate`, `coverageOk`, `deviationBps`, `withinBand`,
- * `pythToWad`; S5).
+ * The interim Merces math (Part C) survives only under `interim.*`, and since S2 only the window and curve cap
+ * (`walletCapUnits`; S5) and the FX family (`quarterAverageRate`, `coverageOk`, `deviationBps`, `withinBand`,
+ * `pythToWad`; S5). The sealed-bid auction is Stage 1's family below (S2).
  */
 export * as interim from './interim/index.ts';
 

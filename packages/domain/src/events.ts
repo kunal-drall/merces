@@ -101,13 +101,7 @@ export const eventPayloads = {
    * are not known yet: each winner's fee is taken when it is processed (`UnitsAllocated.fee`, `FeeTaken`).
    */
   AuctionSettled: z.object({
-    ...seriesScoped, clearingPrice: moneySchema, unitsSold: unitsSchema, proceeds: moneySchema,
-    /**
-     * @deprecated set only by the one-step `settleAuction` composite (Σ fees of the bids it processes); Stage 1's event
-     * has no such field. Removed with the composite's last callers (S2 WP4b).
-     */
-    totalFees: moneySchema.optional(),
-    settledAt: z.number().int(),
+    ...seriesScoped, clearingPrice: moneySchema, unitsSold: unitsSchema, proceeds: moneySchema, settledAt: z.number().int(),
   }),
   /**
    * Stage 1 `RaiseFailed`. NoValidBids carries a price, units and proceeds of 0; MinRaise carries the price that cleared
@@ -115,7 +109,7 @@ export const eventPayloads = {
    * as proceeds / clearingPrice when the price is above 0, else 0). Every deposit is returned in full.
    */
   AuctionFailed: z.object({ ...seriesScoped, reason: raiseFailureSchema, clearingPrice: moneySchema, unitsSold: unitsSchema, proceeds: moneySchema, minimumRaise: moneySchema }),
-  BidRefunded: z.object({ ...seriesScoped, bidder: addressSchema, amount: moneySchema }),
+  /** a curve buy's units (a DBC swap on live chains); a sealed raise's winners get `UnitsAllocated` and `BidDelivered` */
   UnitsMinted: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema }),
   /** Stage 1 `begin_settlement`: round `round` proposes `clearingPrice` (the proposer's claims are on the auction record) */
   SettlementProposed: z.object({ ...seriesScoped, clearingPrice: moneySchema, round: z.number().int().positive() }),
@@ -261,7 +255,7 @@ export function isEvent<T extends EventType>(e: DomainEvent, type: T): e is Doma
  * the generated docs: the control itself is the indexer's activity `summary()`, which names no amount for any event.
  */
 export const amountBearingEvents: ReadonlySet<EventType> = new Set<EventType>([
-  'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'BidRefunded', 'SettlementProposed', 'SettlementRejected', 'UnitsAllocated',
+  'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'SettlementProposed', 'SettlementRejected', 'UnitsAllocated',
   'BidDelivered', 'RaiseMintFinalized', 'TreasuryFunded', 'FundsReleased', 'SplitReceipt', 'ReportAccepted',
   'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout',
   'SeriesExtinguished', 'TransferWindowCleared', 'CurveGraduated',

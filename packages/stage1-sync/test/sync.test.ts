@@ -11,6 +11,12 @@ import { diffInterfaces } from '../src/steps/diff.ts';
 import { INTERIM_FAMILIES, REFERENCE_REEXPORTS, checkMathPin, interimRemaining } from '../src/steps/math.ts';
 import { locateStage1 } from '@merces/chains';
 
+/*
+ * S2 cause codes:
+ *  - S2-MS: multi-step settlement with Stage 1's names (the one-step settlement and the pull refund are retired);
+ *  - S2-G: the interim auction family is retired; the interim cap left is the window and curve cap (S5).
+ */
+
 /** A Stage 1 drop with only a manifest (plus extra files written by the caller). */
 function drop(manifest: Record<string, unknown>, files: Record<string, string> = {}) {
   const root = mkdtempSync(join(tmpdir(), 'stage1-'));
@@ -74,6 +80,7 @@ describe('stage1:sync', () => {
         { name: 'claim_release', args: [], accounts: [{ name: 'issuer', signer: true }, { name: 'series' }, { name: 'treasury' }] },
         { name: 'claim', args: [], accounts: [{ name: 'holder' }, { name: 'series' }] },
         { name: 'mark_terminal', args: [{ name: 'status' }], accounts: [{ name: 'series' }] },
+        { name: 'deliver_bid', args: [], accounts: [{ name: 'payer', signer: true }, { name: 'series' }, { name: 'bidder' }] },
       ],
       events: [{ name: 'RaiseSettled' }],
       types: [{ name: 'RaiseSettled', type: { kind: 'struct', fields: [{ name: 'series' }, { name: 'clearing_price' }] } }],
@@ -84,7 +91,10 @@ describe('stage1:sync', () => {
     const md = readFileSync(join(d.outDir, 'INTERFACE_DRIFT.md'), 'utf8');
     expect(md).toMatch(/\| drawRelease \| claim_release \(alias\) \| seriesId←series \(account\)/);
     expect(md).toMatch(/\| AuctionSettled \| RaiseSettled \(alias\) \| seriesId←series, clearingPrice←clearing_price/);
-    expect(md).toMatch(/\| claimRefund \| \*\*missing\*\*/); // never paired with `claim` by a look-alike
+    // cause S2-MS: Stage 1's own name, its series and bidder passed as accounts (was the pull refund, never paired with
+    // `claim` by a look-alike)
+    expect(md).toMatch(/\| deliverBid \| deliver_bid \| seriesId←series \(account\), bidder←bidder \(account\) \| none \|/);
+    expect(md).toMatch(/\| claimPayout \| claim \(alias\)/);
     expect(md).toMatch(/\| buyCurve \| \*\*missing\*\* \| — \| curve buys are Meteora DBC swaps/);
     expect(md).toContain('callable only by another Merces program or contract');
     expect(md).toMatch(/mark_terminal \(merces_protocol\)/);
@@ -99,7 +109,7 @@ describe('stage1:sync', () => {
     writeFileSync(join(root, 'idl', 'series.json'), JSON.stringify({ address: 'Ser1es1111111111111111111111111111111111111', metadata: { name: 'series', version: '0.1.0', spec: '0.1.0' }, instructions: [{ name: 'create_series', discriminator: [1, 2, 3, 4, 5, 6, 7, 8], accounts: [{ name: 'issuer', signer: true, writable: true }], args: [{ name: 'units_offered', type: 'u64' }] }], events: [{ name: 'SeriesCreated', discriminator: [9, 9, 9, 9, 9, 9, 9, 9] }, { name: 'WeirdExtraEvent', discriminator: [1, 1, 1, 1, 1, 1, 1, 1] }], types: [{ name: 'Terms', type: { kind: 'struct', fields: [{ name: 'units_offered', type: 'u64' }, { name: 'issuer', type: 'pubkey' }] } }] }));
     writeFileSync(join(root, 'abi', 'Series.json'), JSON.stringify({ abi: [{ type: 'event', name: 'RaiseOpened', inputs: [{ name: 'seriesId', type: 'bytes32' }, { name: 'commitEndsAt', type: 'uint64' }] }, { type: 'function', name: 'openRaise', inputs: [{ name: 'seriesId', type: 'bytes32' }] }] }));
     writeFileSync(join(root, 'vectors.json'), JSON.stringify({
-      math: [{ fn: 'auctionFee', args: ['100000000', '100'], expect: '1000000' }],
+      math: [{ fn: 'requiredEscrow', args: ['100000000', '1', '100'], expect: '101000000' }],
       scenarios: [{ name: 'register-and-stop', steps: [{ at: 0, actor: 'issuer', command: { kind: 'registerIssuer' } }, { at: 1, actor: 'issuer', command: { kind: 'stopIssuance' } }, { at: 2, actor: 'issuer', command: { kind: 'registerIssuer' }, expectError: 'Duplicate' }] }],
     }));
     writeFileSync(join(root, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', commit: 'abc', vectors: 'vectors.json', solana: { cluster: 'devnet', programs: { series: 'Ser1es1111111111111111111111111111111111111' }, idlDir: 'idl' }, evm: [{ chain: 'monad-testnet', chainId: 10143, contracts: { Series: '0x' + '22'.repeat(20) }, abiDir: 'abi' }] }));
@@ -185,7 +195,9 @@ describe('stage1:sync', () => {
     expect(r.status, r.details.join('\n')).toBe('ok');
     expect(r.details).toContain(`${REFERENCE_REEXPORTS.length}/${REFERENCE_REEXPORTS.length} re-exports are Stage 1's own objects`);
     const md = readFileSync(join(outDir, 'MATH_PARITY.md'), 'utf8');
-    expect(md).toMatch(new RegExp(`^Stage 1 math imported at ${pinned}; interim families remaining: .*auction \\(S2\\)`, 'm'));
+    // cause S2-G: the interim auction family is gone; the window and curve cap (S5) and the FX family (S5) remain
+    expect(md).toMatch(new RegExp(`^Stage 1 math imported at ${pinned}; interim families remaining: .*window and curve cap \\(S5\\)`, 'm'));
+    expect(md).not.toMatch(/auction \(S2\)/);
   });
 
   it('math: a substituted function, a missing export or another commit fails; an unpinned drop only warns', async () => {
@@ -213,17 +225,18 @@ describe('stage1:sync', () => {
 
   it('math: interim families are reported from what `interim` still exports', () => {
     const all = interimRemaining();
-    // every interim name belongs to a family; the auction (S2) and FX (S5) families outlive S1
+    // every interim name belongs to a family; the window and curve cap (S5) and FX (S5) families outlive S2
     expect(all.find((f) => f.family === 'unclassified')).toBeUndefined();
-    // since S1 exactly these two families remain, each in full
+    // cause S2-G: since S2 exactly these two families remain, each in full (the auction family is retired)
     expect(all).toEqual(INTERIM_FAMILIES);
+    expect(INTERIM_FAMILIES.map((f) => f.family)).toEqual(['FX (S5)', 'window and curve cap (S5)']);
     expect(INTERIM_FAMILIES.flatMap((f) => f.names).filter((n, i, a) => a.indexOf(n) !== i)).toEqual([]);
-    expect(Object.keys(interim)).toContain('clearAuction');
-    // a retired interim name coming back is unclassified, not quietly accepted
-    expect(interimRemaining(['clearAuction', 'pythToWad', 'min', 'somethingNew'])).toEqual([
+    expect(Object.keys(interim)).toContain('walletCapUnits');
+    // a name outside the families (a retired interim name coming back, a Stage 1 name under `interim`) is unclassified
+    expect(interimRemaining(['walletCapUnits', 'pythToWad', 'min', 'requiredEscrow'])).toEqual([
       { family: 'FX (S5)', names: ['pythToWad'] },
-      { family: 'auction (S2)', names: ['clearAuction'] },
-      { family: 'unclassified', names: ['min', 'somethingNew'] },
+      { family: 'window and curve cap (S5)', names: ['walletCapUnits'] },
+      { family: 'unclassified', names: ['min', 'requiredEscrow'] },
     ]);
   });
 

@@ -124,9 +124,10 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
 - Vault key: `MERCES_VAULT_KEY_HEX` (32 bytes). Rotation re-encrypts `terms_vault`, `applications.notes_encrypted` and
   `contract_sessions.signed_document_encrypted`; the key id is stored beside each ciphertext.
 - Keeper fee payer: fund it with devnet SOL / testnet MON only; it never holds stablecoins. On Solana the settle and
-  deliver jobs also pay the rent of the accounts a winner needs (its Holder PDA at `processBid`, its token account at
-  `deliverBid` when missing), and the fee collector's token account must exist before the first `processBid` (a
-  deployment step) [reader, S2; not measured in the simulator].
+  deliver jobs also pay the rent of the accounts a bidder needs (a winner's Holder PDA at `processBid`, the bidder's
+  stablecoin and unit token accounts at `deliverBid` when missing; Stage 1 `raise.rs`), and the fee collector's token
+  account must exist before the first `processBid` (a deployment step). Set a compute-unit limit on `processBid`: it
+  can exceed Solana's 200k default (A-AUC-10; rent is not measured in the simulator).
 
 ## Keepers
 

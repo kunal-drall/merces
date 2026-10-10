@@ -6,7 +6,7 @@ import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './hel
 
 /*
  * S2 cause codes:
- *  - S2-PR: push delivery (`deliverBid`; `claimRefund` retired): the harness raise delivers every bid's units and refund.
+ *  - S2-PR: push delivery (`deliverBid`; the pull refund is retired): the harness raise delivers every bid's units and refund.
  */
 for (const personality of ['solana', 'monad'] as Personality[]) {
   describe(`simulator (${personality}) full raise-to-payout cycle`, () => {
@@ -23,7 +23,7 @@ for (const personality of ['solana', 'monad'] as Personality[]) {
       expect(treasury.total).toBe(USDC(4500).toString());
       // auction fee 1% of 4500 = 45 at the fee collector
       expect(await h.sim.getBalance(h.sim.state.feeCollector, 'USDC')).toBe(USDC(45).toString());
-      // winners get their excess deposit back (cause S2-PR: delivered by the harness raise, no claimRefund)
+      // winners get their excess deposit back (cause S2-PR: delivered by the harness raise, no pull refund)
       const bid0 = (await h.sim.getBid(seriesId, h.backers[0]!.address))!;
       expect(bid0.allocatedUnits).toBe('100');
       const bal0 = BigInt(await h.sim.getBalance(h.backers[0]!.address, 'USDC'));

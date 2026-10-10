@@ -50,7 +50,8 @@ import {
  * Pins that moved with Stage 1 in S2 carry a cause code:
  *  - S2-G: `@merces/math` re-exports Stage 1's auction family (SPEC v1.1 §5.1–§5.2: the auction's wallet cap, the
  *    required escrow, validity at reveal, begin/tally/finalize, per-bid processing, honest claims and the clearing
- *    price); the interim auction family stays under `interim` until its callers move (S2 WP8 deletes it).
+ *    price); the interim auction family is retired (its callers moved to Stage 1's steps), and the interim cap left
+ *    under `interim` is the window and curve cap (S5).
  */
 
 // ---------------------------------------------------------------- the gateway
@@ -96,14 +97,15 @@ describe('@merces/math gateway', () => {
     expect(gateway.walletCapUnitsAtAuction).toBe(ref.walletCapUnitsAtAuction);
     expect(gateway.redemptionQuote).toBe(ref.redemptionQuote);
   });
-  it('`interim` keeps exactly the auction family (S2) and the FX family (S5)', () => {
+  it('`interim` keeps exactly the window and curve cap (S5) and the FX family (S5)', () => {
+    // cause S2-G: the interim auction family (clearing, deposit, fee) is retired; the sealed raise runs Stage 1's
     expect(Object.keys(interim).sort()).toEqual([
-      // auction (S2)
-      'clearAuction', 'walletCapUnits', 'bidDeposit', 'auctionFee',
+      // window and curve cap (S5)
+      'walletCapUnits',
       // FX (S5)
       'quarterAverageRate', 'coverageOk', 'deviationBps', 'withinBand', 'pythToWad',
     ].sort());
-    // the interim auction cap is not Stage 1's (S2 moves the callers)
+    // the interim cap is not Stage 1's (S5 moves the window and curve to Stage 1's)
     expect(interim.walletCapUnits).not.toBe((ref as unknown as Record<string, unknown>).walletCapUnits);
   });
 });
@@ -279,8 +281,8 @@ describe('Stage 1 auction family (SPEC v1.1 §5.1–§5.2; cause S2-G)', () => {
   const bids = [12, 11, 10, 10, 9].map((p, i) => revealed(usdc(p), 100n, i));
 
   it('the default harness raise: clears at 9 USDC, sells out, takes 9 USDC of fee per bid and refunds 303/202/101/101/0', () => {
-    // why most `runRaise` pins survive S2: Stage 1 settles this raise the way the interim clearing did (the same
-    // figures from Stage 1's own Simulator: every backer pays 909 USDC for 100 units)
+    // why most `runRaise` pins survived S2: Stage 1 settles this raise at the figures the retired interim clearing gave
+    // (from Stage 1's own Simulator: every backer pays 909 USDC for 100 units)
     expect(walletCapUnitsAtAuction(rules.unitsOffered, rules.walletCapBps)).toBe(100n);
     expect(bids.map((b) => b.escrow)).toEqual([1_212, 1_111, 1_010, 1_010, 909].map(usdc));
     expect(bids.every((b) => b.valid)).toBe(true);
@@ -297,12 +299,6 @@ describe('Stage 1 auction family (SPEC v1.1 §5.1–§5.2; cause S2-G)', () => {
     const outcomes = bids.map((b) => processBid({ ...b, revealed: true }, settled, rules));
     for (const o of outcomes) expect(o).toMatchObject({ alloc: 100n, cost: usdc(900), fee: usdc(9), charge: 0n });
     expect(outcomes.map((o) => o.pendingRefund)).toEqual([303, 202, 101, 101, 0].map(usdc));
-    // the interim clearing (deleted in S2 WP8) gave the same price, units, proceeds and fees on this raise
-    const old = interim.clearAuction({
-      bids: bids.map((b, i) => ({ bidder: `b${i}`, pricePerUnit: b.price, quantity: b.quantity, order: i })),
-      unitsOffered: rules.unitsOffered, reservePrice: rules.reservePrice, minimumRaise: rules.minRaise, walletCapUnits: 100n, auctionFeeBps: 100n,
-    });
-    expect([old.clearingPrice, old.unitsSold, old.proceeds, old.totalFees]).toEqual([usdc(9), 500n, usdc(4_500), usdc(45)]);
   });
 
   it('a bid above the wallet cap is invalid (not trimmed to the cap): it is tallied for nothing and refunded in full', () => {
@@ -329,9 +325,7 @@ describe('Stage 1 auction family (SPEC v1.1 §5.1–§5.2; cause S2-G)', () => {
   });
 });
 
-// ---------------------------------------------------------------- ours, and the interim auction (S2) and FX (S5) families
-
-const USDC = (n: number | string) => BigInt(Math.round(Number(n) * 1e6));
+// ---------------------------------------------------------------- ours, and the interim cap (S5) and FX (S5) families
 
 describe('fixed point', () => {
   it('parses decimals exactly', () => {
@@ -356,13 +350,6 @@ describe('fixed point', () => {
   });
 });
 
-describe('auction fees (interim auction family, S2)', () => {
-  it('1% auction fee on the cleared amount; the deposit covers price × quantity plus the fee', () => {
-    expect(interim.auctionFee(USDC(100_000), 100n)).toBe(USDC(1_000));
-    expect(interim.bidDeposit(USDC(10), 50n, 100n)).toBe(USDC(505));
-  });
-});
-
 describe('C9 fx', () => {
   it('averages the quarter and checks coverage', () => {
     expect(interim.quarterAverageRate(300n * WAD, 100n * WAD, 200, 100)).toBe(2n * WAD);
@@ -383,48 +370,7 @@ describe('time', () => {
   });
 });
 
-describe('auction clearing', () => {
-  it('clears at the lowest winning price with uniform pricing and a wallet cap', () => {
-    const res = interim.clearAuction({
-      bids: [
-        { bidder: 'a', pricePerUnit: USDC(12), quantity: 60n, order: 0 },
-        { bidder: 'b', pricePerUnit: USDC(11), quantity: 50n, order: 1 },
-        { bidder: 'c', pricePerUnit: USDC(10), quantity: 50n, order: 2 },
-        { bidder: 'd', pricePerUnit: USDC(9), quantity: 50n, order: 3 },
-        { bidder: 'e', pricePerUnit: USDC(5), quantity: 50n, order: 4 }, // below reserve
-      ],
-      unitsOffered: 100n,
-      reservePrice: USDC(8),
-      minimumRaise: USDC(500),
-      walletCapUnits: 50n,
-      auctionFeeBps: 100n,
-    });
-    expect(res.success).toBe(true);
-    expect(res.unitsSold).toBe(100n);
-    expect(res.clearingPrice).toBe(USDC(11));
-    const byBidder = Object.fromEntries(res.allocations.map((a) => [a.bidder, a.units]));
-    expect(byBidder).toEqual({ a: 50n, b: 50n });
-    expect(res.proceeds).toBe(USDC(1_100));
-    expect(res.totalFees).toBe(USDC(11));
-  });
-  it('fails below the minimum raise and with no bids', () => {
-    const res = interim.clearAuction({ bids: [{ bidder: 'a', pricePerUnit: USDC(10), quantity: 10n, order: 0 }], unitsOffered: 100n, reservePrice: USDC(8), minimumRaise: USDC(500), walletCapUnits: 50n, auctionFeeBps: 100n });
-    expect(res.success).toBe(false);
-    expect(res.reason).toBe('below-minimum-raise');
-    const none = interim.clearAuction({ bids: [], unitsOffered: 100n, reservePrice: USDC(8), minimumRaise: 0n, walletCapUnits: 50n, auctionFeeBps: 100n });
-    expect(none.reason).toBe('no-bids');
-  });
-  it('breaks price ties by commit order', () => {
-    const res = interim.clearAuction({
-      bids: [
-        { bidder: 'late', pricePerUnit: USDC(10), quantity: 100n, order: 5 },
-        { bidder: 'early', pricePerUnit: USDC(10), quantity: 100n, order: 1 },
-      ],
-      unitsOffered: 100n, reservePrice: 0n, minimumRaise: 0n, walletCapUnits: 60n, auctionFeeBps: 100n,
-    });
-    const byBidder = Object.fromEntries(res.allocations.map((a) => [a.bidder, a.units]));
-    expect(byBidder).toEqual({ early: 60n, late: 40n });
-  });
+describe('the interim window and curve cap (S5)', () => {
   it('wallet cap is at least one unit', () => {
     expect(interim.walletCapUnits(1_000n, 1_000n)).toBe(100n);
     expect(interim.walletCapUnits(5n, 1_000n)).toBe(1n);

@@ -16,7 +16,7 @@ const DAY = 86_400;
 /*
  * S2 cause codes on the pins that moved:
  *  - S2-MS: Stage 1's multi-step settlement; the keepers settle (`auction.settle`) and deliver (`auction.deliver`) in
- *    separate jobs (was one job, and before S2 the one-step settleAuction).
+ *    separate jobs (was one job, and before S2 the one-step settlement).
  */
 
 /** A registry of one chain, for a test that needs its own series ids, reminder ledger or a wrapped port. */
@@ -168,7 +168,7 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     expect(out3['status.crank']!.detail).toMatch(/fee payer out of funds/);
   });
 
-  // cause S2-MS: the settle job drives Stage 1's steps (was the one-step settleAuction) and leaves delivery to the deliver
+  // cause S2-MS: the settle job drives Stage 1's steps (was the one-step settlement) and leaves delivery to the deliver
   // job (was: both in one job); their errors are value-free (S2 L7)
   it('the settle job takes a due raise to mint finalisation in Stage 1\'s steps and the deliver job delivers it; a failure names the series and a code, never a message', async () => {
     const a = await sol.runRaise({ settle: 'none' });

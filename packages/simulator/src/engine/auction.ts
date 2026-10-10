@@ -5,7 +5,7 @@ import { TERMINAL, big, u64, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
 
 // ------------------------------------------------------------------ the sealed-bid raise: open, cancel, commit, reveal
-// (settlement: ./settlement.ts; the deprecated one-step composites: ./composite.ts)
+// (settlement and delivery: ./settlement.ts)
 /**
  * Stage 1 `open_raise` (SIM:871-883), in its order: the issuer (NotIssuer), a Draft raise (RaiseNotDraft), a contract
  * hash (ContractHashMissing; unreachable here, as `createSeries` refuses a zero hash, kept for parity), the issuer still

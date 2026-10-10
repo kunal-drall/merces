@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import {
   DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, seriesTermsViolations, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
   ChainError, attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
-  makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, termsCommitment, userCommandSchema,
+  makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, permissionlessCommandKinds, serviceCommandKinds, serviceCommandSchema, termsCommitment, userCommandKinds, userCommandSchema,
   type IndexingRule,
 } from '../src/index.ts';
 
@@ -16,7 +16,8 @@ import {
  *  - S2-NRC: the non-reveal charge hold (new series record 0 bps; 0 bps applies whatever a series records);
  *  - S2-MS: multi-step settlement (Stage 1's settlement events);
  *  - S2-RH: registerHolder (`HolderRegistered`);
- *  - S2-E: Stage 1's auction error names (`detail.stage1`).
+ *  - S2-E: Stage 1's auction error names (`detail.stage1`);
+ *  - S2-PR: push delivery (`deliverBid`): the one-step settlement and the pull refund are retired.
  */
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
@@ -146,10 +147,23 @@ describe('schemas', () => {
     expect(() => userCommandSchema.parse({ kind: 'payIn', seriesId: 'solana:abc', periodId: '2026Q5', amount: '1' })).toThrow();
   });
   it('covers every event listed in Part D2', () => {
-    const required = ['IssuerRegistered', 'SeriesCreated', 'RaiseOpened', 'RaiseCancelled', 'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'BidRefunded', 'UnitsMinted', 'TreasuryFunded', 'FundsReleased', 'ReleasesPaused', 'ReleasesResumed', 'SplitReceipt', 'ReportAccepted', 'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'SeriesRetired', 'UnitsBurned', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout', 'PauseRequested', 'PauseApproved', 'PauseEnded', 'StatusChanged', 'FormalNoticeDue', 'TermsAmended', 'SeriesExtinguished', 'RateSnapshot', 'FxFallbackFlagged', 'TransferWindowOpened', 'TransferWindowCleared', 'UnitsTransferred', 'AllowlistUpdated', 'AttestorRegistered', 'CurveSeriesCreated', 'CurveGraduated'];
+    const required = ['IssuerRegistered', 'SeriesCreated', 'RaiseOpened', 'RaiseCancelled', 'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'UnitsMinted', 'TreasuryFunded', 'FundsReleased', 'ReleasesPaused', 'ReleasesResumed', 'SplitReceipt', 'ReportAccepted', 'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'SeriesRetired', 'UnitsBurned', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout', 'PauseRequested', 'PauseApproved', 'PauseEnded', 'StatusChanged', 'FormalNoticeDue', 'TermsAmended', 'SeriesExtinguished', 'RateSnapshot', 'FxFallbackFlagged', 'TransferWindowOpened', 'TransferWindowCleared', 'UnitsTransferred', 'AllowlistUpdated', 'AttestorRegistered', 'CurveSeriesCreated', 'CurveGraduated'];
     for (const r of required) expect(eventTypes).toContain(r);
     // cause S2-MS / S2-RH: Stage 1's settlement events and holder registration, with Stage 1's names
     for (const r of ['SettlementProposed', 'SettlementRejected', 'UnitsAllocated', 'BidDelivered', 'RaiseMintFinalized', 'HolderRegistered']) expect(eventTypes).toContain(r);
+    // cause S2-PR: a bid's refund reaches the bidder with BidDelivered (the pull refund's event is retired); the one
+    // refund event left is a payment's
+    expect(eventTypes.filter((t) => /Refund/.test(t))).toEqual(['PaymentRefunded']);
+  });
+  it('has no one-step settlement or pull refund (cause S2-MS, S2-PR: Stage 1 settles in steps and delivers)', () => {
+    // the raise's wallet commands are Stage 1's four; the rest of the raise is the permissionless group
+    expect(userCommandKinds.filter((k) => /Raise|Bid|Refund/.test(k))).toEqual(['openRaise', 'cancelRaise', 'commitBid', 'revealBid']);
+    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder']);
+    expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankBurn', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'graduateCurve', 'setAllowlist']);
+    // submit takes both groups, each command once (the union's head is the first service command)
+    expect(serviceCommandSchema.parse({ kind: 'deliverBid', seriesId: 'solana:abc', bidder: 'b' }).kind).toBe('deliverBid');
+    expect(serviceCommandSchema.parse({ kind: 'snapshotRate', pair: 'EUR/USD', rateWad: '1', confWad: '0', publishTime: 1, update: null }).kind).toBe('snapshotRate');
+    expect(() => serviceCommandSchema.parse({ kind: 'claimPayout', seriesId: 'solana:abc' })).toThrow();
   });
   it('the committed JSON schema is up to date', () => {
     const path = fileURLToPath(new URL('../schema/domain-v0.schema.json', import.meta.url));

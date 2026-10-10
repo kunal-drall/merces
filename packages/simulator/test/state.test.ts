@@ -15,7 +15,7 @@ const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json',
  *    are refused, never upgraded;
  *  - S2-MS: multi-step settlement: the engine owns every auction and holder field of Stage 1's view (the runner's
  *    bookkeeping is no longer needed); the raise settles, then processes, then delivers;
- *  - S2-PR: push delivery (`deliverBid`): refunds wait in the auction escrow until delivered (`claimRefund` retired).
+ *  - S2-PR: push delivery (`deliverBid`): refunds wait in the auction escrow until delivered (the pull refund is retired).
  */
 describe('simulator state version 3', () => {
   it('round-trips the Stage 1 vault, tail and final states and bigint pauses through serialisation and structuredClone', async () => {

@@ -83,8 +83,10 @@ const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
  * Stage 1 names for canonical items that exist under another name, matched by hand against SPEC v1.1.2, the IDLs and
  * the EVM interfaces (both chains' spellings; case and '_' ignored). An alias match counts as a mapping; the item's
  * fields are still diffed. `none` records a canonical item Stage 1 has no counterpart for by design, with the reason.
+ * `synthesis` names the other Stage 1 events a live adapter derives a canonical event from (shown with its row; it
+ * changes no count).
  */
-export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Record<string, string[]>; none: Record<string, string> } = {
+export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Record<string, string[]>; none: Record<string, string>; synthesis: Record<string, string> } = {
   events: {
     AuctionSettled: ['RaiseSettled'],
     AuctionFailed: ['RaiseFailed'],
@@ -125,14 +127,13 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
     postSplitReceipt: ['route'],
   },
   none: {
-    // S2: the one-step auction's items, retiring (deleted in S2 WP8); Stage 1's own names are canonical since S2 WP3
-    settleAuction: 'retiring (S2): Stage 1 settles in steps, beginSettlement → tallyBids → finalizeSettlement → processBid → deliverBid',
-    claimRefund: 'retiring (S2): Stage 1 has no pull refund; deliverBid pushes the refund and the units',
-    BidRefunded: 'retiring (S2): a refund reaches the bidder with BidDelivered',
-    UnitsMinted: 'curve buys only from S2 (curve buys are Meteora DBC swaps); an auction winner\'s units are UnitsAllocated',
+    UnitsMinted: 'curve buys are DBC swaps sent straight to Meteora\'s program, so no Merces event carries them; a sealed raise\'s winners get UnitsAllocated and BidDelivered',
     buyCurve: 'curve buys are Meteora DBC swaps sent straight to Meteora\'s program; Merces has no buy instruction (curve mode is Solana only; EVM createSeries reverts CurveModeUnsupported)',
-    TreasuryFunded: 'no deposit event in this source; RaiseSettled and RaiseMintFinalized carry the proceeds total, so the adapter can synthesise it',
+    TreasuryFunded: 'Solana: no deposit event; the adapter synthesises one per processed winner from UnitsAllocated.cost (the EVM emits ProceedsDeposited)',
     flagFxFallback: 'no flag command: the FX deviation flag is emitted by the snapshot and the attestor fallback rate travels with submit_report',
+  },
+  synthesis: {
+    FeeTaken: 'also synthesised per processed winner from UnitsAllocated.fee (kind auction); NonRevealCharged is dropped while the owner holds the non-reveal charge (the EVM emits it with 0 for every unrevealed bid, Solana only above 0), and lifting the hold synthesises FeeTaken{kind: nonReveal} from its charge',
   },
 };
 
@@ -364,7 +365,8 @@ function diffSource(src: Source): { md: string[]; missing: number; mismatched: n
     }
     const { mapping, drift, count } = compareFields(ours, theirs, 'field');
     mismatched += count;
-    md.push(`| ${name} | ${shown} | ${mapping.join(', ') || '—'} | ${[...nameDrift, ...drift].join('; ') || 'none'} |`);
+    const synthesis = STAGE1_ALIASES.synthesis[name] ? `. Adapter: ${STAGE1_ALIASES.synthesis[name]}` : '';
+    md.push(`| ${name} | ${shown} | ${mapping.join(', ') || '—'} | ${[...nameDrift, ...drift].join('; ') || 'none'}${synthesis} |`);
   }
   for (const k of src.events.keys()) {
     if (matchedEvents.has(k)) continue;

@@ -8,7 +8,6 @@ import type { SimSeries, SimState } from '../state.ts';
 import { balKey, type EngineCore, type EngineOptions, type Emit, type ExecContext } from './core.ts';
 import { fail } from './errors.ts';
 import { auctionPhase, cancelRaise, commitBid, openRaise, revealBid } from './auction.ts';
-import { claimRefund, settleAuction } from './composite.ts';
 import { buyCurve, graduateCurve } from './curve.ts';
 import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
 import { claimPayout, crankBurn, payIn, postSplitReceipt } from './payments.ts';
@@ -92,9 +91,6 @@ export class SimEngine implements EngineCore {
       case 'processBid': service('any'); return processBid(this, cmd, emit);
       case 'deliverBid': service('any'); return deliverBid(this, cmd, emit);
       case 'registerHolder': service('any'); return registerHolder(this, cmd, emit);
-      // deprecated composites over those steps (S2 WP4b moves their callers, WP8 removes them)
-      case 'settleAuction': service('any'); return settleAuction(this, cmd, now, emit);
-      case 'claimRefund': return claimRefund(this, user(), cmd, emit);
       case 'drawRelease': return drawRelease(this, user(), cmd, now, emit);
       case 'pauseReleases': return pauseReleases(this, user(), cmd, emit);
       case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit, ctx);

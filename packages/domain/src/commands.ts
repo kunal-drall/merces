@@ -64,8 +64,6 @@ export const userCommands = {
   cancelRaise: z.object({ kind: z.literal('cancelRaise'), seriesId: seriesIdSchema }),
   commitBid: z.object({ kind: z.literal('commitBid'), seriesId: seriesIdSchema, commitment: hash32Schema, deposit: moneySchema }),
   revealBid: z.object({ kind: z.literal('revealBid'), seriesId: seriesIdSchema, pricePerUnit: moneySchema, quantity: unitsSchema, salt: hash32Schema }),
-  /** @deprecated one-step refund claim; Stage 1 pushes refunds with `deliverBid` (S2 removes it in WP8) */
-  claimRefund: z.object({ kind: z.literal('claimRefund'), seriesId: seriesIdSchema }),
   drawRelease: z.object({ kind: z.literal('drawRelease'), seriesId: seriesIdSchema }),
   pauseReleases: z.object({ kind: z.literal('pauseReleases'), seriesId: seriesIdSchema, paused: z.boolean() }),
   submitReport: z.object({
@@ -103,8 +101,6 @@ export const userCommands = {
 } as const;
 
 export const serviceCommands = {
-  /** @deprecated one-step settlement; Stage 1 settles with `beginSettlement` … `deliverBid` (S2 removes it in WP8) */
-  settleAuction: z.object({ kind: z.literal('settleAuction'), seriesId: seriesIdSchema }),
   snapshotRate: z.object({ kind: z.literal('snapshotRate'), pair: pairSchema, rateWad: wadSchema, confWad: wadSchema, publishTime: z.number().int(), /** opaque provider update payload (e.g. Pyth VAA) for live chains */ update: z.string().nullable() }),
   crankStatus: z.object({ kind: z.literal('crankStatus'), seriesId: seriesIdSchema }),
   crankBurn: z.object({ kind: z.literal('crankBurn'), seriesId: seriesIdSchema, holders: z.array(addressSchema) }),
@@ -155,7 +151,7 @@ export const routerCommands = {
 export const userCommandSchema = z.discriminatedUnion('kind', Object.values(userCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'registerIssuer'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
 export const permissionlessCommandSchema = z.discriminatedUnion('kind', Object.values(permissionlessCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'beginSettlement'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
 /** What `ChainPort.submit` accepts: the service group and the permissionless group (each command is defined once). */
-export const serviceCommandSchema = z.discriminatedUnion('kind', [...Object.values(serviceCommands), ...Object.values(permissionlessCommands)] as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'settleAuction'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
+export const serviceCommandSchema = z.discriminatedUnion('kind', [...Object.values(serviceCommands), ...Object.values(permissionlessCommands)] as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'snapshotRate'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
 export const adminCommandSchema = z.discriminatedUnion('kind', Object.values(adminCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'registerAttestor'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
 
 export type UserCommand = { [K in keyof typeof userCommands]: z.infer<(typeof userCommands)[K]> }[keyof typeof userCommands];

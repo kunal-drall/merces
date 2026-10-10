@@ -239,7 +239,7 @@ export function deliverBid(e: EngineCore, cmd: Cmd<'deliverBid'>, emit: Emit): v
  * Deliver a processed bid: its refund leaves the escrow for the bidder, its units leave the auction escrow. Position
  * units do not move: they joined the position when the bid was processed (S2 D4). `BidDelivered`.
  */
-export function deliverBody(e: EngineCore, s: SimSeries, b: SimBid, emit: Emit): void {
+function deliverBody(e: EngineCore, s: SimSeries, b: SimBid, emit: Emit): void {
   const a = s.auction;
   b.delivered = true;
   a.escrowTotal -= b.pendingRefund;

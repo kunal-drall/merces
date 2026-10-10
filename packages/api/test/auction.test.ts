@@ -14,7 +14,7 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - S2-FP: a failed raise keeps its price and would-be results, with Stage 1's reason (NoValidBids / MinRaise);
  *  - S2-MS: Stage 1's multi-step settlement, driven by the keepers' `advanceSettlements` (was the one-step
  *    `settleDue`);
- *  - S2-PR: refunds and units are pushed by `deliverBid` (the keepers deliver every bid; `claimRefund` retired).
+ *  - S2-PR: refunds and units are pushed by `deliverBid` (the keepers deliver every bid; the pull refund is retired).
  */
 const HOUR = 3_600;
 const phases = { commitDurationSeconds: HOUR, revealDurationSeconds: HOUR }; // cause S2-AD
@@ -177,7 +177,7 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     await h.sim.setTime(now + 2 * HOUR); // cause S2-AD (was now + 2000)
     const pv = (await rig.get(`/series/${seriesId}/auction/preview`)).json();
     expect(pv.projected).toMatchObject({ success: false, clearingPrice: USDC(10).toString(), unitsSold: '200' });
-    await h.settle(seriesId, 'process'); // cause S2-MS (was the one-step settleAuction)
+    await h.settle(seriesId, 'process'); // cause S2-MS (was the one-step settlement)
     expect((await h.sim.getSeries(seriesId))!.phase).toBe('Failed');
     expect(await h.sim.getAuction(seriesId)).toMatchObject({ failureReason: 'MinRaise', clearingPrice: pv.projected.clearingPrice, unitsSold: pv.projected.unitsSold });
     // the removed bidder is delivered its deposit in full (any wallet may deliver it)

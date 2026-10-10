@@ -342,7 +342,7 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
       { round: 1, clearing_price: USDC(10).toString(), rejected: true, rejection_reason: 'ClaimMismatch' },
       { round: 2, clearing_price: USDC(9).toString(), rejected: false, rejection_reason: null },
     ]);
-    await apply(ev('AuctionSettled', { seriesId, clearingPrice: USDC(9).toString(), unitsSold: '500', proceeds: USDC(4500).toString(), totalFees: USDC(45).toString(), settledAt: 1_780_000_000 }));
+    await apply(ev('AuctionSettled', { seriesId, clearingPrice: USDC(9).toString(), unitsSold: '500', proceeds: USDC(4500).toString(), settledAt: 1_780_000_000 }));
     expect((await t.pool.query('select auction_clearing_price::text, auction_units_sold::text, auction_proceeds::text, auction_failure_reason, auction_finalized_at::int from series where series_id = $1', [seriesId])).rows[0])
       .toEqual({ auction_clearing_price: USDC(9).toString(), auction_units_sold: '500', auction_proceeds: USDC(4500).toString(), auction_failure_reason: null, auction_finalized_at: 1_780_000_000 });
 

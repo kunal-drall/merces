@@ -3,7 +3,7 @@
 How Stage 2 works without Stage 1 today, how it catches Stage 1 the moment it appears, and what happens then.
 This file is updated at each catch-up with what matched, what changed and what is still open.
 
-## Status (2026-10-10): Stage 1 @1bfc66b pinned, S1 done
+## Status (2026-10-10): Stage 1 @1bfc66b pinned, S1 and S2 done
 
 Stage 1 is the `stage1` git submodule, pinned at `1bfc66b` (branch `claude/sweet-goodall-b7acm3`, SPEC v1.1.2; its
 tree is identical to `5eafd41`, the commit the handoff named). Its TypeScript packages (`@merces/sdk`,
@@ -13,8 +13,9 @@ overrides it.
 
 The owner approved section B of the drift review below: **Stage 1 wins for onchain behaviour.** S1 applied its first
 part: Stage 1's math (imported, not rewritten), Stage 1's report proof format, and a Stage 1 vector runner that replays
-Stage 1's own parity vectors against our simulator. "S1 results" says what changed; "Owner decisions and questions"
-says what is still open.
+Stage 1's own parity vectors against our simulator. S2 applied the sealed-bid raise: Stage 1's multi-step settlement
+(B.1), the raise's own terms (B.8, partly) and `register_holder` (B.3, partly), with the non-reveal charge held at 0 by
+the owner. "S1 results" and "S2 results" say what changed; "Owner decisions and questions" says what is still open.
 
 **What the handoff was missing** (unchanged at 1bfc66b). Stage 1 ships no `handoff/manifest.json`, so
 `stage1.map.json` at this repository's root describes it by hand (A-SYNC-2). Missing (also listed in the map's
@@ -33,14 +34,14 @@ Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitigno
 (`MATH_PARITY.md`, `VECTOR_PARITY.md`; regenerate with `pnpm stage1:sync --no-conformance`, which writes them to
 `packages/stage1-sync/out`).
 
-| D6 step | Result at @1bfc66b (after S1) |
+| D6 step | Result at @1bfc66b (after S2) |
 | --- | --- |
 | 1. `stage1:sync` | runs end to end with `--no-conformance` |
 | detect | ok: `stage1.map.json` (hand-written) over the pinned submodule |
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
-| diff | drift: **Solana** 3 canonical items without a counterpart, 261 field mismatches, 87 extra Stage 1 items; **Monad testnet** 1 / 222 / 97 (`INTERFACE_DRIFT.md`; @5eafd41: 260 / 221; the one new mismatch per chain is `ReportAccepted.priorIncomeCommitment`, which S1 added). It is left to the adapters' mappers (D6.2) and the rest of section B (S2–S5) |
-| math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 34 `@merces/reference` names and `@merces/sdk`'s helpers, and all 34 are Stage 1's own function objects. The interim math is left only under `interim.*` for the auction family (S2) and the FX family (S5). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2) |
-| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) **every S1 target at its expected status on both personalities**: 04, 06, 07, 09, 11, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A); 15 vectors not replayed on ours in S1, each with its milestone. 25 vectors, 2,092 steps, 143 expected reverts. Snapshot with the shim table: `docs/stage1/VECTOR_PARITY.md` |
+| diff | drift: **Solana** 4 canonical items without a counterpart, 249 field mismatches, 79 extra Stage 1 items; **Monad testnet** 2 / 210 / 89 (`INTERFACE_DRIFT.md`; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range); the new item without a counterpart on each chain is `UnitsMinted`, now a curve buy only (a Meteora DBC swap). The rest is left to the adapters' mappers (D6.2) and the rest of section B (S3–S5) |
+| math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window and curve cap and the FX family (both S5). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2) |
+| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 36/42 PASS, 42/42 at expected status`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A), 03 PASS-WITH-DIVERGENCES (DIV-NRC-1, the non-reveal hold); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, and parts on 03 at #65 exactly as recorded. 25 vectors, 2,092 steps, 143 expected reverts. Snapshot with the shim table: `docs/stage1/VECTOR_PARITY.md` |
 | conformance | **blocked**: no devnet or testnet deployment |
 | verdict | both chains NOT ready (diff drift; conformance not run) |
 
@@ -55,9 +56,9 @@ S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed 
   `@merces/reference` (status and accrual, the payout vault, redemption, tail and final pool, treasury vesting,
   income), plus the few helpers Stage 1 has no counterpart for (the `"YYYYQn"` codec, decimals, the per-unit rate, a
   value-free payment wrapper, deadline projection, the display cap). Every money path outside the auction and FX, in
-  the simulator, services, indexer and keepers, calls them. What is left of the interim math is the auction family
-  (`clearAuction`, `walletCapUnits`, `bidDeposit`, `auctionFee`; S2) and the FX family (`quarterAverageRate`,
-  `coverageOk`, `deviationBps`, `withinBand`, `pythToWad`; S5); a test pins that key list.
+  the simulator, services, indexer and keepers, calls them. What was left of the interim math after S1 was the auction
+  family (four names; S2 deleted it) and the FX family (`quarterAverageRate`, `coverageOk`, `deviationBps`,
+  `withinBand`, `pythToWad`; S5); a test pins that key list.
 - **Simulator state (WP0, WP2, WP13).** The engine is split by area. The persisted state is version 2: Stage 1's
   series ledger (its field names), payout vault, tail and final pool sit beside ours, and the version-1 bookkeeping
   they replaced is deleted. A version-1 state is refused; `sim:reset` clears the simulated chains and their offchain
@@ -122,6 +123,98 @@ S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed 
 | `pnpm stage1:sync --no-conformance` | math and vectors `OK` (diff `WARN`, conformance skipped) |
 | `grep -rn "interim\." packages/simulator/src` | only `engine/{auction,fx,window,curve}.ts` |
 
+### S2 results
+
+S2 ran as work packages WP1–WP8 (WP4 in two parts), each committed as `S2 WPn: …`, on the S1 review fixes. It applied
+B.1 (auction settlement), the raise's part of B.8 and `register_holder` from B.3. What changed, by area:
+
+- **Math (WP1, WP8).** `@merces/math` re-exports Stage 1's auction family by name (`walletCapUnitsAtAuction`,
+  `requiredEscrow`, `isBidValid`, `beginSettlement`, `tallyBids`, `isClearingPriceValid`, `finalizeSettlement`,
+  `marginalAllocation`, `processBid`, `claimsFor`, `findClearingPrice`; 45 re-exports in all). Every auction figure in
+  the simulator, the services' precheck and preview and the planner's dry run is Stage 1's. The interim auction family
+  (greedy clearing, deposit, fee) is deleted; the interim `walletCapUnits` (at least one unit) stays only for the
+  transfer window and the curve until S5 (A-MATH-1).
+- **Raise terms (WP2).** `commitDurationSeconds`, `revealDurationSeconds` and `nonRevealChargeBps` are series terms,
+  bounded as Stage 1's `create_series` bounds them on a sealed raise (A-TERMS-4); `openRaise{seriesId}` checks Stage 1's
+  order (NotIssuer, RaiseNotDraft, ContractHashMissing, NotAllowlisted, NewRaisesPaused) and derives the phase ends from
+  the terms (A-AUC-5). Migration 018.
+- **Vocabulary (WP3, WP8).** Stage 1's names: the permissionless commands `beginSettlement`, `tallyBids{maxBids?}`,
+  `finalizeSettlement`, `processBid`, `deliverBid` and `registerHolder` (the keepers submit them; any wallet may build
+  them) and the events `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`,
+  `RaiseMintFinalized` and `HolderRegistered`; `BidRevealed.valid`; `AuctionSettled` carries `RaiseSettled`'s fields only
+  and `AuctionFailed` `RaiseFailed`'s plus `unitsSold`. The one-step settlement, the pull refund and its event are
+  deleted (WP8); `UnitsMinted` is a curve buy only. `ChainInfo.limits` gives each chain's tally page and bid limit
+  (A-AUC-6). One planner (`nextSettlementStep`, from the stored raise state) and one driver (`runSettlement`) serve the
+  keepers, the harness, conformance and the API; one helper (`settlementOutcome`) applies D7 (A-AUC-7). The domain
+  schema is version 0.2.0: 48 events, 42 commands.
+- **Engine (WP4a).** The simulator stores Stage 1's `Auction` and `Bid` records and runs `open_raise`, `commit_bid`,
+  `reveal_bid`, `begin_settlement`, paged `tally_bids`, `finalize_settlement`, `process_bid`, `deliver_bid`,
+  `cancel_raise` and `register_holder` with Stage 1's checks in Stage 1's order and Stage 1's error names. Validity is
+  fixed at reveal (an over-cap bid is invalid and refunded in full, A-AUC-4); a failed raise keeps its would-be price and
+  results; money moves bid by bid at processing (`FeeTaken{auction}` and `TreasuryFunded` per winner); MintNotFinalized
+  gates every path Stage 1 gates; a winner holds and accrues from processing (A-AUC-8) and the redemption and final
+  claims deliver a pending bid first; a bidder removed from the allowlist stays valid (A-REV-2 withdrawn); the
+  non-reveal hold applies 0 bps and refuses any charge (A-AUC-11). State version 3 (`sim:reset`).
+- **Callers (WP4b, WP6, WP7).** Every caller runs the steps. Indexer (migration 019): the auction record, settlement
+  rounds, each bid's validity, processing and delivery, undelivered units, holder registrations kept apart from
+  positions (A-REV-10), the keepers' delivery table. Services: precheck and preview on Stage 1's math,
+  `advanceSettlements` and `deliverDue` (from the chain's bids, with a per-bid backoff and stuck alerts, A-AUC-13).
+  Keepers: `auction.settle` and `auction.deliver` as separate jobs; a raise with no bid waits 24 hours for the issuer's
+  cancel (A-AUC-12); errors carry codes, never messages. Notices: a rejected round, the mint finalised, a bid delivered,
+  a stuck delivery or settlement, with no amounts. The services' mint gates (extinguishment, the redemption quote,
+  reconciliation). API: `POST /series/{id}/bids/build-deliver` for any wallet, `POST /series/{id}/auction/build-step`,
+  the issuer's `raise/build-open` and `raise/build-cancel`, typed auction reads; 161 operations.
+- **Vector runner (WP5).** 02, 03, 15 and 17 are targets. SH-AUC-1 and SH-AUC-3…6 are gone (only SH-AUC-2, our bid
+  commitment, stays until S4), and the auction, holder and balance views come from the engine. A known divergence is a
+  first-class entry (`stage1-vectors/divergences.ts`): DIV-NRC-1 accepts exactly the five fields of 03 the hold changes,
+  fails on any other value there, and fails as stale once the hold lifts. Prefix gates keep the auction prefix of 08,
+  10, 14, 16, 20, 21 and 22 green; lockstep compares mid-settlement.
+- **Tests.** Every moved pin names its S2 cause code (S2-G, -AD, -CR, -E, -VR, -MS, -PR, -FP, -DA, -MF, -PU, -NRC, -RH,
+  -V3, and the runner's -NY and -LS); moved figures were recomputed with Stage 1's own simulator.
+- **Privacy.** Settlement rounds and results and each bid's processing and delivery are public onchain, and none is
+  income. Activity summaries name rounds, reasons and unit counts only; notices name no amount; keeper errors and
+  `auction_deliveries` hold codes only; the outbox keeps the events' public onchain amounts (PRIVACY.md).
+
+**The S2 gate**, all green at the S2 WP8 commit:
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | exits 0 |
+| `DATABASE_URL=… pnpm vitest run` | 59 files, 428 tests passed |
+| `MERCES_TEST_DB=1 pnpm vitest run --project canary` | 2 files, 3 tests passed |
+| `CONFORMANCE_CHAIN=simulator` / `simulator:monad` `pnpm vitest run --project conformance` | 18 and 10 tests passed |
+| `pnpm stage1:vectors --personality solana,monad` | exits 0: `OK: 36/42 PASS, 42/42 at expected status (14 prefix runs; 2 runs with accepted divergences)` |
+| `pnpm stage1:vectors --backend reference` | exits 0: `OK: 25/25 PASS, 25/25 at expected status` |
+| `pnpm stage1:vectors --backend lockstep --personality solana,monad` | exits 0: `OK: 36/42 PASS, 42/42 at expected status`; 03 diverges at #65 as recorded (DIV-NRC-1) |
+| `pnpm stage1:sync --no-conformance` | math and vectors `OK` (diff `WARN`, conformance skipped) |
+| `pnpm openapi:check` | `openapi.yaml matches 161 operations` |
+| `grep -rnE "settleAuction\|claimRefund\|BidRefunded\|clearAuction\|bidDeposit\|\bauctionFee\b" packages --include=*.ts \| grep -v generated` | empty |
+
+### Adapter notes for the auction (S5)
+
+What the live adapters normalise so the canonical settlement reads the same on both chains (from Stage 1's programs and
+contracts at 1bfc66b):
+
+- **Tally pages.** The EVM's `tallyBids(seriesId, fromIndex, toIndex)` takes an index range (at most 200 a call and
+  4,096 bids an auction, `TooManyBids`); Solana's `tally_bids` takes up to 24 bid accounts as remaining accounts. The
+  adapter turns the canonical "next page of at most `maxBids`" into either (A-AUC-6).
+- **Escrow total.** Solana's `escrow_total` only grows (the amount ever committed); the EVM and the canonical model keep
+  the live balance. The Solana adapter reports the live balance.
+- **R.** Solana stores no `R` on the auction: when the raise is Settled the adapter reads the accepted proposal's
+  `r_claim`.
+- **Dropped events.** The EVM's `BidProcessed` (a bid processed without allocation) and `MintAuthorityRevoked` have no
+  canonical event; `RaiseMintFinalized` marks every bid processed. The EVM emits `NonRevealCharged` with 0 for every
+  unrevealed bid: while the owner holds the charge the adapter drops it (Solana emits it only above 0, which the hold
+  rules out).
+- **DeliverFirst.** Solana's `claim_redemption` and `claim_final` revert with DeliverFirst while the holder has
+  undelivered units; the canonical model delivers inline, as the EVM and Stage 1's reference do, so the Solana adapter
+  prepends `deliver_bid` to those transactions.
+- **Synthesised events.** `TreasuryFunded` on Solana and `FeeTaken{auction}` on both chains come from each
+  `UnitsAllocated` (its `cost` and `fee`); `AuctionFailed.unitsSold` and `reason` from `RaiseFailed` (section A).
+- **Deployment and fees.** The Solana fee collector's token account must exist before the first `process_bid`; the
+  keepers pay a winner's Holder PDA rent at `process_bid` and the bidder's token accounts at `deliver_bid`, and set a
+  compute-unit limit on `process_bid` (A-AUC-10).
+
 ### Owner decisions and questions
 
 Decided (S1 review):
@@ -140,7 +233,27 @@ Decided (S1 review):
 - **Persisted simulator data:** no environment holds data worth keeping; `sim:reset` runs before the version-2 build
   is deployed.
 
-Open, with the default S1 uses meanwhile:
+Decided (S2):
+
+- **`register_holder` comes into S2**, with the `HolderRegistered` event both chains emit, so vector 17 passes
+  (A-AUC-9); the claims around it stay in S3.
+- **Non-reveal charge: still held, minimal plumbing only.** The owner was told what Stage 1 does: at `process_bid` on a
+  settled raise, Stage 1 keeps `floor(escrow × nonRevealChargeBps / 10000)` of a bid committed and never revealed (100
+  bps by default) and pays it to the fee collector; a failed raise charges nothing. S2 keeps the series term (for
+  `create_series` parity), applies 0 bps, refuses a non-zero charge in the engine, and adds no event, fee kind, column,
+  accounting row or API field for it (A-AUC-11). Vector 03 shows the five fields this changes (DIV-NRC-1).
+
+Open, with the default S2 uses meanwhile:
+
+1. **Non-reveal charge: still on hold.** S2 creates every new series with 0 bps (`DEFAULTS.nonRevealChargeBps`), live
+   chains included. What lifting it adds is in the divergence register below and in A-AUC-11.
+2. **Series created during the hold keep 0 bps.** Their charters are frozen, so lifting the hold changes new series
+   only; a live series created meanwhile never charges a non-revealer.
+3. **Stage 1's two internal inconsistencies (D7)** are resolved toward SPEC and both chains and should be reported to
+   Stage 1: its TS reference settles a round that would sell 0 units (SPEC and both chains fail it), and its simulator's
+   `RaiseMintFinalized` on a failed raise carries the would-be units and proceeds (both chains emit 0 and 0) (A-AUC-7).
+
+Open since S1, with the same defaults:
 
 1. **Who attests `liquidityEvent` for tier 2?** zkTLS data cannot show a liquidity event. Default: the report
    verifier signs the flag the device declares (A-REV-1).
@@ -150,14 +263,17 @@ Open, with the default S1 uses meanwhile:
    no server-side copy (PRIVACY.md). A series' first report in mid-year supplies its own prior, which only the
    attestation binds (Stage 1 A25).
 
-### Divergence register (Stage 1 behaviour knowingly not mirrored after S1)
+### Divergence register (Stage 1 behaviour knowingly not mirrored after S2)
 
 | Divergence | Milestone |
 | --- | --- |
-| Non-reveal charge (owner hold): not modelled. `nonRevealChargeBps` is a series term since S2 (bounded 0–1,000 bps on a sealed raise); new series record 0, live series included, and keep it (frozen charters); 0 applies whatever a series records (`NON_REVEAL_CHARGE_HELD`), so an unrevealed bid is refunded in full. Lifting the hold adds the `NonRevealCharged` event, a `nonReveal` fee kind, the bids' charge column, the accounting rows and the API fields, and drops the vector runner's DIV-NRC-1 entries (A-AUC-11) | after the owner decides |
-| One-step auction: greedy fill by price then commit order, cap clamp at allocation, de-allowlisted bidders excluded, pull refunds (B.1) | S2 |
+| **Non-reveal charge (owner hold): not modelled.** Stage 1 keeps `floor(escrow × nonRevealChargeBps / 10000)` of an unrevealed bid's escrow on a settled raise for the fee collector. Ours: `nonRevealChargeBps` is a series term (bounded 0–1,000 bps on a sealed raise); new series record 0, live series included, and keep it (frozen charters); 0 applies whatever a series records (`NON_REVEAL_CHARGE_HELD`, `appliedNonRevealChargeBps`), so an unrevealed bid is refunded in full, and the engine refuses a non-zero charge. The vectors see it as DIV-NRC-1 in 03 only: #67 `feeCollector`, `auctionEscrow`, `auction.escrowTotal` and #77 `balances.b8.stable`, `feeCollector` (b8's 101 USDC); lockstep parts at #65. **Lifting the hold adds:** `NON_REVEAL_CHARGE_HELD = false` (new series default to Stage 1's 100 bps; series created during the hold keep 0); the engine credits Stage 1's charge to the fee collector; the canonical event `NonRevealCharged{seriesId, bidder, charge}` and `FeeTaken{kind: 'nonReveal'}` (`feeKindSchema` gains `nonReveal`); the indexer's `bids.non_reveal_charge` column and `BidState.nonRevealCharge`; the fee ledger, reconciliation and accounting `byKind`/`bySeries` rows; the API and OpenAPI fields (accounting `byKind.nonReveal`, the bid's charge, the rate in the bid precheck); notices that name it; the adapters stop dropping `NonRevealCharged`; the vector runner's DIV-NRC-1 entries and 03's lockstep parting go (03 becomes PASS); the docs (A-AUC-11) | after the owner decides |
+| Stage 1 internal, resolved toward SPEC and both chains (D7, A-AUC-7): a round that would sell 0 units fails the raise (MinRaise), where Stage 1's TS reference (`auction.ts` `finalizeSettlement`) settles it; a failed raise's `RaiseMintFinalized` carries 0 and 0, where Stage 1's simulator emits the would-be units and proceeds; a failed raise's time is `AuctionState.finalizedAt` and `SeriesState.settledAt` stays null. No vector exercises the first | reported to Stage 1 |
+| Adapter normalisations (see "Adapter notes for the auction"): the EVM's `tallyBids` index range; Solana's cumulative `escrow_total`; Solana's `R` read from `r_claim`; the EVM's `BidProcessed` and `MintAuthorityRevoked` dropped; the EVM's `NonRevealCharged(0)` dropped; Solana's DeliverFirst on the redemption and final claims (the canonical model delivers inline, as the EVM and Stage 1's reference do) | S5 (adapters) |
+| The EVM's 4,096-bid limit per auction (`TooManyBids`) is not enforced by the simulator's monad personality; `ChainInfo.limits.maxBidsPerAuction` reports it | S5 (adapters) |
+| Our bid commitment (SH-AUC-2): `commitBid` carries our commitment, not Stage 1's keccak over the packed price, quantity and salt | S4 |
 | One-step transfer windows; no windows flag, eligibility or fee (B.2) | S5 |
-| `claimPayout` = claim + tail + final; no explicit `register_holder` (B.3); `claim_tail` is `claimRedemption` then `claimPayout`, two transactions (runner-atomic in the vector runner) | S3 |
+| `claimPayout` = claim + tail + final (B.3; `register_holder` exists since S2); `claim_tail` is `claimRedemption` then `claimPayout`, two transactions (runner-atomic in the vector runner) | S3 |
 | No `retire_if_capped`, `withdraw_pause_request` or `end_pause` commands; `requestPause.until` advisory (B.6) | S5 |
 | `payIn` exact-amount and period guards (Stage 1's `pay` takes neither) | S5 (adapters drop them) |
 | Tier 1: no router year-to-date binding; split receipts stand in for the router credit | tier-1 milestone |
@@ -171,7 +287,7 @@ Open, with the default S1 uses meanwhile:
 
 | Blocker | Needs |
 | --- | --- |
-| D6.2/3: resolving the remaining drift and replaying the other 15 vectors on our simulator | the rest of section B (approved): S2 auctions, S3 claims, S4 signatures, S5 the rest |
+| D6.2/3: resolving the remaining drift and replaying the other 11 vectors in full on our simulator (08, 10, 14, 16, 20, 21 and 22 replay up to their prefix gate; 12, 13, 18 and 24 not at all) | the rest of section B (approved): S3 claims, S4 signatures, S5 the rest (S2 auctions done) |
 | D6.4: wiring the adapters (`wired = true`) | the adapters' mappers over the remaining drift, then program ids and addresses |
 | D6.5: conformance on Solana devnet and Monad testnet | Stage 1 deployed to both (STATUS.md: both RPCs are blocked from Stage 1's build container, U5), funded test wallets |
 | D6.6: full raise-to-payout cycle live | D6.5 |
@@ -210,12 +326,15 @@ knowingly still different.
 **A. Adapter-only (no model change).** Names Stage 1 spells differently (`STAGE1_ALIASES`: `drawRelease` ↔
 `claim_release`, `AuctionSettled` ↔ `RaiseSettled`, …); the series and holder passed as Solana accounts rather than
 args; field renames (`price` → `pricePerUnit`, `old`/`new` → `from`/`to`, `commit_end` → `commitEndsAt`); events the
-adapter can synthesise (`TreasuryFunded` on Solana from `RaiseSettled`; `FeeTaken` from `PayoutDistributed.fee`); the
+adapter can synthesise (`TreasuryFunded` on Solana from each `UnitsAllocated.cost` since S2; `FeeTaken` from
+`PayoutDistributed.fee` and, for the auction fee, `UnitsAllocated.fee`); the
 redemption slippage guard (`maxPricePerUnit`) checked before submitting, since Stage 1's `redeem` takes no bound.
 **S2:** the settlement commands and events take Stage 1's own names (`beginSettlement` … `deliverBid`,
 `registerHolder`; `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`,
-`HolderRegistered`), so the aliases `BidRefunded` ↔ `BidDelivered`, `UnitsMinted` ↔ `UnitsAllocated`, `claimRefund` ↔
-`deliver_bid` and `settleAuction` ↔ `finalize_settlement` are gone (the four retire in S2). `AuctionFailed` keeps its
+`HolderRegistered`), so the aliases from the one-step auction's items (its refund event, its pull refund, its one-step
+settlement, and `UnitsMinted` ↔ `UnitsAllocated`) are gone, and so are those items (S2 WP8); `UnitsMinted` is a curve
+buy only, which has no Merces event (a DBC swap). `AuctionSettled` carries Stage 1's `RaiseSettled` fields only (no
+total fees: each winner's fee is a `FeeTaken`). `AuctionFailed` keeps its
 approved alias (`RaiseFailed`) with Stage 1's fields plus one of ours: `unitsSold`, which Stage 1's event omits; the
 adapters derive it as `proceeds / clearingPrice` when the price is above 0 (exact: proceeds = price × units), else 0,
 and `reason` from the price (0: NoValidBids; otherwise MinRaise).
@@ -226,10 +345,16 @@ and `reason` from the price (0: NoValidBids; otherwise MinRaise).
    (a wrong proposal is rejected, not reverted), then per-bid `process_bid` and a retryable `deliver_bid` that pushes
    units and refunds; uniform price with a pro-rata marginal fill `floor(R × q / q_at)` and the remainder unsold; one
    bid per wallet; a bid above the wallet cap is invalid at reveal and refunded in full; 1% non-reveal charge (H1); a
-   winner removed from the allowlist after committing still receives units. Ours: one `settleAuction`, fill by price
-   then commit order, cap applied at allocation, refunds pulled with `claimRefund`, de-allowlisted winners excluded.
+   winner removed from the allowlist after committing still receives units. Ours (before S2): one-step settlement, fill
+   by price then commit order, cap applied at allocation, refunds pulled by the bidder, de-allowlisted winners excluded.
    **S1:** not applied (S2). The vector runner shims it (SH-AUC-1…6) and checks our one-step settlement against Stage
    1's tally of the same bids. The non-reveal charge is an owner hold and is not modelled.
+   **S2:** applied (WP1–WP8, "S2 results"): Stage 1's steps with Stage 1's names, check orders and error names; the math
+   is Stage 1's (`@merces/math`); a page of `tallyBids` is at most the chain's `tallyPageMax`; a bid's validity is fixed
+   at reveal; one bid per wallet; a winner removed from the allowlist is delivered; refunds and units are pushed by
+   `deliverBid` (the keepers deliver every bid, any wallet may deliver one); a winner holds from processing. Two Stage 1
+   inconsistencies are resolved toward SPEC and the chains (D7, A-AUC-7). The vector runner shims only our bid
+   commitment (SH-AUC-2, S4). The non-reveal charge stays an owner hold (0 bps, A-AUC-11; DIV-NRC-1 in 03).
 2. *Transfer window.* The same multi-step shape (`begin_window_settlement`, `tally_orders`, `finalize_window`,
    `process_order`, `deliver_order`, take-back steps) keyed by period, two-branch clearing with first-come fills at the
    margin, a 100 bps window fee, ask units held in escrow, a terminal series forced to NoMatch (S3). Stage 1 emits
@@ -244,6 +369,9 @@ and `reason` from the price (0: NoValidBids; otherwise MinRaise).
    **S1:** Stage 1's accumulators and cursors (WP5–WP7): separate tail and final accumulators whose cursors start at 0,
    holders registered at settlement (or graduation), the tail catch-up inside the redemption claim. `claimPayout` still
    pays claim + tail + final in one command and there is no `register_holder` command (S3).
+   **S2:** `registerHolder` (Stage 1's `register_holder`: an allowlisted wallet, idempotent) with `HolderRegistered`,
+   which both chains emit; a winner is registered when its bid is processed. A registration holds no units and grants
+   no holder access (A-AUC-9, A-REV-10). The separate claims are S3.
 4. *Signatures, commitments, proofs.* Attestor and report-verifier keys are **secp256k1** 20-byte addresses on both
    chains, signing Stage 1's `MERCES_*_V1` keccak messages (per-deployment domain, per-series nonces, low-s), and the
    signatures travel as **instruction arguments**; nobody co-signs (our `UnsignedTx.coSigners` and the attestor
@@ -255,7 +383,7 @@ and `reason` from the price (0: NoValidBids; otherwise MinRaise).
    **S1:** commitments and proofs applied (WP3, WP10): Poseidon terms and income commitments, the prior chain
    (`submitReport.priorIncomeCommitment`), Groth16 with Stage 1's six public inputs, proved on the device and verified
    by the API and the simulated chains; the attestation carries Stage 1's report field set (attestation v1). Signatures
-   stay ed25519 with co-signers (S4); bid and order commitments stay ours (S2, S5).
+   stay ed25519 with co-signers (S4); bid and order commitments stay ours (bids S4, orders S5).
 5. *Extinguishment.* Two distinct attestor signatures with a nonce; only **unvested** proceeds go to holders, vested
    but undrawn tranches stay with the estate (A31, H4); refused unless the raise settled.
    **S1:** applied (WP7): two distinct attestors (co-signing until S4), only the unvested proceeds, through the final
@@ -361,7 +489,7 @@ earlier Merces format below is still accepted as a single JSON file of `scenario
     "name": "happy-path", "genesis": 1767225600, "personalities": ["solana", "monad"],
     "steps": [
       { "at": 0,  "actor": "issuer",   "command": { "kind": "registerIssuer" } },
-      { "at": 10, "actor": "keeper",   "command": { "kind": "settleAuction", "seriesId": "$series0" } },
+      { "at": 10, "actor": "keeper",   "command": { "kind": "finalizeSettlement", "seriesId": "$series0" } },
       { "at": 20, "actor": "backer-1", "command": { "kind": "revealBid", "...": "..." }, "expectError": "WrongPhase" }
     ],
     "expect": { "balances": { "backer-1": { "USDC": "…" } }, "series": { "$series0": { "status": "OnTime", "unitsOutstanding": "500" } } }
@@ -412,8 +540,9 @@ It runs in CI on a six-hour schedule and whenever `stage1/**`, `stage1.map.json`
    Change the canonical model only for a real gap, and record why here.
 3. Where Stage 1 contradicts an assumption, Stage 1 wins for onchain behaviour: update the simulator and
    `ASSUMPTIONS.md`. S1 settled A-C8-1/2 (accrual), A-RED-1…4 (redemption, tail, hurdle), A-REP-1/2/3/6 (reporting,
-   public inputs, pay-in, tier 1), A-REV-1/3/4/6/17/20 and A-C11-6 (extinguishment, still with counsel); still open:
-   A-AUC-1/4 (auction, S2), A-FX-1/2 (weekends, Chainlink, S5), A-CURVE-2 (no cap, S5).
+   public inputs, pay-in, tier 1), A-REV-1/3/4/6/17/20 and A-C11-6 (extinguishment, still with counsel); S2 settled
+   A-AUC-1/2/3/4 (the auction) and withdrew A-REV-2; still open: A-FX-1/2 (weekends, Chainlink, S5), A-CURVE-2 (no cap,
+   S5).
 4. Wire the adapters' reads, event decoding and transaction builders to the generated clients, then set the adapter's
    `wired` flag to `true` (until then `auto` keeps the simulator; explicit `live` is what conformance uses). The
    conformance env for live chains needs funded devnet/testnet wallets (`CONFORMANCE_ISSUER_KEY`, `CONFORMANCE_BACKER_KEYS`,

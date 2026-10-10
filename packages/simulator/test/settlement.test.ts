@@ -537,24 +537,3 @@ describe('the driver\'s step bound', () => {
     expect([rest.stage, rest.limited]).toEqual(['complete', undefined]);
   });
 });
-
-describe('the deprecated one-step composites (removed in S2 WP8)', () => {
-  it('settleAuction runs every step to the last process in one transaction; claimRefund delivers the caller\'s bid', async () => {
-    const h = await SimHarness.create('solana', { genesis: GENESIS });
-    const { seriesId, revealEndsAt } = await raise(h, harnessBids(h), {}, -1);
-    await expectStage1Error(h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper'), 'SettlementNotReady');
-    await h.sim.setTime(revealEndsAt);
-    const txs = h.sim.state.txCount;
-    const settled = await h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper');
-    expect(h.sim.state.txCount).toBe(txs + 1);
-    expect(types(settled.events).filter((t) => t !== 'HolderRegistered' && t !== 'UnitsAllocated' && t !== 'FeeTaken' && t !== 'TreasuryFunded')).toEqual(['SettlementProposed', 'AuctionSettled', 'RaiseMintFinalized']);
-    expect(settled.events.find((e) => e.type === 'AuctionSettled')!.payload).toMatchObject({ totalFees: USDC(45).toString() });
-    expect(await h.sim.getAuction(seriesId)).toMatchObject({ mintFinalized: true, escrowTotal: USDC(707).toString() });
-    await expectStage1Error(h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper'), 'RaiseNotOpen');
-    const refund = await h.exec(h.backers[0]!, { kind: 'claimRefund', seriesId });
-    expect(refund.events.map((e) => [e.type, e.payload])).toEqual([['BidRefunded', { seriesId, bidder: h.backers[0]!.address, amount: USDC(303).toString() }]]);
-    expect(await h.sim.getBid(seriesId, h.backers[0]!.address)).toMatchObject({ delivered: true });
-    await expectChainError(h.exec(h.backers[0]!, { kind: 'claimRefund', seriesId }), 'NotFound');
-    await expectChainError(h.exec(h.backers[4]!, { kind: 'claimRefund', seriesId }), 'NotFound'); // nothing to refund
-  });
-});

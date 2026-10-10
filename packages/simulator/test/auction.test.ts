@@ -10,7 +10,7 @@ import { USDC, expectChainError, expectStage1Error, types } from './helpers.ts';
  *  - S2-E: Stage 1's auction error names (`detail.stage1`) and check order;
  *  - S2-FP: a failed raise keeps its price and would-be results (`AuctionFailed`: NoValidBids or MinRaise);
  *  - S2-MS: multi-step settlement (`beginSettlement` … `deliverBid`);
- *  - S2-PR: push delivery (`deliverBid`; `claimRefund` retired);
+ *  - S2-PR: push delivery (`deliverBid`; the pull refund is retired);
  *  - S2-VR: validity is fixed at reveal: an over-cap bid reveals as invalid and is refunded in full; a reveal never
  *    reverts on validity.
  */
@@ -29,7 +29,7 @@ describe('auction edge cases', () => {
     expect(failureReason).toBe('MinRaise');
     expect(await h.sim.getAuction(seriesId)).toMatchObject({ raiseState: 'Failed', clearingPrice: USDC(10).toString(), unitsSold: '10', proceeds: USDC(100).toString(), failureReason: 'MinRaise', mintFinalized: true });
     expect([s.issuePrice, s.unitsSold, s.unitsOutstanding]).toEqual([null, '0', '0']);
-    // cause S2-PR: the deposit came back through delivery (was claimRefund); the bid read drops the deprecated `refunded`
+    // cause S2-PR: the deposit came back through delivery (was the pull refund); the bid read drops the deprecated `refunded`
     expect(await h.sim.getBid(seriesId, h.backers[0]!.address)).toMatchObject({ processed: true, delivered: true, pendingRefund: '0' });
     expect(await h.sim.getBalance(h.backers[0]!.address, 'USDC')).toBe('1000000000000');
     expect(await h.sim.getBalance(h.sim.state.feeCollector, 'USDC')).toBe('0');
@@ -74,7 +74,7 @@ describe('auction edge cases', () => {
     // cause S2-VR: 300 units is over the wallet cap (20% of 500 = 100): the reveal succeeds and records the bid invalid
     const revealed = await h.exec(w, { kind: 'revealBid', seriesId, pricePerUnit: USDC(10).toString(), quantity: '300', salt });
     expect(revealed.events[0]!.payload).toMatchObject({ valid: false });
-    // cause S2-MS, S2-E: settlement begins after the reveal end (was settleAuction, TooEarly)
+    // cause S2-MS, S2-E: settlement begins after the reveal end (was the one-step settlement, TooEarly)
     const early = h.sim.submit({ kind: 'beginSettlement', seriesId, clearingPrice: '0', qAboveClaim: '0', qAtClaim: '0' }, 'keeper');
     await expectChainError(early, 'TooEarly');
     await expectStage1Error(early, 'SettlementNotReady');

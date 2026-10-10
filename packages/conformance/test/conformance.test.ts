@@ -20,7 +20,7 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - S2-AD: commit and reveal durations are series terms; `openRaise` derives the phase ends from them;
  *  - S2-MS: Stage 1's multi-step settlement (begin, tally pages, finalize, a process per bid), permissionless, driven by
  *    the domain's `runSettlement`; Stage 1's error names (SettlementNotReady); `AuctionSettled` has no fee total;
- *  - S2-PR: push delivery (`deliverBid`, any wallet; `claimRefund` retired): a winner's units count from processing;
+ *  - S2-PR: push delivery (`deliverBid`, any wallet; the pull refund is retired): a winner's units count from processing;
  *  - S2-PU: per-bid money movement: one `FeeTaken` per processed winner.
  */
 const types = (evs: DomainEvent[]) => evs.map((e) => e.type);
@@ -73,7 +73,7 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     void stranger;
   });
 
-  // cause S2-MS, S2-PR (was: one-step settleAuction and a pulled refund)
+  // cause S2-MS, S2-PR (was: the one-step settlement and a pulled refund)
   it('runs a sealed-bid raise: commit, reveal, Stage 1\'s settlement steps at one price with fees, push delivery, mint within the wallet cap', async () => {
     const e = env();
     const now = await e.chain.now();

@@ -8,7 +8,7 @@ import { makeRig } from './helpers.ts';
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 /*
  * S2 cause codes:
- *  - S2-PR: push delivery (`deliverBid`): the raise delivers every bid's refund and units; `claimRefund` retired;
+ *  - S2-PR: push delivery (`deliverBid`): the raise delivers every bid's refund and units; the pull refund is retired;
  *  - S2-RH: registerHolder (`HolderRegistered`).
  */
 

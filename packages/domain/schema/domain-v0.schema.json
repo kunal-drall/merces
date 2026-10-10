@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://merces.dev/schema/domain-v0.json",
   "title": "Merces canonical domain model v0",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "envelope": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "oneOf": [
@@ -751,10 +751,6 @@
                 "type": "string",
                 "pattern": "^\\d+$"
               },
-              "totalFees": {
-                "type": "string",
-                "pattern": "^\\d+$"
-              },
               "settledAt": {
                 "type": "integer",
                 "minimum": -9007199254740991,
@@ -858,80 +854,6 @@
               "unitsSold",
               "proceeds",
               "minimumRaise"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "chain",
-          "cursor",
-          "seq",
-          "blockTime",
-          "blockRef",
-          "txId",
-          "finality",
-          "type",
-          "payload"
-        ],
-        "additionalProperties": false
-      },
-      {
-        "type": "object",
-        "properties": {
-          "chain": {
-            "type": "string"
-          },
-          "cursor": {
-            "type": "string"
-          },
-          "seq": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "blockTime": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
-          },
-          "blockRef": {
-            "type": "string"
-          },
-          "txId": {
-            "type": "string"
-          },
-          "finality": {
-            "type": "string",
-            "enum": [
-              "finalized",
-              "confirmed"
-            ]
-          },
-          "type": {
-            "type": "string",
-            "const": "BidRefunded"
-          },
-          "payload": {
-            "type": "object",
-            "properties": {
-              "seriesId": {
-                "type": "string",
-                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-              },
-              "bidder": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 64
-              },
-              "amount": {
-                "type": "string",
-                "pattern": "^\\d+$"
-              }
-            },
-            "required": [
-              "seriesId",
-              "bidder",
-              "amount"
             ],
             "additionalProperties": false
           }
@@ -4418,10 +4340,6 @@
           "type": "string",
           "pattern": "^\\d+$"
         },
-        "totalFees": {
-          "type": "string",
-          "pattern": "^\\d+$"
-        },
         "settledAt": {
           "type": "integer",
           "minimum": -9007199254740991,
@@ -4476,31 +4394,6 @@
         "unitsSold",
         "proceeds",
         "minimumRaise"
-      ],
-      "additionalProperties": false
-    },
-    "BidRefunded": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "type": "object",
-      "properties": {
-        "seriesId": {
-          "type": "string",
-          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-        },
-        "bidder": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "amount": {
-          "type": "string",
-          "pattern": "^\\d+$"
-        }
-      },
-      "required": [
-        "seriesId",
-        "bidder",
-        "amount"
       ],
       "additionalProperties": false
     },
@@ -6013,25 +5906,6 @@
       ],
       "additionalProperties": false
     },
-    "claimRefund": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "claimRefund"
-        },
-        "seriesId": {
-          "type": "string",
-          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-        }
-      },
-      "required": [
-        "kind",
-        "seriesId"
-      ],
-      "additionalProperties": false
-    },
     "drawRelease": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -6729,25 +6603,6 @@
       },
       "required": [
         "kind"
-      ],
-      "additionalProperties": false
-    },
-    "settleAuction": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "settleAuction"
-        },
-        "seriesId": {
-          "type": "string",
-          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-        }
-      },
-      "required": [
-        "kind",
-        "seriesId"
       ],
       "additionalProperties": false
     },

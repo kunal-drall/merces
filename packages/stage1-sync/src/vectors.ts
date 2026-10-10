@@ -10,7 +10,7 @@ import { SimWallet } from '@merces/simulator';
  *     "genesis": 1767225600,
  *     "steps": [
  *       { "at": 0, "actor": "issuer", "command": { "kind": "registerIssuer" } },
- *       { "at": 10, "actor": "keeper", "command": { "kind": "settleAuction", "seriesId": "$series0" } },
+ *       { "at": 10, "actor": "keeper", "command": { "kind": "finalizeSettlement", "seriesId": "$series0" } },
  *       { "at": 20, "actor": "backer-1", "command": {...}, "expectError": "WrongPhase" }
  *     ],
  *     "expect": { "balances": { "backer-1": { "USDC": "..." } }, "series": { "$series0": { "status": "OnTime", "unitsOutstanding": "500" } } }

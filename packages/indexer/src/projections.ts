@@ -186,13 +186,8 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       await client.query('insert into holder_registrations (series_id, wallet, registered_seq) values ($1,$2,$3) on conflict (series_id, wallet) do nothing', [p.seriesId, p.holder, e.seq]);
       break;
     }
-    case 'BidRefunded': {
-      const p = e.payload as P<'BidRefunded'>;
-      await client.query('update bids set refunded = refunded + $3 where series_id = $1 and bidder = $2', [p.seriesId, p.bidder, p.amount]);
-      await money(client, e, 'refund', p.amount, { wallet: p.bidder });
-      break;
-    }
     case 'UnitsMinted': {
+      // a curve buy (a sealed raise's winners are allocated with UnitsAllocated and delivered with BidDelivered)
       const p = e.payload as P<'UnitsMinted'>;
       await client.query('update bids set allocated_units = allocated_units + $3 where series_id = $1 and bidder = $2', [p.seriesId, p.holder, p.units]);
       await client.query(

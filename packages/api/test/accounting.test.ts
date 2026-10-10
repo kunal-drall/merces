@@ -6,7 +6,7 @@ import { makeRig } from './helpers.ts';
 type Rig = Awaited<ReturnType<typeof makeRig>>;
 /*
  * S2 cause codes:
- *  - S2-PR: push delivery (`deliverBid`): the raise delivers every bid's refund (`claimRefund` retired);
+ *  - S2-PR: push delivery (`deliverBid`): the raise delivers every bid's refund (the pull refund is retired);
  *  - S2-PU: per-bid money movement: `TreasuryFunded` (and `FeeTaken`) per processed winner.
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6)).toString();
