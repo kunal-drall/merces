@@ -254,6 +254,13 @@ export const eventPayloads = {
    * share of the trading fees accrued since the last collection); `proceeds` is the treasury's total proceeds after it.
    */
   CurveProceedsCollected: z.object({ ...seriesScoped, migrationFee: moneySchema, surplus: moneySchema, tradingFee: moneySchema, proceeds: moneySchema }),
+  /**
+   * Stage 1 `CurveUnitsSynced` (curve.rs:492-508, events.rs:462-468): a curve census was stored, by `syncCurveUnits` or
+   * by `redeem` (whose own census leaves the DAMM v2 pool's base vault out, B-C13). `unitsOutstanding = supply −
+   * protocolHeld` (base lamports) becomes the series' units outstanding: the vault's N, the bound on the stakes and the
+   * report proof's public input. `stakedTotal` is the stakes at that moment. Units only, no amount.
+   */
+  CurveUnitsSynced: z.object({ ...seriesScoped, supply: unitsSchema, protocolHeld: unitsSchema, unitsOutstanding: unitsSchema, stakedTotal: unitsSchema }),
 } as const;
 
 export type EventType = keyof typeof eventPayloads;

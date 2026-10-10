@@ -64,7 +64,16 @@ export interface SeriesState {
   settledAt: number | null;
   issuePrice: Money | null;
   unitsSold: Units;
+  /**
+   * The vault's N and the report proof's public input. A sealed raise's units are final once its last bid is processed;
+   * a curve series' are its last census (`syncCurveUnits`, or `redeem`'s own), "0" before the first.
+   */
   unitsOutstanding: Units;
+  /**
+   * Curve mode: when the last census was taken (Stage 1 `units_synced_at`); null before the first and on a sealed-bid
+   * series. A report on a curve series needs one at or after its period's end (CurveUnitsNotSynced).
+   */
+  unitsSyncedAt: number | null;
   capPerUnit: Money | null;
   paidPerUnitWad: Wad;
   accNetWad: Wad;
@@ -380,6 +389,35 @@ export interface CurveState {
   tradingFeeUncollected: Money;
   /** what `collectCurveProceeds` moved so far: the migration fee and surplus into the treasury, the trading fee to the fee collector */
   collected: { migrationFee: Money; surplus: Money; tradingFee: Money; proceeds: Money };
+  /** the curve's census now and the one the chain stored last */
+  census: CurveCensus;
+}
+
+/**
+ * A curve series' census (Stage 1 `compute_curve_units`, curve.rs:350-490), base lamports. Units outstanding are the unit
+ * mint's supply less what protocol accounts hold: the DBC pool's base vault, the DAMM v2 pool's base vault, the locker
+ * escrow and the leftover receiver (the stake vault is the holders'). The chain stores a census only when one is taken
+ * (`syncCurveUnits`, or `redeem`'s own); what it stored is the vault's N, the bound on the stakes and the report proof's
+ * public input.
+ */
+export interface CurveCensus {
+  /** the unit mint's supply now */
+  supply: Units;
+  /** base lamports in protocol accounts now */
+  protocolHeld: Units;
+  /** what `syncCurveUnits` would store now: `supply − protocolHeld` */
+  unitsOutstanding: Units;
+  /**
+   * What `redeem` would count now, its deposit's N: the DAMM v2 pool's base vault is not subtracted (Stage 1 B-C13), so
+   * the count covers every unit holders could tender and the issuer cannot lower it by parking units in the pool
+   */
+  redemptionUnits: Units;
+  /** the stakes now (Stage 1 `staked_total`) */
+  stakedTotal: Units;
+  /** the census the chain stored last (`SeriesState.unitsOutstanding`) and when; null before the first */
+  synced: { unitsOutstanding: Units; at: number } | null;
+  /** a census now would store another count than the last one (or none was taken yet) */
+  changedSinceSync: boolean;
 }
 
 /**

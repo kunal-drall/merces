@@ -297,7 +297,7 @@ export class SimulatorChain implements ChainPort {
   async getCurve(seriesId: string): Promise<CurveState | null> {
     const x = this.state.series.get(seriesId);
     if (!x?.curve) return null;
-    return toCurveState(seriesId, x);
+    return toCurveState(this.engine, seriesId, x);
   }
   async quoteCurveSwap(seriesId: string, side: 'buy' | 'sell', amountIn: string): Promise<CurveSwapQuote> {
     const x = this.state.series.get(seriesId);

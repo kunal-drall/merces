@@ -388,6 +388,11 @@ export class SimHarness {
     return [await this.sim.submit({ kind: 'completeCurve', seriesId }, 'keeper'), await this.sim.submit({ kind: 'collectCurveProceeds', seriesId }, 'keeper')];
   }
 
+  /** The curve's census (`syncCurveUnits`), as the keeper or sent by `wallet` (it is permissionless). */
+  async syncCurve(seriesId: string, wallet?: SimWallet): Promise<TxResult> {
+    return wallet ? this.exec(wallet, { kind: 'syncCurveUnits', seriesId }) : this.sim.submit({ kind: 'syncCurveUnits', seriesId }, 'keeper');
+  }
+
   /**
    * Settle a raise with Stage 1's steps, as the keeper, up to `until` (`runSettlement`). Throws when the planner is
    * stuck or must wait for the reveal end.

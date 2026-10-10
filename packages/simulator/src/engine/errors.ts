@@ -95,6 +95,11 @@ export const STAGE1_SOLANA_CODE = {
   CurveNotComplete: 'TooEarly',
   CurveModeNoBurn: 'NotPermitted',
   CurveUsesTender: 'NotPermitted',
+  // the census (S3 WP9): protocol-held units past the supply (curve.rs:477), a count below the stakes (:478-481), and a
+  // report whose census does not postdate its period's end (require_units_synced_for, :1532-1541)
+  CurveUnitsInconsistent: 'ChainSpecific',
+  CurveUnitsBelowStake: 'WrongStatus',
+  CurveUnitsNotSynced: 'WrongStatus',
 } as const satisfies Record<string, ChainErrorCode>;
 
 /**

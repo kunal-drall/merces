@@ -27,6 +27,7 @@ import { seedAuction, seedBid, seriesOf } from './kit.ts';
  * S3 cause codes:
  *  - S3-BR: `burnRetired` joins the permissionless group (its own cases are in claims.test.ts);
  *  - S3-FN: the final claim is `claimFinal` (was `claimPayout`, which no longer pays the final pool).
+ *  - S3-CN: a curve's census `syncCurveUnits` joins the permissionless group (its own cases are in census.test.ts).
  */
 
 interface Bid { w: SimWallet; price: bigint; qty: bigint; reveal?: boolean; deposit?: bigint }
@@ -97,8 +98,9 @@ describe('the chain\'s settlement limits and the permissionless group', () => {
       { kind: 'registerHolder', seriesId, wallet: h.backers[1]!.address },
     ];
     // cause S3-BR: every settlement step and registration; `burnRetired` needs a Retired series (claims.test.ts), and
-    // `completeCurve` and `collectCurveProceeds` a curve series (curve.test.ts; cause S3-CV)
-    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['burnRetired', 'completeCurve', 'collectCurveProceeds'].includes(k)));
+    // `completeCurve`, `collectCurveProceeds` and `syncCurveUnits` a curve series (curve.test.ts, census.test.ts; cause
+    // S3-CV, S3-CN)
+    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits'].includes(k)));
     for (const cmd of cmds) {
       const tx = await h.sim.build(cmd, anyone.address);
       expect(tx.command).toEqual(cmd);

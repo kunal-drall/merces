@@ -15,6 +15,7 @@ import {
  * S3 cause codes:
  *  - S3-BR: `burnRetired{holder}` (Stage 1 `burn_retired`) joins the permissionless group.
  *  - S3-CV: a curve's `completeCurve` and `collectCurveProceeds` (Stage 1 `complete_curve`, `collect_curve_proceeds`) join it too.
+ *  - S3-CN: and its census `syncCurveUnits` (Stage 1 `sync_curve_units`).
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const SOLANA: ChainLimits = { tallyPageMax: 24, maxBidsPerAuction: null };
@@ -60,13 +61,15 @@ describe('permissionless commands and the settlement events (cause S2-MS)', () =
       // cause S3-CV: a curve's completion and proceeds, Stage 1's `complete_curve` and `collect_curve_proceeds` (anyone)
       { kind: 'completeCurve', seriesId: SID },
       { kind: 'collectCurveProceeds', seriesId: SID },
+      // cause S3-CN: a curve's census, Stage 1's `sync_curve_units` (anyone)
+      { kind: 'syncCurveUnits', seriesId: SID },
     ];
     for (const c of cmds) {
       expect(permissionlessCommandSchema.parse(c)).toEqual(c);
       expect(serviceCommandSchema.parse(c)).toEqual(c);
     }
     expect(serviceCommandSchema.parse({ kind: 'crankStatus', seriesId: SID }).kind).toBe('crankStatus');
-    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds']); // cause S3-BR, S3-CV
+    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits']); // cause S3-BR, S3-CV, S3-CN
     for (const maxBids of [0, 1.5, -1]) expect(() => permissionlessCommandSchema.parse({ kind: 'tallyBids', seriesId: SID, maxBids })).toThrow();
     expect(() => permissionlessCommandSchema.parse({ kind: 'beginSettlement', seriesId: SID, clearingPrice: '9.5', qAboveClaim: '0', qAtClaim: '0' })).toThrow();
     expect(() => userCommandSchema.parse({ kind: 'deliverBid', seriesId: SID, bidder: 'b0' })).toThrow();

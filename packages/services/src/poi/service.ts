@@ -6,6 +6,7 @@ import { WAD, fromPid, parsePeriod, periodsBetween, projectDeadlines, statusPara
 import { SOURCE_DEFINITIONS, type IncomeSourceKind } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
+import { censusFreshFor, curveRegularReport, reportUnits, requireCensusFor, requireCensusUnchanged } from '../curve-census.ts';
 
 /**
  * E5 — ProofOfIncome service (tier 2 quarterly flow; tier 1 reconciliation; tier 3 arrives through E10).
@@ -67,7 +68,12 @@ export class ProofOfIncomeService {
       : null;
     return {
       seriesId, status: series.status, now, reportingCurrency: series.terms.reportingCurrency, fxBasis: series.terms.reportingCurrency === 'USD' ? 'unity' : 'accumulator', tierFlags: series.terms.tierFlags,
-      periods: live.map((p) => ({ ...p, report: byPeriod.get(p.periodId) ? { reportId: byPeriod.get(p.periodId)!.report_id, state: byPeriod.get(p.periodId)!.state } : null, nextStep: nextStep(p, byPeriod.get(p.periodId)?.state) })),
+      periods: live.map((p) => {
+        const step = nextStep(p, byPeriod.get(p.periodId)?.state);
+        // a curve series' next report waits for a census taken after its period ended (S3 WP9)
+        const census = step === 'assemble-report' && p.periodId === series.reporting.nextExpectedPeriod && !censusFreshFor(series, p.periodId);
+        return { ...p, report: byPeriod.get(p.periodId) ? { reportId: byPeriod.get(p.periodId)!.report_id, state: byPeriod.get(p.periodId)!.state } : null, nextStep: census ? 'sync-curve-units' : step };
+      }),
       upcoming,
     };
   }
@@ -145,7 +151,11 @@ export class ProofOfIncomeService {
     };
   }
 
-  /** Assemble: checks everything the chain will check, offchain, so the issuer never pays for a failing transaction. */
+  /**
+   * Assemble: checks everything the chain will check, offchain, so the issuer never pays for a failing transaction. On a
+   * curve series that includes the census (S3 WP9): a regular report needs one taken after its period ended (409
+   * CurveUnitsNotSynced with the sync step) and proves over it (409 `census-changed` otherwise).
+   */
   async assemble(seriesId: string, session: Session, input: z.infer<typeof assembleSchema>): Promise<Record<string, unknown>> {
     if (input.seriesId !== undefined && input.seriesId !== seriesId) throw AppError.unprocessable('the report is for another series');
     const { chain, series } = await this.seriesForIssuer(seriesId, session);
@@ -162,13 +172,17 @@ export class ProofOfIncomeService {
     if (rep.nextExpectedPeriod === null) throw AppError.conflict('the raise has not settled');
     if (rep.nextExpectedPeriod !== input.periodId) throw new AppError(409, 'Conflict', `reports are sequential: the next report is for ${rep.nextExpectedPeriod}`, { stage1: 'WrongPeriod', nextExpectedPeriod: rep.nextExpectedPeriod });
     if (BigInt(rep.openDueAmount) > 0n) throw new AppError(409, 'Conflict', `the report for ${rep.openDuePeriod} is not paid yet`, { stage1: 'PaymentOutstanding', openDuePeriod: rep.openDuePeriod });
+    // a curve series' regular report proves over a census taken after its period ended (Stage 1 CurveUnitsNotSynced;
+    // S3 WP9, amendment H1): 409 with the sync step, and 409 `census-changed` for a proof over another count
+    requireCensusFor(series, input.periodId);
+    if (curveRegularReport(series)) requireCensusUnchanged(series, input.proof.publicInputs[1], 're-prove');
     const fx = await this.resolveFx(seriesId, input.periodId);
     let fxAvgWad: string;
     if (fx.basis === 'attestor') {
       if (!input.attestorRate) throw AppError.unprocessable(`FX fallback is in force for ${fx.pair} ${input.periodId} (${fx.reason}); an attestor-signed rate is required`, { fx });
       fxAvgWad = input.attestorRate.rateWad;
     } else fxAvgWad = fx.fxAvgWad!;
-    const units = series.redemption ? series.redemption.unitsAtRedemption : series.unitsOutstanding;
+    const units = reportUnits(series);
     // the prior the chain will require (SPEC §6.2 step 5), from the series' reporting ledger
     const pidOrNull = (p: string | null) => (p === null ? null : toPid(p));
     const prior = expectedPrior({ lastAcceptedPeriod: pidOrNull(rep.lastAcceptedPeriod), lastIncomePeriod: pidOrNull(rep.lastIncomePeriod), lastIncomeCommitment: rep.lastIncomeCommitment }, toPid(input.periodId), input.priorIncomeCommitment);
@@ -222,11 +236,22 @@ export class ProofOfIncomeService {
     return Promise.all(r.rows.map((x) => this.getReport(x.report_id, { showSource: isIssuer })));
   }
 
+  /**
+   * The unsigned `submitReport` of a stored report. On a curve series the chain binds the census when it accepts the
+   * report, so a census older than the period's end is 409 CurveUnitsNotSynced (sync first) and a census that changed
+   * since the report was assembled is 409 `census-changed` (prove again and re-assemble): the transaction would fail.
+   */
   async buildSubmit(reportId: string, session: Session): Promise<{ tx: UnsignedTx }> {
     const r = await this.ctx.pool.query('select * from reports where report_id = $1', [reportId]);
     const x = r.rows[0];
     if (!x) throw AppError.notFound('report');
     const { chain, series } = await this.seriesForIssuer(x.series_id, session);
+    // a curve report's proof binds the census when the chain accepts it (Stage 1 income.rs:376-381): refused while the
+    // census predates the period's end, and when it changed since the report was assembled (S3 WP9, amendment H1)
+    if (series.terms.raiseStyle === 'curve') {
+      requireCensusFor(series, x.period_id);
+      requireCensusUnchanged(series, (x.proof as { publicInputs?: string[] }).publicInputs?.[1], 're-assemble');
+    }
     // the prior has its own column; reports stored before it carry it as public input 3 of the proof
     const priorIncomeCommitment: string = x.prior_income_commitment ?? fieldToHex32(BigInt((x.proof as { publicInputs: string[] }).publicInputs[3]!));
     const cmd: Extract<UserCommand, { kind: 'submitReport' }> = {

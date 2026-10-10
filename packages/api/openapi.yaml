@@ -2266,7 +2266,7 @@ components:
             - "null"
     RedemptionQuote:
       type: object
-      description: "Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee)."
+      description: "Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee; on a curve series floor(price × base lamports / 10^6) over redeem's own census)."
       required:
         - seriesId
         - now
@@ -2291,6 +2291,13 @@ components:
             - "null"
         unitsOutstanding:
           type: string
+          description: "the deposit's N: the units outstanding, or on a curve series the count redeem's own census takes now (the DAMM v2 pool not subtracted, Stage 1 B-C13; base lamports)"
+        unitsCounted:
+          type: string
+          enum:
+            - units-outstanding
+            - redemption-census
+          description: which count unitsOutstanding is
         pricePerUnit:
           $ref: "#/components/schemas/Money"
         deposit:
@@ -2358,6 +2365,7 @@ components:
               - PaymentOutstanding
               - TrueUpOutstanding
               - UnreportedPeriods
+              - NoUnitsOutstanding
           description: Stage 1 error names of the blockers
           same order: null
         redeemable:
@@ -2551,6 +2559,7 @@ components:
         - migrationFeePercentage
         - tradingFeeUncollected
         - collected
+        - census
       properties:
         seriesId:
           type: string
@@ -2629,6 +2638,57 @@ components:
               $ref: "#/components/schemas/Money"
             proceeds:
               $ref: "#/components/schemas/Money"
+        census:
+          $ref: "#/components/schemas/CurveCensus"
+    CurveCensus:
+      type: object
+      description: "A curve series' census (Stage 1 compute_curve_units), base lamports: units outstanding = the unit mint's supply less what protocol accounts hold (the DBC pool's base vault, the DAMM v2 pool's base vault, the locker escrow, the leftover receiver; the stake vault is the holders'). The chain stores a count only when a census is taken (syncCurveUnits, or redeem's own); the stored count is the vault's N, the bound on the stakes and the report proof's public input."
+      required:
+        - supply
+        - protocolHeld
+        - unitsOutstanding
+        - redemptionUnits
+        - stakedTotal
+        - synced
+        - changedSinceSync
+      properties:
+        supply:
+          type: string
+          pattern: ^\d+$
+          description: the unit mint's supply now
+        protocolHeld:
+          type: string
+          pattern: ^\d+$
+          description: base lamports in protocol accounts now
+        unitsOutstanding:
+          type: string
+          pattern: ^\d+$
+          description: "what a census now would store: supply − protocolHeld"
+        redemptionUnits:
+          type: string
+          pattern: ^\d+$
+          description: "what redeem's own census would count now, its deposit's N: the DAMM v2 pool's base vault is not subtracted (Stage 1 B-C13), so the count covers every unit holders could tender and parking units in the pool cannot lower it"
+        stakedTotal:
+          type: string
+          pattern: ^\d+$
+          description: the stakes now
+        synced:
+          type:
+            - object
+            - "null"
+          description: the count the chain stored last and when; null before the first census
+          required:
+            - unitsOutstanding
+            - at
+          properties:
+            unitsOutstanding:
+              type: string
+              pattern: ^\d+$
+            at:
+              type: integer
+        changedSinceSync:
+          type: boolean
+          description: a census now would store another count than the last one (or none was taken yet)
     SeriesCurve:
       type: object
       description: A curve series' curve as indexed from Stage 1's activation, completion and collections (the live pool is GET /series/{seriesId}/curve)
@@ -4906,7 +4966,7 @@ paths:
           in: header
           schema:
             type: string
-      description: "The device's assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, the prior chain, the six public inputs against the series' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (v1, with the prior and the liquidity flag), or for tier 3 the chosen attestor's signed case."
+      description: "The device's assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, on a curve series a census taken after the period ended (the proof is over it), the prior chain, the six public inputs against the series' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (v1, with the prior and the liquidity flag), or for tier 3 the chosen attestor's signed case."
       requestBody:
         required: true
         content:
@@ -4980,7 +5040,7 @@ paths:
         "400":
           description: Malformed or unknown fields
         "409":
-          description: Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod) or a previous due unpaid (detail.stage1 PaymentOutstanding)
+          description: "Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod), a previous due unpaid (detail.stage1 PaymentOutstanding); on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step) or a proof over another count than the census (detail.reason census-changed: prove again)"
         "422":
           description: Proof
           attestation: null
@@ -5070,6 +5130,8 @@ paths:
             application/json:
               schema:
                 type: object
+        "409":
+          description: "On a curve series the census is older than the period end (detail.stage1 CurveUnitsNotSynced: sync first) or changed since the report was assembled (detail.reason census-changed: prove again and re-assemble); the chain would refuse the transaction"
   /reports/{reportId}/submitted:
     post:
       operationId: markReportSubmitted
@@ -6658,7 +6720,7 @@ paths:
               schema:
                 type: object
         "409":
-          description: Period not ended, tier 3 disabled or a case already open/signed
+          description: Period not ended, tier 3 disabled, a case already open/signed, or on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step)
         "422":
           description: Plaintext-looking documents, an opening that is not a merces-e2e v1 envelope, or an unknown attestor
   /series/{seriesId}/tier3:
@@ -6847,7 +6909,7 @@ paths:
         "403":
           description: Not the chosen attestor
         "409":
-          description: Already signed
+          description: "Already signed; on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced) or a proof over another count than the census (detail.reason census-changed: the issuer proves again)"
         "422":
           description: Proof not over this series or not verifying, prior not the expected one, or signature not the attestor's
   /attestor/fx-requests:
@@ -7644,6 +7706,58 @@ paths:
           description: The curve has filled (its units trade on the DEX pool), or the amount buys nothing
         "422":
           description: Not a Solana series; stablecoin unavailable
+  /series/{seriesId}/curve/build-sync:
+    post:
+      operationId: buildCurveSync
+      x-access: account
+      tags:
+        - curve
+      security:
+        - session: []
+      description: "The curve's census (syncCurveUnits, Stage 1 sync_curve_units; permissionless) for one of the caller's wallets: units outstanding = the unit mint's supply less what protocol accounts hold (the DBC pool's and the DAMM v2 pool's base vaults, the locker escrow, the leftover receiver; never the stake vault). It is the vault's N, the bound on the stakes and the report proof's public input: a regular report needs one taken after its period ended. Never built while the issuer has assembled the report for the series' next expected period and not submitted it (its proof is over the current census)."
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - signer
+              properties:
+                signer:
+                  type: string
+                  description: one of the caller's wallets
+      responses:
+        "200":
+          description: The unsigned census, what it would count now beside the count stored last, and whether it changes it
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - seriesId
+                  - tx
+                  - census
+                  - changes
+                properties:
+                  seriesId:
+                    type: string
+                  tx:
+                    type: object
+                  census:
+                    oneOf:
+                      - $ref: "#/components/schemas/CurveCensus"
+                      - type: "null"
+                  changes:
+                    type: boolean
+        "403":
+          description: The signer is not one of the caller's wallets
+        "409":
+          description: The raise is not Open or Settled (detail.stage1 RaiseNotOpen), the series is Retired, Redeemed or Extinguished (detail.stage1 TerminalStatus), or the issuer has an assembled report waiting to be submitted (detail.reason report-pending, with its periodId and reportId); not a curve-mode series
+        "422":
+          description: Not a Solana series
   /admin/curves/monitor:
     post:
       operationId: monitorCurves

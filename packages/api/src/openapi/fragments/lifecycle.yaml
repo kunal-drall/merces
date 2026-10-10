@@ -4,13 +4,14 @@ components:
   schemas:
     RedemptionQuote:
       type: object
-      description: "Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee)."
+      description: "Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee; on a curve series floor(price × base lamports / 10^6) over redeem's own census)."
       required: [seriesId, now, pricePerUnit, deposit, decidedBy, boundBy, terms, tailCapPerUnit, blockers, blockedBy, redeemable, outcome]
       properties:
         seriesId: { type: string }
         now: { type: integer }
         lockupEndsAt: { type: [integer, 'null'] }
-        unitsOutstanding: { type: string }
+        unitsOutstanding: { type: string, description: "the deposit's N: the units outstanding, or on a curve series the count redeem's own census takes now (the DAMM v2 pool not subtracted, Stage 1 B-C13; base lamports)" }
+        unitsCounted: { type: string, enum: [units-outstanding, redemption-census], description: 'which count unitsOutstanding is' }
         pricePerUnit: { $ref: '#/components/schemas/Money' }
         deposit: { $ref: '#/components/schemas/Money' }
         decidedBy: { type: string, enum: [cap_remaining, hurdle, payout_multiple], description: "Stage 1's label for the term that set the price (a tie between the floor terms reports hurdle)" }
@@ -27,7 +28,7 @@ components:
             payoutMultipleK: { type: integer }
         tailCapPerUnit: { $ref: '#/components/schemas/Money', description: C_remaining − price; the tail room per unit after a redemption }
         blockers: { type: array, items: { type: string }, description: 'why redeem would be refused now, in the order Stage 1 checks (empty: redeemable)' }
-        blockedBy: { type: array, items: { type: string, enum: [TerminalStatus, SeriesLate, LockupActive, PaymentOutstanding, TrueUpOutstanding, UnreportedPeriods] }, description: Stage 1 error names of the blockers, same order }
+        blockedBy: { type: array, items: { type: string, enum: [TerminalStatus, SeriesLate, LockupActive, PaymentOutstanding, TrueUpOutstanding, UnreportedPeriods, NoUnitsOutstanding] }, description: Stage 1 error names of the blockers, same order }
         redeemable: { type: boolean }
         outcome: { type: string, enum: [redeem, retire], description: 'retire: nothing is left of the cap (C_remaining = 0), so redeem retires the series instead and takes no deposit' }
         note: { type: [string, 'null'] }

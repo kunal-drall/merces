@@ -7,7 +7,7 @@ import { seriesTermsSchema, tierSchema, fxBasisSchema } from './events.ts';
  * Canonical commands (Part D2). User commands are built into unsigned transactions for the user's wallet.
  * Service commands are submitted by the backend's own low-privilege roles (keeper, allowlist manager).
  * Permissionless commands (Stage 1's sealed-bid settlement, holder registration, the Retired burn and a curve's
- * completion and proceeds) may be sent by anyone: the keeper `submit`s them, and any wallet may `build` and sign them
+ * completion, proceeds and census) may be sent by anyone: the keeper `submit`s them, and any wallet may `build` and sign them
  * (self-delivery, or a fallback when the keepers stall).
  * Admin commands are built for the protocol multisig.
  */
@@ -142,8 +142,8 @@ export const serviceCommands = {
 } as const;
 
 /**
- * Stage 1's sealed-bid settlement (SPEC §5.2), holder registration, the Retired burn and a curve's completion and
- * proceeds, with Stage 1's names. Anyone may send them: the keeper `submit`s them and any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans
+ * Stage 1's sealed-bid settlement (SPEC §5.2), holder registration, the Retired burn and a curve's completion,
+ * proceeds and census, with Stage 1's names. Anyone may send them: the keeper `submit`s them and any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans
  * the settlement steps.
  */
 export const permissionlessCommands = {
@@ -183,6 +183,15 @@ export const permissionlessCommands = {
    * `TreasuryFunded` and `FeeTaken{curveTrading}` when they are above 0.
    */
   collectCurveProceeds: z.object({ kind: z.literal('collectCurveProceeds'), seriesId: seriesIdSchema }),
+  /**
+   * Stage 1 `sync_curve_units` (curve.rs:936-963), the curve's census: units outstanding = the unit mint's supply less
+   * the base lamports in protocol accounts (the DBC pool's base vault, the DAMM v2 pool's base vault, the locker escrow
+   * and the leftover receiver; the stake vault is the holders'). The census is the vault's N, the bound on the stakes
+   * and the report proof's public input: a report needs one taken after its period ended (CurveUnitsNotSynced). Anyone
+   * may send it at any time. NotCurveMode, RaiseNotOpen (Open or Settled), TerminalStatus (the stored status Retired,
+   * Redeemed or Extinguished), CurveUnitsBelowStake when the count falls below the stakes. Emits `CurveUnitsSynced`.
+   */
+  syncCurveUnits: z.object({ kind: z.literal('syncCurveUnits'), seriesId: seriesIdSchema }),
 } as const;
 
 export const adminCommands = {

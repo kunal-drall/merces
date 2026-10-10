@@ -3,6 +3,7 @@ import { CURVE_BUYER_NOTICE, CURVE_NO_CAP, ChainError, curveBuyerNotice, type Cu
 import type { DexPort, MeteoraPort } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
+import { censusLockedBy } from '../curve-census.ts';
 
 /**
  * E14 — Meteora support (Solana only; R35). Orchestrates curve-mode series on Stage 1's curve lifecycle (S3 WP8): runs
@@ -117,6 +118,28 @@ export class MeteoraService {
       seriesId, payIn, amountIn, usdcAmount, quote, minimumAmountOut, swap, tx, earns, warning: earns ? null : NOT_APPROVED,
       series: { status: series.status, phase: series.phase }, ...NO_CAP, notice: curveNotice(curve),
     };
+  }
+
+  /**
+   * The curve's census (`syncCurveUnits`, Stage 1 `sync_curve_units`, permissionless) as an unsigned transaction for
+   * `signer`, one of the caller's wallets: what it would store (`census`, the count now and the one stored last) and
+   * whether that changes the count (`changes`). Refusals in Stage 1's order before the wallet signs: 409 RaiseNotOpen,
+   * 409 TerminalStatus (Retired, Redeemed or Extinguished). Never while the issuer has assembled the report for the
+   * series' next expected period and not submitted it: its proof is over the current census, and a census now could
+   * change the count and invalidate it (amendment H1): 409 `report-pending` until the report is submitted.
+   */
+  async buildSync(seriesId: string, session: Session, signer: string): Promise<Record<string, unknown>> {
+    const { chain, series } = await this.curveSeries(seriesId);
+    if (!session.wallets.some((w) => w.chain === chain.chain && w.address === signer) && !session.roles.includes('admin')) throw AppError.forbidden('wallet is not linked to your account');
+    if (series.phase !== 'Open' && series.phase !== 'Settled') throw AppError.conflict(`the raise is ${series.phase}`, { stage1: 'RaiseNotOpen' });
+    if (['Retired', 'Redeemed', 'Extinguished'].includes(series.status)) throw AppError.conflict(`the series is ${series.status}: its units are no longer counted`, { stage1: 'TerminalStatus' });
+    const locked = await censusLockedBy(this.ctx, series);
+    if (locked) {
+      throw AppError.conflict(`the issuer assembled the ${locked.periodId} report over the current census and has not submitted it: a census now could invalidate its proof`, { reason: 'report-pending', periodId: locked.periodId, reportId: locked.reportId });
+    }
+    const curve = await chain.getCurve(seriesId);
+    const tx = await chain.build({ kind: 'syncCurveUnits', seriesId }, signer);
+    return { seriesId, tx, census: curve?.census ?? null, changes: curve ? curve.census.changedSinceSync : true };
   }
 
   /**

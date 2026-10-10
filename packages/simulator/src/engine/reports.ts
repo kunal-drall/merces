@@ -15,16 +15,24 @@ type SubmitReport = Extract<Command, { kind: 'submitReport' }>;
  * Stage 1's error names (`detail.stage1`):
  *
  *  1. the issuer signs (NotIssuer)                          9. a report already stored (WrongPeriod)
- *  2. the raise settled (RaiseNotSettled)                   10. tail: TailEnded, NoTailDue
- *  3. entry ranges (AmountOutOfRange, InvalidProof)         11. tier (TierNotEnabled)
- *  4. the mint is final: the last bid is processed          12. FX (FxMismatch, FxFallbackRequired,
- *     (MintNotFinalized)                                        FxFallbackNotAllowed, InvalidAttestorSignature)
- *  5. derived status Retired/Extinguished (TerminalStatus)  13. the prior chain (InvalidProof)
- *  6. the next expected period (WrongPeriod)                14. the six public signals (InvalidProof)
- *  7. the period has ended (ReportTooEarly)                 15. the proof (InvalidProof)
- *  8. no open due (PaymentOutstanding)                      16. source binding: tier 2 verifier attestation
+ *  2. the raise settled (RaiseNotSettled)                   9a. curve mode, not a tail report: a census taken at or
+ *  3. entry ranges (AmountOutOfRange, InvalidProof)              after the period's end, of more than 0 units
+ *  4. the mint is final: the last bid is processed               (CurveUnitsNotSynced)
+ *     (MintNotFinalized)                                    10. tail: TailEnded, NoTailDue
+ *  5. derived status Retired/Extinguished (TerminalStatus)  11. tier (TierNotEnabled)
+ *  6. the next expected period (WrongPeriod)                12. FX (FxMismatch, FxFallbackRequired,
+ *  7. the period has ended (ReportTooEarly)                     FxFallbackNotAllowed, InvalidAttestorSignature)
+ *  8. no open due (PaymentOutstanding)                      13. the prior chain (InvalidProof)
+ *                                                           14. the six public signals (InvalidProof)
+ *                                                           15. the proof (InvalidProof)
+ *                                                           16. source binding: tier 2 verifier attestation
  *                                                               (InvalidVerifierSignature), tier 3 attestor
  *                                                               co-signature (InvalidAttestorSignature)
+ *
+ * Step 9a is Solana's curve-mode gate (`require_units_synced_for`, curve.rs:1532-1541, called from income.rs:228-233
+ * before the tail block): the census is the proof's public input and the vault's N, so it must be counted after the
+ * period ended (`syncCurveUnits`); the regular report then proves over that census. Stage 1's reference simulator has
+ * no curve mode, so the step sits where Solana runs it, after its due and period checks.
  *
  * Divergences (S1 plan §6): tier 1 is not bound to a router year-to-date checkpoint; split receipts of the period
  * stand in for Stage 1's router credit; the verifier attestation is ed25519 over attestation v1 (S4 moves it).
@@ -52,8 +60,12 @@ export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport
   if (BigInt(now) < periodEnd(pid)) fail('ReportTooEarly', `${cmd.periodId} has not ended`);
   if (l.openDueAmount > 0n) fail('PaymentOutstanding', 'the previous report is not paid');
   if (s.periods.get(cmd.periodId)?.reportAccepted) fail('WrongPeriod', 'report already stored');
-  // 10. tail reports (the series redeemed)
   const isTail = status === 'Redeemed';
+  // 9a. curve mode: the census postdates the period's end (curve.rs:1532-1541)
+  if (s.curve && !isTail && !(s.unitsSyncedAt !== null && BigInt(s.unitsSyncedAt) >= periodEnd(pid) && s.unitsOutstanding > 0n)) {
+    fail('CurveUnitsNotSynced', `the curve's units must be counted again after ${cmd.periodId} ended (syncCurveUnits)`);
+  }
+  // 10. tail reports (the series redeemed)
   if (isTail) {
     const r = s.redemption!;
     if (periodStart(pid) > BigInt(r.openedAt) + BigInt(DEFAULTS.tailSeconds)) fail('TailEnded', 'the tail window has closed');

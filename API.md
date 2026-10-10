@@ -41,7 +41,12 @@ also after the reveal end; 409 RaiseNotOpen or BidsExist) → draw treasury (`PO
 /series/{id}/reporting/schedule`, `POST …/reporting/zktls-session`, the device proves and gets an attestation from the
 report verifier (`GET /reporting/verifier`), `POST /series/{id}/reports` (returns the `submitReport` tx), `POST
 /reports/{id}/build-payin` (the exact remaining due: a late period accrues per day, so a pay-in built on one day of
-lateness is refused onchain after the next day boundary; rebuild it) → hardship (`POST /series/{id}/hardship`) or redemption (`GET /series/{id}/redemption/quote`,
+lateness is refused onchain after the next day boundary; rebuild it). On a curve series a regular report proves over the
+curve's census (S3 WP9, A-CURVE-5): assembling (and opening or signing a tier-3 case) is 409 `detail.stage1`
+CurveUnitsNotSynced while the last census predates the period's end, with the sync step in `detail.next` (the schedule
+shows `nextStep: sync-curve-units`); a proof over another count is 409 `detail.reason` `census-changed` (prove again);
+`POST /reports/{id}/build-submit` is 409 `census-changed` (`next: re-assemble`) when a census moved the count since the
+report was assembled → hardship (`POST /series/{id}/hardship`) or redemption (`GET /series/{id}/redemption/quote`,
 `POST …/redemption/build-redeem`).
 
 **Backer**: apply → `GET /arena`, `GET /series/{id}`, `GET /series/{id}/terms` (eligible backers only, logged) →
@@ -58,7 +63,14 @@ and a warning (it can trade, never register, stake or earn), not a 403 (S3 WP8);
 series is Open from its creation (its activation fixes P0); the admin monitor (`POST /admin/curves/monitor`) completes
 it once the pool filled (`completeCurve`, settling at the pool's finish time) and collects its proceeds
 (`collectCurveProceeds`: the partner migration fee into the treasury, the partner trading fee to the fee collector,
-kind `curveTrading` in the fee ledger). Every sealed-bid builder refuses a curve series with 409 `detail.stage1`
+kind `curveTrading` in the fee ledger). The census (`syncCurveUnits`, permissionless): `POST
+/series/{id}/curve/build-sync {signer}` builds it for one of your wallets, with what it would count now beside the count
+stored last (`census`, `changes`); 409 RaiseNotOpen or TerminalStatus, and 409 `detail.reason` `report-pending` while the
+issuer has assembled the report for the series' next expected period and not submitted it (its proof is over the current
+census; amendment H1). `GET /series/{id}/curve` carries `onchain.census` (`CurveCensus`: supply, protocol-held, the count
+a census would store now, the count `redeem`'s own census would take with the DAMM pool not subtracted, the stakes, the
+last stored count and its time); the redemption quote on a curve counts `redeem`'s own census (`unitsCounted:
+redemption-census`; a count of 0 blocks with NoUnitsOutstanding). Every sealed-bid builder refuses a curve series with 409 `detail.stage1`
 NotSealedBid (open, cancel, commit, reveal, deliver, the settlement step, the preview); the redemption claim builder
 refuses it with CurveUsesTender and the admin burn crank with CurveModeNoBurn. Every curve response carries the buyer
 notice (`CURVE_BUYER_NOTICE` with the curve's figures, A-CURVE-8). **No cap:** a curve raise has no wallet cap at any stage, before or after the curve

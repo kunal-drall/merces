@@ -26,5 +26,7 @@ export function registerMeteoraRoutes(app: FastifyInstance, base: AppContext): v
       return s.buildBuy(sid(req), session!, b.buyer, b.amountIn, b.payIn, b.slippageBps);
     },
   });
+  // the census is permissionless: any signed-in account builds it for one of its own wallets
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/curve/build-sync', access: 'account', handler: async (req, _r, session) => s.buildSync(sid(req), session!, z.object({ signer: z.string().min(1) }).parse(req.body).signer) });
   defineRoute(app, ctx, { method: 'POST', url: '/admin/curves/monitor', access: 'admin', handler: async () => s.monitorGraduation() });
 }

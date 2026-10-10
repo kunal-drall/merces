@@ -33,6 +33,7 @@ import {
  *  - S3-CV: Stage 1's curve lifecycle vocabulary: `curveSwap` (a Meteora DBC swap), the permissionless `completeCurve`
  *    and `collectCurveProceeds`, `CurveActivated`, `CurveGraduated` (Stage 1 RaiseSettled), `CurveProceedsCollected`,
  *    the `curveTrading` fee kind; the toy curve's buy and graduation commands and its mint and creation events are gone.
+ *  - S3-CN: the curve census: the permissionless `syncCurveUnits` and `CurveUnitsSynced` (Stage 1 `sync_curve_units`).
  */
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
@@ -177,8 +178,9 @@ describe('schemas', () => {
   it('has no one-step settlement or pull refund (cause S2-MS, S2-PR: Stage 1 settles in steps and delivers)', () => {
     // the raise's wallet commands are Stage 1's four; the rest of the raise is the permissionless group
     expect(userCommandKinds.filter((k) => /Raise|Bid|Refund/.test(k))).toEqual(['openRaise', 'cancelRaise', 'commitBid', 'revealBid']);
-    // cause S3-BR, S3-CV: a curve's completion and proceeds are permissionless (Stage 1 complete_curve, collect_curve_proceeds)
-    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds']);
+    // cause S3-BR, S3-CV: a curve's completion and proceeds are permissionless (Stage 1 complete_curve, collect_curve_proceeds);
+    // cause S3-CN: and its census (Stage 1 sync_curve_units)
+    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits']);
     // cause S3-BR: burnRetired{holder} (permissionless, above) replaces the S1 list burn crank (`holders[]`), so no service
     // command burns any more; cause S3-CV: completion is permissionless `completeCurve` (was a service graduation command)
     expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'setAllowlist']);

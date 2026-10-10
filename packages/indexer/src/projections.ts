@@ -53,6 +53,7 @@ function summary(e: DomainEvent): string | null {
     case 'TransferWindowCleared': return `Transfer window ${p.windowId} cleared: ${p.unitsTransferred} units moved`;
     case 'UnitsTransferred': return `${p.units} units transferred in window ${p.windowId}`;
     case 'CurveGraduated': return `Curve filled: the raise settled with ${p.unitsSold} base units sold`;
+    case 'CurveUnitsSynced': return `Units counted: ${p.unitsOutstanding} base units outstanding`;
     case 'FxFallbackFlagged': return `FX fallback flagged for ${p.pair} ${p.periodId}`;
     default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, VerifierKeyRegistered, HolderRegistered, FeeTaken, refunds, treasury, splits, curve proceeds: not in the public feed
   }
@@ -431,6 +432,14 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       // the trading fee the fee collector (its `FeeTaken` follows); `proceeds` is the treasury's total after it
       const p = e.payload as P<'CurveProceedsCollected'>;
       await client.query('update curves set proceeds = $2, migration_fee = migration_fee + $3, surplus = surplus + $4, trading_fee = trading_fee + $5 where series_id = $1', [p.seriesId, p.proceeds, p.migrationFee, p.surplus, p.tradingFee]);
+      break;
+    }
+    case 'CurveUnitsSynced': {
+      // Stage 1 `store_curve_units`: a census (`syncCurveUnits`, or `redeem`'s own) becomes the series' units outstanding
+      // (the vault's N, the stake bound and the report's public input) at the time it was taken; each census is kept
+      const p = e.payload as P<'CurveUnitsSynced'>;
+      await client.query('insert into curve_census (series_id, seq, supply, protocol_held, units_outstanding, staked_total, synced_at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing', [p.seriesId, e.seq, p.supply, p.protocolHeld, p.unitsOutstanding, p.stakedTotal, e.blockTime]);
+      await client.query('update series set units_outstanding = $2, units_synced_at = $3, staked_total = $4, last_event_seq = $5 where series_id = $1', [p.seriesId, p.unitsOutstanding, e.blockTime, p.stakedTotal, e.seq]);
       break;
     }
     case 'PauseRequested':

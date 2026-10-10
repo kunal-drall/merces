@@ -170,6 +170,10 @@ export class LifecycleService {
    * TrueUpOutstanding (not reachable until the true-up lands, S5) and UnreportedPeriods (every ended period must be
    * reported). With no cap left (`C_remaining = 0`) `redeem` retires the series instead: `outcome` is `retire` and no
    * deposit is taken. 409 before settlement and while the raise is still processing its bids (MintNotFinalized, S2).
+   *
+   * On a curve series `redeem` takes its own census first, with the DAMM v2 pool's base vault left out (Stage 1
+   * exit.rs:80-95, B-C13; S3 WP9), so the deposit's N is that count now (`CurveState.census.redemptionUnits`), not the
+   * last regular census; `unitsCounted` says which (`redemption-census`), and a count of 0 is NoUnitsOutstanding.
    */
   async quote(seriesId: string): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
@@ -181,13 +185,19 @@ export class LifecycleService {
     const now = await chain.now();
     const t = BigInt(Math.max(0, now - s.settledAt));
     const ring = s.yearGross.map((y) => ({ year: y.year, grossWad: BigInt(y.grossWad) })) as unknown as YearGrossRing;
-    const q = redemptionQuoteScaled({ p0: BigInt(s.issuePrice), hurdleRateWad: BigInt(s.terms.hurdleWad), payoutMultipleK: s.terms.payoutMultipleK, t, capPerUnit: BigInt(s.capPerUnit), paidPerUnitWad: BigInt(s.paidPerUnitWad), yearGross: ring, unitsOutstanding: BigInt(s.unitsOutstanding), unitScale: BigInt(s.unitScale) });
+    const curve = s.terms.raiseStyle === 'curve' ? await chain.getCurve(seriesId) : null;
+    const units = curve ? curve.census.redemptionUnits : s.unitsOutstanding;
+    const q = redemptionQuoteScaled({ p0: BigInt(s.issuePrice), hurdleRateWad: BigInt(s.terms.hurdleWad), payoutMultipleK: s.terms.payoutMultipleK, t, capPerUnit: BigInt(s.capPerUnit), paidPerUnitWad: BigInt(s.paidPerUnitWad), yearGross: ring, unitsOutstanding: BigInt(units), unitScale: BigInt(s.unitScale) });
     const boundBy = q.decidedBy === 'cap_remaining' ? 'cap' : q.decidedBy === 'payout_multiple' ? 'payout' : 'hurdle';
     const payoutTerm = q.dAvg === null ? null : BigInt(s.terms.payoutMultipleK) * q.dAvg;
     const { blockers, blockedBy } = redeemBlockers(s, now);
+    if (curve && BigInt(units) === 0n) {
+      blockedBy.push('NoUnitsOutstanding');
+      blockers.push('no units are outstanding: nobody outside the protocol holds units of the curve');
+    }
     const retires = q.cRemaining === 0n;
     return {
-      seriesId, now, lockupEndsAt: s.lockupEndsAt, unitsOutstanding: s.unitsOutstanding,
+      seriesId, now, lockupEndsAt: s.lockupEndsAt, unitsOutstanding: units, unitsCounted: curve ? 'redemption-census' : 'units-outstanding',
       pricePerUnit: q.pRedeem.toString(), deposit: q.deposit.toString(), decidedBy: q.decidedBy, boundBy,
       terms: { capRemaining: q.cRemaining.toString(), hurdlePrice: q.pHurdle.toString(), payoutTerm: payoutTerm === null ? null : payoutTerm.toString(), dAvg: q.dAvg === null ? null : q.dAvg.toString(), kTimesDavgYears: Number(t / YEAR), hurdleWad: s.terms.hurdleWad, payoutMultipleK: s.terms.payoutMultipleK },
       tailCapPerUnit: q.tailCapPerUnit.toString(), blockers, blockedBy, redeemable: blockers.length === 0,

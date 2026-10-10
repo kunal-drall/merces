@@ -978,7 +978,7 @@ paths:
       tags: [reporting]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: Idempotency-Key, in: header, schema: { type: string } }]
-      description: 'The device''s assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, the prior chain, the six public inputs against the series'' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (v1, with the prior and the liquidity flag), or for tier 3 the chosen attestor''s signed case.'
+      description: 'The device''s assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, on a curve series a census taken after the period ended (the proof is over it), the prior chain, the six public inputs against the series'' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (v1, with the prior and the liquidity flag), or for tier 3 the chosen attestor''s signed case.'
       requestBody:
         required: true
         content:
@@ -1000,7 +1000,7 @@ paths:
                 attestorRate: { type: [object, 'null'], properties: { attestor: { type: string }, rateWad: { $ref: '#/components/schemas/Wad' } } }
                 attestor: { type: [string, 'null'], description: tier 3 co-signer }
                 liquidityEvent: { type: boolean }
-      responses: { '201': { description: Report verified offchain and stored (commitments, amounts, proof), with the unsigned submitReport transaction, content: { application/json: { schema: { type: object } } } }, '400': { description: Malformed or unknown fields }, '409': { description: 'Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod) or a previous due unpaid (detail.stage1 PaymentOutstanding)' }, '422': { description: Proof, attestation, prior, public inputs or FX basis rejected } }
+      responses: { '201': { description: Report verified offchain and stored (commitments, amounts, proof), with the unsigned submitReport transaction, content: { application/json: { schema: { type: object } } } }, '400': { description: Malformed or unknown fields }, '409': { description: 'Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod), a previous due unpaid (detail.stage1 PaymentOutstanding); on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step) or a proof over another count than the census (detail.reason census-changed: prove again)' }, '422': { description: Proof, attestation, prior, public inputs or FX basis rejected } }
     get:
       operationId: listReports
       x-access: holder-or-issuer
@@ -1031,7 +1031,7 @@ paths:
       tags: [reporting]
       security: [{ session: [] }]
       parameters: [{ name: reportId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: Unsigned submitReport transaction (attestor co-signs for tier 3 or a fallback rate), content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Unsigned submitReport transaction (attestor co-signs for tier 3 or a fallback rate), content: { application/json: { schema: { type: object } } } }, '409': { description: 'On a curve series the census is older than the period end (detail.stage1 CurveUnitsNotSynced: sync first) or changed since the report was assembled (detail.reason census-changed: prove again and re-assemble); the chain would refuse the transaction' } }
   /reports/{reportId}/submitted:
     post:
       operationId: markReportSubmitted

@@ -1,8 +1,8 @@
 import { ChainError, type Command } from '@merces/domain';
-import { CURVE_BASE_DECIMALS, CURVE_UNIT_SCALE, capPerUnit, migrationFeeSplit, mulDiv, mulDivCeil, p0PerUnit } from '@merces/math';
+import { CURVE_BASE_DECIMALS, CURVE_UNIT_SCALE, capPerUnit, migrationFeeSplit, mulDiv, mulDivCeil, p0PerUnit, unitsOutstanding } from '@merces/math';
 import { deriveAddress } from '../addresses.ts';
 import type { SimCurve, SimSeries } from '../state.ts';
-import { balKey, str, u64, type EngineCore, type Emit } from './core.ts';
+import { TERMINAL, balKey, str, u64, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
 import { pidAtTime } from './ledger.ts';
 import { splitTranches } from './treasury.ts';
@@ -12,8 +12,9 @@ import { splitTranches } from './treasury.ts';
  *
  * Merces' side is Stage 1's: activation (folded into `createSeries`: P0 fixed from X and the swap base, the raise Open),
  * `completeCurve` (settles at the pool's finish time with the P0 and units fixed at activation; no census, no
- * registration) and `collectCurveProceeds` (the partner migration fee and surplus into the treasury, the partner trading
- * fee to the fee collector). The venue is not: Meteora's Dynamic Bonding Curve runs outside Merces and its source is not
+ * registration), `collectCurveProceeds` (the partner migration fee and surplus into the treasury, the partner trading
+ * fee to the fee collector) and `syncCurveUnits`, the census (S3 WP9: units outstanding = supply − protocol-held, the
+ * vault's N, the stake bound and the report's public input; `redeem` takes its own without the DAMM pool). The venue is not: Meteora's Dynamic Bonding Curve runs outside Merces and its source is not
  * in the checkout, so `curveSwap` trades against a **labelled stand-in** (`SimCurve.venue`) until S5 brings Stage 1's
  * DBC math through the Meteora port:
  *  - it sells the swap base at the constant price P0, exactly X per swap base (P0 before Stage 1 floors it), so the
@@ -273,6 +274,84 @@ export function collectCurveProceeds(e: EngineCore, cmd: Extract<Command, { kind
   emit('CurveProceedsCollected', { seriesId, migrationFee: str(migrationFee), surplus: str(surplus), tradingFee: str(tradingFee), proceeds: str(s.treasuryTotal) });
   if (received > 0n) emit('TreasuryFunded', { seriesId, amount: str(received) });
   if (tradingFee > 0n) emit('FeeTaken', { seriesId, kind: 'curveTrading', amount: str(tradingFee), payer: c.dbcPool });
+}
+
+// ------------------------------------------------------------------ the census
+/** A census (Stage 1 `CurveUnits`): the unit mint's supply, the base lamports protocol accounts hold, and the rest. */
+export interface CurveCensusCount {
+  supply: bigint;
+  protocolHeld: bigint;
+  outstanding: bigint;
+}
+
+/**
+ * The base lamports in the protocol-held accounts, in Stage 1's order (`compute_curve_units`, curve.rs:470-475): the DBC
+ * pool's base vault, the DAMM v2 pool's base vault (0 when `excludeDamm`), the locker escrow and the leftover receiver.
+ * The stake vault is not among them: staked units are the holders'.
+ */
+function protocolHeldBalances(e: EngineCore, c: SimCurve, excludeDamm: boolean): bigint[] {
+  const a = c.accounts;
+  const bal = (account: string) => balanceOf(e, account, c.baseMint);
+  return [bal(a.dbcBaseVault), excludeDamm ? 0n : bal(a.dammBaseVault), bal(a.lockerEscrow), bal(a.leftoverReceiver)];
+}
+
+/**
+ * The census as Stage 1 counts it (`compute_curve_units`, curve.rs:350-490; merces-common `units_outstanding`, ported):
+ * `supply − (DBC base vault + DAMM v2 base vault + locker escrow + leftover)`. Holdings past the supply or a sum past
+ * u64 are CurveUnitsInconsistent; a count below the stakes is CurveUnitsBelowStake. `excludeDamm` leaves the DAMM v2
+ * pool's base vault out of the subtraction, as `redeem` does (S2, B-C13): the count then covers wallets, stakes and the
+ * pool, an upper bound on what holders can tender that the issuer cannot lower by parking units in the pool. Moves
+ * nothing. The stand-in's supply is fixed (`SimCurve.supply`): nothing burns base lamports before tenders (WP10).
+ */
+export function takeCensus(e: EngineCore, s: SimSeries, excludeDamm: boolean): CurveCensusCount {
+  const c = curveOf(s);
+  const held = protocolHeldBalances(e, c, excludeDamm);
+  let outstanding: bigint;
+  try {
+    outstanding = unitsOutstanding(c.supply, held);
+  } catch {
+    return fail('CurveUnitsInconsistent', 'the protocol-held units exceed the unit supply');
+  }
+  if (outstanding < s.stakedTotal) fail('CurveUnitsBelowStake', 'the census would fall below the staked units');
+  return { supply: c.supply, protocolHeld: c.supply - outstanding, outstanding };
+}
+
+/**
+ * Stores a census (Stage 1 `store_curve_units`, curve.rs:492-508): the series' units outstanding and the census time;
+ * emits `CurveUnitsSynced` with the stakes at that moment.
+ */
+export function storeCensus(s: SimSeries, u: CurveCensusCount, now: number, emit: Emit): void {
+  s.unitsOutstanding = u.outstanding;
+  s.unitsSyncedAt = now;
+  emit('CurveUnitsSynced', { seriesId: s.seriesId, supply: str(u.supply), protocolHeld: str(u.protocolHeld), unitsOutstanding: str(u.outstanding), stakedTotal: str(s.stakedTotal) });
+}
+
+/**
+ * Stage 1 `sync_curve_units` (curve.rs:936-963), permissionless: NotCurveMode, RaiseNotOpen (the raise is Open or
+ * Settled: a census may be taken while the curve sells), TerminalStatus (the stored status is Retired, Redeemed or
+ * Extinguished), then the census (`takeCensus`, the DAMM v2 pool counted: it is not held by holders, and the per-unit
+ * income math is invariant to it) is stored. Emits `CurveUnitsSynced`.
+ */
+export function syncCurveUnits(e: EngineCore, cmd: Extract<Command, { kind: 'syncCurveUnits' }>, now: number, emit: Emit): void {
+  const s = e.series(cmd.seriesId);
+  curveOf(s);
+  if (s.phase !== 'Open' && s.phase !== 'Settled') fail('RaiseNotOpen', `the raise is ${s.phase}`);
+  if (TERMINAL.has(s.status)) fail('TerminalStatus', `series is ${s.status}`);
+  storeCensus(s, takeCensus(e, s, false), now, emit);
+}
+
+/** The census preview for the curve read: both counts now, without the refusals (`takeCensus` moves and refuses nothing else). */
+export function censusPreview(e: EngineCore, s: SimSeries): { full: CurveCensusCount | null; redemption: bigint | null } {
+  const c = curveOf(s);
+  const count = (excludeDamm: boolean): bigint | null => {
+    try {
+      return unitsOutstanding(c.supply, protocolHeldBalances(e, c, excludeDamm));
+    } catch {
+      return null;
+    }
+  };
+  const full = count(false);
+  return { full: full === null ? null : { supply: c.supply, protocolHeld: c.supply - full, outstanding: full }, redemption: count(true) };
 }
 
 // ------------------------------------------------------------------ harness hooks (not reachable through ChainPort)

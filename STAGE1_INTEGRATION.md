@@ -39,7 +39,7 @@ Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitigno
 | 1. `stage1:sync` | runs end to end with `--no-conformance` |
 | detect | ok: `stage1.map.json` (hand-written) over the pinned submodule |
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
-| diff | drift: **Solana** 4 canonical items without a counterpart, 249 field mismatches, 79 extra Stage 1 items; **Monad testnet** 2 / 210 / 89 (`INTERFACE_DRIFT.md`; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range); the new item without a counterpart on each chain was the curve buy's mint event. S3 WP8: 3 / 219 / 72 and 1 / 206 / 85: the curve's buy command and mint event are gone (a curve trade is `curveSwap`, a Meteora DBC `swap2`, which has no Merces counterpart by design), `completeCurve`, `collectCurveProceeds`, `CurveActivated` and `CurveProceedsCollected` match Stage 1 by name, and `issuePrice` and `settledAt` read Stage 1's `clearing_price` and `settlement_ts`. The rest is left to the adapters' mappers (D6.2) and the rest of section B (S3–S5) |
+| diff | drift: **Solana** 4 canonical items without a counterpart, 249 field mismatches, 79 extra Stage 1 items; **Monad testnet** 2 / 210 / 89 (`INTERFACE_DRIFT.md`; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range); the new item without a counterpart on each chain was the curve buy's mint event. S3 WP8: 3 / 219 / 72 and 1 / 206 / 85: the curve's buy command and mint event are gone (a curve trade is `curveSwap`, a Meteora DBC `swap2`, which has no Merces counterpart by design), `completeCurve`, `collectCurveProceeds`, `CurveActivated` and `CurveProceedsCollected` match Stage 1 by name, and `issuePrice` and `settledAt` read Stage 1's `clearing_price` and `settlement_ts`. S3 WP9: 3 / 219 / 70 and 1 / 206 / 85: the census, `syncCurveUnits` and `CurveUnitsSynced`, matches Stage 1's `sync_curve_units` and `CurveUnitsSynced` by name and field. The rest is left to the adapters' mappers (D6.2) and the rest of section B (S3–S5) |
 | math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window cap and the FX family (both S5; S3 WP7: a curve raise has no cap). S3 WP5: beside them, 16 names ported from Stage 1's Rust (merces-common: the unit scale, the vault, tail and redemption at a scale, curve mode's arithmetic), because Stage 1's TypeScript has no `unit_scale`; at scale 1 each calls Stage 1's own function, and the step checks their merces-common items at the pin ("45/45 re-exports are Stage 1's own objects; 16 ported (curve, A-MATH-3)"). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2, A-MATH-3) |
 | vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 36/42 PASS, 42/42 at expected status`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A), 03 PASS-WITH-DIVERGENCES (DIV-NRC-1, the non-reveal hold); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, and parts on 03 at #65 exactly as recorded. 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. Our eleven S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) pass on Stage 1's simulator, on ours and in lockstep, 55/55 runs. Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
 | conformance | **blocked**: no devnet or testnet deployment |
@@ -282,6 +282,16 @@ Open since S3, with the default S3 uses meanwhile (recorded by the work package 
    (`PublicPriceNotAccepted`, registry lib.rs:501-506). The canonical terms have no such field: choosing a curve raise is
    taken as the consent, and the Solana adapter sets the flag (S5). Owner: an explicit consent field in the terms
    instead?
+5. **The census race (S3 decision 4, amendment H1, A-CURVE-5).** Stage 1 binds a curve report's census when the report
+   is submitted (`income.rs:376-381`), and anyone may take a census at any time (`sync_curve_units`,
+   `curve.rs:936-963`): a census between the issuer's proof and its submission changes the count and the submission
+   fails (InvalidProof). Since S3 WP9 Merces never causes it and says so before the issuer signs: assembling a curve
+   report, and opening or signing a tier-3 case, is 409 CurveUnitsNotSynced with the sync step while the census predates
+   the period's end; a proof over another count is 409 `census-changed`; building the submission is 409
+   `census-changed` (re-assemble) once a census moved the count; Merces' own census builder (`build-sync`; the stake
+   builder in WP12 and the keepers' once-per-period census in WP11, taken before the issuer assembles) sends none while
+   the issuer has an assembled, unsubmitted report for the series' next expected period. A third party can still sync.
+   Asked of Stage 1: should a report bind the census taken at its period's end (a snapshot) rather than the live one?
 
 Open since S1, with the same defaults:
 
@@ -503,7 +513,12 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    base supply in protocol accounts, migration, locker and DAMM moves as harness hooks), `completeCurve` at the pool's
    finish time (no census, no registration), `collectCurveProceeds` (the treasury 0 until then; tranches at the first
    collection; `FeeTaken{curveTrading}`), no cancel, NotSealedBid on every sealed-bid path, CurveUsesTender and
-   CurveModeNoBurn, the buyer notice (A-CURVE-1, -3, -4, -7, -8; migration 020).
+   CurveModeNoBurn, the buyer notice (A-CURVE-1, -3, -4, -7, -8; migration 020). WP9: the census (A-CURVE-5): the
+   permissionless `syncCurveUnits` (`CurveUnitsSynced`; supply less the DBC, DAMM, locker and leftover balances;
+   CurveUnitsBelowStake, CurveUnitsInconsistent, TerminalStatus), the report gate (CurveUnitsNotSynced) and `redeem`'s own
+   census without the DAMM pool (B-C13); the poi assembly, the submission builder and the tier-3 path census-aware, and
+   `build-sync` never over an assembled report (H1); Stage 1's curve report fixtures replayed with their own Groth16
+   proofs.
 12. *Math.* Replace the six disagreeing families with Stage 1's formulas (or import `@merces/reference`), then
     replay the 25 vectors through a Stage 1 op runner on the simulator with full-state expectations.
    **S1:** applied (WP1, WP9a, WP9b): `@merces/reference` is imported through `@merces/math`, and Stage 1's vectors are
@@ -635,4 +650,7 @@ State at @1bfc66b (the same tree as @5eafd41):
   arithmetic (`p0_per_unit`, `units_outstanding`, `migration_fee_split`, `wallet_tender_fits`, `scaled_amount`) exists
   only in Rust. Asked: add them to `@merces/reference` (the scale as a trailing argument, 1 for sealed bid), so
   `@merces/math` re-exports them and the port goes.
+- The curve census at report time (S3 WP9, A-CURVE-5): a report binds the live census when it is submitted and anyone
+  may take one at any time, so a third party's census can invalidate an issuer's proof between proving and submitting.
+  Asked: bind the census taken at the period's end instead (a per-period snapshot)?
 - Devnet and testnet deployments: still missing (blockers above).

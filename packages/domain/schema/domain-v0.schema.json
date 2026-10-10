@@ -4153,6 +4153,89 @@
           "payload"
         ],
         "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "CurveUnitsSynced"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "supply": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "protocolHeld": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "unitsOutstanding": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "stakedTotal": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "supply",
+              "protocolHeld",
+              "unitsOutstanding",
+              "stakedTotal"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
       }
     ]
   },
@@ -5854,6 +5937,40 @@
         "proceeds"
       ],
       "additionalProperties": false
+    },
+    "CurveUnitsSynced": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "supply": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "protocolHeld": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "unitsOutstanding": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "stakedTotal": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "supply",
+        "protocolHeld",
+        "unitsOutstanding",
+        "stakedTotal"
+      ],
+      "additionalProperties": false
     }
   },
   "commands": {
@@ -7317,6 +7434,25 @@
         "kind": {
           "type": "string",
           "const": "collectCurveProceeds"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "syncCurveUnits": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "syncCurveUnits"
         },
         "seriesId": {
           "type": "string",

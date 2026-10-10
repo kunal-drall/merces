@@ -8,7 +8,7 @@ import type { SimSeries, SimState } from '../state.ts';
 import { balKey, type EngineCore, type EngineOptions, type Emit, type ExecContext } from './core.ts';
 import { fail } from './errors.ts';
 import { auctionPhase, cancelRaise, commitBid, openRaise, revealBid } from './auction.ts';
-import { collectCurveProceeds, completeCurve, curveSwap } from './curve.ts';
+import { collectCurveProceeds, completeCurve, curveSwap, syncCurveUnits } from './curve.ts';
 import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
 import { burnRetired, claimPayout, payIn, postSplitReceipt } from './payments.ts';
 import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
@@ -95,6 +95,7 @@ export class SimEngine implements EngineCore {
       case 'burnRetired': service('any'); return burnRetired(this, cmd, emit);
       case 'completeCurve': service('any'); return completeCurve(this, cmd, emit);
       case 'collectCurveProceeds': service('any'); return collectCurveProceeds(this, cmd, emit);
+      case 'syncCurveUnits': service('any'); return syncCurveUnits(this, cmd, now, emit);
       case 'drawRelease': return drawRelease(this, user(), cmd, now, emit);
       case 'pauseReleases': return pauseReleases(this, user(), cmd, emit);
       case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit, ctx);

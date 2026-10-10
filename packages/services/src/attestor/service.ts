@@ -5,6 +5,7 @@ import { parsePeriod, periodFrom, toPid } from '@merces/math';
 import { verifyWalletSignature } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
+import { curveRegularReport, reportUnits, requireCensusFor, requireCensusUnchanged } from '../curve-census.ts';
 
 /**
  * E10 — attestor service (R10, R16, R26, C8.5–6, C11.6).
@@ -346,13 +347,18 @@ export class AttestorService {
     if (!(await this.actsAs(session, String(c.chain), String(c.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this case was addressed to another attestor, or your registration for that wallet is not active');
   }
 
-  /** Issuer: open a tier-3 case for a completed quarter with E2E-encrypted documents and income opening for the attestor, and the issuer's own estimate. */
+  /**
+   * Issuer: open a tier-3 case for a completed quarter with E2E-encrypted documents and income opening for the attestor,
+   * and the issuer's own estimate. On a curve series the issuer's proof is over the curve's census, so the case opens
+   * only once a census was taken after the period ended (409 CurveUnitsNotSynced with the sync step; S3 WP9).
+   */
   async openTier3Case(seriesId: string, periodId: string, session: Session, input: z.infer<typeof tier3OpenSchema>): Promise<Record<string, unknown>> {
     const { chain, series } = await this.seriesForIssuer(seriesId, session);
     if (!series.terms.tierFlags.tier3) throw AppError.conflict('tier 3 is not enabled for this series');
     const period = parsePeriod(periodId);
     const now = await chain.now();
     if (period.end > now) throw AppError.conflict('the period has not ended');
+    requireCensusFor(series, periodId);
     assertOpaqueCiphertext(input.documentsCiphertext, 'documentsCiphertext');
     assertTier3OpeningEnvelope(input.openingCiphertext);
     const attestor = normaliseAddress(input.attestor, chain.family);
@@ -372,7 +378,8 @@ export class AttestorService {
     const c = await this.caseRow(id);
     await this.requireCaseAttestor(session, c);
     const series = await this.ctx.chains.get(String(c.chain)).getSeries(String(c.series_id));
-    return { ...this.caseView(c, true), reportingCurrency: series?.terms.reportingCurrency ?? null, unitsOutstanding: series?.unitsOutstanding ?? null, termsCommitment: series?.terms.termsCommitment ?? null };
+    // the units the issuer's proof must be over (a curve series: its census, taken when `unitsSyncedAt` says)
+    return { ...this.caseView(c, true), reportingCurrency: series?.terms.reportingCurrency ?? null, unitsOutstanding: series ? reportUnits(series) : null, unitsSyncedAt: series?.unitsSyncedAt ?? null, termsCommitment: series?.terms.termsCommitment ?? null };
   }
 
   /**
@@ -427,7 +434,9 @@ export class AttestorService {
   /**
    * Attestor: sign the quarter's commitments and the issuer's proof; the issuer then assembles the tier-3 report (E5)
    * with this attestor as co-signer. Checked here: the proof is over the series' live terms commitment, its units and
-   * the prior the chain expects, and verifies; the signature is the chosen attestor wallet's over attestation v1.
+   * the prior the chain expects, and verifies; the signature is the chosen attestor wallet's over attestation v1. On a
+   * curve series the units are the census (S3 WP9): 409 CurveUnitsNotSynced while it predates the period's end (sync
+   * first), 409 `census-changed` for a proof over another count (the issuer proves again; nothing is signed).
    */
   async signTier3Case(id: string, session: Session, input: z.infer<typeof tier3SignSchema>): Promise<Record<string, unknown>> {
     const c = await this.caseRow(id);
@@ -442,7 +451,9 @@ export class AttestorService {
     const prior = expectedPrior({ lastAcceptedPeriod: pidOrNull(rep.lastAcceptedPeriod), lastIncomePeriod: pidOrNull(rep.lastIncomePeriod), lastIncomeCommitment: rep.lastIncomeCommitment }, toPid(periodId), input.priorIncomeCommitment);
     if (prior !== input.priorIncomeCommitment) throw AppError.unprocessable('the prior income commitment does not chain from the last accepted report', { expectedPrior: prior });
     const signals = input.proof.publicInputs;
-    const units = series.redemption ? series.redemption.unitsAtRedemption : series.unitsOutstanding;
+    requireCensusFor(series, periodId);
+    if (curveRegularReport(series)) requireCensusUnchanged(series, signals[1], 're-prove');
+    const units = reportUnits(series);
     let bound = false;
     try {
       bound = signals[0] === hex32ToField(series.terms.termsCommitment).toString() && signals[1] === BigInt(units).toString() && signals[3] === hex32ToField(input.priorIncomeCommitment).toString() && signals[4] === hex32ToField(input.incomeCommitment).toString();

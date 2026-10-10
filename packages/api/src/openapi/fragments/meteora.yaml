@@ -29,6 +29,31 @@ paths:
         '403': { description: Not an eligible backer, or the wallet is not linked to the caller }
         '409': { description: 'The curve has filled (its units trade on the DEX pool), or the amount buys nothing' }
         '422': { description: 'Not a Solana series; stablecoin unavailable' }
+  /series/{seriesId}/curve/build-sync:
+    post:
+      operationId: buildCurveSync
+      x-access: account
+      tags: [curve]
+      security: [{ session: [] }]
+      description: "The curve's census (syncCurveUnits, Stage 1 sync_curve_units; permissionless) for one of the caller's wallets: units outstanding = the unit mint's supply less what protocol accounts hold (the DBC pool's and the DAMM v2 pool's base vaults, the locker escrow, the leftover receiver; never the stake vault). It is the vault's N, the bound on the stakes and the report proof's public input: a regular report needs one taken after its period ended. Never built while the issuer has assembled the report for the series' next expected period and not submitted it (its proof is over the current census)."
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [signer], properties: { signer: { type: string, description: one of the caller's wallets } } } } } }
+      responses:
+        '200':
+          description: The unsigned census, what it would count now beside the count stored last, and whether it changes it
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [seriesId, tx, census, changes]
+                properties:
+                  seriesId: { type: string }
+                  tx: { type: object }
+                  census: { oneOf: [{ $ref: '#/components/schemas/CurveCensus' }, { type: 'null' }] }
+                  changes: { type: boolean }
+        '403': { description: The signer is not one of the caller's wallets }
+        '409': { description: 'The raise is not Open or Settled (detail.stage1 RaiseNotOpen), the series is Retired, Redeemed or Extinguished (detail.stage1 TerminalStatus), or the issuer has an assembled report waiting to be submitted (detail.reason report-pending, with its periodId and reportId); not a curve-mode series' }
+        '422': { description: 'Not a Solana series' }
   /admin/curves/monitor:
     post:
       operationId: monitorCurves
@@ -61,7 +86,7 @@ components:
     CurveState:
       type: object
       description: "A curve series' bonding curve as the chain reads it. Base quantities in base lamports (10^6 per whole unit), prices per whole unit. Until S5 the simulator runs a labelled stand-in for Meteora's DBC (venue simulator-stand-in): the constant price P0, Stage 1's config's 1% trading fee, the fill at the target."
-      required: [seriesId, venue, dbcConfig, dbcPool, baseMint, quoteStablecoin, migrationQuoteThreshold, quoteReserve, progressBps, finishCurveTimestamp, poolComplete, settled, issuePrice, unitsSold, baseSold, baseSupply, spotPrice, tradingFeeBps, migrationFeePercentage, tradingFeeUncollected, collected]
+      required: [seriesId, venue, dbcConfig, dbcPool, baseMint, quoteStablecoin, migrationQuoteThreshold, quoteReserve, progressBps, finishCurveTimestamp, poolComplete, settled, issuePrice, unitsSold, baseSold, baseSupply, spotPrice, tradingFeeBps, migrationFeePercentage, tradingFeeUncollected, collected, census]
       properties:
         seriesId: { type: string }
         venue: { type: string, enum: [simulator-stand-in, meteora-dbc] }
@@ -91,6 +116,25 @@ components:
             surplus: { $ref: '#/components/schemas/Money' }
             tradingFee: { $ref: '#/components/schemas/Money' }
             proceeds: { $ref: '#/components/schemas/Money' }
+        census: { $ref: '#/components/schemas/CurveCensus' }
+    CurveCensus:
+      type: object
+      description: "A curve series' census (Stage 1 compute_curve_units), base lamports: units outstanding = the unit mint's supply less what protocol accounts hold (the DBC pool's base vault, the DAMM v2 pool's base vault, the locker escrow, the leftover receiver; the stake vault is the holders'). The chain stores a count only when a census is taken (syncCurveUnits, or redeem's own); the stored count is the vault's N, the bound on the stakes and the report proof's public input."
+      required: [supply, protocolHeld, unitsOutstanding, redemptionUnits, stakedTotal, synced, changedSinceSync]
+      properties:
+        supply: { type: string, pattern: '^\d+$', description: "the unit mint's supply now" }
+        protocolHeld: { type: string, pattern: '^\d+$', description: base lamports in protocol accounts now }
+        unitsOutstanding: { type: string, pattern: '^\d+$', description: 'what a census now would store: supply − protocolHeld' }
+        redemptionUnits: { type: string, pattern: '^\d+$', description: "what redeem's own census would count now, its deposit's N: the DAMM v2 pool's base vault is not subtracted (Stage 1 B-C13), so the count covers every unit holders could tender and parking units in the pool cannot lower it" }
+        stakedTotal: { type: string, pattern: '^\d+$', description: the stakes now }
+        synced:
+          type: [object, 'null']
+          description: the count the chain stored last and when; null before the first census
+          required: [unitsOutstanding, at]
+          properties:
+            unitsOutstanding: { type: string, pattern: '^\d+$' }
+            at: { type: integer }
+        changedSinceSync: { type: boolean, description: a census now would store another count than the last one (or none was taken yet) }
     SeriesCurve:
       type: object
       description: "A curve series' curve as indexed from Stage 1's activation, completion and collections (the live pool is GET /series/{seriesId}/curve)"

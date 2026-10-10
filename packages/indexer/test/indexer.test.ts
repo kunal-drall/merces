@@ -25,6 +25,7 @@ const GENESIS = Date.UTC(2026, 0, 1) / 1000;
  *    (`RaiseOpened{0, 0}` records no phase ends and no feed line), `CurveGraduated` settles at the finish time with no
  *    treasury and no units outstanding, `CurveProceedsCollected` and `TreasuryFunded` fund the treasury, `FeeTaken`
  *    records the curve trading fee; was: buys minting units and funding the treasury, graduation setting both.
+ *  - S3-CN: the curve census (`CurveUnitsSynced`) sets units outstanding, the census time and the stakes; each is kept.
  */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
@@ -314,6 +315,36 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const amended = (await h.sim.getSeries(seriesId))!.capPerUnit;
     expect(amended).toBe((2n * p0).toString());
     expect(await row()).toMatchObject({ cap_multiple_wad: m.toString(), cap_per_unit: amended });
+  });
+
+  // cause S3-CN: every curve census (Stage 1 CurveUnitsSynced, from `syncCurveUnits` and from `redeem`'s own) becomes
+  // the series' units outstanding at the census time, and each is kept in curve_census; the feed names units only
+  it("projects every curve census: the series' units outstanding and census time, one curve_census row each", async () => {
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'curve-census', genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const { seriesId } = await h.createCurve();
+    await h.fillCurve(seriesId);
+    const row = async () => (await t.pool.query('select units_outstanding::text, units_synced_at, staked_total::text from series where series_id = $1', [seriesId])).rows[0];
+    const census = async () => (await t.pool.query('select seq, supply::text, protocol_held::text, units_outstanding::text, staked_total::text, synced_at from curve_census where series_id = $1 order by seq', [seriesId])).rows;
+    await idx.catchUp();
+    expect(await row()).toEqual({ units_outstanding: '0', units_synced_at: null, staked_total: '0' });
+    await h.sim.advanceTime(3_600);
+    const sync = await h.syncCurve(seriesId);
+    await idx.catchUp();
+    expect(await row()).toEqual({ units_outstanding: '100000000', units_synced_at: String(sync.blockTime), staked_total: '0' });
+    expect(await census()).toEqual([{ seq: String(sync.events[0]!.seq), supply: '110363638', protocol_held: '10363638', units_outstanding: '100000000', staked_total: '0', synced_at: String(sync.blockTime) }]);
+    // the redemption's own census leaves the DAMM pool out: the units parked there and the pool's migration deposit
+    // (363,637, curve_config.json migrationBaseThreshold) count
+    await h.sim.curveHook(seriesId, { kind: 'migrate' });
+    await h.sim.curveHook(seriesId, { kind: 'dammTrade', wallet: h.backers[2]!.address, units: -5_000_000n });
+    await h.sim.advanceTime(60);
+    const redeem = await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
+    await idx.catchUp();
+    expect(redeem.events[0]!.payload).toMatchObject({ unitsOutstanding: '100363637' });
+    expect(await row()).toEqual({ units_outstanding: '100363637', units_synced_at: String(redeem.blockTime), staked_total: '0' });
+    expect((await census()).map((r) => [r.units_outstanding, r.synced_at])).toEqual([['100000000', String(sync.blockTime)], ['100363637', String(redeem.blockTime)]]);
+    const feed = (await t.pool.query("select summary from activity where series_id = $1 and kind = 'CurveUnitsSynced' order by seq", [seriesId])).rows;
+    expect(feed).toEqual([{ summary: 'Units counted: 100000000 base units outstanding' }, { summary: 'Units counted: 100363637 base units outstanding' }]);
   });
 
   // cause S2-MS (S2 WP3): the engine emits these from WP4; synthetic events on a real revealed raise drive the projections

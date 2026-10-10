@@ -5,6 +5,7 @@ import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
 import { accrualUnits, burnUnits, settleHolder } from './holders.ts';
 import { derivedStatus, liveCapPerUnit, mintFinalized, retire, setStatus } from './ledger.ts';
+import { storeCensus, takeCensus } from './curve.ts';
 import { deliverPending } from './settlement.ts';
 import { syncStatus } from './status.ts';
 
@@ -51,6 +52,9 @@ export function quote(s: SimSeries, now: number): RedemptionQuote {
  *  5. nothing is due (PaymentOutstanding) and no true-up is due (TrueUpOutstanding; 0 until S5);
  *  6. every ended period is reported: `lastEnded = pidAt(now) − 1` is before the first period or at most the last
  *     accepted one (UnreportedPeriods);
+ *  6a. curve mode (Solana `redeem`, exit.rs:80-95, B-C13): the redemption takes and stores its own census with the
+ *     DAMM v2 pool's base vault left out (`takeCensus(…, true)`, `CurveUnitsSynced`), so the deposit covers every unit
+ *     holders could tender and parking units in the pool cannot lower it; a count of 0 is NoUnitsOutstanding;
  *  7. ours: the quoted price is within `maxPricePerUnit` (InvalidTerms; Stage 1 has no slippage bound).
  *
  * Then `syncStatus` (a sync point, after the quote). With nothing left of the cap (`C_rem = 0`) the series retires
@@ -72,6 +76,10 @@ export function redeem(e: EngineCore, signer: string, cmd: Extract<Command, { ki
   if (l.trueupDue > 0n) fail('TrueUpOutstanding', 'a true-up is not paid');
   const lastEnded = pidAt(BigInt(now)) - 1;
   if (!(lastEnded < (l.firstPeriod ?? 0) || (l.lastAcceptedPeriod !== null && l.lastAcceptedPeriod >= lastEnded))) fail('UnreportedPeriods', 'every ended period must be reported first');
+  if (s.curve) {
+    storeCensus(s, takeCensus(e, s, true), now, emit);
+    if (s.unitsOutstanding === 0n) fail('NoUnitsOutstanding', 'no units are outstanding');
+  }
   const q = quote(s, now);
   if (q.pRedeem > big(cmd.maxPricePerUnit)) throw new ChainError('InvalidTerms', `price ${q.pRedeem} exceeds maxPricePerUnit`);
   syncStatus(e, s, now, emit);
