@@ -24,7 +24,7 @@ a lender or a broker, and it is **never a custodian**:
 
 | Key | Where | Can | Cannot |
 | --- | --- | --- | --- |
-| Report-verifier ed25519 | KMS port (`LocalKms` for development; cloud KMS in production, Part J.2). Public key registered onchain by the multisig. | Sign `{series, period, income_commitment, tier}` after verifying a zkTLS proof. The proof's source is checked against the request but is not signed (A-REV-1, B7) | Sign anything else; the verifier has no database and no payload logs |
+| Report-verifier ed25519 | KMS port (`LocalKms` for development; cloud KMS in production, Part J.2). Public key registered onchain by the multisig. | Sign attestation v1 `{series, period, prior_income_commitment, income_commitment, tier, liquidity_event}` after verifying a zkTLS proof and the prior opening. The proof's source is checked against the request but is not signed (A-REV-1, B7); the liquidity flag is the one the device declares (owner question 1). S4 moves it to Stage 1's secp256k1 key and `MERCES_REPORT_V1` bytes | Sign anything else; the verifier has no database and no payload logs |
 | Keeper fee payer (per chain) | KMS port | Submit permissionless cranks | Any user action |
 | Allowlist manager (per chain) | KMS port | `setAllowlist` | Freeze or seize units, block claims |
 | Session HMAC secret | environment | Sign API session tokens | — |
@@ -61,11 +61,31 @@ Secrets never enter the repository: `.env.example` lists names only; development
 - Backer-tier access is decided by a live read of the `eligibility` table on every request, never by the session
   token's `eligible` flag: a revoke takes effect on the next request. Private terms have no admin bypass.
 
+## Report proofs
+
+- Reports carry Stage 1's ProofOfIncome proof: Groth16 over BN254 (`stage1/circuits`), six public signals in Stage 1's
+  order. The issuer's device proves with fresh randomness; the API verifies before it builds `submitReport`, and every
+  simulated chain verifies again before its engine runs (the ports' `Groth16ReportVerifier`), then checks the six
+  signals against its own state (terms commitment, units, FX rate, the prior chain, the payment). The Stage 1 vector
+  runner uses the same verifier.
+- **The proving key is a development key.** It comes from Stage 1's development trusted setup with a public beacon
+  (`stage1/circuits/build/MANIFEST.txt`): anyone can forge proofs with it. It is fit for the simulator, devnet and
+  testnet only and must be replaced by a real ceremony before mainnet (Stage 1 A37); mainnet is refused anyway.
+  `GET /prover/artifacts` says so (`trustedSetup: "development"`), and every served file is checked against the
+  build manifest's sha256.
+- **Mock proofs are development-only.** The mock system is a digest over the six public signals, so anyone can compute
+  one. The simulator engine refuses mock proofs by default (`acceptMockProofs: false`); tests and the harness opt in
+  explicitly. A process accepts them only with `MERCES_PROOF_SYSTEM=mock` while every chain resolves to the simulator;
+  it logs a warning at startup, and a process with a live chain refuses to start with it set. Never on a live chain.
+- Stage 1 error messages can embed the values they range-check, so calls into Stage 1's math, prover and verifier are
+  wrapped (`guardStage1` in the engine, `paymentStable` in `@merces/math`, error codes in the device and the verifier):
+  errors carry codes and Stage 1 error names (`detail.stage1`), never a submitted value. The canary covers it.
+
 ## The report verifier (most sensitive component)
 
-It unavoidably sees the attested income figure in memory. Controls: a separate process and port; no database; logs
+It unavoidably sees the attested income figure in memory, and for tier 2 the prior quarter's opening. Controls: a separate process and port; no database; logs
 carry request id, route, outcome code and duration only; the input schema is validated before any processing; the
-only output is a signature over the commitment tuple; the signing key lives behind the KMS port. Devices send proofs
+only output is a signature over the attestation fields (commitments, tier, liquidity flag; never a figure); the signing key lives behind the KMS port. Devices send proofs
 to it directly, never through the API, so the API process never sees income or salts. If Reclaim's hash-attesting
 providers (`responseRedactions[].hash`) are adopted (Part J.3), the verifier can stop seeing figures entirely.
 

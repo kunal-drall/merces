@@ -53,7 +53,7 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
     '',
     `Stage 1 parity vectors in ${source.dir}${source.commit ? ` at ${source.commit}` : ''} (schema 2, SPEC 1.1), replayed by the Stage 1 vector runner (\`packages/stage1-sync/src/stage1-vectors\`, \`pnpm stage1:vectors\`).`,
     '',
-    `Every \`expect\` compares the keys it carries, each as a whole value; every \`expect_revert\` must raise the named Stage 1 error and leave the state unchanged; Σ stablecoin equals Σ \`fund\` after every step, and the unit supply holds at every \`expect\`. Proofs are verified for real with Stage 1's verifier: ${proofs.verified} distinct proofs, ${proofs.invalid} invalid (the vectors' deliberate tamper cases).`,
+    `Every \`expect\` compares the keys it carries, each as a whole value; every \`expect_revert\` must raise the named Stage 1 error and leave the state unchanged; Σ stablecoin equals Σ \`fund\` after every step, and the unit supply holds at every \`expect\`. Proofs are verified for real with the ports' \`Groth16ReportVerifier\` (Stage 1's verifier and development verification key): ${proofs.verified} distinct proofs, ${proofs.invalid} invalid (the vectors' deliberate tamper cases).`,
     '',
     ...(extra.notes?.length ? [...extra.notes, ''] : []),
     '## Results',

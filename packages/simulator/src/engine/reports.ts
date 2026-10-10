@@ -97,9 +97,6 @@ export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport
   p.priorIncomeCommitment = prior;
   p.incomeCommitment = cmd.incomeCommitment;
   p.due = due;
-  // the version-1 bookkeeping `payIn` and the period reads still use (WP4 and WP5 move them to the ledger)
-  p.outstanding = due;
-  p.accrual = 0n;
   p.paymentDue = due;
   p.liquidityEvent = cmd.liquidityEvent;
   p.acceptedAt = now;

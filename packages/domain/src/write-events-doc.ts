@@ -52,6 +52,22 @@ for (const [title, group] of [['User commands', userCommands], ['Service command
   lines.push('');
 }
 lines.push('## Additions beyond the Part D2 list', '', '- Events: `IssuanceStopped` (C11.5), `VerifierKeyRegistered` (admin registers report-verifier keys).', '- Commands: `registerIssuer`, `stopIssuance`, `pauseReleases` (the issuer\'s own pause, C11.1), `crankPause`, `flagFxFallback`, `clearTransferWindow`, `commitWindowOrder`, `revealWindowOrder`, `buyCurve`, `graduateCurve`, `registerVerifierKey`, `pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`, `postSplitReceipt`.', '- Each addition closes a gap between the D2 list and Part C; Stage 1 wins on names and shapes, recorded in `INTERFACE_DRIFT.md`.', '');
+lines.push(
+  '## Meanings on Stage 1 (since S1)',
+  '',
+  'The shapes above are generated; these meanings changed in S1, when the simulator moved to Stage 1\'s rules (SPEC v1.1.2; Stage 1 wins for onchain behaviour). `ASSUMPTIONS.md` and `STAGE1_INTEGRATION.md` carry the details and the divergences still open.',
+  '',
+  '- **Errors.** Every `ChainError` raised on a Stage 1 path carries `detail.stage1`, Stage 1\'s error name (SPEC §11); the API returns it with the error.',
+  '- **`SeriesTerms` deadlines.** Counted in unpaused time from the period end: OnTime while the countdown is ≤ `dueDays`, InGrace while ≤ `dueDays + graceDays`, then Late (inclusive bounds). `formalNoticeDays` counts from the **period end** (Stage 1 `formalNoticeDue`; 90 = period end + 90 days).',
+  '- **`submitReport`.** Reports are strictly sequential (the next expected period, once ended, with no unpaid due). `priorIncomeCommitment` is the income commitment the report chains from (the previous quarter\'s in the same year; ZERO at a year start; a series\' first report outside Q1 supplies its own, bound only by the attestation, Stage 1 A25); the chain checks the proof against the series\' live terms commitment, so the command carries none. `proof` is Stage 1\'s Groth16 proof (`groth16-bn254`) or, only on a simulator configured for it, the mock digest; either way with Stage 1\'s six public inputs `[terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd]`. Commitments are Stage 1\'s Poseidon: terms over (θ, r, currency code, indexing rule, salt), income over (year-to-date figure, salt).',
+  '- **Verifier attestation (tier 2).** Attestation v1 over series, period, prior and income commitments, tier and `liquidityEvent`; never the income source.',
+  '- **`ReportAccepted`.** `paymentDue` is the due the report opened (the payment less tier-1 split credit; 0 for a tail report that is not a liquidity event), without accrual; `accrual` is always "0"; `priorIncomeCommitment` is the commitment it chained from.',
+  '- **`payIn` and `PaymentReceived`.** `payIn` pays the open due in full: `periodId` names the open due period and `amount` is the due plus Stage 1\'s lateness accrual when the payment lands; anyone may pay (NothingDue when nothing is open). `PaymentReceived.gross` is what the vault accepted; from a pay-in it carries the final `paymentDue` (due + accrual) and `accrual`; `source: \'tail\'` is a tail payment (its own accumulator, outside the payout vault totals); `source: \'extinguishment\'` is the unvested treasury returned through the final pool (fee 0, not an issuer payment).',
+  '- **Pauses.** `requestPause.until` and `PauseRequested.until` are advisory (Stage 1\'s request has no end); `approvePause` sets the pause end within Stage 1\'s bounds, and a pause ends by itself at that end.',
+  '- **`claimPayout`.** Pays the net payout and, after a redemption or an extinguishment, the tail and the holder\'s final-pool share (S3 splits them into their own commands). A holder that is not registered is refused; a zero claim succeeds with no transfer, and on a Retired or Extinguished series it still burns the holder\'s units.',
+  '- **`extinguish`.** Refused unless the raise settled (RaiseNotSettled); only the unvested treasury returns to holders, and the issuer\'s estate may still draw the vested tranches.',
+  '',
+);
 const out = fileURLToPath(new URL('../../../DOMAIN_EVENTS.md', import.meta.url));
 writeFileSync(out, lines.join('\n'));
 console.log(`wrote ${out}`);

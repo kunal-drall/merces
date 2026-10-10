@@ -16,7 +16,8 @@ import type { Applied, FxRequest, VectorPersonality, World, WorldOptions } from 
  * (`ops/`) and the shim table, one fresh chain per vector and personality.
  *
  * - The chain is `createSync` (never persisted) with `acceptMockProofs: false` and, as its `reportProofVerifier`,
- *   Stage 1's own verifier behind the runner's per-process verdict cache: every report proof is checked for real.
+ *   the ports' `Groth16ReportVerifier` (Stage 1's verifier, as the API's simulator chains run it) behind the runner's
+ *   per-process tally: every report proof is checked for real.
  * - The clock is set to each step's `t` before the step, `expect` and `expect_revert` included (SIM:475-482).
  * - Each op runs atomically: a translator that sends several transactions (or updates the runner's bookkeeping after
  *   one) is undone as a whole if any part throws, so an expected revert leaves state, events and bookkeeping

@@ -16,7 +16,7 @@ import { fail } from './errors.ts';
 export function position(s: SimSeries, wallet: string): SimPosition {
   let p = s.positions.get(wallet);
   if (!p) {
-    p = { wallet, units: 0n, escrowed: 0n, rewardDebt: 0n, pending: 0n, claimedTotal: 0n, redeemedUnits: 0n, tailDebt: 0n, redemptionClaimed: false, registered: false, lastNetAccWad: 0n, lastTailAccWad: 0n, lastFinalAccWad: 0n, finalClaimed: false };
+    p = { wallet, units: 0n, escrowed: 0n, pending: 0n, claimedTotal: 0n, redeemedUnits: 0n, registered: false, lastNetAccWad: 0n, lastTailAccWad: 0n, lastFinalAccWad: 0n, finalClaimed: false };
     s.positions.set(wallet, p);
   }
   return p;

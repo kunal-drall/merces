@@ -6,9 +6,12 @@ in parallel. **This repository is Stage 2**: everything that connects both chain
 legal contracts, identity checks, exchange rates) and the single chain-neutral API Stage 3's apps use. The brief is
 `BUILD_PROMPT.md`.
 
-Stage 1 does not exist yet, so everything runs against a **deterministic simulator** of the mechanism behind one
-`ChainPort` interface. When Stage 1 publishes its artifacts, `pnpm stage1:sync` detects them, generates live adapters,
-reports every difference, and proves with one shared conformance suite that the live chains behave like the simulator.
+Stage 1 has no devnet or testnet deployment yet, so everything runs against a **deterministic simulator** of the
+mechanism behind one `ChainPort` interface. Stage 1's code is the pinned `stage1` submodule (SPEC v1.1.2): its math is
+imported, not rewritten, and the simulator follows Stage 1's rules, checked by replaying Stage 1's own parity vectors
+(`STAGE1_INTEGRATION.md`). `pnpm stage1:sync` generates typed clients from Stage 1's IDLs and ABIs, reports every
+interface difference, and, once Stage 1 is deployed, proves with one shared conformance suite that the live chains
+behave like the simulator.
 
 ## Quick start
 
@@ -24,8 +27,9 @@ pnpm test                                # unit + integration suites (Postgres n
 pnpm test:conformance                    # H2: the ChainPort behavioural suite on both simulator personalities
 pnpm test:canary                         # H3: income canary and access-tier matrix
 pnpm demo:cycle                          # one raise → treasury → 3 quarterly ProofOfIncome reports (Stripe data) → payouts, on Solana and Monad personalities
-pnpm stage1:sync                         # "Stage 1 not present" today; the full catch-up pipeline once STAGE1_PATH points at Stage 1
+pnpm stage1:sync --no-conformance       # the catch-up pipeline against the pinned stage1 submodule (STAGE1_PATH overrides)
 pnpm stage1:vectors --backend reference  # replay Stage 1's 25 parity vectors (reference backend = Stage 1's own simulator)
+pnpm stage1:vectors                      # the S1 target vectors on our simulator, both personalities
 pnpm openapi:check                       # routes ⇄ openapi.yaml ⇄ access tiers
 ```
 
@@ -33,7 +37,7 @@ pnpm openapi:check                       # routes ⇄ openapi.yaml ⇄ access ti
 
 | Area | Packages |
 | --- | --- |
-| Mechanism math (Part C) | `@merces/math` — pure bigint; swappable for Stage 1's library |
+| Mechanism math | `@merces/math` — the gateway to Stage 1's math (`@merces/sdk`, `@merces/reference` from the `stage1` submodule), plus the interim auction (S2) and FX (S5) families |
 | Canonical model + `ChainPort` | `@merces/domain` — events, commands, state, hashing; `DOMAIN_EVENTS.md` and a JSON schema generated from it |
 | Simulator | `@merces/simulator` — two personalities (`solana`: USDC+USDG, base58; `monad`: USDC, EVM), time travel, Postgres persistence |
 | Live adapters | `@merces/chain-solana`, `@merces/chain-evm` (config-driven; mainnet refused), `@merces/chains` (mock / live / auto) |
@@ -41,7 +45,7 @@ pnpm openapi:check                       # routes ⇄ openapi.yaml ⇄ access ti
 | Services | `@merces/services`: identity & onboarding (E2), contracts (E3), terms vault (E4), ProofOfIncome (E5), auction (E6), lifecycle (treasury/payouts/redemption/windows), Meteora (E14), threshold data (E9), attestor (E10), accounting (E11), notifications (E12), admin (E13) |
 | Clockwork | `@merces/keepers` (E7 cranks, reminders, outbox; E8 rate keeper) |
 | The sensitive one | `@merces/report-verifier` — isolated, no database, no payload logs |
-| Device side | `@merces/poi-device` — what runs on the issuer's device for a report |
+| Device side | `@merces/poi-device` — what runs on the issuer's device for a report (income chain, Stage 1 payment, Groth16 proof) |
 | Ports | `@merces/ports` — KMS, vault crypto, wallet verification, identity check, e-sign, zkTLS (Reclaim-shaped), proof system, Pyth/Chainlink, Meteora, DEX; every one with a mock |
 | Stage 1 catch-up | `@merces/stage1-sync`, `@merces/conformance` |
 | Tests and demos | `@merces/privacy-tests`, `@merces/scenarios`, `@merces/fixtures` |

@@ -3,13 +3,22 @@
 How Stage 2 works without Stage 1 today, how it catches Stage 1 the moment it appears, and what happens then.
 This file is updated at each catch-up with what matched, what changed and what is still open.
 
-## Status (2026-10-09): Stage 1 @5eafd41 checked in, drift under review
+## Status (2026-10-10): Stage 1 @1bfc66b pinned, S1 done
 
-Stage 1 arrived on branch `claude/sweet-goodall-b7acm3`, commit `5eafd41`, SPEC v1.1.2. `STAGE1_PATH` points at a
-checkout of that commit. **The canonical model has not changed yet:** the drift below goes to the owner first.
+Stage 1 is the `stage1` git submodule, pinned at `1bfc66b` (branch `claude/sweet-goodall-b7acm3`, SPEC v1.1.2; its
+tree is identical to `5eafd41`, the commit the handoff named). Its TypeScript packages (`@merces/sdk`,
+`@merces/reference`, `@merces/circuits`) are workspace packages, built from the submodule by the root `postinstall`
+(`pnpm stage1:build`). `pnpm stage1:sync` and `pnpm stage1:vectors` find the submodule by themselves; `STAGE1_PATH`
+overrides it.
 
-**What the handoff was missing.** Stage 1 ships no `handoff/manifest.json`, so `stage1.map.json` at this repository's
-root describes it by hand (A-SYNC-2). Missing (also listed in the map's `missing` field):
+The owner approved section B of the drift review below: **Stage 1 wins for onchain behaviour.** S1 applied its first
+part: Stage 1's math (imported, not rewritten), Stage 1's report proof format, and a Stage 1 vector runner that replays
+Stage 1's own parity vectors against our simulator. "S1 results" says what changed; "Owner decisions and questions"
+says what is still open.
+
+**What the handoff was missing** (unchanged at 1bfc66b). Stage 1 ships no `handoff/manifest.json`, so
+`stage1.map.json` at this repository's root describes it by hand (A-SYNC-2). Missing (also listed in the map's
+`missing` field):
 
 - `handoff/manifest.json` itself;
 - Solana devnet program ids and RPC (only `solana/deployments/localnet.json` exists);
@@ -21,28 +30,128 @@ root describes it by hand (A-SYNC-2). Missing (also listed in the map's `missing
 - the indexer's start slot and start block.
 
 Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitignored reports in `docs/stage1/`
-(regenerate with `STAGE1_PATH=<checkout> pnpm stage1:sync --no-conformance`).
+(`MATH_PARITY.md`, `VECTOR_PARITY.md`; regenerate with `pnpm stage1:sync --no-conformance`, which writes them to
+`packages/stage1-sync/out`).
 
-| D6 step | Result at @5eafd41 |
+| D6 step | Result at @1bfc66b (after S1) |
 | --- | --- |
 | 1. `stage1:sync` | runs end to end with `--no-conformance` |
-| detect | ok: `stage1.map.json` (hand-written) |
+| detect | ok: `stage1.map.json` (hand-written) over the pinned submodule |
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
-| diff | drift: **Solana** 3 canonical items without a counterpart, 260 field mismatches, 87 extra Stage 1 items; **Monad testnet** 1 / 221 / 97. `INTERFACE_DRIFT.md`; review below |
-| math | **6 of 12 function families disagree** with Stage 1 (snapshot in `docs/stage1/MATH_PARITY.md`, A-MATH-2): hurdle compounding and late accrual (ours is never lower: we would overcharge the issuer), the payout accumulator's dropped remainder, holder claims (ours can pay one base unit more), the redemption price (through the hurdle only) and the auction's marginal fill. Stage 1 wins |
-| vectors | 25 vectors (2,092 steps, 143 expected reverts) inventoried, **0 replayed**: every vector settles its auction through `begin_settlement` → `tally_bids` → `finalize_settlement` → `process_bid` → `deliver_bid`, which the canonical model does in one `settleAuction`; every `expect` compares Stage 1's full state snapshot; and every report carries a Groth16 proof over Stage 1's public inputs. Estimate: 8 vectors (04, 06, 07, 09, 11, 19, 23, 25) can pass once the simulator takes Stage 1's report public inputs, with documented runner shims; the other 15 need canonical changes (B below). No vector covers curve mode. `docs/stage1/VECTOR_PARITY.md` maps each op |
+| diff | drift: **Solana** 3 canonical items without a counterpart, 261 field mismatches, 87 extra Stage 1 items; **Monad testnet** 1 / 222 / 97 (`INTERFACE_DRIFT.md`; @5eafd41: 260 / 221; the one new mismatch per chain is `ReportAccepted.priorIncomeCommitment`, which S1 added). It is left to the adapters' mappers (D6.2) and the rest of section B (S2–S5) |
+| math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 34 `@merces/reference` names and `@merces/sdk`'s helpers, and all 34 are Stage 1's own function objects. The interim math is left only under `interim.*` for the auction family (S2) and the FX family (S5). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2) |
+| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) **every S1 target at its expected status on both personalities**: 04, 06, 07, 09, 11, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A); 15 vectors not replayed on ours in S1, each with its milestone. 25 vectors, 2,092 steps, 143 expected reverts. Snapshot with the shim table: `docs/stage1/VECTOR_PARITY.md` |
 | conformance | **blocked**: no devnet or testnet deployment |
-| verdict | both chains NOT ready |
+| verdict | both chains NOT ready (diff drift; conformance not run) |
 
-Stage 1's own reference suite was re-run here against its vectors: 171/171 pass (`@merces/reference`, built inside
-the Stage 1 checkout with Stage 1's pinned toolchain; `node_modules` and `dist` are ignored by Stage 1's git).
+Stage 1's own reference suite was re-run here against its vectors at @5eafd41: 171/171 pass.
+
+### S1 results
+
+S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed as `S1 WPn: …`. What changed, by area:
+
+- **Math (WP1, WP13).** `@merces/math` is the one gateway to Stage 1's math: named re-exports of `@merces/sdk`
+  (fixed point, periods, pauses, the tagged year ring, parameters, error names, Poseidon commitments) and
+  `@merces/reference` (status and accrual, the payout vault, redemption, tail and final pool, treasury vesting,
+  income), plus the few helpers Stage 1 has no counterpart for (the `"YYYYQn"` codec, decimals, the per-unit rate, a
+  value-free payment wrapper, deadline projection, the display cap). Every money path outside the auction and FX, in
+  the simulator, services, indexer and keepers, calls them. What is left of the interim math is the auction family
+  (`clearAuction`, `walletCapUnits`, `bidDeposit`, `auctionFee`; S2) and the FX family (`quarterAverageRate`,
+  `coverageOk`, `deviationBps`, `withinBand`, `pythToWad`; S5); a test pins that key list.
+- **Simulator state (WP0, WP2, WP13).** The engine is split by area. The persisted state is version 2: Stage 1's
+  series ledger (its field names), payout vault, tail and final pool sit beside ours, and the version-1 bookkeeping
+  they replaced is deleted. A version-1 state is refused; `sim:reset` clears the simulated chains and their offchain
+  rows (RUNBOOK.md). Every error on a Stage 1 path carries Stage 1's error name (`ChainError.detail.stage1`).
+- **Reports (WP3, WP10).** Stage 1's commitments (terms: Poseidon(5); income: Poseidon(2) with the prior chain), the
+  six public inputs and Groth16 proofs (B.4, partly). `submitReport` runs Stage 1's checks in Stage 1's order
+  (sequential periods, no unpaid due, tail rules, tier rules, the prior chain, the signals, the proof, then the
+  attestation). The issuer's device keeps the income chain and proves on the device; the report verifier attests
+  attestation v1 (with the prior and the liquidity flag); the API and every simulated chain verify the Groth16 proof
+  (the ports' `Groth16ReportVerifier`). Mock proofs are refused unless a simulator-only process sets
+  `MERCES_PROOF_SYSTEM=mock` (SECURITY.md). Tier 3: the device proves and the opening reaches the attestor end to end
+  encrypted (migration 017).
+- **Status and timing (WP4).** Stage 1's derived status (inclusive ≤ 30 / ≤ 45 days of unpaused time), the formal
+  notice at period end + 90 days, Stage 1's sync points, hardship pauses with Stage 1's approval bounds (the requested
+  end is advisory), releases gated by Stage 1's underlying lateness (B.9, partly).
+- **Money (WP5–WP8).** Stage 1's vault (`vaultReceiveGross`: the cap read live, the exact WAD carry, the year ring
+  tagged by the report deadline); `payIn` without an issuer check and with the accrual computed when it lands; claims
+  for registered holders only, a zero claim succeeding; Stage 1's `redeem` preconditions and quote, the tail
+  accumulator and its 365-day window; extinguishment of the unvested treasury through the final pool, refused for an
+  unsettled raise (M5); amendments that may only lower the cap within [2, 3]; transfer-window escrow that is never
+  burned, asks settling the holder first, NoMatch on a terminal series (B.3, B.5 and B.2, partly).
+- **Offchain mirrors (WP10, WP11).** The redemption quote, tail and retirement views, accounting (C_remaining, the
+  tail pool, the extinguishment line), the indexer's cap per unit and reporting ledger (served on `Series`), the
+  keepers' status instants and reminders, and the OpenAPI shapes follow Stage 1. `claimable` stays the net payout;
+  the tail and the final share are separate fields (M9).
+- **Vector runner (WP9a, WP9b, WP13).** `pnpm stage1:vectors` (`packages/stage1-sync/src/stage1-vectors`): a
+  reference backend (Stage 1's own simulator), a merces backend (our `SimulatorChain` through op translators and the
+  shim table, never persisted, real Groth16 verification with the ports' verifier) and a lockstep oracle that names
+  the first field where the two disagree. The merces gate runs in the default test suite.
+- **Tests (WP12).** Every pin S1 moved names its cause code; the moved figures were recomputed with Stage 1's own
+  simulator.
+
+**The S1 gate**, all green at the S1 commit:
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | exits 0 |
+| `DATABASE_URL=… pnpm vitest run` | 53 files, 324 tests passed |
+| `MERCES_TEST_DB=1 pnpm vitest run --project canary` | 2 files, 3 tests passed |
+| `pnpm stage1:vectors --personality solana,monad` | exits 0: `OK: 16/20 PASS, 20/20 at expected status` (10 targets × 2 personalities) |
+| `pnpm stage1:vectors --backend reference` | exits 0: `OK: 25/25 PASS, 25/25 at expected status` |
+| `pnpm stage1:sync --no-conformance` | math and vectors `OK` (diff `WARN`, conformance skipped) |
+| `grep -rn "interim\." packages/simulator/src` | only `engine/{auction,fx,window,curve}.ts` |
+
+### Owner decisions and questions
+
+Decided (S1 review):
+
+- **Section B is approved:** Stage 1 wins for onchain behaviour. Import `@merces/reference` instead of rewriting the
+  math. Order: math and the report proof format first (vectors 04, 06, 07, 09, 11, 19, 23, 25), then auctions,
+  claims, signatures, the rest.
+- **Non-reveal charge: not modelled.** Settlement keeps refunding unrevealed bids in full. Vector 03 (b8, charged on a
+  settled raise) waits for the owner; no S1 target has a non-revealer.
+- **Formal notice mirrors Stage 1** (period end + 90 days): applied in S1.
+- **Window fee:** a series parameter, value undecided; not in S1 (S5).
+- **Tier-1 public terms:** accepted, with an explicit issuer consent step; not in S1 (tier-1 milestone).
+- **Curve:** no wallet cap for curve raises, and "no cap" said everywhere (S5, A-CURVE-2); the buyer notice wording;
+  curve staking first-class (S3).
+- **Extinguishing an unsettled raise** (critique M5): adopt Stage 1 now (RaiseNotSettled); applied in S1 WP7.
+- **Persisted simulator data:** no environment holds data worth keeping; `sim:reset` runs before the version-2 build
+  is deployed.
+
+Open, with the default S1 uses meanwhile:
+
+1. **Who attests `liquidityEvent` for tier 2?** zkTLS data cannot show a liquidity event. Default: the report
+   verifier signs the flag the device declares (A-REV-1).
+2. **A lost device-held opening blocks that year's next proof.** The next quarter's proof needs the previous
+   quarter's year-to-date figure and salt, which only the issuer's device holds. Default: salts are derived from a
+   device secret (`deriveIncomeSalt`), so a reinstalled device rebuilds its openings from its own records; there is
+   no server-side copy (PRIVACY.md). A series' first report in mid-year supplies its own prior, which only the
+   attestation binds (Stage 1 A25).
+
+### Divergence register (Stage 1 behaviour knowingly not mirrored after S1)
+
+| Divergence | Milestone |
+| --- | --- |
+| Non-reveal charge (owner hold) | after the owner decides |
+| One-step auction: greedy fill by price then commit order, cap clamp at allocation, de-allowlisted bidders excluded, pull refunds (B.1) | S2 |
+| One-step transfer windows; no windows flag, eligibility or fee (B.2) | S5 |
+| `claimPayout` = claim + tail + final; no explicit `register_holder` (B.3) | S3 |
+| No `retire_if_capped`, `withdraw_pause_request` or `end_pause` commands; `requestPause.until` advisory (B.6) | S5 |
+| `payIn` exact-amount and period guards (Stage 1's `pay` takes neither) | S5 (adapters drop them) |
+| Tier 1: no router year-to-date binding; split receipts stand in for the router credit | tier-1 milestone |
+| True-up, the FX accumulator (trading-day coverage) and the `tier4Enabled` flag (B.6, B.9) | S5 |
+| ed25519 signatures with co-signers, attestation v1 as canonical JSON, no revocation grace (B.4) | S4 |
+| `register_issuer` by the issuer (Stage 1: admin-only, B.7) | S5 |
+| Curve wallet cap enforced while bonding (owner: no cap) | S5 |
 
 ### Blockers
 
 | Blocker | Needs |
 | --- | --- |
-| D6.2/3: resolving drift and replaying the 25 vectors | the owner's review of the drift below (canonical model changes) |
-| D6.4: wiring the adapters (`wired = true`) | the review, then program ids and addresses |
+| D6.2/3: resolving the remaining drift and replaying the other 15 vectors on our simulator | the rest of section B (approved): S2 auctions, S3 claims, S4 signatures, S5 the rest |
+| D6.4: wiring the adapters (`wired = true`) | the adapters' mappers over the remaining drift, then program ids and addresses |
 | D6.5: conformance on Solana devnet and Monad testnet | Stage 1 deployed to both (STATUS.md: both RPCs are blocked from Stage 1's build container, U5), funded test wallets |
 | D6.6: full raise-to-payout cycle live | D6.5 |
 | D6.7: `live` in staging | D6.6 |
@@ -64,17 +173,18 @@ ungraduated curve cannot be extinguished and Merces holds nothing to repay. → 
 cap, lockup and raise durations as 0 (`create_series` rejects non-zero values). The DBC base mint has no transfer
 hook, freeze authority or permanent delegate, and buys are DBC `swap2` calls sent straight to Meteora's program, so
 Merces sees none of them. There is no buy allowlist: the allowlist gates `stake_units`, and only staked units earn.
-The backend's cap can only limit buys built through Merces. → A-CURVE-2 (ASK).
+The backend's cap can only limit buys built through Merces. → A-CURVE-2 (owner: no cap for curve raises, S5).
 
 Other curve facts the model has to absorb: curve mode is Solana only (EVM `createSeries` reverts
 `CurveModeUnsupported`); holders earn only on units staked in the series stake vault (`stake_units`,
 `unstake_units`); redemption is by tender (`tender_units`, burned in place); `P0 = floor(X × 10^6 / swap_base_amount)`;
 accounting is per base lamport (6-decimal units).
 
-### Drift review: proposed resolution (awaiting the owner)
+### Drift review: resolution (approved by the owner; S1 applied part of it)
 
-Nothing below is applied yet. Where Stage 1 and Stage 2 disagree on onchain behaviour, Stage 1 wins; the question
-for the owner is how the canonical model absorbs it.
+The owner approved section B: where Stage 1 and Stage 2 disagree on onchain behaviour, Stage 1 wins. Each item below
+says what S1 applied (**S1:**) and which milestone takes the rest; the divergence register above lists what is
+knowingly still different.
 
 **A. Adapter-only (no model change).** Names Stage 1 spells differently (`STAGE1_ALIASES`: `drawRelease` ↔
 `claim_release`, `AuctionSettled` ↔ `RaiseSettled`, …); the series and holder passed as Solana accounts rather than
@@ -90,14 +200,22 @@ redemption slippage guard (`maxPricePerUnit`) checked before submitting, since S
    bid per wallet; a bid above the wallet cap is invalid at reveal and refunded in full; 1% non-reveal charge (H1); a
    winner removed from the allowlist after committing still receives units. Ours: one `settleAuction`, fill by price
    then commit order, cap applied at allocation, refunds pulled with `claimRefund`, de-allowlisted winners excluded.
+   **S1:** not applied (S2). The vector runner shims it (SH-AUC-1…6) and checks our one-step settlement against Stage
+   1's tally of the same bids. The non-reveal charge is an owner hold and is not modelled.
 2. *Transfer window.* The same multi-step shape (`begin_window_settlement`, `tally_orders`, `finalize_window`,
    `process_order`, `deliver_order`, take-back steps) keyed by period, two-branch clearing with first-come fills at the
    margin, a 100 bps window fee, ask units held in escrow, a terminal series forced to NoMatch (S3). Stage 1 emits
    per-order fills, so the canonical pairwise `UnitsTransferred(from, to)` has no source. **Windows ship disabled**
    (`windows_enabled = false`, A18): the keepers must not open windows until the admin enables them.
+   **S1:** the escrow semantics only (WP8): ask units stay escrowed and are never burned, an ask settles the holder
+   first, a terminal series clears NoMatch, opening a window during the lockup fails with LockupActive. The multi-step
+   shape, the flag, eligibility and the fee (a parameter, value undecided) are S5.
 3. *Holder claims.* Separate tail and final accumulators with `claim_tail` and `claim_final`, an explicit
    `register_holder` (cursors start at 0, S1), and a tail catch-up inside the redemption claim (S6). Ours routes the
    tail and extinguishment through the payout accumulator.
+   **S1:** Stage 1's accumulators and cursors (WP5–WP7): separate tail and final accumulators whose cursors start at 0,
+   holders registered at settlement (or graduation), the tail catch-up inside the redemption claim. `claimPayout` still
+   pays claim + tail + final in one command and there is no `register_holder` command (S3).
 4. *Signatures, commitments, proofs.* Attestor and report-verifier keys are **secp256k1** 20-byte addresses on both
    chains, signing Stage 1's `MERCES_*_V1` keccak messages (per-deployment domain, per-series nonces, low-s), and the
    signatures travel as **instruction arguments**; nobody co-signs (our `UnsignedTx.coSigners` and the attestor
@@ -106,37 +224,59 @@ redemption slippage guard (`maxPricePerUnit`) checked before submitting, since S
    `[terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd]`, so
    `submitReport` needs the prior commitment (A25). Ours: sha256 over canonical JSON, a mock prover, our own input
    order. This touches the report verifier's KMS key type, the device prover, the terms vault and the bid flow.
+   **S1:** commitments and proofs applied (WP3, WP10): Poseidon terms and income commitments, the prior chain
+   (`submitReport.priorIncomeCommitment`), Groth16 with Stage 1's six public inputs, proved on the device and verified
+   by the API and the simulated chains; the attestation carries Stage 1's report field set (attestation v1). Signatures
+   stay ed25519 with co-signers (S4); bid and order commitments stay ours (S2, S5).
 5. *Extinguishment.* Two distinct attestor signatures with a nonce; only **unvested** proceeds go to holders, vested
    but undrawn tranches stay with the estate (A31, H4); refused unless the raise settled.
+   **S1:** applied (WP7): two distinct attestors (co-signing until S4), only the unvested proceeds, through the final
+   pool, and refused unless the raise settled (amendment M5).
 6. *Missing flows.* The tier-3 true-up is onchain (`submit_trueup`, `pay_trueup`; our A-C8-3 and A-M5-5 assumed it
    was not); the tier-1 income router (`init_router`, `route`, `close_router_period`) is permissionless and keeps θ
    and r in plaintext onchain for tier-1 series (Stage 1 A22: the issuer's choice; our events say θ never goes
    onchain, so this is a privacy decision for the owner); `withdraw_pause_request`; pauses without a requested end;
    key revocation with a 45-day grace (A33); `retire_if_capped`; `resume_issuance`; `request_early_draw`.
+   **S1:** a pause request carries no enforced end (`until` is advisory) and approvals use Stage 1's bounds (WP4). The
+   rest is S5 (true-up, router, `withdraw_pause_request`, `retire_if_capped`, `resume_issuance`, `request_early_draw`);
+   key revocation with its grace is S4. The router's plaintext θ and r: the owner accepted tier-1 public terms with an
+   explicit issuer consent step (tier-1 milestone).
 7. *Actors and admin.* `register_issuer` is **admin-only** on both chains (ours is the issuer's own command); there is
    no admin router registration; timelock-only powers need `TimelockController.schedule`/`execute`; the admin
    surface adds `set_flags` (`new_raises_paused`, `windows_enabled`, `tier4_enabled`), `set_fx_pair`, `set_defaults`,
    `set_contract_hash`, admin transfer. One user action can need several transactions (Solana `prepare_raise` then
    `open_raise`), while our builder returns one.
+   **S1:** not applied (S5); the vector runner shims `register_issuer` (SH-REG-1).
 8. *Series parameters and identity.* `create_series` carries mode, tier flags, FX pair, release schedule (≤ 24
    tranches), `k`, hurdle, fee and non-reveal bps, lockup and wallet cap, and the terms commitment. EVM series ids are
    `uint256` counters, not addresses. Defaults differ: lockup 547.875 days (ours 540), tail 365 days (ours 360). Our
    `walletCapBps` must be positive, which rejects every Stage 1 curve series (cap 0).
+   **S1:** the defaults (WP2, WP6): lockup 547.875 days and the 365-day tail come from Stage 1's `DEFAULT_PARAMETERS`.
+   The creation shape (mode, FX pair, durations, non-reveal and window bps) and curve series with cap 0 are S2 and S5.
 9. *Status and timing.* The formal notice falls at period end + 90 days (ours + 120); OnTime lasts while the
    countdown is ≤ 30 days and InGrace while ≤ 45 days (ours switches at the boundary); `D_avg` buckets a payment by its
    period's deadline, not by when it arrived; FX coverage counts trading days, and weekend snapshots revert.
+   **S1:** applied except FX (WP4, WP5): the formal notice at period end + 90 days, the inclusive ≤ 30 / ≤ 45-day
+   bounds, `D_avg` from the year ring tagged by each payment's report deadline. FX trading-day coverage is S5.
 10. *Indexer and codecs.* Stage 1 events carry no stream sequence, while our indexer requires a dense `seq` (the
     adapter must keep its own counter, or the indexer accepts a strictly increasing one). Codecs: `period` u32 ↔
     `"YYYYQn"` (and a calendar year for true-up notices), `pair_id` bytes32 ↔ `"EUR/USD"`, base58/hex keys. Some enum
     codes differ between the chains (`UnitsBurned.reason`, `WindowCleared.branch`), event order inside a transaction
     differs between the chains, several canonical events are joins (`PaymentReceived` = `PaymentSettled` +
     `PayoutDistributed`), and the Solana decoder must accept only Merces program frames and skip failed transactions.
+   **S1:** the period codec (`toPid`/`fromPid` over Stage 1 period ids) is in `@merces/math`; the rest is adapter work
+   (D6.2).
 11. *Curve mode.* Solana only; no `buyCurve` in Merces (a DBC swap; the backend could still build the unsigned
     Meteora swap); `activate_curve`, `complete_curve`, `collect_curve_proceeds`, `sync_curve_units`, staking and
     tender; no cancel, failure or extinguishment before graduation; units in base lamports (6 decimals). Our Meteora
     service must generate configs with creator fee 0 and the Merces PDA as fee claimer, or activation fails (H3).
+   **S1:** only extinguishment (refused before graduation, WP7). The rest is S5; the owner decided curve raises carry
+   no wallet cap.
 12. *Math.* Replace the six disagreeing families with Stage 1's formulas (or import `@merces/reference`), then
     replay the 25 vectors through a Stage 1 op runner on the simulator with full-state expectations.
+   **S1:** applied (WP1, WP9a, WP9b): `@merces/reference` is imported through `@merces/math`, and Stage 1's vectors are
+   replayed through a Stage 1 op runner with full-state expectations: all 25 on Stage 1's own simulator, the 10 S1
+   targets on ours.
 
 **Stage 1 documents that disagree with Stage 1's code** (the code, IDLs and vectors win): `SECURITY_REVIEW.md` on S2;
 `EVENTS.md` field lists in several places; `CURVE_MODE.md` §5 (claims are gated by staking); the vectors declare
@@ -151,7 +291,7 @@ unknown fields are kept:
 ```json
 {
   "version": "…", "commit": "…",
-  "math":    { "package": "<path or npm name exporting a MercesMath-shaped object (see packages/math/src/index.ts)>" },
+  "math":    { "package": "<path to Stage 1's math package (packages/reference), whose functions @merces/math re-exports>" },
   "vectors": "<path to parity vectors (format below)>",
   "events":  { "doc": "EVENTS.md", "schema": "<JSON schema: {events: {Name: {properties}}, commands: {Name: {properties}}}>" },
   "solana":  { "cluster": "devnet", "rpcUrl": "…", "programs": { "<module>": "<program id>" }, "idlDir": "<dir of Anchor IDL json>", "startSlot": 0 },
@@ -162,16 +302,21 @@ unknown fields are kept:
 
 If Stage 1 arrives without a manifest, write `stage1.map.json` (same shape) by hand at the Stage 1 root or at this
 repository's root; the pipeline accepts either (the repository's copy only for a non-empty `STAGE1_PATH`, and it
-reports a checkout at another commit than the map pins). Stage 1 @5eafd41 needed the hand-written map.
+reports a checkout at another commit than the map pins). Stage 1 @5eafd41 (and @1bfc66b, the same tree) needed the
+hand-written map.
 
-Stage 1's math package does not export a `MercesMath` object; `stage1:sync` then compares function families
-(A-MATH-2) and needs the package built inside the Stage 1 checkout.
+`@merces/math` imports Stage 1's math from the pinned submodule's workspace packages (built by the root `postinstall`);
+the math step of `stage1:sync` checks that the checkout is at the pinned commit and that every re-export is Stage 1's
+own object (A-MATH-1, A-MATH-2).
 
 ### Parity vector format
 
+Stage 1 publishes its own vector directory (`packages/vectors`, `NN_name.json`: SPEC ops, full-state `expect` checks
+and `expect_revert` with Stage 1 error names), which the Stage 1 vector runner replays (`pnpm stage1:vectors`). The
+earlier Merces format below is still accepted as a single JSON file of `scenarios`, replayed through the harness:
+
 ```json
 {
-  "math": [ { "fn": "owedYtd", "args": ["100000000000000", "500", "75000000000", "60000000000"], "expect": "750000000" } ],
   "scenarios": [ {
     "name": "happy-path", "genesis": 1767225600, "personalities": ["solana", "monad"],
     "steps": [
@@ -188,26 +333,25 @@ Actors: `issuer`, `backer-N`, `attestor-N`, `admin`, `keeper`, `allowlistManager
 series created in the scenario. Bigint arguments are decimal strings. Every expected balance must match the simulator
 to the base unit; a mismatch means the simulator is wrong and is fixed.
 
-Math vectors are compared exactly after canonicalisation (bigints and numbers as decimal strings, object keys sorted).
-A function that returns an object needs the whole expected object, every field included; a missing or extra field
-is a disagreement.
-
 ## `pnpm stage1:sync`
 
-1. **detect** — manifest or map through `STAGE1_PATH`; "Stage 1 not present" otherwise.
+1. **detect** — manifest or map through `STAGE1_PATH`, else the pinned `stage1` submodule; "Stage 1 not present"
+   otherwise.
 2. **generate** — EVM ABIs → `packages/stage1-sync/generated/evm/*.ts` (`as const` for viem); Anchor IDLs →
    `generated/solana/*.ts` (built-in renderer; Codama can replace it once Stage 1 pins an IDL spec version).
 3. **diff** — `INTERFACE_DRIFT.md`: every canonical event and command, its Stage 1 counterpart, field-by-field mapping,
    and anything missing, extra or differently shaped. Only exact names (ignoring case, `_` and `-`) map; a look-alike
    (`fee` vs `feeBps`) is listed as an unverified match, and it, extra fields/args and names-only items all count as
    drift. The step is `ok` only when nothing is left to resolve.
-4. **math** — Stage 1's library vs ours on every math vector, or, when Stage 1 exports its own function shapes,
-   family by family on deterministic inputs (`MATH_PARITY.md` under `packages/stage1-sync/out`; A-MATH-2).
-   Full agreement is reported as "eligible to replace the interim library"; it does not change what any process runs.
+4. **math** — `@merces/math` runs Stage 1's functions, so the step checks the pin and the wiring: the Stage 1
+   checkout is at the commit the manifest pins, and every re-exported Stage 1 name is Stage 1's own object; it also
+   lists the interim families still exported (`MATH_PARITY.md` under `packages/stage1-sync/out`; A-MATH-1, A-MATH-2).
+   Behavioural parity is the vectors step's job.
 5. **vectors** — Stage 1's own vector directory is replayed by the Stage 1 vector runner (`pnpm stage1:vectors`,
    `packages/stage1-sync/src/stage1-vectors`): on the reference backend (Stage 1's own simulator; all 25 must pass,
-   proofs verified, or the runner or the checkout is broken) and, from S1 WP9b, on the merces backend (our simulator,
-   the S1 target vectors on both personalities, each at its expected status). `VECTOR_PARITY.md` lists the results,
+   proofs verified, or the runner or the checkout is broken) and on the merces backend (our simulator, the S1 target
+   vectors on both personalities, each at its expected status; the default test suite runs the same gate). Report
+   proofs are verified with the ports' `Groth16ReportVerifier`, the verifier the API and the simulated chains run. `VECTOR_PARITY.md` lists the results,
    the findings with leaf-path diffs, waived steps, the shims used ("not parity") and the op inventory. A single JSON
    file of `scenarios` (the earlier Merces format) is replayed through the harness.
 6. **conformance** — the H2 suite against each live chain (`CONFORMANCE_CHAIN=solana|evm:<chain>`).
@@ -223,14 +367,13 @@ It runs in CI on a six-hour schedule and whenever `stage1/**`, `stage1.map.json`
 2. Resolve drift in the adapters' mappers (`packages/chain-solana/src/mapping.ts`, `packages/chain-evm/src/mapping.ts`).
    Change the canonical model only for a real gap, and record why here.
 3. Where Stage 1 contradicts an assumption, Stage 1 wins for onchain behaviour: update the simulator and
-   `ASSUMPTIONS.md`. Candidates already flagged: A-AUC-1 (tie-breaking), A-C8-1/2 (accrual), A-RED-1/2 (redemption
-   precondition, tail fee), A-REP-2 (public input layout), A-FX-1/2 (weekends, Chainlink), A-C11-6 (extinguishment).
+   `ASSUMPTIONS.md`. S1 settled A-C8-1/2 (accrual), A-RED-1…4 (redemption, tail, hurdle), A-REP-1/2/3/6 (reporting,
+   public inputs, pay-in, tier 1), A-REV-1/3/4/6/17/20 and A-C11-6 (extinguishment, still with counsel); still open:
+   A-AUC-1/4 (auction, S2), A-FX-1/2 (weekends, Chainlink, S5), A-CURVE-2 (no cap, S5).
 4. Wire the adapters' reads, event decoding and transaction builders to the generated clients, then set the adapter's
    `wired` flag to `true` (until then `auto` keeps the simulator; explicit `live` is what conformance uses). The
    conformance env for live chains needs funded devnet/testnet wallets (`CONFORMANCE_ISSUER_KEY`, `CONFORMANCE_BACKER_KEYS`,
    `CONFORMANCE_ATTESTOR_KEYS`, `CONFORMANCE_ADMIN_KEY`) and short durations in Stage 1's test deployment.
-   If math parity is proven and Stage 1's library should replace the interim one, that is its own change: route the
-   money-relevant calls through `math.<fn>()` and select the library at startup in every process.
 5. Get the conformance suite green on Solana devnet and Monad testnet.
 6. Run the full raise-to-payout cycle on both live chains (`pnpm demo:cycle` against `MERCES_CHAIN_*_MODE=live`).
 7. Flip both chains to `live` in the staging configuration; keep `mock` for local development and Stage 3.
@@ -238,15 +381,16 @@ It runs in CI on a six-hour schedule and whenever `stage1/**`, `stage1.map.json`
 
 ## Known gaps that only Stage 1 can close
 
-State at @5eafd41:
+State at @1bfc66b (the same tree as @5eafd41):
 
 - Groth16 circuit, verifying key and prover artifacts: delivered (`circuits/build`), from a development trusted
-  setup that must be replaced before mainnet (A37). The mock proof system stays in use until B.4 of the review lands.
+  setup that must be replaced before mainnet (A37). Since S1 the services and the simulated chains verify Groth16
+  proofs by default; the mock proof system is a development opt-in on simulator-only processes (SECURITY.md).
 - Event and instruction names, account layouts and error codes: delivered (IDLs, ABIs, `@merces/sdk` error names);
-  the adapters' mappers are filled after the review.
+  the adapters' mappers are filled as the remaining section B work lands (D6.2).
 - Pyth receiver accounts and FX feeds: Stage 1 snapshots FX daily per pair (`snapshot_fx`); feed ids for INR, JPY,
   CAD, CHF, BRL, MXN and SGD are still unverified (Stage 1 U3).
 - Report-verifier signatures: Stage 1 verifies **secp256k1** report attestations onchain (SPEC §1.4), not ed25519;
-  B.4 of the review.
+  B.4 of the review, S4.
 - Curve buyers' money and the wallet cap: answered (see "The two curve questions" above).
 - Devnet and testnet deployments: still missing (blockers above).

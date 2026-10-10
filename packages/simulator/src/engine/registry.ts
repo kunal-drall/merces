@@ -77,9 +77,9 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   };
   const s: SimSeries = {
     seriesId, address, issuer: signer, terms, phase: 'Draft', status: 'OnTime', createdAt: now, openedAt: null, commitEndsAt: null, revealEndsAt: null, settledAt: null,
-    issuePrice: null, unitsSold: 0n, unitsOutstanding: 0n, capPerUnit: null, paidPerUnitWad: 0n, accNetWad: 0n, vaultBalance: 0n, vaultGrossTotal: 0n, vaultFeesTotal: 0n, vaultDistributedNet: 0n,
-    treasuryTotal: 0n, treasuryReleased: 0n, treasuryReturned: 0n, tranches: [], releasesPausedByIssuer: false, releasesPausedLate: false, bids: new Map(), bidOrder: 0, positions: new Map(), periods: new Map(),
-    pause: null, pauseIntervals: [], pausedSecondsTotal: 0, redemption: null, extinguishedAt: null, grossByYear: new Map(), grossPaidTotal: 0n, feesTotal: 0n, transferWindows: [], curve: null, splitRouter: null, amendments: [],
+    issuePrice: null, unitsSold: 0n, unitsOutstanding: 0n, capPerUnit: null, vaultBalance: 0n, vaultDistributedNet: 0n,
+    treasuryTotal: 0n, treasuryReleased: 0n, treasuryReturned: 0n, tranches: [], releasesPausedByIssuer: false, bids: new Map(), bidOrder: 0, positions: new Map(), periods: new Map(),
+    redemption: null, extinguishedAt: null, grossPaidTotal: 0n, feesTotal: 0n, transferWindows: [], curve: null, splitRouter: null, amendments: [],
     ledger: newLedger(), vault: newVaultState(), tail: newTailState(0n), final: newFinalState(),
   };
   e.state.series.set(seriesId, s);

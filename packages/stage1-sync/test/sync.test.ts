@@ -215,14 +215,15 @@ describe('stage1:sync', () => {
     const all = interimRemaining();
     // every interim name belongs to a family; the auction (S2) and FX (S5) families outlive S1
     expect(all.find((f) => f.family === 'unclassified')).toBeUndefined();
-    expect(all.map((f) => f.family)).toEqual(expect.arrayContaining(['FX (S5)', 'auction (S2)']));
+    // since S1 exactly these two families remain, each in full
+    expect(all).toEqual(INTERIM_FAMILIES);
     expect(INTERIM_FAMILIES.flatMap((f) => f.names).filter((n, i, a) => a.indexOf(n) !== i)).toEqual([]);
     expect(Object.keys(interim)).toContain('clearAuction');
+    // a retired interim name coming back is unclassified, not quietly accepted
     expect(interimRemaining(['clearAuction', 'pythToWad', 'min', 'somethingNew'])).toEqual([
-      { family: 'fixed point', names: ['min'] },
       { family: 'FX (S5)', names: ['pythToWad'] },
       { family: 'auction (S2)', names: ['clearAuction'] },
-      { family: 'unclassified', names: ['somethingNew'] },
+      { family: 'unclassified', names: ['min', 'somethingNew'] },
     ]);
   });
 

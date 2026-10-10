@@ -1,6 +1,10 @@
-import { assertNonNegative, bpsOf, min } from './fixed.ts';
+import { bpsOf, minBig } from '@merces/sdk';
 
 /**
+ * The interim auction family (S2 replaces it with Stage 1's multi-step settlement: pro-rata marginal fill, an over-cap
+ * bid invalid at reveal). Unrevealed bids are refunded in full: the non-reveal charge is an owner hold and is not
+ * modelled. The fee arithmetic is Stage 1's `bpsOf`.
+ *
  * Sealed-bid uniform-price clearing (R4, C10). Pure and deterministic.
  *  - Bids below the reserve price are ignored.
  *  - Bids are filled from the highest price down; ties are broken by commit order (earlier first) (A-AUC-1).
@@ -43,7 +47,7 @@ export function clearAuction(params: {
   auctionFeeBps: bigint;
 }): ClearingResult {
   const { unitsOffered, reservePrice, minimumRaise, walletCapUnits, auctionFeeBps } = params;
-  assertNonNegative(unitsOffered, 'unitsOffered');
+  if (unitsOffered < 0n) throw new RangeError('unitsOffered must be non-negative');
   const eligible = params.bids
     .filter((b) => b.pricePerUnit >= reservePrice && b.quantity > 0n)
     .sort((a, b) => (a.pricePerUnit === b.pricePerUnit ? a.order - b.order : a.pricePerUnit > b.pricePerUnit ? -1 : 1));
@@ -56,7 +60,7 @@ export function clearAuction(params: {
     if (remaining === 0n) break;
     const already = perWallet.get(b.bidder) ?? 0n;
     const room = walletCapUnits > already ? walletCapUnits - already : 0n;
-    const units = min(min(b.quantity, remaining), room);
+    const units = minBig(b.quantity, remaining, room);
     if (units === 0n) continue;
     remaining -= units;
     perWallet.set(b.bidder, already + units);
@@ -86,4 +90,16 @@ export function clearAuction(params: {
 export function walletCapUnits(unitsOutstanding: bigint, capBps: bigint): bigint {
   const cap = (unitsOutstanding * capBps) / 10_000n;
   return cap === 0n && unitsOutstanding > 0n ? 1n : cap;
+}
+
+/** Auction fee paid by a winning bidder on top of the cleared amount (1% by default, a series term). */
+export function auctionFee(clearedAmount: bigint, feeBps: bigint): bigint {
+  if (clearedAmount < 0n) throw new RangeError('clearedAmount must be non-negative');
+  return bpsOf(clearedAmount, feeBps);
+}
+
+/** What a bidder must deposit at commit time to cover price × quantity plus the fee. */
+export function bidDeposit(pricePerUnit: bigint, quantity: bigint, feeBps: bigint): bigint {
+  const amount = pricePerUnit * quantity;
+  return amount + bpsOf(amount, feeBps);
 }

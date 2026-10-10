@@ -8,8 +8,9 @@
  * Beside them sit the few helpers Stage 1 has no counterpart for: the `"YYYYQn"` period codec, decimal parsing, the
  * term builder's per-unit rate, a value-free payment wrapper, deadline projection and a display cap.
  *
- * The interim Merces math (Part C) survives only under `interim.*` until each caller moves to Stage 1's functions;
- * at the end of S1 it keeps only the auction family (S2) and the FX family (S5).
+ * The interim Merces math (Part C) survives only under `interim.*`, and since the end of S1 only the auction family
+ * (`clearAuction`, `walletCapUnits`, `bidDeposit`, `auctionFee`; S2) and the FX family (`quarterAverageRate`,
+ * `coverageOk`, `deviationBps`, `withinBand`, `pythToWad`; S5).
  */
 export * as interim from './interim/index.ts';
 

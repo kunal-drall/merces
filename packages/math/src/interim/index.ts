@@ -1,17 +1,10 @@
 /**
- * The interim Merces math (Part C), kept only until each caller moves to Stage 1's functions.
+ * The interim Merces math (Part C) that outlives S1, reached as `interim.<name>` from `@merces/math`.
  *
- * Reached as `interim.<name>` from `@merces/math`. Every work package removes the `interim.` uses in the files it
- * owns; at the end of S1 only the auction family (S2) and the FX family (S5) remain. Nothing here is Stage 1's
- * semantics: where a Stage 1 function of the same name exists (`hurdlePrice`, `redemptionQuote`, `lateAccrual`,
- * `owedYtd`, `quarterPayment`, `walletCapUnits`, `capRemaining`), it differs in signature, rounding or meaning.
+ * Exactly two families remain, each until its milestone moves the callers to Stage 1: the auction family (S2: Stage 1's
+ * multi-step settlement) and the FX family (S5: Stage 1's FX accumulator). Everything else moved to Stage 1's own
+ * functions during S1; the test in `packages/math/test/math.test.ts` pins this key list. Nothing here is Stage 1's
+ * semantics: Stage 1's `walletCapUnits`, for one, differs (the S2 auction family is not re-exported).
  */
-export * from './fixed.ts';
-export * from './time.ts';
-export * from './payment.ts';
-export * from './fees.ts';
-export * from './cap.ts';
-export * from './redemption.ts';
-export * from './lateness.ts';
-export * from './fx.ts';
-export * from './auction.ts';
+export { clearAuction, walletCapUnits, auctionFee, bidDeposit, type RevealedBid, type Allocation, type ClearingResult } from './auction.ts';
+export { quarterAverageRate, coverageOk, deviationBps, withinBand, pythToWad } from './fx.ts';

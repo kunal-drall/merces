@@ -19,8 +19,9 @@ backend's two low-privilege roles. The three implementations are interchangeable
 
 ## The canonical model
 
-`@merces/domain` defines the vocabulary once: 43 events, 36 commands, the state shapes, canonical hashing for the terms
-commitment, income commitment, bid and order commitments, the verifier attestation message and the zk public-input layout.
+`@merces/domain` defines the vocabulary once: 43 events, 38 commands, the state shapes, the commitments (Stage 1's
+Poseidon terms and income commitments; our bid and order commitments until S2 and S5), the verifier attestation
+message (Stage 1's report field set) and Stage 1's six report public inputs.
 Zod schemas are the single source: TypeScript types, runtime validation in the indexer and the API, the JSON schema
 (`packages/domain/schema`) and `DOMAIN_EVENTS.md` are all generated from them. Live adapters are anti-corruption layers:
 whatever Stage 1 emits is mapped onto these shapes by `SolanaEventMapper` / `EvmEventMapper`, with every difference
@@ -28,13 +29,20 @@ written to `INTERFACE_DRIFT.md`.
 
 ## The simulator
 
-`SimEngine` implements Part C in TypeScript with `bigint` only, one `execute(command, actor)` per transaction with
-snapshot-and-rollback, and exactly the canonical events. Its commands live in one module per area under
+`SimEngine` runs the canonical commands on Stage 1's rules (SPEC v1.1.2, with Stage 1's reference simulator as the
+executable spec) in TypeScript with `bigint` only, one `execute(command, actor)` per transaction with
+snapshot-and-rollback, and exactly the canonical events. Every error on a Stage 1 path carries Stage 1's error name
+(`ChainError.detail.stage1`). A Groth16 report proof is verified asynchronously in `SimulatorChain.send` before the
+synchronous engine runs; the engine takes the verdict and checks the six public signals itself. Its commands live in one module per area under
 `packages/simulator/src/engine/` (registry, auction, treasury, reports, payments, holders, status, redemption, terminal,
 fx, window, curve), each a set of functions over the shared `EngineCore`; the `ChainPort` read mappers live in
-`src/reads/`. State is a plain object (serialisable for the Postgres persistent mode). Two personalities differ only in address format and stablecoin catalogue. Time is a controllable clock
-(`advanceTime`, `setTime`) exposed in mock mode through `/dev/advance-time`. The pure arithmetic lives in `@merces/math`
-behind a `MercesMath` interface so `stage1:sync` can swap in Stage 1's reference library after vector parity.
+`src/reads/`. State is a plain object, version 2, carrying Stage 1's own series ledger, payout vault, tail and final
+pool (serialisable for the Postgres persistent mode; another version is refused, and `sim:reset` clears it). Two
+personalities differ only in address format and stablecoin catalogue. Time is a controllable clock (`advanceTime`,
+`setTime`) exposed in mock mode through `/dev/advance-time`. The arithmetic is Stage 1's: `@merces/math` re-exports
+`@merces/sdk` and `@merces/reference` (workspace packages built from the pinned `stage1` submodule) by name, plus a
+few helpers Stage 1 has no counterpart for; the interim Merces math survives under `interim.*` only for the auction
+(S2) and FX (S5) families.
 
 ## Read side
 
@@ -76,16 +84,21 @@ snapshot per UTC day per pair per chain with a Chainlink cross-check where a fee
 
 ## The report verifier
 
-A separate process with one job: verify a zkTLS proof, recompute the income commitment, sign the commitment tuple. It
-has no database, logs no payloads, and keeps its key behind the KMS port. Devices call it directly; the API never sees
-a proof or a salt. `@merces/poi-device` is the device-side counterpart (payment, commitment, proof, assembly).
+A separate process with one job: verify a zkTLS proof and the prior quarter's opening, recompute the income
+commitments, sign the attestation (series, period, prior and income commitments, tier, liquidity flag). It has no
+database, logs no payloads, and keeps its key behind the KMS port. Devices call it directly; the API never sees a zkTLS
+proof or a salt. `@merces/poi-device` is the device-side counterpart: it keeps the income chain (each quarter's
+opening, salts derived from a device secret), computes the payment with Stage 1's formula and proves Stage 1's
+ProofOfIncome circuit (Groth16) on the device; only commitments, the payment and the proof leave it.
 
 ## Stage 1 catch-up
 
-`stage1:sync` (`@merces/stage1-sync`) detects the handoff manifest or a hand-written map, generates typed clients from
-IDLs and ABIs, diffs interfaces into `INTERFACE_DRIFT.md`, proves math parity before swapping, replays parity vectors
-through the simulator, runs the conformance suite (`@merces/conformance`, written against `ChainPort` only) on each
-live chain, and prints a verdict. It runs on a schedule in CI. See `STAGE1_INTEGRATION.md`.
+Stage 1 is the `stage1` git submodule, pinned. `stage1:sync` (`@merces/stage1-sync`) detects the handoff manifest or
+a hand-written map, generates typed clients from IDLs and ABIs, diffs interfaces into `INTERFACE_DRIFT.md`, checks that
+`@merces/math` runs Stage 1's own functions at the pinned commit, replays Stage 1's 25 parity vectors through the Stage
+1 vector runner (on Stage 1's own simulator, and the S1 targets on ours on both personalities, `pnpm stage1:vectors`),
+runs the conformance suite (`@merces/conformance`, written against `ChainPort` only) on each live chain, and prints a
+verdict. It runs on a schedule in CI. See `STAGE1_INTEGRATION.md`.
 
 ## Conventions
 

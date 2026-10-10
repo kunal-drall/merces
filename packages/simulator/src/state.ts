@@ -6,8 +6,10 @@ import type { PersonalityConfig } from './addresses.ts';
  * Internal simulator state. bigint everywhere money or ratios appear.
  *
  * Version 2 (S1) carries Stage 1's own state objects beside ours: the series ledger (`SimLedger`, Stage 1's field
- * names), the payout vault, the tail and the final pool (Stage 1 types from `@merces/reference`). Fields marked
- * `@deprecated` are the version-1 bookkeeping the named work package stops using; WP13 deletes them.
+ * names), the payout vault, the tail and the final pool (Stage 1 types from `@merces/reference`). The version-1
+ * bookkeeping those replaced (the reward-debt cursors, the series pause record, the per-year gross map, the period's
+ * outstanding and accrual) is gone since S1 WP13; a persisted version-2 state that still carries it is read as before
+ * and the old fields are ignored.
  */
 export const SIM_STATE_VERSION = 2;
 
@@ -61,16 +63,10 @@ export interface SimPosition {
   units: bigint;
   /** units held back for an open transfer-window sell order; they stay in `units` for payout accounting */
   escrowed: bigint;
-  /** @deprecated WP5 (the claim cursor is `lastNetAccWad`; no longer read or written) */
-  rewardDebt: bigint;
   /** payouts settled into a pending balance on unit changes (burn, transfer) */
   pending: bigint;
   claimedTotal: bigint;
   redeemedUnits: bigint;
-  /** @deprecated WP6 (the tail cursor is `lastTailAccWad`; no longer read or written) */
-  tailDebt: bigint;
-  /** @deprecated WP6 (no longer read or written) */
-  redemptionClaimed: boolean;
   // ---- Stage 1 holder record (SIM:82-90); set by `registerHolder` (SIM:406-416)
   registered: boolean;
   /** `vault.netAccWad` at the holder's last settlement */
@@ -88,13 +84,7 @@ export interface SimPeriod {
   reportAccepted: boolean;
   tier: number | null;
   paymentStable: bigint;
-  /**
-   * owed before lateness (payment minus split receipts, or the tail amount)
-   * @deprecated WP4 and WP5 (the ledger's `openDueAmount` and the report's `due`)
-   */
-  outstanding: bigint;
-  /** @deprecated WP4 and WP5 (accrual is computed at pay time; `accrualPaid` records it) */
-  accrual: bigint;
+  /** the due as the reads show it: the report's `due`, then the total paid (due + accrual) once settled */
   paymentDue: bigint;
   paid: bigint;
   splitReceived: bigint;
@@ -108,8 +98,6 @@ export interface SimPeriod {
   accrualPaid: bigint;
   paidAt: number | null;
   liquidityEvent: boolean;
-  /** @deprecated WP4 (the ledger's `formalNoticeEmittedFor`) */
-  formalNoticeEmitted: boolean;
   acceptedAt: number | null;
   isTail: boolean;
 }
@@ -132,10 +120,6 @@ export interface SimRedemption {
   claimed: bigint;
   tailCapPerUnit: bigint;
   tailEndsAt: number;
-  /** @deprecated WP6 (`SimSeries.tail.tailPaidPerUnitWad`; no longer read or written) */
-  tailPaidPerUnit: bigint;
-  /** @deprecated WP6 (`SimSeries.tail.tailAccWad`; no longer read or written) */
-  accTailNetWad: bigint;
 }
 
 export interface SimWindowOrder {
@@ -225,15 +209,7 @@ export interface SimSeries {
   unitsSold: bigint;
   unitsOutstanding: bigint;
   capPerUnit: bigint | null;
-  /** @deprecated WP5 (`vault.paidPerUnitWad`; no longer read or written since WP6 moved the quote to Stage 1's) */
-  paidPerUnitWad: bigint;
-  /** @deprecated WP5 (`vault.netAccWad`; no longer read or written) */
-  accNetWad: bigint;
   vaultBalance: bigint;
-  /** @deprecated WP5 (`vault.grossReceived`; the API vault totals are `grossPaidTotal`/`feesTotal`; no longer read or written) */
-  vaultGrossTotal: bigint;
-  /** @deprecated WP5 (`vault.feeCollected`; see `vaultGrossTotal`) */
-  vaultFeesTotal: bigint;
   vaultDistributedNet: bigint;
   treasuryTotal: bigint;
   treasuryReleased: bigint;
@@ -241,22 +217,12 @@ export interface SimSeries {
   treasuryReturned: bigint;
   tranches: SimTranche[];
   releasesPausedByIssuer: boolean;
-  /** @deprecated WP4 (`ledger.releasesBlockedLate`) */
-  releasesPausedLate: boolean;
   bids: Map<string, SimBid>;
   bidOrder: number;
   positions: Map<string, SimPosition>;
   periods: Map<string, SimPeriod>;
-  /** @deprecated WP4 (`ledger.pauses`, `ledger.pauseRequested`, `ledger.pauseRequestedUntil`) */
-  pause: { requestedUntil: number | null; approvedUntil: number | null; startedAt: number | null } | null;
-  /** @deprecated WP4 (`ledger.pauses`) */
-  pauseIntervals: { from: number; to: number }[];
-  /** @deprecated WP4 (`ledger.pausedTotal`) */
-  pausedSecondsTotal: number;
   redemption: SimRedemption | null;
   extinguishedAt: number | null;
-  /** @deprecated WP5 (`vault.yearGross`, Stage 1's tagged year ring the quote reads; no longer read or written) */
-  grossByYear: Map<number, bigint>;
   /** life-to-date gross the vault accepted (regular, split and tail payments; not an extinguishment return): the API vault total */
   grossPaidTotal: bigint;
   /** life-to-date payout fees (regular, split and tail) */

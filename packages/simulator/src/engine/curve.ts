@@ -1,5 +1,5 @@
 import { ChainError, type Command } from '@merces/domain';
-import { interim, WAD } from '@merces/math';
+import { WAD, bpsOf, capPerUnit, interim, mulDiv } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { position, registerHolder, setUnits } from './holders.ts';
@@ -17,7 +17,8 @@ export function buyCurve(e: EngineCore, signer: string, cmd: Extract<Command, { 
   e.requireAllowlisted(signer);
   const amountIn = big(cmd.amountIn);
   if (amountIn <= 0n) throw new ChainError('InvalidTerms', 'amountIn must be positive');
-  const spot = c.basePrice + interim.mulDiv(c.basePrice, c.slopeWad * s.unitsOutstanding, WAD);
+  // Stage 1's mulDiv (sdk), on non-negative inputs: the base price is the reserve price, the slope a constant
+  const spot = c.basePrice + mulDiv(c.basePrice, c.slopeWad * s.unitsOutstanding, WAD);
   const units = amountIn / spot;
   if (units < big(cmd.minUnitsOut) || units === 0n) throw new ChainError('InvalidTerms', 'slippage: fewer units than minUnitsOut');
   // Bonding phase only: a wallet may hold at most the series' wallet cap of the units offered (C10/R17, A-CURVE-2).
@@ -46,10 +47,10 @@ export function graduate(s: SimSeries, now: number, emit: Emit): void {
   // every curve buyer becomes a registered holder at graduation, as Stage 1 registers allocated bidders at settlement
   for (const p of s.positions.values()) if (p.units > 0n) registerHolder(s, p);
   s.issuePrice = s.unitsSold > 0n ? c.raised / s.unitsSold : c.basePrice;
-  s.capPerUnit = interim.perUnitCap(s.terms.capMultipleWad, s.issuePrice);
+  s.capPerUnit = capPerUnit(s.terms.capMultipleWad, s.issuePrice);
   let allocated = 0n;
   s.tranches = s.terms.releaseSchedule.map((t, i, arr) => {
-    const amount = i === arr.length - 1 ? s.treasuryTotal - allocated : interim.bpsOf(s.treasuryTotal, BigInt(t.bps));
+    const amount = i === arr.length - 1 ? s.treasuryTotal - allocated : bpsOf(s.treasuryTotal, BigInt(t.bps));
     allocated += amount;
     return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false, returned: false };
   });

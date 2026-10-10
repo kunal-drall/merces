@@ -108,7 +108,6 @@ export function payIn(e: EngineCore, signer: string, cmd: Extract<Command, { kin
   const r = vaultReceive(e, s, total, anchor, { periodId, source: 'payIn', payer: signer, due: { paymentDue: total, accrual } }, now, emit);
   // the period as the reads show it once paid: the due recomputed at payment time; `paid` is what the vault accepted
   // (a cap refund is not part of it, A-C6-1)
-  p.accrual = accrual;
   p.paymentDue = total;
   p.accrualPaid = accrual;
   p.paid += r.accepted;

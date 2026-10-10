@@ -22,15 +22,16 @@ reassign a case) but hold no key, so they cannot read it.
 
 | Field | Where | Storage | Readers | Deleted when |
 | --- | --- | --- | --- | --- |
-| Income figure (YTD, per source) | nowhere on the server; the device computes the payment; the report verifier sees it in memory only | none | — | never exists at rest |
-| Income salt | device; sent to the verifier in memory only | none | — | — |
-| Income commitment | `reports.income_commitment`, onchain `ReportAccepted` | hash | issuer, holders, public (onchain) | — |
+| Income figure (year to date, per source) | the issuer's device only: its income chain keeps each reported quarter's year-to-date figure and salt (the opening the next quarter's proof chains from). The report verifier sees the figure inside the zkTLS proof, and the prior quarter's opening, in memory only; a tier-3 attestor receives the opening end-to-end encrypted | none on the server | — | never exists at rest on the server |
+| Income salt | device; derived from a device secret (HMAC-SHA512 under the device secret over the series and period, reduced mod the BN254 field order; `@merces/poi-device` `deriveIncomeSalt`), so a reinstalled device rebuilds its openings from its own records and no server-side copy exists (owner question 2, default). Sent to the verifier in memory only (tier 2) or end-to-end encrypted to the attestor (tier 3) | none | — | — |
+| Income commitment and the prior it chains from | `reports.income_commitment`, `reports.prior_income_commitment`, `periods`, `series.last_income_commitment`, onchain `ReportAccepted` | hash (Stage 1 Poseidon(2) over the year-to-date figure and the salt) | issuer, holders, public (onchain) | — |
 | Payment amounts (gross, fee, net, accrual) | `reports`, `periods`, `money_events`, `fees_ledger`, onchain | plain (public onchain in v1) | issuer, holders, admin; never in the public activity feed | end of retention |
-| Threshold θ and rate r | `terms_vault.ciphertext`; `terms_amendments.ciphertext` | vault | issuer, eligible backers (every read logged in `terms_access_log`; eligibility read live); the reviewing attestor on an amendment. No admin bypass. | series end + retention |
-| Terms commitment | `series`, `series_drafts`, onchain | hash | public | — |
+| Threshold θ, rate r and the terms salt | `terms_vault.ciphertext`; `terms_amendments.ciphertext` | vault | issuer, eligible backers (every read logged in `terms_access_log`; eligibility read live); the reviewing attestor on an amendment. No admin bypass. | series end + retention |
+| Terms commitment | `series`, `series_drafts`, onchain | hash (Stage 1 Poseidon(5) over θ, r, the currency code, the indexing rule and the terms salt) | public | — |
 | zkTLS proof (contains the figure) | never on the server; device → verifier in memory | none | — | — |
-| Prover proof + public inputs | `reports.proof` (no witness) | plain | issuer, holders, admin | end of retention |
-| Verifier attestation (signature over the commitment tuple) | `reports.attestation`, onchain | plain | issuer, holders, admin | — |
+| Report proof + public inputs | `reports.proof`: Stage 1's Groth16 proof and its six public signals (terms commitment, units outstanding, FX rate, prior and income commitments, payment); never the witness, which stays inside the device's prover | plain | issuer, holders, admin | end of retention |
+| Verifier attestation (signature over series, period, prior and income commitments, tier and liquidity event) | `reports.attestation`, onchain | plain | issuer, holders, admin | — |
+| Tier-3 income opening (year-to-date figures and salts of the quarter and its prior) | `tier3_cases.opening_ciphertext` | e2e | the chosen attestor only, to check the commitments against the documents; server: nobody. The attestor's signed case carries commitments, the proof and the attestation only | case closed + retention |
 | Tier-3 documents (tax returns, accounting exports) | `tier3_cases.documents_ciphertext`, `tier3_annual.documents_ciphertext` | e2e | the chosen attestor only (client-side decryption); server: nobody | case closed + retention |
 | Tier-3 attested payment | `tier3_cases`, `tier3_annual` (amounts only) | plain | issuer, attestor, admin | end of retention |
 | Income source kinds (stripe/deel/…) | `applications.income_source_kinds`, `income_sources.kind` | plain | owner, admin | account deletion |

@@ -21,7 +21,7 @@ export function toPeriodState(x: SimSeries, periodId: string, now: number): Peri
   const settled = !!p?.settled;
   const l = x.ledger;
   const open = l.openDuePeriod === pid && l.openDueAmount > 0n;
-  const liveAccrual = open && !p?.isTail ? lateAccrual(pid, l.openDueAmount, clock, t, params) : (p?.accrual ?? 0n);
+  const liveAccrual = open && !p?.isTail ? lateAccrual(pid, l.openDueAmount, clock, t, params) : (p?.accrualPaid ?? 0n);
   const liveDue = open ? l.openDueAmount + (p?.isTail ? 0n : liveAccrual) : (p?.paymentDue ?? 0n);
   return {
     seriesId: x.seriesId, periodId, dueAt: Number(d.dueAt), graceEndsAt: Number(d.graceEndsAt), formalNoticeAt: Number(d.formalNoticeAt), reportAccepted: !!p?.reportAccepted, tier: p?.tier ?? null,

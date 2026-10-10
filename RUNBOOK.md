@@ -92,6 +92,25 @@ MERCES_ALLOW_SIM_RESET=1 pnpm --filter @merces/simulator sim:reset --chain solan
   and the issuer registrations (`registerIssuer`). `dev:mock` does this itself: it registers the verifier key at boot
   and re-seeds its synthetic cohort on an empty chain.
 
+### Checks before a deploy
+
+The S1 gate, all from the repository root with Postgres up:
+
+```
+pnpm typecheck
+DATABASE_URL=postgres://postgres@localhost:5432/merces pnpm vitest run          # unit + DB suites
+MERCES_TEST_DB=1 pnpm vitest run --project canary                               # the privacy canary
+CONFORMANCE_CHAIN=simulator pnpm vitest run --project conformance               # also simulator:monad
+pnpm stage1:vectors --personality solana,monad                                  # the 10 S1 targets on our simulator
+pnpm stage1:vectors --backend reference                                         # all 25 on Stage 1's own simulator
+pnpm stage1:sync --no-conformance                                               # pin, drift, math, vectors
+```
+
+`stage1:vectors` must exit 0 with `OK: …, 20/20 at expected status` (the 10 targets on both personalities) and the
+reference backend with `OK: 25/25 PASS`; `stage1:sync` must report the math and vectors steps `OK` (the diff step stays
+`WARN` until the adapters are wired, and conformance needs live deployments). The vector runner verifies every
+embedded report proof with the ports' Groth16 verifier and never persists anything.
+
 ## Keys
 
 - Development: `MERCES_KMS_PROVIDER=local` derives deterministic keys from `MERCES_LOCAL_KEY_SEED`. The report verifier's
@@ -116,10 +135,10 @@ in the transaction that projects the finalized event, not by the keepers.
 | --- | --- | --- | --- |
 | auction.settle | 1 min | settles raises whose reveal phase ended | settlement delays; anyone can call `settleAuction` |
 | auction.reveal-reminders | 10 min | reminds unrevealed bidders in the last 12 h | bidders may miss reveals |
-| status.crank | 1 h | InGrace/Late transitions, FormalNoticeDue | statuses lag; the chain's view is authoritative |
-| pause.crank | 1 h | ends approved pauses | paused series stay paused until run |
+| status.crank | 1 h | `crankStatus` once the earliest unpaid period passes a status instant the chain has not recorded: InGrace after `dueAt`, Late after `graceEndsAt`, the formal notice at `formalNoticeAt` (period end + 30 / 45 / 90 days of unpaused time, Stage 1's inclusive bounds) | the stored and indexed status lags the derived one until any sync point; reads and money paths use the derived status, which is authoritative |
+| pause.crank | 1 h | announces hardship pauses whose approved end passed (`PauseEnded`) | events only: a pause ends by itself at its approved end (Stage 1), so the series is no longer Paused; only the notice lags |
 | burn.crank | 1 h | burns units of Retired series (Stage 1 `burn_retired`; an Extinguished series burns on claim) | holders can still claim; burn is cosmetic |
-| reporting.reminders | 1 h | due-soon / due / grace-end reminders | issuers get no reminders |
+| reporting.reminders | 1 h | reminders 7 days before `dueAt`, at `dueAt + 1` (InGrace) and at `graceEndsAt + 1` (Late), from the chain's period read | issuers get no reminders |
 | rate.snapshot | 30 min | one Pyth snapshot per UTC day per pair per chain, Chainlink cross-check | coverage drops → quarters flagged for attestor rates |
 | fx.coverage | 6 h | flags quarters with < 80% coverage, opens attestor requests | reports for non-USD series block |
 | transfer.windows | 1 h | opens/clears quarterly windows (flag `transfer_windows`) | no windows |

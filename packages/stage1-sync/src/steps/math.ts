@@ -24,18 +24,13 @@ export const REFERENCE_REEXPORTS = [
 ] as const;
 
 /**
- * The interim (Part C) math still exported under `interim`, by family. A family is "remaining" while any of its
- * names is still there; S1 removes all but the auction family (S2) and the FX family (S5).
+ * The interim (Part C) math still exported under `interim`, by family. S1 moved every other family to Stage 1's own
+ * functions; these two remain until S2 (Stage 1's auction) and S5 (Stage 1's FX accumulator). A name outside them is
+ * reported as "unclassified".
  */
 export const INTERIM_FAMILIES: { family: string; names: string[] }[] = [
-  { family: 'fixed point', names: ['WAD', 'BPS', 'assertNonNegative', 'mulDiv', 'wadMul', 'wadDiv', 'wadFromDecimal', 'wadToDecimal', 'bpsOf', 'min', 'max', 'pow', 'wadPow1p'] },
-  { family: 'time and periods', names: ['DAY', 'YEAR_DAYS', 'periodOf', 'periodFrom', 'parsePeriod', 'previousPeriod', 'nextPeriod', 'periodsBetween', 'comparePeriods', 'utcDayIndex', 'daysBetween', 'yearsSince'] },
-  { family: 'payment', names: ['ratePerUnit', 'owedYtd', 'periodPayment', 'toStablecoin', 'quarterPayment'] },
-  { family: 'vault and claims', names: ['perUnitCap', 'applyGrossPayment', 'capRemaining', 'accrueNet', 'claimable', 'rewardDebt', 'payoutFee', 'DEFAULT_PAYOUT_FEE_BPS'] },
-  { family: 'redemption and tail', names: ['hurdlePrice', 'averageAnnualPayout', 'redemptionQuote', 'tailPayoutPerUnit'] },
-  { family: 'status and lateness', names: ['DEFAULT_DUE_DAYS', 'DEFAULT_GRACE_DAYS', 'DEFAULT_FORMAL_NOTICE_DAYS', 'deadlinesFor', 'daysLate', 'lateAccrual', 'periodStanding'] },
-  { family: 'FX (S5)', names: ['DEFAULT_MIN_COVERAGE_BPS', 'quarterAverageRate', 'coverageOk', 'deviationBps', 'withinBand', 'pythToWad'] },
-  { family: 'auction (S2)', names: ['clearAuction', 'walletCapUnits', 'bidDeposit', 'auctionFee', 'DEFAULT_AUCTION_FEE_BPS'] },
+  { family: 'FX (S5)', names: ['quarterAverageRate', 'coverageOk', 'deviationBps', 'withinBand', 'pythToWad'] },
+  { family: 'auction (S2)', names: ['clearAuction', 'walletCapUnits', 'bidDeposit', 'auctionFee'] },
 ];
 
 /** Interim families with at least one name still exported, with those names; unknown names land in "unclassified". */
@@ -160,7 +155,7 @@ function writeParity(ctx: StepCtx, r: { pkg: string | null; commit: string | nul
   }
   lines.push(
     '- No function-by-function comparison: the gateway runs Stage 1\'s functions, so comparing them would compare Stage 1 with itself. Behavioural parity is measured by the Stage 1 vector runner (`VECTOR_PARITY.md`). The last comparison of the interim math against Stage 1 (6 of 12 families disagreeing) is in this file\'s git history.',
-    '- The interim (Part C) math survives only under `interim.*` until each caller moves to Stage 1; S1 removes all of it except the auction family (S2) and the FX family (S5).',
+    '- The interim (Part C) math survives only under `interim.*`: since S1, only the auction family (S2) and the FX family (S5). Any other name there is reported as unclassified.',
     '',
   );
   if (r.remaining.length) {

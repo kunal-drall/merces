@@ -10,10 +10,10 @@ import type { Applied, FxRequest, World } from './world.ts';
  * as is; the runner's comparison, invariants and revert check run on top of it, so a 25/25 pass proves the runner
  * (S1 plan D7) and that the pinned Stage 1 checkout replays its own vectors.
  *
- * Proofs are verified for real. Each proof's verdict comes from the per-process cache first (`proofs.ts`, Stage 1's
- * `verifyReport`): when it is valid, the simulator's own verification would return the same `true`, so it is skipped
- * for that call; when it is not, the simulator verifies itself and raises `InvalidProof` at its own point in the check
- * order (SIM:1110-1113).
+ * Proofs are verified for real. Each proof's verdict comes from the per-process cache first (`proofs.ts`: the ports'
+ * `Groth16ReportVerifier`, i.e. Stage 1's `verifyReport`): when it is valid, the simulator's own verification would
+ * return the same `true`, so it is skipped for that call; when it is not, the simulator verifies itself and raises
+ * `InvalidProof` at its own point in the check order (SIM:1110-1113).
  */
 export class ReferenceWorld implements World {
   readonly backend = 'reference' as const;

@@ -1,16 +1,18 @@
-import { BPS, assertNonNegative } from './fixed.ts';
+import { BPS_DENOMINATOR as BPS } from '@merces/sdk';
 
 /**
+ * The interim FX family (S5 replaces it with Stage 1's trading-day coverage and FX accumulator).
+ *
  * C9. Rate accumulator: one snapshot per UTC day per pair; running sum and count.
  * fx_avg(q) = (sum_end − sum_start) / (count_end − count_start)
  */
-export const DEFAULT_MIN_COVERAGE_BPS = 8_000n; // 80% of the quarter's days
+const DEFAULT_MIN_COVERAGE_BPS = 8_000n; // 80% of the quarter's days
 
 export function quarterAverageRate(sumEnd: bigint, sumStart: bigint, countEnd: number, countStart: number): bigint {
   const n = BigInt(countEnd - countStart);
   if (n <= 0n) throw new RangeError('no snapshots in the quarter');
   const s = sumEnd - sumStart;
-  assertNonNegative(s, 'rate sum');
+  if (s < 0n) throw new RangeError('rate sum must be non-negative');
   return s / n;
 }
 

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bidCommitment, type DomainEvent } from '@merces/domain';
-import { interim, WAD, parsePeriod } from '@merces/math';
+import { WAD, capPerUnit, parsePeriod } from '@merces/math';
 import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv } from '../src/env.ts';
 
 /**
@@ -95,7 +95,7 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     expect(ev.totalFees).toBe(USDC(45).toString());
     const s = (await e.chain.getSeries(seriesId))!;
     expect(s.phase).toBe('Settled');
-    expect(s.capPerUnit).toBe(interim.perUnitCap(BigInt(s.terms.capMultipleWad), clearing).toString());
+    expect(s.capPerUnit).toBe(capPerUnit(BigInt(s.terms.capMultipleWad), clearing).toString()); // Stage 1's capPerUnit
     const pos = (await e.chain.getPosition(seriesId, bids[0]!.w.address))!;
     expect(pos.units).toBe('100');
     const before = BigInt(await e.chain.getBalance(bids[0]!.w.address, s.terms.stablecoin));

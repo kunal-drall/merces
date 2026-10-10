@@ -367,8 +367,22 @@ describe('stage1 vector runner: merces backend', () => {
     expect(verify(null, Buffer.from(attestationMessage(fields)), pub, Buffer.from(att.signature.slice(2), 'hex'))).toBe(true);
   });
 
+  // the S1 gate (plan WP13): one full run of every target on both personalities, shared by the next two tests
+  let full: RunReport | undefined;
+  const fullRun = async (): Promise<RunReport> => (full ??= await runStage1Vectors({ dir: VECTORS, backend: 'merces' }));
+
+  it('every S1 target is at its expected status on both personalities', async () => {
+    const report = await fullRun();
+    expect(report.runs.map((r) => `${r.id}/${r.world}`)).toEqual(TARGETS_S1.flatMap((id) => [`${id}/merces/solana`, `${id}/merces/monad`]));
+    for (const r of report.runs) expect(r.atExpected, `${r.vector} ${r.world}: ${r.status}`).toBe(true);
+    expect(report.ok).toBe(true);
+    // the report proofs went through the ports' Groth16 verifier: 04#66 passes only because its pairing check fails
+    // (its signals match the claimed payment), so a verifier that accepted everything would leave 04 off its status
+    expect(report.proofs.verified).toBeGreaterThan(0);
+  }, 180_000);
+
   it('the shim table is written into VECTOR_PARITY.md under "Shims (not parity)", and a merces run carries public values only', async () => {
-    const report = await runStage1Vectors({ dir: VECTORS, backend: 'merces' });
+    const report = await fullRun();
     expect(report.runs).toHaveLength(TARGETS_S1.length * 2);
     expect(report.notRun).toHaveLength(25 - TARGETS_S1.length);
     const md = renderParity([report], { dir: '$STAGE1_PATH/packages/vectors' });
@@ -393,13 +407,7 @@ describe('stage1 vector runner: merces backend', () => {
       expect(md.toLowerCase().includes(s)).toBe(false);
       expect(json.includes(s)).toBe(false);
     }
-  }, 120_000);
-
-  // WP13 turns this on by default (S1 plan WP13); until then the engine work packages bring the targets up one by one
-  it.runIf(process.env.STAGE1_VECTORS_MERCES === '1')('every S1 target is at its expected status on both personalities', async () => {
-    const report = await runStage1Vectors({ dir: VECTORS, backend: 'merces' });
-    for (const r of report.runs) expect(r.atExpected, `${r.vector} ${r.world}: ${r.status}`).toBe(true);
-  }, 120_000);
+  }, 180_000);
 });
 
 describe('stage1:vectors CLI: merces backend', () => {

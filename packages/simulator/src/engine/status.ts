@@ -28,8 +28,8 @@ export function periodRecord(s: SimSeries, periodId: string): SimPeriod {
   let p = s.periods.get(periodId);
   if (!p) {
     p = {
-      periodId, pid: toPid(periodId), reportAccepted: false, tier: null, paymentStable: 0n, outstanding: 0n, accrual: 0n, paymentDue: 0n, paid: 0n, splitReceived: 0n, settled: false,
-      incomeCommitment: null, priorIncomeCommitment: null, due: 0n, accrualPaid: 0n, paidAt: null, liquidityEvent: false, formalNoticeEmitted: false, acceptedAt: null, isTail: false,
+      periodId, pid: toPid(periodId), reportAccepted: false, tier: null, paymentStable: 0n, paymentDue: 0n, paid: 0n, splitReceived: 0n, settled: false,
+      incomeCommitment: null, priorIncomeCommitment: null, due: 0n, accrualPaid: 0n, paidAt: null, liquidityEvent: false, acceptedAt: null, isTail: false,
     };
     s.periods.set(periodId, p);
   }

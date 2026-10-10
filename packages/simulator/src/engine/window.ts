@@ -82,6 +82,7 @@ export function revealWindowOrder(e: EngineCore, signer: string, cmd: Extract<Co
 }
 // ------------------------------------------------------------------ clearing
 type Fill = { buyer: string; seller: string; units: bigint };
+const minOf = (a: bigint, b: bigint): bigint => (a < b ? a : b);
 
 /**
  * Our one-step greedy matching (unchanged; Stage 1's proposal/tally/fill rounds and the window fee are S5): buys by
@@ -104,7 +105,7 @@ function matchOrders(s: SimSeries, w: SimTransferWindow): { fills: Fill[]; clear
     if (b.revealed!.pricePerUnit < x.revealed!.pricePerUnit) break;
     const held = (s.positions.get(b.wallet)?.units ?? 0n) + fills.filter((f) => f.buyer === b.wallet).reduce((a, f) => a + f.units, 0n);
     const room = cap > held ? cap - held : 0n;
-    const units = interim.min(interim.min(buyLeft[bi]!, sellLeft[si]!), room);
+    const units = minOf(minOf(buyLeft[bi]!, sellLeft[si]!), room);
     if (units === 0n) {
       bi++;
       continue;

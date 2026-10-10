@@ -1,5 +1,5 @@
 import { ChainError, bidCommitment, type Command } from '@merces/domain';
-import { interim } from '@merces/math';
+import { bpsOf, capPerUnit, interim } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { position, registerHolder, setUnits } from './holders.ts';
@@ -59,7 +59,7 @@ export function revealBid(e: EngineCore, signer: string, cmd: Extract<Command, {
   const qty = big(cmd.quantity);
   const expected = bidCommitment({ seriesId: s.seriesId, bidder: signer, pricePerUnit: price, quantity: qty, salt: cmd.salt });
   if (expected !== b.commitment) throw new ChainError('InvalidCommitment', 'reveal does not match the commitment');
-  const needed = price * qty + interim.bpsOf(price * qty, s.terms.auctionFeeBps);
+  const needed = price * qty + bpsOf(price * qty, s.terms.auctionFeeBps);
   if (needed > b.deposit) throw new ChainError('InsufficientFunds', 'deposit does not cover price × quantity plus the fee');
   b.revealed = { pricePerUnit: price, quantity: qty };
   emit('BidRevealed', { seriesId: s.seriesId, bidder: signer, pricePerUnit: cmd.pricePerUnit, quantity: cmd.quantity });
@@ -102,11 +102,11 @@ export function settleAuction(e: EngineCore, cmd: Extract<Command, { kind: 'sett
   s.issuePrice = res.clearingPrice;
   s.unitsSold = res.unitsSold;
   s.unitsOutstanding = res.unitsSold;
-  s.capPerUnit = interim.perUnitCap(s.terms.capMultipleWad, res.clearingPrice);
+  s.capPerUnit = capPerUnit(s.terms.capMultipleWad, res.clearingPrice); // Stage 1's floor(m × P0 / WAD)
   s.treasuryTotal = res.proceeds;
   let allocated = 0n;
   s.tranches = s.terms.releaseSchedule.map((t, i, arr) => {
-    const amount = i === arr.length - 1 ? res.proceeds - allocated : interim.bpsOf(res.proceeds, BigInt(t.bps));
+    const amount = i === arr.length - 1 ? res.proceeds - allocated : bpsOf(res.proceeds, BigInt(t.bps));
     allocated += amount;
     return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false, returned: false };
   });

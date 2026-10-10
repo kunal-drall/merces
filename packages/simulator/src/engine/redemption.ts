@@ -77,7 +77,7 @@ export function redeem(e: EngineCore, signer: string, cmd: Extract<Command, { ki
   s.vaultBalance += q.deposit;
   const N = s.unitsOutstanding;
   const tailEndsAt = now + DEFAULTS.tailSeconds;
-  s.redemption = { openedAt: now, pricePerUnit: q.pRedeem, unitsAtRedemption: N, deposit: q.deposit, claimed: 0n, tailCapPerUnit: q.tailCapPerUnit, tailEndsAt, tailPaidPerUnit: 0n, accTailNetWad: 0n };
+  s.redemption = { openedAt: now, pricePerUnit: q.pRedeem, unitsAtRedemption: N, deposit: q.deposit, claimed: 0n, tailCapPerUnit: q.tailCapPerUnit, tailEndsAt };
   s.tail = newTailState(q.tailCapPerUnit);
   emit('RedemptionOpened', { seriesId: s.seriesId, pricePerUnit: str(q.pRedeem), unitsOutstanding: str(N), deposit: str(q.deposit), tailCapPerUnit: str(q.tailCapPerUnit), tailEndsAt });
   setStatus(s, 'Redeemed', emit);
