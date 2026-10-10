@@ -253,4 +253,35 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     const holding = (await rig.get('/me/holdings', tok(b1))).json().holdings.find((x: { seriesId: string }) => x.seriesId === seriesId);
     expect(holding).toMatchObject({ claimable: '0', pending: '0', redemptionClaimable: '0', tailClaimable: '0', finalClaimable: '0', redeemedUnits: '100' });
   });
+
+  // cause S3R-F (S3 review fix 1): on a redeemed then extinguished series, a holder with units in an open window ask is
+  // weighed on its redeemed units plus the ask's escrow, as both Stage 1 chains weigh it (DIV-S1I-1). Five holders of 100
+  // units at 52.5 USDC; half the 26,250 proceeds is unvested at the extinguishment: 26.25 a unit, 2,625 for 100 units
+  // (was: the preview and the claim weighed b1 on its 60 redeemed units, 1,575)
+  it('S3 review: the final claim builder previews the share of an open ask\'s units too, as the chain pays it', async () => {
+    const h = rig.sol;
+    const bids = [0, 1, 2, 3, 4].map((backer) => ({ backer, price: USDC(52.5), qty: 100n }));
+    const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 }, bids });
+    const b1 = h.backers[1]!;
+    const tok = rig.token({ accountId: 'fin-ask-b1', wallets: [{ chain: 'solana', address: b1.address }], roles: ['backer'] });
+    const open = (await h.sim.getSeries(seriesId))!.settledAt! + 11;
+    await h.sim.setTime(Math.max(open, await h.sim.now()));
+    const now = await h.sim.now();
+    await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 }, 'keeper');
+    const salt = '0x' + 'cd'.repeat(32);
+    const commitment = orderCommitment({ seriesId, windowId: 0, wallet: b1.address, side: 'sell', pricePerUnit: USDC(60), quantity: 40n, salt });
+    await h.exec(b1, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment, deposit: '0', units: '40' });
+    await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
+    await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);
+    await rig.sync();
+    const p1 = (await rig.get(`/series/${seriesId}/position`, tok)).json().positions[0] as Record<string, string>;
+    expect(p1).toMatchObject({ units: '100', escrowedUnits: '40', finalClaimable: USDC(2_625).toString() });
+    // the 60 free units are redeemed first and burn; the share is weighed on 60 + 40
+    const f1 = await rig.post(`/series/${seriesId}/final/build-claim`, { holder: b1.address }, tok);
+    expect(f1.statusCode, f1.body).toBe(200);
+    expect(f1.json()).toMatchObject({ amount: USDC(2_625).toString(), redeemsFirst: { units: '60' }, burnsUnits: '60' });
+    const r1 = await relay(b1, f1.json().tx, tok);
+    expect(r1.events.at(-1)).toEqual(['FinalClaimed', { seriesId, holder: b1.address, units: '100', amount: USDC(2_625).toString() }]);
+    expect([r1.paid, r1.burned]).toEqual([f1.json().total, '60']);
+  });
 });

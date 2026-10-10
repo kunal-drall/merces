@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { brief } from './compare.ts';
 import { DIVERGENCES } from './divergences.ts';
 import { EXPECTED, describeExpected, expectedFor } from './expected.ts';
+import { SCENARIO_EXPECTATIONS } from './scenarios.ts';
 import type { RunReport, RunResult } from './index.ts';
 import { isFinding } from './run.ts';
 import { SHIMS } from './shims.ts';
@@ -97,17 +98,22 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
     "Stage 1 behaviour the merces backend knowingly does not mirror (the register, `stage1-vectors/divergences.ts`). Each is recorded per `expect` step and field with Stage 1's value and ours (`expected.ts`): a difference equal to a recorded entry is accepted and the run is PASS-WITH-DIVERGENCES; another value at that field fails, and an entry whose difference no longer occurs fails as stale. In lockstep the backends must part right after the recorded step on exactly the recorded fields; the replay stops there.",
     '',
   );
-  if (!DIVERGENCES.length) lines.push('None: the register is empty. Its only row, DIV-NRC-1 (the non-reveal charge, held in S2), went when the charge was modelled as Stage 1 models it (S3 follow-up NRC); 03 replays in full.', '');
+  if (!DIVERGENCES.length) lines.push('None: the register is empty.', '');
+  if (!Object.values(EXPECTED).some((e) => e.divergences?.length || e.lockstep)) lines.push('No Stage 1 vector carries a divergence: DIV-NRC-1 (the non-reveal charge, held in S2), the only row a vector ever met, went when the charge was modelled as Stage 1 models it (S3 follow-up NRC); 03 replays in full.', '');
   for (const row of DIVERGENCES) {
-    lines.push(`### ${row.id}: ${row.title}`, '', `- What: ${row.what}`, `- Why: ${row.why}`, `- Seen: ${row.seen}`, `- Until: ${row.milestone}`, `- Lifting it: ${row.lift.join(' ')}`, '', '| Vector | Step | Field | Stage 1 | Ours |', '| --- | --- | --- | --- | --- |');
-    for (const [id, e] of Object.entries(EXPECTED).sort(([a], [b]) => (a < b ? -1 : 1))) {
-      const name = vectors.find(([, vid]) => vid === id)?.[0] ?? id;
+    lines.push(`### ${row.id}: ${row.title}`, '', `- What: ${row.what}`, `- Why: ${row.why}`, `- Seen: ${row.seen}`, `- Until: ${row.milestone}`, `- Lifting it: ${row.lift.join(' ')}`, '', '| Vector or scenario | Step | Field | Stage 1 | Ours |', '| --- | --- | --- | --- | --- |');
+    const entries = [
+      ...Object.entries(EXPECTED).sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, e]) => [vectors.find(([, vid]) => vid === id)?.[0] ?? id, e] as const),
+      ...Object.entries(SCENARIO_EXPECTATIONS).sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, e]) => [`scenario ${id}`, e] as const),
+    ];
+    for (const [name, e] of entries) {
       for (const d of (e.divergences ?? []).filter((x) => x.id === row.id)) lines.push(`| ${name} | #${d.step} | \`${d.path}\` | ${brief(d.stage1)} | ${brief(d.ours)} |`);
       if (e.lockstep?.id === row.id) for (const d of e.lockstep.diffs) lines.push(`| ${name} (lockstep) | after #${e.lockstep.divergesAt} | \`${d.path}\` | ${brief(d.stage1)} | ${brief(d.ours)} |`);
     }
     const seen = runs.filter((r) => r.issues.some((i) => i.kind === 'divergence' && i.divergence === row.id));
+    const scenarios = Object.entries(SCENARIO_EXPECTATIONS).filter(([, e]) => e.lockstep?.id === row.id || e.divergences?.some((d) => d.id === row.id)).map(([id]) => id);
     lines.push('');
-    if (!seen.length) lines.push('Not reached by the runs of this report.');
+    if (!seen.length) lines.push(scenarios.length ? `Not reached by a Stage 1 vector; reached by our scenario${scenarios.length > 1 ? 's' : ''} ${scenarios.join(', ')} (see "S3 claim scenarios").` : 'Not reached by the runs of this report.');
     for (const r of seen) {
       const at = r.issues.filter((i) => i.kind === 'divergence' && i.divergence === row.id);
       lines.push(`- ${r.vector} on ${r.world}: ${at.map((i) => `#${i.index} (${i.diffs?.length ?? 0} field${(i.diffs?.length ?? 0) > 1 ? 's' : ''})`).join(', ')}, as recorded`);

@@ -133,11 +133,12 @@ export class LifecycleService {
    *
    * On a series that redeemed, a holder with units not yet redeemed (less those held for a window ask) is redeemed first
    * by the same transaction (`redeemsFirst`: the redemption price and the tail catch-up as `amount`, its pending payout as
-   * `payout`, in the redemption's own events) and weighed on its redeemed units; `amount` is then the share alone
-   * (`finalClaimable`). Otherwise `amount` is `claimable + finalClaimable` (the pending payout and the share). `total`
-   * is everything the transaction pays; `burnsUnits` every unit it burns (the redeemed units included): the holder's
-   * units less those held for a window ask. A claim that would pay 0 and burn nothing (a second final claim) is a 409
-   * (`nothing-to-claim`).
+   * `payout`, in the redemption's own events) and weighed on its redeemed units plus the units held for an uncleared
+   * window ask (both Stage 1 chains' weight; S3 review, DIV-S1I-1: the read's `finalClaimable` counts them); `amount` is
+   * then the share alone (`finalClaimable`). Otherwise `amount` is `claimable + finalClaimable` (the pending payout and
+   * the share). `total` is everything the transaction pays; `burnsUnits` every unit it burns (the redeemed units
+   * included): the holder's units less those held for a window ask. A claim that would pay 0 and burn nothing (a second
+   * final claim) is a 409 (`nothing-to-claim`).
    *
    * On a curve series (S3 WP10; Stage 1 claims.rs:424-452) nothing is redeemed or burned: `amount` = `total` is the
    * pending payout (which on a series that did not redeem holds the stake's final share) plus the final share of the

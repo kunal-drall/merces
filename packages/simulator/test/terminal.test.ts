@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { termsCommitment } from '@merces/domain';
+import { orderCommitment, termsCommitment } from '@merces/domain';
 import { WAD, parsePeriod, wadFromDecimal } from '@merces/math';
 import { SimHarness, defaultTerms } from '../src/index.ts';
 import { GENESIS, USDC, expectStage1Error, types } from './helpers.ts';
@@ -23,7 +23,10 @@ import { seriesOf } from './kit.ts';
  *  - S3-CL (S3): `claimPayout` is Stage 1's `claim`: the net payout only, no final share and no burn on an Extinguished
  *    series;
  *  - S3-Z (S3): a claim of nothing emits its event with zeros (was: no event);
- *  - S3-BR (S3): `burnRetired{holder}` replaces the S1 list burn crank (`holders[]`).
+ *  - S3-BR (S3): `burnRetired{holder}` replaces the S1 list burn crank (`holders[]`);
+ *  - S3R-F (S3 review fix 1): on a series that redeemed, the final share is weighed on the redeemed units plus the units
+ *    held for an uncleared window ask, as both Stage 1 chains weigh it (MercesVault.sol:658, claims.rs:486-490; Stage 1's
+ *    TS reference leaves the escrow out, SIM:1460, and strands its share: DIV-S1I-1).
  */
 
 const DAY = 86_400;
@@ -164,5 +167,65 @@ describe('amendments and extinguishment', () => {
     expect((await h.exec(b1, { kind: 'claimFinal', seriesId })).events.map((e) => e.payload)).toEqual([{ seriesId, holder: b1.address, units: '100', amount: '0' }]);
     // Stage 1's vault after the same two claims: 4,500 deposit + 2,250 final − 900 − 450 − 1,350 = 4,050
     expect(seriesOf(h.sim, seriesId).vaultBalance).toBe(USDC(4050));
+  });
+
+  // cause S3R-F: the S3 review's case (scenario S3l on vector 22) at the harness's scale. Five holders of 100 units at
+  // 52.5 USDC; 50% of the 26,250 proceeds is unvested at the extinguishment, 13,125 over the 500 units at redemption:
+  // 26.25 a unit, 2,625 for a 100-unit holder. b1 has 40 of its 100 units in an open ask (was: weighed on its 60 redeemed
+  // units, 1,575, and the escrowed 40 units' 1,050 stranded in the vault for good)
+  it('on a redeemed series weighs the final share on the redeemed units plus an open ask\'s escrow, as both chains do: 2,625 USDC for the 100-unit holder (S3 review)', async () => {
+    const h = await SimHarness.create('solana', { genesis: GENESIS });
+    const bids = [0, 1, 2, 3, 4].map((backer) => ({ backer, price: USDC(52.5), qty: 100n }));
+    const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 }, bids });
+    const settledAt = (await h.sim.getSeries(seriesId))!.settledAt!;
+    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
+    const [b0, b1, b2, b3, b4] = h.backers as [typeof h.backers[0], typeof h.backers[0], typeof h.backers[0], typeof h.backers[0], typeof h.backers[0]];
+    // b1 asks 40 of its 100 units in a window, and reveals; the window is still open when the series ends
+    const open = settledAt + 11;
+    await h.sim.setTime(open);
+    await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: open + 100, revealEndsAt: open + 200 }, 'keeper');
+    const salt = '0x' + 'cd'.repeat(32);
+    const commitment = orderCommitment({ seriesId, windowId: 0, wallet: b1.address, side: 'sell', pricePerUnit: USDC(60), quantity: 40n, salt });
+    await h.exec(b1, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment, deposit: '0', units: '40' });
+    await h.sim.setTime(open + 100);
+    await h.exec(b1, { kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'sell', pricePerUnit: USDC(60).toString(), quantity: '40', salt });
+    expect(seriesOf(h.sim, seriesId).positions.get(b1.address)).toMatchObject({ units: 100n, escrowed: 40n });
+
+    await h.sim.setTime(open + 150);
+    await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
+    const price = BigInt((await h.sim.getRedemption(seriesId))!.pricePerUnit);
+    expect((await h.sim.getRedemption(seriesId))!.unitsAtRedemption).toBe('500');
+    await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    expect((await h.sim.getSeries(seriesId))!.final).toMatchObject({ units: '500', accWad: (USDC(26.25) * WAD).toString(), distributed: USDC(13_125).toString() });
+
+    // the read and the claim agree: b1's share is weighed on 60 + 40 = 100 units, like b0's
+    expect((await h.sim.getPosition(seriesId, b1.address))!).toMatchObject({ units: '100', escrowedUnits: '40', finalClaimable: USDC(2_625).toString() });
+    expect((await h.sim.getPosition(seriesId, b0.address))!.finalClaimable).toBe(USDC(2_625).toString());
+    const before = await balance(h, b1.address);
+    const first = await h.exec(b1, { kind: 'claimFinal', seriesId });
+    // its 60 free units are redeemed first (the units in the ask stay for the window to return); the share is 2,625
+    expect(types(first.events)).toEqual(['UnitsBurned', 'RedemptionClaimed', 'FinalClaimed']);
+    expect(first.events[1]!.payload).toMatchObject({ units: '60', amount: (price * 60n).toString() });
+    expect(first.events[2]!.payload).toEqual({ seriesId, holder: b1.address, units: '100', amount: USDC(2_625).toString() });
+    expect((await balance(h, b1.address)) - before).toBe(price * 60n + USDC(2_625));
+    expect((await h.sim.getPosition(seriesId, b1.address))!).toMatchObject({ units: '40', escrowedUnits: '40', redeemedUnits: '60', finalClaimable: '0' });
+
+    // the window ends in NoMatch on the terminal series and returns the 40 units; b1's next final claim redeems them at
+    // the redemption price with a share of 0 (it was paid on them already)
+    await h.sim.setTime(open + 200);
+    await h.sim.submit({ kind: 'clearTransferWindow', seriesId, windowId: 0 }, 'keeper');
+    const mid = await balance(h, b1.address);
+    const second = await h.exec(b1, { kind: 'claimFinal', seriesId });
+    expect(second.events.find((e) => e.type === 'RedemptionClaimed')!.payload).toMatchObject({ units: '40', amount: (price * 40n).toString() });
+    expect(second.events.find((e) => e.type === 'FinalClaimed')!.payload).toEqual({ seriesId, holder: b1.address, units: '100', amount: '0' });
+    expect((await balance(h, b1.address)) - mid).toBe(price * 40n);
+
+    // every other 100-unit holder gets the same 2,625, and nothing strands: the vault ends empty
+    for (const b of [b0, b2, b3, b4]) {
+      const ev = (await h.exec(b, { kind: 'claimFinal', seriesId })).events.find((e) => e.type === 'FinalClaimed')!;
+      expect(ev.payload, b.address).toEqual({ seriesId, holder: b.address, units: '100', amount: USDC(2_625).toString() });
+    }
+    expect((await h.sim.getSeries(seriesId))!.unitsOutstanding).toBe('0');
+    expect(seriesOf(h.sim, seriesId).vaultBalance).toBe(0n);
   });
 });

@@ -8274,7 +8274,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unsigned claimFinal (Stage 1's claim_final) after an extinguishment: the pending payout and the final-pool share, once (amount = claimable + finalClaimable, the FinalClaimed amount), and the holder's units burn. On a series that redeemed, a holder with units not yet redeemed is redeemed first by the same transaction (redeemsFirst, which then pays the pending payout) and weighed on its redeemed units; amount is then the share (finalClaimable). */
+            /** @description Unsigned claimFinal (Stage 1's claim_final) after an extinguishment: the pending payout and the final-pool share, once (amount = claimable + finalClaimable, the FinalClaimed amount), and the holder's units burn. On a series that redeemed, a holder with units not yet redeemed is redeemed first by the same transaction (redeemsFirst, which then pays the pending payout) and weighed on its redeemed units plus the units it holds for an uncleared window ask (as both Stage 1 chains weigh it; those units are redeemed, at a share of 0, by a later final claim once the window returns them); amount is then the share (finalClaimable). */
             200: {
                 headers: {
                     [name: string]: unknown;

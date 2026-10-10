@@ -3,7 +3,7 @@ import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describeExpected, type Expected } from './expected.ts';
 import { RunnerError } from './errors.ts';
-import type { RunReport, RunResult } from './index.ts';
+import type { BackendChoice, RunReport, RunResult } from './index.ts';
 import { fromJson, type LoadedVector } from './load.ts';
 import { isFinding } from './run.ts';
 
@@ -19,8 +19,12 @@ import { isFinding } from './run.ts';
  * after every step anyway.
  *
  * A scenario is ours, not Stage 1's: passing shows the merces backend does what Stage 1's simulator does on these
- * paths. It is no Stage 1 vector, so every backend must PASS it (`SCENARIO_EXPECTED`), and it is reported apart from
- * the vectors (`renderScenarios`, the "S3 claim scenarios" section of VECTOR_PARITY.md).
+ * paths. It is no Stage 1 vector, so every backend must PASS it (`SCENARIO_EXPECTED`), with one exception: a scenario
+ * that shows a Stage 1-internal difference resolved toward both chains (Stage 1's TS reference and its EVM and Solana
+ * programs disagree, and we follow the programs) is PASS-WITH-DIVERGENCES on the merces and lockstep backends, on the
+ * entries of its row of the divergence register (`SCENARIO_EXPECTATIONS`, `divergences.ts`), and still PASS on the
+ * reference backend, whose values its expects carry. Scenarios are reported apart from the vectors (`renderScenarios`,
+ * the "S3 claim scenarios" section of VECTOR_PARITY.md).
  *
  * Privacy: the composed vector goes through `fromJson`, so the base vector's `witness` and `seriesPrivate` are dropped
  * and its keys stay non-enumerable, as for a vector.
@@ -29,8 +33,46 @@ import { isFinding } from './run.ts';
 /** The S3 claim scenarios (S3 plan WP2 (a)-(g), amendment M5). */
 export const S3_CLAIM_SCENARIOS = fileURLToPath(new URL('../../test/fixtures/s3-claims', import.meta.url));
 
-/** A scenario must PASS on every backend: no waiver, no divergence, no gate. */
+/** A scenario must PASS on every backend: no waiver, no divergence, no gate (but see `SCENARIO_EXPECTATIONS`). */
 export const SCENARIO_EXPECTED: Expected = Object.freeze({ status: 'PASS' });
+
+/**
+ * The scenarios that are not PASS on the merces and lockstep backends, by id: each shows a Stage 1-internal difference
+ * resolved toward both chains, a row of the divergence register (`divergences.ts`). Its expects carry Stage 1's
+ * simulator's values (the reference backend PASSes them); the merces backend differs on exactly the recorded fields, and
+ * the backends part in lockstep right after the recorded step on exactly the recorded fields. A difference anywhere else,
+ * or a recorded one that no longer occurs, fails as for a vector.
+ */
+export const SCENARIO_EXPECTATIONS: Readonly<Record<string, Expected>> = Object.freeze({
+  // DIV-S1I-1 (S3 review): b1's first claim_final (#78) is weighed on its 60 redeemed units plus the 40 in its open ask's
+  // escrow, as both chains weigh it (2,625 USDC at 26.25 a unit), not on the 60 (1,575 USDC) as Stage 1's simulator
+  // does; so b1 is paid 1,050 USDC more and the vault, which Stage 1's simulator leaves at 1,050 USDC once every unit
+  // is claimed (#87), ends at 0
+  S3l: {
+    status: 'PASS-WITH-DIVERGENCES',
+    divergences: [
+      { id: 'DIV-S1I-1', step: 79, path: 'balances.b1.stable', stage1: '69260161480', ours: '70310161480' },
+      { id: 'DIV-S1I-1', step: 79, path: 'vault', stage1: '54517581720', ours: '53467581720' },
+      { id: 'DIV-S1I-1', step: 87, path: 'balances.b1.stable', stage1: '73986935800', ours: '75036935800' },
+      { id: 'DIV-S1I-1', step: 87, path: 'vault', stage1: '1050000000', ours: '0' },
+    ],
+    lockstep: {
+      id: 'DIV-S1I-1',
+      divergesAt: 78,
+      // a wallet's stablecoin balance is in every series' snapshot: S1's too
+      diffs: [
+        { path: 'S1.balances.b1.stable', stage1: '69260161480', ours: '70310161480' },
+        { path: 'S2.balances.b1.stable', stage1: '69260161480', ours: '70310161480' },
+        { path: 'S2.vault', stage1: '54517581720', ours: '53467581720' },
+      ],
+    },
+  },
+});
+
+/** A scenario's expectation on a backend: PASS on the reference backend, else its `SCENARIO_EXPECTATIONS` entry or PASS. */
+export function scenarioExpected(id: string, backend: BackendChoice): Expected {
+  return backend === 'reference' ? SCENARIO_EXPECTED : (SCENARIO_EXPECTATIONS[id] ?? SCENARIO_EXPECTED);
+}
 
 export type ScenarioSegment = { baseSteps: [number, number] } | { steps: Record<string, unknown>[] };
 
@@ -139,7 +181,11 @@ export function loadScenarios(dir: string, vectorsDir: string, only?: readonly s
 function cell(r: RunResult | undefined): string {
   if (!r) return '—';
   const failures = r.issues.filter((i) => i.kind === 'fail').length;
-  return `${r.status}${failures ? ` (${failures} failing step${failures > 1 ? 's' : ''})` : ''} ${r.executed}/${r.total}`;
+  const accepted = r.issues.filter((i) => i.kind === 'divergence');
+  const fields = accepted.reduce((n, i) => n + (i.diffs?.length ?? 0), 0);
+  // lockstep stops where the backends part, so a recorded parting is named where it happened
+  const known = !accepted.length ? '' : r.backend === 'lockstep' ? `, diverged at #${accepted[0]!.index} as recorded (${accepted[0]!.divergence})` : ` (${fields} accepted divergence${fields > 1 ? 's' : ''}, ${accepted[0]!.divergence})`;
+  return `${r.status}${failures ? ` (${failures} failing step${failures > 1 ? 's' : ''})` : ''} ${r.executed}/${r.total}${known}`;
 }
 
 /**
@@ -152,7 +198,7 @@ export function renderScenarios(scenarios: readonly Scenario[], reports: readonl
   const lines: string[] = [
     "## S3 claim scenarios (ours, lockstep against Stage 1's Simulator)",
     '',
-    "The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, amendment M5), written in Stage 1's op format (`packages/stage1-sync/test/fixtures/s3-claims`, `pnpm stage1:vectors --scenarios`). Each reuses steps of a Stage 1 vector (its bootstrap, raise, reports with their proofs and payments) and adds calls of our own; its own `expect`s carry Stage 1's values, which the reference backend (Stage 1's simulator) passes, and lockstep compares the full snapshots of both backends after every step. They are ours, not Stage 1's vectors: every backend must PASS them, with no waiver and no divergence.",
+    "The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, amendment M5), written in Stage 1's op format (`packages/stage1-sync/test/fixtures/s3-claims`, `pnpm stage1:vectors --scenarios`). Each reuses steps of a Stage 1 vector (its bootstrap, raise, reports with their proofs and payments) and adds calls of our own; its own `expect`s carry Stage 1's values, which the reference backend (Stage 1's simulator) passes, and lockstep compares the full snapshots of both backends after every step. They are ours, not Stage 1's vectors: every backend must PASS them, with no waiver and no divergence, except where a scenario shows a Stage 1-internal difference resolved toward both chains (Stage 1's simulator and its EVM and Solana programs disagree, and we follow the programs): it is PASS-WITH-DIVERGENCES on the merces and lockstep backends, on exactly the entries of its row of the divergence register (see \"Known divergences\" above).",
     '',
     `| Scenario | Covers | Built from | ${worlds.join(' | ')} |`,
     `| --- | --- | --- | ${worlds.map(() => '---').join(' | ')} |`,
@@ -162,7 +208,10 @@ export function renderScenarios(scenarios: readonly Scenario[], reports: readonl
     lines.push(`| ${s.vector.name} | ${s.covers.map((c) => `(${c})`).join(' ')} | ${s.parts.join('; ')} | ${row.join(' | ')} |`);
   }
   lines.push('');
-  for (const s of scenarios) lines.push(`- ${s.vector.name}: ${s.vector.description}`);
+  for (const s of scenarios) {
+    const e = SCENARIO_EXPECTATIONS[s.vector.id];
+    lines.push(`- ${s.vector.name}: ${s.vector.description}${e ? ` Expected on the merces and lockstep backends: ${describeExpected(e)}.` : ''}`);
+  }
   const bad = runs.filter((r) => !r.atExpected || r.issues.some(isFinding));
   if (bad.length) {
     lines.push('', '### Scenario findings', '');

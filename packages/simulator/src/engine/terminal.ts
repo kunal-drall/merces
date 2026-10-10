@@ -115,11 +115,15 @@ export function extinguish(e: EngineCore, signers: string[], cmd: Extract<Comman
 
 // ------------------------------------------------------------------ the final pool
 /**
- * The units a holder's final-pool share is weighed on (Stage 1 `claim_final`, SIM:1458-1466): on a series that
- * redeemed, its redeemed units, counting the units its redemption body would still redeem; otherwise its accrual units.
+ * The units a holder's final-pool share is weighed on (Stage 1 `claim_final`, both chains: MercesVault.sol:654-658,
+ * claims.rs:486-490): on a series that redeemed, its redeemed units, counting the units its redemption body would still
+ * redeem and the units held for an uncleared window ask (`escrowed`: they come back later and are redeemed then, and
+ * carry their final share now, like every unit that existed at redemption); otherwise its accrual units (the ask's
+ * units included). Stage 1's TS reference leaves the escrow out on a series that redeemed (SIM:1460); we follow both
+ * chains (a Stage 1-internal difference, reported to Stage 1; register row DIV-S1I-1).
  */
 function finalWeight(s: SimSeries, p: SimPosition): bigint {
-  return s.redemption ? p.redeemedUnits + redeemableUnits(p) : accrualUnits(s, p);
+  return s.redemption ? p.redeemedUnits + redeemableUnits(p) + p.escrowed : accrualUnits(s, p);
 }
 
 /**
@@ -151,17 +155,21 @@ function curveFinalShare(s: SimSeries, p: SimPosition): { weight: bigint; share:
 
 /**
  * A settled holder's weight and share of the final pool of an extinguished series (Stage 1 `claim_final`,
- * SIM:1458-1468). On a series that redeemed (amendment M4), a holder that still has units not held for a window ask has
- * them redeemed first (`redeemBody`: its pending payout, the redemption price and the tail catch-up, paid at once) and
- * its share is weighed on its redeemed units; otherwise on its accrual units. The share is
- * `floor((finalAccWad − lastFinalAccWad) × weight / WAD)`, 0 after the first final claim; moves the final cursor and
- * marks the holder claimed. The caller (`claimFinal`) has delivered a pending auction bid and settled the holder.
+ * SIM:1458-1468, with both chains' weight). On a series that redeemed (amendment M4), a holder that still has units not
+ * held for a window ask has them redeemed first (`redeemBody`: its pending payout, the redemption price and the tail
+ * catch-up, paid at once) and its share is weighed on its redeemed units plus the units held for an uncleared ask
+ * (MercesVault.sol:658 `weight = redeemedUnits + escrow`, claims.rs:486-490; Stage 1's TS reference, SIM:1460, leaves
+ * the escrow out and so strands its share: we follow both chains, register row DIV-S1I-1); otherwise on its accrual
+ * units (the ask's units included). The share is `floor((finalAccWad − lastFinalAccWad) × weight / WAD)`, 0 after the
+ * first final claim (the ask's units, once the window returns them, are redeemed by a later claim at a share of 0: they
+ * were paid theirs already); moves the final cursor and marks the holder claimed. The caller (`claimFinal`) has
+ * delivered a pending auction bid and settled the holder.
  */
 function finalShare(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): { weight: bigint; share: bigint } {
   let weight: bigint;
   if (s.redemption) {
     if (redeemableUnits(p) > 0n) redeemBody(e, s, p, emit);
-    weight = p.redeemedUnits;
+    weight = p.redeemedUnits + p.escrowed;
   } else {
     weight = accrualUnits(s, p);
   }
@@ -178,7 +186,8 @@ function finalShare(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): { 
  *  2. a pending auction bid is delivered (`deliverPending`: its refund and units);
  *  3. the signer is a registered holder (HolderNotRegistered), settled on the vault cursor;
  *  4. its weight and share (`finalShare`: on a series that redeemed, its remaining units are redeemed first and it is
- *     weighed on its redeemed units; otherwise on its accrual units); the share is paid once;
+ *     weighed on its redeemed units plus the units held for an uncleared window ask, as both chains weigh it;
+ *     otherwise on its accrual units); the share is paid once;
  *  5. it is paid `pending + share` from the vault and its balance burns (reason `extinguishment`; the units held for a
  *     window ask stay until the window returns them).
  *

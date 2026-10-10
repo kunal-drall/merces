@@ -21,7 +21,7 @@ import { MercesWorld } from './merces-world.ts';
 import { replayLockstep } from './oracle.ts';
 import { ReferenceWorld } from './reference-world.ts';
 import { isFinding, replayVector, type VectorRun } from './run.ts';
-import { S3_CLAIM_SCENARIOS, SCENARIO_EXPECTED, loadScenarios, type Scenario } from './scenarios.ts';
+import { S3_CLAIM_SCENARIOS, loadScenarios, scenarioExpected, type Scenario } from './scenarios.ts';
 import { PERSONALITIES, type Backend, type VectorPersonality, type WorldFactory } from './world.ts';
 
 export {
@@ -54,7 +54,7 @@ export { replayLockstep, type LockstepOptions } from './oracle.ts';
 export { TRANSLATORS, NOT_YET, translate } from './ops/index.ts';
 export { SHIMS, SHIM_BY_ID, type Shim } from './shims.ts';
 export { renderParity, renderSummary, writeParity, type ParitySource } from './report.ts';
-export { S3_CLAIM_SCENARIOS, SCENARIO_EXPECTED, loadScenario, loadScenarios, renderScenarios, type Scenario, type ScenarioFile, type ScenarioSegment } from './scenarios.ts';
+export { S3_CLAIM_SCENARIOS, SCENARIO_EXPECTED, SCENARIO_EXPECTATIONS, scenarioExpected, loadScenario, loadScenarios, renderScenarios, type Scenario, type ScenarioFile, type ScenarioSegment } from './scenarios.ts';
 export { PERSONALITIES, type Backend, type World, type WorldFactory, type Applied, type Attempt, type OpKind, type VectorPersonality } from './world.ts';
 
 /** Worlds by backend. */
@@ -88,10 +88,11 @@ export interface RunOptions {
   /** stop before the first step with this op */
   stopBefore?: string;
   /**
-   * the expectation of every vector replayed, in place of its own (`expectedFor`, or PASS on the reference backend):
-   * our scenarios (`scenarios.ts`) are no Stage 1 vector and must PASS on every backend
+   * the expectation of every vector replayed, in place of its own (`expectedFor`, or PASS on the reference backend), or
+   * a function giving each its own: our scenarios (`scenarios.ts`) are no Stage 1 vector and must PASS on every backend,
+   * unless `SCENARIO_EXPECTATIONS` records a Stage 1-internal difference resolved toward both chains
    */
-  expected?: Expected;
+  expected?: Expected | ((v: LoadedVector) => Expected);
 }
 
 export interface RunResult extends VectorRun {
@@ -155,7 +156,7 @@ export async function runStage1Vectors(opts: RunOptions): Promise<RunReport> {
   const worlds: (VectorPersonality | undefined)[] = backend === 'reference' ? [undefined] : [...(opts.personalities?.length ? opts.personalities : PERSONALITIES)];
   const runs: RunResult[] = [];
   for (const v of vectors) {
-    const expected = opts.expected ?? (backend === 'reference' ? EXPECTED_REFERENCE : expectedFor(v.id));
+    const expected = typeof opts.expected === 'function' ? opts.expected(v) : (opts.expected ?? (backend === 'reference' ? EXPECTED_REFERENCE : expectedFor(v.id)));
     // a prefix gate replays to its gate unless the caller names its own last step
     const until = opts.until ?? expected.until;
     const replay = {
@@ -194,13 +195,18 @@ export interface ScenarioRunOptions {
   personalities?: readonly VectorPersonality[];
 }
 
-/** Replay our scenarios (`scenarios.ts`) on a backend; each must PASS. Returns the scenarios with the report. */
+/**
+ * Replay our scenarios (`scenarios.ts`) on a backend; each must PASS, or be at its `SCENARIO_EXPECTATIONS` entry on the
+ * merces and lockstep backends (a Stage 1-internal difference resolved toward both chains). Returns the scenarios with
+ * the report.
+ */
 export async function runScenarios(opts: ScenarioRunOptions): Promise<{ scenarios: Scenario[]; report: RunReport }> {
   const scenarios = loadScenarios(opts.dir ?? S3_CLAIM_SCENARIOS, opts.vectorsDir, opts.only);
+  const backend = opts.backend ?? 'lockstep';
   const report = await runStage1Vectors({
     vectors: scenarios.map((s) => s.vector),
-    backend: opts.backend ?? 'lockstep',
-    expected: SCENARIO_EXPECTED,
+    backend,
+    expected: (v) => scenarioExpected(v.id, backend),
     ...(opts.personalities ? { personalities: opts.personalities } : {}),
   });
   return { scenarios, report };

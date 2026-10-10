@@ -137,7 +137,7 @@ and the 7 prefix gates to their gate, on both personalities; 01 and 05 PASS-WITH
 non-reveal charge is modelled, with no accepted divergence, in lockstep too) and the reference backend with
 `OK: 25/25 PASS`;
 `stage1:vectors --scenarios` (the paths of the claim family no vector takes, built on Stage 1 vector prefixes) with
-`OK: 22/22 PASS, 22/22 at expected status` (eleven scenarios, (a)–(k), on both personalities); `stage1:sync` must report the math, curve-port and vectors steps `OK` (the diff step stays
+`OK: 22/24 PASS, 24/24 at expected status (2 runs with accepted divergences)` (twelve scenarios, (a)–(l), on both personalities; (l) is PASS-WITH-DIVERGENCES on DIV-S1I-1, a Stage 1-internal difference resolved toward both chains); `stage1:sync` must report the math, curve-port and vectors steps `OK` (the diff step stays
 `WARN` until the adapters are wired, and conformance needs live deployments). The curve-port step needs cargo with Stage 1's
 toolchain (`rustup toolchain install 1.97.1 --profile minimal`, the channel of `stage1/solana/rust-toolchain.toml`):
 without it the step, and the sync, fails; it must print `55/55 figures, 5,883/5,883 oracle cases` at @1bfc66b. `openapi:check` prints `openapi.yaml matches 170 operations` (after S3) and `demo:cycle` ends with `DEMO OK`. The vector runner verifies every

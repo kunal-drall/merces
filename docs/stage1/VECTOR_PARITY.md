@@ -42,7 +42,27 @@ None: every replayed step matched.
 
 Stage 1 behaviour the merces backend knowingly does not mirror (the register, `stage1-vectors/divergences.ts`). Each is recorded per `expect` step and field with Stage 1's value and ours (`expected.ts`): a difference equal to a recorded entry is accepted and the run is PASS-WITH-DIVERGENCES; another value at that field fails, and an entry whose difference no longer occurs fails as stale. In lockstep the backends must part right after the recorded step on exactly the recorded fields; the replay stops there.
 
-None: the register is empty. Its only row, DIV-NRC-1 (the non-reveal charge, held in S2), went when the charge was modelled as Stage 1 models it (S3 follow-up NRC); 03 replays in full.
+No Stage 1 vector carries a divergence: DIV-NRC-1 (the non-reveal charge, held in S2), the only row a vector ever met, went when the charge was modelled as Stage 1 models it (S3 follow-up NRC); 03 replays in full.
+
+### DIV-S1I-1: a redeemed holder's final share counts the units in its open window ask (Stage 1 internal, resolved toward both chains)
+
+- What: On a series that redeemed and was then extinguished, `claim_final` by a holder with units held for an uncleared window ask: Stage 1's EVM and Solana programs weigh the holder's final share on its redeemed units plus the ask's escrow (MercesVault.sol:654-658 `weight = redeemedUnits + escrow`; claims.rs:486-490), and the units, once the window returns them, are redeemed by a later claim at a share of 0; Stage 1's TS reference simulator weighs it on the redeemed units only (simulator.ts:1456-1460) and marks the share claimed, so the escrowed units' share stays in its vault for good. The merces backend weighs it as both chains do (`finalShare`, `claimableFinal`, the buildClaimFinal preview).
+- Why: Stage 1 wins, and both of Stage 1's programs (and its design notes, track-c.md C-S5 and track-b.md B-S25) count the escrow; only its TS reference leaves it out, and the live adapters must agree with the chains. Reported to Stage 1.
+- Seen: our S3 claim scenario S3l (22's prefix with S2's window up to its reveals, then redeem, extinguish and claim_final): at its two expects (b1's balance and the vault, 1,050 USDC apart) and, in lockstep, right after b1's first claim_final; no Stage 1 vector reaches it
+- Until: until Stage 1's TS reference counts the escrow (reported to Stage 1)
+- Lifting it: When Stage 1's reference weighs the share on the redeemed units plus the escrow, S3l's expects are retaken from it (they then equal ours), its entries go stale and fail the run until they are removed from `SCENARIO_EXPECTATIONS`, and the row goes.
+
+| Vector or scenario | Step | Field | Stage 1 | Ours |
+| --- | --- | --- | --- | --- |
+| scenario S3l | #79 | `balances.b1.stable` | "69260161480" | "70310161480" |
+| scenario S3l | #79 | `vault` | "54517581720" | "53467581720" |
+| scenario S3l | #87 | `balances.b1.stable` | "73986935800" | "75036935800" |
+| scenario S3l | #87 | `vault` | "1050000000" | "0" |
+| scenario S3l (lockstep) | after #78 | `S1.balances.b1.stable` | "69260161480" | "70310161480" |
+| scenario S3l (lockstep) | after #78 | `S2.balances.b1.stable` | "69260161480" | "70310161480" |
+| scenario S3l (lockstep) | after #78 | `S2.vault` | "54517581720" | "53467581720" |
+
+Not reached by a Stage 1 vector; reached by our scenario S3l (see "S3 claim scenarios").
 
 ## Prefix gates
 
@@ -113,7 +133,7 @@ Shim-derived view fields (runner bookkeeping, also not parity): `window.period`,
 
 ## S3 claim scenarios (ours, lockstep against Stage 1's Simulator)
 
-The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, amendment M5), written in Stage 1's op format (`packages/stage1-sync/test/fixtures/s3-claims`, `pnpm stage1:vectors --scenarios`). Each reuses steps of a Stage 1 vector (its bootstrap, raise, reports with their proofs and payments) and adds calls of our own; its own `expect`s carry Stage 1's values, which the reference backend (Stage 1's simulator) passes, and lockstep compares the full snapshots of both backends after every step. They are ours, not Stage 1's vectors: every backend must PASS them, with no waiver and no divergence.
+The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, amendment M5), written in Stage 1's op format (`packages/stage1-sync/test/fixtures/s3-claims`, `pnpm stage1:vectors --scenarios`). Each reuses steps of a Stage 1 vector (its bootstrap, raise, reports with their proofs and payments) and adds calls of our own; its own `expect`s carry Stage 1's values, which the reference backend (Stage 1's simulator) passes, and lockstep compares the full snapshots of both backends after every step. They are ours, not Stage 1's vectors: every backend must PASS them, with no waiver and no divergence, except where a scenario shows a Stage 1-internal difference resolved toward both chains (Stage 1's simulator and its EVM and Solana programs disagree, and we follow the programs): it is PASS-WITH-DIVERGENCES on the merces and lockstep backends, on exactly the entries of its row of the divergence register (see "Known divergences" above).
 
 | Scenario | Covers | Built from | reference | merces/solana | merces/monad | lockstep/solana | lockstep/monad |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -128,6 +148,7 @@ The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, a
 | S3i_claim_on_extinguished | (i) | 11 #0-#47 as #0-#47; ours as #48-#51; 11 #49-#51 as #52-#54 | PASS 55/55 | PASS 55/55 | PASS 55/55 | PASS 55/55 | PASS 55/55 |
 | S3j_zero_claim_retired_burns | (j) | 05 #0-#28 as #0-#28; 05 #31-#35 as #29-#33; 05 #37-#39 as #34-#36; 05 #41 as #37; 05 #43-#47 as #38-#42; 05 #49 as #43; ours as #44-#48; 05 #51-#53 as #49-#51 | PASS 52/52 | PASS 52/52 | PASS 52/52 | PASS 52/52 | PASS 52/52 |
 | S3k_claim_nothing | (k) | 21 #0-#39 as #0-#39; 21 #44-#46 as #40-#42; 21 #48-#57 as #43-#52; ours as #53-#55; 21 #59 as #56 | PASS 57/57 | PASS 57/57 | PASS 57/57 | PASS 57/57 | PASS 57/57 |
+| S3l_final_with_open_ask_after_redemption | (l) | 22 #0-#70 as #0-#70; 22 #79-#83 as #71-#75; ours as #76-#79; 22 #84-#86 as #80-#82; ours as #83-#87 | PASS 88/88 | PASS-WITH-DIVERGENCES 88/88 (4 accepted divergences, DIV-S1I-1) | PASS-WITH-DIVERGENCES 88/88 (4 accepted divergences, DIV-S1I-1) | PASS-WITH-DIVERGENCES 79/88, diverged at #78 as recorded (DIV-S1I-1) | PASS-WITH-DIVERGENCES 79/88, diverged at #78 as recorded (DIV-S1I-1) |
 
 - S3a_tail_before_redeem: claim_tail before any redemption is NotRedeemed, for a holder and for a stranger alike: Stage 1 checks the redemption before the registration (SIM:1405-1407), so the stranger is not told HolderNotRegistered. Built on 09's prefix to its last report before S1 redeems (#63).
 - S3b_tail_not_registered: After S1 redeems (09 #64), claim_tail by a wallet that is not a registered holder is HolderNotRegistered, before the tail is funded and after (09 #80): a stranger, and the issuer, which is allowlisted but never registered (allowlist membership is not registration). The rest of 09 then runs to its end unchanged.
@@ -140,6 +161,7 @@ The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, a
 - S3i_claim_on_extinguished: claim on an Extinguished series pays the pending payout only: no final-pool share and no burn (the units are the holder's final-pool weight). On 11 after the extinguishment (#39) and b1's claim_final (#46): b2 claims its pending payout, a repeat pays 0, then claim_final pays its share on its 100 units and burns them. 11 then runs to its end with every holder paid as in 11.
 - S3j_zero_claim_retired_burns: The zero-amount rule on a Retired series: a claim that pays 0 still burns the holder's units. On 05 with b4's bid left undelivered (05 #29 left out, with the expects that count b4's delivered units): once S1 is Retired (#39), b4's claim pays the payout accrued on its undelivered units and burns nothing (its balance is 0); its bid is then delivered; its next claim pays 0 and burns its 100 units; a repeat pays and burns nothing. 05 #42 (retire_if_capped, BLK-1) is left out. 05 then runs to its end.
 - S3k_claim_nothing: Claims of nothing succeed (the zero-amount rule), the claims of 21 #48-#57 that its gate (#40) keeps from running: on 21 without its pause steps (#40-#43: the 2^64 pause end and withdraw_pause_request are S5, with the expects that count the pause nonce), the series retires at exactly its cap (#46); b1's claim pays and burns, its second claim pays and burns nothing, burn_retired of nothing is a burn of 0 (a holder already burned, a wallet that never held units), b2's units burn and its pending payout stays claimable, an allowlisted wallet that is not a registered holder is refused (a precondition, not a zero amount), and the other holders claim. Then claims of nothing again: b1 on the Retired series and the keeper's burn of an unknown wallet.
+- S3l_final_with_open_ask_after_redemption: On 22's prefix to #70 and S2's window up to its reveals (#79-#83: b1 asks 40 of its 100 units, b5 bids for them), S2 redeems with the ask still open and is extinguished: the unvested 10,500 USDC is the final pool over the 400 units at redemption, 26.25 a unit. b1's claim_final redeems its 60 free units first; both Stage 1 chains then weigh its share on its redeemed units plus the 40 in the ask's escrow (MercesVault.sol:658, claims.rs:486-490), 2,625 USDC, as for every other 100-unit holder, and so do we. Stage 1's TS reference weighs it on the 60 redeemed units only (SIM:1460), 1,575 USDC; when the window ends in NoMatch on the terminal series (#84-#86) and returns the 40 units, b1's second claim_final redeems them at P_redeem with a share of 0, so 1,050 USDC stays in its vault for good, where ours (as both chains) ends at 0. The expects carry Stage 1's simulator's values: the merces backend differs from them on exactly b1's balance and the vault (DIV-S1I-1, a Stage 1-internal difference resolved toward both chains; reported to Stage 1), and the backends part in lockstep right after b1's first claim_final. Expected on the merces and lockstep backends: PASS-WITH-DIVERGENCES (DIV-S1I-1: 4 field(s) at #79, #87; lockstep parts at #78).
 
 ## Inventory
 

@@ -73,11 +73,16 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *  - NRC: the non-reveal charge is modelled as Stage 1 models it: 03 is PASS in full on both personalities and in
  *    lockstep, and the divergence register is empty (was: DIV-NRC-1, the S2 hold, with five fields of 03 and its lockstep
  *    parting at #65). The divergence mechanism stays; it is tested on a test-only divergence (`TEST_03`).
+ *
+ * S3 review cause code:
+ *  - S3R-F: the register has one row again, DIV-S1I-1 (a redeemed holder's final share counts its open ask's escrow, as
+ *    both chains weigh it; Stage 1's TS reference does not): a Stage 1-internal difference resolved toward both chains,
+ *    met by our scenario S3l only (`s3-claims.test.ts`). No Stage 1 vector carries a divergence.
  */
 afterAll(shutdown);
 
 /**
- * A test-only divergence, since the register is empty: vector 03 replayed with its S1 created at 0 bps on the merces
+ * A test-only divergence, since no vector meets a row of the register: vector 03 replayed with its S1 created at 0 bps on the merces
  * side only (`ZERO_CHARGE`, a synthetic create_series), so b8, which never reveals, is refunded in full and five
  * `expect` fields differ from Stage 1's at the vector's 1%. The values are Stage 1's own arithmetic: its simulator at
  * 0 bps reaches exactly them (tested below). They are the former DIV-NRC-1 entries.
@@ -284,7 +289,7 @@ describe('stage1 vector runner: expectations and the op map', () => {
   // cause S2-NY, S2-MS: the targets are S1's and S2's; the vectors that need a later milestone are prefix-gated or
   // NOT-YET (was: S1 targets PASS, every other vector NOT-IN-S1). Cause NRC: no vector carries a divergence (was: 03's
   // five DIV-NRC-1 entries and its lockstep parting)
-  it('targets are never NOT-YET; waivers only on blocked or n/a rows; no divergence anywhere; prefix gates carry until; the rest are NOT-YET with a milestone', () => {
+  it('targets are never NOT-YET; waivers only on blocked or n/a rows; no vector carries a divergence; prefix gates carry until; the rest are NOT-YET with a milestone', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(listVectorFiles(VECTORS).map((f) => f.split('/').at(-1)!.slice(0, 2)));
     expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2]);
     expect([...TARGETS_S2]).toEqual(['02', '03', '15', '17']);
@@ -308,13 +313,14 @@ describe('stage1 vector runner: expectations and the op map', () => {
         // the step after the gate is the one `next` names
         expect(e.next!, id).toContain(`#${e.until! + 1} \`${opLabel(v.steps[e.until! + 1]!)}\``);
       } else expect(e.status === 'NOT-YET' && !!e.milestone, id).toBe(true);
-      // no divergence anywhere, and no PASS-WITH-DIVERGENCES status
+      // no vector carries a divergence, and none is PASS-WITH-DIVERGENCES (the register's row is a scenario's, S3R-F)
       expect([e.divergences, e.lockstep], id).toEqual([undefined, undefined]);
       expect(e.status, id).not.toBe('PASS-WITH-DIVERGENCES');
     }
-    // the register is empty: DIV-NRC-1 went with the non-reveal charge modelled, and 03 is PASS
-    expect(DIVERGENCES).toEqual([]);
-    expect(DIVERGENCE_BY_ID.size).toBe(0);
+    // DIV-NRC-1 went with the non-reveal charge modelled, and 03 is PASS. Cause S3R-F: the register's one row is
+    // DIV-S1I-1, which only our scenario S3l meets (was: the register empty)
+    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-1']);
+    expect(DIVERGENCE_BY_ID.size).toBe(1);
     expect(EXPECTED['03']).toMatchObject({ status: 'PASS' });
     // the test-only divergence's Stage 1 values are vector 03's own, each at an expect step; its parting is b8's process_bid
     const v03 = loadVector(vectorFile('03'));
@@ -984,11 +990,17 @@ describe('stage1 vector runner: merces backend', () => {
     expect(section).toMatch(new RegExp(`\\| SH-AUC-2 \\| \`commit_bid\` \\|[^\\n]*\\| S4 \\| ${committing.join(', ')} \\|`));
     expect(section).not.toMatch(/SH-AUC-[3-6]/);
     expect(section).toMatch(/\| BLK-1 \(BLOCKED\) \| `retire_if_capped` \|/);
-    // cause NRC: the known divergences section says the register is empty (was: the DIV-NRC-1 row, its five entries, its
-    // lockstep parting and where the runs met it), and 03's row is PASS in full
+    // cause NRC: the known divergences section says no vector carries a divergence (was: the DIV-NRC-1 row, its five
+    // entries, its lockstep parting and where the runs met it), and 03's row is PASS in full. Cause S3R-F: it lists the
+    // register's one row, DIV-S1I-1, with the entries of the scenario that meets it (was: "the register is empty")
     const known = md.slice(md.indexOf('## Known divergences (not parity)'), md.indexOf('## Prefix gates'));
-    expect(known).toContain('None: the register is empty. Its only row, DIV-NRC-1 (the non-reveal charge, held in S2), went when the charge was modelled');
-    expect(known).not.toContain('### ');
+    expect(known).toContain('No Stage 1 vector carries a divergence: DIV-NRC-1 (the non-reveal charge, held in S2), the only row a vector ever met, went when the charge was modelled');
+    expect(known).not.toContain('None: the register is empty');
+    expect(known.match(/^### .*$/gm)).toEqual(["### DIV-S1I-1: a redeemed holder's final share counts the units in its open window ask (Stage 1 internal, resolved toward both chains)"]);
+    expect(known).toContain('| scenario S3l | #79 | `balances.b1.stable` | "69260161480" | "70310161480" |');
+    expect(known).toContain('| scenario S3l | #87 | `vault` | "1050000000" | "0" |');
+    expect(known).toContain('| scenario S3l (lockstep) | after #78 | `S2.vault` | "54517581720" | "53467581720" |');
+    expect(known).toContain('Not reached by a Stage 1 vector; reached by our scenario S3l (see "S3 claim scenarios").');
     expect(md).not.toContain('PASS-WITH-DIVERGENCES (');
     expect(md).toContain('| 03_auction_edges | PASS 78/78 | PASS 78/78 | PASS |');
     expect(md.slice(md.indexOf('## Findings'), md.indexOf('## Known divergences'))).toContain('None: every replayed step matched.');

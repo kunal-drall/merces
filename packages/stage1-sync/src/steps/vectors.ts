@@ -221,14 +221,15 @@ async function replayStage1Vectors(dir: string, ctx: StepCtx): Promise<StepRepor
       sections = runner.renderScenarios(scenarios, scenarioReports);
       const scenarioRuns = scenarioReports.flatMap((r) => r.runs);
       const scenariosOk = scenarioReports.every((r) => r.ok);
-      details.push(`S3 claim scenarios (ours): ${scenarios.length} scenario(s), ${scenarioRuns.filter((r) => r.status === 'PASS').length}/${scenarioRuns.length} run(s) PASS on the reference, merces and lockstep backends`);
-      for (const r of scenarioRuns.filter((x) => !x.atExpected)) details.push(`scenario ${r.vector} [${r.world}]: ${r.status}, expected PASS`);
+      const scenarioDiverging = scenarioRuns.filter((r) => r.status === 'PASS-WITH-DIVERGENCES').length;
+      details.push(`S3 claim scenarios (ours): ${scenarios.length} scenario(s), ${scenarioRuns.filter((r) => r.status === 'PASS').length}/${scenarioRuns.length} run(s) PASS on the reference, merces and lockstep backends${scenarioDiverging ? `, ${scenarioDiverging} PASS-WITH-DIVERGENCES on a recorded Stage 1-internal difference resolved toward both chains (see VECTOR_PARITY.md)` : ''}; ${scenarioRuns.filter((r) => r.atExpected).length}/${scenarioRuns.length} at expected status`);
+      for (const r of scenarioRuns.filter((x) => !x.atExpected)) details.push(`scenario ${r.vector} [${r.world}]: ${r.status}, expected ${runner.describeExpected(r.expected)}`);
       status = merces.ok && scenariosOk ? 'ok' : 'fail';
       summary = !merces.ok
         ? `${merces.runs.length - at} run(s) below their expected status: our simulator disagrees with Stage 1`
         : scenariosOk
-          ? `every target and prefix gate is at its expected status on both personalities, and our S3 claim scenarios pass in lockstep; ${refLine}`
-          : `${scenarioRuns.filter((r) => !r.atExpected).length} S3 claim scenario run(s) do not pass: our simulator disagrees with Stage 1`;
+          ? `every target and prefix gate is at its expected status on both personalities, and our S3 claim scenarios are at theirs in lockstep; ${refLine}`
+          : `${scenarioRuns.filter((r) => !r.atExpected).length} S3 claim scenario run(s) are below their expected status: our simulator disagrees with Stage 1`;
     }
   } catch (e) {
     status = 'fail';
