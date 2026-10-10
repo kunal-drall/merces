@@ -42,7 +42,7 @@ pnpm openapi:check                       # routes ⇄ openapi.yaml ⇄ access ti
 | Simulator | `@merces/simulator` — two personalities (`solana`: USDC+USDG, base58; `monad`: USDC, EVM), time travel, Postgres persistence |
 | Live adapters | `@merces/chain-solana`, `@merces/chain-evm` (config-driven; mainnet refused), `@merces/chains` (mock / live / auto) |
 | Read side | `@merces/indexer` (finality-aware, idempotent, resumable), `@merces/api` (Fastify, access tiers, `openapi.yaml`), `@merces/client` |
-| Services | `@merces/services`: identity & onboarding (E2), contracts (E3), terms vault (E4), ProofOfIncome (E5), auction (E6), lifecycle (treasury/payouts/redemption/windows), Meteora (E14), threshold data (E9), attestor (E10), accounting (E11), notifications (E12), admin (E13) |
+| Services | `@merces/services`: identity & onboarding (E2), contracts (E3), terms vault (E4), ProofOfIncome (E5), auction (E6), lifecycle (treasury, Stage 1's claims, redemption, windows), Meteora (E14: curve mode, staking and tender), threshold data (E9), attestor (E10), accounting (E11), notifications (E12), admin (E13) |
 | Clockwork | `@merces/keepers` (E7 cranks, reminders, outbox; E8 rate keeper) |
 | The sensitive one | `@merces/report-verifier` — isolated, no database, no payload logs |
 | Device side | `@merces/poi-device` — what runs on the issuer's device for a report (income chain, Stage 1 payment, Groth16 proof) |

@@ -99,7 +99,7 @@ MERCES_ALLOW_SIM_RESET=1 pnpm --filter @merces/simulator sim:reset --chain solan
 
 ### Checks before a deploy
 
-The S1 gate, all from the repository root with Postgres up:
+The gate (S1, kept through S2 and S3), all from the repository root with Postgres up:
 
 ```
 pnpm typecheck
@@ -111,14 +111,16 @@ pnpm stage1:vectors --backend reference                                         
 pnpm stage1:vectors --backend lockstep --personality solana                     # both side by side, every step
 pnpm stage1:vectors --scenarios                                                 # our S3 claim scenarios, in lockstep
 pnpm stage1:sync --no-conformance                                               # pin, drift, math, vectors
+pnpm openapi:check                                                              # routes, openapi.yaml, access tiers
+pnpm demo:cycle                                                                 # raise to payout on both personalities
 ```
 
 `stage1:vectors` must exit 0 with `OK: 36/42 PASS, 42/42 at expected status` (the 14 targets in full and the 7 prefix
 gates to their gate, on both personalities; 03 is PASS-WITH-DIVERGENCES on the five DIV-NRC-1 fields of the
 non-reveal hold, and lockstep accepts 03 parting at #65 as recorded) and the reference backend with `OK: 25/25 PASS`;
 `stage1:vectors --scenarios` (the paths of the claim family no vector takes, built on Stage 1 vector prefixes) with
-`OK: 14/14 PASS, 14/14 at expected status`; `stage1:sync` must report the math and vectors steps `OK` (the diff step stays
-`WARN` until the adapters are wired, and conformance needs live deployments). The vector runner verifies every
+`OK: 22/22 PASS, 22/22 at expected status` (eleven scenarios, (a)–(k), on both personalities); `stage1:sync` must report the math and vectors steps `OK` (the diff step stays
+`WARN` until the adapters are wired, and conformance needs live deployments). `openapi:check` prints `openapi.yaml matches 170 operations` (after S3) and `demo:cycle` ends with `DEMO OK`. The vector runner verifies every
 embedded report proof with the ports' Groth16 verifier and never persists anything.
 
 ## Keys

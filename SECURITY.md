@@ -10,10 +10,12 @@ a lender or a broker, and it is **never a custodian**:
 - It holds no user funds and has no code path that moves them. Every state change on a user's behalf is an
   **unsigned transaction** (`ChainPort.build`) that the user's wallet signs; `POST /tx/send` relays a user-signed
   transaction and refuses one whose signer is not one of the caller's linked wallets.
-- Its own keys are low-privilege: a **keeper** fee payer that can only call permissionless functions (settlement,
-  cranks, snapshots), and an **allowlist manager** that can only add or remove eligibility. Neither can touch terms,
+- Its own keys are low-privilege: a **keeper** fee payer that can only call permissionless functions (settlement and
+  delivery, the Retired burn, a curve's completion, proceeds collection and census, cranks, snapshots; never a holder's
+  stake, unstake, tender or claim), and an **allowlist manager** that can only add or remove eligibility. Neither can touch terms,
   move treasury or vault funds, or block claims, redemption or releases (C12). Removal from the allowlist never strands
-  value: the chain keeps claims, redemption and window sells open.
+  value: the chain keeps claims, redemption and window sells open (on a curve also unstaking and the tender of a
+  registered holder; only a new registration or stake needs the allowlist).
 - Admin actions (register attestors and verifier keys, pause new raises, fee collector, templates, flags) are built
   for the **protocol multisig**; the backend records the request and never signs it. The simulator stands in for the
   multisig with one admin address in mock mode only.

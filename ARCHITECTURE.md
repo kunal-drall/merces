@@ -13,20 +13,25 @@
 ```
 
 Every service talks to a chain only through `ChainPort` (`packages/domain/src/port.ts`): reads of current state, an
-ordered resumable event stream, `build(command)` for unsigned user transactions, and `submit(command, role)` for the
-backend's two low-privilege roles. The three implementations are interchangeable; `@merces/chains` picks one per chain
+ordered resumable event stream, `build(command)` for unsigned user transactions (or `build([commands])`: an ordered
+list as one all-or-nothing transaction, S3; the EVM adapter builds one command per transaction until a bundle is needed
+there), and `submit(command, role)` for the backend's two low-privilege roles. The three implementations are interchangeable; `@merces/chains` picks one per chain
 (`mock | live | auto`).
 
 ## The canonical model
 
-`@merces/domain` defines the vocabulary once: 48 events, 42 commands, the state shapes, the commitments (Stage 1's
+`@merces/domain` defines the vocabulary once: 53 events, 49 commands (schema 0.3.0), the state shapes, the commitments (Stage 1's
 Poseidon terms and income commitments; our bid and order commitments until S4 and S5), the verifier attestation
 message (Stage 1's report field set) and Stage 1's six report public inputs. The sealed raise uses Stage 1's names for
 its multi-step settlement (S2): the permissionless commands `beginSettlement`, `tallyBids`, `finalizeSettlement`,
 `processBid`, `deliverBid` and `registerHolder`, which the keepers submit and any wallet may build, and their events.
 One planner plans them for every caller (`nextSettlementStep` and the driver `runSettlement`, `settlement.ts`): the
 keepers, the simulator harness, conformance and the API's `build-step` all take the next step from the chain's stored
-raise state, so there is no second settlement path to drift.
+raise state, so there is no second settlement path to drift. The holder claims are Stage 1's family (S3): `claimPayout`
+(Stage 1's `claim`), `claimRedemption`, `claimTail`, `claimFinal`, and the permissionless `burnRetired`; every stablecoin
+amount a claim moves appears in exactly one event amount. Curve mode (S3) has Stage 1's names too: the permissionless
+`completeCurve`, `collectCurveProceeds` and `syncCurveUnits`, and the holder's `stakeUnits`, `unstakeUnits` and
+`tenderUnits`; a curve trade (`curveSwap`) is Meteora's, not a Merces instruction.
 Zod schemas are the single source: TypeScript types, runtime validation in the indexer and the API, the JSON schema
 (`packages/domain/schema`) and `DOMAIN_EVENTS.md` are all generated from them. Live adapters are anti-corruption layers:
 whatever Stage 1 emits is mapped onto these shapes by `SolanaEventMapper` / `EvmEventMapper`, with every difference
@@ -35,8 +40,8 @@ written to `INTERFACE_DRIFT.md`.
 ## The simulator
 
 `SimEngine` runs the canonical commands on Stage 1's rules (SPEC v1.1.2, with Stage 1's reference simulator as the
-executable spec) in TypeScript with `bigint` only, one `execute(command, actor)` per transaction with
-snapshot-and-rollback, and exactly the canonical events. Every error on a Stage 1 path carries Stage 1's error name
+executable spec) in TypeScript with `bigint` only, one `executeAll(commands, actor)` per transaction (one command, or an ordered list run
+all or nothing, S3) with snapshot-and-rollback, and exactly the canonical events. Every error on a Stage 1 path carries Stage 1's error name
 (`ChainError.detail.stage1`). A Groth16 report proof is verified asynchronously in `SimulatorChain.send` before the
 synchronous engine runs; the engine takes the verdict and checks the six public signals itself. Its commands live in one module per area under
 `packages/simulator/src/engine/` (registry, auction, settlement, treasury, reports, payments, holders, status,
@@ -83,8 +88,8 @@ Nothing in the backend signs for a user. Services return `UnsignedTx` objects (`
 | terms | validation (bounds, defaults, threshold floor), encrypted private terms, logged disclosure, commitment recomputation, inflation amendments |
 | poi | reporting schedule and deadlines, zkTLS sessions, FX basis, offchain proof and attestation verification, report store (commitments and amounts only), submit/payIn builders, tier-1 reconciliation |
 | auction | pre-checks on Stage 1's escrow and validity rules, open/cancel/commit/reveal/deliver builders and the next settlement step for any wallet, encrypted reveal backups, the settlement preview (Stage 1's math), settlement and delivery for the keepers (separate jobs, delivery retries and stuck alerts), reveal reminders |
-| lifecycle | treasury draws and pause, payout claims behind `PayoutClaimBuilder` (private payouts can slot in), redemption quote/builders/tail, retirement, transfer windows (flag-gated) |
-| meteora | curve-mode config generation; the curve read (the chain's `CurveState`, its census included); the lifecycle pass that completes a filled curve and collects its proceeds and, weekly, its trading fees (Stage 1's permissionless `completeCurve`, `collectCurveProceeds`; `advanceCurves`, run by the keepers' `curve.lifecycle` and the admin monitor); the census builder (`syncCurveUnits`, never while the issuer's assembled report waits: `curve-census.ts`, which also makes the report assembly, the submission builder and the tier-3 path census-aware); a buy builder (`curveSwap` on the chain's quote, any wallet, `earns: false` for one not approved) with a USDG→USDC swap route through the DEX port; no cap at any stage (every response carries `noCap` and the one statement) and the buyer notice (`CURVE_BUYER_NOTICE`) |
+| lifecycle | treasury draws and pause, Stage 1's claim family (payout claims behind `PayoutClaimBuilder`, so private payouts can slot in; the redemption, tail and final claim builders; none builds a claim of nothing; the holder registration), redemption quote/builders/tail, retirement and `burnRetired`, transfer windows (flag-gated); every per-unit read at the series' unit scale |
+| meteora | curve-mode config generation; the curve read (the chain's `CurveState`, its census included); the lifecycle pass that completes a filled curve and collects its proceeds and, weekly, its trading fees (Stage 1's permissionless `completeCurve`, `collectCurveProceeds`; `advanceCurves`, run by the keepers' `curve.lifecycle` and the admin monitor); the census builder (`syncCurveUnits`, never while the issuer's assembled report waits: `curve-census.ts`, which also makes the report assembly, the submission builder and the tier-3 path census-aware); the pre-buy quote and its `beforeYouBuy` statements; a swap builder (`build-swap`: `curveSwap` on the chain's quote, any wallet, `earns: false` for one not approved, a buy only once the statements are acknowledged) with a USDG→USDC swap route through the DEX port; staking (`staking.ts`): the wallet's curve position read and the stake (with its registration and census steps), unstake (one transaction with the claim that pays it) and tender builders; no cap at any stage (every response carries `noCap` and the one statement) and the buyer notice (`CURVE_BUYER_NOTICE`, its trading fee and split from the pool's config) |
 | threshold | admin-curated median income and inflation table with history; yearly indexing candidates |
 | attestor | attestor queue, hardship review (end-to-end encrypted), tier-3 cases and annual true-up, fallback FX signing, two-attestor extinguishment |
 | accounting | fee ledger, per-series statements, reconciliation of indexed totals against onchain balances, CSV export |

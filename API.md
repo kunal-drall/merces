@@ -23,8 +23,9 @@ explains how to use the API; the spec is the source of truth for shapes.
 - **Writes** accept an `Idempotency-Key` header, scoped to your account; the same key with the same body replays the
   stored response, a different body is a 409, and a repeat while the first request is still running is a 409 (retry later).
 - **Transactions**: the backend never signs for a user. Builders return `{ tx: UnsignedTx }` (`chain`, `family`, `signer`,
-  `coSigners`, `command`, `payload`, `encoding`, `expiresAt`). The wallet signs; `POST /tx/send` relays `{ tx, signatures }`
-  and returns the canonical events the transaction emitted.
+  `coSigners`, `command`, `payload`, `encoding`, `expiresAt`; since S3 `commands` when one transaction runs several
+  commands in order, all or nothing, as the curve unstake does, `command` being the first). The wallet signs; `POST
+  /tx/send` relays `{ tx, signatures }` and returns the canonical events the transaction emitted.
 - **Mock mode** adds `/dev/time`, `/dev/advance-time`, `/dev/faucet`, `/dev/esign/complete` so Stage 3 can drive the whole
   lifecycle without waiting for quarters to pass.
 
