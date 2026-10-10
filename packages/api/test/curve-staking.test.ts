@@ -20,7 +20,10 @@ const SCALE = 1_000_000n;
  *  - S3-ST: staking, unstake, tender and stake-weighted claims;
  *  - S3-SW: build-swap and the statements before a buy (owner direction of 2026-10-10);
  *  - S3-UL: base lamports: per-unit reads are per whole unit at the series' unit scale (was: per base lamport on a curve,
- *    `paidPerUnitWad / WAD`, and cost bases and cap totals 10^6 times too large).
+ *    `paidPerUnitWad / WAD`, and cost bases and cap totals 10^6 times too large);
+ *  - S3R-Y (S3 review fix 2): a curve holding's realised yield is on what the wallet has held, its stake, its wallet
+ *    units and its tendered units (was: on its stake, the indexed `units`, so an unstake moved it and a wallet that
+ *    unstaked everything read 0).
  */
 describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -218,9 +221,12 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
     // holdings: the unit scale, the stake and the wallet units, gross paid per whole unit, a cost basis per whole unit
     const holding = (await rig.get('/me/holdings', aTok)).json().holdings.find((x: { seriesId: string }) => x.seriesId === seriesId);
     expect(holding).toMatchObject({ raiseStyle: 'curve', unitScale: '1000000', stakedUnits: '19800000', walletUnits: '19800000', grossPaidPerUnit: perWhole.toString(), issuePrice: '10000000' });
-    const claimed = BigInt(holding.claimedTotal);
-    const costBasis = (10_000_000n * BigInt(Number(holding.units) + Number(holding.burnedUnits))) / SCALE;
-    expect(holding.realisedYieldBps).toBe(Number((claimed * 10_000n) / costBasis));
+    // cause S3R-Y: the yield is on the 39.6 units a holds, 19.8 staked and 19.8 in its wallet, at P0 = 10 USDC: 396 USDC,
+    // of which it has claimed 376.2 USDC, 9,500 bps (was: on its 19.8-unit stake, the indexed units, 19,000 bps)
+    expect(holding).toMatchObject({ units: '19800000', burnedUnits: '0', claimedTotal: '376200000', realisedYieldBps: 9_500 });
+    const costBasis = (10_000_000n * (BigInt(holding.stakedUnits) + BigInt(holding.walletUnits) + BigInt(holding.burnedUnits))) / SCALE;
+    expect(costBasis).toBe(USDC(396));
+    expect(holding.realisedYieldBps).toBe(Number((BigInt(holding.claimedTotal) * 10_000n) / costBasis));
     // retirement: paid per whole unit and Stage 1's C_remaining at the unit scale
     const cap = BigInt(s.capPerUnit!);
     const retirement = (await rig.get(`/series/${seriesId}/retirement`)).json();
@@ -232,6 +238,30 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
       unitScale: '1000000', perUnit: cap.toString(), unitsSold: '100000000', total: (cap * 100n).toString(), paidPerUnit: perWhole.toString(), remainingPerUnit: remaining.toString(),
       remainingTotal: ((remaining * BigInt(st.unitsOutstanding)) / SCALE).toString(), progressBps: Number((paidWad * SCALE * 10_000n) / (cap * WAD)),
     });
+  });
+
+  // cause S3R-Y (S3 review fix 2): unstaking moves no unit out of the holding, so it leaves the cost basis where it is.
+  // b holds 35.65 units, all staked, and has claimed nothing; it unstakes them all through the builder, whose bundled
+  // claim pays its pending payout (was: the cost basis fell to 0 with the stake, so its yield read 0 once it was paid)
+  it('a curve holding\'s yield is on what the wallet holds: an unstake leaves the cost basis where it is', async () => {
+    const holdingOf = async () => {
+      await rig.sync();
+      return (await rig.get('/me/holdings', bTok)).json().holdings.find((x: { seriesId: string }) => x.seriesId === seriesId) as Record<string, string | number>;
+    };
+    const basis = USDC(356.5); // 35.65 units at P0 = 10 USDC
+    const before = await holdingOf();
+    expect(before).toMatchObject({ units: '35650000', stakedUnits: '35650000', walletUnits: '0', burnedUnits: '0', claimedTotal: '0', realisedYieldBps: 0 });
+    const pending = BigInt((await h.sim.getPosition(seriesId, b.address))!.claimable);
+    expect(pending > 0n).toBe(true);
+    const built = await rig.post(`/series/${seriesId}/curve/build-unstake`, { wallet: b.address, units: '35650000' }, bTok);
+    expect(built.statusCode, built.body).toBe(200);
+    expect(built.json()).toMatchObject({ commands: ['unstakeUnits', 'claimPayout'], payout: pending.toString(), stakedAfter: '0' });
+    await send(built.json().tx, b, bTok);
+    const after = await holdingOf();
+    // the stake (the indexed units) is 0 and every unit is in the wallet; the yield is the payout over the 35.65 units
+    expect(after).toMatchObject({ units: '0', stakedUnits: '0', walletUnits: '35650000', burnedUnits: '0', claimedTotal: pending.toString() });
+    expect(after.realisedYieldBps).toBe(Number((pending * 10_000n) / basis));
+    expect(after.realisedYieldBps).toBeGreaterThan(0);
   });
 
   // cause S3-ST: a curve redeems by tender; the builder previews the principal, the pending payout and the quota, and

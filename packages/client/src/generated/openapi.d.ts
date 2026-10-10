@@ -3042,7 +3042,7 @@ export type components = {
             tailClaimable?: components["schemas"]["Money"];
             /** @description the final-pool share claimFinal pays after an extinguishment (claimFinal also pays the net payout, claimable) */
             finalClaimable?: components["schemas"]["Money"];
-            /** @description claimedTotal / cost basis in basis points; the cost basis is issuePrice × (units + burnedUnits) / unitScale */
+            /** @description claimedTotal / cost basis in basis points; the cost basis is issuePrice × (the units held + burnedUnits) / unitScale, the units held being units on a sealed-bid row and stakedUnits + walletUnits on a curve row (whose units is its stake), so staking or unstaking does not move it */
             realisedYieldBps?: number;
             lockupEndsAt?: number | null;
             redemptionPrice?: string | null;

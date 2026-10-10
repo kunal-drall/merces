@@ -481,6 +481,12 @@ The S3 review's confirmed findings, each fixed in its own commit ("S3 review fix
    pins 2,625 USDC for the 100-unit holder with 40 units in the ask (26.25 a unit, as for every other 100-unit holder)
    and an empty vault once all claim; an API test pins the builder's preview and what the relayed claim pays. Reported
    to Stage 1 ("Asked of Stage 1 (S3)", 5). ASSUMPTIONS A-AUC-8, A-REV-16 and A-C11-6 corrected.
+2. **A curve holding's yield is on the holding, not the stake (low).** On a curve series the indexed `positions.units`
+   is the stake (the accrual weight), and `/me/holdings` took the cost basis from it, so an unstake halved the basis
+   (doubling `realisedYieldBps`) and a holder that unstaked everything read 0 although paid. A curve row's basis is now
+   `issuePrice × (stakedUnits + walletUnits + burnedUnits) / unitScale`, read live; a sealed-bid row's is unchanged.
+   Tests: the yield over a's 39.6 units (19.8 staked, 19.8 in the wallet) is 9,500 bps, and b's stays on its 35.65 units
+   when it unstakes them all. OpenAPI (client regenerated) and API.md say how the basis is taken.
 
 ### Adapter notes for the auction (S5)
 

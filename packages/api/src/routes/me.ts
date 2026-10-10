@@ -20,6 +20,12 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
    * `grossPaidPerUnit = floor(paidPerUnitWad × unitScale / WAD)` and the cost basis is `issuePrice × units / unitScale`.
    * A curve row also carries the stake and the units in the wallet (`stakedUnits`, `walletUnits`; the curve position
    * read, `GET /series/{id}/curve/position`, covers a wallet that has not staked).
+   *
+   * `realisedYieldBps` is `claimedTotal` over the cost basis of what the wallet has held, `issuePrice × held /
+   * unitScale`: on a sealed-bid row its units (balance, undelivered and ask units) and the units it burned; on a curve
+   * row its stake, its units in the wallet and the units it tendered (burned), read live, because a curve row's indexed
+   * `units` is its stake, its accrual weight (S3 review fix 2: the yield was on the stake, so an unstake moved it, and a
+   * holder that unstaked everything read 0).
    */
   defineRoute(app, ctx, {
     method: 'GET', url: '/me/holdings', access: 'account',
@@ -35,7 +41,9 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
         const chain = ctx.chainFor(x.series_id);
         const live = await chain.getPosition(x.series_id, x.wallet);
         const unitScale = BigInt(x.unit_scale ?? '1');
-        const unitsEver = BigInt(x.units) + BigInt(x.burned_units);
+        // what the wallet has held: a curve row's indexed units are its stake, so its holding is read live
+        const held = x.raise_style === 'curve' && live ? BigInt(live.stakedUnits) + BigInt(live.walletUnits) : BigInt(x.units);
+        const unitsEver = held + BigInt(x.burned_units);
         const costBasis = x.issue_price ? (BigInt(x.issue_price) * unitsEver) / unitScale : 0n;
         const grossPerUnit = perWholeUnit(x.paid_per_unit_wad, unitScale);
         const yieldBps = costBasis > 0n ? (BigInt(x.claimed_total) * 10_000n) / costBasis : 0n;

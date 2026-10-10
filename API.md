@@ -160,7 +160,9 @@ simulator runs it in one execution with one rollback, the Solana adapter packs t
 builds one command per transaction (NotImplemented for a list) until a bundle is needed there. Every per-unit read is
 per whole unit at the series' unit scale (amendment M4): `/me/holdings` rows carry `unitScale` (and a curve row its
 `stakedUnits` and `walletUnits`), `grossPaidPerUnit = floor(paidPerUnitWad × unitScale / 1e18)` and a cost basis of
-`issuePrice × units / unitScale`; the retirement read's `paidPerUnit`, `capRemaining` (Stage 1's C_remaining at the unit
+`issuePrice × units / unitScale` over what the wallet has held (`realisedYieldBps = claimedTotal / cost basis`): a
+sealed-bid row's `units` and `burnedUnits`; a curve row's `stakedUnits + walletUnits` and `burnedUnits` (its `units` is
+its stake, so staking or unstaking leaves the yield where it is); the retirement read's `paidPerUnit`, `capRemaining` (Stage 1's C_remaining at the unit
 scale) and `capProgressBps`; the redemption read's tail `paidPerUnit`; the accounting statement's cap figures
 (`unitScale`, `total = perUnit × unitsSold / unitScale`, `remainingTotal`, `progressBps`). The series read carries the
 curve's `stakedTotal`, `tenderedTotal` and `unitsSyncedAt`.

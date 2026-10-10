@@ -1008,7 +1008,7 @@ components:
           description: the final-pool share claimFinal pays after an extinguishment (claimFinal also pays the net payout, claimable)
         realisedYieldBps:
           type: integer
-          description: claimedTotal / cost basis in basis points; the cost basis is issuePrice × (units + burnedUnits) / unitScale
+          description: claimedTotal / cost basis in basis points; the cost basis is issuePrice × (the units held + burnedUnits) / unitScale, the units held being units on a sealed-bid row and stakedUnits + walletUnits on a curve row (whose units is its stake), so staking or unstaking does not move it
         lockupEndsAt:
           type:
             - integer

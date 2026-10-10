@@ -329,7 +329,7 @@ components:
         redemptionClaimable: { $ref: '#/components/schemas/Money', description: 'what the redemption pays now beside the pending payout (claimRedemption, or the redemption claimTail or claimFinal runs first): the redemption price on the units not yet redeemed plus their tail catch-up; 0 unless the series redeemed' }
         tailClaimable: { $ref: '#/components/schemas/Money', description: "what claimTail pays (Stage 1's claimableTail view): the tail since the holder's tail cursor on its redeemed units or, before it redeems, on the units its redemption would redeem (claimTail redeems first)" }
         finalClaimable: { $ref: '#/components/schemas/Money', description: "the final-pool share claimFinal pays after an extinguishment (claimFinal also pays the net payout, claimable)" }
-        realisedYieldBps: { type: integer, description: 'claimedTotal / cost basis in basis points; the cost basis is issuePrice × (units + burnedUnits) / unitScale' }
+        realisedYieldBps: { type: integer, description: 'claimedTotal / cost basis in basis points; the cost basis is issuePrice × (the units held + burnedUnits) / unitScale, the units held being units on a sealed-bid row and stakedUnits + walletUnits on a curve row (whose units is its stake), so staking or unstaking does not move it' }
         lockupEndsAt: { type: [integer, 'null'] }
         redemptionPrice: { type: [string, 'null'] }
     PositionView:
