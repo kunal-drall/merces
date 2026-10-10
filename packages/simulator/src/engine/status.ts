@@ -1,4 +1,4 @@
-import { ChainError, type Command } from '@merces/domain';
+import { ChainError, PAUSE_APPROVAL_MESSAGE, pauseBounds, type Command } from '@merces/domain';
 import {
   U64_MAX, earliestUnpaid, formalNoticeDue, isLateUnderlying, isPausedAt, lateAccrual, pauseApprovalError, periodsBetween, projectDeadlines, toPid,
   type Period,
@@ -6,7 +6,7 @@ import {
 import type { SimPeriod, SimSeries } from '../state.ts';
 import { TERMINAL, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
-import { derivedStatus, ledgerClock, pauseBounds, periodIdOf, setStatus, statusParams } from './ledger.ts';
+import { derivedStatus, ledgerClock, periodIdOf, setStatus, statusParams } from './ledger.ts';
 
 export { setStatus };
 
@@ -135,7 +135,8 @@ export function requestPause(e: EngineCore, signer: string, cmd: Extract<Command
 
 /**
  * `approve_pause` (SIM:1284-1297): an active attestor approves the pending request with the pause end. Bounds from
- * Stage 1's `pauseApprovalError` (end in the future, not already paused, ≤ 1 year, ≤ 2 years in total, ≤ 16 pauses).
+ * Stage 1's `pauseApprovalError` (end in the future, not already paused, ≤ 1 year, ≤ 2 years in total, ≤ 16 pauses),
+ * with the bounds and messages the attestor service checks its decisions against (`@merces/domain` pause-rules.ts).
  * The pause counts from now; `pausedTotal` grows by its whole length at approval. Then `syncStatus` (Paused).
  */
 export function approvePause(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'approvePause' }>, now: number, emit: Emit): void {
@@ -147,7 +148,7 @@ export function approvePause(e: EngineCore, signer: string, cmd: Extract<Command
   const t = BigInt(now);
   const end = BigInt(cmd.until);
   const err = pauseApprovalError(l.pauses, l.pausedTotal, t, end, pauseBounds());
-  if (err) fail(err, PAUSE_ERROR_MESSAGE[err]);
+  if (err) fail(err, PAUSE_APPROVAL_MESSAGE[err]);
   l.pauses.push({ start: t, end });
   l.pausedTotal += end - t;
   l.pauseRequested = false;
@@ -155,12 +156,6 @@ export function approvePause(e: EngineCore, signer: string, cmd: Extract<Command
   emit('PauseApproved', { seriesId: s.seriesId, attestor: signer, until: cmd.until });
   syncStatus(e, s, now, emit);
 }
-const PAUSE_ERROR_MESSAGE = {
-  InvalidPauseEnd: 'pause end must be in the future',
-  AlreadyPaused: 'a pause is already running',
-  PauseTooLong: 'pause exceeds the per-pause or cumulative limit',
-  TooManyPauses: 'the series has used all its pauses',
-} as const;
 
 /**
  * Announce the end of hardship pauses (events only; not a Stage 1 op). A pause already stops at its approved end on

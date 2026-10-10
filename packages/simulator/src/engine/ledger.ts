@@ -1,8 +1,8 @@
 import type { LifecycleStatus } from '@merces/domain';
-import { DEFAULTS, ZERO_INCOME_COMMITMENT, fieldToHex32 } from '@merces/domain';
+import { ZERO_INCOME_COMMITMENT, fieldToHex32 } from '@merces/domain';
 import {
   SeriesStatus, capPerUnit, deriveStatus, fromPid, pidAt, statusParamsOf, toPid,
-  type LedgerClock, type PauseBounds, type StatusParams,
+  type LedgerClock, type StatusParams,
 } from '@merces/math';
 import type { SimLedger, SimSeries } from '../state.ts';
 import type { EngineCore, Emit } from './core.ts';
@@ -87,11 +87,6 @@ export function mintFinalized(s: SimSeries): boolean {
 /** `cap_per_unit()` read live from the (amendable) cap multiple and the clearing price (SIM:370-372); 0 before settlement. */
 export function liveCapPerUnit(s: SimSeries): bigint {
   return s.issuePrice === null ? 0n : capPerUnit(s.terms.capMultipleWad, s.issuePrice);
-}
-
-/** `approve_pause` bounds (Stage 1 parameters, through DEFAULTS). */
-export function pauseBounds(): PauseBounds {
-  return { maxPauseSeconds: BigInt(DEFAULTS.maxPauseSeconds), maxCumulativePauseSeconds: BigInt(DEFAULTS.maxCumulativePauseSeconds), maxPauses: DEFAULTS.maxPauses };
 }
 
 // ------------------------------------------------------------------ stored status

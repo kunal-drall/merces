@@ -72,7 +72,9 @@ S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed 
   encrypted (migration 017), in a merces-e2e v1 envelope the API parses and otherwise refuses (S1 review; PRIVACY.md).
 - **Status and timing (WP4).** Stage 1's derived status (inclusive ≤ 30 / ≤ 45 days of unpaused time), the formal
   notice at period end + 90 days, Stage 1's sync points, hardship pauses with Stage 1's approval bounds (the requested
-  end is advisory), releases gated by Stage 1's underlying lateness (B.9, partly).
+  end is advisory), releases gated by Stage 1's underlying lateness (B.9, partly). S1 review: the attestor service
+  checks a hardship decision with Stage 1's `pauseApprovalError` on the chain's pause record before it records an
+  approval; a refusal carries Stage 1's name and leaves the request pending (A-REV-23).
 - **Money (WP5–WP8).** Stage 1's vault (`vaultReceiveGross`: the cap read live, the exact WAD carry, the year ring
   tagged by the report deadline); `payIn` without an issuer check and with the accrual computed when it lands; claims
   for registered holders only, a zero claim succeeding; Stage 1's `redeem` preconditions and quote, the tail
@@ -241,8 +243,10 @@ redemption slippage guard (`maxPricePerUnit`) checked before submitting, since S
    and r in plaintext onchain for tier-1 series (Stage 1 A22: the issuer's choice; our events say θ never goes
    onchain, so this is a privacy decision for the owner); `withdraw_pause_request`; pauses without a requested end;
    key revocation with a 45-day grace (A33); `retire_if_capped`; `resume_issuance`; `request_early_draw`.
-   **S1:** a pause request carries no enforced end (`until` is advisory) and approvals use Stage 1's bounds (WP4). The
-   rest is S5 (true-up, router, `withdraw_pause_request`, `retire_if_capped`, `resume_issuance`, `request_early_draw`);
+   **S1:** a pause request carries no enforced end (`until` is advisory) and approvals use Stage 1's bounds (WP4). S1
+   review: the attestor service checks a decision with the same bounds (`pauseApprovalError` on the chain's pause
+   record, `@merces/domain` pause-rules.ts) before it records an approval, so it never records one the chain refuses,
+   and a refusal leaves the request pending (A-REV-23). The rest is S5 (true-up, router, `withdraw_pause_request`, `retire_if_capped`, `resume_issuance`, `request_early_draw`);
    key revocation with its grace is S4. The router's plaintext θ and r: the owner accepted tier-1 public terms with an
    explicit issuer consent step (tier-1 milestone).
 7. *Actors and admin.* `register_issuer` is **admin-only** on both chains (ours is the issuer's own command); there is

@@ -5645,7 +5645,7 @@ paths:
               properties:
                 until:
                   type: integer
-                  description: requested pause end (unix seconds)
+                  description: "requested pause end (unix seconds); advisory, as Stage 1's request_pause carries no end: the attestor approves the actual end within Stage 1's approve_pause bounds"
                 attestor:
                   type: string
                   description: a registered attestor wallet on the series' chain
@@ -5667,8 +5667,7 @@ paths:
           paused or terminal: null
           or a request is already pending: null
         "422":
-          description: Plaintext-looking payload
-          unknown attestor or end date in the past: null
+          description: "Plaintext-looking payload, unknown attestor or end date in the past; or no pause could be approved (detail.stage1 TooManyPauses: the series has used its 16 pauses; PauseTooLong: its two years in total are used)"
     get:
       operationId: hardshipStatus
       x-access: holder-or-issuer
@@ -5701,7 +5700,7 @@ paths:
             type: string
       responses:
         "200":
-          description: The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state
+          description: "The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state: `pause` (the deprecated single-pause view) and `pauses` (Stage 1's record: pauses approved, seconds paused in total, a pending request, the running pause), which the approval bounds are checked against"
           content:
             application/json:
               schema:
@@ -5743,6 +5742,7 @@ paths:
                 decisionCode:
                   type: string
                   description: rejection code (never free text)
+      description: "An approval is checked with Stage 1's approve_pause rules (pauseApprovalError) on the chain's pause record before anything is recorded: the end in the future, no running pause, at most 365 days, at most 730 days across the series' pauses, at most 16 pauses. A refusal names Stage 1's rule in detail.stage1 (never a date) and leaves the request pending, so the attestor can decide again with an end the chain accepts, or reject it."
       responses:
         "200":
           description: "Approved: the record and the unsigned approvePause transaction for the attestor. Rejected: the record with its decision code and tx null"
@@ -5753,10 +5753,9 @@ paths:
         "403":
           description: Not the chosen attestor
         "409":
-          description: Already decided
-          or the issuer has not sent requestPause onchain: null
+          description: Already decided; the issuer has not sent requestPause onchain (detail.stage1 PauseNotRequested); or a pause is running (AlreadyPaused)
         "422":
-          description: Approved end after the requested end or in the past
+          description: Approved end after the requested end, or refused by Stage 1's bounds (detail.stage1 InvalidPauseEnd, PauseTooLong or TooManyPauses); the request stays pending
   /series/{seriesId}/tier3/annual:
     post:
       operationId: openTier3Annual

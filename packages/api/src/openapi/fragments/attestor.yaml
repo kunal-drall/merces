@@ -69,8 +69,8 @@ paths:
       tags: [hardship]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: Idempotency-Key, in: header, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [until, attestor, ciphertext], properties: { until: { type: integer, description: requested pause end (unix seconds) }, attestor: { type: string, description: a registered attestor wallet on the series' chain }, ciphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] } } } } } }
-      responses: { '201': { description: The hardship record (no ciphertext) and the unsigned requestPause transaction for the issuer, content: { application/json: { schema: { type: object } } } }, '409': { description: Series not settled, paused or terminal, or a request is already pending }, '422': { description: Plaintext-looking payload, unknown attestor or end date in the past } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [until, attestor, ciphertext], properties: { until: { type: integer, description: "requested pause end (unix seconds); advisory, as Stage 1's request_pause carries no end: the attestor approves the actual end within Stage 1's approve_pause bounds" }, attestor: { type: string, description: a registered attestor wallet on the series' chain }, ciphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] } } } } } }
+      responses: { '201': { description: The hardship record (no ciphertext) and the unsigned requestPause transaction for the issuer, content: { application/json: { schema: { type: object } } } }, '409': { description: Series not settled, paused or terminal, or a request is already pending }, '422': { description: "Plaintext-looking payload, unknown attestor or end date in the past; or no pause could be approved (detail.stage1 TooManyPauses: the series has used its 16 pauses; PauseTooLong: its two years in total are used)" } }
     get:
       operationId: hardshipStatus
       x-access: holder-or-issuer
@@ -85,7 +85,7 @@ paths:
       tags: [hardship]
       security: [{ session: [] }]
       parameters: [{ name: hardshipId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state, content: { application/json: { schema: { type: object } } } }, '403': { description: Addressed to another attestor } }
+      responses: { '200': { description: "The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state: `pause` (the deprecated single-pause view) and `pauses` (Stage 1's record: pauses approved, seconds paused in total, a pending request, the running pause), which the approval bounds are checked against", content: { application/json: { schema: { type: object } } } }, '403': { description: Addressed to another attestor } }
   /attestor/hardship/{hardshipId}/decide:
     post:
       operationId: decideHardship
@@ -94,7 +94,8 @@ paths:
       security: [{ session: [] }]
       parameters: [{ name: hardshipId, in: path, required: true, schema: { type: string } }, { name: Idempotency-Key, in: header, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [approve], properties: { approve: { type: boolean }, until: { type: integer, description: approved end; defaults to the requested end and may not exceed it }, decisionCode: { type: string, description: rejection code (never free text) } } } } } }
-      responses: { '200': { description: 'Approved: the record and the unsigned approvePause transaction for the attestor. Rejected: the record with its decision code and tx null', content: { application/json: { schema: { type: object } } } }, '403': { description: Not the chosen attestor }, '409': { description: Already decided, or the issuer has not sent requestPause onchain }, '422': { description: Approved end after the requested end or in the past } }
+      description: "An approval is checked with Stage 1's approve_pause rules (pauseApprovalError) on the chain's pause record before anything is recorded: the end in the future, no running pause, at most 365 days, at most 730 days across the series' pauses, at most 16 pauses. A refusal names Stage 1's rule in detail.stage1 (never a date) and leaves the request pending, so the attestor can decide again with an end the chain accepts, or reject it."
+      responses: { '200': { description: 'Approved: the record and the unsigned approvePause transaction for the attestor. Rejected: the record with its decision code and tx null', content: { application/json: { schema: { type: object } } } }, '403': { description: Not the chosen attestor }, '409': { description: "Already decided; the issuer has not sent requestPause onchain (detail.stage1 PauseNotRequested); or a pause is running (AlreadyPaused)" }, '422': { description: "Approved end after the requested end, or refused by Stage 1's bounds (detail.stage1 InvalidPauseEnd, PauseTooLong or TooManyPauses); the request stays pending" } }
   /series/{seriesId}/tier3/annual:
     post:
       operationId: openTier3Annual

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
-import { E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, attestationMessage, expectedPrior, fxAttestationMessage, hex32ToField, normaliseAddress, parseE2eEnvelope, readsAsText, reportProofSchema, type ChainPort, type SeriesState, type UnsignedTx } from '@merces/domain';
+import { E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, attestationMessage, expectedPrior, fxAttestationMessage, hex32ToField, noPauseApprovable, normaliseAddress, parseE2eEnvelope, pauseApprovalRefusal, readsAsText, reportProofSchema, type ChainPort, type PauseApprovalRule, type SeriesState, type UnsignedTx } from '@merces/domain';
 import { parsePeriod, periodFrom, toPid } from '@merces/math';
 import { verifyWalletSignature } from '@merces/ports';
 import type { Session } from '@merces/api';
@@ -51,6 +51,14 @@ export const tier3AnnualOpenSchema = z.object({ year: z.number().int().min(2026)
 export const tier3AnnualSignSchema = z.object({ totalPaymentStable: money });
 export const fxSignSchema = z.object({ rateWad: z.string().regex(/^\d+$/), attestorWallet: z.string().min(1).max(64), sourceNote: code, signature: z.string().min(1).max(4096) });
 export const extinguishSchema = z.object({ seriesId: z.string().regex(/^[a-z0-9-]+:[A-Za-z0-9]+$/), attestors: z.array(z.string().min(1).max(64)).length(2), evidenceCiphertext: ciphertext, keyHint });
+
+/**
+ * A Stage 1 pause-approval refusal as an API error: Stage 1's name in `detail.stage1` and a message naming the rule and
+ * the protocol bound, never a date. A running pause is a 409 (the series' state), the bounds a 422.
+ */
+function pauseRefusal(rule: PauseApprovalRule): AppError {
+  return new AppError(rule === 'AlreadyPaused' ? 409 : 422, rule === 'AlreadyPaused' ? 'Conflict' : 'Unprocessable', PAUSE_APPROVAL_MESSAGE[rule], { stage1: rule });
+}
 
 /** Days the issuer has to settle an annual underpayment (C8: "true up within 60 days"). No accrual (A-C8-3). */
 export const TRUE_UP_DAYS = 60;
@@ -239,6 +247,11 @@ export class AttestorService {
     if (input.until <= now) throw AppError.unprocessable('the pause end must be in the future');
     if (series.phase !== 'Settled') throw AppError.conflict('the series has not settled');
     if (['Retired', 'Redeemed', 'Extinguished', 'Paused'].includes(series.status)) throw AppError.conflict(`cannot request a pause while ${series.status}`);
+    // The requested end stays advisory (Stage 1's request_pause carries none; the attestor approves the actual end within
+    // Stage 1's bounds). A request no approval could satisfy is refused before the issuer sends it: the series has used
+    // all its pauses, or its cumulative limit leaves no time (S1 review).
+    const exhausted = noPauseApprovable(series.pauses, now);
+    if (exhausted) throw pauseRefusal(exhausted);
     const pending = await this.ctx.pool.query("select 1 from hardship_requests where series_id = $1 and state = 'pending'", [seriesId]);
     if (pending.rowCount) throw AppError.conflict('a hardship request is already pending for this series');
     const id = this.ctx.newId('hard');
@@ -256,10 +269,13 @@ export class AttestorService {
     const h = await this.hardshipRow(id);
     if (!(await this.actsAs(session, String(h.chain), String(h.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this request was addressed to another attestor, or your registration for that wallet is not active');
     const series = await this.ctx.chains.get(String(h.chain)).getSeries(String(h.series_id));
-    return { ...this.hardshipView(h, true), seriesStatus: series?.status ?? null, pause: series?.pause ?? null };
+    return { ...this.hardshipView(h, true), seriesStatus: series?.status ?? null, pause: series?.pause ?? null, pauses: series?.pauses ?? null };
   }
 
-  /** Attestor decision: approve (build approvePause for the attestor, until ≤ requested) or reject with a code. */
+  /**
+   * Attestor decision: approve (build approvePause for the attestor, until ≤ requested and within Stage 1's
+   * `approve_pause` bounds on the chain's pause record) or reject with a code.
+   */
   async decideHardship(id: string, session: Session, input: z.infer<typeof hardshipDecideSchema>): Promise<Record<string, unknown> & { tx: UnsignedTx | null }> {
     const h = await this.hardshipRow(id);
     if (!(await this.actsAs(session, String(h.chain), String(h.attestor)))) throw AppError.forbidden('only the chosen attestor, while registered, can decide this request');
@@ -278,10 +294,16 @@ export class AttestorService {
     const until = input.until ?? requested;
     if (until > requested) throw AppError.unprocessable('the approved end cannot be after the requested end');
     const now = await chain.now();
-    if (until <= now) throw AppError.unprocessable('the approved end must be in the future');
     const series = await chain.getSeries(seriesId);
     if (!series) throw AppError.notFound('series');
-    if (!series.pause || series.pause.requestedUntil === null || series.pause.startedAt !== null) throw AppError.conflict('the issuer has not sent requestPause onchain yet (or the pause already started)');
+    // Stage 1's approve_pause, in its order (SIM:1284-1297), on the chain's pause record, before anything is recorded:
+    // a pending request onchain (PauseNotRequested), then pauseApprovalError (the end in the future, no running pause,
+    // at most a year, two years in total, 16 pauses). A refusal leaves the request pending, so the attestor can decide
+    // again with an end the chain accepts, or reject it (S1 review: the record said approved for a pause the chain
+    // refused, and could not be corrected).
+    if (!series.pauses.requested) throw new AppError(409, 'Conflict', 'the issuer has not sent requestPause onchain yet', { stage1: 'PauseNotRequested' });
+    const refusal = pauseApprovalRefusal(series.pauses, now, until);
+    if (refusal) throw pauseRefusal(refusal);
     // build before recording the decision: if the build fails the request stays pending and can be decided again
     const tx = await chain.build({ kind: 'approvePause', seriesId, until }, String(h.attestor));
     const upd = await this.ctx.pool.query("update hardship_requests set state = 'approved', approved_until = $2, decision_code = 'approved', decided_by = $3, decided_at = now() where hardship_id = $1 and state = 'pending'", [id, until, session.accountId]);

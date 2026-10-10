@@ -279,8 +279,10 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext, keyHint: 'attestor-1 x25519 key v1' }, issuerTok, { 'idempotency-key': 'hard-1' })).json().hardshipId).toBe(hardshipId);
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(409);
 
-    // the attestor cannot approve before the issuer's requestPause landed
-    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: true }, attTok)).statusCode).toBe(409);
+    // the attestor cannot approve before the issuer's requestPause landed (Stage 1's PauseNotRequested)
+    const early = await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: true }, attTok);
+    expect(early.statusCode).toBe(409);
+    expect(early.json().detail).toEqual({ stage1: 'PauseNotRequested' });
     const sent = await rig.post('/tx/send', await h.issuer.sign(tx), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     expect(sent.json().events[0].type).toBe('PauseRequested');
@@ -390,6 +392,85 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: e2e('x'.repeat(40)) }, attTok)).statusCode).toBe(409);
     const audit = await rig.t.pool.query("select detail from audit_log where action = 'extinguishment.request' and target = $1", [requestId]);
     expect(audit.rows[0].detail).toMatchObject({ seriesId, attestors: [a1.address, a2.address] });
+  });
+
+  // S1 review: decide checked only the requested end and "in the future", so it recorded 'approved' (and notified it) for a
+  // pause Stage 1's approve_pause refuses (more than a year, more than two years in total, 16 pauses); the request then
+  // left the queue and a second decision was a 409. It also refused, with a 409, a request the chain would approve when an
+  // earlier pause had ended but was not announced yet. Runs after the extinguishment test: it moves the clock two years.
+  it('hardship: a decision is checked against Stage 1\'s approve_pause bounds before it is recorded; a refusal leaves the request pending', async () => {
+    const att = h.attestors[0]!;
+    const s = (await h.runRaise()).seriesId;
+    await rig.sync();
+    const open = async (until: number): Promise<string> => {
+      const r = await rig.post(`/series/${s}/hardship`, { until, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok);
+      expect(r.statusCode, JSON.stringify(r.json())).toBe(201);
+      const sent = await rig.post('/tx/send', await h.issuer.sign(r.json().tx as UnsignedTx), issuerTok);
+      expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
+      return r.json().hardshipId as string;
+    };
+    const approve = async (id: string, until: number) => {
+      const d = await rig.post(`/attestor/hardship/${id}/decide`, { approve: true, until }, attTok);
+      expect(d.statusCode, JSON.stringify(d.json())).toBe(200);
+      expect(d.json()).toMatchObject({ state: 'approved', approvedUntil: until });
+      const sent = await rig.post('/tx/send', await att.sign(d.json().tx as UnsignedTx), attTok);
+      expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
+      expect(sent.json().events[0].type).toBe('PauseApproved');
+    };
+    /** a refused decision: Stage 1's name, a message without the date, and nothing recorded, notified or audited */
+    const refused = async (id: string, body: { approve: true; until?: number }, stage1: string) => {
+      const r = await rig.post(`/attestor/hardship/${id}/decide`, body, attTok);
+      expect(r.statusCode, JSON.stringify(r.json())).toBe(422);
+      expect(r.json()).toMatchObject({ error: 'Unprocessable', detail: { stage1 } });
+      expect(Object.keys(r.json().detail)).toEqual(['stage1']);
+      const pending = await rig.t.pool.query('select state, approved_until, decision_code, decided_at from hardship_requests where hardship_id = $1', [id]);
+      expect(pending.rows[0]).toEqual({ state: 'pending', approved_until: null, decision_code: null, decided_at: null });
+      expect((await rig.get('/attestor/queue', attTok)).json().hardship.map((x: { hardshipId: string }) => x.hardshipId)).toContain(id);
+      expect((await rig.t.pool.query("select payload->>'kind' as kind from outbox where payload->>'hardshipId' = $1 order by id", [id])).rows.map((x) => x.kind)).toEqual(['hardship.requested']);
+      expect((await rig.t.pool.query('select 1 from audit_log where target = $1', [id])).rowCount).toBe(0);
+      return r.json().message as string;
+    };
+
+    // a requested end more than a year out is advisory and accepted; approving it as requested is PauseTooLong
+    let now = await h.sim.now();
+    const first = await open(now + 400 * DAY);
+    const msg = await refused(first, { approve: true }, 'PauseTooLong');
+    expect(msg).toBe('a pause may last at most 365 days, and the series\' pauses 730 days in total');
+    expect(msg).not.toContain(String(now + 400 * DAY));
+    await refused(first, { approve: true, until: now + 365 * DAY + 1 }, 'PauseTooLong');
+    await refused(first, { approve: true, until: now }, 'InvalidPauseEnd');
+    expect((await rig.get(`/series/${s}/hardship`, issuerTok)).json()).toMatchObject({ paused: false, requests: [{ state: 'pending', approvedUntil: null, decidedAt: null }] });
+    expect((await h.sim.getSeries(s))!.pauses).toMatchObject({ count: 0, requested: true });
+    // the attestor decides again, at the bound, and the chain accepts it
+    await approve(first, now + 365 * DAY);
+    expect((await h.sim.getSeries(s))!.status).toBe('Paused');
+
+    // the first pause ends by itself; its PauseEnded is not announced yet (no crank), and the chain approves a new one
+    await h.sim.advanceTime(365 * DAY);
+    now = await h.sim.now();
+    expect((await h.sim.getSeries(s))!.pause).toMatchObject({ startedAt: expect.any(Number) });
+    const view = await rig.get(`/attestor/hardship/${first}`, attTok);
+    expect(view.json().pauses).toMatchObject({ count: 1, pausedTotalSeconds: 365 * DAY, current: null });
+    const second = await open(now + 400 * DAY);
+    await approve(second, now + 300 * DAY);
+
+    // 665 of the 730 days are used: a 66-day pause is within a year but over the cumulative limit
+    await h.sim.advanceTime(300 * DAY);
+    now = await h.sim.now();
+    const third = await open(now + 100 * DAY);
+    await refused(third, { approve: true, until: now + 66 * DAY }, 'PauseTooLong');
+    await approve(third, now + 65 * DAY);
+
+    // nothing is left: a new request is refused before the issuer sends it, with nothing stored or notified
+    await h.sim.advanceTime(65 * DAY);
+    now = await h.sim.now();
+    const rows = (await rig.t.pool.query('select count(*)::int as n from hardship_requests where series_id = $1', [s])).rows[0].n;
+    const exhausted = await rig.post(`/series/${s}/hardship`, { until: now + 30 * DAY, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok);
+    expect(exhausted.statusCode, JSON.stringify(exhausted.json())).toBe(422);
+    expect(exhausted.json()).toMatchObject({ detail: { stage1: 'PauseTooLong' } });
+    expect((await rig.t.pool.query('select count(*)::int as n from hardship_requests where series_id = $1', [s])).rows[0].n).toBe(rows);
+    expect((await h.sim.getSeries(s))!.pauses).toMatchObject({ count: 3, pausedTotalSeconds: 730 * DAY, requested: false });
+    expect((await rig.get(`/series/${s}/hardship`, issuerTok)).json().requests.map((x: { state: string }) => x.state)).toEqual(['approved', 'approved', 'approved']);
   });
 
   it('privacy: the attestor tables and logs hold ciphertext and amounts only — never the plaintext or the canary', async () => {

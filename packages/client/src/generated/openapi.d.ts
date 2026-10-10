@@ -1761,6 +1761,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description An approval is checked with Stage 1's approve_pause rules (pauseApprovalError) on the chain's pause record before anything is recorded: the end in the future, no running pause, at most 365 days, at most 730 days across the series' pauses, at most 16 pauses. A refusal names Stage 1's rule in detail.stage1 (never a date) and leaves the request pending, so the attestor can decide again with an end the chain accepts, or reject it. */
         post: operations["decideHardship"];
         delete?: never;
         options?: never;
@@ -6625,7 +6626,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description requested pause end (unix seconds) */
+                    /** @description requested pause end (unix seconds); advisory, as Stage 1's request_pause carries no end: the attestor approves the actual end within Stage 1's approve_pause bounds */
                     until: number;
                     /** @description a registered attestor wallet on the series' chain */
                     attestor: string;
@@ -6651,7 +6652,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Plaintext-looking payload */
+            /** @description Plaintext-looking payload, unknown attestor or end date in the past; or no pause could be approved (detail.stage1 TooManyPauses: the series has used its 16 pauses; PauseTooLong: its two years in total are used) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -6671,7 +6672,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state */
+            /** @description The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state: `pause` (the deprecated single-pause view) and `pauses` (Stage 1's record: pauses approved, seconds paused in total, a pending request, the running pause), which the approval bounds are checked against */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6728,14 +6729,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Already decided */
+            /** @description Already decided; the issuer has not sent requestPause onchain (detail.stage1 PauseNotRequested); or a pause is running (AlreadyPaused) */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Approved end after the requested end or in the past */
+            /** @description Approved end after the requested end, or refused by Stage 1's bounds (detail.stage1 InvalidPauseEnd, PauseTooLong or TooManyPauses); the request stays pending */
             422: {
                 headers: {
                     [name: string]: unknown;

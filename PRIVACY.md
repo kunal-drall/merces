@@ -68,6 +68,7 @@ document file (A-PRIV-4).
 | Hardship reason and evidence | `hardship_requests.ciphertext` | e2e | the chosen attestor only; server: nobody | decision + retention |
 | Hardship state and dates | `hardship_requests` (state, until, decided_at), onchain `PauseRequested/Approved/Ended` | plain | issuer, holders (status and dates only), attestor, admin | — |
 | Decision code | `hardship_requests.decision_code`, `audit_log` | plain (codes only) | attestor, admin | — |
+| Approval refusal | API response only (`detail.stage1`: Stage 1's rule name; the message names the rule and the protocol bound, never a date); nothing stored, audited or notified | plain (codes only) | the deciding attestor | — |
 | Extinguishment evidence | `extinguishment_requests.evidence_ciphertext` | e2e | the two attestors; server: nobody | — |
 
 ## Identity and accounts
