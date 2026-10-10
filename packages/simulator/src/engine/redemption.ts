@@ -1,5 +1,5 @@
 import { DEFAULTS, ChainError, type Command } from '@merces/domain';
-import { U64_MAX, WAD, newTailState, pidAt, redemptionQuote, settleHolderDelta, tailReceive, type RedemptionQuote } from '@merces/math';
+import { U64_MAX, mulDiv, newTailState, pidAt, redemptionQuoteScaled, scaledAmount, settleHolderDelta, tailReceiveScaled, wadPerScaledUnit, type RedemptionQuote } from '@merces/math';
 import type { SimPeriod, SimPosition, SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
@@ -12,6 +12,10 @@ import { syncStatus } from './status.ts';
  * Redemption and the tail clause on Stage 1 (SPEC v1.1 §6.7-§6.8; Stage 1 simulator SIM:1158-1172, 1328-1412),
  * through `@merces/math`: Stage 1's `redemptionQuote` over the vault's tagged year ring, `newTailState` at redemption,
  * `tailReceive` for every tail payment and the holder's tail cursor (`lastTailAccWad`).
+ *
+ * Each takes the series' unit scale (`SimSeries.unitScale`) through the scale-aware family (`redemptionQuoteScaled`,
+ * `tailReceiveScaled`, `scaledAmount`; ported from merces-common, A-MATH-3): at scale 1 they are Stage 1's own
+ * functions and `P × units`; at another scale units are accounting units and prices stay per whole unit.
  */
 
 // ------------------------------------------------------------------ redemption
@@ -19,10 +23,12 @@ import { syncStatus } from './status.ts';
  * Stage 1's redemption quote at `now` (`redemptionQuote`, REF/redemption.ts:58-78): the hurdle price, `k × D_avg`
  * over the trailing full settlement years of `vault.yearGross` (each payment is tagged with the year of its report
  * deadline), the remaining cap `C_rem` from the live cap and `vault.paidPerUnitWad` (ceil), and the price the
- * smallest of them decides. Meaningful once the raise settled.
+ * smallest of them decides. Meaningful once the raise settled. At the series' unit scale (`redemptionQuoteScaled`:
+ * Stage 1's `redemptionQuote` at scale 1; otherwise merces-common `redemption.rs:101-141` with the deposit
+ * `floor(P_redeem × N / scale)`, Solana `exit.rs:125`).
  */
 export function quote(s: SimSeries, now: number): RedemptionQuote {
-  return guardStage1(() => redemptionQuote({
+  return guardStage1(() => redemptionQuoteScaled({
     p0: s.issuePrice ?? 0n,
     hurdleRateWad: s.terms.hurdleWad,
     payoutMultipleK: Number(s.terms.payoutMultipleK),
@@ -31,6 +37,7 @@ export function quote(s: SimSeries, now: number): RedemptionQuote {
     paidPerUnitWad: s.vault.paidPerUnitWad,
     yearGross: s.vault.yearGross,
     unitsOutstanding: s.unitsOutstanding,
+    unitScale: s.unitScale,
   }), 'AmountOutOfRange');
 }
 
@@ -118,7 +125,8 @@ function tailCatchUp(p: SimPosition, units: bigint): bigint {
  * A holder's redemption body (Stage 1 `claimRedemptionBody`, SIM:1375-1393), the cross-module contract for
  * `claimRedemption` and the final claim: deliver its auction bid if still pending (`deliverPending`: the refund and the
  * units), settle the holder (HolderNotRegistered), redeem its units not held for a window ask (`units − escrowed`,
- * added to `redeemedUnits`), pay `pending + P_redeem × units + tail catch-up` from the vault, burn those units (reason
+ * added to `redeemedUnits`), pay `pending + P_redeem × units + tail catch-up` from the vault (the principal at the
+ * series' unit scale, `scaledAmount`: `P_redeem × units` at scale 1), burn those units (reason
  * `redemption`).
  *
  * Events: `BidDelivered` (a pending bid), `PayoutClaimed{burnedUnits: 0}` for the pending payout and the tail catch-up
@@ -132,7 +140,7 @@ export function redeemBody(e: EngineCore, s: SimSeries, p: SimPosition, emit: Em
   settleHolder(e, s, p);
   const units = redeemableUnits(p);
   p.redeemedUnits += units;
-  const principal = r.pricePerUnit * units;
+  const principal = guardStage1(() => scaledAmount(r.pricePerUnit, units, s.unitScale), 'AmountOutOfRange');
   const payout = p.pending + tailCatchUp(p, units);
   const amount = payout + principal;
   p.pending = 0n;
@@ -153,19 +161,22 @@ export function redeemBody(e: EngineCore, s: SimSeries, p: SimPosition, emit: Em
 export function claimableRedemption(s: SimSeries, p: SimPosition): bigint {
   if (!s.redemption || (s.status !== 'Redeemed' && s.status !== 'Extinguished')) return 0n;
   const units = redeemableUnits(p);
-  return s.redemption.pricePerUnit * units + tailCatchUp(p, units);
+  return scaledAmount(s.redemption.pricePerUnit, units, s.unitScale) + tailCatchUp(p, units);
 }
 
 // ------------------------------------------------------------------ tail
 /**
  * Stage 1 `pay` on a Redeemed series (SIM:1158-1172), the money side: the payer is debited the whole tail due as
  * reported (no accrual; `payIn` checks the amount and records the period as paid afterwards, with no `syncStatus`),
- * then `tailReceive` with `N = unitsAtRedemption`: the part above the tail cap goes back to the issuer, the payout
+ * then `tailReceive` with `N = unitsAtRedemption` at the series' unit scale (`tailReceiveScaled`: Stage 1's `tailReceive`
+ * at scale 1; otherwise the tail cap per accounting unit is `scaled_cap_wad`, Solana `common.rs:595-612`): the part
+ * above the tail cap goes back to the issuer, the payout
  * fee to the fee collector, `accepted − fee` into the vault on the tail accumulator. The tail never touches the
  * payout vault (`vault.grossReceived`, `vault.feeCollected`); our life-to-date totals count it.
  *
  * Events: `PaymentRefunded{cap}` (refund > 0), `FeeTaken` (fee > 0), `PaymentReceived{source: 'tail', gross:
- * accepted}`, `TailPayout{perUnit: floor(accepted / N), total: accepted}`.
+ * accepted}`, `TailPayout{perUnit, total: accepted}` with `perUnit` per whole unit, `floor(accepted × scale / N)`
+ * (`floor(accepted / N)` at scale 1).
  */
 export function payTail(e: EngineCore, s: SimSeries, payer: string, p: SimPeriod, amount: bigint, _now: number, emit: Emit): void {
   const r = s.redemption!;
@@ -173,7 +184,7 @@ export function payTail(e: EngineCore, s: SimSeries, payer: string, p: SimPeriod
   const N = r.unitsAtRedemption;
   if (N === 0n) fail('NoUnitsOutstanding', 'no units were outstanding at redemption');
   e.debit(payer, mint, amount);
-  const { state, result } = guardStage1(() => tailReceive(s.tail, amount, N, Number(s.terms.payoutFeeBps)), 'AmountOutOfRange');
+  const { state, result } = guardStage1(() => tailReceiveScaled(s.tail, amount, N, Number(s.terms.payoutFeeBps), s.unitScale), 'AmountOutOfRange');
   s.tail = state;
   s.vaultBalance += result.accepted - result.fee;
   const { seriesId } = s;
@@ -190,7 +201,7 @@ export function payTail(e: EngineCore, s: SimSeries, payer: string, p: SimPeriod
   s.feesTotal += result.fee;
   p.paid += result.accepted;
   emit('PaymentReceived', { seriesId, periodId, gross: str(result.accepted), fee: str(result.fee), net: str(result.accepted - result.fee), source: 'tail', paidPerUnitWad: str(s.vault.paidPerUnitWad) });
-  emit('TailPayout', { seriesId, periodId, perUnit: str(result.accepted / N), total: str(result.accepted) });
+  emit('TailPayout', { seriesId, periodId, perUnit: str(mulDiv(result.accepted, s.unitScale, N)), total: str(result.accepted) });
 }
 
 /** The tail on `units` since the holder's tail cursor: `floor((tailAccWad − lastTailAccWad) × units / WAD)`. */
@@ -250,7 +261,10 @@ export function claimTail(e: EngineCore, signer: string, cmd: Extract<Command, {
   emit('TailClaimed', { seriesId: s.seriesId, holder: p.wallet, amount: str(amount) });
 }
 
-/** The deprecated per-unit tail paid in base units (`RedemptionState.tailPaidPerUnit`), from Stage 1's WAD figure. */
+/**
+ * The deprecated per-unit tail paid in base units per whole unit (`RedemptionState.tailPaidPerUnit`), from Stage 1's
+ * WAD figure per accounting unit: `tailPaidPerUnitWad / (WAD / scale)` (`/ WAD` at scale 1).
+ */
 export function tailPaidPerUnit(s: SimSeries): bigint {
-  return s.tail.tailPaidPerUnitWad / WAD;
+  return s.tail.tailPaidPerUnitWad / wadPerScaledUnit(s.unitScale);
 }

@@ -1,5 +1,5 @@
 import { ChainError, type Command } from '@merces/domain';
-import { DAY, U64_MAX, lateAccrual, periodEnd, periodOf, settlementYear, vaultReceiveGross, type ReceiveResult } from '@merces/math';
+import { DAY, U64_MAX, lateAccrual, periodEnd, periodOf, settlementYear, vaultReceiveGrossScaled, type ReceiveResult } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
@@ -25,19 +25,21 @@ interface Receipt {
 /**
  * Stage 1 `vault_receive_gross(G, source, period_for_year)` (SIM:457-469) on gross `G` the caller already debited:
  * `vaultReceiveGross` with `N = unitsOutstanding`, the cap read live (`liveCapPerUnit`, so an amendment applies at once),
- * the payout fee and the settlement year of `anchorTs`. The cap refund goes to the **issuer**, the fee to the fee
- * collector, `accepted − fee` to the vault. Retires the series when the cap is met (`retire`, SIM:445-454).
+ * the payout fee and the settlement year of `anchorTs`, at the series' unit scale (`vaultReceiveGrossScaled`: Stage 1's
+ * `vaultReceiveGross` itself at scale 1; at another scale the cap per accounting unit is `scaled_cap_wad`, merces-common
+ * `vault.rs:48-78`). The cap refund goes to the **issuer**, the fee to the fee collector, `accepted − fee` to the vault.
+ * Retires the series when the cap is met (`retire`, SIM:445-454).
  *
  * Events: `PaymentRefunded{cap}` (refund > 0), `FeeTaken` (fee > 0), `PaymentReceived{gross: accepted, fee, net,
  * paidPerUnitWad}`, then retirement's `StatusChanged` and `SeriesRetired`.
  */
 export function vaultReceive(e: EngineCore, s: SimSeries, gross: bigint, anchorTs: bigint, receipt: Receipt, now: number, emit: Emit): ReceiveResult {
   if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids');
-  // checked here: `vaultReceiveGross` throws a plain Error for it
+  // checked here: `vaultReceiveGross` (and its scaled port) throws a plain Error for it
   const N = s.unitsOutstanding;
   if (N === 0n) fail('NoUnitsOutstanding', 'the series has no units outstanding');
   const year = settlementYear(anchorTs, BigInt(s.settledAt!));
-  const { state, result } = guardStage1(() => vaultReceiveGross(s.vault, gross, N, liveCapPerUnit(s), Number(s.terms.payoutFeeBps), year), 'AmountOutOfRange');
+  const { state, result } = guardStage1(() => vaultReceiveGrossScaled(s.vault, gross, N, liveCapPerUnit(s), s.unitScale, Number(s.terms.payoutFeeBps), year), 'AmountOutOfRange');
   s.vault = state;
   s.vaultBalance += result.accepted - result.fee;
   const mint = s.terms.stablecoinMint;

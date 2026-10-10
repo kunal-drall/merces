@@ -71,12 +71,15 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
     reportingCurrency: t.reportingCurrency,
     raiseStyle: t.raiseStyle,
   };
+  // the unit scale is 1 for every series until curve mode keeps base lamports (S3 WP8); every money path passes it to
+  // the scale-aware `@merces/math` functions, which run Stage 1's own at scale 1
   const s: SimSeries = {
-    seriesId, address, issuer: signer, terms, phase: 'Draft', status: 'OnTime', createdAt: now, openedAt: null, commitEndsAt: null, revealEndsAt: null, settledAt: null,
+    seriesId, address, issuer: signer, terms, unitScale: 1n, phase: 'Draft', status: 'OnTime', createdAt: now, openedAt: null, commitEndsAt: null, revealEndsAt: null, settledAt: null,
     issuePrice: null, unitsSold: 0n, unitsOutstanding: 0n, capPerUnit: null, vaultBalance: 0n, vaultDistributedNet: 0n,
     treasuryTotal: 0n, treasuryReleased: 0n, treasuryReturned: 0n, tranches: [], releasesPausedByIssuer: false, bids: new Map(), bidOrder: 0, auction: newAuction(), positions: new Map(), periods: new Map(),
     redemption: null, extinguishedAt: null, grossPaidTotal: 0n, feesTotal: 0n, transferWindows: [], curve: null, splitRouter: null, amendments: [],
     ledger: newLedger(), vault: newVaultState(), tail: newTailState(0n), final: newFinalState(),
+    stakedTotal: 0n, tenderedTotal: 0n, unitsSyncedAt: null,
   };
   e.state.series.set(seriesId, s);
   issuer.seriesIds.push(seriesId);

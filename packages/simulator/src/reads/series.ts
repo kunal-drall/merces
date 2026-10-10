@@ -1,4 +1,4 @@
-import type { IssuerState, SeriesState } from '@merces/domain';
+import type { IssuerState, SeriesState, UnitScale } from '@merces/domain';
 import { nextExpectedPeriod } from '@merces/math';
 import type { SimIssuer, SimSeries } from '../state.ts';
 import { str as s } from '../engine/core.ts';
@@ -33,7 +33,7 @@ export function toSeriesState(chain: string, x: SimSeries, now: number): SeriesS
   const l = x.ledger;
   const current = l.pauses.find((p) => p.start <= BigInt(now) && BigInt(now) < p.end) ?? null;
   return {
-    seriesId: x.seriesId, chain, issuer: x.issuer,
+    seriesId: x.seriesId, chain, issuer: x.issuer, unitScale: s(x.unitScale) as UnitScale,
     terms: {
       stablecoin: t.stablecoin, stablecoinMint: t.stablecoinMint, unitsOffered: s(t.unitsOffered), reservePrice: s(t.reservePrice), minimumRaise: s(t.minimumRaise), capMultipleWad: s(t.capMultipleWad), lockupSeconds: t.lockupSeconds,
       releaseSchedule: t.releaseSchedule.map((r) => ({ ...r })), auctionFeeBps: Number(t.auctionFeeBps), payoutFeeBps: Number(t.payoutFeeBps), hurdleWad: s(t.hurdleWad), payoutMultipleK: Number(t.payoutMultipleK), walletCapBps: Number(t.walletCapBps),

@@ -2793,6 +2793,11 @@ export type components = {
             stablecoin?: "USDC" | "USDG";
             /** @enum {string} */
             raiseStyle?: "sealed" | "curve";
+            /**
+             * @description accounting units per whole unit (Stage 1's unit_scale, fixed by the raise style): 1 for a sealed-bid series, 1000000 for a curve series, whose units are counted in base lamports. unitsSold, unitsOutstanding, position units and paidPerUnitWad are per accounting unit; issuePrice, capPerUnit and redemption prices per whole unit
+             * @enum {string}
+             */
+            unitScale?: "1" | "1000000";
             phase?: components["schemas"]["RaisePhase"];
             /** @enum {string} */
             status?: "OnTime" | "InGrace" | "Late" | "Paused" | "Retired" | "Redeemed" | "Extinguished";

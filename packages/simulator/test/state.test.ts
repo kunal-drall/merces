@@ -16,8 +16,12 @@ const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json',
  *  - S2-MS: multi-step settlement: the engine owns every auction and holder field of Stage 1's view (the runner's
  *    bookkeeping is no longer needed); the raise settles, then processes, then delivers;
  *  - S2-PR: push delivery (`deliverBid`): refunds wait in the auction escrow until delivered (the pull refund is retired).
+ *
+ * S3 cause codes:
+ *  - S3-V4: simulator state version 4 (S3: the unit scale, the stake and tender totals, the census time and each
+ *    holder's stake); versions 1 to 3 are refused, never upgraded.
  */
-describe('simulator state version 3', () => {
+describe('simulator state version 4', () => {
   it('round-trips the Stage 1 vault, tail and final states and bigint pauses through serialisation and structuredClone', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
     const { seriesId } = await h.runRaise();
@@ -30,7 +34,9 @@ describe('simulator state version 3', () => {
     seedFinal(h.sim, seriesId, { finalAccWad: 9n * WAD, finalUnits: 500n, unreleasedDistributed: USDC(2250) });
     seedPause(h.sim, seriesId, now, now + 86_400);
     seedLedger(h.sim, seriesId, { lastAcceptedPeriod: toPid('2026Q1'), openDuePeriod: toPid('2026Q1'), openDueAmount: USDC(10), pauseRequestedUntil: BigInt(now + 2 * 86_400), pauseNonce: 1n });
-    seedHolder(h.sim, seriesId, h.backers[0]!.address, { pending: 42n, lastTailAccWad: 5n, finalClaimed: true });
+    seedHolder(h.sim, seriesId, h.backers[0]!.address, { pending: 42n, lastTailAccWad: 5n, finalClaimed: true, stakedUnits: 7n });
+    // cause S3-V4: the version-4 series fields round-trip too
+    Object.assign(seriesOf(h.sim, seriesId), { unitScale: 1_000_000n, stakedTotal: 7n, tenderedTotal: 3n, unitsSyncedAt: now });
 
     const json = serialiseState(h.sim.state);
     const back = deserialiseState(json);
@@ -43,19 +49,37 @@ describe('simulator state version 3', () => {
     expect(s.vault.yearGross[0]).toEqual({ year: 0, grossWad: 5n * WAD });
     expect(s.tail.tailExhausted).toBe(true);
     expect(s.final.finalUnits).toBe(500n);
-    expect(back.version).toBe(3); // cause S2-V3 (was 2)
+    expect([s.unitScale, s.stakedTotal, s.tenderedTotal, s.unitsSyncedAt, s.positions.get(h.backers[0]!.address)!.stakedUnits]).toEqual([1_000_000n, 7n, 3n, now, 7n]);
+    expect(back.version).toBe(4); // cause S3-V4 (was 3)
     expect(structuredClone(h.sim.state)).toEqual(h.sim.state);
   });
 
-  it('refuses a version-1 or version-2 state instead of upgrading it', async () => {
+  it('refuses a version-1, version-2 or version-3 state instead of upgrading it', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
-    const v3 = JSON.parse(serialiseState(h.sim.state)) as Record<string, unknown>;
-    const { version: _v, ...v1 } = v3;
+    const v4 = JSON.parse(serialiseState(h.sim.state)) as Record<string, unknown>;
+    const { version: _v, ...v1 } = v4;
     expect(() => deserialiseState(JSON.stringify(v1))).toThrow(SimStateVersionError);
-    expect(() => deserialiseState(JSON.stringify({ ...v3, version: 1 }))).toThrow(/version 1 is not supported.*sim:reset/);
+    expect(() => deserialiseState(JSON.stringify({ ...v4, version: 1 }))).toThrow(/version 1 is not supported.*sim:reset/);
     // cause S2-V3: a version-2 state (S1) is refused too
-    expect(() => deserialiseState(JSON.stringify({ ...v3, version: 2 }))).toThrow(/version 2 is not supported \(this build needs version 3\).*sim:reset/);
-    expect(() => deserialiseState(JSON.stringify(v3))).not.toThrow();
+    expect(() => deserialiseState(JSON.stringify({ ...v4, version: 2 }))).toThrow(/version 2 is not supported \(this build needs version 4\).*sim:reset/); // cause S3-V4 (was version 3)
+    // cause S3-V4: a version-3 state (S2) is refused too
+    expect(() => deserialiseState(JSON.stringify({ ...v4, version: 3 }))).toThrow(/version 3 is not supported \(this build needs version 4\).*sim:reset/);
+    expect(() => deserialiseState(JSON.stringify(v4))).not.toThrow();
+  });
+
+  it('a new series has scale 1, no stake, no tender and no census; a new holder has no stake (S3-V4)', async () => {
+    for (const raiseStyle of ['sealed', 'curve'] as const) {
+      const h = await SimHarness.create('solana', { genesis: GENESIS });
+      await h.exec(h.issuer, { kind: 'registerIssuer' });
+      const overrides = raiseStyle === 'curve' ? { raiseStyle, minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' } : {};
+      const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, overrides).terms });
+      const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
+      const s = seriesOf(h.sim, seriesId);
+      // a curve series keeps base lamports (10^6) from WP8; until then every series has scale 1
+      expect([s.unitScale, s.stakedTotal, s.tenderedTotal, s.unitsSyncedAt], raiseStyle).toEqual([1n, 0n, 0n, null]);
+      expect((await h.sim.getSeries(seriesId))!.unitScale).toBe('1');
+      expect(seedHolder(h.sim, seriesId, h.backers[0]!.address).stakedUnits).toBe(0n);
+    }
   });
 
   it("a fresh Draft series' Stage 1 ledger view equals vector 01 step 11", async () => {

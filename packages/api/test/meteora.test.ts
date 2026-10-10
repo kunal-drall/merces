@@ -23,6 +23,9 @@ describe.skipIf(!dbTestsEnabled())('M6 Meteora support (E14)', () => {
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     await rig.sync();
+    // S3: the series read derives Stage 1's unit scale from the raise style: a curve series counts base lamports, 10^6
+    // per whole unit (the simulator's curve keeps them from S3 WP8)
+    expect((await rig.get(`/series/${seriesId}`)).json()).toMatchObject({ raiseStyle: 'curve', unitScale: '1000000' });
     const issuerTok = rig.token({ accountId: 'iss', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
     const backerTok = await rig.grant({ accountId: 'b0', wallets: [{ chain: 'solana', address: h.backers[0]!.address }], roles: ['backer'] });
     const adminTok = rig.token({ accountId: 'adm', roles: ['admin'], wallets: [] });

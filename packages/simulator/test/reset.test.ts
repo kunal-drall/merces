@@ -7,8 +7,10 @@ import { GENESIS } from './helpers.ts';
 
 /*
  * S2 cause codes:
- *  - S2-V3: simulator state version 3;
  *  - S2-MS: migration 019's settlement tables are keyed by series, so a reset clears them.
+ *
+ * S3 cause codes:
+ *  - S3-V4: simulator state version 4.
  */
 describe('sim:reset guard', () => {
   it('runs only with MERCES_ALLOW_SIM_RESET=1', () => {
@@ -104,7 +106,7 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
 
     // a reset chain starts again from an empty state of the current version
     const fresh = await persisted('solana');
-    expect(fresh.state.version).toBe(3); // cause S2-V3: simulator state version 3 (was 2)
+    expect(fresh.state.version).toBe(4); // cause S3-V4: simulator state version 4 (was 3)
     expect(await fresh.getBalance(fresh.address('wallet:x'), 'USDC')).toBe('0');
     await fresh.close();
   });

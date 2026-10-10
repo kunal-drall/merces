@@ -1,6 +1,6 @@
 import { AppError, audit, getFlag } from '@merces/core';
 import { ChainError, orderCommitment, type ChainPort, type PositionState, type SeriesState, type UnsignedTx } from '@merces/domain';
-import { SeriesStatus, WAD, YEAR, capRemaining, fromPid, interim, isTerminal, periodStart, pidAt, redemptionQuote, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
+import { SeriesStatus, WAD, YEAR, capRemaining, fromPid, interim, isTerminal, periodStart, pidAt, redemptionQuoteScaled, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -161,7 +161,8 @@ export class LifecycleService {
   // ---- R15 redemption
   /**
    * The chain's own quote: Stage 1's `redemptionQuote` over the series' live cap, `paidPerUnitWad` and tagged year ring
-   * (`SeriesState.yearGross`), exactly what `redeem` computes at `now`. `decidedBy` is Stage 1's label
+   * (`SeriesState.yearGross`), exactly what `redeem` computes at `now`, at the series' unit scale
+   * (`redemptionQuoteScaled`, Stage 1's own function at scale 1). `decidedBy` is Stage 1's label
    * (`cap_remaining`, `hurdle`, `payout_multiple`); `boundBy` keeps the version-1 labels (`cap`, `hurdle`, `payout`).
    *
    * The blockers are Stage 1's `redeem` refusals in its own order (SIM:1328-1342), each with its error name in
@@ -180,7 +181,7 @@ export class LifecycleService {
     const now = await chain.now();
     const t = BigInt(Math.max(0, now - s.settledAt));
     const ring = s.yearGross.map((y) => ({ year: y.year, grossWad: BigInt(y.grossWad) })) as unknown as YearGrossRing;
-    const q = redemptionQuote({ p0: BigInt(s.issuePrice), hurdleRateWad: BigInt(s.terms.hurdleWad), payoutMultipleK: s.terms.payoutMultipleK, t, capPerUnit: BigInt(s.capPerUnit), paidPerUnitWad: BigInt(s.paidPerUnitWad), yearGross: ring, unitsOutstanding: BigInt(s.unitsOutstanding) });
+    const q = redemptionQuoteScaled({ p0: BigInt(s.issuePrice), hurdleRateWad: BigInt(s.terms.hurdleWad), payoutMultipleK: s.terms.payoutMultipleK, t, capPerUnit: BigInt(s.capPerUnit), paidPerUnitWad: BigInt(s.paidPerUnitWad), yearGross: ring, unitsOutstanding: BigInt(s.unitsOutstanding), unitScale: BigInt(s.unitScale) });
     const boundBy = q.decidedBy === 'cap_remaining' ? 'cap' : q.decidedBy === 'payout_multiple' ? 'payout' : 'hurdle';
     const payoutTerm = q.dAvg === null ? null : BigInt(s.terms.payoutMultipleK) * q.dAvg;
     const { blockers, blockedBy } = redeemBlockers(s, now);

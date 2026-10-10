@@ -263,7 +263,12 @@ Open since S3, with the default S3 uses meanwhile (recorded by the work package 
    seeded grids), so sealed-bid series run only Stage 1's functions; every curve figure is pinned to Stage 1's Rust
    tests and fixtures. This bends A-MATH-1 ("import, don't rewrite"); the alternative is to block curve staking on
    Stage 1's TypeScript. Asked of Stage 1: add `unit_scale` to its TypeScript (and the curve functions), so the port
-   becomes an import (see "Known gaps").
+   becomes an import (see "Known gaps"). Since S3 WP6 every money path runs through the family with the series' unit
+   scale (simulator state version 4, `SimSeries.unitScale`; 1 for every series until curve mode keeps base lamports in
+   WP8): the vault receipt, the redemption quote and deposit (the engine's and the lifecycle service's), the
+   redemption principal, the tail and `TailPayout.perUnit`. At scale 1 they are Stage 1's own functions, so the
+   vectors, the lockstep and every pin are unchanged; a white-box test rescales a series to 10^6 and gets the same
+   money. `SeriesState.unitScale` and the API's series read (derived from the raise style) carry it.
 
 Open since S1, with the same defaults:
 

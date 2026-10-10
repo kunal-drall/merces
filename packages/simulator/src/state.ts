@@ -9,12 +9,17 @@ import type { PersonalityConfig } from './addresses.ts';
  * names), the payout vault, the tail and the final pool (Stage 1 types from `@merces/reference`).
  *
  * Version 3 (S2) adds the raise's own terms (the commit and reveal durations and the non-reveal charge, `SimTerms`)
- * and Stage 1's multi-step auction settlement (`SimAuction`, `SimBid`). States of another version are never upgraded in
- * place.
+ * and Stage 1's multi-step auction settlement (`SimAuction`, `SimBid`).
+ *
+ * Version 4 (S3) adds the unit scale and curve staking: `SimSeries.unitScale` (accounting units per whole unit, Stage 1's
+ * `Ledger.unit_scale`), the stake and tender totals and the census time, and each holder's `stakedUnits`. Every money
+ * path takes the unit scale through `@merces/math`'s scale-aware family (Stage 1's own functions at scale 1). The
+ * curve record (`SimCurve`) is completed under the same version before anything is deployed (S3 WP8). States of another
+ * version are never upgraded in place.
  */
-export const SIM_STATE_VERSION = 3;
+export const SIM_STATE_VERSION = 4;
 
-/** A persisted simulator state from another layout (version 1 before S1, version 2 before S2): never upgraded in place, reset it. */
+/** A persisted simulator state from another layout (version 1 before S1, 2 before S2, 3 before S3): never upgraded in place, reset it. */
 export class SimStateVersionError extends Error {
   constructor(readonly found: unknown) {
     super(`simulator state version ${String(found ?? 1)} is not supported (this build needs version ${SIM_STATE_VERSION}); reset the simulator chains with \`pnpm --filter @merces/simulator sim:reset\` (RUNBOOK.md)`);
@@ -151,6 +156,11 @@ export interface SimPosition {
   lastTailAccWad: bigint;
   lastFinalAccWad: bigint;
   finalClaimed: boolean;
+  /**
+   * Curve mode: the holder's units in the series' stake vault (Stage 1 `HolderRecord.staked_units`, accounting units).
+   * On a curve series payouts accrue on these only; 0 on a sealed-bid series.
+   */
+  stakedUnits: bigint;
 }
 
 export interface SimPeriod {
@@ -274,6 +284,13 @@ export interface SimSeries {
   address: string;
   issuer: string;
   terms: SimTerms;
+  /**
+   * Accounting units per whole unit (Stage 1 `Ledger.unit_scale`): 1 for a sealed-bid series, 10^6 base lamports for a
+   * curve series (from S3 WP8; 1 until then). Units outstanding, weights, stakes and tenders are in accounting units,
+   * prices (the issue price, the cap, `P_redeem`) per whole unit; the vault's per-unit WAD figures are per accounting
+   * unit. Every money path passes it to `@merces/math`'s scale-aware functions, which run Stage 1's own at scale 1.
+   */
+  unitScale: bigint;
   /** Stage 1's stored raise state (`raise_state`); the reveal phase is time-derived (`auctionPhase`), never stored */
   phase: RaiseStateName;
   status: LifecycleStatus;
@@ -321,6 +338,13 @@ export interface SimSeries {
   tail: TailState;
   /** final pool after an extinguishment (SPEC v1.1 §6.9) */
   final: FinalState;
+  // ---- curve staking (Stage 1 curve mode; 0 / null on a sealed-bid series)
+  /** Σ holders' `stakedUnits` (Stage 1 `Ledger.staked_total`, accounting units) */
+  stakedTotal: bigint;
+  /** units tendered at a curve redemption (Stage 1 `Ledger.tendered_total`, accounting units) */
+  tenderedTotal: bigint;
+  /** when `unitsOutstanding` was last taken from the curve's census (Stage 1 `Ledger.units_synced_at`); null before the first */
+  unitsSyncedAt: number | null;
 }
 
 export interface SimIssuer {
@@ -369,7 +393,7 @@ export function serialiseState(s: SimState): string {
   });
 }
 
-/** Parse a persisted state. Throws `SimStateVersionError` unless it is version 3: older states are never upgraded. */
+/** Parse a persisted state. Throws `SimStateVersionError` unless it is version 4: older states are never upgraded. */
 export function deserialiseState(json: string): SimState {
   const state = JSON.parse(json, (_k, v) => {
     if (v && typeof v === 'object') {

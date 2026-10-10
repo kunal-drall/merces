@@ -1,3 +1,5 @@
+import { unitScaleOf } from '@merces/domain';
+
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
 /**
@@ -13,6 +15,9 @@ const num = (v: unknown): number | null => (v === null || v === undefined ? null
  *
  * The auction's settlement (S2: the round, the results `finalizeSettlement` wrote, the mint gate) comes from the same
  * projection (migration 019) and is public onchain state, like the bids it settles.
+ *
+ * `unitScale` (S3) is derived from the raise style (`unitScaleOf`: 1 sealed, 10^6 base lamports per whole unit for a
+ * curve), as Stage 1 fixes `unit_scale` at creation from the style; no column holds it.
  */
 export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -21,6 +26,7 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
     issuer: r.issuer,
     stablecoin: r.stablecoin,
     raiseStyle: r.raise_style,
+    unitScale: unitScaleOf(r.raise_style as 'sealed' | 'curve').toString(),
     phase: r.phase,
     status: r.status,
     terms: {

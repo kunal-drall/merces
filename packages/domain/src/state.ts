@@ -1,5 +1,6 @@
 import type { LifecycleStatus, RaiseFailure, RaisePhase, RaiseStateName, SeriesTerms, SettlementRejection } from './events.ts';
 import type { Address, ChainFamily, ChainKey, ChainMode, Stablecoin } from './ids.ts';
+import type { UnitScale } from './curve.ts';
 import type { Money, Units, Wad } from './money.ts';
 
 /** Read-side state shapes returned by ChainPort. Money as strings; nothing chain-specific. */
@@ -50,6 +51,12 @@ export interface SeriesState {
   chain: ChainKey;
   issuer: Address;
   terms: SeriesTerms;
+  /**
+   * Accounting units per whole unit (Stage 1 `Ledger.unit_scale`): "1" for a sealed-bid series, "1000000" (base
+   * lamports) for a curve series. `unitsSold`, `unitsOutstanding`, position units and `paidPerUnitWad`/`accNetWad` are
+   * per accounting unit; `issuePrice`, `capPerUnit` and the redemption price per whole unit.
+   */
+  unitScale: UnitScale;
   phase: RaisePhase;
   status: LifecycleStatus;
   createdAt: number;
@@ -283,9 +290,9 @@ export interface RedemptionState {
   claimed: Money;
   tailCapPerUnit: Money;
   tailEndsAt: number;
-  /** @deprecated use `tailPaidPerUnitWad` (the per-unit tail paid, WAD-scaled) */
+  /** @deprecated use `tailPaidPerUnitWad`: the tail paid per whole unit, `tailPaidPerUnitWad / (WAD / unitScale)` */
   tailPaidPerUnit: Money;
-  /** tail gross paid per unit so far, WAD-scaled (Stage 1 tail state) */
+  /** tail gross paid per accounting unit so far, WAD-scaled (Stage 1 tail state) */
   tailPaidPerUnitWad: Wad;
   /** the tail accumulator (net per unit, WAD-scaled) */
   tailAccWad: Wad;

@@ -192,6 +192,10 @@ export const eventPayloads = {
   UnitsBurned: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, reason: z.enum(['cap', 'redemption', 'extinguishment']) }),
   RedemptionOpened: z.object({ ...seriesScoped, pricePerUnit: moneySchema, unitsOutstanding: unitsSchema, deposit: moneySchema, tailCapPerUnit: moneySchema, tailEndsAt: z.number().int() }),
   RedemptionClaimed: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, amount: moneySchema }),
+  /**
+   * Ours (no Stage 1 counterpart): a tail payment's `total` the tail accepted, and `perUnit` per whole unit,
+   * `floor(total × unitScale / unitsAtRedemption)` (`floor(total / unitsAtRedemption)` on a sealed-bid series).
+   */
   TailPayout: z.object({ ...seriesScoped, periodId: periodIdSchema, perUnit: moneySchema, total: moneySchema }),
   PauseRequested: z.object({ ...seriesScoped, until: z.number().int() }),
   PauseApproved: z.object({ ...seriesScoped, attestor: addressSchema, until: z.number().int() }),

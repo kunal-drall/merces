@@ -6,7 +6,7 @@ import { tailPaidPerUnit } from '../engine/redemption.ts';
 /**
  * A series' redemption: the price, units and deposit fixed at `redeem`, the principal claimed so far, and the tail
  * from Stage 1's tail state (`SimSeries.tail`): cap, per-unit paid (WAD), accumulator, exhaustion and the refunds.
- * `tailPaidPerUnit` (deprecated) is the WAD figure in base units.
+ * `tailPaidPerUnit` (deprecated) is the WAD figure in base units per whole unit (at the series' unit scale).
  */
 export function toRedemption(x: SimSeries): RedemptionState {
   const r = x.redemption!;

@@ -53,6 +53,8 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     expect(list.json().series.map((s: { seriesId: string }) => s.seriesId).sort()).toEqual([seriesId, monSeriesId].sort());
     const one = await rig.get(`/series/${seriesId}`);
     expect(one.json().unitsOutstanding).toBe('500');
+    // S3: Stage 1's unit scale, derived from the raise style (a sealed-bid series counts whole units)
+    expect(one.json().unitScale).toBe('1');
     expect(one.json().holderCount).toBe(5);
     expect(one.json().terms.termsCommitment).toMatch(/^0x/);
     expect(one.json().terms).not.toHaveProperty('threshold');
