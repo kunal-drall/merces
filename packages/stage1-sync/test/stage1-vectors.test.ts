@@ -340,6 +340,64 @@ describe('stage1 vector runner: merces backend', () => {
     expect(run.status).toBe('BLOCKED');
   }, 60_000);
 
+  // Stage 1's create_series rules (SIM:756-781) on both backends: every refusal raises Stage 1's error and leaves the
+  // state untouched, and terms at the bounds themselves are accepted (review finding "createSeries skips Stage 1's
+  // create_series parameter bounds"; before the fix the merces backend accepted every one of these series)
+  it('create_series: out-of-bounds parameters, unreachable terms and bad release schedules revert as in Stage 1', async () => {
+    const src = raw('04_zero_quarters');
+    const created = src.steps.findIndex((s) => s.op === 'create_series');
+    const base = src.steps[created]! as Record<string, unknown> & { terms: Record<string, string>; releaseSchedule: { atOffsetSeconds: string; bps: string }[] };
+    const WAD = 10n ** 18n;
+    const YEAR = 365n * 86_400n;
+    const tranches = (n: number) => Array.from({ length: n }, (_, i) => ({ atOffsetSeconds: String(i * 86_400), bps: String(i < n - 1 ? Math.floor(10_000 / n) : 10_000 - (n - 1) * Math.floor(10_000 / n)) }));
+    const call = (series: string, terms: Record<string, string>, releaseSchedule = base.releaseSchedule) => ({ ...structuredClone(base), series, terms: { ...base.terms, ...terms }, releaseSchedule });
+    const reverts: [Record<string, unknown>, string][] = [
+      [call('X1', { capMultipleWad: String(3n * WAD + 1n) }), 'ParameterOutOfBounds'],
+      [call('X2', { hurdleRateWad: String(WAD / 4n + 1n) }), 'ParameterOutOfBounds'],
+      [call('X3', { payoutMultipleK: '21' }), 'ParameterOutOfBounds'],
+      [call('X4', { lockupSeconds: String(5n * YEAR + 1n) }), 'ParameterOutOfBounds'],
+      [call('X5', { walletCapBps: '99' }), 'ParameterOutOfBounds'],
+      [call('X6', { auctionFeeBps: '1001' }), 'ParameterOutOfBounds'],
+      [call('X7', { payoutFeeBps: '2001' }), 'ParameterOutOfBounds'],
+      [call('X8', { minRaise: String(BigInt(base.terms.reservePrice!) * BigInt(base.terms.unitsOffered!) + 1n) }), 'InvalidTerms'],
+      [call('X9', { unitsOffered: '5', minRaise: '0' }), 'InvalidTerms'], // floor(5 × 10%) = 0: a wallet cap below one unit
+      [call('X10', {}, [{ atOffsetSeconds: '7776000', bps: '5000' }, { atOffsetSeconds: '0', bps: '5000' }]), 'InvalidReleaseSchedule'],
+      [call('X11', {}, tranches(25)), 'InvalidReleaseSchedule'],
+      [call('X12', {}, [{ atOffsetSeconds: '0', bps: '9000' }]), 'InvalidReleaseSchedule'],
+      // Stage 1's order: the bounded parameters come before the release schedule
+      [call('X13', { hurdleRateWad: String(WAD / 2n) }, [{ atOffsetSeconds: '7776000', bps: '5000' }, { atOffsetSeconds: '0', bps: '5000' }]), 'ParameterOutOfBounds'],
+    ];
+    const atBounds = call('S9', { capMultipleWad: String(2n * WAD), hurdleRateWad: String(WAD / 4n), payoutMultipleK: '20', lockupSeconds: String(5n * YEAR), walletCapBps: '100', auctionFeeBps: '1000', payoutFeeBps: '2000' }, tranches(24));
+    const t = base.t;
+    src.steps = [...src.steps.slice(0, created + 1), ...reverts.map(([c, error]) => ({ t, op: 'expect_revert', call: c, error })), { t, ...atBounds }];
+    const v = fromJson(src, '04_zero_quarters');
+    for (const backend of ['reference', 'merces'] as const) {
+      const r = await runStage1Vectors({ vectors: [v], backend, personalities: ['solana', 'monad'] });
+      for (const run of r.runs) {
+        expect(run.issues, `${backend} ${run.world}`).toEqual([]);
+        expect(run.status, `${backend} ${run.world}`).toBe('PASS');
+        expect(run.executed, `${backend} ${run.world}`).toBe(v.steps.length);
+      }
+    }
+  }, 120_000);
+
+  it('new raises paused: create_series still succeeds and open_raise reverts NewRaisesPaused, as in Stage 1 (SIM:875)', async () => {
+    const src = raw('04_zero_quarters') as ReturnType<typeof raw> & { config: { flags: Record<string, boolean> } };
+    src.config.flags.newRaisesPaused = true;
+    const open = src.steps.findIndex((s) => s.op === 'open_raise');
+    const { t, ...openCall } = src.steps[open]!;
+    src.steps = [...src.steps.slice(0, open), { t, op: 'expect_revert', call: openCall, error: 'NewRaisesPaused' }];
+    const v = fromJson(src, '04_zero_quarters');
+    expect(v.steps.filter((s) => s.op === 'create_series').length).toBeGreaterThan(0);
+    for (const backend of ['reference', 'merces'] as const) {
+      const r = await runStage1Vectors({ vectors: [v], backend, personalities: ['solana', 'monad'] });
+      for (const run of r.runs) {
+        expect(run.issues, `${backend} ${run.world}`).toEqual([]);
+        expect(run.status, `${backend} ${run.world}`).toBe('PASS');
+      }
+    }
+  }, 60_000);
+
   it('every op the vectors use has a translator; the S1 gaps name the same milestones as the op map', () => {
     for (const f of listVectorFiles(VECTORS)) {
       for (const s of loadVector(f).steps) {

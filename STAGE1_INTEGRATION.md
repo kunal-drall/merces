@@ -145,6 +145,7 @@ Open, with the default S1 uses meanwhile:
 | ed25519 signatures with co-signers, attestation v1 as canonical JSON, no revocation grace (B.4) | S4 |
 | `register_issuer` by the issuer (Stage 1: admin-only, B.7) | S5 |
 | Curve wallet cap enforced while bonding (owner: no cap) | S5 |
+| Raise and window durations, the window fee and the non-reveal charge are not series terms, so `createSeries` cannot bound them (Stage 1: ParameterOutOfBounds); every canonical term follows Stage 1's `create_series` rules (A-TERMS-4) | S2, S5 |
 
 ### Blockers
 
@@ -252,7 +253,13 @@ redemption slippage guard (`maxPricePerUnit`) checked before submitting, since S
    `uint256` counters, not addresses. Defaults differ: lockup 547.875 days (ours 540), tail 365 days (ours 360). Our
    `walletCapBps` must be positive, which rejects every Stage 1 curve series (cap 0).
    **S1:** the defaults (WP2, WP6): lockup 547.875 days and the 365-day tail come from Stage 1's `DEFAULT_PARAMETERS`.
-   The creation shape (mode, FX pair, durations, non-reveal and window bps) and curve series with cap 0 are S2 and S5.
+   S1 review: `createSeries` applies Stage 1's `create_series` rules in Stage 1's order (SIM:756-781): every canonical
+   bounded term within `PARAMETER_BOUNDS` (ParameterOutOfBounds), units, reserve, a reachable minimum raise and a wallet
+   cap of at least one unit (InvalidTerms), then `validateReleaseSchedule` (InvalidReleaseSchedule); the terms service
+   checks drafts with the same rules (`seriesTermsViolations`, A-TERMS-4). The new-raises flag refuses `openRaise` only
+   (NewRaisesPaused, SIM:875), no longer `createSeries`, except that creating a curve raise, which starts it, is refused
+   as Stage 1 refuses activating a curve (A-ADM-2). The creation shape (mode, FX pair, durations, non-reveal and window
+   bps) and curve series with cap 0 are S2 and S5.
 9. *Status and timing.* The formal notice falls at period end + 90 days (ours + 120); OnTime lasts while the
    countdown is ≤ 30 days and InGrace while ≤ 45 days (ours switches at the boundary); `D_avg` buckets a payment by its
    period's deadline, not by when it arrived; FX coverage counts trading days, and weekend snapshots revert.

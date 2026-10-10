@@ -3,12 +3,11 @@ import { DEFAULT_PARAMETERS, wadFromDecimal } from '@merces/math';
 /**
  * Protocol defaults (B8). Every default is a parameter, never a constant baked into logic (B11):
  * series carry their own copy of each value at creation. Where Stage 1 fixes a default (`DEFAULT_PARAMETERS`,
- * SPEC §1.6), it is taken from Stage 1 rather than restated.
+ * SPEC §1.6), it is taken from Stage 1 rather than restated. The bounds are Stage 1's `PARAMETER_BOUNDS`, applied by
+ * `seriesTermsViolations` (terms-rules.ts).
  */
 export const DEFAULTS = {
   capMultipleWad: wadFromDecimal('2.5'),
-  capMultipleMinWad: wadFromDecimal('2.0'),
-  capMultipleMaxWad: wadFromDecimal('3.0'),
   hurdleWad: wadFromDecimal('0.08'),
   payoutMultipleK: 5,
   /** 18 × 30.4375 days = 47,336,400 s (Stage 1 `EIGHTEEN_MONTHS_SECONDS`; was 540 days, A-TERMS-2) */

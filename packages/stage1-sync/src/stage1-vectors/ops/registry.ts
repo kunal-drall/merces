@@ -13,7 +13,8 @@ import { direct, eventOf, shim, type TranslatorTable } from './types.ts';
  * - `register_attestor` / `revoke_attestor` (SH-REG-2): admin `registerAttestor{active}`; no 45-day revocation grace.
  * - `register_verifier_key` (SH-REG-3): admin `registerVerifierKey` with the ed25519 key derived from the vector key.
  * - `create_series` (SH-REG-4): `createSeries` in USDC with USD income, sealed; due, grace and notice days from
- *   `config.parameters`; durations, window fee and non-reveal bps held by the runner.
+ *   `config.parameters`; durations, window fee and non-reveal bps held by the runner (their Stage 1 bounds are not
+ *   checked: the engine's createSeries bounds only the canonical terms, as Stage 1's SIM:756-781 does).
  */
 export const registryOps: TranslatorTable = {
   fund: (ctx, c) =>

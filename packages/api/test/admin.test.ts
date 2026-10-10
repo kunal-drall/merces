@@ -130,7 +130,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect((await rig.get('/admin/verifier-keys', adminTok)).json().chains.map((c: { chain: string }) => c.chain).sort()).toEqual(['monad', 'solana']);
     expect((await rig.get('/admin/verifier-keys?chain=nowhere', adminTok)).statusCode).toBe(400);
 
-    // pause new raises on monad with the monad multisig stand-in; the simulator then refuses createSeries
+    // pause new raises on monad with the monad multisig stand-in; the simulator then refuses openRaise (Stage 1 NewRaisesPaused)
     const pause = await rig.post('/admin/raises/pause', { chain: 'monad', paused: true }, adminTok, { 'idempotency-key': 'pause-1' });
     expect(pause.statusCode).toBe(201);
     const ptx = pause.json().tx as UnsignedTx;

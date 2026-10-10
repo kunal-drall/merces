@@ -1,17 +1,10 @@
-import { ChainError, DEFAULTS, type Command } from '@merces/domain';
-import { PARAMETER_BOUNDS, WAD, newFinalState, newTailState, newVaultState } from '@merces/math';
+import { ChainError, seriesTermsViolations, type Command } from '@merces/domain';
+import { WAD, newFinalState, newTailState, newVaultState } from '@merces/math';
 import { deriveAddress } from '../addresses.ts';
 import type { SimSeries, SimTerms } from '../state.ts';
 import { big, str, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
 import { newLedger } from './ledger.ts';
-
-/** Stage 1 fixes the report due, grace and formal-notice days (min = max, SDK constants.ts:87-89). */
-const FIXED_DAYS = [
-  ['dueDays', 'reportDueDays'],
-  ['graceDays', 'graceDays'],
-  ['formalNoticeDays', 'formalNoticeDays'],
-] as const;
 
 // ------------------------------------------------------------------ issuers and series
 export function registerIssuer(e: EngineCore, signer: string, now: number, emit: Emit): void {
@@ -31,24 +24,23 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   const issuer = e.state.issuers.get(signer);
   if (!issuer) throw new ChainError('Unauthorized', 'issuer not registered');
   if (issuer.issuanceStopped) throw new ChainError('NotPermitted', 'issuer stopped issuance');
-  if (e.state.newRaisesPaused) throw new ChainError('Paused', 'new raises are paused by the protocol admin');
   const t = cmd.terms;
   const coin = e.state.config.stablecoins[t.stablecoin];
   if (!coin) throw new ChainError('InvalidTerms', `${t.stablecoin} is not available on ${e.state.config.chain}`);
   if (coin.mint !== t.stablecoinMint) throw new ChainError('InvalidTerms', 'stablecoin mint does not match the chain catalogue');
-  const capWad = big(t.capMultipleWad);
-  if (capWad < DEFAULTS.capMultipleMinWad || capWad > DEFAULTS.capMultipleMaxWad) throw new ChainError('InvalidTerms', 'cap multiple out of bounds (2.0–3.0)');
-  for (const [ours, stage1] of FIXED_DAYS) {
-    const b = PARAMETER_BOUNDS[stage1];
-    const v = BigInt(t[ours]);
-    if (v < b.min || v > b.max) fail('ParameterOutOfBounds', `${ours} is fixed by Stage 1 at ${b.min}`);
-  }
-  const bpsSum = t.releaseSchedule.reduce((a, x) => a + x.bps, 0);
-  if (bpsSum !== 10_000) throw new ChainError('InvalidTerms', 'release schedule must sum to 10000 bps');
-  if (big(t.unitsOffered) <= 0n) throw new ChainError('InvalidTerms', 'unitsOffered must be positive');
+  // Stage 1's create_series rules in its order (SIM:756-781): the bounded parameters (ParameterOutOfBounds), units,
+  // reserve and minimum raise and the wallet cap of at least one unit (InvalidTerms), the release schedule
+  // (InvalidReleaseSchedule); the messages carry the field and the bound, never the submitted value
+  const violation = seriesTermsViolations(t)[0];
+  if (violation) fail(violation.stage1, violation.message);
   if (/^0x0{64}$/.test(t.contractHash)) throw new ChainError('InvalidTerms', 'contract hash required: a raise needs a signed contract');
   if (t.raiseStyle === 'curve' && e.state.config.family !== 'solana') throw new ChainError('InvalidTerms', 'curve-mode raises exist on Solana only');
+  // New raises paused: Stage 1 refuses open_raise (NewRaisesPaused, SIM:875), never create_series, so a sealed series
+  // is still created (openRaise refuses). A curve raise starts at creation here: its creation is the curve's
+  // activation, which Stage 1 refuses while paused (Solana registry `mark_curve_activated`).
+  if (t.raiseStyle === 'curve' && e.state.newRaisesPaused) fail('NewRaisesPaused', 'new raises are paused by the protocol admin');
   if (t.tierFlags.tier4) throw new ChainError('InvalidTerms', 'tier 4 is switched off');
+  const capWad = big(t.capMultipleWad);
   const address = cmd.seriesAddressHint ?? deriveAddress(e.state.config.family, `series:${signer}:${issuer.seriesIds.length}`);
   const seriesId = `${e.state.config.chain}:${address}`;
   if (e.state.series.has(seriesId)) throw new ChainError('Duplicate', 'series exists');

@@ -68,6 +68,72 @@ describe('Stage 1 error names on simulator errors', () => {
     expect(ok.events[0]!.type).toBe('SeriesCreated');
   });
 
+  // Stage 1 create_series (SIM:756-781): every bounded parameter (PARAMETER_BOUNDS), the units, reserve and minimum raise,
+  // a wallet cap of at least one unit, and the release schedule (review finding: createSeries checked only the cap, the
+  // fixed day counts and the bps sum)
+  it('createSeries refuses what Stage 1 create_series refuses, with its error name, and accepts the bounds themselves', async () => {
+    const h = await SimHarness.create('solana', { genesis: GENESIS });
+    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    const WAD = 10n ** 18n;
+    const YEAR = 365 * 86_400;
+    const decreasing = [{ afterSeconds: 90 * 86_400, bps: 5000 }, { afterSeconds: 0, bps: 5000 }];
+    const tranches = (n: number) => Array.from({ length: n }, (_, i) => ({ afterSeconds: i * 86_400, bps: i < n - 1 ? 400 : 10_000 - 400 * (n - 1) }));
+    const cases: [string, Parameters<typeof defaultTerms>[1], string][] = [
+      ['cap above 3.0', { capMultipleWad: String(3n * WAD + 1n) }, 'ParameterOutOfBounds'],
+      ['cap below 2.0', { capMultipleWad: String(2n * WAD - 1n) }, 'ParameterOutOfBounds'],
+      ['hurdle above 0.25', { hurdleWad: String(WAD / 4n + 1n) }, 'ParameterOutOfBounds'],
+      ['k above 20', { payoutMultipleK: 21 }, 'ParameterOutOfBounds'],
+      ['lockup above 5 years', { lockupSeconds: 5 * YEAR + 1 }, 'ParameterOutOfBounds'],
+      ['wallet cap below 1%', { walletCapBps: 99 }, 'ParameterOutOfBounds'],
+      ['auction fee above 10%', { auctionFeeBps: 1001 }, 'ParameterOutOfBounds'],
+      ['payout fee above 20%', { payoutFeeBps: 2001 }, 'ParameterOutOfBounds'],
+      ['reserve price 0', { reservePrice: '0', minimumRaise: '0' }, 'InvalidTerms'],
+      ['minimum raise above reserve × units', { minimumRaise: String(500n * 8_000_000n + 1n) }, 'InvalidTerms'],
+      ['wallet cap below one unit', { unitsOffered: '9', walletCapBps: 1000, minimumRaise: '0' }, 'InvalidTerms'],
+      ['release offsets decrease', { releaseSchedule: decreasing }, 'InvalidReleaseSchedule'],
+      ['25 release tranches', { releaseSchedule: tranches(25) }, 'InvalidReleaseSchedule'],
+      ['release bps sum 9000', { releaseSchedule: [{ afterSeconds: 0, bps: 9000 }] }, 'InvalidReleaseSchedule'],
+      // Stage 1's order: the bounded parameters before the terms, the terms before the release schedule
+      ['hurdle and schedule', { hurdleWad: String(WAD / 2n), releaseSchedule: decreasing }, 'ParameterOutOfBounds'],
+      ['unreachable raise and schedule', { minimumRaise: String(500n * 8_000_000n + 1n), releaseSchedule: decreasing }, 'InvalidTerms'],
+    ];
+    for (const [name, over, stage1] of cases) {
+      const e = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, over).terms }));
+      expect(e.code, name).toBe('InvalidTerms');
+      expect(e.detail, name).toEqual({ stage1 });
+    }
+    // the message names the field and the bound, never the submitted value
+    const hurdle = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { hurdleWad: String(WAD / 2n) }).terms }));
+    expect(hurdle.message).toBe('hurdle rate must be between 0 and 0.25');
+    expect(JSON.stringify([hurdle.message, hurdle.detail])).not.toMatch(/0\.5|500000000000000000/);
+    // nothing was created by the refusals; terms at every bound are accepted
+    expect(await h.sim.listSeries()).toHaveLength(0);
+    const atBounds = defaultTerms(h.sim, { capMultipleWad: String(2n * WAD), hurdleWad: String(WAD / 4n), payoutMultipleK: 20, lockupSeconds: 5 * YEAR, walletCapBps: 100, auctionFeeBps: 1000, payoutFeeBps: 2000, releaseSchedule: tranches(24) }).terms;
+    expect((await h.exec(h.issuer, { kind: 'createSeries', terms: atBounds })).events[0]!.type).toBe('SeriesCreated');
+  });
+
+  // Stage 1 refuses open_raise while new raises are paused (NewRaisesPaused, SIM:875), not create_series; a curve raise
+  // starts at creation, which Stage 1 refuses as the curve's activation (registry mark_curve_activated)
+  it('new raises paused: a sealed series is still created and openRaise refuses NewRaisesPaused; a curve raise is refused', async () => {
+    const h = await SimHarness.create('solana', { genesis: GENESIS });
+    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'pauseNewRaises', paused: true });
+    const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
+    expect(created.events[0]!.type).toBe('SeriesCreated');
+    const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
+    const now = await h.sim.now();
+    const open = await rejection(h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 86_400, revealEndsAt: now + 2 * 86_400 }));
+    expect(open.code).toBe('Paused');
+    expect(open.detail).toEqual({ stage1: 'NewRaisesPaused' });
+    const curve = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: '2000000000', reservePrice: '5000000', unitsOffered: '1000' }).terms;
+    const refused = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: curve }));
+    expect(refused.code).toBe('Paused');
+    expect(refused.detail).toEqual({ stage1: 'NewRaisesPaused' });
+    await h.exec(h.admin, { kind: 'pauseNewRaises', paused: false });
+    await h.exec(h.issuer, { kind: 'openRaise', seriesId, commitEndsAt: now + 86_400, revealEndsAt: now + 2 * 86_400 });
+    expect((await h.exec(h.issuer, { kind: 'createSeries', terms: curve })).events.map((x) => x.type)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
+  });
+
   it('a debit beyond the balance is InsufficientFunds with Stage 1 name InsufficientEscrow', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const { seriesId } = await (async () => {

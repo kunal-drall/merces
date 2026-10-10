@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { DEFAULTS, INDEXING_RULE_CODE, currencyCodeOf, normaliseAddress, randomFieldSalt, termsCommitment, type SeriesTerms, type UnsignedTx } from '@merces/domain';
+import { DEFAULTS, INDEXING_RULE_CODE, currencyCodeOf, normaliseAddress, randomFieldSalt, seriesTermsViolations, termsCommitment, type BoundedTerms, type SeriesTerms, type UnsignedTx } from '@merces/domain';
 import { U64_MAX, WAD, ratePerUnit, wadFromDecimal, wadToDecimal } from '@merces/math';
 import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -99,6 +99,9 @@ export interface ValidationIssue {
   message: string;
 }
 
+/** The public-terms field a canonical terms field comes from, where the names differ (the others share the name). */
+const PUBLIC_FIELD: Partial<Record<keyof SeriesTerms, string>> = { capMultipleWad: 'capMultiple', hurdleWad: 'hurdle' };
+
 export class TermsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -119,13 +122,17 @@ export class TermsService {
     if (info && !info.stablecoins[pub.stablecoin]) issues.push({ field: 'stablecoin', code: 'not-on-chain', message: `${pub.stablecoin} is not available on ${chain}` });
     if (pub.raiseStyle === 'curve' && info?.family !== 'solana') issues.push({ field: 'raiseStyle', code: 'curve-solana-only', message: 'curve-mode raises exist on Solana only' });
     const capWad = wadFromDecimal(pub.capMultiple);
-    if (capWad < DEFAULTS.capMultipleMinWad || capWad > DEFAULTS.capMultipleMaxWad) issues.push({ field: 'capMultiple', code: 'out-of-bounds', message: 'cap multiple must be between 2.0 and 3.0' });
-    const bps = pub.releaseSchedule.reduce((a, t) => a + t.bps, 0);
-    if (bps !== 10_000) issues.push({ field: 'releaseSchedule', code: 'bps-sum', message: 'release schedule must sum to 10000 bps' });
+    const hurdleWad = wadFromDecimal(pub.hurdle);
     const units = BigInt(pub.unitsOffered);
-    if (units <= 0n) issues.push({ field: 'unitsOffered', code: 'positive', message: 'units offered must be positive' });
-    if (BigInt(pub.reservePrice) <= 0n) issues.push({ field: 'reservePrice', code: 'positive', message: 'reserve price must be positive' });
-    if (BigInt(pub.minimumRaise) > units * BigInt(pub.reservePrice)) issues.push({ field: 'minimumRaise', code: 'unreachable', message: 'minimum raise exceeds units × reserve price' });
+    // Stage 1's create_series rules (bounded parameters, units, reserve, minimum raise, a wallet cap of at least one unit,
+    // the release schedule) on the terms buildCreateSeries will send, with the fee and wallet-cap defaults it fills in,
+    // so a draft fails here, per field, instead of at createSeries
+    const onchain: BoundedTerms = {
+      capMultipleWad: capWad.toString(), hurdleWad: hurdleWad.toString(), payoutMultipleK: pub.payoutMultipleK, lockupSeconds: pub.lockupSeconds, walletCapBps: DEFAULTS.walletCapBps,
+      auctionFeeBps: DEFAULTS.auctionFeeBps, payoutFeeBps: DEFAULTS.payoutFeeBps, dueDays: DEFAULTS.dueDays, graceDays: DEFAULTS.graceDays, formalNoticeDays: DEFAULTS.formalNoticeDays,
+      unitsOffered: pub.unitsOffered, reservePrice: pub.reservePrice, minimumRaise: pub.minimumRaise, releaseSchedule: pub.releaseSchedule,
+    };
+    for (const v of seriesTermsViolations(onchain)) issues.push({ field: PUBLIC_FIELD[v.field] ?? v.field, code: v.code, message: v.message });
     if (pub.tierFlags.tier4) issues.push({ field: 'tierFlags.tier4', code: 'switched-off', message: 'tier 4 self-attestation is switched off' });
     if (!isCommitmentCurrency(pub.reportingCurrency)) issues.push({ field: 'reportingCurrency', code: 'unsupported', message: `${pub.reportingCurrency} has no ISO-4217 numeric code in Stage 1's terms commitment` });
     if (!pub.tierFlags.tier1 && !pub.tierFlags.tier2 && !pub.tierFlags.tier3) issues.push({ field: 'tierFlags', code: 'none', message: 'at least one verification tier is required' });
@@ -152,7 +159,7 @@ export class TermsService {
       if (!floor) issues.push({ field: 'threshold', code: 'no-floor-data', message: `no median-income data for ${pub.country} in ${pub.reportingCurrency}; the floor cannot be checked (ask Kunal for sources)` });
       else if (BigInt(priv.threshold) < floor.floor) issues.push({ field: 'threshold', code: 'below-floor', message: `threshold must be at least the local median full-time income (${floor.floor} ${pub.reportingCurrency} base units)` });
     }
-    return { issues, derived: { capMultipleWad: capWad.toString(), hurdleWad: wadFromDecimal(pub.hurdle).toString(), ratePerUnitWad, thresholdFloor: floorStr, floorPlaceholder } };
+    return { issues, derived: { capMultipleWad: capWad.toString(), hurdleWad: hurdleWad.toString(), ratePerUnitWad, thresholdFloor: floorStr, floorPlaceholder } };
   }
 
   async createDraft(session: Session, chain: string, issuer: string): Promise<Record<string, unknown>> {

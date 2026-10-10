@@ -3,6 +3,7 @@ import { bpsOf, capPerUnit, interim } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { position, registerHolder, setUnits } from './holders.ts';
+import { fail } from './errors.ts';
 import { pidAtTime } from './ledger.ts';
 
 // ------------------------------------------------------------------ auction
@@ -11,7 +12,7 @@ export function openRaise(e: EngineCore, signer: string, cmd: Extract<Command, {
   e.requireIssuer(s, signer);
   if (s.phase !== 'Draft') throw new ChainError('WrongPhase', `series is ${s.phase}`);
   if (s.terms.raiseStyle !== 'sealed') throw new ChainError('WrongPhase', 'curve-mode series do not run a sealed-bid raise');
-  if (e.state.newRaisesPaused) throw new ChainError('Paused', 'new raises are paused');
+  if (e.state.newRaisesPaused) fail('NewRaisesPaused', 'new raises are paused by the protocol admin');
   if (cmd.commitEndsAt <= now || cmd.revealEndsAt <= cmd.commitEndsAt) throw new ChainError('InvalidTerms', 'bad auction timings');
   s.phase = 'Open';
   s.openedAt = now;

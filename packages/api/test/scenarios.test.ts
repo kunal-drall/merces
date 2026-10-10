@@ -21,7 +21,9 @@ import { makeRig } from './helpers.ts';
  *  - G5: the tail due is the full payment as reported; `tailReceive` caps it when it is paid;
  *  - RD: Stage 1's redeem: a holder's tail follows its own redemption claim (`redeemedUnits`);
  *  - G7: an extinguishment returns only the unvested proceeds, through the final pool; vested tranches stay drawable;
- *  - M6: tier 1 is a report tier only on a pure tier-1 series (SIM:1077).
+ *  - M6: tier 1 is a report tier only on a pure tier-1 series (SIM:1077);
+ *  - CS: Stage 1's create_series rules (SIM:756-781): bounded parameters, a reachable minimum raise
+ *    (≤ reserve × units), a wallet cap of at least one unit, a valid release schedule.
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 void makeContext;
@@ -246,7 +248,9 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     // tier 1 is a report tier only on a pure tier-1 series (cause M6: Stage 1 refuses a tier-1 report on any other series
     // with TierNotEnabled; was the harness default tiers 1 + 2 + 3)
     const a = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
-    const b = await h.runRaise({ terms: { unitsOffered: '300' }, bids: [{ backer: 0, price: USDC(15), qty: 60n }, { backer: 1, price: USDC(15), qty: 60n }, { backer: 2, price: USDC(15), qty: 60n }, { backer: 3, price: USDC(15), qty: 60n }, { backer: 4, price: USDC(15), qty: 60n }] });
+    // cause CS: Stage 1 refuses a minimum raise above reserve × units (InvalidTerms); was the harness's 4,000 USDC on
+    // 300 units at 8 USDC (2,400)
+    const b = await h.runRaise({ terms: { unitsOffered: '300', minimumRaise: USDC(2000).toString() }, bids: [{ backer: 0, price: USDC(15), qty: 60n }, { backer: 1, price: USDC(15), qty: 60n }, { backer: 2, price: USDC(15), qty: 60n }, { backer: 3, price: USDC(15), qty: 60n }, { backer: 4, price: USDC(15), qty: 60n }] });
     await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId: a.seriesId, router: h.router });
     const issuerTok = rig.token({ accountId: 'ms-iss', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
     await rig.sync();

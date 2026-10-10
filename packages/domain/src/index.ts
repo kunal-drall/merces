@@ -6,4 +6,5 @@ export * from './state.ts';
 export * from './port.ts';
 export * from './hashing.ts';
 export * from './params.ts';
+export * from './terms-rules.ts';
 export * from './schema.ts';

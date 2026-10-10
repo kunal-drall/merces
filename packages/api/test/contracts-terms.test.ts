@@ -160,6 +160,35 @@ describe.skipIf(!dbTestsEnabled())('contract templates, contract signing and dra
     expect((await rig.post('/terms/commitment', { threshold: '65000000000', ratePerUnitWad: '100000000000000', reportingCurrency: 'NZD', indexingRule: 'cpi-annual', termsSalt: '1' })).statusCode).toBe(422);
   });
 
+  // Stage 1's create_series rules (SIM:756-781) on a draft, per field and value-free, so terms Stage 1 would refuse never
+  // reach buildCreateSeries (review finding: validate() bounded only the cap, the bps sum, units, reserve and min raise)
+  it('terms validation applies Stage 1\'s create_series bounds per field, with messages that carry no submitted value', async () => {
+    const svc = new TermsService(rig.ctx);
+    const YEAR = 365 * 86_400;
+    const pub = { stablecoin: 'USDC' as const, unitsOffered: '1000', reservePrice: '8000000', minimumRaise: '4000000000', capMultiple: '2.5', lockupSeconds: 0, releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], hurdle: '0.05', payoutMultipleK: 2, tierFlags: { tier1: false, tier2: true, tier3: false, tier4: false }, reportingCurrency: 'USD', raiseStyle: 'sealed' as const, country: 'US' };
+    const bad = { ...pub, hurdle: '0.5', payoutMultipleK: 30, lockupSeconds: 6 * YEAR, releaseSchedule: [{ afterSeconds: 90 * 86_400, bps: 5000 }, { afterSeconds: 0, bps: 5000 }], unitsOffered: '5', minimumRaise: '0' };
+    const { issues } = await svc.validate('solana', bad, null, 2026);
+    expect(issues.map((i) => [i.field, i.code])).toEqual([
+      ['hurdle', 'out-of-bounds'],
+      ['payoutMultipleK', 'out-of-bounds'],
+      ['lockupSeconds', 'out-of-bounds'],
+      ['unitsOffered', 'wallet-cap-below-one-unit'], // floor(5 × 10% default wallet cap) = 0
+      ['releaseSchedule', 'offsets-decrease'],
+    ]);
+    expect(issues.find((i) => i.field === 'hurdle')!.message).toBe('hurdle rate must be between 0 and 0.25');
+    for (const i of issues) expect(i.message, i.field).not.toMatch(/0\.5\b|\b30\b|189216000|7776000/);
+    // too many tranches and an unreachable minimum raise
+    const more = await svc.validate('solana', { ...pub, minimumRaise: '8000000001', releaseSchedule: Array.from({ length: 25 }, (_, i) => ({ afterSeconds: i, bps: 400 })) }, null, 2026);
+    expect(more.issues.map((i) => [i.field, i.code])).toEqual([['minimumRaise', 'unreachable'], ['releaseSchedule', 'too-many-tranches']]);
+    // the bounds themselves are valid
+    const atBounds = await svc.validate('solana', { ...pub, hurdle: '0.25', payoutMultipleK: 20, lockupSeconds: 5 * YEAR, capMultiple: '3' }, null, 2026);
+    expect(atBounds.issues).toEqual([]);
+    // setTerms refuses the draft and stores nothing
+    await draftRow('draft-bounds', 'draft');
+    await expect(svc.setTerms('draft-bounds', issuer, bad, { threshold: '65000000000', shareRate: '0.10', indexingRule: 'cpi-annual' })).rejects.toMatchObject({ status: 422, detail: { issues: expect.arrayContaining([expect.objectContaining({ field: 'hurdle', code: 'out-of-bounds' })]) } });
+    expect((await rig.t.pool.query("select state, terms_commitment from series_drafts where draft_id = 'draft-bounds'")).rows[0]).toEqual({ state: 'draft', terms_commitment: null });
+  });
+
   it('a draft whose vault payload predates the Poseidon terms scheme is refused at submission (S1 WP10; cause PF)', async () => {
     await draftRow('draft-legacy', 'contract_signed', { contractHash: '0x' + 'aa'.repeat(32), commitment: '0x' + 'bb'.repeat(32) });
     // a SHA-256-era payload: no scheme, a hex salt
