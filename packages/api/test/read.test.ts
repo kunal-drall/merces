@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { parsePeriod } from '@merces/math';
+import type { DomainEvent } from '@merces/domain';
+import { project } from '@merces/indexer';
 import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -104,6 +106,31 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     const lastTok = rig.token({ accountId: 'b4', wallets: [{ chain: 'solana', address: rig.sol.backers[4]!.address }], roles: ['backer'] });
     expect((await rig.get('/me/bids', lastTok)).json().bids[0].refundable).toBe('0');
     expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: rig.sol.backers[4]!.address }, lastTok)).statusCode).toBe(409);
+  });
+
+  // cause S2-RH: Stage 1's register_holder is permissionless for any allowlisted wallet, so a registration alone is not
+  // a holding (A-REV-10): it opens no holder-tier route and adds no holding. The simulator emits HolderRegistered from
+  // S2 WP4, so the event is projected here directly.
+  it('a wallet that is only registered as a holder gets no holder-tier access and no holding', async () => {
+    const wallet = 'registered-only';
+    const e = { chain: 'solana', cursor: '000009000001', seq: 9_000_001, blockTime: 1_780_000_000, blockRef: '9000001', txId: 'synthetic-register', finality: 'finalized', type: 'HolderRegistered', payload: { seriesId, holder: wallet } } as DomainEvent;
+    const c = await rig.t.pool.connect();
+    try {
+      await project(c, e);
+    } finally {
+      c.release();
+    }
+    expect((await rig.t.pool.query('select 1 from holder_registrations where series_id = $1 and wallet = $2', [seriesId, wallet])).rowCount).toBe(1);
+    const tok = rig.token({ accountId: 'registered-only', wallets: [{ chain: 'solana', address: wallet }], roles: ['backer'] });
+    for (const route of ['periods', 'vault', 'holders', 'payouts', 'position']) {
+      expect([route, (await rig.get(`/series/${seriesId}/${route}`, tok)).statusCode]).toEqual([route, 403]);
+      expect([route, (await rig.get(`/series/${seriesId}/${route}`, holderTok)).statusCode]).toEqual([route, 200]);
+    }
+    expect((await rig.get('/me/holdings', tok)).json().holdings).toEqual([]);
+    const holders = (await rig.get(`/series/${seriesId}/holders`, holderTok)).json().holders as { wallet: string }[];
+    expect(holders).toHaveLength(5);
+    expect(holders.map((h) => h.wallet)).not.toContain(wallet);
+    expect((await rig.get(`/series/${seriesId}`)).json().holderCount).toBe(5);
   });
 
   it('a series id with an unknown or missing chain prefix is 404 on every series route, never 500', async () => {

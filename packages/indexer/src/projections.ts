@@ -178,8 +178,10 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       break;
     }
     case 'HolderRegistered': {
+      // anyone may register any allowlisted wallet (Stage 1 `register_holder`), so a registration is recorded on its own
+      // and never creates a position row: holder-tier access and /me/holdings need units held, ever (A-REV-10)
       const p = e.payload as P<'HolderRegistered'>;
-      await client.query('insert into positions (series_id, wallet, registered, first_seq, last_seq) values ($1,$2,true,$3,$3) on conflict (series_id, wallet) do update set registered = true, last_seq = greatest(positions.last_seq, excluded.last_seq)', [p.seriesId, p.holder, e.seq]);
+      await client.query('insert into holder_registrations (series_id, wallet, registered_seq) values ($1,$2,$3) on conflict (series_id, wallet) do nothing', [p.seriesId, p.holder, e.seq]);
       break;
     }
     case 'BidRefunded': {

@@ -327,7 +327,8 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const series = async () => (await t.pool.query('select phase, settlement_round, round_rejected, rejection_reason, mint_finalized, units_outstanding::text from series where series_id = $1', [seriesId])).rows[0];
     const rounds = async () => (await t.pool.query('select round, clearing_price::text, rejected, rejection_reason from settlement_rounds where series_id = $1 order by round', [seriesId])).rows;
     const bid = async (w: string) => (await t.pool.query('select processed, allocated_units::text, cost::text, fee::text, pending_units::text, pending_refund::text, delivered, delivered_units::text, refunded::text from bids where series_id = $1 and bidder = $2', [seriesId, w])).rows[0];
-    const pos = async (w: string) => (await t.pool.query('select units::text, undelivered_units::text, registered from positions where series_id = $1 and wallet = $2', [seriesId, w])).rows[0];
+    const pos = async (w: string) => (await t.pool.query('select units::text, undelivered_units::text from positions where series_id = $1 and wallet = $2', [seriesId, w])).rows[0];
+    const registered = async (w: string) => !!(await t.pool.query('select 1 from holder_registrations where series_id = $1 and wallet = $2', [seriesId, w])).rowCount;
 
     // a round proposed, rejected, and a second round proposed
     await apply(ev('SettlementProposed', { seriesId, clearingPrice: USDC(10).toString(), round: 1 }));
@@ -344,15 +345,24 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect((await t.pool.query('select auction_clearing_price::text, auction_units_sold::text, auction_proceeds::text, auction_failure_reason, auction_finalized_at::int from series where series_id = $1', [seriesId])).rows[0])
       .toEqual({ auction_clearing_price: USDC(9).toString(), auction_units_sold: '500', auction_proceeds: USDC(4500).toString(), auction_failure_reason: null, auction_finalized_at: 1_780_000_000 });
 
-    // a winner: registered, processed (its units count from here, undelivered), then delivered
+    // a winner: registered (Stage 1 registers it before allocating, SIM:1005-1006; a registration alone is no
+    // position, A-REV-10), processed (its units count from here, undelivered), then delivered
     await apply(ev('HolderRegistered', { seriesId, holder: b0 }));
-    expect(await pos(b0)).toEqual({ units: '0', undelivered_units: '0', registered: true });
+    expect(await registered(b0)).toBe(true);
+    expect(await pos(b0)).toBeUndefined();
     await apply(ev('UnitsAllocated', { seriesId, bidder: b0, units: '100', cost: USDC(900).toString(), fee: USDC(9).toString(), refund: USDC(303).toString() }));
     expect(await bid(b0)).toMatchObject({ processed: true, allocated_units: '100', cost: USDC(900).toString(), fee: USDC(9).toString(), pending_units: '100', pending_refund: USDC(303).toString(), delivered: false });
-    expect(await pos(b0)).toEqual({ units: '100', undelivered_units: '100', registered: true });
+    expect(await pos(b0)).toEqual({ units: '100', undelivered_units: '100' });
     await apply(ev('BidDelivered', { seriesId, bidder: b0, units: '100', refund: USDC(303).toString() }));
     expect(await bid(b0)).toMatchObject({ processed: true, delivered: true, delivered_units: '100', refunded: USDC(303).toString(), pending_units: '0', pending_refund: '0' });
-    expect(await pos(b0)).toEqual({ units: '100', undelivered_units: '0', registered: true });
+    expect(await pos(b0)).toEqual({ units: '100', undelivered_units: '0' });
+    // anyone may register any allowlisted wallet (Stage 1 register_holder): a wallet registered with no units has no
+    // position, and a repeated registration keeps the first (cause S2-RH)
+    const outsider = 'registered-only-wallet';
+    await apply(ev('HolderRegistered', { seriesId, holder: outsider }), ev('HolderRegistered', { seriesId, holder: outsider }));
+    expect(await registered(outsider)).toBe(true);
+    expect(await pos(outsider)).toBeUndefined();
+    expect((await t.pool.query('select count(*)::int as n from holder_registrations where series_id = $1', [seriesId])).rows[0].n).toBe(2);
     // a loser is processed without an event: its delivery marks it processed (S2 amendment M4)
     expect(await bid(b4)).toMatchObject({ processed: false, delivered: false });
     await apply(ev('BidDelivered', { seriesId, bidder: b4, units: '0', refund: USDC(909).toString() }));

@@ -26,10 +26,18 @@ alter table bids add column if not exists pending_refund numeric(38,0) not null 
 alter table bids add column if not exists delivered boolean not null default false;
 alter table bids add column if not exists delivered_units numeric(38,0) not null default 0;
 
--- a winner's units count toward its position (its accrual weight) from processing; the part not yet delivered, and
--- Stage 1's holder registration
+-- a winner's units count toward its position (its accrual weight) from processing; the part not yet delivered
 alter table positions add column if not exists undelivered_units numeric(38,0) not null default 0;
-alter table positions add column if not exists registered boolean not null default false;
+
+-- Stage 1's holder registrations (HolderRegistered). Registration is permissionless for any allowlisted wallet, so it
+-- is kept apart from `positions`: a registration alone is not a holding and never creates a position row (holder-tier
+-- access and /me/holdings read positions only, ASSUMPTIONS A-REV-10). Keyed by series, so a simulator reset clears it.
+create table if not exists holder_registrations (
+  series_id text not null,
+  wallet text not null,
+  registered_seq bigint not null,
+  primary key (series_id, wallet)
+);
 
 -- every settlement round proposed for a series, and how it ended
 create table if not exists settlement_rounds (

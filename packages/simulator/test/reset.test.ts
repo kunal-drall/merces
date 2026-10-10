@@ -53,6 +53,7 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
     // migration 019's settlement tables are keyed by series (cause S2-MS)
     await pool.query("insert into settlement_rounds (series_id, round, clearing_price, proposed_seq) values ($1, 1, 9000000, 2)", [sid]);
     await pool.query("insert into auction_deliveries (series_id, bidder, attempts, last_error) values ($1, 'bidder', 1, 'NotProcessed')", [sid]);
+    await pool.query("insert into holder_registrations (series_id, wallet, registered_seq) values ($1, 'holder', 3)", [sid]);
     await pool.query("insert into outbox (topic, payload) values ('notification', $1)", [JSON.stringify({ kind: 'payout.available', seriesId: sid })]);
     await pool.query("insert into notifications (notification_id, account_id, kind, subject, body, data, payload_hash) values ($1, 'acct-1', 'payout.available', 's', 'b', $2, $1)", [`n-${chain}`, JSON.stringify({ seriesId: sid })]);
   }
@@ -77,7 +78,8 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
     expect(report.chains).toEqual(['solana']);
     expect(report.draftsKept).toBe(1);
     const deleted = Object.fromEntries(report.deleted.map((d) => [d.table, d.rows]));
-    expect(deleted).toMatchObject({ sim_state: 1, events: 1, indexer_cursors: 1, reports: 1, series_drafts: 1, terms_vault: 1, reminders_sent: 1, outbox: 1, notifications: 1, settlement_rounds: 1, auction_deliveries: 1 });
+    // cause S2-MS: migration 019's settlement_rounds, auction_deliveries and holder_registrations
+    expect(deleted).toMatchObject({ sim_state: 1, events: 1, indexer_cursors: 1, reports: 1, series_drafts: 1, terms_vault: 1, reminders_sent: 1, outbox: 1, notifications: 1, settlement_rounds: 1, auction_deliveries: 1, holder_registrations: 1 });
     expect(formatSimResetReport(report, prefix)).toMatch(/re-apply on each reset chain[\s\S]*registerAttestor[\s\S]*registerVerifierKey/);
 
     // the reset chain is gone, the other untouched
@@ -89,7 +91,7 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
       expect(await count(`${table} where chain = 'monad'`), table).toBe(1);
     }
     expect(await count("reports where series_id like 'monad:%'")).toBe(1);
-    for (const table of ['settlement_rounds', 'auction_deliveries']) {
+    for (const table of ['settlement_rounds', 'auction_deliveries', 'holder_registrations']) {
       expect(await count(`${table} where series_id like 'solana:%'`), table).toBe(0);
       expect(await count(`${table} where series_id like 'monad:%'`), table).toBe(1);
     }
