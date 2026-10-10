@@ -22,7 +22,7 @@ from the build environment and the fact must be re-verified before going live.
 | @solana/web3.js | 1.99.0 | Solana adapter skeleton (maintenance line; Anza recommends `@solana/kit` 8.x for new code — migrate when Stage 1's clients are generated with Codama) |
 | @noble/hashes | 2.4.0 | sha256 |
 | bs58 | 6.0.0 | Solana address checks |
-| snarkjs | 0.7.6 | offchain Groth16 verification (`groth16.verify(vkey, publicSignals, proof)`) |
+| snarkjs | 0.7.6 | offchain Groth16 proving and verification, through Stage 1's `@merces/circuits` (`proveReport`, `verifyReport`; pinned by `stage1/circuits`) |
 
 ## Stage 1 (imported, not rewritten)
 

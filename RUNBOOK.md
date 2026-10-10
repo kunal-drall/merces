@@ -41,6 +41,24 @@ genesis hash against the configured cluster; EVM accepts only chain ids in the t
 RPC stops the process under `live`; under `auto` the chain falls back to the simulator and the refusal is the logged
 reason. A new testnet is added to the allow-list in code, never through configuration.
 
+### Report proofs (Stage 1 Groth16)
+
+Reports carry Stage 1's ProofOfIncome proof (Groth16 over BN254, `stage1/circuits`). The issuer's device proves
+(`@merces/poi-device`, fresh randomness); the API verifies before it builds `submitReport`, and every simulated chain
+verifies again before its engine runs (`Groth16ReportVerifier` in `@merces/ports`, verdicts cached per process).
+Devices fetch the circuit from `GET /prover/artifacts` and the files from `GET /prover/report.wasm` and
+`GET /prover/report.zkey`, each checked against the Stage 1 build manifest's sha256. The proving key comes from Stage
+1's **development** trusted setup: anyone can forge proofs with it, so never mainnet.
+
+`MERCES_PROOF_SYSTEM` is `groth16` (default) or `mock`. `mock` also accepts mock proofs (a digest over the public
+inputs, forgeable by anyone) in the simulators and the API, for fast local seeding (`dev:mock` then seeds with mock
+proofs). It is honoured only when every chain resolves to the simulator, logs a warning at startup, and a process with
+a live chain refuses to start with it set.
+
+snarkjs keeps worker threads alive once it has verified or proved. The API, `dev:mock` and `dev:verifier` terminate
+them on SIGINT/SIGTERM (`shutdownProofSystem()`), as do `stage1:sync` and `demo:cycle` before they exit; a new CLI that
+proves or verifies must do the same, or it will not exit.
+
 ### Simulator state version 2: reset
 
 From S1 the persisted simulator state is **version 2**: it carries Stage 1's own series ledger, payout vault, tail and

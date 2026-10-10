@@ -42,7 +42,11 @@ The indexer reads events after a per-chain cursor, validates them, projects `fin
 model inside one transaction per batch, and advances the cursor in that same transaction. Duplicates are skipped by
 `seq`, gaps stop the batch, `confirmed` events are parked in `events_pending`. The public `activity` table never holds an
 amount. The API serves lists and histories from the read model and reads per-request precision (claimable, quotes,
-period standings) live from the chain.
+period standings) live from the chain. Stage 1's reporting ledger (first and next expected period, last accepted and
+paid period, the open due, the income chain head, the period whose formal notice was recorded) is projected into
+`series` like everything else (migration 017; from `AuctionSettled`/`CurveGraduated`, `ReportAccepted`,
+`PaymentReceived`, `SeriesExtinguished` and `FormalNoticeDue`), so the series views have one source; the report
+prior a device must prove against is read live (`GET /series/{id}/reporting/prior`).
 
 ## Write side
 

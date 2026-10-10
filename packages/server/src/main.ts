@@ -1,5 +1,5 @@
 import { createLogger } from '@merces/core';
-import { resolveSecret, simulatorOnly } from '@merces/ports';
+import { resolveSecret, shutdownProofSystem, simulatorOnly } from '@merces/ports';
 import { createPool, migrate } from '@merces/db';
 import { chainsConfigFromEnv, createChains, subsetRegistry } from '@merces/chains';
 import { Indexer } from '@merces/indexer';
@@ -33,4 +33,19 @@ if (sims.chains.size) {
     void new KeeperScheduler(kctx, standardJobs({ pyth, chainlink: new MockChainlink(), outbox: notificationsOutboxHandler(kctx) })).start();
   }
   log.info({ chains: [...sims.chains.keys()], keepers: process.env.MERCES_KEEPERS !== 'false' }, 'simulated chains indexed and cranked in-process');
+}
+
+// shutdown: stop serving, release the persisted simulators' single-writer locks and the pool, then terminate the proof
+// system's worker threads (Groth16 verification starts them; they would keep the process alive)
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(sig, () => {
+    log.info({ signal: sig }, 'shutting down');
+    void (async () => {
+      await app.close().catch(() => undefined);
+      await chains.close().catch(() => undefined);
+      await pool.end().catch(() => undefined);
+      await shutdownProofSystem().catch(() => undefined);
+      process.exit(0);
+    })();
+  });
 }

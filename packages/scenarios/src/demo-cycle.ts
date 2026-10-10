@@ -7,9 +7,9 @@ import { createTestSchema } from '@merces/db';
 import { buildApp, issueSession, makeContext } from '@merces/api';
 import { createServiceContext, serviceRoutes } from '@merces/services';
 import { Indexer } from '@merces/indexer';
-import { LocalKms, MockESign, MockIdentityCheck, MockZkTls } from '@merces/ports';
+import { Groth16ReportVerifier, LocalKms, MockESign, MockIdentityCheck, MockZkTls, shutdownProofSystem } from '@merces/ports';
 import { ReportVerifier } from '@merces/report-verifier';
-import { assembleOnDevice, type IncomeOpening } from '@merces/poi-device';
+import { MemoryIncomeChain, assembleOnDevice, choosePrior } from '@merces/poi-device';
 import { stripeFixtureFor, stripeGrossUntil } from '@merces/fixtures';
 import { parsePeriod } from '@merces/math';
 import { SimHarness, SimulatorChain, type Personality } from '@merces/simulator';
@@ -25,9 +25,10 @@ const say = (s: string) => {
 };
 
 const t = await createTestSchema();
-// the device below still builds mock proofs (S1 WP10 moves it to Groth16): these in-process chains accept them
-const sol = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'solana', genesis: GENESIS, acceptMockProofs: true }) });
-const mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'monad', genesis: GENESIS, acceptMockProofs: true }) });
+// the issuer's device proves with Stage 1's prover; the chains (like the API) verify Stage 1 Groth16 proofs and accept no mock
+const groth16 = new Groth16ReportVerifier();
+const sol = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'solana', genesis: GENESIS, reportProofVerifier: groth16 }) });
+const mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'monad', genesis: GENESIS, reportProofVerifier: groth16 }) });
 const chains: ChainRegistry = { chains: new Map([['solana', sol.sim], ['monad', mon.sim]]), decisions: [], stage1: null, get: (c: string) => (c === 'solana' ? sol.sim : mon.sim), byFamily: (f: string) => (f === 'solana' ? sol.sim : mon.sim), close: async () => undefined };
 const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return silent; } } as never;
 const zktls = new MockZkTls();
@@ -58,17 +59,20 @@ for (const personality of ['solana', 'monad'] as Personality[]) {
   const treasury = await api('GET', `/series/${raise.seriesId}/treasury`, issuerTok);
   say(`treasury ${treasury.total}; released ${treasury.released}`);
   const fixture = stripeFixtureFor(`demo-${personality}`, 2026, [USDC(25_000), USDC(50_000), USDC(75_000), USDC(100_000)]);
-  const privateTerms = { threshold: raise.privateTerms.theta.toString(), ratePerUnitWad: raise.privateTerms.rWad.toString(), reportingCurrency: 'USD' };
-  // the device keeps its last income opening for the next quarter's prior (never sent to the API)
-  let prior: IncomeOpening | null = null;
+  // the private terms as the vault discloses them to the issuer: the opening of the Poseidon terms commitment
+  const privateTerms = { threshold: raise.privateTerms.theta.toString(), ratePerUnitWad: raise.privateTerms.rWad.toString(), reportingCurrency: 'USD', indexingRule: raise.privateTerms.indexingRule, termsSalt: raise.privateTerms.termsSalt.toString() };
+  // the device keeps its income chain (openings and attestations) for the next quarter's prior (never sent to the API)
+  const incomeChain = new MemoryIncomeChain();
   for (const q of ['2026Q1', '2026Q2', '2026Q3']) {
     const period = parsePeriod(q);
     await h.sim.setTime(period.end + 86_400);
     const sess = await api('POST', `/series/${raise.seriesId}/reporting/zktls-session`, issuerTok, { periodId: q, source: 'stripe' });
     const ytd = stripeGrossUntil(fixture, period.end) * 10_000n;
     const proof = zktls.prove({ source: 'stripe', seriesId: raise.seriesId, periodId: q, figure: ytd, currency: 'USD', coversUntil: period.end, owner: h.issuer.address, sessionId: sess.sessionId });
-    const { assembled, opening } = await assembleOnDevice({ seriesId: raise.seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: series.unitsOutstanding, privateTerms, prior, incomeYtdNow: ytd, fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof: proof }, verifier);
-    prior = opening;
+    const expected = await api('GET', `/series/${raise.seriesId}/reporting/prior?periodId=${q}`);
+    const prior = choosePrior(incomeChain, raise.seriesId, q, expected.expectedPriorIncomeCommitment);
+    const { assembled, entry } = await assembleOnDevice({ seriesId: raise.seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: series.unitsOutstanding, privateTerms, prior, incomeYtdNow: ytd, fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof: proof, deviceSecret: `demo-device-${personality}` }, verifier);
+    incomeChain.put(entry);
     const rep = await api('POST', `/series/${raise.seriesId}/reports`, issuerTok, assembled);
     const sent = await api('POST', '/tx/send', issuerTok, await h.issuer.sign(rep.tx as UnsignedTx));
     const due = sent.events.find((e: { type: string }) => e.type === 'ReportAccepted').payload.paymentDue as string;
@@ -79,7 +83,7 @@ for (const personality of ['solana', 'monad'] as Personality[]) {
       await api('POST', `/reports/${rep.reportId}/paid`, issuerTok, { txId: paid.txId });
     }
     // the income figure itself is never printed: only the onchain-public payment is (Part B)
-    say(`${q}: ProofOfIncome accepted → payment due ${due} base units (${(Number(due) / 1e6).toFixed(2)} USDC)`);
+    say(`${q}: ProofOfIncome (Stage 1 Groth16) accepted → payment due ${due} base units (${(Number(due) / 1e6).toFixed(2)} USDC)`);
   }
   await indexer.catchUp();
   const backer = h.backers[0]!;
@@ -102,5 +106,7 @@ for (const personality of ['solana', 'monad'] as Personality[]) {
 }
 await app.close();
 await t.drop();
+// snarkjs' worker threads (proving and verifying) would otherwise keep the process alive
+await shutdownProofSystem();
 say(failures ? `\nDEMO FAILED (${failures} mismatch)` : '\nDEMO OK: raise → treasury → three quarterly ProofOfIncome reports with Stripe data → payouts claimed, on both personalities, no manual steps.');
 process.exit(failures ? 1 : 0);

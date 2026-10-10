@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { stripeFixtureFor, stripeGrossUntil } from '@merces/fixtures';
 import { parsePeriod, ratePerUnit, wadFromDecimal } from '@merces/math';
-import { assembleOnDevice, type IncomeOpening } from '@merces/poi-device';
+import { MemoryIncomeChain, assembleOnDevice, choosePrior } from '@merces/poi-device';
 import type { UnsignedTx } from '@merces/domain';
 import { makeRig } from './helpers.ts';
 
@@ -23,8 +23,8 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
       const raise = await h.runRaise();
       const seriesId = raise.seriesId;
       const issuerTok = rig.token({ accountId: `iss-${personality}`, wallets: [{ chain: h.sim.chain, address: h.issuer.address }], roles: ['issuer'] });
-      // the device's view of the private terms (as disclosed by E4)
-      const privateTerms = { threshold: raise.privateTerms.theta.toString(), shareRate: '0.10', reportingCurrency: 'USD' };
+      // the device's view of the private terms (as disclosed by E4: the opening of the Poseidon terms commitment)
+      const privateTerms = { threshold: raise.privateTerms.theta.toString(), shareRate: '0.10', reportingCurrency: 'USD', indexingRule: raise.privateTerms.indexingRule, termsSalt: raise.privateTerms.termsSalt.toString() };
       const fixture = stripeFixtureFor(`iss-${personality}`, 2026, [USDC(25_000), USDC(50_000), USDC(75_000), USDC(100_000)]);
       // Q3 is over
       await h.sim.setTime(parsePeriod('2026Q3').end + 86_400);
@@ -35,10 +35,17 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
       expect(schedule.json().fxBasis).toBe('unity');
       const sources = await rig.get('/income-sources');
       expect(sources.json().sources.map((s: { kind: string }) => s.kind)).toEqual(['stripe', 'deel', 'distrokid']);
-      expect((await rig.get('/prover/artifacts')).json().publicInputLayout).toHaveLength(6);
+      const artifacts = (await rig.get('/prover/artifacts')).json();
+      expect(artifacts).toMatchObject({ system: 'groth16-bn254', trustedSetup: 'development', acceptedSystems: ['groth16-bn254', 'mock'] });
+      expect(artifacts.publicInputLayout).toHaveLength(6);
+      const wasm = await rig.get(artifacts.wasm.url);
+      expect(wasm.statusCode).toBe(200);
+      expect(wasm.headers['x-content-sha256']).toBe(artifacts.wasm.sha256);
+      expect(wasm.rawPayload.length).toBe(artifacts.wasm.bytes);
 
-      // the device keeps its last income opening for the next quarter's prior (it never reaches the API)
-      let prior: IncomeOpening | null = null;
+      // the device keeps its income chain (openings and attestations) for the next quarter's prior; it never reaches the API
+      const chain = new MemoryIncomeChain();
+      const deviceSecret = `device-secret-${personality}`;
       for (const q of ['2026Q1', '2026Q2', '2026Q3']) {
         const period = parsePeriod(q);
         // 1. zkTLS session (device completes it with the provider; here the mock proves from the Stripe fixture)
@@ -48,14 +55,30 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
         const ytdCents = stripeGrossUntil(fixture, period.end);
         const ytd = ytdCents * 10_000n;
         const zktlsProof = rig.zktls.prove({ source: 'stripe', seriesId, periodId: q, figure: ytd, currency: 'USD', coversUntil: period.end, owner: h.issuer.address, sessionId: sess.json().sessionId });
-        // 2. device: commitment + proof + attestation from the verifier (direct, not via the API)
-        const { assembled, opening } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, prior, incomeYtdNow: ytd, fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof }, rig.verifier);
-        prior = opening;
+        // 2. device: the prior the chain expects (public), then commitment + Stage 1 Groth16 proof + attestation from the verifier (direct, not via the API)
+        const expected = (await rig.get(`/series/${seriesId}/reporting/prior`)).json();
+        expect(expected).toMatchObject({ periodId: q, nextExpectedPeriod: q, rule: q === '2026Q1' ? 'year-start' : 'chained', acceptsSuppliedPrior: false });
+        const prior = choosePrior(chain, seriesId, q, expected.expectedPriorIncomeCommitment);
+        const { assembled, entry } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, prior, incomeYtdNow: ytd, fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof, deviceSecret }, rig.verifier);
+        chain.put(entry);
+        expect(assembled.proof.system).toBe('groth16-bn254');
+        expect(assembled.priorIncomeCommitment).toBe(expected.expectedPriorIncomeCommitment);
         expect(JSON.stringify(assembled)).not.toContain(ytd.toString());
+        if (q === '2026Q2') {
+          // reports are sequential (Stage 1 WrongPeriod): the API refuses a later quarter before the chain would
+          const ahead = await rig.post(`/series/${seriesId}/reports`, { ...assembled, periodId: '2026Q3' }, issuerTok);
+          expect(ahead.statusCode).toBe(409);
+          expect(ahead.json().detail).toMatchObject({ stage1: 'WrongPeriod', nextExpectedPeriod: '2026Q2' });
+          // the body is strict: a stray year-to-date figure is refused, and never echoed or stored
+          const stray = await rig.post(`/series/${seriesId}/reports`, { ...assembled, incomeYtd: ytd.toString() }, issuerTok);
+          expect(stray.statusCode).toBe(400);
+          expect(stray.body).not.toContain(ytd.toString());
+        }
         // 3. assemble through the API (offchain verification) → unsigned submitReport
         const rep = await rig.post(`/series/${seriesId}/reports`, assembled, issuerTok, { 'idempotency-key': `rep-${personality}-${q}` });
         expect(rep.statusCode, JSON.stringify(rep.json())).toBe(201);
         expect(rep.json().verifiedOffchain).toBe(true);
+        expect(rep.json().priorIncomeCommitment).toBe(assembled.priorIncomeCommitment);
         const reportId = rep.json().reportId as string;
         const tx = rep.json().tx as UnsignedTx;
         expect(tx.command.kind).toBe('submitReport');
@@ -110,11 +133,11 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     await rig.sync();
     const fx = await rig.get(`/series/${seriesId}/reporting/fx/${q}`, issuerTok);
     expect(fx.json()).toMatchObject({ basis: 'attestor', pair: 'EUR/USD', reason: 'coverage' });
-    const privateTerms = { threshold: '50000000000', shareRate: '0.10', reportingCurrency: 'EUR' };
+    const privateTerms = { threshold: '50000000000', shareRate: '0.10', reportingCurrency: 'EUR', indexingRule: 'cpi-annual' as const, termsSalt: BigInt('0x' + '55'.repeat(31)).toString() };
     const ytd = 70_000_000_000n;
     const zktlsProof = rig.zktls.prove({ source: 'deel', seriesId, periodId: q, figure: ytd, currency: 'EUR', coversUntil: parsePeriod(q).end, owner: h.issuer.address });
     const rate = wadFromDecimal('1.08');
-    const { assembled } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, prior: null, incomeYtdNow: ytd, fxAvgWad: rate, tier: 2, source: 'deel', zktlsProof }, rig.verifier);
+    const { assembled } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, prior: null, incomeYtdNow: ytd, fxAvgWad: rate, tier: 2, source: 'deel', zktlsProof, deviceSecret: 'device-secret-eur' }, rig.verifier);
     // no attestor rate → 422 with the fx detail
     const noRate = await rig.post(`/series/${seriesId}/reports`, assembled, issuerTok);
     expect(noRate.statusCode).toBe(422);

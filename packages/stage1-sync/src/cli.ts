@@ -1,5 +1,6 @@
 #!/usr/bin/env tsx
 import { existsSync } from 'node:fs';
+import { shutdownProofSystem } from '@merces/ports';
 import { runSync } from './index.ts';
 import { renderReport } from './report.ts';
 
@@ -15,4 +16,6 @@ const report = await runSync({
 if (args.has('--json')) console.log(JSON.stringify(report, null, 2));
 else console.log(renderReport(report));
 const failed = report.present && report.steps.some((s) => s.status === 'fail');
+// the vectors step verifies Stage 1 Groth16 proofs: terminate snarkjs' worker threads before exiting
+await shutdownProofSystem();
 process.exit(failed ? 1 : 0);

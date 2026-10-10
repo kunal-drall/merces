@@ -2,7 +2,9 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createChains, evmConfigFrom, locateStage1 } from '../src/index.ts';
+import { Groth16ReportVerifier } from '@merces/ports';
+import type { SimulatorChain } from '@merces/simulator';
+import { chainsConfigFromEnv, createChains, evmConfigFrom, locateStage1 } from '../src/index.ts';
 import { evmRpc, fakeRpc } from './fake-rpc.ts';
 
 describe('mode selection (D4)', () => {
@@ -76,5 +78,38 @@ describe('mode selection (D4)', () => {
     expect(reg.chains.size).toBe(0);
     expect(reg.decisions.map((d) => [d.chain, d.chosen])).toEqual([['solana', 'mock'], ['monad', 'mock']]);
     expect(reg.decisions.every((d) => /not opened here/.test(d.reason))).toBe(true);
+  });
+});
+
+describe('report proofs on simulator chains (critique H3)', () => {
+  const opts = (c: unknown) => (c as SimulatorChain).engine.opts;
+  it('simulators verify Stage 1 Groth16 proofs and refuse mock proofs by default', async () => {
+    const reg = await createChains({ solana: { mode: 'mock' }, evm: { mode: 'mock', chainKey: 'monad' }, log: () => undefined });
+    for (const c of reg.chains.values()) {
+      expect(opts(c).acceptMockProofs).toBe(false);
+      expect(opts(c).reportProofVerifier).toBeInstanceOf(Groth16ReportVerifier);
+    }
+    expect(chainsConfigFromEnv({}).proofSystem).toBe('groth16-bn254');
+  });
+  it('MERCES_PROOF_SYSTEM=mock: accepted in a simulator-only process, with a warning', async () => {
+    const lines: string[] = [];
+    const reg = await createChains({ ...chainsConfigFromEnv({ MERCES_PROOF_SYSTEM: 'mock', MERCES_CHAIN_SOLANA_MODE: 'mock', MERCES_CHAIN_EVM_MODE: 'mock' }), log: (m) => lines.push(m) });
+    for (const c of reg.chains.values()) {
+      expect(opts(c).acceptMockProofs).toBe(true);
+      expect(opts(c).reportProofVerifier).toBeInstanceOf(Groth16ReportVerifier);
+    }
+    expect(lines.filter((l) => l.startsWith('WARNING') && /MOCK report proofs/.test(l))).toHaveLength(1);
+    expect(() => chainsConfigFromEnv({ MERCES_PROOF_SYSTEM: 'plonk' })).toThrow(/MERCES_PROOF_SYSTEM/);
+  });
+  it('MERCES_PROOF_SYSTEM=mock is refused when a chain is live', async () => {
+    const rpc = await fakeRpc(evmRpc(10143));
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'stage1-'));
+      mkdirSync(join(dir, 'handoff'));
+      writeFileSync(join(dir, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', evm: [{ chain: 'monad-testnet', chainId: 10143, rpcUrl: rpc.url, contracts: { Series: '0x' + '22'.repeat(20) } }] }));
+      await expect(createChains({ solana: { mode: 'mock' }, evm: { mode: 'live', chainKey: 'monad' }, stage1Path: dir, proofSystem: 'mock', log: () => undefined })).rejects.toThrow(/MERCES_PROOF_SYSTEM=mock is refused/);
+    } finally {
+      await rpc.close();
+    }
   });
 });

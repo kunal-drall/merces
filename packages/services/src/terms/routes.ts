@@ -5,7 +5,7 @@ import { AppError, withIdempotency } from '@merces/core';
 import type { SignedTx } from '@merces/domain';
 import { svc } from '../context.ts';
 import { thresholdPublicView } from '../threshold/service.ts';
-import { TermsService, commitTerms, privateTermsSchema, publicTermsSchema } from './service.ts';
+import { TERMS_SCHEME, TermsService, commitTerms, privateTermsSchema, publicTermsSchema } from './service.ts';
 
 export function registerTermsRoutes(app: FastifyInstance, base: AppContext): void {
   const ctx = svc(base);
@@ -23,9 +23,10 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
   defineRoute(app, ctx, {
     method: 'POST', url: '/terms/commitment', access: 'public',
     handler: async (req) => {
-      // Stage 1's Poseidon(5) commitment; the salt is the field element the vault payload carries (decimal)
-      const b = z.object({ threshold: z.string().regex(/^\d+$/), ratePerUnitWad: z.string().regex(/^\d+$/), reportingCurrency: z.string(), indexingRule: z.string(), salt: z.string().regex(/^\d{1,78}$/) }).parse(req.body);
-      return { commitment: commitTerms(b) };
+      // Stage 1's Poseidon(5) commitment over the vault payload's fields (the whole disclosed payload may be posted; its
+      // other fields are ignored); `termsSalt` is the field element the payload carries (decimal)
+      const b = z.object({ threshold: z.string().regex(/^\d+$/), ratePerUnitWad: z.string().regex(/^\d+$/), reportingCurrency: z.string(), indexingRule: z.string(), termsSalt: z.string().regex(/^\d{1,78}$/) }).parse(req.body);
+      return { commitment: commitTerms(b), scheme: TERMS_SCHEME };
     },
   });
   defineRoute(app, ctx, { method: 'GET', url: '/thresholds/:country', access: 'public', handler: async (req) => {

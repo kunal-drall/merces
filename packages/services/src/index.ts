@@ -1,5 +1,5 @@
 import type { AppContext } from '@merces/api';
-import { LocalKms, MockESign, MockIdentityCheck, MockProofVerifier, MockZkTls, resolveSecret, simulatorOnly, vaultFromEnv, type ESignPort, type IdentityCheckPort, type KmsPort, type ProofVerifierPort, type VaultCrypto, type ZkTlsPort } from '@merces/ports';
+import { LocalKms, MockESign, MockIdentityCheck, MockZkTls, reportProofSystemFromEnv, reportProofVerifier, resolveSecret, simulatorOnly, vaultFromEnv, type ESignPort, type IdentityCheckPort, type KmsPort, type ProofVerifierPort, type VaultCrypto, type ZkTlsPort } from '@merces/ports';
 import { HttpReportVerifierClient, ReportVerifier, type ReportVerifierPort } from '@merces/report-verifier';
 import type { ServiceContext } from './context.ts';
 import { newId } from './ids.ts';
@@ -53,7 +53,9 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   ctx.identity = over.identity ?? new MockIdentityCheck();
   ctx.esign = over.esign ?? new MockESign();
   ctx.zktls = over.zktls ?? new MockZkTls();
-  ctx.proofVerifier = over.proofVerifier ?? new MockProofVerifier();
+  // Stage 1 Groth16 by default; mock proofs too only in a simulator-only process with MERCES_PROOF_SYSTEM=mock (H3;
+  // the chain registry logs the warning and refuses the setting next to a live chain)
+  ctx.proofVerifier = over.proofVerifier ?? reportProofVerifier({ acceptMock: reportProofSystemFromEnv(process.env, { simulatorOnly: simOnly }) === 'mock' });
   ctx.reportVerifierUrl = over.reportVerifierUrl ?? process.env.REPORT_VERIFIER_URL ?? 'http://localhost:3100';
   // In mock mode the verifier runs in-process with the same local key the standalone service derives (dev seed); live mode talks to the isolated service.
   ctx.verifier = over.verifier ?? (base.devMode ? new ReportVerifier(ctx.zktls, ctx.kms, process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1') : new HttpReportVerifierClient(ctx.reportVerifierUrl));

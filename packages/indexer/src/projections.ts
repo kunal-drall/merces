@@ -1,9 +1,13 @@
 import type { PoolClient } from '@merces/db';
 import type { DomainEvent, EventPayload } from '@merces/domain';
 import { DEFAULTS } from '@merces/domain';
-import { interim } from '@merces/math';
+import { fromPid, interim, pidAt, toPid } from '@merces/math';
 
 type P<T extends DomainEvent['type']> = EventPayload<T>;
+
+/** The Stage 1 period ("YYYYQn") containing a unix time, and the period after one (the reporting ledger, M8). */
+const periodAt = (ts: number): string => fromPid(pidAt(BigInt(ts)));
+const nextPeriod = (periodId: string): string => fromPid(toPid(periodId) + 1);
 
 /** Public activity summaries. Never an amount (R28). Unit counts and statuses only. */
 function summary(e: DomainEvent): string | null {
@@ -108,8 +112,9 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       const row = s.rows[0];
       const cap = row ? interim.perUnitCap(BigInt(row.cap_multiple_wad), BigInt(p.clearingPrice)).toString() : null;
       await client.query(
-        "update series set phase = 'Settled', settled_at = $2, issue_price = $3, units_sold = $4, units_outstanding = $4, cap_per_unit = $5, treasury_total = $6, lockup_ends_at = $2 + lockup_seconds, last_event_seq = $7 where series_id = $1",
-        [p.seriesId, p.settledAt, p.clearingPrice, p.unitsSold, cap, p.proceeds, e.seq],
+        // the reporting ledger starts at the settlement quarter (Stage 1 first_period, SIM:972)
+        "update series set phase = 'Settled', settled_at = $2, issue_price = $3, units_sold = $4, units_outstanding = $4, cap_per_unit = $5, treasury_total = $6, lockup_ends_at = $2 + lockup_seconds, first_period = $8, next_expected_period = coalesce(next_expected_period, $8), last_event_seq = $7 where series_id = $1",
+        [p.seriesId, p.settledAt, p.clearingPrice, p.unitsSold, cap, p.proceeds, e.seq, periodAt(p.settledAt)],
       );
       await money(client, e, 'treasury', p.proceeds, { detail: { clearingPrice: p.clearingPrice, unitsSold: p.unitsSold, totalFees: p.totalFees } });
       break;
@@ -160,11 +165,21 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     case 'ReportAccepted': {
       const p = e.payload as P<'ReportAccepted'>;
       await client.query(
-        `insert into periods (series_id, period_id, tier, payment_due, accrual, report_accepted, settled, income_commitment, fx_basis, fx_avg_wad, liquidity_event, accepted_seq)
-         values ($1,$2,$3,$4,$5,true,$6,$7,$8,$9,$10,$11)
+        `insert into periods (series_id, period_id, tier, payment_due, accrual, report_accepted, settled, prior_income_commitment, income_commitment, fx_basis, fx_avg_wad, liquidity_event, accepted_seq)
+         values ($1,$2,$3,$4,$5,true,$6,$7,$8,$9,$10,$11,$12)
          on conflict (series_id, period_id) do update set tier = excluded.tier, payment_due = excluded.payment_due, accrual = excluded.accrual, report_accepted = true, settled = periods.settled or excluded.settled,
-           income_commitment = excluded.income_commitment, fx_basis = excluded.fx_basis, fx_avg_wad = excluded.fx_avg_wad, liquidity_event = excluded.liquidity_event, accepted_seq = excluded.accepted_seq`,
-        [p.seriesId, p.periodId, p.tier, p.paymentDue, p.accrual, p.paymentDue === '0', p.incomeCommitment, p.fxBasis, p.fxAvgWad, p.liquidityEvent, e.seq],
+           prior_income_commitment = excluded.prior_income_commitment, income_commitment = excluded.income_commitment, fx_basis = excluded.fx_basis, fx_avg_wad = excluded.fx_avg_wad, liquidity_event = excluded.liquidity_event, accepted_seq = excluded.accepted_seq`,
+        [p.seriesId, p.periodId, p.tier, p.paymentDue, p.accrual, p.paymentDue === '0', p.priorIncomeCommitment, p.incomeCommitment, p.fxBasis, p.fxAvgWad, p.liquidityEvent, e.seq],
+      );
+      // the reporting ledger (SIM:1131-1148): reports are sequential; a zero due pays the period at once, any other
+      // due opens it (paymentDue excludes accrual, which is charged at payment)
+      await client.query(
+        `update series set last_accepted_period = $2, next_expected_period = $3, last_income_period = $2, last_income_commitment = $4,
+           last_paid_period = case when $5::numeric = 0 then $2 else last_paid_period end,
+           open_due_period = case when $5::numeric = 0 then open_due_period else $2 end,
+           open_due_amount = case when $5::numeric = 0 then open_due_amount else $5::numeric end,
+           last_event_seq = $6 where series_id = $1`,
+        [p.seriesId, p.periodId, nextPeriod(p.periodId), p.incomeCommitment, p.paymentDue, e.seq],
       );
       break;
     }
@@ -183,6 +198,8 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
           [p.seriesId, p.periodId, p.gross, p.paymentDue ?? null, p.accrual ?? null],
         );
       if (p.periodId && p.source === 'tail') await client.query('insert into periods (series_id, period_id, paid, settled) values ($1,$2,$3,true) on conflict (series_id, period_id) do update set paid = periods.paid + excluded.paid, settled = true', [p.seriesId, p.periodId, p.gross]);
+      // paying the open due (a regular or a tail payment) closes it (SIM:1177-1180)
+      if (p.periodId && (p.source === 'payIn' || p.source === 'tail')) await client.query('update series set last_paid_period = $2, open_due_period = null, open_due_amount = 0 where series_id = $1 and open_due_period = $2', [p.seriesId, p.periodId]);
       await money(client, e, 'payment', p.gross, { periodId: p.periodId, detail: { fee: p.fee, net: p.net, source: p.source } });
       break;
     }
@@ -240,6 +257,7 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     case 'FormalNoticeDue': {
       const p = e.payload as P<'FormalNoticeDue'>;
       await client.query('insert into periods (series_id, period_id, formal_notice_seq) values ($1,$2,$3) on conflict (series_id, period_id) do update set formal_notice_seq = coalesce(periods.formal_notice_seq, excluded.formal_notice_seq)', [p.seriesId, p.periodId, e.seq]);
+      await client.query('update series set formal_notice_emitted_for = $2 where series_id = $1', [p.seriesId, p.periodId]);
       break;
     }
     case 'TermsAmended': {
@@ -251,7 +269,8 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       const p = e.payload as P<'SeriesExtinguished'>;
       // only the unvested proceeds return to holders (Stage 1 SIM:1431); the vested part stays in the treasury and the
       // issuer may still draw it, so `treasury_released` moves only with `FundsReleased`
-      await client.query('update series set extinguished_at = $2, last_event_seq = $3 where series_id = $1', [p.seriesId, e.blockTime, e.seq]);
+      // nothing more is owed: the open due ends with the series (SIM:1438-1441)
+      await client.query('update series set extinguished_at = $2, open_due_period = null, open_due_amount = 0, last_event_seq = $3 where series_id = $1', [p.seriesId, e.blockTime, e.seq]);
       await money(client, e, 'extinguishment', p.returnedToHolders, { detail: { attestors: p.attestors } });
       break;
     }
@@ -294,7 +313,7 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     case 'CurveGraduated': {
       const p = e.payload as P<'CurveGraduated'>;
       await client.query('update curves set graduated = true, raised = $2 where series_id = $1', [p.seriesId, p.raised]);
-      await client.query("update series set phase = 'Settled', settled_at = $2, units_sold = $3, units_outstanding = $3, treasury_total = $4, lockup_ends_at = $2 + lockup_seconds, last_event_seq = $5 where series_id = $1", [p.seriesId, e.blockTime, p.unitsOutstanding, p.raised, e.seq]);
+      await client.query("update series set phase = 'Settled', settled_at = $2, units_sold = $3, units_outstanding = $3, treasury_total = $4, lockup_ends_at = $2 + lockup_seconds, first_period = $6, next_expected_period = coalesce(next_expected_period, $6), last_event_seq = $5 where series_id = $1", [p.seriesId, e.blockTime, p.unitsOutstanding, p.raised, e.seq, periodAt(e.blockTime)]);
       break;
     }
     case 'PauseRequested':

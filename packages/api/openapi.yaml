@@ -567,6 +567,128 @@ components:
           type:
             - string
             - "null"
+    Hash32:
+      type: string
+      pattern: ^0x[0-9a-f]{64}$
+      description: a 32-byte value as 0x + 64 lowercase hex digits (a BN254 field element for Poseidon commitments)
+    FieldDecimal:
+      type: string
+      pattern: ^\d{1,78}$
+      description: a field element or u64 as a decimal string (snarkjs encoding)
+    Groth16Proof:
+      type: object
+      description: A snarkjs Groth16 proof over BN254 (Stage 1's ProofOfIncome circuit); chain adapters encode it for the EVM or Solana verifier.
+      required:
+        - pi_a
+        - pi_b
+        - pi_c
+        - protocol
+        - curve
+      additionalProperties: false
+      properties:
+        pi_a:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            $ref: "#/components/schemas/FieldDecimal"
+        pi_b:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items:
+              $ref: "#/components/schemas/FieldDecimal"
+        pi_c:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            $ref: "#/components/schemas/FieldDecimal"
+        protocol:
+          type: string
+          const: groth16
+        curve:
+          type: string
+          const: bn128
+    ReportPublicInputs:
+      type: array
+      minItems: 6
+      maxItems: 6
+      items:
+        $ref: "#/components/schemas/FieldDecimal"
+      description: "Stage 1's six public signals, in order: terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd"
+    ReportProof:
+      description: "The report proof: Stage 1's Groth16 proof, or (simulator-only processes started with MERCES_PROOF_SYSTEM=mock) the mock digest over the public inputs. GET /prover/artifacts lists the systems the API accepts."
+      oneOf:
+        - type: object
+          required:
+            - system
+            - proof
+            - publicInputs
+          additionalProperties: false
+          properties:
+            system:
+              type: string
+              const: groth16-bn254
+            proof:
+              $ref: "#/components/schemas/Groth16Proof"
+            publicInputs:
+              $ref: "#/components/schemas/ReportPublicInputs"
+        - type: object
+          required:
+            - system
+            - proof
+            - publicInputs
+          additionalProperties: false
+          properties:
+            system:
+              type: string
+              const: mock
+            proof:
+              type: string
+            publicInputs:
+              $ref: "#/components/schemas/ReportPublicInputs"
+      discriminator:
+        propertyName: system
+    VerifierAttestation:
+      type: object
+      description: "The report verifier's ed25519 signature over attestation v1: \"merces/attestation/v1\\n\" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier}. Names no income source."
+      required:
+        - keyId
+        - seriesId
+        - periodId
+        - priorIncomeCommitment
+        - incomeCommitment
+        - tier
+        - liquidityEvent
+        - signature
+      properties:
+        keyId:
+          type: string
+        seriesId:
+          type: string
+        periodId:
+          type: string
+          pattern: ^\d{4}Q[1-4]$
+        priorIncomeCommitment:
+          $ref: "#/components/schemas/Hash32"
+        incomeCommitment:
+          $ref: "#/components/schemas/Hash32"
+        tier:
+          type: integer
+          enum:
+            - 1
+            - 2
+            - 3
+            - 4
+        liquidityEvent:
+          type: boolean
+        signature:
+          type: string
     AccountingFeeRow:
       type: object
       required:
@@ -3208,6 +3330,7 @@ paths:
       x-access: public
       tags:
         - terms
+      description: Stage 1's terms commitment, Poseidon(5)(θ, r, ISO-4217 numeric currency, indexing rule code, terms salt) (SPEC §1.5), over the fields the terms vault discloses (scheme poseidon5-v1). The whole disclosed payload may be posted; other fields are ignored.
       requestBody:
         required: true
         content:
@@ -3219,18 +3342,28 @@ paths:
                 - ratePerUnitWad
                 - reportingCurrency
                 - indexingRule
-                - salt
+                - termsSalt
+              additionalProperties: true
               properties:
                 threshold:
                   type: string
+                  pattern: ^\d+$
+                  description: θ in the reporting currency at 6 decimals, below 2^64
                 ratePerUnitWad:
                   type: string
+                  pattern: ^\d+$
+                  description: r per unit (WAD)
+                  below 2^64: null
                 reportingCurrency:
                   type: string
+                  description: ISO-4217 alpha code Stage 1 lists (CURRENCY_CODES)
                 indexingRule:
                   type: string
-                salt:
-                  type: string
+                  enum:
+                    - none
+                    - cpi-annual
+                termsSalt:
+                  $ref: "#/components/schemas/FieldDecimal"
       responses:
         "200":
           description: The commitment
@@ -3240,7 +3373,15 @@ paths:
                 type: object
                 properties:
                   commitment:
+                    $ref: "#/components/schemas/Hash32"
+                  scheme:
                     type: string
+                    const: poseidon5-v1
+        "422":
+          description: The fields cannot form a commitment (unsupported currency
+          unknown indexing rule: null
+          out of range: null
+          salt not a field element): null
   /thresholds/{country}:
     get:
       operationId: getThresholdData
@@ -3658,13 +3799,39 @@ paths:
         - reporting
       responses:
         "200":
-          description: Circuit id
-          public input layout: null
-          artifact URLs and verifying key (placeholder until Stage 1 publishes the circuit): null
+          description: "Stage 1's ProofOfIncome circuit: the public input layout, the verification key, the wasm and zkey URLs with their sha256 (checked against the Stage 1 build manifest), the proof systems this API accepts, and the warning that the zkey comes from a development trusted setup (never mainnet)"
           content:
             application/json:
               schema:
                 type: object
+  /prover/report.wasm:
+    get:
+      operationId: getProverWasm
+      x-access: public
+      tags:
+        - reporting
+      responses:
+        "200":
+          description: The circuit's witness calculator (Stage 1 build); header x-content-sha256 carries its sha256
+          content:
+            application/wasm:
+              schema:
+                type: string
+                format: binary
+  /prover/report.zkey:
+    get:
+      operationId: getProverZkey
+      x-access: public
+      tags:
+        - reporting
+      responses:
+        "200":
+          description: The proving key (Stage 1 development trusted setup; never mainnet); header x-content-sha256 carries its sha256
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
   /income-sources:
     get:
       operationId: listIncomeSources
@@ -3712,6 +3879,60 @@ paths:
             application/json:
               schema:
                 type: object
+  /series/{seriesId}/reporting/prior:
+    get:
+      operationId: getReportingPrior
+      x-access: public
+      tags:
+        - reporting
+      description: "The prior income commitment the chain will require for a period's report (SPEC §6.2 step 5), from the series' public reporting ledger: chained (the previous quarter's income commitment, same year), year-start (ZERO = Poseidon(2)(0, 0)), or first-report-outside-q1 (A25: the chain accepts the prior as given; the verifier attestation binds it). Commitments only."
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+        - name: periodId
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^\d{4}Q[1-4]$
+          description: defaults to the next expected period
+      responses:
+        "200":
+          description: The expected prior
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  seriesId:
+                    type: string
+                  periodId:
+                    type: string
+                  nextExpectedPeriod:
+                    type:
+                      - string
+                      - "null"
+                  rule:
+                    type: string
+                    enum:
+                      - chained
+                      - year-start
+                      - first-report-outside-q1
+                  expectedPriorIncomeCommitment:
+                    oneOf:
+                      - $ref: "#/components/schemas/Hash32"
+                      - type: "null"
+                  acceptsSuppliedPrior:
+                    type: boolean
+                  chainedFrom:
+                    type:
+                      - string
+                      - "null"
+                  note:
+                    type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The raise has not settled
   /series/{seriesId}/reporting/fx/{periodId}:
     get:
       operationId: getReportingFx
@@ -3785,6 +4006,7 @@ paths:
           in: header
           schema:
             type: string
+      description: "The device's assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, the prior chain, the six public inputs against the series' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (v1, with the prior and the liquidity flag), or for tier 3 the chosen attestor's signed case."
       requestBody:
         required: true
         content:
@@ -3796,33 +4018,53 @@ paths:
                 - tier
                 - source
                 - paymentStable
+                - priorIncomeCommitment
                 - incomeCommitment
                 - proof
+              additionalProperties: false
               properties:
+                seriesId:
+                  type: string
+                  description: optional; must be the series in the path
                 periodId:
                   type: string
+                  pattern: ^\d{4}Q[1-4]$
                 tier:
                   type: integer
+                  enum:
+                    - 1
+                    - 2
+                    - 3
+                    - 4
                 source:
                   type: string
+                  description: the income source (kept offchain; shown to the issuer only)
                 paymentStable:
                   $ref: "#/components/schemas/Money"
+                priorIncomeCommitment:
+                  $ref: "#/components/schemas/Hash32"
                 incomeCommitment:
-                  type: string
+                  $ref: "#/components/schemas/Hash32"
                 proof:
-                  type: object
+                  $ref: "#/components/schemas/ReportProof"
                 attestation:
-                  type:
-                    - object
-                    - "null"
+                  oneOf:
+                    - $ref: "#/components/schemas/VerifierAttestation"
+                    - type: "null"
                 attestorRate:
                   type:
                     - object
                     - "null"
+                  properties:
+                    attestor:
+                      type: string
+                    rateWad:
+                      $ref: "#/components/schemas/Wad"
                 attestor:
                   type:
                     - string
                     - "null"
+                  description: tier 3 co-signer
                 liquidityEvent:
                   type: boolean
       responses:
@@ -3835,9 +4077,14 @@ paths:
             application/json:
               schema:
                 type: object
+        "400":
+          description: Malformed or unknown fields
+        "409":
+          description: Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod) or a previous due unpaid (detail.stage1 PaymentOutstanding)
         "422":
           description: Proof
           attestation: null
+          prior: null
           public inputs or FX basis rejected: null
     get:
       operationId: listReports
@@ -5279,20 +5526,25 @@ paths:
           in: header
           schema:
             type: string
+      description: "The issuer's device proves the quarter; the documents and the income opening (merces/tier3-opening/v1: year-to-date figure and salt, and the prior's) reach the attestor end to end encrypted. Both are opaque here."
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required:
                 - attestor
                 - documentsCiphertext
+                - openingCiphertext
                 - estimatePaymentStable
               properties:
                 attestor:
                   type: string
                 documentsCiphertext:
+                  $ref: "#/components/schemas/Ciphertext"
+                openingCiphertext:
                   $ref: "#/components/schemas/Ciphertext"
                 keyHint:
                   type:
@@ -5454,33 +5706,53 @@ paths:
           in: header
           schema:
             type: string
+      description: The attestor's device checked the decrypted opening against the documents (the commitments open to it, and its year-to-date figure is max(documented, prior)). The body carries commitments, the issuer's proof and the attestation only, never a figure, a salt or an opening (unknown fields are refused). The API checks the proof is over the series' live terms commitment, units and the prior the chain expects, that it verifies, and that the signature is the chosen attestor wallet's over attestation v1 with tier 3.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required:
-                - paymentStable
+                - priorIncomeCommitment
                 - incomeCommitment
+                - proof
+                - attestation
               properties:
-                paymentStable:
-                  $ref: "#/components/schemas/Money"
+                priorIncomeCommitment:
+                  $ref: "#/components/schemas/Hash32"
                 incomeCommitment:
-                  type: string
-                liquidityEvent:
-                  type: boolean
+                  $ref: "#/components/schemas/Hash32"
+                proof:
+                  $ref: "#/components/schemas/ReportProof"
+                attestation:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - liquidityEvent
+                    - signature
+                  properties:
+                    liquidityEvent:
+                      type: boolean
+                    signature:
+                      type: string
+                      description: "the attestor wallet's signature over \"merces/attestation/v1\\n\" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}"
       responses:
         "200":
-          description: The case marked signed with the attested payment; the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer
+          description: The case marked signed with the attested payment (the proof's public input 5); the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer
           content:
             application/json:
               schema:
                 type: object
+        "400":
+          description: Malformed or unknown fields
         "403":
           description: Not the chosen attestor
         "409":
           description: Already signed
+        "422":
+          description: Proof not over this series or not verifying, prior not the expected one, or signature not the attestor's
   /attestor/fx-requests:
     get:
       operationId: listFxRequests

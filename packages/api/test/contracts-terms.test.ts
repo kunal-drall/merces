@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { dbTestsEnabled, type Pool } from '@merces/db';
-import { ContractService, TermsService, applicationCreateSchema, type ServiceContext } from '@merces/services';
+import { ContractService, TermsService, applicationCreateSchema, assembleSchema, tier3OpenSchema, tier3SignSchema, type ServiceContext } from '@merces/services';
 import { buildSpec } from '../src/openapi/build.ts';
 import type { Session } from '../src/index.ts';
 import { makeRig } from './helpers.ts';
@@ -44,6 +44,23 @@ describe('POST /applications contract matches the handler validation', () => {
     expect([props.country!.minLength, props.country!.maxLength]).toEqual([zs.properties.country!.minLength, zs.properties.country!.maxLength]);
     expect(props.notes!.maxLength).toBe(zs.properties.notes!.maxLength);
   });
+});
+
+describe('report request bodies in the contract match the handler validation (S1 WP10)', () => {
+  type Body = { required?: string[]; properties: Record<string, unknown>; additionalProperties?: boolean };
+  const spec = buildSpec() as unknown as { paths: Record<string, { post: { requestBody: { content: { 'application/json': { schema: Body } } } } }> };
+  const body = (path: string) => spec.paths[path]!.post.requestBody.content['application/json'].schema;
+  const zodBody = (schema: z.ZodType) => z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' }) as Body;
+  for (const [path, schema] of [['/series/{seriesId}/reports', assembleSchema], ['/attestor/tier3/{caseId}/sign', tier3SignSchema], ['/series/{seriesId}/tier3/{periodId}', tier3OpenSchema]] as const) {
+    it(`${path}: same fields, same required fields, unknown fields refused`, () => {
+      const b = body(path);
+      const zs = zodBody(schema);
+      expect(Object.keys(b.properties).sort()).toEqual(Object.keys(zs.properties).sort());
+      expect([...(b.required ?? [])].sort()).toEqual([...(zs.required ?? [])].sort());
+      expect(b.additionalProperties).toBe(false);
+      expect(zs.additionalProperties).toBe(false);
+    });
+  }
 });
 
 describe.skipIf(!dbTestsEnabled())('contract templates, contract signing and draft linking write atomically', () => {
@@ -115,5 +132,13 @@ describe.skipIf(!dbTestsEnabled())('contract templates, contract signing and dra
     expect((await rig.t.pool.query("select state, terms_commitment from series_drafts where draft_id = 'draft-terms'")).rows[0]).toEqual({ state: 'draft', terms_commitment: null });
     const ok = await new TermsService(rig.ctx).setTerms('draft-terms', issuer, pub, priv);
     expect((await rig.t.pool.query("select commitment from terms_vault where draft_id = 'draft-terms'")).rows[0].commitment).toBe(ok.termsCommitment);
+  });
+
+  it('a draft whose vault payload predates the Poseidon terms scheme is refused at submission (S1 WP10)', async () => {
+    await draftRow('draft-legacy', 'contract_signed', { contractHash: '0x' + 'aa'.repeat(32), commitment: '0x' + 'bb'.repeat(32) });
+    // a SHA-256-era payload: no scheme, a hex salt
+    const ct = rig.ctx.vault.encrypt(JSON.stringify({ threshold: '65000000000', shareRate: '0.10', ratePerUnitWad: '100000000000000', reportingCurrency: 'USD', indexingRule: 'cpi-annual', salt: '0x' + '22'.repeat(32) }), 'terms:draft-legacy');
+    await rig.t.pool.query("insert into terms_vault (draft_id, ciphertext, key_id, commitment) values ('draft-legacy', $1, $2, $3)", [ct, rig.ctx.vault.keyId, '0x' + 'bb'.repeat(32)]);
+    await expect(new TermsService(rig.ctx).buildCreateSeries('draft-legacy', issuer)).rejects.toThrow(/predate the poseidon5-v1 commitment scheme/);
   });
 });

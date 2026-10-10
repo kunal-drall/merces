@@ -4,7 +4,7 @@ import { Indexer } from '@merces/indexer';
 import { SimHarness, SimulatorChain, type Personality } from '@merces/simulator';
 import { buildApp, issueSession, makeContext, type Session } from '../src/index.ts';
 import { createServiceContext, serviceRoutes } from '@merces/services';
-import { LocalKms, MockESign, MockIdentityCheck, MockZkTls } from '@merces/ports';
+import { Groth16ReportVerifier, LocalKms, MockESign, MockIdentityCheck, MockZkTls, reportProofVerifier, shutdownProofSystem } from '@merces/ports';
 import { ReportVerifier } from '@merces/report-verifier';
 
 const GENESIS = Date.UTC(2026, 0, 1) / 1000;
@@ -14,9 +14,11 @@ export const SECRET = 'test-secret';
 export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extraRoutes?: ((app: import('fastify').FastifyInstance, ctx: import('@merces/api').AppContext) => void)[] } = {}) {
   const t = await createTestSchema();
   const prefix = opts.keyPrefix ?? `t${Math.random().toString(36).slice(2, 7)}`;
-  // the harness and the device build mock proofs (S1 WP10 moves the device to Groth16): these chains accept them
-  const sol = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: `solana`, genesis: opts.genesis ?? GENESIS, acceptMockProofs: true }) });
-  const mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: `monad`, genesis: opts.genesis ?? GENESIS, acceptMockProofs: true }) });
+  // the chains verify Stage 1 Groth16 proofs (the device's) like the API's; the tests also opt into mock proofs, which
+  // the harness builds for speed (H3: never the default)
+  const groth16 = new Groth16ReportVerifier();
+  const sol = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: `solana`, genesis: opts.genesis ?? GENESIS, acceptMockProofs: true, reportProofVerifier: groth16 }) });
+  const mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: `monad`, genesis: opts.genesis ?? GENESIS, acceptMockProofs: true, reportProofVerifier: groth16 }) });
   void prefix;
   const chains: ChainRegistry = {
     chains: new Map([[sol.sim.chain, sol.sim], [mon.sim.chain, mon.sim]]),
@@ -40,7 +42,7 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
   const verifier = new ReportVerifier(zktls, kms, 'report-verifier-test');
   const spki = await kms.spkiHex('report-verifier-test');
   for (const h of [sol, mon]) await h.exec(h.admin, { kind: 'registerVerifierKey', keyId: 'report-verifier-test', publicKey: spki, active: true });
-  const ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: SECRET, devMode: true }), { esign, identity, zktls, kms, verifier, reportVerifierUrl: 'http://verifier.test' });
+  const ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: SECRET, devMode: true }), { esign, identity, zktls, kms, verifier, reportVerifierUrl: 'http://verifier.test', proofVerifier: reportProofVerifier({ acceptMock: true, groth16 }) });
   const app = await buildApp(ctx, [...serviceRoutes, ...(opts.extraRoutes ?? [])]);
   await app.ready();
   const token = (s: Partial<Session> & { wallets?: Session['wallets'] }) =>
@@ -62,6 +64,8 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
     async close() {
       await app.close();
       await t.drop();
+      // snarkjs' worker threads (Groth16 proving and verifying) would keep the test worker alive
+      await shutdownProofSystem();
     },
   };
 }

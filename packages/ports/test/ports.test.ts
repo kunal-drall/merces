@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { createPublicKey, verify as edVerify } from 'node:crypto';
+import { afterAll, describe, expect, it } from 'vitest';
+import { createHash, createPublicKey, verify as edVerify } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { privateKeyToAccount } from 'viem/accounts';
-import { AesGcmVault, LocalKms, MockESign, MockIdentityCheck, ed25519RawToSpki, signInMessage, verifyWalletSignature } from '../src/index.ts';
+import { mockProve, type Groth16ProofJson } from '@merces/domain';
+import {
+  AesGcmVault, Groth16ReportVerifier, LocalKms, MockESign, MockIdentityCheck, MockProofVerifier, ed25519RawToSpki, proverArtifactFile, reportProofSystemFromEnv, reportProofVerifier,
+  shutdownProofSystem, signInMessage, stage1ProverArtifacts, verifyWalletSignature,
+} from '../src/index.ts';
 import { resolveSecret } from '../src/secrets.ts';
 
 describe('LocalKms', () => {
@@ -84,5 +89,61 @@ describe('secrets (Part I)', () => {
     expect(() => resolveSecret({ S: 'short' }, 'S', { ...opts, simulatorOnly: false })).toThrow(/at least 32/);
     const strong = 'x'.repeat(40);
     expect(resolveSecret({ S: strong }, 'S', { ...opts, simulatorOnly: false })).toBe(strong);
+  });
+});
+
+describe('report proofs (S1 WP10): Stage 1 Groth16 verifier, proof-system selection, prover artifacts', () => {
+  // vector 04's first report: a real Stage 1 Groth16 proof and its six public signals
+  const step = (() => {
+    const v = JSON.parse(readFileSync(new URL('../../../stage1/packages/vectors/04_zero_quarters.json', import.meta.url), 'utf8')) as { steps: { op: string; proof?: Groth16ProofJson; publicSignals?: string[] }[] };
+    const s = v.steps.find((x) => x.op === 'submit_report' && x.proof)!;
+    return { proof: s.proof!, signals: s.publicSignals! };
+  })();
+  afterAll(shutdownProofSystem);
+
+  it('Groth16ReportVerifier: verifies Stage 1 proofs, refuses tampered or malformed ones, caches verdicts per process', async () => {
+    const v = new Groth16ReportVerifier();
+    expect(v.systems).toEqual(['groth16-bn254']);
+    expect(await v.verify(step.proof, step.signals)).toBe(true);
+    expect(await new Groth16ReportVerifier().verify(step.proof, [...step.signals])).toBe(true); // a cache hit across instances
+    const tampered = [...step.signals];
+    tampered[5] = (BigInt(tampered[5]!) + 1n).toString();
+    expect(await v.verify(step.proof, tampered)).toBe(false);
+    expect(await v.verify({ ...step.proof, pi_a: [step.proof.pi_c[0]!, step.proof.pi_c[1]!, '1'] }, step.signals)).toBe(false);
+    expect(await v.verify('0xdeadbeef', step.signals)).toBe(false);
+    expect(await v.verify(step.proof, step.signals.slice(0, 5))).toBe(false);
+    expect(await v.verify(step.proof, [...step.signals.slice(0, 5), 'x'])).toBe(false);
+  });
+
+  it('a process accepts mock proofs only when it says so; MERCES_PROOF_SYSTEM=mock needs a simulator-only process', async () => {
+    expect(reportProofSystemFromEnv({}, { simulatorOnly: false })).toBe('groth16-bn254');
+    expect(reportProofSystemFromEnv({ MERCES_PROOF_SYSTEM: 'groth16' }, { simulatorOnly: false })).toBe('groth16-bn254');
+    expect(reportProofSystemFromEnv({ MERCES_PROOF_SYSTEM: 'mock' }, { simulatorOnly: true })).toBe('mock');
+    expect(() => reportProofSystemFromEnv({ MERCES_PROOF_SYSTEM: 'mock' }, { simulatorOnly: false })).toThrow(/refused/);
+    expect(() => reportProofSystemFromEnv({ MERCES_PROOF_SYSTEM: 'plonk' }, { simulatorOnly: true })).toThrow(/MERCES_PROOF_SYSTEM/);
+    const mock = mockProve(step.signals);
+    expect(await new MockProofVerifier().verify(mock, step.signals)).toBe(true);
+    const strict = reportProofVerifier({ acceptMock: false });
+    expect(strict.systems).toEqual(['groth16-bn254']);
+    expect(await strict.verify(mock, step.signals)).toBe(false);
+    const dev = reportProofVerifier({ acceptMock: true });
+    expect(dev.systems).toEqual(['groth16-bn254', 'mock']);
+    expect(await dev.verify(mock, step.signals)).toBe(true);
+    expect(await dev.verify(step.proof, step.signals)).toBe(true);
+  });
+
+  it('serves Stage 1\'s artifacts, each matching its MANIFEST hash, with the development-setup warning', async () => {
+    const a = await stage1ProverArtifacts('/prover');
+    expect(a.system).toBe('groth16-bn254');
+    expect(a.publicInputLayout).toEqual(['terms_commitment', 'units_outstanding', 'fx_avg_wad', 'prior_income_commitment', 'income_commitment', 'payment_usd']);
+    expect(a.wasm).toMatchObject({ url: '/prover/report.wasm', sha256: 'b8bf04593e14fe2093d81d35c9a27c176ab6543303ca3e206ae4806793f111ce' });
+    expect(a.zkey).toMatchObject({ url: '/prover/report.zkey', sha256: '52adb06c6537c5c2b82e2aa7f50349ef0766e7bfc4ad4cf3d258ba3de8d28455' });
+    expect(a.vkeySha256).toBe('30403351f96ffd60b1c3ce1b13aaa10d8544644b608a9f43b5a8fd05a53df1d2');
+    expect(a.vkey).toMatchObject({ protocol: 'groth16', nPublic: 6 });
+    expect(a.trustedSetup).toBe('development');
+    expect(a.notes).toMatch(/Never mainnet/);
+    const wasm = await proverArtifactFile('wasm');
+    expect(createHash('sha256').update(wasm.bytes).digest('hex')).toBe(a.wasm.sha256);
+    expect(wasm.contentType).toBe('application/wasm');
   });
 });

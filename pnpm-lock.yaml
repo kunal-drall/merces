@@ -111,6 +111,9 @@ importers:
       '@merces/domain':
         specifier: workspace:*
         version: link:../domain
+      '@merces/ports':
+        specifier: workspace:*
+        version: link:../ports
       '@merces/simulator':
         specifier: workspace:*
         version: link:../simulator
@@ -256,6 +259,9 @@ importers:
 
   packages/poi-device:
     dependencies:
+      '@merces/circuits':
+        specifier: workspace:*
+        version: link:../../stage1/circuits
       '@merces/domain':
         specifier: workspace:*
         version: link:../domain
@@ -271,6 +277,9 @@ importers:
 
   packages/ports:
     dependencies:
+      '@merces/circuits':
+        specifier: workspace:*
+        version: link:../../stage1/circuits
       '@merces/domain':
         specifier: workspace:*
         version: link:../domain
@@ -286,9 +295,6 @@ importers:
       bs58:
         specifier: 6.0.0
         version: 6.0.0
-      snarkjs:
-        specifier: 0.7.6
-        version: 0.7.6
       viem:
         specifier: 2.57.3
         version: 2.57.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.6.5)
@@ -341,6 +347,9 @@ importers:
       '@merces/domain':
         specifier: workspace:*
         version: link:../domain
+      '@merces/math':
+        specifier: workspace:*
+        version: link:../math
       '@merces/ports':
         specifier: workspace:*
         version: link:../ports
@@ -517,6 +526,9 @@ importers:
       '@merces/math':
         specifier: workspace:*
         version: link:../math
+      '@merces/ports':
+        specifier: workspace:*
+        version: link:../ports
       '@merces/reference':
         specifier: workspace:*
         version: link:../../stage1/packages/reference

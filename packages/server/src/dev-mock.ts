@@ -7,7 +7,7 @@ import { createPool, migrate } from '@merces/db';
 import { createChains } from '@merces/chains';
 import { Indexer } from '@merces/indexer';
 import { KeeperScheduler, standardJobs } from '@merces/keepers';
-import { MockChainlink, MockPyth } from '@merces/ports';
+import { MockChainlink, MockPyth, reportProofSystemFromEnv, shutdownProofSystem } from '@merces/ports';
 import { seedCohort } from '@merces/scenarios';
 import { SimWallet, SimulatorChain, simAdminWallet } from '@merces/simulator';
 import { PILOT_COHORT } from '@merces/fixtures';
@@ -17,12 +17,15 @@ import { IdentityService, createServiceContext, notificationsOutboxHandler, serv
 const log = createLogger('dev-mock');
 const pool = createPool();
 await migrate(pool);
-const chains = await createChains({ solana: { mode: 'mock' }, evm: { mode: 'mock', chainKey: 'monad' }, pool, persistKeyPrefix: process.env.MERCES_SIM_KEY ?? 'sim', log: (m: string) => log.info(m) });
+// every chain is the simulator here, so MERCES_PROOF_SYSTEM=mock may make the simulators and the API accept mock report
+// proofs (forgeable; the registry logs the warning); the default is Stage 1 Groth16
+const proofSystem = reportProofSystemFromEnv(process.env, { simulatorOnly: true });
+const chains = await createChains({ solana: { mode: 'mock' }, evm: { mode: 'mock', chainKey: 'monad' }, pool, persistKeyPrefix: process.env.MERCES_SIM_KEY ?? 'sim', proofSystem, log: (m: string) => log.info(m) });
 const solana = chains.get('solana') as SimulatorChain;
 const monad = chains.get('monad') as SimulatorChain;
 if ((await solana.listSeries()).length === 0 && process.env.MERCES_SEED !== 'false') {
   log.info('seeding the synthetic pilot cohort');
-  await seedCohort({ solana, monad }, { quarters: Number(process.env.MERCES_SEED_QUARTERS ?? 3), log: (m: string) => log.info(m) });
+  await seedCohort({ solana, monad }, { quarters: Number(process.env.MERCES_SEED_QUARTERS ?? 3), proofs: proofSystem === 'mock' ? 'mock' : 'groth16', log: (m: string) => log.info(m) });
 }
 const indexer = new Indexer(pool, [solana, monad], { logger: log });
 await indexer.catchUp();
@@ -60,4 +63,20 @@ log.info({ port }, 'dev:mock listening (simulator, both personalities)');
 void indexer.runLoop(Number(process.env.INDEXER_POLL_MS ?? 1000));
 // keepers in-process (mock Pyth prices; the outbox logs notifications until a channel is configured)
 const keepers = new KeeperScheduler(ctx, standardJobs({ pyth: new MockPyth(undefined, () => solana.clock.now()), chainlink: new MockChainlink(), outbox: notificationsOutboxHandler(ctx) }));
-if (process.env.MERCES_KEEPERS !== 'false') void keepers.start(undefined, Number(process.env.KEEPER_TICK_MS ?? 5000));
+const keeperStop = new AbortController();
+if (process.env.MERCES_KEEPERS !== 'false') void keepers.start(keeperStop.signal, Number(process.env.KEEPER_TICK_MS ?? 5000));
+
+// shutdown: stop serving, release the simulators' single-writer locks and the pool, terminate the proof system's threads
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(sig, () => {
+    log.info({ signal: sig }, 'shutting down');
+    void (async () => {
+      keeperStop.abort();
+      await app.close().catch(() => undefined);
+      await chains.close().catch(() => undefined);
+      await pool.end().catch(() => undefined);
+      await shutdownProofSystem().catch(() => undefined);
+      process.exit(0);
+    })();
+  });
+}

@@ -729,6 +729,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description Stage 1's terms commitment, Poseidon(5)(θ, r, ISO-4217 numeric currency, indexing rule code, terms salt) (SPEC §1.5), over the fields the terms vault discloses (scheme poseidon5-v1). The whole disclosed payload may be posted; other fields are ignored. */
         post: operations["computeCommitment"];
         delete?: never;
         options?: never;
@@ -1008,6 +1009,38 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/prover/report.wasm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProverWasm"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/prover/report.zkey": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProverZkey"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/income-sources": {
         parameters: {
             query?: never;
@@ -1048,6 +1081,23 @@ export type paths = {
             cookie?: never;
         };
         get: operations["getReportingSchedule"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/reporting/prior": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The prior income commitment the chain will require for a period's report (SPEC §6.2 step 5), from the series' public reporting ledger: chained (the previous quarter's income commitment, same year), year-start (ZERO = Poseidon(2)(0, 0)), or first-report-outside-q1 (A25: the chain accepts the prior as given; the verifier attestation binds it). Commitments only. */
+        get: operations["getReportingPrior"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1097,6 +1147,7 @@ export type paths = {
         };
         get: operations["listReports"];
         put?: never;
+        /** @description The device's assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, the prior chain, the six public inputs against the series' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (v1, with the prior and the liquidity flag), or for tier 3 the chosen attestor's signed case. */
         post: operations["assembleReport"];
         delete?: never;
         options?: never;
@@ -1742,6 +1793,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description The issuer's device proves the quarter; the documents and the income opening (merces/tier3-opening/v1: year-to-date figure and salt, and the prior's) reach the attestor end to end encrypted. Both are opaque here. */
         post: operations["openTier3Case"];
         delete?: never;
         options?: never;
@@ -1838,6 +1890,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description The attestor's device checked the decrypted opening against the documents (the commitments open to it, and its year-to-date figure is max(documented, prior)). The body carries commitments, the issuer's proof and the attestation only, never a figure, a salt or an opening (unknown fields are refused). The API checks the proof is over the series' live terms commitment, units and the prior the chain expects, that it verifies, and that the signature is the chosen attestor wallet's over attestation v1 with tier 3. */
         post: operations["signTier3Case"];
         delete?: never;
         options?: never;
@@ -2552,6 +2605,46 @@ export type components = {
             realisedYieldBps?: number;
             lockupEndsAt?: number | null;
             redemptionPrice?: string | null;
+        };
+        /** @description a 32-byte value as 0x + 64 lowercase hex digits (a BN254 field element for Poseidon commitments) */
+        Hash32: string;
+        /** @description a field element or u64 as a decimal string (snarkjs encoding) */
+        FieldDecimal: string;
+        /** @description A snarkjs Groth16 proof over BN254 (Stage 1's ProofOfIncome circuit); chain adapters encode it for the EVM or Solana verifier. */
+        Groth16Proof: {
+            pi_a: components["schemas"]["FieldDecimal"][];
+            pi_b: components["schemas"]["FieldDecimal"][][];
+            pi_c: components["schemas"]["FieldDecimal"][];
+            /** @constant */
+            protocol: "groth16";
+            /** @constant */
+            curve: "bn128";
+        };
+        /** @description Stage 1's six public signals, in order: terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd */
+        ReportPublicInputs: components["schemas"]["FieldDecimal"][];
+        /** @description The report proof: Stage 1's Groth16 proof, or (simulator-only processes started with MERCES_PROOF_SYSTEM=mock) the mock digest over the public inputs. GET /prover/artifacts lists the systems the API accepts. */
+        ReportProof: {
+            /** @constant */
+            system: "groth16-bn254";
+            proof: components["schemas"]["Groth16Proof"];
+            publicInputs: components["schemas"]["ReportPublicInputs"];
+        } | {
+            /** @constant */
+            system: "mock";
+            proof: string;
+            publicInputs: components["schemas"]["ReportPublicInputs"];
+        };
+        /** @description The report verifier's ed25519 signature over attestation v1: "merces/attestation/v1\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier}. Names no income source. */
+        VerifierAttestation: {
+            keyId: string;
+            seriesId: string;
+            periodId: string;
+            priorIncomeCommitment: components["schemas"]["Hash32"];
+            incomeCommitment: components["schemas"]["Hash32"];
+            /** @enum {integer} */
+            tier: 1 | 2 | 3 | 4;
+            liquidityEvent: boolean;
+            signature: string;
         };
         AccountingFeeRow: {
             chain: string;
@@ -4375,11 +4468,17 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @description θ in the reporting currency at 6 decimals, below 2^64 */
                     threshold: string;
+                    /** @description r per unit (WAD) */
                     ratePerUnitWad: string;
+                    /** @description ISO-4217 alpha code Stage 1 lists (CURRENCY_CODES) */
                     reportingCurrency: string;
-                    indexingRule: string;
-                    salt: string;
+                    /** @enum {string} */
+                    indexingRule: "none" | "cpi-annual";
+                    termsSalt: components["schemas"]["FieldDecimal"];
+                } & {
+                    [key: string]: unknown;
                 };
             };
         };
@@ -4391,9 +4490,18 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        commitment?: string;
+                        commitment?: components["schemas"]["Hash32"];
+                        /** @constant */
+                        scheme?: "poseidon5-v1";
                     };
                 };
+            };
+            /** @description The fields cannot form a commitment (unsupported currency */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -4850,13 +4958,53 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Circuit id */
+            /** @description Stage 1's ProofOfIncome circuit: the public input layout, the verification key, the wasm and zkey URLs with their sha256 (checked against the Stage 1 build manifest), the proof systems this API accepts, and the warning that the zkey comes from a development trusted setup (never mainnet) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    getProverWasm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The circuit's witness calculator (Stage 1 build); header x-content-sha256 carries its sha256 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/wasm": string;
+                };
+            };
+        };
+    };
+    getProverZkey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The proving key (Stage 1 development trusted setup; never mainnet); header x-content-sha256 carries its sha256 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
                 };
             };
         };
@@ -4921,6 +5069,50 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
+            };
+        };
+    };
+    getReportingPrior: {
+        parameters: {
+            query?: {
+                /** @description defaults to the next expected period */
+                periodId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The expected prior */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        seriesId?: string;
+                        periodId?: string;
+                        nextExpectedPeriod?: string | null;
+                        /** @enum {string} */
+                        rule?: "chained" | "year-start" | "first-report-outside-q1";
+                        expectedPriorIncomeCommitment?: components["schemas"]["Hash32"] | null;
+                        acceptsSuppliedPrior?: boolean;
+                        chainedFrom?: string | null;
+                        note?: string;
+                    };
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description The raise has not settled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -5017,14 +5209,23 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @description optional; must be the series in the path */
+                    seriesId?: string;
                     periodId: string;
-                    tier: number;
+                    /** @enum {integer} */
+                    tier: 1 | 2 | 3 | 4;
+                    /** @description the income source (kept offchain; shown to the issuer only) */
                     source: string;
                     paymentStable: components["schemas"]["Money"];
-                    incomeCommitment: string;
-                    proof: Record<string, never>;
-                    attestation?: Record<string, never> | null;
-                    attestorRate?: Record<string, never> | null;
+                    priorIncomeCommitment: components["schemas"]["Hash32"];
+                    incomeCommitment: components["schemas"]["Hash32"];
+                    proof: components["schemas"]["ReportProof"];
+                    attestation?: components["schemas"]["VerifierAttestation"] | null;
+                    attestorRate?: {
+                        attestor?: string;
+                        rateWad?: components["schemas"]["Wad"];
+                    } | null;
+                    /** @description tier 3 co-signer */
                     attestor?: string | null;
                     liquidityEvent?: boolean;
                 };
@@ -5039,6 +5240,20 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
+            };
+            /** @description Malformed or unknown fields */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod) or a previous due unpaid (detail.stage1 PaymentOutstanding) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Proof */
             422: {
@@ -6459,6 +6674,7 @@ export interface operations {
                 "application/json": {
                     attestor: string;
                     documentsCiphertext: components["schemas"]["Ciphertext"];
+                    openingCiphertext: components["schemas"]["Ciphertext"];
                     keyHint?: string | null;
                     estimatePaymentStable: components["schemas"]["Money"];
                 };
@@ -6651,14 +6867,19 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    paymentStable: components["schemas"]["Money"];
-                    incomeCommitment: string;
-                    liquidityEvent?: boolean;
+                    priorIncomeCommitment: components["schemas"]["Hash32"];
+                    incomeCommitment: components["schemas"]["Hash32"];
+                    proof: components["schemas"]["ReportProof"];
+                    attestation: {
+                        liquidityEvent: boolean;
+                        /** @description the attestor wallet's signature over "merces/attestation/v1\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3} */
+                        signature: string;
+                    };
                 };
             };
         };
         responses: {
-            /** @description The case marked signed with the attested payment; the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer */
+            /** @description The case marked signed with the attested payment (the proof's public input 5); the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6666,6 +6887,13 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
+            };
+            /** @description Malformed or unknown fields */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not the chosen attestor */
             403: {
@@ -6676,6 +6904,13 @@ export interface operations {
             };
             /** @description Already signed */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Proof not over this series or not verifying, prior not the expected one, or signature not the attestor's */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

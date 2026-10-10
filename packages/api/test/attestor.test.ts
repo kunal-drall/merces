@@ -1,8 +1,9 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { fxAttestationMessage, type UnsignedTx } from '@merces/domain';
-import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
+import { attestationMessage, fxAttestationMessage, type UnsignedTx } from '@merces/domain';
+import { WAD, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
+import { assembleOnDevice, checkTier3Opening } from '@merces/poi-device';
 import type { SimHarness } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
@@ -80,22 +81,30 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const att = h.attestors[0]!;
     const periodId = '2026Q1';
     // the quarter has not ended yet
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: USDC(1800).toString() }, issuerTok)).statusCode).toBe(409);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: e2e('opening'), documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: USDC(1800).toString() }, issuerTok)).statusCode).toBe(409);
     await h.sim.setTime(parsePeriod(periodId).end + DAY);
     // plaintext documents are refused
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: JSON.stringify({ documents: ['1040'], grossReceipts: CANARY }), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: Buffer.from(JSON.stringify({ grossReceipts: CANARY, note: 'x' })).toString('base64'), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: e2e('opening'), documentsCiphertext: JSON.stringify({ documents: ['1040'], grossReceipts: CANARY }), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: e2e('opening'), documentsCiphertext: Buffer.from(JSON.stringify({ grossReceipts: CANARY, note: 'x' })).toString('base64'), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
     // unknown attestor
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: h.backers[0]!.address, documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: h.backers[0]!.address, openingCiphertext: e2e('opening'), documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    // the issuer's device proves the quarter (Stage 1 Groth16); the opening goes to the attestor end to end encrypted (M7)
+    const dev = await assembleOnDevice({ seriesId, periodId, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', privateTerms: { threshold: raise.privateTerms.theta.toString(), ratePerUnitWad: raise.privateTerms.rWad.toString(), reportingCurrency: 'USD', indexingRule: raise.privateTerms.indexingRule, termsSalt: raise.privateTerms.termsSalt.toString() }, prior: null, incomeYtdNow: USDC(80_000), fxAvgWad: WAD, tier: 3, source: 'attestor', deviceSecret: 'issuer-device-secret' }, null);
+    expect(dev.assembled.paymentStable).toBe(USDC(2000).toString());
+    const opening = dev.tier3Opening!;
+    // a plaintext opening is refused like plaintext documents
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: e2e(DOCS_PLAIN), openingCiphertext: JSON.stringify(opening), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
     const docs = e2e(DOCS_PLAIN);
-    const opened = await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: docs, keyHint: 'attestor-1 x25519 key v1', estimatePaymentStable: USDC(1800).toString() }, issuerTok, { 'idempotency-key': 't3-q1' });
+    const openingCiphertext = e2e(JSON.stringify(opening));
+    const opened = await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: docs, openingCiphertext, keyHint: 'attestor-1 x25519 key v1', estimatePaymentStable: USDC(1800).toString() }, issuerTok, { 'idempotency-key': 't3-q1' });
     expect(opened.statusCode, JSON.stringify(opened.json())).toBe(201);
     const caseId = opened.json().caseId as string;
     expect(opened.json()).toMatchObject({ state: 'open', periodId, attestor: att.address, estimatePaymentStable: USDC(1800).toString() });
     expect(opened.json().documentsCiphertext).toBeUndefined();
+    expect(opened.json().openingCiphertext).toBeUndefined();
     // replay returns the same case; a second case for the period is refused
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: docs, keyHint: 'attestor-1 x25519 key v1', estimatePaymentStable: USDC(1800).toString() }, issuerTok, { 'idempotency-key': 't3-q1' })).json().caseId).toBe(caseId);
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(409);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: docs, openingCiphertext, keyHint: 'attestor-1 x25519 key v1', estimatePaymentStable: USDC(1800).toString() }, issuerTok, { 'idempotency-key': 't3-q1' })).json().caseId).toBe(caseId);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: e2e(DOCS_PLAIN), openingCiphertext: e2e('x'.repeat(40)), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(409);
 
     // the case is on the chosen attestor's queue only; only they (or an admin) read the ciphertext
     expect((await rig.get('/attestor/queue', attTok)).json().tier3.map((c: { caseId: string }) => c.caseId)).toEqual([caseId]);
@@ -105,39 +114,42 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const view = await rig.get(`/attestor/tier3/${caseId}`, attTok);
     expect(view.statusCode).toBe(200);
     expect(view.json().documentsCiphertext).toBe(docs);
+    expect(view.json().openingCiphertext).toBe(openingCiphertext);
     expect(view.json()).toMatchObject({ reportingCurrency: 'USD', unitsOutstanding: '500', termsCommitment: raise.terms.termsCommitment });
     const spec = await rig.get(`/attestor/tier3/${caseId}/prefill-spec`, attTok);
     expect(spec.statusCode).toBe(200);
-    expect(spec.json().extraction).toBe('client-side');
-    expect(spec.json().currency).toBe('USD');
+    expect(spec.json()).toMatchObject({ version: 'tier3-prefill/v1', extraction: 'client-side', currency: 'USD', termsCommitment: raise.terms.termsCommitment });
     expect(spec.json().period).toMatchObject({ start: parsePeriod(periodId).start, end: parsePeriod(periodId).end });
     const fields = spec.json().documents.flatMap((d: { fields: { name: string }[] }) => d.fields.map((f) => f.name));
     expect(fields).toEqual(expect.arrayContaining(['grossReceipts', 'w2Wages', 'form1099Totals', 'royalties']));
 
-    // attestor device: extract, compute the payment and the commitment (the harness plays the device; nothing private reaches the API)
-    const built = await h.buildReport({ seriesId, periodId, unitsOutstanding: 500n, privateTerms: raise.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(80_000), termsCommitment: raise.terms.termsCommitment, tier: 3, source: 'attestor', attestor: att.address });
-    expect(built.paymentStable).toBe(USDC(2000));
-    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { paymentStable: built.command.paymentStable, incomeCommitment: built.command.incomeCommitment }, att1Tok)).statusCode).toBe(403);
-    const signed = await rig.post(`/attestor/tier3/${caseId}/sign`, { paymentStable: built.command.paymentStable, incomeCommitment: built.command.incomeCommitment, liquidityEvent: false }, attTok, { 'idempotency-key': 't3-sign-q1' });
+    // attestor device: decrypt (here: the plaintext the issuer encrypted), check the opening against the documents, sign
+    const c = { seriesId, periodId, priorIncomeCommitment: dev.assembled.priorIncomeCommitment, incomeCommitment: dev.assembled.incomeCommitment };
+    expect(checkTier3Opening(opening, { ...c, documentedYtd: USDC(80_000) })).toEqual({ ok: true });
+    const signature = await att.signMessage(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
+    const signBody = { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, proof: dev.assembled.proof, attestation: { liquidityEvent: false, signature } };
+    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, signBody, att1Tok)).statusCode).toBe(403);
+    // the sign body carries commitments, the proof and the attestation only: an opening field is refused (strict)
+    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, incomeYtd: opening.incomeYtd }, attTok)).statusCode).toBe(400);
+    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, attestation: { liquidityEvent: true, signature } }, attTok)).statusCode).toBe(422); // signed another flag
+    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, incomeCommitment: c.priorIncomeCommitment }, attTok)).statusCode).toBe(422); // proof over other commitments
+    const signed = await rig.post(`/attestor/tier3/${caseId}/sign`, signBody, attTok, { 'idempotency-key': 't3-sign-q1' });
     expect(signed.statusCode, JSON.stringify(signed.json())).toBe(200);
-    expect(signed.json()).toMatchObject({ state: 'signed', attestedPaymentStable: USDC(2000).toString(), incomeCommitment: built.command.incomeCommitment });
-    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { paymentStable: '1', incomeCommitment: built.command.incomeCommitment }, attTok)).statusCode).toBe(409);
+    expect(signed.json()).toMatchObject({ state: 'signed', attestedPaymentStable: USDC(2000).toString(), incomeCommitment: c.incomeCommitment, priorIncomeCommitment: c.priorIncomeCommitment });
+    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, signBody, attTok)).statusCode).toBe(409);
     expect((await rig.get('/attestor/queue', attTok)).json().tier3).toEqual([]);
     const forIssuer = await rig.get(`/series/${seriesId}/tier3`, issuerTok);
     expect(forIssuer.json().cases[0]).toMatchObject({ caseId, state: 'signed', attestedPaymentStable: USDC(2000).toString() });
     expect(JSON.stringify(forIssuer.json())).not.toContain(docs.slice(0, 32));
+    expect(JSON.stringify(forIssuer.json())).not.toContain(openingCiphertext.slice(0, 32));
 
     // the issuer assembles the tier-3 report through E5 with the attestor as co-signer, then both sign and the issuer sends
-    const rep = await rig.post(`/series/${seriesId}/reports`, { ...built.command, source: built.source, tier: 3 }, issuerTok, { 'idempotency-key': 't3-rep-q1' });
+    const rep = await rig.post(`/series/${seriesId}/reports`, { ...dev.assembled, attestor: att.address }, issuerTok, { 'idempotency-key': 't3-rep-q1' });
     expect(rep.statusCode, JSON.stringify(rep.json())).toBe(201);
     expect(rep.json()).toMatchObject({ tier: 3, verifiedOffchain: true, paymentStable: USDC(2000).toString() });
     const reportId = rep.json().reportId as string;
-    let tx = rep.json().tx as UnsignedTx;
-    expect(tx.command.kind).toBe('submitReport');
-    if ((tx.command as { attestor: string | null }).attestor !== att.address) {
-      // E5's builder does not yet carry the tier-3 attestor into the command (see the module report); the device rebuilds it with the co-signer
-      tx = await h.sim.build({ ...(tx.command as Extract<UnsignedTx['command'], { kind: 'submitReport' }>), attestor: att.address }, h.issuer.address, [att.address]);
-    }
+    const tx = rep.json().tx as UnsignedTx;
+    expect(tx.command).toMatchObject({ kind: 'submitReport', tier: 3, attestor: att.address });
     expect(tx.coSigners).toEqual([att.address]);
     const sent = await rig.post('/tx/send', await att.coSign(await h.issuer.sign(tx)), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);

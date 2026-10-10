@@ -11,6 +11,7 @@
     "@merces/circuits": "workspace:*",
     "@merces/domain": "workspace:*",
     "@merces/math": "workspace:*",
+    "@merces/ports": "workspace:*",
     "@merces/reference": "workspace:*",
     "@merces/sdk": "workspace:*",
     "@merces/simulator": "workspace:*"

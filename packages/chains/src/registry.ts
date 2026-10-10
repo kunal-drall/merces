@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import type { ChainPort } from '@merces/domain';
 import { EVM_KNOWN, EvmChain, type EvmChainConfig } from '@merces/chain-evm';
 import { SOLANA_KNOWN, SolanaChain, normalizeCluster, type SolanaChainConfig } from '@merces/chain-solana';
+import { Groth16ReportVerifier, MOCK_PROOFS_WARNING, reportProofSystemFromEnv, type ReportProofSystem } from '@merces/ports';
 import { PgSimPersistence, SimulatorChain } from '@merces/simulator';
 import { locateStage1, stage1Path, type Stage1Location } from './manifest.ts';
 
@@ -22,6 +23,13 @@ export interface ChainsConfig {
    * standalone indexer and keeper processes handle live chains only.
    */
   simulators?: 'own' | 'skip';
+  /**
+   * The report proofs simulator chains accept (critique H3). Default `groth16-bn254`: a simulator verifies Stage 1
+   * Groth16 proofs with the ports' `Groth16ReportVerifier` before its engine runs, and refuses mock proofs. `mock`
+   * (`MERCES_PROOF_SYSTEM=mock`) also accepts mock proofs, which anyone can forge: it is honoured only when every
+   * chain resolves to the simulator (a live chain makes `createChains` refuse to start) and logs a warning.
+   */
+  proofSystem?: ReportProofSystem;
 }
 
 export interface ChainDecision {
@@ -95,10 +103,11 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
   const chains = new Map<string, ChainPort>();
   const decisions: ChainDecision[] = [];
 
-  async function decide(chain: string, requested: ModeSetting, live: (() => ChainPort | null) | null, mock: () => Promise<ChainPort>): Promise<void> {
+  // a simulator is opened only once every chain has decided: whether it may accept mock proofs depends on all of them
+  const opened: { chain: string; port: ChainPort | null; mock: (acceptMockProofs: boolean) => Promise<ChainPort> }[] = [];
+  async function decide(chain: string, requested: ModeSetting, live: (() => ChainPort | null) | null, mock: (acceptMockProofs: boolean) => Promise<ChainPort>): Promise<void> {
     let chosen: 'mock' | 'live';
     let reason: string;
-    let port: ChainPort;
     const tryLive = async (): Promise<{ port: ChainPort; detail: string } | { error: string }> => {
       let l: ChainPort | null;
       try {
@@ -135,13 +144,14 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
       log(`${chain}: requested=${requested} chosen=${chosen} — ${reason}`);
       return;
     }
-    port = livePort ?? (await mock());
-    chains.set(chain, port);
+    opened.push({ chain, port: livePort, mock });
     decisions.push({ chain, requested, chosen, reason });
     log(`${chain}: requested=${requested} chosen=${chosen} — ${reason}`);
   }
 
   const persistence = (key: string) => (cfg.pool ? new PgSimPersistence(cfg.pool, `${cfg.persistKeyPrefix ?? 'sim'}:${key}`) : undefined);
+  // one verifier (and verdict cache) for every simulator in the process
+  const reportProofVerifier = new Groth16ReportVerifier();
 
   await decide(
     'solana',
@@ -150,7 +160,7 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
       const c = solanaConfigFrom(stage1, { rpcUrl: cfg.solana.rpcUrl, generatedDir: cfg.generatedDir });
       return c ? new SolanaChain(c) : null;
     },
-    () => SimulatorChain.create({ personality: 'solana', chainKey: 'solana', persistence: persistence('solana') }),
+    (acceptMockProofs) => SimulatorChain.create({ personality: 'solana', chainKey: 'solana', persistence: persistence('solana'), reportProofVerifier, acceptMockProofs }),
   );
   await decide(
     cfg.evm.chainKey,
@@ -159,8 +169,15 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
       const c = evmConfigFrom(stage1, cfg.evm.chainKey, { rpcUrl: cfg.evm.rpcUrl, chainId: cfg.evm.chainId, generatedDir: cfg.generatedDir });
       return c ? new EvmChain(c) : null;
     },
-    () => SimulatorChain.create({ personality: 'monad', chainKey: cfg.evm.chainKey, persistence: persistence(cfg.evm.chainKey) }),
+    (acceptMockProofs) => SimulatorChain.create({ personality: 'monad', chainKey: cfg.evm.chainKey, persistence: persistence(cfg.evm.chainKey), reportProofVerifier, acceptMockProofs }),
   );
+
+  // H3: mock report proofs only in a process whose every chain is the simulator, and never silently
+  const simulatorOnly = decisions.every((d) => d.chosen === 'mock');
+  if (cfg.proofSystem === 'mock' && !simulatorOnly) throw new Error('MERCES_PROOF_SYSTEM=mock is refused: mock report proofs are forgeable, and this process has a live chain');
+  const acceptMockProofs = cfg.proofSystem === 'mock';
+  if (acceptMockProofs && opened.some((o) => !o.port)) log(`WARNING ${MOCK_PROOFS_WARNING}`);
+  for (const o of opened) chains.set(o.chain, o.port ?? (await o.mock(acceptMockProofs)));
 
   return {
     chains,
@@ -189,6 +206,8 @@ export function chainsConfigFromEnv(env: NodeJS.ProcessEnv = process.env, extra:
     evm: { mode: mode(env.MERCES_CHAIN_EVM_MODE), chainKey: env.EVM_CHAIN_KEY ?? 'monad', chainId: env.EVM_CHAIN_ID ? Number(env.EVM_CHAIN_ID) : undefined, rpcUrl: env.EVM_RPC_URL },
     stage1Path: env.STAGE1_PATH,
     persistKeyPrefix: env.MERCES_SIM_KEY,
+    // validated against the decided chains in createChains (mock needs a simulator-only process)
+    proofSystem: reportProofSystemFromEnv(env, { simulatorOnly: true }),
     ...extra,
   };
 }

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { parsePeriod } from '@merces/math';
 import { PgSimPersistence, SimHarness, SimulatorChain } from '@merces/simulator';
-import type { ChainPort, DomainEvent } from '@merces/domain';
+import { ZERO_INCOME_COMMITMENT, type ChainPort, type DomainEvent } from '@merces/domain';
 import { Indexer } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -139,6 +139,41 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const row = (await t.pool.query('select payment_due::text, accrual::text, paid::text, settled from periods where series_id = $1 and period_id = $2', [a.seriesId, '2026Q1'])).rows[0];
     expect(row).toEqual({ payment_due: chain.paymentDue, accrual: chain.accrual, paid: chain.paid, settled: true });
     expect(row.payment_due).toBe(live.paymentDue);
+  });
+
+  it('projects Stage 1\'s reporting ledger and the report prior (M8): the series row follows the chain', async () => {
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'ledger', genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
+    const a = await h.runRaise();
+    const ledgerRow = async () => (await t.pool.query('select first_period, next_expected_period, last_accepted_period, last_paid_period, open_due_period, open_due_amount::text, last_income_period, last_income_commitment, formal_notice_emitted_for from series where series_id = $1', [a.seriesId])).rows[0];
+    const chainLedger = async () => {
+      const s = (await h.sim.getSeries(a.seriesId))!;
+      const r = s.reporting;
+      return { first_period: r.firstPeriod, next_expected_period: r.nextExpectedPeriod, last_accepted_period: r.lastAcceptedPeriod, last_paid_period: r.lastPaidPeriod, open_due_period: r.openDuePeriod, open_due_amount: r.openDueAmount, last_income_period: r.lastIncomePeriod, last_income_commitment: r.lastAcceptedPeriod === null ? null : r.lastIncomeCommitment, formal_notice_emitted_for: s.formalNoticeEmittedFor };
+    };
+    await idx.catchUp();
+    expect(await ledgerRow()).toEqual(await chainLedger());
+    expect((await ledgerRow()).next_expected_period).toBe('2026Q1');
+    // Q1 below the threshold: due 0, paid at once
+    await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
+    const q1 = await h.buildReport({ seriesId: a.seriesId, periodId: '2026Q1', privateTerms: a.privateTerms, incomeYtdNow: USDC(10_000) });
+    await h.exec(h.issuer, q1.command);
+    // Q2 above it: the due stays open until paid
+    await h.sim.setTime(parsePeriod('2026Q2').end + 86_400);
+    const q2 = await h.buildReport({ seriesId: a.seriesId, periodId: '2026Q2', privateTerms: a.privateTerms, incomeYtdNow: USDC(100_000) });
+    await h.exec(h.issuer, q2.command);
+    await idx.catchUp();
+    expect(await ledgerRow()).toEqual(await chainLedger());
+    expect(await ledgerRow()).toMatchObject({ last_accepted_period: '2026Q2', next_expected_period: '2026Q3', last_paid_period: '2026Q1', open_due_period: '2026Q2', open_due_amount: q2.paymentStable.toString(), last_income_commitment: q2.command.incomeCommitment });
+    const priors = (await t.pool.query('select period_id, prior_income_commitment from periods where series_id = $1 order by period_id', [a.seriesId])).rows;
+    expect(priors).toEqual([{ period_id: '2026Q1', prior_income_commitment: ZERO_INCOME_COMMITMENT }, { period_id: '2026Q2', prior_income_commitment: q1.command.incomeCommitment }]);
+    await h.exec(h.issuer, { kind: 'payIn', seriesId: a.seriesId, periodId: '2026Q2', amount: (await h.sim.getPeriod(a.seriesId, '2026Q2'))!.paymentDue });
+    // Q3 is never reported: the formal notice is recorded at period end + 90 days
+    await h.sim.setTime(parsePeriod('2026Q3').end + 91 * 86_400);
+    await h.sim.submit({ kind: 'crankStatus', seriesId: a.seriesId }, 'keeper');
+    await idx.catchUp();
+    expect(await ledgerRow()).toEqual(await chainLedger());
+    expect(await ledgerRow()).toMatchObject({ last_paid_period: '2026Q2', open_due_period: null, open_due_amount: '0', formal_notice_emitted_for: '2026Q3' });
   });
 
   it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
-import { fxAttestationMessage, normaliseAddress, type ChainPort, type SeriesState, type UnsignedTx } from '@merces/domain';
-import { parsePeriod, periodFrom } from '@merces/math';
+import { attestationMessage, expectedPrior, fxAttestationMessage, hex32ToField, normaliseAddress, reportProofSchema, type ChainPort, type SeriesState, type UnsignedTx } from '@merces/domain';
+import { parsePeriod, periodFrom, toPid } from '@merces/math';
 import { verifyWalletSignature } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -12,8 +12,9 @@ import type { ServiceContext } from '../context.ts';
  * This service tracks the work that needs an attestor's signature and builds the transactions they sign:
  *  - hardship pauses: the issuer's reason and evidence reach the chosen attestor as END-TO-END ciphertext the
  *    server stores opaque and never decrypts; holders only ever see statuses and dates;
- *  - tier-3 cases: documents (E2E ciphertext) and the attestor's attested quarterly payment; the client-side
- *    prefill specification (R26 — the server extracts nothing); the annual true-up as amounts and a deadline;
+ *  - tier-3 cases: the issuer's device proves the report; the documents and the income opening reach the attestor
+ *    as E2E ciphertext (M7); the attestor signs the commitments and the proof; the client-side prefill specification
+ *    (R26 — the server extracts nothing); the annual true-up as amounts and a deadline;
  *  - FX fallback requests the keeper opened (C9): the attestor signs a rate client-side, the service stores it;
  *  - extinguishment (C11.6): one transaction with two distinct registered attestors as signers.
  * No income figure, document or reason is ever at rest or in a log. Decision fields are codes.
@@ -29,8 +30,22 @@ const ciphertext = z.string().min(1).max(1_900_000);
 
 export const hardshipRequestSchema = z.object({ until: z.number().int().positive(), attestor: z.string().min(1).max(64), ciphertext, keyHint });
 export const hardshipDecideSchema = z.object({ approve: z.boolean(), until: z.number().int().positive().optional(), decisionCode: code.optional() });
-export const tier3OpenSchema = z.object({ attestor: z.string().min(1).max(64), documentsCiphertext: ciphertext, keyHint, estimatePaymentStable: money });
-export const tier3SignSchema = z.object({ paymentStable: money, incomeCommitment: z.string().regex(/^0x[0-9a-f]{64}$/), liquidityEvent: z.boolean().default(false) });
+const hex32 = z.string().regex(/^0x[0-9a-f]{64}$/);
+/**
+ * Tier 3 (critique M7). The issuer's device proves the report; the attestor checks the income commitment against the
+ * documents with the opening (year-to-date figure and salt, and the prior's), which the issuer encrypts end to end for
+ * the attestor exactly like the documents (`openingCiphertext`, opaque here). The attestor's signature carries the
+ * commitments, the proof and the attestation only: never a figure, a salt or an opening.
+ */
+export const tier3OpenSchema = z.object({ attestor: z.string().min(1).max(64), documentsCiphertext: ciphertext, openingCiphertext: ciphertext, keyHint, estimatePaymentStable: money }).strict();
+export const tier3SignSchema = z.object({
+  priorIncomeCommitment: hex32,
+  incomeCommitment: hex32,
+  /** the issuer's proof (Stage 1 Groth16; the payment is its public input 5) */
+  proof: reportProofSchema,
+  /** the attestor wallet's signature over attestation v1 with tier 3 (`attestationMessage`) */
+  attestation: z.object({ liquidityEvent: z.boolean(), signature: z.string().min(1).max(4096) }).strict(),
+}).strict();
 export const tier3AnnualOpenSchema = z.object({ year: z.number().int().min(2026).max(2100), attestor: z.string().min(1).max(64), documentsCiphertext: ciphertext, keyHint });
 export const tier3AnnualSignSchema = z.object({ totalPaymentStable: money });
 export const fxSignSchema = z.object({ rateWad: z.string().regex(/^\d+$/), attestorWallet: z.string().min(1).max(64), sourceNote: code, signature: z.string().min(1).max(4096) });
@@ -271,7 +286,8 @@ export class AttestorService {
   private caseView(c: Record<string, unknown>, withCiphertext: boolean): Record<string, unknown> {
     return {
       caseId: c.case_id, seriesId: c.series_id, chain: c.chain, periodId: c.period_id, attestor: c.attestor, state: c.state, estimatePaymentStable: str(c.estimate_payment_stable), attestedPaymentStable: str(c.attested_payment_stable),
-      incomeCommitment: c.income_commitment ?? null, liquidityEvent: c.liquidity_event, keyHint: c.key_hint ?? null, createdAt: c.created_at, signedAt: c.signed_at ?? null, ...(withCiphertext ? { documentsCiphertext: c.documents_ciphertext } : {}),
+      priorIncomeCommitment: c.prior_income_commitment ?? null, incomeCommitment: c.income_commitment ?? null, liquidityEvent: c.liquidity_event, keyHint: c.key_hint ?? null, createdAt: c.created_at, signedAt: c.signed_at ?? null,
+      ...(withCiphertext ? { documentsCiphertext: c.documents_ciphertext, openingCiphertext: c.opening_ciphertext ?? null } : {}),
     };
   }
 
@@ -279,7 +295,7 @@ export class AttestorService {
     if (!(await this.actsAs(session, String(c.chain), String(c.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this case was addressed to another attestor, or your registration for that wallet is not active');
   }
 
-  /** Issuer: open a tier-3 case for a completed quarter with E2E-encrypted documents for the attestor and the issuer's own estimate. */
+  /** Issuer: open a tier-3 case for a completed quarter with E2E-encrypted documents and income opening for the attestor, and the issuer's own estimate. */
   async openTier3Case(seriesId: string, periodId: string, session: Session, input: z.infer<typeof tier3OpenSchema>): Promise<Record<string, unknown>> {
     const { chain, series } = await this.seriesForIssuer(seriesId, session);
     if (!series.terms.tierFlags.tier3) throw AppError.conflict('tier 3 is not enabled for this series');
@@ -287,14 +303,15 @@ export class AttestorService {
     const now = await chain.now();
     if (period.end > now) throw AppError.conflict('the period has not ended');
     assertOpaqueCiphertext(input.documentsCiphertext, 'documentsCiphertext');
+    assertOpaqueCiphertext(input.openingCiphertext, 'openingCiphertext');
     const attestor = normaliseAddress(input.attestor, chain.family);
     await this.requireRegisteredAttestor(chain, attestor);
     const dup = await this.ctx.pool.query("select case_id, state from tier3_cases where series_id = $1 and period_id = $2 and state in ('open','signed')", [seriesId, periodId]);
     if (dup.rows[0]) throw AppError.conflict(`a tier-3 case for ${periodId} is already ${dup.rows[0].state} (${dup.rows[0].case_id})`);
     const id = this.ctx.newId('t3c');
     await this.ctx.pool.query(
-      'insert into tier3_cases (case_id, series_id, chain, period_id, issuer, account_id, attestor, documents_ciphertext, key_hint, estimate_payment_stable) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
-      [id, seriesId, chain.chain, periodId, series.issuer, session.accountId, attestor, input.documentsCiphertext, input.keyHint, input.estimatePaymentStable],
+      'insert into tier3_cases (case_id, series_id, chain, period_id, issuer, account_id, attestor, documents_ciphertext, opening_ciphertext, key_hint, estimate_payment_stable) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+      [id, seriesId, chain.chain, periodId, series.issuer, session.accountId, attestor, input.documentsCiphertext, input.openingCiphertext, input.keyHint, input.estimatePaymentStable],
     );
     await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'tier3.case-opened', seriesId, periodId, caseId: id, attestor });
     return this.caseView(await this.caseRow(id), false);
@@ -318,12 +335,13 @@ export class AttestorService {
     const period = parsePeriod(String(c.period_id));
     const currency = series?.terms.reportingCurrency ?? 'USD';
     return {
-      version: 'tier3-prefill/v0',
+      version: 'tier3-prefill/v1',
       extraction: 'client-side',
       caseId: id, seriesId: c.series_id, periodId: period.id,
       period: { start: period.start, end: period.end, year: period.year, quarter: period.quarter, coverage: 'calendar year to date through the period end' },
       currency, unit: 'currency base units (6 decimals)',
-      note: 'Decrypt the documents on your device, extract these fields locally and compute the figures there. Send the API only the attested payment and the income commitment; never a figure or a document.',
+      termsCommitment: series?.terms.termsCommitment ?? null,
+      note: 'Decrypt the documents and the income opening on your device, extract these fields locally and check the issuer\'s commitments and proof there. Send the API only the commitments, the proof and your signature; never a figure, a salt, an opening or a document.',
       documents: [
         { kind: 'tax-return', forms: ['1040 Schedule C', '1040 Schedule E', '1040 Schedule 1', 'SA100/SA103 (UK)', 'local equivalent'], fields: [
           { name: 'grossReceipts', source: 'Schedule C line 1 (gross receipts or sales) or local equivalent', include: true },
@@ -339,24 +357,61 @@ export class AttestorService {
           { name: 'refunds', source: 'refunds and chargebacks (subtract)', include: false },
         ] },
       ],
-      output: {
-        incomeYtd: `sum of included fields converted to ${currency} base units for ${period.year} through ${new Date(period.end * 1000).toISOString().slice(0, 10)}`,
-        incomeYtdPrev: 'the same figure through the end of the previous quarter of the reporting year (0 in Q1)',
-        paymentStable: 'quarterPayment(ratePerUnitWad, unitsOutstanding, incomeYtdPrev, incomeYtdNow, threshold, fxAvgWad) per C3 — the private terms are disclosed to you inside the ciphertext envelope',
-        incomeCommitment: 'incomeCommitment({ seriesId, periodId, incomeYtd: incomeYtdNow, salt }) with the salt from the envelope',
-        liquidityEvent: 'true when the documents show a sale of the business or equity (C3)',
+      opening: {
+        ciphertext: 'openingCiphertext (GET /attestor/tier3/{caseId}): merces/tier3-opening/v1 {seriesId, periodId, incomeYtd, incomeSalt, priorIncomeYtd, priorSalt, priorIncomeCommitment, incomeCommitment}, encrypted by the issuer\'s device for your key',
       },
-      next: `POST /attestor/tier3/${id}/sign with { paymentStable, incomeCommitment, liquidityEvent }`,
+      checks: [
+        `documented year-to-date income: the sum of included fields in ${currency} base units for ${period.year} through ${new Date(period.end * 1000).toISOString().slice(0, 10)}`,
+        'Poseidon(2)(incomeYtd, incomeSalt) = incomeCommitment and Poseidon(2)(priorIncomeYtd, priorSalt) = priorIncomeCommitment (SPEC §1.5; ZERO = Poseidon(2)(0, 0) at a year start)',
+        'incomeYtd = max(documented year-to-date income, priorIncomeYtd): the high-water rule (SPEC §1.5)',
+        'priorIncomeCommitment is the one the chain expects (GET /series/{seriesId}/reporting/prior)',
+        'the issuer\'s Groth16 proof verifies (GET /prover/artifacts) over [termsCommitment, units outstanding, FX average, priorIncomeCommitment, incomeCommitment, payment]; the payment is its public input 5',
+      ],
+      liquidityEvent: 'true when the documents show a sale of the business or equity (C3)',
+      sign: 'sign attestation v1 for tier 3 with your registered wallet: "merces/attestation/v1\\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}',
+      next: `POST /attestor/tier3/${id}/sign with { priorIncomeCommitment, incomeCommitment, proof, attestation: { liquidityEvent, signature } }`,
     };
   }
 
-  /** Attestor: record the attested payment for the quarter; the issuer then assembles the tier-3 report (E5) with this attestor as co-signer. */
+  /**
+   * Attestor: sign the quarter's commitments and the issuer's proof; the issuer then assembles the tier-3 report (E5)
+   * with this attestor as co-signer. Checked here: the proof is over the series' live terms commitment, its units and
+   * the prior the chain expects, and verifies; the signature is the chosen attestor wallet's over attestation v1.
+   */
   async signTier3Case(id: string, session: Session, input: z.infer<typeof tier3SignSchema>): Promise<Record<string, unknown>> {
     const c = await this.caseRow(id);
     if (!(await this.actsAs(session, String(c.chain), String(c.attestor)))) throw AppError.forbidden('only the chosen attestor, while registered, can sign this case');
     if (c.state !== 'open') throw AppError.conflict(`tier-3 case is ${c.state}`);
-    await this.ctx.pool.query("update tier3_cases set state = 'signed', attested_payment_stable = $2, income_commitment = $3, liquidity_event = $4, signed_at = now() where case_id = $1", [id, input.paymentStable, input.incomeCommitment, input.liquidityEvent]);
-    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'tier3.sign', target: id, detail: { seriesId: c.series_id, periodId: c.period_id, paymentStable: input.paymentStable, liquidityEvent: input.liquidityEvent } });
+    const chain = this.ctx.chains.get(String(c.chain));
+    const series = await chain.getSeries(String(c.series_id));
+    if (!series) throw AppError.notFound('series');
+    const periodId = String(c.period_id);
+    const rep = series.reporting;
+    const pidOrNull = (p: string | null) => (p === null ? null : toPid(p));
+    const prior = expectedPrior({ lastAcceptedPeriod: pidOrNull(rep.lastAcceptedPeriod), lastIncomePeriod: pidOrNull(rep.lastIncomePeriod), lastIncomeCommitment: rep.lastIncomeCommitment }, toPid(periodId), input.priorIncomeCommitment);
+    if (prior !== input.priorIncomeCommitment) throw AppError.unprocessable('the prior income commitment does not chain from the last accepted report', { expectedPrior: prior });
+    const signals = input.proof.publicInputs;
+    const units = series.redemption ? series.redemption.unitsAtRedemption : series.unitsOutstanding;
+    let bound = false;
+    try {
+      bound = signals[0] === hex32ToField(series.terms.termsCommitment).toString() && signals[1] === BigInt(units).toString() && signals[3] === hex32ToField(input.priorIncomeCommitment).toString() && signals[4] === hex32ToField(input.incomeCommitment).toString();
+    } catch {
+      bound = false;
+    }
+    if (!bound) throw AppError.unprocessable('the proof is not over this series\' terms commitment and units, or these commitments');
+    if (!this.ctx.proofVerifier.systems.includes(input.proof.system)) throw AppError.unprocessable(`proof system ${input.proof.system} is not accepted`);
+    if (!(await this.ctx.proofVerifier.verify(input.proof.proof, signals))) throw AppError.unprocessable('proof does not verify');
+    const message = new TextDecoder().decode(attestationMessage({ seriesId: String(c.series_id), periodId, priorIncomeCommitment: input.priorIncomeCommitment, incomeCommitment: input.incomeCommitment, tier: 3, liquidityEvent: input.attestation.liquidityEvent }));
+    const ok = await verifyWalletSignature({ family: chain.family, address: String(c.attestor), message, signature: input.attestation.signature, allowSimulator: this.ctx.devMode || chain.mode === 'mock' });
+    if (!ok) throw AppError.unprocessable('signature does not verify over the tier-3 attestation for this case\'s attestor wallet');
+    const paymentStable = signals[5]!;
+    const attestation = { attestor: String(c.attestor), liquidityEvent: input.attestation.liquidityEvent, signature: input.attestation.signature };
+    const upd = await this.ctx.pool.query(
+      "update tier3_cases set state = 'signed', attested_payment_stable = $2, prior_income_commitment = $3, income_commitment = $4, liquidity_event = $5, proof = $6, attestation = $7, signed_at = now() where case_id = $1 and state = 'open'",
+      [id, paymentStable, input.priorIncomeCommitment, input.incomeCommitment, input.attestation.liquidityEvent, JSON.stringify(input.proof), JSON.stringify(attestation)],
+    );
+    if (!upd.rowCount) throw AppError.conflict('tier-3 case was signed concurrently');
+    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'tier3.sign', target: id, detail: { seriesId: c.series_id, periodId, paymentStable, liquidityEvent: input.attestation.liquidityEvent } });
     await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'tier3.case-signed', seriesId: c.series_id, periodId: c.period_id, caseId: id });
     return this.caseView(await this.caseRow(id), false);
   }

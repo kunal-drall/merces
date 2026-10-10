@@ -107,7 +107,8 @@ paths:
       tags: [tier3]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: periodId, in: path, required: true, schema: { type: string } }, { name: Idempotency-Key, in: header, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [attestor, documentsCiphertext, estimatePaymentStable], properties: { attestor: { type: string }, documentsCiphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] }, estimatePaymentStable: { $ref: '#/components/schemas/Money' } } } } } }
+      description: 'The issuer''s device proves the quarter; the documents and the income opening (merces/tier3-opening/v1: year-to-date figure and salt, and the prior''s) reach the attestor end to end encrypted. Both are opaque here.'
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [attestor, documentsCiphertext, openingCiphertext, estimatePaymentStable], properties: { attestor: { type: string }, documentsCiphertext: { $ref: '#/components/schemas/Ciphertext' }, openingCiphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] }, estimatePaymentStable: { $ref: '#/components/schemas/Money' } } } } } }
       responses: { '201': { description: The case (state open; no ciphertext), content: { application/json: { schema: { type: object } } } }, '409': { description: Period not ended, tier 3 disabled or a case already open/signed }, '422': { description: Plaintext-looking payload or unknown attestor } }
   /series/{seriesId}/tier3:
     get:
@@ -157,8 +158,27 @@ paths:
       tags: [tier3]
       security: [{ session: [] }]
       parameters: [{ name: caseId, in: path, required: true, schema: { type: string } }, { name: Idempotency-Key, in: header, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [paymentStable, incomeCommitment], properties: { paymentStable: { $ref: '#/components/schemas/Money' }, incomeCommitment: { type: string }, liquidityEvent: { type: boolean } } } } } }
-      responses: { '200': { description: 'The case marked signed with the attested payment; the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer', content: { application/json: { schema: { type: object } } } }, '403': { description: Not the chosen attestor }, '409': { description: Already signed } }
+      description: 'The attestor''s device checked the decrypted opening against the documents (the commitments open to it, and its year-to-date figure is max(documented, prior)). The body carries commitments, the issuer''s proof and the attestation only, never a figure, a salt or an opening (unknown fields are refused). The API checks the proof is over the series'' live terms commitment, units and the prior the chain expects, that it verifies, and that the signature is the chosen attestor wallet''s over attestation v1 with tier 3.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [priorIncomeCommitment, incomeCommitment, proof, attestation]
+              properties:
+                priorIncomeCommitment: { $ref: '#/components/schemas/Hash32' }
+                incomeCommitment: { $ref: '#/components/schemas/Hash32' }
+                proof: { $ref: '#/components/schemas/ReportProof' }
+                attestation:
+                  type: object
+                  additionalProperties: false
+                  required: [liquidityEvent, signature]
+                  properties:
+                    liquidityEvent: { type: boolean }
+                    signature: { type: string, description: 'the attestor wallet''s signature over "merces/attestation/v1\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}' }
+      responses: { '200': { description: 'The case marked signed with the attested payment (the proof''s public input 5); the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer', content: { application/json: { schema: { type: object } } } }, '400': { description: Malformed or unknown fields }, '403': { description: Not the chosen attestor }, '409': { description: Already signed }, '422': { description: 'Proof not over this series or not verifying, prior not the expected one, or signature not the attestor''s' } }
   /attestor/fx-requests:
     get:
       operationId: listFxRequests

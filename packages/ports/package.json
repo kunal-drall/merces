@@ -8,13 +8,13 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@merces/circuits": "workspace:*",
     "@merces/domain": "workspace:*",
+    "@merces/math": "workspace:*",
+    "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "bs58": "6.0.0",
-    "viem": "2.57.3",
-    "@noble/curves": "2.4.0",
-    "snarkjs": "0.7.6",
-    "@merces/math": "workspace:*"
+    "viem": "2.57.3"
   },
   "devDependencies": {
     "@merces/simulator": "workspace:*"

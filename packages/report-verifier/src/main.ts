@@ -1,4 +1,4 @@
-import { LocalKms, MockZkTls, resolveSecret } from '@merces/ports';
+import { LocalKms, MockZkTls, resolveSecret, shutdownProofSystem } from '@merces/ports';
 import { ReportVerifier } from './verifier.ts';
 import { createVerifierServer } from './server.ts';
 
@@ -10,4 +10,10 @@ const kms = new LocalKms(resolveSecret(process.env, 'MERCES_LOCAL_KEY_SEED', { s
 if (process.env.MERCES_KMS_PROVIDER && process.env.MERCES_KMS_PROVIDER !== 'local') throw new Error('cloud KMS not configured (Part J.2)');
 const verifier = new ReportVerifier(new MockZkTls(), kms, process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1');
 const port = Number(process.env.REPORT_VERIFIER_PORT ?? 3100);
-createVerifierServer(verifier).listen(port, () => process.stdout.write(`report-verifier listening on :${port} (keyId=${process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1'})\n`));
+const server = createVerifierServer(verifier).listen(port, () => process.stdout.write(`report-verifier listening on :${port} (keyId=${process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1'})\n`));
+// on shutdown: stop accepting requests, then release the proof system's worker threads (if anything started them)
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(sig, () => {
+    server.close(() => void shutdownProofSystem().finally(() => process.exit(0)));
+  });
+}

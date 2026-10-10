@@ -16,7 +16,7 @@ Lockup: {{lockupDays}} days from auction settlement
 Release schedule: {{releaseSchedule}}
 Fees: backers pay {{auctionFeeBps}} bps on cleared bids and {{payoutFeeBps}} bps on payouts; the issuer pays nothing
 Reporting currency: {{reportingCurrency}}; reporting period: calendar quarter (UTC)
-Terms commitment (hash of threshold, rate per unit, currency, indexing rule and salt): {{termsCommitment}}
+Terms commitment (Poseidon(5) over BN254 of the threshold θ, the rate per unit r (WAD), the ISO-4217 numeric currency code, the indexing rule code and a random field salt; Stage 1 SPEC §1.5): {{termsCommitment}}
 
 1. The issuer owes, for each quarter, r × units outstanding × max(0, income YTD − θ) minus what was owed year to date, converted at the quarter-average rate; nothing is owed below the threshold θ.
 2. Payments are due 30 days after quarter end with 15 days of grace; afterwards simple interest accrues at the series hurdle rate and treasury releases pause until the issuer is current. Nothing is ever slashed.

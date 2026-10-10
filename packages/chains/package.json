@@ -9,6 +9,7 @@
     "@merces/chain-evm": "workspace:*",
     "@merces/chain-solana": "workspace:*",
     "@merces/domain": "workspace:*",
+    "@merces/ports": "workspace:*",
     "@merces/simulator": "workspace:*",
     "pg": "8.23.1",
     "zod": "4.6.5"
