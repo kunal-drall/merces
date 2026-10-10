@@ -1,7 +1,6 @@
 import type { SeriesTerms } from '@merces/domain';
 import { RunnerError } from '../errors.ts';
 import { ZERO_HASH32, hex32, num, tierFlagsOf } from '../codec.ts';
-import { newAuctionBook } from '../book.ts';
 import { direct, eventOf, shim, type TranslatorTable } from './types.ts';
 
 /**
@@ -91,7 +90,7 @@ export const registryOps: TranslatorTable = {
       const r = await ctx.send(ctx.actors.wallet(c.actor), { kind: 'createSeries', terms, seriesAddressHint: ctx.actors.seriesAddress(c.series) });
       const created = eventOf<{ seriesId: string }>(r, 'SeriesCreated');
       if (!created) throw new RunnerError(`create_series ${c.series}: no SeriesCreated event`);
-      ctx.book.series[c.series] = { seriesId: created.seriesId, terms: held, auction: newAuctionBook(), window: null };
+      ctx.book.series[c.series] = { seriesId: created.seriesId, terms: held, window: null };
     });
   },
 };

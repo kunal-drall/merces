@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { WAD, capPerUnit, parsePeriod, requiredEscrow } from '@merces/math';
 import { PgSimPersistence, SimHarness, SimulatorChain, defaultTerms } from '@merces/simulator';
-import { ZERO_INCOME_COMMITMENT, bidCommitment, type ChainPort, type DomainEvent, type EventPayload, type EventType } from '@merces/domain';
+import { ZERO_INCOME_COMMITMENT, bidCommitment, runSettlement, type ChainPort, type DomainEvent, type EventPayload, type EventType } from '@merces/domain';
 import { Indexer, project } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -12,7 +12,8 @@ const GENESIS = Date.UTC(2026, 0, 1) / 1000;
  *  - S2-AD: commit and reveal durations are series terms, projected from SeriesCreated (migration 018);
  *  - S2-MS: Stage 1's settlement events, projected (migration 019);
  *  - S2-FP: a failed raise keeps its price and would-be results;
- *  - S2-RH: registerHolder (`HolderRegistered`).
+ *  - S2-RH: registerHolder (`HolderRegistered`);
+ *  - S2-PU: per-bid money movement: `TreasuryFunded` per processed winner, one treasury money row each.
  */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
@@ -383,6 +384,44 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
       'Settlement proposed (round 1)', 'Settlement round 1 rejected (ClaimMismatch)', 'Settlement proposed (round 2)', 'Auction settled: 500 units sold',
       '100 units allocated to a bidder', 'A bid was delivered', 'A bid was delivered', 'Raise minting finalised',
     ]);
+  });
+
+  // cause S2-MS, S2-PU: the engine's own settlement, step by step: the raise is Settling between begin and finalize; the
+  // money moves bid by bid at processing and the units become outstanding at the last process (was: all at settlement)
+  it('projects a real multi-step settlement: Settling, then the treasury per winner, the mint gate and undelivered units until delivery', async () => {
+    const key = 'settle-steps';
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const { seriesId } = await h.runRaise({ settle: 'none' });
+    const b0 = h.backers[0]!.address;
+    const series = async () => (await t.pool.query('select phase, mint_finalized, units_outstanding::text, treasury_total::text, settlement_round from series where series_id = $1', [seriesId])).rows[0];
+    const pos = async () => (await t.pool.query('select units::text, undelivered_units::text from positions where series_id = $1 and wallet = $2', [seriesId, b0])).rows[0];
+    const money = async (kind: string) => (await t.pool.query('select amount::text from money_events where series_id = $1 and kind = $2 order by seq', [seriesId, kind])).rows.map((r) => r.amount);
+    await idx.catchUp();
+    // validity is fixed at reveal and projected
+    expect((await t.pool.query('select valid from bids where series_id = $1 order by bid_order', [seriesId])).rows.map((r) => r.valid)).toEqual([true, true, true, true, true]);
+    // the proposal alone: the raise is Settling
+    await runSettlement(h.sim, seriesId, { until: 'finalize', maxSteps: 1, atLimit: 'stop' });
+    await idx.catchUp();
+    expect(await series()).toMatchObject({ phase: 'Settling', settlement_round: 1, mint_finalized: false });
+    // finalized: Settled, but no units outstanding and no treasury until the bids are processed
+    await h.settle(seriesId, 'finalize');
+    await idx.catchUp();
+    expect(await series()).toEqual({ phase: 'Settled', mint_finalized: false, units_outstanding: '0', treasury_total: '0', settlement_round: 1 });
+    expect(await money('treasury')).toEqual([]);
+    // every bid processed: the mint is final, each winner's cost funded the treasury, units count undelivered
+    await h.settle(seriesId, 'process');
+    await idx.catchUp();
+    expect(await series()).toEqual({ phase: 'Settled', mint_finalized: true, units_outstanding: '500', treasury_total: USDC(4500).toString(), settlement_round: 1 });
+    expect(await money('treasury')).toEqual(Array(5).fill(USDC(900).toString()));
+    expect(await pos()).toEqual({ units: '100', undelivered_units: '100' });
+    expect(await money('refund')).toEqual([]);
+    // delivered: the units are the holder's own, the refunds are paid (303/202/101/101; the last winner's is 0)
+    await h.settle(seriesId, 'deliver');
+    await idx.catchUp();
+    expect(await pos()).toEqual({ units: '100', undelivered_units: '0' });
+    expect(await money('refund')).toEqual([303, 202, 101, 101].map((n) => USDC(n).toString()));
+    expect((await t.pool.query('select count(*)::int as n from bids where series_id = $1 and processed and delivered', [seriesId])).rows[0].n).toBe(5);
   });
 
   // cause S2-FP: a failed raise keeps its price and would-be results on the auction; the issue price stays unset

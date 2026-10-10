@@ -1,5 +1,3 @@
-import type { BidState } from '@merces/domain';
-
 /**
  * Row → API shapes. Money stays a string; bigint columns arrive as strings from pg.
  *
@@ -79,17 +77,4 @@ export function reportingRow(r: Record<string, unknown>): Record<string, unknown
     openDueAmount: r.open_due_amount === null || r.open_due_amount === undefined ? '0' : String(r.open_due_amount),
     formalNoticeEmittedFor: r.formal_notice_emitted_for ?? null,
   };
-}
-
-/**
- * What claimRefund would pay a bidder right now: nothing before settlement; afterwards the deposit less the
- * allocated units at the issue price, the auction fee on that spend, and anything already refunded. Mirrors the
- * chain's settlement arithmetic so read routes and the refund builder agree.
- */
-export function bidRefundable(bid: Pick<BidState, 'deposit' | 'refunded' | 'revealed' | 'allocatedUnits' | 'settled'>, series: { issuePrice: string | null; terms: { auctionFeeBps: number | string } }): bigint {
-  if (!bid.settled) return 0n;
-  const spent = bid.revealed && BigInt(bid.allocatedUnits) > 0n ? BigInt(bid.allocatedUnits) * BigInt(series.issuePrice ?? '0') : 0n;
-  const fee = (spent * BigInt(series.terms.auctionFeeBps)) / 10_000n;
-  const r = BigInt(bid.deposit) - spent - fee - BigInt(bid.refunded);
-  return r > 0n ? r : 0n;
 }

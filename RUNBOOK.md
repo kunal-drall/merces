@@ -134,7 +134,7 @@ in the transaction that projects the finalized event, not by the keepers.
 
 | Job | Interval | What it does | If it stops |
 | --- | --- | --- | --- |
-| auction.settle | 1 min | settles raises whose reveal phase ended | settlement delays; anyone can call `settleAuction` |
+| auction.settle | 1 min | drives Stage 1's settlement of raises whose reveal phase ended (the proposal, the tally pages, finalize, a `processBid` and a `deliverBid` per bid; at most 64 steps per series per run, the next run goes on); a raise with no bid waits 24 h past its reveal end so its issuer can still cancel (A-AUC-12); a series the planner will not act on is reported as `stuck (<reason>)` | settlement and delivery delay (winners' units still accrue from processing); anyone can send the next step (`beginSettlement` … `deliverBid` are permissionless) |
 | auction.reveal-reminders | 10 min | reminds unrevealed bidders in the last 12 h | bidders may miss reveals |
 | status.crank | 1 h | `crankStatus` once the earliest unpaid period passes a status instant the chain has not recorded: InGrace after `dueAt`, Late after `graceEndsAt`, the formal notice at `formalNoticeAt` (period end + 30 / 45 / 90 days of unpaused time, Stage 1's inclusive bounds) | the stored and indexed status lags the derived one until any sync point; reads and money paths use the derived status, which is authoritative |
 | pause.crank | 1 h | announces hardship pauses whose approved end passed (`PauseEnded`) | events only: a pause ends by itself at its approved end (Stage 1), so the series is no longer Paused; only the notice lags |

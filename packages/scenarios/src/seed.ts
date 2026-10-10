@@ -1,6 +1,6 @@
 import { bidCommitment, termsCommitment, type SeriesTerms } from '@merces/domain';
 import { PILOT_COHORT, stripeFixtureFor, stripeGrossUntil, type SyntheticIssuer } from '@merces/fixtures';
-import { WAD, parsePeriod, periodsBetween, ratePerUnit, wadFromDecimal } from '@merces/math';
+import { WAD, parsePeriod, periodsBetween, ratePerUnit, requiredEscrow, wadFromDecimal } from '@merces/math';
 import { MemoryIncomeChain, assembleOnDevice, submitReportCommand } from '@merces/poi-device';
 import { LocalKms, MockZkTls, type IncomeSourceKind } from '@merces/ports';
 import { ReportVerifier } from '@merces/report-verifier';
@@ -84,17 +84,18 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
       const salt = '0x' + (0x10 + b).toString(16).padStart(2, '0').repeat(32);
       salts.push(salt);
       const c = bidCommitment({ seriesId, bidder: w.address, pricePerUnit: price, quantity: qty, salt });
-      const deposit = price * qty + (price * qty) / 100n;
+      const deposit = requiredEscrow(price, qty, terms.auctionFeeBps);
       await h.exec(w, { kind: 'commitBid', seriesId, commitment: c, deposit: deposit.toString() });
     }
     await sim.setTime(commitEndsAt);
     for (const [b, price] of prices.entries()) await h.exec(h.backers[b]!, { kind: 'revealBid', seriesId, pricePerUnit: price.toString(), quantity: qty.toString(), salt: salts[b]! });
     await sim.setTime(revealEndsAt);
-    const settled = await sim.submit({ kind: 'settleAuction', seriesId }, 'keeper');
-    const settledEv = settled.events.find((e) => e.type === 'AuctionSettled');
-    if (!settledEv) throw new Error(`seed: auction for ${issuer.handle} failed (${JSON.stringify(settled.events.map((e) => e.payload))}); fixture minimumRaise must be ≤ unitsOffered/2 × reservePrice`);
-    const clearing = BigInt((settledEv.payload as { clearingPrice: string }).clearingPrice);
-    for (const b of prices.keys()) await h.exec(h.backers[b]!, { kind: 'claimRefund', seriesId }).catch(() => undefined);
+    // Stage 1's settlement as the keeper: proposal, tally, finalize, a process and a delivery per bid (refunds and units
+    // are pushed to the backers)
+    await h.settle(seriesId, 'deliver');
+    const auction = (await sim.getAuction(seriesId))!;
+    if (auction.raiseState !== 'Settled') throw new Error(`seed: auction for ${issuer.handle} failed (${auction.failureReason}); fixture minimumRaise must be ≤ unitsOffered/2 × reservePrice`);
+    const clearing = BigInt(auction.clearingPrice!);
     await exec({ kind: 'drawRelease', seriesId });
     if (issuer.tier === 1) await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId, router: h.router });
     log(`${issuer.chain}:${issuer.handle} raised ${clearing * BigInt(qty) * 5n} at ${clearing}/unit`);

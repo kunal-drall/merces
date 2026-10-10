@@ -5,8 +5,9 @@ import { TEMPLATES, createServiceContext, safeData, type ServiceContext } from '
 import { MockChainlink, MockPyth } from '@merces/ports';
 import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimulatorChain } from '@merces/simulator';
+import { ChainError } from '@merces/domain';
 import type { ChainRegistry } from '@merces/chains';
-import { KeeperScheduler, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, rateKeeperJob, statusCrankJob, burnCrankJob, outboxJob } from '../src/index.ts';
+import { KeeperScheduler, auctionSettleJob, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, rateKeeperJob, statusCrankJob, burnCrankJob, outboxJob } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const GENESIS = Date.UTC(2026, 0, 1) / 1000;
@@ -153,6 +154,26 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     const out3 = await new KeeperScheduler(ctx3, [statusCrankJob]).runAll();
     expect(out3['status.crank']!.ok).toBe(false);
     expect(out3['status.crank']!.detail).toMatch(/fee payer out of funds/);
+  });
+
+  // cause S2-MS: the settle job drives Stage 1's steps (was the one-step settleAuction); its errors are value-free (S2 L7)
+  it('the auction job settles a due raise in Stage 1\'s steps and delivers it; a failure names the series and a code, never a message', async () => {
+    const a = await sol.runRaise({ settle: 'none' });
+    const out = await new KeeperScheduler(ctx, [auctionSettleJob]).runAll();
+    // the proposal, one tally page, finalize, then a process and a delivery for each of the five bids
+    expect(out['auction.settle']).toMatchObject({ ok: true, actions: 13 });
+    expect(await sol.sim.getAuction(a.seriesId)).toMatchObject({ raiseState: 'Settled', mintFinalized: true, bidsProcessed: 5 });
+    expect((await sol.sim.listBids(a.seriesId)).every((b) => b.delivered)).toBe(true);
+    expect((await new KeeperScheduler(ctx, [auctionSettleJob]).runAll())['auction.settle']).toMatchObject({ ok: true, actions: 0 });
+    // a submit refused with an amount in its message: the run fails with the series and the Stage 1 name only
+    const b = await mon.runRaise({ settle: 'none' });
+    const flaky = new Proxy(mon.sim, { get(target, k) { if (k === 'submit') return async () => { throw new ChainError('InsufficientFunds', 'fee payer is short by 123456789', { stage1: 'InsufficientEscrow' }); }; const v = Reflect.get(target, k); return typeof v === 'function' ? v.bind(target) : v; } });
+    const reg: ChainRegistry = { chains: new Map([['monad', flaky as never]]), decisions: [], stage1: null, get: () => flaky as never, byFamily: () => flaky as never, close: async () => undefined };
+    const out2 = await new KeeperScheduler(createServiceContext(makeContext({ pool: t.pool, chains: reg, log: silent, sessionSecret: 's', devMode: true })), [auctionSettleJob]).runAll();
+    expect(out2['auction.settle']).toMatchObject({ ok: false, actions: 0, detail: `errors: ${b.seriesId}: InsufficientEscrow` });
+    expect(out2['auction.settle']!.detail).not.toContain('123456789');
+    expect((await mon.sim.getAuction(b.seriesId))!.raiseState).toBe('Open');
+    await mon.settle(b.seriesId, 'deliver');
   });
 
   it('reminders and the status crank follow Stage 1\'s instants: InGrace after dueAt, Late after graceEndsAt, formal notice at formalNoticeAt', async () => {

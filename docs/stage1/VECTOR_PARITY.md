@@ -63,11 +63,7 @@ The merces backend runs these Stage 1 ops through canonical calls of another sha
 | SH-REG-2 | `register_attestor`, `revoke_attestor` | admin registerAttestor{active} | no 45-day revocation grace modelled | S4 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
 | SH-REG-3 | `register_verifier_key` | registerVerifierKey{keyId: name, ed25519 SPKI from the seed} | Stage 1 verifier keys are secp256k1 | S4 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
 | SH-REG-4 | `create_series` | createSeries (USDC, USD, sealed; due/grace/notice days from config.parameters; tier bitmask → object; atOffsetSeconds → afterSeconds); window durations and windowFeeBps held by the runner, their Stage 1 bounds unchecked | canonical terms lack those fields | S5 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
-| SH-AUC-2 | `commit_bid` | commitBid{commitment recomputed from the plaintext, deposit = escrow} | Stage 1 uses a keccak commitment | S2 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
-| SH-AUC-3 | `begin_settlement` | keeper settleAuction (one step) when Stage 1's tally of the same revealed bids accepts the proposal (claims and isClearingPriceValid), then our price and units checked against it; a proposal Stage 1 rejects is BLOCKED | canonical settlement is one step | S2 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
-| SH-AUC-4 | `finalize_settlement` | no-op; asserts Settled or Failed | canonical settlement is one step | S2 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
-| SH-AUC-5 | `process_bid` | no-op; bookkeeping of processed bids and minted units (the engine's allocation) | canonical settlement mints inside settleAuction | S2 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
-| SH-AUC-6 | `deliver_bid` | claimRefund when refundable > 0, else nothing; bookkeeping of delivery | push vs pull refunds | S2 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
+| SH-AUC-2 | `commit_bid` | commitBid{commitment recomputed from the plaintext by our builder, which decodes the price and quantity as u64s (AmountOutOfRange), deposit = escrow} | Stage 1 uses a keccak commitment | S4 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
 | SH-REP-1 | `submit_report` | submitReport{prior, income, Groth16 proof and signals}; tier-2 attestation signed by the runner with the named key; tier 3 co-signed by the attestor | signatures are S4; proofs are real | S4 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
 | SH-PAY-1 | `pay` | payIn{periodId: open due period (else the next expected period), amount: the period payment due} | Stage 1's pay has no amount or period | S5 | 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 |
 | SH-PAU-1 | `request_pause` | requestPause{until: t + maxPauseSeconds} | Stage 1's request has no end | S5 | 19 |
@@ -90,7 +86,7 @@ The merces backend runs these Stage 1 ops through canonical calls of another sha
 | BLK-1 (BLOCKED) | `retire_if_capped` | none: BLOCKED (waived in 01#34, 05#42) | no canonical command | S5 | 01, 05 |
 | NA-1 (N/A) | `transfer_units` | none: N/A (01#32) | the canonical model has no transfer to refuse | — | 01 |
 
-Shim-derived view fields (runner bookkeeping, also not parity): `auction.tallyRound`, `roundRejected`, `rejectionReason`, `qAbove`, `qAt`, `R`, `unitsMinted`, `bidsProcessed`, `auctionEscrowUnits`; `holders.*.pendingUnits`, `pendingRefund` (from the engine's `refundable`) and `delivered`; `window.period`, `state`, `tallyRound`, `roundRejected`, `branch` and `matchedUnits`.
+Shim-derived view fields (runner bookkeeping, also not parity): `window.period`, `state`, `tallyRound`, `roundRejected`, `branch` and `matchedUnits`. Every auction and holder field comes from the engine (S2).
 
 ## Not replayed on the merces backend in S1
 
@@ -114,31 +110,31 @@ Shim-derived view fields (runner bookkeeping, also not parity): `auction.tallyRo
 
 | Vector | Steps | Expect checks | Expected reverts | Ops the merces backend shims, blocks or lacks in S1 |
 | --- | --- | --- | --- | --- |
-| 01_happy_path.json | 67 | 10 | 9 | `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report`, `transfer_units` |
-| 02_failed_auction.json | 38 | 4 | 7 | `begin_settlement`, `cancel_raise`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key` |
-| 03_auction_edges.json | 78 | 7 | 12 | `begin_settlement`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key` |
-| 04_zero_quarters.json | 81 | 7 | 6 | `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 05_cap_hit.json | 54 | 6 | 4 | `amend_terms`, `begin_settlement`, `burn_retired`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
-| 06_redemption_terms.json | 116 | 9 | 5 | `begin_settlement`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 07_late_payment.json | 59 | 10 | 2 | `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 08_hardship_pause.json | 64 | 7 | 8 | `approve_pause`, `begin_settlement`, `commit_bid`, `create_series`, `deliver_bid`, `end_pause`, `finalize_settlement`, `pay`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
-| 09_tail_clause.json | 95 | 7 | 4 | `begin_settlement`, `claim_tail`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 10_transfer_window.json | 92 | 6 | 12 | `begin_settlement`, `begin_window_settlement`, `claim`, `commit_ask`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `finalize_window`, `open_window`, `pay`, `process_bid`, `process_orders`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `set_flags`, `submit_report`, `transfer_units`, `window_commit_bid` |
-| 11_extinguishment.json | 52 | 4 | 7 | `amend_terms`, `begin_settlement`, `claim_final`, `commit_bid`, `create_series`, `deliver_bid`, `extinguish`, `finalize_settlement`, `pay`, `process_bid`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `revoke_attestor`, `submit_report` |
-| 12_multi_series_router.json | 118 | 10 | 6 | `begin_settlement`, `claim`, `close_router_period`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `resume_issuance`, `route_income`, `stop_issuance`, `submit_report` |
-| 13_fx.json | 281 | 5 | 10 | `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `fx_snapshot`, `pay`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
-| 14_amendment.json | 83 | 6 | 8 | `amend_terms`, `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
-| 15_zero_valid_bids.json | 35 | 4 | 7 | `begin_settlement`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 16_demand_limited_window.json | 77 | 6 | 0 | `begin_settlement`, `begin_window_settlement`, `claim`, `commit_ask`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `finalize_window`, `open_window`, `pay`, `process_bid`, `process_orders`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `set_flags`, `submit_report`, `window_commit_bid` |
-| 17_undelivered_winner.json | 51 | 4 | 4 | `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `register_attestor`, `register_holder`, `register_issuer`, `register_verifier_key`, `submit_report` |
-| 18_report_before_finalization.json | 51 | 6 | 5 | `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `route_income`, `submit_report` |
-| 19_pause_while_late.json | 60 | 8 | 4 | `approve_pause`, `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report` |
-| 20_tier3_trueup.json | 120 | 11 | 12 | `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `pay_trueup`, `process_bid`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report`, `submit_trueup` |
-| 21_entry_rules.json | 61 | 5 | 10 | `approve_pause`, `begin_settlement`, `burn_retired`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `pay`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
-| 22_late_holder_tail_final.json | 111 | 6 | 1 | `begin_settlement`, `begin_window_settlement`, `claim_final`, `claim_tail`, `commit_ask`, `commit_bid`, `create_series`, `deliver_bid`, `extinguish`, `finalize_settlement`, `finalize_window`, `open_window`, `pay`, `process_bid`, `process_orders`, `redeem`, `register_attestor`, `register_holder`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
-| 23_redeem_twice_with_tail.json | 63 | 2 | 0 | `begin_settlement`, `begin_window_settlement`, `claim_tail`, `commit_ask`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `finalize_window`, `open_window`, `pay`, `process_bid`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report` |
-| 24_inverted_fx.json | 94 | 2 | 0 | `begin_settlement`, `claim`, `commit_bid`, `create_series`, `deliver_bid`, `finalize_settlement`, `fx_snapshot`, `pay`, `process_bid`, `register_attestor`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
-| 25_window_on_terminal.json | 91 | 2 | 0 | `begin_settlement`, `begin_window_settlement`, `commit_ask`, `commit_bid`, `create_series`, `deliver_bid`, `extinguish`, `finalize_settlement`, `finalize_window`, `open_window`, `pay`, `process_bid`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
+| 01_happy_path.json | 67 | 10 | 9 | `claim`, `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report`, `transfer_units` |
+| 02_failed_auction.json | 38 | 4 | 7 | `commit_bid`, `create_series`, `register_attestor`, `register_issuer`, `register_verifier_key` |
+| 03_auction_edges.json | 78 | 7 | 12 | `commit_bid`, `create_series`, `register_attestor`, `register_issuer`, `register_verifier_key` |
+| 04_zero_quarters.json | 81 | 7 | 6 | `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 05_cap_hit.json | 54 | 6 | 4 | `amend_terms`, `burn_retired`, `claim`, `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
+| 06_redemption_terms.json | 116 | 9 | 5 | `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 07_late_payment.json | 59 | 10 | 2 | `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 08_hardship_pause.json | 64 | 7 | 8 | `approve_pause`, `commit_bid`, `create_series`, `end_pause`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
+| 09_tail_clause.json | 95 | 7 | 4 | `claim_tail`, `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 10_transfer_window.json | 92 | 6 | 12 | `begin_window_settlement`, `claim`, `commit_ask`, `commit_bid`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `set_flags`, `submit_report`, `transfer_units`, `window_commit_bid` |
+| 11_extinguishment.json | 52 | 4 | 7 | `amend_terms`, `claim_final`, `commit_bid`, `create_series`, `extinguish`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `revoke_attestor`, `submit_report` |
+| 12_multi_series_router.json | 118 | 10 | 6 | `claim`, `close_router_period`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `resume_issuance`, `route_income`, `stop_issuance`, `submit_report` |
+| 13_fx.json | 281 | 5 | 10 | `claim`, `commit_bid`, `create_series`, `fx_snapshot`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
+| 14_amendment.json | 83 | 6 | 8 | `amend_terms`, `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `submit_report` |
+| 15_zero_valid_bids.json | 35 | 4 | 7 | `commit_bid`, `create_series`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 16_demand_limited_window.json | 77 | 6 | 0 | `begin_window_settlement`, `claim`, `commit_ask`, `commit_bid`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `set_flags`, `submit_report`, `window_commit_bid` |
+| 17_undelivered_winner.json | 51 | 4 | 4 | `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report` |
+| 18_report_before_finalization.json | 51 | 6 | 5 | `claim`, `commit_bid`, `create_series`, `pay`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `retire_if_capped`, `route_income`, `submit_report` |
+| 19_pause_while_late.json | 60 | 8 | 4 | `approve_pause`, `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report` |
+| 20_tier3_trueup.json | 120 | 11 | 12 | `claim`, `commit_bid`, `create_series`, `pay`, `pay_trueup`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `submit_report`, `submit_trueup` |
+| 21_entry_rules.json | 61 | 5 | 10 | `approve_pause`, `burn_retired`, `claim`, `commit_bid`, `create_series`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `request_pause`, `submit_report`, `withdraw_pause_request` |
+| 22_late_holder_tail_final.json | 111 | 6 | 1 | `begin_window_settlement`, `claim_final`, `claim_tail`, `commit_ask`, `commit_bid`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
+| 23_redeem_twice_with_tail.json | 63 | 2 | 0 | `begin_window_settlement`, `claim_tail`, `commit_ask`, `commit_bid`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report` |
+| 24_inverted_fx.json | 94 | 2 | 0 | `claim`, `commit_bid`, `create_series`, `fx_snapshot`, `pay`, `register_attestor`, `register_issuer`, `register_verifier_key`, `set_fx_pair`, `submit_report` |
+| 25_window_on_terminal.json | 91 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `commit_bid`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_attestor`, `register_issuer`, `register_verifier_key`, `reveal_order`, `submit_report`, `window_commit_bid` |
 
 ### Ops used and how they run on the merces backend in S1
 
@@ -147,19 +143,19 @@ Shim-derived view fields (runner bookkeeping, also not parity): `auction.tallyRo
 | `fx_snapshot` | 282 | snapshotRate | not in S1 (S5) |
 | `submit_report` | 173 | submitReport (Groth16 proof; attestation signed by the runner) | shim (SH-REP-1) |
 | `expect` | 154 | runner assertion | harness |
-| `commit_bid` | 151 | commitBid (our commitment recomputed from the plaintext) | shim (SH-AUC-2) |
-| `deliver_bid` | 149 | claimRefund for losers; none for winners | shim (SH-AUC-6) |
-| `process_bid` | 147 | none (canonical settlement mints inside settleAuction) | shim (SH-AUC-5) |
+| `commit_bid` | 151 | commitBid (our commitment recomputed from the plaintext; u64 price and quantity) | shim (SH-AUC-2) |
+| `deliver_bid` | 149 | deliverBid | direct |
+| `process_bid` | 147 | processBid | direct |
 | `reveal_bid` | 145 | revealBid | direct |
 | `expect_revert` | 143 | runner assertion (canonical error names) | harness |
 | `fund` | 136 | simulator fund (test faucet) | harness |
 | `pay` | 87 | payIn (period and amount supplied by the runner) | shim (SH-PAY-1) |
 | `claim` | 81 | claimPayout | shim (SH-CLM-1) |
 | `register_attestor` | 51 | registerAttestor | shim (SH-REG-2) |
-| `begin_settlement` | 42 | settleAuction (one step; Stage 1 is proposer claims + paged tally + finalize) | shim (SH-AUC-3) |
+| `begin_settlement` | 42 | beginSettlement (permissionless; sent by the keeper) | direct |
 | `claim_release` | 41 | drawRelease | direct |
 | `create_series` | 41 | createSeries (window durations and fee held by the runner) | shim (SH-REG-4) |
-| `finalize_settlement` | 39 | none (settled inside settleAuction) | shim (SH-AUC-4) |
+| `finalize_settlement` | 39 | tallyBids (every page) then finalizeSettlement | direct |
 | `open_raise` | 38 | openRaise (the phase ends from the series durations) | direct |
 | `allowlist` | 27 | setAllowlist | direct |
 | `register_issuer` | 25 | registerIssuer signed by the wallet (Stage 1: admin-only) | shim (SH-REG-1) |
@@ -189,10 +185,10 @@ Shim-derived view fields (runner bookkeeping, also not parity): `auction.tallyRo
 | `pay_trueup` | 3 | none (tier-3 true-up) | not in S1 (S5) |
 | `set_fx_pair` | 3 | none (admin FX pair configuration) | not in S1 (S5) |
 | `withdraw_pause_request` | 3 | none | not in S1 (S5) |
-| `register_holder` | 2 | none (canonical holders are implicit in positions) | not in S1 (S3) |
+| `register_holder` | 2 | registerHolder | direct |
 | `set_flags` | 2 | pauseNewRaises (Stage 1 also has windows_enabled) | not in S1 (S5) |
 | `transfer_units` | 2 | none: a direct unit transfer, used only inside expect_revert (DirectTransferForbidden); the canonical model has no transfer to refuse | n/a (NA-1) |
-| `cancel_raise` | 1 | cancelRaise | not in S1 (S2) |
+| `cancel_raise` | 1 | cancelRaise | direct |
 | `resume_issuance` | 1 | none | not in S1 (S5) |
 | `revoke_attestor` | 1 | registerAttestor(active=false) (Stage 1: forward-only with a 45-day grace) | shim (SH-REG-2) |
 | `stop_issuance` | 1 | stopIssuance | not in S1 (S5) |

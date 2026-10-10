@@ -41,7 +41,10 @@ const raw = (name: string) => JSON.parse(readFileSync(join(VECTORS, `${name}.jso
  * S2 cause codes:
  *  - S2-CR: Stage 1's creation rules over the raise's own terms (commit and reveal durations, the non-reveal charge),
  *    canonical since S2; `open_raise` runs directly (shim SH-AUC-1 retired);
- *  - S2-VR: a bid's validity is fixed at reveal (Stage 1 `isBidValid`): an over-cap bid is invalid and refunded in full.
+ *  - S2-VR: a bid's validity is fixed at reveal (Stage 1 `isBidValid`): an over-cap bid is invalid and refunded in full;
+ *  - S2-MS: Stage 1's multi-step settlement runs directly (begin, tally and finalize, process, deliver; shims
+ *    SH-AUC-3..6 retired, the auction and holder views come from the engine);
+ *  - S2-RH: `register_holder` runs directly (with `cancel_raise`, no longer outside the milestone).
  */
 afterAll(shutdown);
 
@@ -297,7 +300,7 @@ describe('stage1:vectors CLI', () => {
 // merces backend (S1 WP9b): our SimulatorChain through the translators and the shim table
 // ---------------------------------------------------------------------------------------------------------------
 
-/** The ops of the bootstrap and of the raise (one-step settlement shims); a target's raise prefix ends before the first other op. */
+/** The ops of the bootstrap and of the raise (Stage 1's settlement steps); a target's raise prefix ends before the first other op. */
 const RAISE_PREFIX_OPS = new Set(['register_attestor', 'register_verifier_key', 'allowlist', 'register_issuer', 'fund', 'create_series', 'open_raise', 'commit_bid', 'reveal_bid', 'begin_settlement', 'finalize_settlement', 'process_bid', 'deliver_bid', 'expect']);
 function raisePrefixEnd(v: LoadedVector): number {
   const i = v.steps.findIndex((s) => !RAISE_PREFIX_OPS.has(s.op));
@@ -313,7 +316,9 @@ describe('stage1 vector runner: merces backend', () => {
       expect(run.status).toBe('PASS');
       expect(run.executed).toBe(32);
       expect(run.stopped).toEqual({ index: 32, reason: 'until' });
-      expect(run.shims['SH-AUC-3']).toBeGreaterThan(0);
+      // cause S2-MS: only the commitment is still a shim (SH-AUC-2, S4); the settlement steps run directly
+      expect(run.shims['SH-AUC-2']).toBeGreaterThan(0);
+      expect(Object.keys(run.shims).filter((id) => id.startsWith('SH-AUC-'))).toEqual(['SH-AUC-2']);
     }
     expect(r.ok).toBe(true);
   }, 120_000);
@@ -364,7 +369,7 @@ describe('stage1 vector runner: merces backend', () => {
   }, 60_000);
 
   // cause S2-VR: validity is fixed at reveal on both backends (was: the one-step settlement clamped the over-cap bid to
-  // the cap and filled it, so the SH-AUC-3 shim found the models disagree and failed the step)
+  // the cap and filled it, so the retired SH-AUC-3 shim found the models disagree and failed the step)
   it('an over-cap bid is invalid on both backends: the settlements agree, and lockstep agrees through the raise', async () => {
     // b1 bids 150 units, above the 100-unit wallet cap: Stage 1 records the bid as invalid and refunds it in full
     const src = raw('01_happy_path');
@@ -376,7 +381,8 @@ describe('stage1 vector runner: merces backend', () => {
       if (s.op === 'begin_settlement') s.qAboveClaim = '200';
     }
     const v = fromJson(src, '01_happy_path');
-    const i = v.steps.findIndex((s) => s.op === 'begin_settlement');
+    // cause S2-MS: the raise settles at finalize_settlement (begin_settlement only proposes)
+    const i = v.steps.findIndex((s) => s.op === 'finalize_settlement');
     const world = await MercesWorld.create(v, { personality: 'monad' });
     for (const step of v.steps.slice(0, i + 1)) {
       world.setTime(BigInt(step.t));
@@ -385,18 +391,33 @@ describe('stage1 vector runner: merces backend', () => {
     const series = [...world.chain.state.series.values()][0]!;
     const b1 = series.bids.get(world.actors.address('b1'))!;
     expect([b1.valid, b1.revealed?.quantity]).toEqual([false, 150n]);
-    expect([series.phase, series.unitsSold, series.issuePrice]).toEqual(['Settled', 300n, 105_000_000n]);
+    expect([series.phase, series.unitsSold, series.issuePrice, series.auction.validCount]).toEqual(['Settled', 300n, 105_000_000n, 3]);
     const lock = (await runStage1Vectors({ vectors: [v], backend: 'lockstep', until: raisePrefixEnd(v), personalities: ['monad'] })).runs[0]!;
     expect(lock.issues).toEqual([]);
   }, 60_000);
 
-  it('a proposal Stage 1 would reject is BLOCKED, not run', async () => {
+  // cause S2-MS: a proposal Stage 1 rejects is recorded and the next round runs (was: BLOCKED, the one-step settlement
+  // could not represent a rejected round)
+  it('a proposal Stage 1 would reject is recorded (ClaimMismatch) and the next round settles, on the runner and in lockstep', async () => {
     const src = raw('01_happy_path');
     const i = src.steps.findIndex((s) => s.op === 'begin_settlement');
+    const honest = structuredClone(src.steps[i]!);
+    expect(src.steps[i + 1]).toMatchObject({ op: 'finalize_settlement' });
     src.steps[i]!.qAtClaim = '99';
-    const run = (await runStage1Vectors({ vectors: [fromJson(src, '01_happy_path')], backend: 'merces', until: i, personalities: ['solana'] })).runs[0]!;
-    expect(run.issues).toEqual([{ index: i, op: 'begin_settlement', kind: 'blocked', message: 'cannot run on this backend yet; not run (Stage 1 rejects this proposal (ClaimMismatch); one-step settlement cannot represent a rejected round)', shimId: 'SH-AUC-3' }]);
-    expect(run.status).toBe('BLOCKED');
+    // the rejected round, then the honest proposal and its finalize at the same instant
+    src.steps.splice(i + 2, 0, honest, { t: honest.t, op: 'finalize_settlement', series: 'S1' });
+    const v = fromJson(src, '01_happy_path');
+    const world = await MercesWorld.create(v, { personality: 'solana' });
+    const auction = () => [...world.chain.state.series.values()][0]!.auction;
+    for (const [k, step] of v.steps.slice(0, i + 4).entries()) {
+      world.setTime(BigInt(step.t));
+      if (step.op !== 'expect') await world.apply(step as unknown as Parameters<typeof world.apply>[0]);
+      if (k === i + 1) expect([auction().tallyRound, auction().roundRejected, auction().rejectionReason, [...world.chain.state.series.values()][0]!.phase]).toEqual([1, true, 'ClaimMismatch', 'Settling']);
+    }
+    expect([auction().tallyRound, auction().roundRejected, auction().rejectionReason, auction().unitsSold, auction().clearingPrice]).toEqual([2, false, null, 400n, 105_000_000n]);
+    await world.close();
+    const lock = (await runStage1Vectors({ vectors: [v], backend: 'lockstep', until: raisePrefixEnd(v), personalities: ['solana'] })).runs[0]!;
+    expect(lock.issues).toEqual([]);
   }, 60_000);
 
   // review finding "Waivers match any shim-less BLOCKED op at a waived step index": 01#34 turned into an op outside S1
@@ -587,6 +608,11 @@ describe('stage1 vector runner: merces backend', () => {
     }
     const notInS1 = Object.fromEntries(Object.entries(STAGE1_OP_MAP).filter(([, m]) => m.kind === 'not-in-s1').map(([op, m]) => [op, m.milestone]));
     expect(NOT_IN_S1).toEqual(notInS1);
+    // cause S2-RH, S2-MS: the raise's ops run directly since S2, `commit_bid` aside (our commitment until S4)
+    expect(NOT_IN_S1).not.toHaveProperty('cancel_raise');
+    expect(NOT_IN_S1).not.toHaveProperty('register_holder');
+    for (const op of ['open_raise', 'cancel_raise', 'reveal_bid', 'begin_settlement', 'finalize_settlement', 'process_bid', 'deliver_bid', 'register_holder']) expect(STAGE1_OP_MAP[op]?.kind, op).toBe('direct');
+    expect(STAGE1_OP_MAP.commit_bid).toMatchObject({ kind: 'shim', shim: 'SH-AUC-2' });
   });
 
   it('vector keys become stable ed25519 verifier keys whose attestations verify', async () => {
@@ -627,7 +653,9 @@ describe('stage1 vector runner: merces backend', () => {
     const section = md.slice(md.indexOf('## Shims (not parity)'));
     expect(section.length).toBeGreaterThan(0);
     for (const s of SHIM_BY_ID.values()) expect(section, s.id).toContain(`| ${s.id}`);
-    expect(section).toMatch(/\| SH-AUC-3 \| `begin_settlement` \|[^\n]*\| S2 \| 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 \|/);
+    // cause S2-MS: the commitment is the raise's only shim left (SH-AUC-3..6 retired); it goes in S4
+    expect(section).toMatch(/\| SH-AUC-2 \| `commit_bid` \|[^\n]*\| S4 \| 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 \|/);
+    expect(section).not.toMatch(/SH-AUC-[3-6]/);
     expect(section).toMatch(/\| BLK-1 \(BLOCKED\) \| `retire_if_capped` \|/);
     // review finding "VECTOR_PARITY.md 'Used in' leaves out shims exercised by expect_revert steps": the calls of
     // passing reverts went through their shims too (amend_terms at 05#44 and 11#45, redeem at 01#33, 05#43, 11#43)

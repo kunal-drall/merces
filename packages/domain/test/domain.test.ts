@@ -5,7 +5,7 @@ import { BN254_FR, CURRENCY_CODES, DEFAULT_PARAMETERS } from '@merces/math';
 import { randomBytes } from 'node:crypto';
 import {
   DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, seriesTermsViolations, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
-  attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
+  ChainError, attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, termsCommitment, userCommandSchema,
   type IndexingRule,
 } from '../src/index.ts';
@@ -15,7 +15,8 @@ import {
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
  *  - S2-NRC: the non-reveal charge hold (new series record 0 bps; 0 bps applies whatever a series records);
  *  - S2-MS: multi-step settlement (Stage 1's settlement events);
- *  - S2-RH: registerHolder (`HolderRegistered`).
+ *  - S2-RH: registerHolder (`HolderRegistered`);
+ *  - S2-E: Stage 1's auction error names (`detail.stage1`).
  */
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
@@ -97,6 +98,20 @@ describe('hashing', () => {
   });
   it('other commitments and the attestation message keep their encodings', () => {
     expect(bidCommitment({ seriesId: 's', bidder: 'b', pricePerUnit: 10n, quantity: 5n, salt: 'x' })).toMatch(/^0x[0-9a-f]{64}$/);
+    // cause S2-E: the price and the quantity are u64s, as Stage 1's commit_bid decodes them (AmountOutOfRange, value-free)
+    const U64_MAX = 2n ** 64n - 1n;
+    expect(bidCommitment({ seriesId: 's', bidder: 'b', pricePerUnit: U64_MAX, quantity: U64_MAX.toString(), salt: 'x' })).toMatch(/^0x[0-9a-f]{64}$/);
+    for (const [pricePerUnit, quantity] of [[U64_MAX + 1n, 5n], [10n, (U64_MAX + 1n).toString()], [-1n, 5n]] as const) {
+      let err: unknown;
+      try {
+        bidCommitment({ seriesId: 's', bidder: 'b', pricePerUnit, quantity, salt: 'x' });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ChainError);
+      expect(err).toMatchObject({ code: 'InvalidTerms', detail: { stage1: 'AmountOutOfRange' } });
+      expect((err as Error).message).not.toMatch(/\d{5,}/);
+    }
     const msg = new TextDecoder().decode(attestationMessage({ seriesId: 's', periodId: '2026Q1', priorIncomeCommitment: ZERO_INCOME_COMMITMENT, incomeCommitment: '0x' + '01'.repeat(32), tier: 2, liquidityEvent: false }));
     expect(msg.startsWith('merces/attestation/v1\n')).toBe(true);
     expect(msg).toContain('"priorIncomeCommitment"');

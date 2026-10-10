@@ -286,6 +286,11 @@ export interface RunSettlementOptions {
   until: SettlementGoal;
   /** a bound on submits and re-plans (default 256) */
   maxSteps?: number;
+  /**
+   * What reaching `maxSteps` does: `'throw'` (the default) raises ChainSpecific; `'stop'` returns what was sent with
+   * `limited` set (a keeper that bounds its work per run and comes back on the next).
+   */
+  atLimit?: 'throw' | 'stop';
   /** how a step is sent; the keeper's `submit` by default (a wallet may build and sign any step instead) */
   submit?: (command: PermissionlessCommand) => Promise<TxResult>;
 }
@@ -299,6 +304,8 @@ export interface SettlementRun {
   stuck?: SettlementStuckReason;
   /** set when the run stopped to wait for the chain clock (the reveal end) */
   waitUntil?: number;
+  /** set when the run stopped at `maxSteps` with work left (`atLimit: 'stop'`) */
+  limited?: true;
   /** the transactions sent */
   results: TxResult[];
 }
@@ -333,7 +340,10 @@ export async function runSettlement(port: ChainPort, seriesId: string, opts: Run
     if (step.kind === 'done') return { steps, stage: step.stage, results };
     if (step.kind === 'wait') return { steps, stage: step.stage, waitUntil: step.until, results };
     if (step.kind === 'stuck') return { steps, stage: step.stage, stuck: step.reason, results };
-    if (attempts >= maxSteps) throw new ChainError('ChainSpecific', `settlement of ${seriesId} did not finish within ${maxSteps} steps`);
+    if (attempts >= maxSteps) {
+      if (opts.atLimit === 'stop') return { steps, stage: step.stage, limited: true, results };
+      throw new ChainError('ChainSpecific', `settlement of ${seriesId} did not finish within ${maxSteps} steps`);
+    }
     try {
       results.push(await submit(step.command));
       steps.push(step.command.kind);

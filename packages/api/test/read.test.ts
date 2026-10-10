@@ -6,6 +6,11 @@ import { project } from '@merces/indexer';
 import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
+/*
+ * S2 cause codes:
+ *  - S2-PR: push delivery (`deliverBid`): the raise delivers every bid's refund and units; `claimRefund` retired;
+ *  - S2-RH: registerHolder (`HolderRegistered`).
+ */
 
 describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -16,9 +21,8 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
   let strangerTok: string;
   beforeAll(async () => {
     rig = await makeRig();
-    // refunds stay pending (processed, not delivered) for the pull-refund pins below (build-refund, refundable); S2 WP4b
-    // moves them to push delivery and drops `settle`
-    const a = await rig.sol.runRaise({ settle: 'process' });
+    // cause S2-PR: the raise delivers every bid (push delivery), so nothing is left refundable below
+    const a = await rig.sol.runRaise();
     seriesId = a.seriesId;
     monSeriesId = (await rig.mon.runRaise()).seriesId;
     await rig.sol.sim.setTime(parsePeriod('2026Q3').end + 86_400);
@@ -99,14 +103,13 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     expect((await rig.get('/me/holdings')).statusCode).toBe(401);
     const mine = await rig.get('/me/bids', holderTok);
     expect(mine.json().bids[0].allocatedUnits).toBe('100');
-    // refundable excludes the allocated spend and its fee, and agrees with the refund builder:
-    // deposit 1212 USDC (100 × 12 + 1%), spent 100 × 9 = 900, fee 9 → 303 USDC
-    expect(mine.json().bids[0].refundable).toBe(USDC(303).toString());
-    const built = await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: rig.sol.backers[0]!.address }, holderTok);
-    expect(built.json().refundable).toBe(mine.json().bids[0].refundable);
-    // a bidder at the clearing price who won everything has nothing to refund
+    // cause S2-PR: the refund was pushed at delivery: the deposit 1212 USDC (100 × 12 + 1%) less the cost 100 × 9 = 900
+    // and its 9 fee → 303 USDC delivered; nothing is refundable any more and the delivery builder refuses (409)
+    expect(mine.json().bids[0]).toMatchObject({ valid: true, processed: true, delivered: true, pendingUnits: '0', pendingRefund: '0', refundable: '0', refunded: USDC(303).toString() });
+    expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: rig.sol.backers[0]!.address }, holderTok)).statusCode).toBe(409);
+    // a bidder at the clearing price who won everything had nothing to refund
     const lastTok = rig.token({ accountId: 'b4', wallets: [{ chain: 'solana', address: rig.sol.backers[4]!.address }], roles: ['backer'] });
-    expect((await rig.get('/me/bids', lastTok)).json().bids[0].refundable).toBe('0');
+    expect((await rig.get('/me/bids', lastTok)).json().bids[0]).toMatchObject({ refundable: '0', refunded: '0', delivered: true });
     expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: rig.sol.backers[4]!.address }, lastTok)).statusCode).toBe(409);
   });
 

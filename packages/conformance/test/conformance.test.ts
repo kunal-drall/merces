@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { bidCommitment, type DomainEvent } from '@merces/domain';
-import { WAD, capPerUnit, parsePeriod } from '@merces/math';
+import { bidCommitment, runSettlement, type DomainEvent } from '@merces/domain';
+import { WAD, capPerUnit, parsePeriod, requiredEscrow } from '@merces/math';
 import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv } from '../src/env.ts';
 
 /**
@@ -17,7 +17,11 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - P: Stage 1's approve_pause takes an active attestor's signature (InvalidAttestorSignature, code InvalidAttestation);
  *  - RD: Stage 1's claim_redemption of 0 units succeeds.
  * S2 cause codes:
- *  - S2-AD: commit and reveal durations are series terms; `openRaise` derives the phase ends from them.
+ *  - S2-AD: commit and reveal durations are series terms; `openRaise` derives the phase ends from them;
+ *  - S2-MS: Stage 1's multi-step settlement (begin, tally pages, finalize, a process per bid), permissionless, driven by
+ *    the domain's `runSettlement`; Stage 1's error names (SettlementNotReady); `AuctionSettled` has no fee total;
+ *  - S2-PR: push delivery (`deliverBid`, any wallet; `claimRefund` retired): a winner's units count from processing;
+ *  - S2-PU: per-bid money movement: one `FeeTaken` per processed winner.
  */
 const types = (evs: DomainEvent[]) => evs.map((e) => e.type);
 
@@ -69,7 +73,8 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     void stranger;
   });
 
-  it('runs a sealed-bid raise: commit, reveal, settle at one price with fees, pull refunds, mint within the wallet cap', async () => {
+  // cause S2-MS, S2-PR (was: one-step settleAuction and a pulled refund)
+  it('runs a sealed-bid raise: commit, reveal, Stage 1\'s settlement steps at one price with fees, push delivery, mint within the wallet cap', async () => {
     const e = env();
     const now = await e.chain.now();
     // cause S2-AD: the chain derives the phase ends from the series' durations
@@ -80,9 +85,10 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     expect(opened.events.find((x) => x.type === 'RaiseOpened')!.payload).toMatchObject({ commitEndsAt, revealEndsAt });
     expect([commitEndsAt - now >= e.durations.commit, revealEndsAt - commitEndsAt]).toEqual([true, e.durations.reveal]);
     const bids = [12, 11, 10, 10, 9].map((p, i) => ({ w: e.backers[i]!, price: USDC(p), qty: 100n, salt: '0x' + (0x30 + i).toString(16).padStart(2, '0').repeat(32) }));
+    const terms = (await e.chain.getSeries(seriesId))!.terms;
     for (const b of bids) {
       const c = bidCommitment({ seriesId, bidder: b.w.address, pricePerUnit: b.price, quantity: b.qty, salt: b.salt });
-      const deposit = b.price * b.qty + (b.price * b.qty) / 100n;
+      const deposit = requiredEscrow(b.price, b.qty, terms.auctionFeeBps);
       const r = await exec(e, b.w, { kind: 'commitBid', seriesId, commitment: c, deposit: deposit.toString() });
       expect(types(r.events)).toEqual(['BidCommitted']);
     }
@@ -91,23 +97,39 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     await e.waitUntil(commitEndsAt);
     await expectChainError(exec(e, bids[0]!.w, { kind: 'revealBid', seriesId, pricePerUnit: bids[0]!.price.toString(), quantity: '99', salt: bids[0]!.salt }), 'InvalidCommitment');
     for (const b of bids) await exec(e, b.w, { kind: 'revealBid', seriesId, pricePerUnit: b.price.toString(), quantity: b.qty.toString(), salt: b.salt });
-    await expectChainError(e.chain.submit({ kind: 'settleAuction', seriesId }, 'keeper'), 'TooEarly');
+    // settlement begins only after the reveal end (Stage 1 SettlementNotReady, code TooEarly)
+    const early = e.chain.submit({ kind: 'beginSettlement', seriesId, clearingPrice: USDC(9).toString(), qAboveClaim: '400', qAtClaim: '100' }, 'keeper');
+    await expect(early).rejects.toMatchObject({ code: 'TooEarly', detail: { stage1: 'SettlementNotReady' } });
     await e.waitUntil(revealEndsAt);
-    const settled = await e.chain.submit({ kind: 'settleAuction', seriesId }, 'keeper');
-    const ev = settled.events.find((x) => x.type === 'AuctionSettled')!.payload as { clearingPrice: string; unitsSold: string; proceeds: string; totalFees: string };
+    // the keeper's steps up to the last process: the honest proposal, one tally page, finalize, a process per bid
+    const run = await runSettlement(e.chain, seriesId, { until: 'process' });
+    expect([run.steps, run.stage, run.stuck]).toEqual([['beginSettlement', 'tallyBids', 'finalizeSettlement', ...Array(5).fill('processBid')], 'delivering', undefined]);
+    const events = run.results.flatMap((r) => r.events);
+    const ev = events.find((x) => x.type === 'AuctionSettled')!.payload as { clearingPrice: string; unitsSold: string; proceeds: string };
     clearing = BigInt(ev.clearingPrice);
-    expect(ev.clearingPrice).toBe(USDC(9).toString());
-    expect(ev.unitsSold).toBe('500');
-    expect(ev.totalFees).toBe(USDC(45).toString());
+    expect(ev).toMatchObject({ clearingPrice: USDC(9).toString(), unitsSold: '500', proceeds: USDC(4500).toString() });
+    expect(ev).not.toHaveProperty('totalFees'); // cause S2-MS: unknowable at finalize
+    // cause S2-PU: the fees are taken bid by bid at processing (1% of 100 × 9 USDC per winner)
+    const fees = events.filter((x) => x.type === 'FeeTaken').map((x) => BigInt((x.payload as { amount: string }).amount));
+    expect([fees.length, fees.reduce((a, b) => a + b, 0n)]).toEqual([5, USDC(45)]);
+    expect(types(events).filter((t) => t === 'UnitsAllocated')).toHaveLength(5);
+    expect(types(events).at(-1)).toBe('RaiseMintFinalized');
     const s = (await e.chain.getSeries(seriesId))!;
-    expect(s.phase).toBe('Settled');
+    expect([s.phase, s.mintFinalized]).toEqual(['Settled', true]);
     expect(s.capPerUnit).toBe(capPerUnit(BigInt(s.terms.capMultipleWad), clearing).toString()); // Stage 1's capPerUnit
-    const pos = (await e.chain.getPosition(seriesId, bids[0]!.w.address))!;
-    expect(pos.units).toBe('100');
+    // cause S2-PR: a winner's units count from processing, undelivered until its bid is delivered
+    expect((await e.chain.getPosition(seriesId, bids[0]!.w.address))!).toMatchObject({ units: '100', undeliveredUnits: '100' });
+    // the bidder delivers its own bid (any wallet may): its units and its refund (12 → 9 on 100 units plus the fee)
     const before = BigInt(await e.chain.getBalance(bids[0]!.w.address, s.terms.stablecoin));
-    const refund = await exec(e, bids[0]!.w, { kind: 'claimRefund', seriesId });
-    expect(types(refund.events)).toEqual(['BidRefunded']);
-    expect(BigInt(await e.chain.getBalance(bids[0]!.w.address, s.terms.stablecoin)) - before).toBe(USDC(300) + USDC(3)); // 12→9 on 100 units plus the fee difference
+    const own = await exec(e, bids[0]!.w, { kind: 'deliverBid', seriesId, bidder: bids[0]!.w.address });
+    expect(types(own.events)).toEqual(['BidDelivered']);
+    expect(own.events[0]!.payload).toMatchObject({ bidder: bids[0]!.w.address, units: '100', refund: (USDC(300) + USDC(3)).toString() });
+    expect(BigInt(await e.chain.getBalance(bids[0]!.w.address, s.terms.stablecoin)) - before).toBe(USDC(300) + USDC(3));
+    await expectChainError(exec(e, bids[0]!.w, { kind: 'deliverBid', seriesId, bidder: bids[0]!.w.address }), 'Duplicate'); // AlreadyDelivered
+    expect((await e.chain.getPosition(seriesId, bids[0]!.w.address))!).toMatchObject({ units: '100', undeliveredUnits: '0' });
+    // the keeper delivers the rest
+    const rest = await runSettlement(e.chain, seriesId, { until: 'deliver' });
+    expect([rest.steps, rest.stage]).toEqual([Array(4).fill('deliverBid'), 'complete']);
     const t = (await e.chain.getTreasury(seriesId))!;
     expect(t.total).toBe(USDC(4500).toString());
   });
@@ -176,7 +198,8 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
       expect(ev.finality).toBe('finalized');
       expect(typeof ev.cursor).toBe('string');
     }
-    expect(all.map((x) => x.type)).toEqual(expect.arrayContaining(['SeriesCreated', 'RaiseOpened', 'BidCommitted', 'BidRevealed', 'AuctionSettled', 'TreasuryFunded', 'FundsReleased', 'ReportAccepted', 'FeeTaken', 'PaymentReceived', 'PayoutClaimed']));
+    // cause S2-MS: Stage 1's settlement events, with their names
+    expect(all.map((x) => x.type)).toEqual(expect.arrayContaining(['SeriesCreated', 'RaiseOpened', 'BidCommitted', 'BidRevealed', 'SettlementProposed', 'AuctionSettled', 'UnitsAllocated', 'TreasuryFunded', 'RaiseMintFinalized', 'BidDelivered', 'FundsReleased', 'ReportAccepted', 'FeeTaken', 'PaymentReceived', 'PayoutClaimed']));
     const again = await e.chain.readEvents(first.nextCursor, 10_000);
     expect(again.events.map((x) => x.cursor)).toEqual(rest.events.map((x) => x.cursor));
   });

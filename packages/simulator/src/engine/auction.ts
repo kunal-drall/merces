@@ -1,5 +1,5 @@
 import { ChainError, auctionRulesOf, bidCommitment, type Command } from '@merces/domain';
-import { isBidValid } from '@merces/math';
+import { U64_MAX, isBidValid } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, u64, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
@@ -94,8 +94,9 @@ export function revealBid(e: EngineCore, signer: string, cmd: Extract<Command, {
   if (b.revealed) fail('AlreadyRevealed', 'the bid is already revealed');
   const price = big(cmd.pricePerUnit);
   const qty = big(cmd.quantity);
-  const expected = bidCommitment({ seriesId: s.seriesId, bidder: signer, pricePerUnit: price, quantity: qty, salt: cmd.salt });
-  if (expected !== b.commitment) fail('CommitmentMismatch', 'the reveal does not match the commitment');
+  // a price or quantity outside u64 matches no commitment (the commitment builder refuses one, AmountOutOfRange)
+  const inRange = price <= U64_MAX && qty <= U64_MAX;
+  if (!inRange || bidCommitment({ seriesId: s.seriesId, bidder: signer, pricePerUnit: price, quantity: qty, salt: cmd.salt }) !== b.commitment) fail('CommitmentMismatch', 'the reveal does not match the commitment');
   const a = s.auction;
   b.revealed = { pricePerUnit: price, quantity: qty };
   b.revealIndex = a.revealedCount++;

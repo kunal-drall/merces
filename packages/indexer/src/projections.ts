@@ -110,7 +110,8 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     }
     case 'BidRevealed': {
       const p = e.payload as P<'BidRevealed'>;
-      await client.query('update bids set revealed_price = $3, revealed_quantity = $4 where series_id = $1 and bidder = $2', [p.seriesId, p.bidder, p.pricePerUnit, p.quantity]);
+      // validity is fixed at reveal (Stage 1 `isBidValid`); an invalid bid is refunded in full at processing
+      await client.query('update bids set revealed_price = $3, revealed_quantity = $4, valid = $5 where series_id = $1 and bidder = $2', [p.seriesId, p.bidder, p.pricePerUnit, p.quantity, p.valid]);
       break;
     }
     case 'AuctionSettled': {
@@ -120,11 +121,12 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       // Stage 1's cap per unit, `mulDiv(capMultipleWad, P0, WAD)` (floor), the figure the chain enforces
       const cap = row ? capPerUnit(BigInt(row.cap_multiple_wad), BigInt(p.clearingPrice)).toString() : null;
       await client.query(
-        // the reporting ledger starts at the settlement quarter (Stage 1 first_period, SIM:972)
-        "update series set phase = 'Settled', settled_at = $2, issue_price = $3, units_sold = $4, units_outstanding = $4, cap_per_unit = $5, treasury_total = $6, lockup_ends_at = $2 + lockup_seconds, first_period = $8, next_expected_period = coalesce(next_expected_period, $8), last_event_seq = $7 where series_id = $1",
-        [p.seriesId, p.settledAt, p.clearingPrice, p.unitsSold, cap, p.proceeds, e.seq, periodAt(p.settledAt)],
+        // the reporting ledger starts at the settlement quarter (Stage 1 first_period, SIM:972). Stage 1 moves the money
+        // bid by bid at processing (TreasuryFunded) and makes the units outstanding at the last process
+        // (RaiseMintFinalized), so neither is set here
+        "update series set phase = 'Settled', settled_at = $2, issue_price = $3, units_sold = $4, cap_per_unit = $5, lockup_ends_at = $2 + lockup_seconds, first_period = $7, next_expected_period = coalesce(next_expected_period, $7), last_event_seq = $6 where series_id = $1",
+        [p.seriesId, p.settledAt, p.clearingPrice, p.unitsSold, cap, e.seq, periodAt(p.settledAt)],
       );
-      await money(client, e, 'treasury', p.proceeds, { detail: { clearingPrice: p.clearingPrice, unitsSold: p.unitsSold, totalFees: p.totalFees } });
       // the auction's own results (migration 019), as finalize_settlement wrote them
       await client.query('update series set auction_clearing_price = $2, auction_units_sold = $3, auction_proceeds = $4, auction_failure_reason = null, auction_finalized_at = $5 where series_id = $1', [p.seriesId, p.clearingPrice, p.unitsSold, p.proceeds, p.settledAt]);
       break;
@@ -200,10 +202,12 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       break;
     }
     case 'TreasuryFunded': {
-      // an auction's proceeds are recorded on AuctionSettled; a curve funds its treasury buy by buy before graduation
-      // (CurveGraduated then sets the same total), so only an ungraduated curve adds here
+      // a sealed raise funds its treasury bid by bid at processing (each winner's cost, Stage 1 `process_bid`), one
+      // treasury money row each; a curve funds it buy by buy before graduation (CurveGraduated then sets the same total),
+      // so a graduated curve adds nothing here
       const p = e.payload as P<'TreasuryFunded'>;
-      await client.query("update series set treasury_total = treasury_total + $2, last_event_seq = $3 where series_id = $1 and raise_style = 'curve' and phase <> 'Settled'", [p.seriesId, p.amount, e.seq]);
+      const r = await client.query("update series set treasury_total = treasury_total + $2, last_event_seq = $3 where series_id = $1 and (raise_style = 'sealed' or phase <> 'Settled') returning raise_style", [p.seriesId, p.amount, e.seq]);
+      if (r.rows[0]?.raise_style === 'sealed') await money(client, e, 'treasury', p.amount);
       break;
     }
     case 'FundsReleased': {

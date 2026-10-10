@@ -68,6 +68,9 @@ describe('auction edge cases', () => {
     const mismatch = h.exec(w, { kind: 'revealBid', seriesId, pricePerUnit: USDC(10).toString(), quantity: '299', salt });
     await expectChainError(mismatch, 'InvalidCommitment');
     await expectStage1Error(mismatch, 'CommitmentMismatch'); // cause S2-E
+    // cause S2-E: a price or quantity outside u64 matches no commitment (the builder refuses one: AmountOutOfRange)
+    await expectStage1Error(h.exec(w, { kind: 'revealBid', seriesId, pricePerUnit: (2n ** 64n).toString(), quantity: '300', salt }), 'CommitmentMismatch');
+    await expectStage1Error(h.exec(w, { kind: 'revealBid', seriesId, pricePerUnit: USDC(10).toString(), quantity: (2n ** 64n + 300n).toString(), salt }), 'CommitmentMismatch');
     // cause S2-VR: 300 units is over the wallet cap (20% of 500 = 100): the reveal succeeds and records the bid invalid
     const revealed = await h.exec(w, { kind: 'revealBid', seriesId, pricePerUnit: USDC(10).toString(), quantity: '300', salt });
     expect(revealed.events[0]!.payload).toMatchObject({ valid: false });

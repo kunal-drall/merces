@@ -521,6 +521,21 @@ describe('the planner and the driver on the chain', () => {
   });
 });
 
+describe('the driver\'s step bound', () => {
+  // the keepers bound their work per pass (`advanceSettlements`): at the bound the driver stops and says so, or throws
+  it('runSettlement at maxSteps throws by default, or stops with `limited` and resumes on the next run', async () => {
+    const h = await SimHarness.create('solana', { genesis: GENESIS });
+    const { seriesId } = await h.runRaise({ settle: 'none' });
+    await expectChainError(runSettlement(h.sim, seriesId, { until: 'deliver', maxSteps: 2 }), 'ChainSpecific');
+    // the two steps sent before the throw stay sent (begin and the one tally page); the next run goes on from there
+    const first = await runSettlement(h.sim, seriesId, { until: 'deliver', maxSteps: 3, atLimit: 'stop' });
+    expect(first).toMatchObject({ steps: ['finalizeSettlement', 'processBid', 'processBid'], stage: 'processing', limited: true });
+    const rest = await runSettlement(h.sim, seriesId, { until: 'deliver', maxSteps: 64, atLimit: 'stop' });
+    expect(rest.steps).toEqual([...Array<string>(3).fill('processBid'), ...Array<string>(5).fill('deliverBid')]);
+    expect([rest.stage, rest.limited]).toEqual(['complete', undefined]);
+  });
+});
+
 describe('the deprecated one-step composites (removed in S2 WP8)', () => {
   it('settleAuction runs every step to the last process in one transaction; claimRefund delivers the caller\'s bid', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });

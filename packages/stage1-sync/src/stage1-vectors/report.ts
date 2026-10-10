@@ -117,7 +117,7 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
   }
   lines.push(
     '',
-    'Shim-derived view fields (runner bookkeeping, also not parity): `auction.tallyRound`, `roundRejected`, `rejectionReason`, `qAbove`, `qAt`, `R`, `unitsMinted`, `bidsProcessed`, `auctionEscrowUnits`; `holders.*.pendingUnits`, `pendingRefund` (from the engine\'s `refundable`) and `delivered`; `window.period`, `state`, `tallyRound`, `roundRejected`, `branch` and `matchedUnits`.',
+    'Shim-derived view fields (runner bookkeeping, also not parity): `window.period`, `state`, `tallyRound`, `roundRejected`, `branch` and `matchedUnits`. Every auction and holder field comes from the engine (S2).',
   );
   const notRun = reports.flatMap((r) => r.notRun);
   if (notRun.length) {

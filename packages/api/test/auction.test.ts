@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { bidCommitment, type UnsignedTx } from '@merces/domain';
-import { AuctionService } from '@merces/services';
+import { AuctionService, ZERO_BID_GRACE_SECONDS } from '@merces/services';
 import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -10,7 +10,11 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's minimum is one hour each, where these raises opened
  *    1,000-second phases); `openRaise` derives the phase ends from them;
  *  - S2-DA: a bidder removed from the allowlist after committing stays valid, is settled and is delivered (A-REV-2
- *    withdrawn).
+ *    withdrawn);
+ *  - S2-FP: a failed raise keeps its price and would-be results, with Stage 1's reason (NoValidBids / MinRaise);
+ *  - S2-MS: Stage 1's multi-step settlement, driven by the keepers' `advanceSettlements` (was the one-step
+ *    `settleDue`);
+ *  - S2-PR: refunds and units are pushed by `deliverBid` (the keepers deliver every bid; `claimRefund` retired).
  */
 const HOUR = 3_600;
 const phases = { commitDurationSeconds: HOUR, revealDurationSeconds: HOUR }; // cause S2-AD
@@ -75,26 +79,75 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     await rig.post('/tx/send', await b2.sign(reveal2.json().tx as UnsignedTx), tok2);
     // preview: 200 units at the lowest winning price 10 → proceeds 2000 < min raise 4000 → projected failure, settlement not yet due
     const pv = await rig.get(`/series/${seriesId}/auction/preview`);
-    expect(pv.json().settleDue).toBe(false);
-    expect(pv.json().projected).toMatchObject({ success: false, reason: 'below-minimum-raise', clearingPrice: USDC(10).toString(), unitsSold: '200' });
-    // keeper settles when due; running it twice is harmless
+    expect(pv.json()).toMatchObject({ settleDue: false, stage: 'reveal' });
+    // cause S2-FP: Stage 1's reason, the would-be price and units, and each bid's processing (a failed raise refunds all)
+    expect(pv.json().projected).toMatchObject({ success: false, reason: 'MinRaise', clearingPrice: USDC(10).toString(), unitsSold: '200', proceeds: USDC(2000).toString(), qAboveClaim: '100', qAtClaim: '100', R: '0' });
+    expect(pv.json().projected.allocations).toEqual([
+      { bidder: backer.address, units: '0', cost: '0', fee: '0', refund: USDC(1010).toString() },
+      { bidder: b2.address, units: '0', cost: '0', fee: '0', refund: USDC(4545).toString() },
+    ]);
+    // the build path refuses a delivery before the bid is processed
+    expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: backer.address }, tok)).statusCode).toBe(409);
+    // cause S2-MS: the keepers settle in Stage 1's steps once the reveal phase is over; a pass with nothing to do is harmless
     const svc = new AuctionService(rig.ctx as never);
-    expect((await svc.settleDue()).settled).toEqual([]);
+    expect(await svc.advanceSettlements({ deliver: true })).toEqual({ advanced: [], stuck: [], failed: [] });
     await h.sim.setTime(now + 2 * HOUR); // cause S2-AD (was now + 2000)
-    expect((await rig.get(`/series/${seriesId}/auction/preview`)).json().settleDue).toBe(true);
-    const first = await svc.settleDue();
-    expect(first.settled).toEqual([seriesId]);
-    expect((await svc.settleDue()).settled).toEqual([]);
+    expect((await rig.get(`/series/${seriesId}/auction/preview`)).json()).toMatchObject({ settleDue: true, stage: 'awaiting-proposal' });
+    const before = BigInt(await h.sim.getBalance(backer.address, 'USDC'));
+    const first = await svc.advanceSettlements({ deliver: true });
+    expect(first).toEqual({ advanced: [{ seriesId, steps: ['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'processBid', 'deliverBid', 'deliverBid'], stage: 'failed-complete' }], stuck: [], failed: [] });
+    expect(await svc.advanceSettlements({ deliver: true })).toEqual({ advanced: [], stuck: [], failed: [] });
     expect((await h.sim.getSeries(seriesId))!.phase).toBe('Failed');
-    // refunds: builder reports the full deposit and the relay returns it
-    const refund = await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: backer.address }, tok);
-    expect(refund.json().refundable).toBe(USDC(1010).toString());
-    expect((await rig.post('/tx/send', await backer.sign(refund.json().tx as UnsignedTx), tok)).json().events[0].type).toBe('BidRefunded');
+    expect(await h.sim.getAuction(seriesId)).toMatchObject({ failureReason: 'MinRaise', clearingPrice: USDC(10).toString(), unitsSold: '200', mintFinalized: true });
+    // cause S2-PR: the keeper delivered the deposit in full; nothing is left for the bidder's own delivery (409)
+    expect(BigInt(await h.sim.getBalance(backer.address, 'USDC')) - before).toBe(USDC(1010));
+    expect(await h.sim.getBid(seriesId, backer.address)).toMatchObject({ processed: true, delivered: true, pendingRefund: '0' });
     expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: backer.address }, tok)).statusCode).toBe(409);
     // the notice comes from the indexer, in the transaction that projects the finalized AuctionFailed event
     await rig.sync();
     const notified = await rig.t.pool.query("select payload->>'kind' as kind from outbox where payload->>'seriesId' = $1", [seriesId]);
     expect(notified.rows.map((r) => r.kind)).toContain('auction.failed');
+  });
+
+  // cause S2-MS: Stage 1 lets the issuer cancel an Open raise while no bid exists, with no time limit (SIM:578-585), so
+  // the keepers leave a raise that drew no bid alone for 24 hours past its reveal end (A-AUC-12); anyone may settle it
+  // earlier with a step of their own
+  it('the keepers leave a raise with no bid to its issuer for 24 hours after the reveal end, then fail it (NoValidBids)', async () => {
+    const h = rig.harness('solana');
+    const svc = new AuctionService(rig.ctx as never);
+    const mine = (r: Awaited<ReturnType<AuctionService['advanceSettlements']>>, ids: string[]) => ({ ...r, advanced: r.advanced.filter((x) => ids.includes(x.seriesId)) });
+    const cancelled = (await h.runRaise({ bids: [], settle: 'none', terms: phases })).seriesId;
+    const left = (await h.runRaise({ bids: [], settle: 'none', terms: phases })).seriesId;
+    const ids = [cancelled, left];
+    const { revealEndsAt } = (await h.sim.getAuction(left))!;
+    expect((await h.sim.now()) >= revealEndsAt!).toBe(true);
+    expect(mine(await svc.advanceSettlements({ deliver: true }), ids)).toEqual({ advanced: [], stuck: [], failed: [] });
+    // the issuer may still cancel
+    expect((await h.exec(h.issuer, { kind: 'cancelRaise', seriesId: cancelled })).events.map((e) => e.type)).toEqual(['RaiseCancelled']);
+    await h.sim.setTime(revealEndsAt! + ZERO_BID_GRACE_SECONDS - 1);
+    expect(mine(await svc.advanceSettlements({ deliver: true }), ids)).toEqual({ advanced: [], stuck: [], failed: [] });
+    await h.sim.setTime(revealEndsAt! + ZERO_BID_GRACE_SECONDS);
+    expect(mine(await svc.advanceSettlements({ deliver: true }), ids)).toEqual({ advanced: [{ seriesId: left, steps: ['beginSettlement', 'finalizeSettlement'], stage: 'failed-complete' }], stuck: [], failed: [] });
+    expect(await h.sim.getAuction(left)).toMatchObject({ raiseState: 'Failed', failureReason: 'NoValidBids', clearingPrice: null, mintFinalized: true });
+    expect((await h.sim.getSeries(cancelled))!.phase).toBe('Cancelled');
+  });
+
+  // S2 amendment L7: a keeper failure carries a code, never an adapter message (Stage 1 messages can embed values)
+  it('a settlement failure is reported by series and code only', async () => {
+    const h = rig.harness('monad');
+    const { seriesId } = await h.runRaise({ settle: 'none', terms: phases });
+    const realSubmit = h.sim.submit.bind(h.sim);
+    h.sim.submit = async () => {
+      throw new Error('upstream refused a fee of 987654321');
+    };
+    try {
+      const r = await new AuctionService(rig.ctx as never).advanceSettlements({ deliver: false });
+      expect(r.failed).toEqual([{ target: seriesId, error: 'Error' }]);
+      expect(JSON.stringify(r)).not.toContain('987654321');
+    } finally {
+      h.sim.submit = realSubmit;
+    }
+    await h.settle(seriesId, 'deliver');
   });
 
   // cause S2-DA: Stage 1 checks the allowlist at commit only: a bidder removed afterwards stays in the settlement (and so
@@ -122,7 +175,7 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     await h.sim.setTime(now + 2 * HOUR); // cause S2-AD (was now + 2000)
     const pv = (await rig.get(`/series/${seriesId}/auction/preview`)).json();
     expect(pv.projected).toMatchObject({ success: false, clearingPrice: USDC(10).toString(), unitsSold: '200' });
-    await h.sim.submit({ kind: 'settleAuction', seriesId }, 'keeper');
+    await h.settle(seriesId, 'process'); // cause S2-MS (was the one-step settleAuction)
     expect((await h.sim.getSeries(seriesId))!.phase).toBe('Failed');
     expect(await h.sim.getAuction(seriesId)).toMatchObject({ failureReason: 'MinRaise', clearingPrice: pv.projected.clearingPrice, unitsSold: pv.projected.unitsSold });
     // the removed bidder is delivered its deposit in full (any wallet may deliver it)

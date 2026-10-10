@@ -2,8 +2,6 @@ import type { FastifyInstance } from 'fastify';
 import { defineRoute } from '../app.ts';
 import type { AppContext } from '../context.ts';
 import { WAD } from '@merces/math';
-import type { SeriesState } from '@merces/domain';
-import { bidRefundable } from '../serialize.ts';
 
 export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
   defineRoute(app, ctx, {
@@ -54,15 +52,21 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
       const wallets = session!.wallets.map((w) => w.address);
       const r = await ctx.pool.query('select b.*, s.phase, s.chain from bids b join series s on s.series_id = b.series_id where b.bidder = any($1) order by b.bid_order', [wallets]);
       const bids = [];
-      const seriesCache = new Map<string, SeriesState | null>();
       for (const x of r.rows) {
-        const chain = ctx.chainFor(x.series_id);
-        const live = await chain.getBid(x.series_id, x.bidder);
-        if (live?.settled && !seriesCache.has(x.series_id)) seriesCache.set(x.series_id, await chain.getSeries(x.series_id));
-        const series = seriesCache.get(x.series_id);
-        // same arithmetic as the refund builder: allocated spend and its fee are not refundable
-        const refundable = !live ? null : live.settled && series ? bidRefundable(live, series).toString() : '0';
-        bids.push({ seriesId: x.series_id, chain: x.chain, bidder: x.bidder, phase: x.phase, deposit: x.deposit, revealed: live?.revealed ?? null, allocatedUnits: x.allocated_units, refunded: x.refunded, refundable, settled: live?.settled ?? false });
+        const live = await ctx.chainFor(x.series_id).getBid(x.series_id, x.bidder);
+        // what the chain still owes the bidder (Stage 1's pendingRefund of a processed, undelivered bid; "0" otherwise):
+        // the keepers deliver it, or the bidder delivers it now (S2: push delivery, nothing computed offchain)
+        const owed = !!live && live.processed && !live.delivered;
+        bids.push({
+          seriesId: x.series_id, chain: x.chain, bidder: x.bidder, phase: x.phase, deposit: x.deposit, revealed: live?.revealed ?? null, valid: live?.valid ?? null,
+          processed: live?.processed ?? false, delivered: live?.delivered ?? false, allocatedUnits: x.allocated_units,
+          pendingUnits: owed ? live.pendingUnits : '0', pendingRefund: owed ? live.pendingRefund : '0',
+          // the refunds delivered so far, as indexed (BidDelivered)
+          refunded: x.refunded,
+          refundable: !live ? null : owed ? live.pendingRefund : '0',
+          /** @deprecated `processed` (S2 WP7 removes it) */
+          settled: live?.processed ?? false,
+        });
       }
       return { bids };
     },

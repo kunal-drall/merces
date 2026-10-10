@@ -64,12 +64,19 @@ async function forEachSettled(ctx: ServiceContext, errors: string[], fn: (chain:
   });
 }
 
+/**
+ * Stage 1's sealed-bid settlement, one pass per run (`AuctionService.advanceSettlements`): the proposal, the tally
+ * pages, finalize, a `processBid` per bid and a `deliverBid` per bid (refunds and units are pushed). Actions are the
+ * steps sent; a series the planner will not act on, or whose pass raised, is an error (value-free: the series and a
+ * Stage 1 error name, ChainError code or stuck reason, never a message). WP6 splits delivery into its own job.
+ */
 export const auctionSettleJob: KeeperJob = {
   name: 'auction.settle',
   intervalSeconds: 60,
   async run(ctx) {
-    const r = await new AuctionService(ctx).settleDue();
-    return { actions: r.settled.length, errors: r.failed };
+    const r = await new AuctionService(ctx).advanceSettlements({ deliver: true });
+    const errors = [...r.failed.map((f) => `${f.target}: ${f.error}`), ...r.stuck.map((x) => `${x.seriesId}: stuck (${x.reason})`)];
+    return { actions: r.advanced.reduce((n, a) => n + a.steps.length, 0), errors };
   },
 };
 

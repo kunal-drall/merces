@@ -43,13 +43,16 @@ lateness is refused onchain after the next day boundary; rebuild it) → hardshi
 
 **Backer**: apply → `GET /arena`, `GET /series/{id}`, `GET /series/{id}/terms` (eligible backers only, logged) →
 `POST /series/{id}/bids/precheck` → compute the commitment client-side (or `POST …/bids/commitment`) → `POST
-…/bids/build-commit` → keep an encrypted backup (`PUT …/bids/backup`) → reveal (`POST …/bids/build-reveal`) → refunds
-(`POST …/bids/build-refund`) → `GET /me/holdings`, `GET /series/{id}/payouts`, claims (`POST
+…/bids/build-commit` → keep an encrypted backup (`PUT …/bids/backup`) → reveal (`POST …/bids/build-reveal`) → the keepers
+deliver every bid's refund and units after settlement (`POST …/bids/build-refund` builds the bidder's own `deliverBid` to
+take them sooner) → `GET /me/holdings`, `GET /series/{id}/payouts`, claims (`POST
 /series/{id}/payouts/build-claim`), redemption claims. Curve-mode buys (`POST /series/{id}/curve/build-buy`) need a wallet on that
 chain's allowlist (403 otherwise) and, while the curve is bonding, stay within the wallet cap shown by
-`GET /series/{id}/curve` (`walletCap`; 422 with the remaining allowance otherwise). After graduation no cap applies. The auction preview leaves out bidders no longer allowlisted, as settlement does.
-`GET /me/bids` shows `refundable` as what `claimRefund` would pay now: 0 before settlement, then the deposit less the
-allocated spend, its auction fee and anything already refunded.
+`GET /series/{id}/curve` (`walletCap`; 422 with the remaining allowance otherwise). After graduation no cap applies. The auction preview counts every revealed bid, its bidder still allowlisted or not, as
+Stage 1's settlement does (S2).
+`GET /me/bids` shows the chain's figures: `refundable` (= `pendingRefund`) and `pendingUnits` are what a processed bid is
+still owed until it is delivered ("0" otherwise), with the bid's `valid`, `processed` and `delivered`, and `refunded`, the
+refund delivered so far.
 
 **Attestor**: `GET /attestor/queue` → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
 attestations, extinguishment transactions (two signers).

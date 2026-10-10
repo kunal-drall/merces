@@ -9,11 +9,10 @@ import { blocked, notApplicable, type Translation, type TranslatorTable } from '
  * - `transfer_units` (NA-1): Stage 1 refuses a direct transfer (DirectTransferForbidden); the canonical model has no
  *   transfer to refuse, so the step has no meaning here.
  * - The ops only the vectors outside the S1 set use: BLOCKED, naming the milestone that brings them. The same
- *   milestones are in `steps/vectors.ts` `STAGE1_OP_MAP` (a test keeps them equal).
+ *   milestones are in `steps/vectors.ts` `STAGE1_OP_MAP` (a test keeps them equal). S2 brought `cancel_raise` and
+ *   `register_holder` (now in `raise.ts`).
  */
 export const NOT_IN_S1: Readonly<Partial<Record<CallOp, string>>> = Object.freeze({
-  cancel_raise: 'S2',
-  register_holder: 'S3',
   revoke_verifier_key: 'S4',
   withdraw_pause_request: 'S5',
   end_pause: 'S5',

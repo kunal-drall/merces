@@ -4,6 +4,11 @@ import { parsePeriod } from '@merces/math';
 import { makeRig } from './helpers.ts';
 
 type Rig = Awaited<ReturnType<typeof makeRig>>;
+/*
+ * S2 cause codes:
+ *  - S2-PR: push delivery (`deliverBid`): the raise delivers every bid's refund (`claimRefund` retired);
+ *  - S2-PU: per-bid money movement: `TreasuryFunded` (and `FeeTaken`) per processed winner.
+ */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6)).toString();
 /** the income figure fed to the device-side prover; it must never appear in any accounting response */
 const INCOME_YTD = 75_000_000_000n;
@@ -20,17 +25,16 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
   beforeAll(async () => {
     rig = await makeRig();
     // default raise: 500 units, bids 12/11/10/10/9 USDC × 100 → clears at 9 USDC, proceeds 4,500 USDC, 1% auction fee = 45 USDC (one FeeTaken per winning bidder)
-    // refunds stay pending (processed, not delivered) so backer 0 claims its own below; S2 WP4b moves this to push
-    // delivery and drops `settle`
-    const a = await rig.sol.runRaise({ settle: 'process' });
+    // cause S2-PR: every bid is delivered, its refund pushed: deposits 12/11/10/10/9 × 100 × 1.01 less 9 × 100 × 1.01
+    // each → 303 + 202 + 101 + 101 + 0 = 707 USDC refunded
+    const a = await rig.sol.runRaise();
     seriesId = a.seriesId;
     await rig.sol.sim.setTime(parsePeriod('2026Q1').end + 86_400);
     // θ = 60,000 USD, share rate 10%: YTD income 75,000 → payment 1,500 USDC; 5% payout fee = 75 USDC; net 1,425 USDC
     const q = await rig.sol.reportAndPay(seriesId, '2026Q1', a.privateTerms, a.terms.termsCommitment, 0n, INCOME_YTD);
     expect(q.due.toString()).toBe(USDC(1500));
-    // backer 0 holds 100/500 units → claims 285 USDC; it also claims its bid refund (deposited 12 × 100 × 1.01, paid 9 × 100 × 1.01 → 303 USDC back)
+    // backer 0 holds 100/500 units → claims 285 USDC (its 303 USDC bid refund was delivered with the raise; cause S2-PR)
     await rig.sol.exec(rig.sol.backers[0]!, { kind: 'claimPayout', seriesId });
-    await rig.sol.exec(rig.sol.backers[0]!, { kind: 'claimRefund', seriesId });
     await rig.sync();
     adminTok = rig.token({ accountId: 'admin-1', roles: ['admin'], wallets: [] });
     issuerTok = rig.token({ accountId: 'issuer-1', roles: ['issuer'], wallets: [{ chain: 'solana', address: rig.sol.issuer.address }] });
@@ -100,7 +104,7 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
     expect(s.payments).toEqual({ grossPaidTotal: USDC(1500), netDistributed: USDC(1425), feesTaken: USDC(75), count: 1 });
     expect(s.fees).toEqual({ auction: USDC(45), payout: USDC(75), total: USDC(120), vaultFeesTotal: USDC(75) });
     expect(s.payouts).toEqual({ claimed: USDC(285), unclaimed: USDC(1140), count: 1 });
-    expect(s.refunds).toEqual({ total: USDC(303), bids: USDC(303), payments: '0' });
+    expect(s.refunds).toEqual({ total: USDC(707), bids: USDC(707), payments: '0' }); // cause S2-PR: every bid's refund is pushed (was backer 0's claim)
     expect(s.treasury).toEqual({ total: USDC(4500), released: '0', balance: USDC(4500), releasesPaused: false });
     expect(s.redemption).toEqual({ price: null, redeemedAt: null, deposit: '0', claimed: '0' });
     // the tail is its own pool with its own fee and net (G5, WP11: was { total } only, with tail payments inside `payments`)
@@ -180,7 +184,7 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
     const lines = r.body.trimEnd().split('\r\n');
     expect(lines[0]).toBe('chain,seq,block_time,series_id,period_id,kind,wallet,amount,tx_id,stablecoin');
     const rows = lines.slice(1).map((l) => l.split(','));
-    expect(rows.length).toBeGreaterThanOrEqual(9); // treasury, 5 fees, payment, payout fee, payout, refund
+    expect(rows.length).toBeGreaterThanOrEqual(16); // 5 treasury, 5 fees, payment, payout fee, payout, 4 refunds (cause S2-PU, S2-PR)
     expect(Number(r.headers['x-row-count'])).toBe(rows.length);
     for (const row of rows) {
       expect(row).toHaveLength(10);
@@ -194,14 +198,15 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
     expect(kinds.filter((k) => k === 'fee')).toHaveLength(6);
     expect(rows.find((x) => x[5] === 'payout')).toEqual(expect.arrayContaining([rig.sol.backers[0]!.address, USDC(285)]));
     expect(rows.find((x) => x[5] === 'payment')!.slice(4, 8)).toEqual(['2026Q1', 'payment', '', USDC(1500)]);
-    expect(rows.find((x) => x[5] === 'treasury')![7]).toBe(USDC(4500));
+    // cause S2-PU: the treasury is funded bid by bid at processing (100 units × 9 USDC per winner; was one 4,500 USDC row)
+    expect(rows.filter((x) => x[5] === 'treasury').map((x) => x[7])).toEqual(Array(5).fill(USDC(900)));
     expect(rows.find((x) => x[5] === 'refund')![7]).toBe(USDC(303));
     expect(r.body).not.toContain(INCOME_YTD.toString());
     // audited with the filter and the row count
     const audit = await rig.t.pool.query("select actor, actor_role, target, detail from audit_log where action = 'accounting.export' order by id");
     expect(audit.rows).toHaveLength(1);
     expect(audit.rows[0]).toEqual({ actor: 'admin-1', actor_role: 'admin', target: 'solana', detail: { chain: 'solana', from: null, to: null, rows: rows.length, filename: 'merces-money-events_solana_genesis_latest.csv' } });
-    // a window: everything from the pay-in block onwards (payment, payout fee, payout, refund)
+    // a window: everything from the pay-in block onwards (payment, payout fee, payout; the refunds were delivered with the raise)
     const payin = Math.floor(new Date(rows.find((x) => x[5] === 'payment')![2]!).getTime() / 1000);
     const windowed = await rig.get(`/admin/accounting/export?chain=solana&from=${payin}`, adminTok);
     const wrows = windowed.body.trimEnd().split('\r\n').slice(1);

@@ -4,6 +4,7 @@ import {
   BN254_FR, CURRENCY_CODES, INDEXING_RULES, U64_MAX, ZERO_INCOME_COMMITMENT as ZERO_FIELD, quarterIndex, yearOf,
   incomeCommitmentField, routerIncomeCommitmentField, termsCommitmentField,
 } from '@merces/math';
+import { ChainError } from './port.ts';
 
 /**
  * Canonical hashing for commitments and attestations. All parties (device, verifier, services, simulator, live
@@ -203,9 +204,25 @@ export function mockVerify(proof: unknown, publicInputs: readonly string[]): boo
 
 // ---------------------------------------------------------------- other commitments (unchanged until S2)
 
-/** Sealed-bid commitment = hash(seriesId, bidder, price, quantity, salt). */
+/**
+ * Sealed-bid commitment = hash(seriesId, bidder, price, quantity, salt) (ours until S4, shim SH-AUC-2; Stage 1's is
+ * keccak). The price and quantity must be u64s, as Stage 1's `commit_bid` decodes them (SIM:893-894; EVM checks
+ * `toU64` before hashing): outside that range it throws `ChainError('InvalidTerms', …, {stage1: 'AmountOutOfRange'})`,
+ * naming neither value (a bid's price and quantity stay sealed until the reveal).
+ */
 export function bidCommitment(input: { seriesId: string; bidder: string; pricePerUnit: bigint | string; quantity: bigint | string; salt: string }): string {
-  return hashCanonical('bid', { seriesId: input.seriesId, bidder: input.bidder, pricePerUnit: input.pricePerUnit.toString(), quantity: input.quantity.toString(), salt: input.salt });
+  const price = bidU64(input.pricePerUnit, 'price');
+  const quantity = bidU64(input.quantity, 'quantity');
+  return hashCanonical('bid', { seriesId: input.seriesId, bidder: input.bidder, pricePerUnit: price.toString(), quantity: quantity.toString(), salt: input.salt });
+}
+
+/** A bid's price or quantity as a u64, else Stage 1's AmountOutOfRange (value-free). */
+function bidU64(v: bigint | string, what: 'price' | 'quantity'): bigint {
+  try {
+    return toU64(v, what);
+  } catch {
+    throw new ChainError('InvalidTerms', `the bid ${what} is out of the u64 range`, { stage1: 'AmountOutOfRange' });
+  }
 }
 
 /** Transfer-window order commitment. */
