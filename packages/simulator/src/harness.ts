@@ -393,6 +393,27 @@ export class SimHarness {
     return wallet ? this.exec(wallet, { kind: 'syncCurveUnits', seriesId }) : this.sim.submit({ kind: 'syncCurveUnits', seriesId }, 'keeper');
   }
 
+  /** Register `wallet` as a holder of the series (`registerHolder`, permissionless: the keeper sends it unless `by` is given). */
+  async registerHolder(seriesId: string, wallet: SimWallet | string, by?: SimWallet): Promise<TxResult> {
+    const cmd = { kind: 'registerHolder' as const, seriesId, wallet: typeof wallet === 'string' ? wallet : wallet.address };
+    return by ? this.exec(by, cmd) : this.sim.submit(cmd, 'keeper');
+  }
+
+  /** Curve staking (Stage 1 `stake_units`): `wallet` stakes `units` base lamports. */
+  async stake(seriesId: string, wallet: SimWallet, units: bigint): Promise<TxResult> {
+    return this.exec(wallet, { kind: 'stakeUnits', seriesId, units: units.toString() });
+  }
+
+  /** Stage 1 `unstake_units`: `wallet` takes `units` base lamports back from its stake (credits pending, pays nothing). */
+  async unstake(seriesId: string, wallet: SimWallet, units: bigint): Promise<TxResult> {
+    return this.exec(wallet, { kind: 'unstakeUnits', seriesId, units: units.toString() });
+  }
+
+  /** Stage 1 `tender_units`: `wallet` tenders `fromStake` staked and `fromWallet` wallet base lamports at a curve redemption. */
+  async tender(seriesId: string, wallet: SimWallet, fromStake: bigint, fromWallet: bigint): Promise<TxResult> {
+    return this.exec(wallet, { kind: 'tenderUnits', seriesId, fromStake: fromStake.toString(), fromWallet: fromWallet.toString() });
+  }
+
   /**
    * Settle a raise with Stage 1's steps, as the keeper, up to `until` (`runSettlement`). Throws when the planner is
    * stuck or must wait for the reveal end.

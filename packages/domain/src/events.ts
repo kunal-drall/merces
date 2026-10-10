@@ -198,7 +198,9 @@ export const eventPayloads = {
    * Retired series' balance; 0 otherwise). `claimPayout` always emits it, zeros included (SPEC's zero-amount rule),
    * before the `UnitsBurned` of a Retired balance. Inside the redemption body (`claimRedemption`, and the redemption a
    * `claimTail` or `claimFinal` runs first) it carries the holder's pending payout and the tail catch-up, with
-   * `burnedUnits` 0 (the body's burn is its own `UnitsBurned`), and is emitted only when that amount is above 0.
+   * `burnedUnits` 0 (the body's burn is its own `UnitsBurned`), and is emitted only when that amount is above 0; so it is
+   * in a curve series' `tenderUnits` and `claimTail` (the pending payout split out of the tender's principal and the
+   * tail). A curve series never burns on a claim (`burnedUnits` 0).
    */
   PayoutClaimed: z.object({ ...seriesScoped, holder: addressSchema, amount: moneySchema, burnedUnits: unitsSchema }),
   /** Stage 1 `TailClaimed` (`claimTail`): the tail paid on the holder's redeemed units, the tail only (0 included) */
@@ -211,9 +213,21 @@ export const eventPayloads = {
    */
   FinalClaimed: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, amount: moneySchema }),
   SeriesRetired: z.object({ ...seriesScoped, paidPerUnitWad: wadSchema }),
+  /**
+   * A holder's units burned (Stage 1 `UnitsBurned`). On a sealed-bid series units outstanding fall by `units`; on a curve
+   * series only a tender burns (`reason: redemption`, staked and wallet units together), and units outstanding stay the
+   * count taken at redemption (Stage 1 takes no census after it).
+   */
   UnitsBurned: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, reason: z.enum(['cap', 'redemption', 'extinguishment']) }),
   RedemptionOpened: z.object({ ...seriesScoped, pricePerUnit: moneySchema, unitsOutstanding: unitsSchema, deposit: moneySchema, tailCapPerUnit: moneySchema, tailEndsAt: z.number().int() }),
-  RedemptionClaimed: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, amount: moneySchema }),
+  /**
+   * A holder's units redeemed: `amount` is the redemption principal, `P_redeem × units` at the series' unit scale (the
+   * holder's pending payout and any tail catch-up go out in the `PayoutClaimed` before it). On a curve series
+   * (`tenderUnits`, Stage 1 `tender_units`) `fromStake` is the part of `units` tendered from the holder's stake (ours:
+   * Stage 1's event has no such field; the Solana adapter derives it from the tender's arguments); absent on a
+   * sealed-bid series.
+   */
+  RedemptionClaimed: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, amount: moneySchema, fromStake: unitsSchema.optional() }),
   /**
    * Ours (no Stage 1 counterpart): a tail payment's `total` the tail accepted, and `perUnit` per whole unit,
    * `floor(total × unitScale / unitsAtRedemption)` (`floor(total / unitsAtRedemption)` on a sealed-bid series).
@@ -261,6 +275,17 @@ export const eventPayloads = {
    * report proof's public input. `stakedTotal` is the stakes at that moment. Units only, no amount.
    */
   CurveUnitsSynced: z.object({ ...seriesScoped, supply: unitsSchema, protocolHeld: unitsSchema, unitsOutstanding: unitsSchema, stakedTotal: unitsSchema }),
+  /**
+   * Stage 1 `UnitsStaked` (curve.rs:1305-1310, events.rs:483-489): `holder` moved `units` base lamports into the series'
+   * stake vault (`stakeUnits`); `staked` is its stake after it. Staked units earn from now on. Units only, no amount.
+   */
+  UnitsStaked: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, staked: unitsSchema }),
+  /**
+   * Stage 1 `UnitsUnstaked` (curve.rs:1376-1381, events.rs:491-497): `holder` took `units` base lamports back from the
+   * stake vault to its wallet (`unstakeUnits`); `staked` is its stake after it. What the stake earned stays in the
+   * holder's pending payout: no stablecoin moves. Units only, no amount.
+   */
+  UnitsUnstaked: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, staked: unitsSchema }),
 } as const;
 
 export type EventType = keyof typeof eventPayloads;

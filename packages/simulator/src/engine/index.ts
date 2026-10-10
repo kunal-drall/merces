@@ -14,6 +14,7 @@ import { burnRetired, claimPayout, payIn, postSplitReceipt } from './payments.ts
 import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
 import { submitReport } from './reports.ts';
+import { stakeUnits, tenderUnits, unstakeUnits } from './stake.ts';
 import { beginSettlement, deliverBid, finalizeSettlement, processBid, registerHolder, tallyBids } from './settlement.ts';
 import { accrualNow, approvePause, crankPause, crankStatus, deadlines, reportablePeriods, requestPause, type PeriodDeadlines } from './status.ts';
 import { amendTerms, claimFinal, extinguish } from './terminal.ts';
@@ -119,6 +120,10 @@ export class SimEngine implements EngineCore {
       case 'clearTransferWindow': service('any'); return clearTransferWindow(this, cmd, now, emit);
       // a trade on the curve's venue (Meteora's DBC on live chains; the stand-in pool here)
       case 'curveSwap': return curveSwap(this, user(), cmd, now, emit);
+      // curve staking and tender (Stage 1 curve mode): the holder signs
+      case 'stakeUnits': return stakeUnits(this, user(), cmd, emit);
+      case 'unstakeUnits': return unstakeUnits(this, user(), cmd, emit);
+      case 'tenderUnits': return tenderUnits(this, user(), cmd, emit);
       case 'setAllowlist': service('allowlistManager'); return setAllowlist(this, cmd, emit);
       case 'registerAttestor': admin(); this.state.attestors.set(cmd.attestor, cmd.active); emit('AttestorRegistered', { attestor: cmd.attestor, active: cmd.active }); return;
       case 'registerVerifierKey': admin(); this.state.verifierKeys.set(cmd.keyId, { publicKey: cmd.publicKey, active: cmd.active }); emit('VerifierKeyRegistered', { keyId: cmd.keyId, publicKey: cmd.publicKey, active: cmd.active }); return;

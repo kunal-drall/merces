@@ -40,7 +40,7 @@ snapshot-and-rollback, and exactly the canonical events. Every error on a Stage 
 (`ChainError.detail.stage1`). A Groth16 report proof is verified asynchronously in `SimulatorChain.send` before the
 synchronous engine runs; the engine takes the verdict and checks the six public signals itself. Its commands live in one module per area under
 `packages/simulator/src/engine/` (registry, auction, settlement, treasury, reports, payments, holders, status,
-redemption, terminal, fx, window, curve), each a set of functions over the shared `EngineCore`; the `ChainPort` read
+redemption, terminal, fx, window, curve, stake), each a set of functions over the shared `EngineCore`; the `ChainPort` read
 mappers live in `src/reads/`. State is a plain object, version 4 (S3), carrying Stage 1's own series ledger, payout
 vault, tail and final pool, Stage 1's auction record and bids, and each series' unit scale and curve stakes; every
 money path passes the unit scale to `@merces/math`'s scale-aware family, which is Stage 1's own function at scale 1

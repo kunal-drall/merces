@@ -2636,6 +2636,10 @@
               "amount": {
                 "type": "string",
                 "pattern": "^\\d+$"
+              },
+              "fromStake": {
+                "type": "string",
+                "pattern": "^\\d+$"
               }
             },
             "required": [
@@ -4236,6 +4240,164 @@
           "payload"
         ],
         "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "UnitsStaked"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "holder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "units": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "staked": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "holder",
+              "units",
+              "staked"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "UnitsUnstaked"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "holder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "units": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "staked": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "holder",
+              "units",
+              "staked"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
       }
     ]
   },
@@ -5365,6 +5527,10 @@
         "amount": {
           "type": "string",
           "pattern": "^\\d+$"
+        },
+        "fromStake": {
+          "type": "string",
+          "pattern": "^\\d+$"
         }
       },
       "required": [
@@ -5969,6 +6135,66 @@
         "protocolHeld",
         "unitsOutstanding",
         "stakedTotal"
+      ],
+      "additionalProperties": false
+    },
+    "UnitsStaked": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "staked": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "holder",
+        "units",
+        "staked"
+      ],
+      "additionalProperties": false
+    },
+    "UnitsUnstaked": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "staked": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "holder",
+        "units",
+        "staked"
       ],
       "additionalProperties": false
     }
@@ -7022,6 +7248,83 @@
         "side",
         "amountIn",
         "minimumAmountOut"
+      ],
+      "additionalProperties": false
+    },
+    "stakeUnits": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "stakeUnits"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "units"
+      ],
+      "additionalProperties": false
+    },
+    "unstakeUnits": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "unstakeUnits"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "units"
+      ],
+      "additionalProperties": false
+    },
+    "tenderUnits": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "tenderUnits"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "fromStake": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "fromWallet": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "fromStake",
+        "fromWallet"
       ],
       "additionalProperties": false
     },

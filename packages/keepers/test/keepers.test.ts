@@ -20,6 +20,7 @@ const DAY = 86_400;
  * S3 cause codes:
  *  - S3-BR: `burn.crank` sends one `burnRetired{holder}` per holder still holding units (was one list burn crank, `holders[]`).
  *  - S3-CV: `burn.crank` skips curve series: their units never burn (Stage 1 CurveModeNoBurn).
+ *  - S3-ST: curve staking: a curve position's units are its stake (`stakeUnits`).
  */
 
 /** A registry of one chain, for a test that needs its own series ids, reminder ledger or a wrapped port. */
@@ -89,15 +90,17 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
   });
 
   // cause S3-CV: a curve series' units never burn (CurveModeNoBurn, claims.rs:252), so the burn crank never sends one,
-  // whatever its status. White-box: a Retired curve with a holder showing units (a census and stakes arrive in S3 WP9-10)
+  // whatever its status. A holder that staked (cause S3-ST: its position's units are its stake) on a curve made Retired
+  // white-box
   it('burn.crank skips a curve series, even a Retired one with holders', async () => {
     const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'curve-burn', genesis: GENESIS, acceptMockProofs: true }) });
     const { seriesId } = await h.createCurve();
     await h.fillCurve(seriesId);
     await h.exec(h.backers[0]!, { kind: 'registerHolder', seriesId, wallet: h.backers[0]!.address });
+    await h.syncCurve(seriesId);
+    await h.stake(seriesId, h.backers[0]!, 5n);
     const x = h.sim.state.series.get(seriesId)!;
     x.status = 'Retired';
-    x.positions.get(h.backers[0]!.address)!.units = 5n;
     expect((await h.sim.listPositions(seriesId)).map((p) => p.units)).toEqual(['5']);
     // the chain would refuse the burn, so sending it would be an error; the job sends nothing
     await expect(h.sim.submit({ kind: 'burnRetired', seriesId, holder: h.backers[0]!.address }, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'CurveModeNoBurn' } });

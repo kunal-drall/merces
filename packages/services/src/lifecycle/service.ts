@@ -65,7 +65,8 @@ export class LifecycleService {
    * Retired series the claim also burns the holder's balance (`burnsUnits`: its units less the auction units not yet
    * delivered and those held for a window ask, which Stage 1 does not burn), so a holder with nothing to be paid but
    * units to burn still gets the claim (a zero claim). Otherwise a claim that would pay 0 and burn nothing is a 409
-   * (`nothing-to-claim`) naming the claims that would pay the holder something now (`claimWith`).
+   * (`nothing-to-claim`) naming the claims that would pay the holder something now (`claimWith`). A curve series never
+   * burns on a claim: it pays what the holder's stake earned (S3 WP10).
    */
   async buildClaim(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; claimable: string; burnsUnits: string; builder: string }> {
     const chain = this.ctx.chainFor(seriesId);
@@ -74,8 +75,10 @@ export class LifecycleService {
     if (!p) throw AppError.notFound('position');
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
-    const burnsUnits = s.status === 'Retired' ? heldUnits(p) : 0n;
-    if (BigInt(p.claimable) === 0n && burnsUnits === 0n) throw nothingToClaim('a payout', p, 'claimPayout');
+    const curve = s.terms.raiseStyle === 'curve';
+    // a curve never burns on a claim (Stage 1 claims.rs:182-196); its position's units are its stake
+    const burnsUnits = s.status === 'Retired' && !curve ? heldUnits(p) : 0n;
+    if (BigInt(p.claimable) === 0n && burnsUnits === 0n) throw nothingToClaim('a payout', p, 'claimPayout', curve);
     return { tx: await this.claimBuilder.build(chain, seriesId, holder), claimable: p.claimable, burnsUnits: burnsUnits.toString(), builder: this.claimBuilder.kind };
   }
 
@@ -92,6 +95,10 @@ export class LifecycleService {
    * `burnsUnits` the units it burns (the redeemed ones). Like the payout claim, a claim that would pay 0 and burn
    * nothing is a 409 (`nothing-to-claim`, `claimWith` naming the claims that would pay the holder something now): a
    * claim of nothing would only move the holder's tail cursor.
+   *
+   * On a curve series (S3 WP10; Stage 1 claims.rs:365-391) nothing is redeemed first: the holder redeems by tendering
+   * (`tenderUnits`), so a holder that tendered nothing is 409 NoRedeemedUnits; `amount` is the tail on its tendered units
+   * and `total` adds its pending payout, which the same transaction pays; nothing burns.
    */
   async buildClaimTail(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; amount: string; redeemsFirst: RedeemsFirst | null; total: string; burnsUnits: string }> {
     const chain = this.ctx.chainFor(seriesId);
@@ -102,6 +109,14 @@ export class LifecycleService {
     const p = await chain.getPosition(seriesId, holder);
     if (!p) throw AppError.notFound('position');
     if (!p.registered) throw AppError.conflict('not a registered holder of this series', { stage1: 'HolderNotRegistered' });
+    if (s.terms.raiseStyle === 'curve') {
+      // a curve redeems by tender (`tenderUnits`), never here (Stage 1 claims.rs:365-391): the tail on the tendered units
+      // and the pending payout (its own `PayoutClaimed`), NoRedeemedUnits without a tender; nothing burns
+      if (BigInt(p.redeemedUnits) === 0n) throw AppError.conflict('the holder has tendered no units: a curve series pays its tail on tendered units only', { stage1: 'NoRedeemedUnits' });
+      const total = BigInt(p.tailClaimable) + BigInt(p.claimable);
+      if (total === 0n) throw nothingToClaim('a tail', p, 'claimTail', true);
+      return { tx: await chain.build({ kind: 'claimTail', seriesId }, holder), amount: p.tailClaimable, redeemsFirst: null, total: total.toString(), burnsUnits: '0' };
+    }
     const redeemable = BigInt(p.units) - BigInt(p.escrowedUnits);
     if (BigInt(p.redeemedUnits) === 0n && redeemable === 0n) throw AppError.conflict('the holder has redeemed no units and has none left to redeem', { stage1: 'NoRedeemedUnits' });
     const redeemsFirst = BigInt(p.redeemedUnits) === 0n ? redemptionPreview(p, redeemable) : null;
@@ -123,6 +138,10 @@ export class LifecycleService {
    * is everything the transaction pays; `burnsUnits` every unit it burns (the redeemed units included): the holder's
    * units less those held for a window ask. A claim that would pay 0 and burn nothing (a second final claim) is a 409
    * (`nothing-to-claim`).
+   *
+   * On a curve series (S3 WP10; Stage 1 claims.rs:424-452) nothing is redeemed or burned: `amount` = `total` is the
+   * pending payout (which on a series that did not redeem holds the stake's final share) plus the final share of the
+   * tendered units on one that redeemed.
    */
   async buildClaimFinal(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; amount: string; redeemsFirst: RedeemsFirst | null; total: string; burnsUnits: string }> {
     const chain = this.ctx.chainFor(seriesId);
@@ -133,6 +152,13 @@ export class LifecycleService {
     const p = await chain.getPosition(seriesId, holder);
     if (!p) throw AppError.notFound('position');
     if (!p.registered) throw AppError.conflict('not a registered holder of this series', { stage1: 'HolderNotRegistered' });
+    if (s.terms.raiseStyle === 'curve') {
+      // a curve redeems and burns nothing here (Stage 1 claims.rs:424-452): the pending payout (on a series that did not
+      // redeem, the stake's final share is in it) and the final share of the tendered units on one that redeemed
+      const amount = BigInt(p.claimable) + BigInt(p.finalClaimable);
+      if (amount === 0n) throw nothingToClaim('a final share', p, 'claimFinal', true);
+      return { tx: await chain.build({ kind: 'claimFinal', seriesId }, holder), amount: amount.toString(), redeemsFirst: null, total: amount.toString(), burnsUnits: '0' };
+    }
     const balance = BigInt(p.units) - BigInt(p.escrowedUnits);
     const redeemsFirst = (await chain.getRedemption(seriesId)) && balance > 0n ? redemptionPreview(p, balance) : null;
     const amount = BigInt(p.finalClaimable) + (redeemsFirst ? 0n : BigInt(p.claimable));
@@ -389,8 +415,9 @@ export function claimsThatPay(p: Pick<PositionState, 'claimable' | 'redemptionCl
  * A builder's 409 for a claim that would pay 0 and burn nothing: `reason` `nothing-to-claim` and `claimWith`, the other
  * claims that would pay the holder something now (the claim itself is never listed).
  */
-function nothingToClaim(what: string, p: PositionState, self: ReturnType<typeof claimsThatPay>[number]): AppError {
-  const claimWith = claimsThatPay(p).filter((c) => c !== self);
+function nothingToClaim(what: string, p: PositionState, self: ReturnType<typeof claimsThatPay>[number], curve = false): AppError {
+  // a curve holder redeems by tender (`tenderUnits`), not by a claim: its tender preview is no claim to point at
+  const claimWith = claimsThatPay(p).filter((c) => c !== self && !(curve && c === 'claimRedemption'));
   return AppError.conflict(claimWith.length ? `nothing to claim as ${what}; claim with ${claimWith.join(', ')}` : 'nothing to claim', { reason: 'nothing-to-claim', claimWith });
 }
 

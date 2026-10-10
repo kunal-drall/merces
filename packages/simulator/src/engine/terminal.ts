@@ -122,10 +122,31 @@ function finalWeight(s: SimSeries, p: SimPosition): bigint {
   return s.redemption ? p.redeemedUnits + redeemableUnits(p) : accrualUnits(s, p);
 }
 
-/** A holder's share of the final pool it could take now, without moving its cursor (the share `claimFinal` pays on top of the net payout). */
+/**
+ * A holder's share of the final pool it could take now, without moving its cursor (the share `claimFinal` pays on top of
+ * the net payout). On a curve series that did not redeem it is 0: the share of the holder's stake is credited into its
+ * pending payout by the settlement and counted in `claimableNet` (any claim pays it); on one that redeemed it is the
+ * share of its tendered units since its final cursor.
+ */
 export function claimableFinal(s: SimSeries, p: SimPosition): bigint {
-  if (s.status !== 'Extinguished' || !p.registered || p.finalClaimed) return 0n;
+  if (s.status !== 'Extinguished' || !p.registered) return 0n;
+  if (s.curve) return s.redemption ? settleHolderDelta(s.final.finalAccWad, p.lastFinalAccWad, p.redeemedUnits) : 0n;
+  if (p.finalClaimed) return 0n;
   return settleHolderDelta(s.final.finalAccWad, p.lastFinalAccWad, finalWeight(s, p));
+}
+
+/**
+ * Curve mode's weight and share (Stage 1 claims.rs:424-452; the caller settled the holder on its stake): on a series
+ * that redeemed, the holder's tendered units and their share since its final cursor (which moves); otherwise its stake,
+ * with a share of 0 here because the settlement already credited the stake's share into the pending payout. Nothing is
+ * redeemed and nothing burns; a second claim pays nothing more (the cursors moved).
+ */
+function curveFinalShare(s: SimSeries, p: SimPosition): { weight: bigint; share: bigint } {
+  if (!s.redemption) return { weight: p.stakedUnits, share: 0n };
+  const weight = p.redeemedUnits;
+  const share = settleHolderDelta(s.final.finalAccWad, p.lastFinalAccWad, weight);
+  p.lastFinalAccWad = s.final.finalAccWad;
+  return { weight, share };
 }
 
 /**
@@ -159,7 +180,12 @@ function finalShare(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): { 
  *  4. its weight and share (`finalShare`: on a series that redeemed, its remaining units are redeemed first and it is
  *     weighed on its redeemed units; otherwise on its accrual units); the share is paid once;
  *  5. it is paid `pending + share` from the vault and its balance burns (reason `extinguishment`; the units held for a
- *     window ask stay until the window returns them); a curve series burns nothing (claims.rs:424-452).
+ *     window ask stay until the window returns them).
+ *
+ * A curve series (claims.rs:424-452) has no bids to deliver, settles the holder on its stake (`settle_curve_holder`,
+ * which on a series that did not redeem credits the stake's final share into the pending payout), weighs the share on
+ * the holder's tendered units on a series that redeemed, else on its stake with a share of 0 (`curveFinalShare`), and
+ * burns nothing.
  *
  * Events: `BidDelivered` (a pending bid), the redemption body's when it runs, then `FinalClaimed{units: weight, amount:
  * pending + share}` (0 included, SPEC's zero-amount rule) and the `UnitsBurned` of the remaining balance (the EVM
@@ -172,7 +198,7 @@ export function claimFinal(e: EngineCore, signer: string, cmd: Extract<Command, 
   const p = s.positions.get(signer);
   if (!p || !p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');
   settleHolder(e, s, p);
-  const { weight, share } = finalShare(e, s, p, emit);
+  const { weight, share } = s.curve ? curveFinalShare(s, p) : finalShare(e, s, p, emit);
   const amount = p.pending + share;
   p.pending = 0n;
   if (amount > s.vaultBalance) throw new ChainError('ChainSpecific', 'vault invariant violated'); // never happens: every division floors

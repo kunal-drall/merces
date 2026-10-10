@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { bidCommitment, runSettlement, type DomainEvent } from '@merces/domain';
-import { WAD, capPerUnit, parsePeriod, requiredEscrow } from '@merces/math';
+import { CURVE_TERMS_ZEROS, bidCommitment, rateUnits, runSettlement, termsCommitment, type DomainEvent } from '@merces/domain';
+import { WAD, capPerUnit, parsePeriod, ratePerUnit, requiredEscrow, wadFromDecimal } from '@merces/math';
 import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv } from '../src/env.ts';
 
 /**
@@ -25,6 +25,9 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  * S3 cause codes:
  *  - S3-Z: Stage 1's zero-amount rule: a claim of nothing succeeds and emits its event with zeros (`PayoutClaimed{0, 0}`);
  *  - S3-BU: `PayoutClaimed.burnedUnits`, 0 off a Retired series.
+ *  - S3-ST: curve staking (Solana only): a registered, allowlisted holder stakes its base lamports after a census and is
+ *    paid on its stake; a buyer that did not register earns nothing; unstake credits pending and moves no stablecoin; an
+ *    EVM chain refuses a curve series (CurveModeUnsupported).
  */
 const types = (evs: DomainEvent[]) => evs.map((e) => e.type);
 
@@ -260,5 +263,64 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     expect(types(again.events)).toEqual(['RedemptionClaimed']);
     expect(again.events[0]!.payload).toMatchObject({ units: '0', amount: '0' });
     await expectChainError(exec(e, e.admin, { kind: 'claimRedemption', seriesId }), 'NotFound');
+  });
+
+  // cause S3-ST: Stage 1's curve mode through the port (curve_mode.rs: register, sync, stake, receive, claim); EVM
+  // registries refuse a curve series right after the issuer check (MercesRegistry.sol:479-481)
+  it('runs curve staking on Solana: register, census, stake, receive, claim by stake, unstake credits pending; EVM refuses a curve', async () => {
+    const e = env();
+    if (!(await e.chain.getIssuer(e.issuer.address))) await exec(e, e.issuer, { kind: 'registerIssuer' });
+    // Stage 1's worked curve series: 100 units, X = 1,000 USDC, r per base lamport, the curve's zeros
+    const over = { raiseStyle: 'curve' as const, ...CURVE_TERMS_ZEROS, unitsOffered: '100', minimumRaise: '1000000000' };
+    const privateTerms = { ...e.privateTerms, rWad: ratePerUnit(wadFromDecimal('0.10'), rateUnits(over)) };
+    const terms = e.terms({ ...over, termsCommitment: termsCommitment(privateTerms) });
+    if (e.chain.family !== 'solana') {
+      await expectChainError(exec(e, e.issuer, { kind: 'createSeries', terms }), 'NotPermitted');
+      return;
+    }
+    const created = await exec(e, e.issuer, { kind: 'createSeries', terms });
+    expect(types(created.events)).toEqual(['SeriesCreated', 'CurveActivated', 'RaiseOpened']);
+    const curveId = (created.events[0]!.payload as { seriesId: string }).seriesId;
+    const [a, b, c] = e.backers as [typeof e.backers[0], typeof e.backers[0], typeof e.backers[0]];
+    for (const [w, amount] of [[a, 400], [b, 350], [c, 300]] as const) {
+      await exec(e, w, { kind: 'curveSwap', seriesId: curveId, side: 'buy', amountIn: USDC(amount).toString(), minimumAmountOut: '0' });
+    }
+    await e.chain.submit({ kind: 'completeCurve', seriesId: curveId }, 'keeper');
+    await e.chain.submit({ kind: 'collectCurveProceeds', seriesId: curveId }, 'keeper');
+    // a buyer holds units in its wallet and is not registered: it earns nothing
+    const held = BigInt((await e.chain.getPosition(curveId, a.address))!.walletUnits);
+    expect(held > 0n).toBe(true);
+    await e.chain.submit({ kind: 'registerHolder', seriesId: curveId, wallet: a.address }, 'keeper');
+    // nothing staked before a census covers it (StakeExceedsOutstanding, code WrongStatus)
+    await expectChainError(exec(e, a, { kind: 'stakeUnits', seriesId: curveId, units: held.toString() }), 'WrongStatus');
+    await e.chain.submit({ kind: 'syncCurveUnits', seriesId: curveId }, 'keeper');
+    const staked = await exec(e, a, { kind: 'stakeUnits', seriesId: curveId, units: held.toString() });
+    expect(staked.events.map((x) => [x.type, x.payload])).toEqual([['UnitsStaked', { seriesId: curveId, holder: a.address, units: held.toString(), staked: held.toString() }]]);
+    expect(await e.chain.getPosition(curveId, a.address)).toMatchObject({ registered: true, units: held.toString(), stakedUnits: held.toString(), walletUnits: '0' });
+    // a report after the quarter, over a census taken after it
+    const s = (await e.chain.getSeries(curveId))!;
+    const q = parsePeriod(s.reporting.firstPeriod!);
+    await e.waitUntil(q.end + e.durations.reportLead);
+    await e.chain.submit({ kind: 'syncCurveUnits', seriesId: curveId }, 'keeper');
+    const n = BigInt((await e.chain.getSeries(curveId))!.unitsOutstanding);
+    const report = await e.buildReport({ seriesId: curveId, periodId: q.id, unitsOutstanding: n, privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(70_000), termsCommitment: terms.termsCommitment });
+    const accepted = await exec(e, e.issuer, report.command);
+    const due = (accepted.events[0]!.payload as { paymentDue: string }).paymentDue;
+    expect(BigInt(due) > 0n).toBe(true);
+    await exec(e, e.issuer, { kind: 'payIn', seriesId: curveId, periodId: q.id, amount: due });
+    // the stake is paid its share of the net, `floor(acc × staked / WAD)`; the unstaked units' share stays in the vault
+    const acc = BigInt((await e.chain.getSeries(curveId))!.accNetWad);
+    const owed = (acc * held) / WAD;
+    expect((await e.chain.getPosition(curveId, a.address))!.claimable).toBe(owed.toString());
+    const claim = await exec(e, a, { kind: 'claimPayout', seriesId: curveId });
+    expect(claim.events.map((x) => [x.type, x.payload])).toEqual([['PayoutClaimed', { seriesId: curveId, holder: a.address, amount: owed.toString(), burnedUnits: '0' }]]);
+    // b bought and never registered: no claim (HolderNotRegistered, code NotFound)
+    await expectChainError(exec(e, b, { kind: 'claimPayout', seriesId: curveId }), 'NotFound');
+    // unstaking returns the units and moves no stablecoin
+    const before = await e.chain.getBalance(a.address, 'USDC');
+    const un = await exec(e, a, { kind: 'unstakeUnits', seriesId: curveId, units: held.toString() });
+    expect(types(un.events)).toEqual(['UnitsUnstaked']);
+    expect(await e.chain.getBalance(a.address, 'USDC')).toBe(before);
+    expect(await e.chain.getPosition(curveId, a.address)).toMatchObject({ stakedUnits: '0', walletUnits: held.toString() });
   });
 });

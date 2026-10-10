@@ -18,7 +18,7 @@ import { curveOf, dammTrade, migrateCurve, releaseLockedUnits } from './engine/c
 import { balKey } from './engine/core.ts';
 import { toQuarterRate, toRateAccumulator } from './reads/fx.ts';
 import { listPeriodStates, toPeriodState } from './reads/periods.ts';
-import { listPositionStates, toPosition } from './reads/positions.ts';
+import { getPositionState, listPositionStates } from './reads/positions.ts';
 import { toRedemption } from './reads/redemption.ts';
 import { toIssuerState, toSeriesState } from './reads/series.ts';
 import { toTreasuryState } from './reads/treasury.ts';
@@ -250,12 +250,11 @@ export class SimulatorChain implements ChainPort {
   }
   async getPosition(seriesId: string, wallet: string): Promise<PositionState | null> {
     const x = this.state.series.get(seriesId);
-    const p = x?.positions.get(wallet);
-    return x && p ? toPosition(x, p) : null;
+    return x ? getPositionState(this.state, x, wallet) : null;
   }
   async listPositions(seriesId: string): Promise<PositionState[]> {
     const x = this.state.series.get(seriesId);
-    return x ? listPositionStates(x) : [];
+    return x ? listPositionStates(this.state, x) : [];
   }
   async getPeriod(seriesId: string, periodId: string): Promise<PeriodState | null> {
     const x = this.state.series.get(seriesId);

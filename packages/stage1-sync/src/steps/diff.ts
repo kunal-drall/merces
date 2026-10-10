@@ -134,7 +134,10 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
 };
 
 /** Curve mode is Solana only (SPEC v1.1.2 §9; EVM createSeries reverts CurveModeUnsupported): not applicable on EVM. */
-const SOLANA_ONLY = new Set(['curveSwap', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'CurveActivated', 'CurveGraduated', 'CurveProceedsCollected', 'CurveUnitsSynced']);
+const SOLANA_ONLY = new Set([
+  'curveSwap', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'stakeUnits', 'unstakeUnits', 'tenderUnits',
+  'CurveActivated', 'CurveGraduated', 'CurveProceedsCollected', 'CurveUnitsSynced', 'UnitsStaked', 'UnitsUnstaked',
+]);
 
 /** Field spellings that mean the same thing in both vocabularies. */
 const FIELD_ALIASES: Record<string, string[]> = {

@@ -327,18 +327,20 @@ components:
     PositionView:
       type: object
       description: "A holder's live position, read from the chain (S3: Stage 1's claim family). Each claimable figure is what one claim pays now; nothing is counted twice."
-      required: [seriesId, wallet, units, undeliveredUnits, escrowedUnits, claimable, pending, redemptionClaimable, tailClaimable, finalClaimable, claimedTotal, redeemedUnits, registered]
+      required: [seriesId, wallet, units, stakedUnits, walletUnits, undeliveredUnits, escrowedUnits, claimable, pending, redemptionClaimable, tailClaimable, finalClaimable, claimedTotal, redeemedUnits, registered]
       properties:
         seriesId: { type: string }
         wallet: { type: string }
-        units: { type: string, description: "the holder's accrual weight (Stage 1 accrual_units): its balance, its auction units not yet delivered and the units held for a window ask" }
+        units: { type: string, description: "the holder's accrual weight (Stage 1 accrual_units): its balance, its auction units not yet delivered and the units held for a window ask. On a curve series only staked units earn: its stake (stakedUnits), base lamports" }
+        stakedUnits: { type: string, description: "curve mode: the holder's units in the series' stake vault (Stage 1 staked_units, base lamports), the only units that earn; 0 on a sealed-bid series (S3 WP10)" }
+        walletUnits: { type: string, description: "the units in the holder's wallet: on a curve series its base lamports of the unit mint, which earn nothing until staked (a wallet holding units without registering reads registered false); on a sealed-bid series its own balance, units − undeliveredUnits − escrowedUnits" }
         undeliveredUnits: { type: string, description: auction units allocated and not yet delivered (part of units) }
         escrowedUnits: { type: string, description: "units held for the holder's window ask (part of units); the holder's own balance is units − undeliveredUnits − escrowedUnits" }
         claimable: { $ref: '#/components/schemas/Money', description: "what claimPayout (Stage 1's claim) pays now: pending plus what accrued since the holder's vault cursor; the net payout only" }
         pending: { $ref: '#/components/schemas/Money', description: "the part of claimable already settled into the holder's balance (Stage 1 pending)" }
-        redemptionClaimable: { $ref: '#/components/schemas/Money', description: 'what claimRedemption pays now beside the pending payout: the redemption price on the units not yet redeemed plus their tail catch-up; 0 unless the series redeemed' }
-        tailClaimable: { $ref: '#/components/schemas/Money', description: "what claimTail pays as TailClaimed (Stage 1's claimableTail view); claimTail redeems a holder that has redeemed nothing first" }
-        finalClaimable: { $ref: '#/components/schemas/Money', description: 'the final-pool share claimFinal pays once after an extinguishment (beside the pending payout)' }
+        redemptionClaimable: { $ref: '#/components/schemas/Money', description: "what claimRedemption pays now beside the pending payout: the redemption price on the units not yet redeemed plus their tail catch-up; 0 unless the series redeemed. On a curve series what a tender (tenderUnits) of the holder's stake and the wallet units that fit the tender quota would pay as principal" }
+        tailClaimable: { $ref: '#/components/schemas/Money', description: "what claimTail pays as TailClaimed (Stage 1's claimableTail view); claimTail redeems a holder that has redeemed nothing first (on a curve series it redeems nothing: the tail on tendered units only)" }
+        finalClaimable: { $ref: '#/components/schemas/Money', description: "the final-pool share claimFinal pays once after an extinguishment (beside the pending payout). On a curve series that did not redeem the stake's share is in claimable (any claim pays it) and this is 0" }
         claimedTotal: { $ref: '#/components/schemas/Money' }
         redeemedUnits: { type: string }
         registered: { type: boolean, description: 'a Stage 1 registered holder: payouts accrue to registered holders only, and every claim needs it' }

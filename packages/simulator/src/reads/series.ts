@@ -41,6 +41,7 @@ export function toSeriesState(chain: string, x: SimSeries, now: number): SeriesS
       dueDays: t.dueDays, graceDays: t.graceDays, formalNoticeDays: t.formalNoticeDays, contractHash: t.contractHash, termsCommitment: t.termsCommitment, tierFlags: { ...t.tierFlags }, reportingCurrency: t.reportingCurrency, raiseStyle: t.raiseStyle,
     },
     phase: x.phase, status: derivedStatus(x, now), createdAt: x.createdAt, openedAt: x.openedAt, settledAt: x.settledAt, issuePrice: x.issuePrice === null ? null : s(x.issuePrice), unitsSold: s(x.unitsSold), unitsOutstanding: s(x.unitsOutstanding), unitsSyncedAt: x.unitsSyncedAt,
+    stakedTotal: s(x.stakedTotal), tenderedTotal: s(x.tenderedTotal),
     capPerUnit: x.issuePrice === null ? null : s(liveCapPerUnit(x)), paidPerUnitWad: s(x.vault.paidPerUnitWad), accNetWad: s(x.vault.netAccWad), lockupEndsAt: x.settledAt === null ? null : x.settledAt + t.lockupSeconds,
     releasesPaused: x.releasesPausedByIssuer || releasesBlockedByLateness(x, now), releasesPausedByIssuer: x.releasesPausedByIssuer, pause: legacyPause(x), pausedSecondsTotal: Number(l.pausedTotal),
     redemption: x.redemption ? toRedemption(x) : null, extinguishedAt: x.extinguishedAt, grossPaidTotal: s(x.grossPaidTotal), feesTotal: s(x.feesTotal),

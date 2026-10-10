@@ -301,7 +301,8 @@ function protocolHeldBalances(e: EngineCore, c: SimCurve, excludeDamm: boolean):
  * u64 are CurveUnitsInconsistent; a count below the stakes is CurveUnitsBelowStake. `excludeDamm` leaves the DAMM v2
  * pool's base vault out of the subtraction, as `redeem` does (S2, B-C13): the count then covers wallets, stakes and the
  * pool, an upper bound on what holders can tender that the issuer cannot lower by parking units in the pool. Moves
- * nothing. The stand-in's supply is fixed (`SimCurve.supply`): nothing burns base lamports before tenders (WP10).
+ * nothing. The stand-in's supply (`SimCurve.supply`) is fixed until a redemption: only tenders burn base lamports
+ * (`tenderUnits`), and no census is taken after a redemption.
  */
 export function takeCensus(e: EngineCore, s: SimSeries, excludeDamm: boolean): CurveCensusCount {
   const c = curveOf(s);

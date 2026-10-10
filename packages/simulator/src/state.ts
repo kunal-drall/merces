@@ -237,7 +237,10 @@ export interface SimCurveAccounts {
   lockerEscrow: string;
   /** the leftover receiver (the curve authority PDA) after `withdraw_leftover` */
   leftoverReceiver: string;
-  /** the series' stake vault (Stage 1 `ATA(PDA["curve_stake", series], base_mint)`; used from S3 WP10); not protocol-held */
+  /**
+   * the series' stake vault (Stage 1 `ATA(PDA["curve_stake", series], base_mint)`): the holders' staked units, the only
+   * units that earn (`stakeUnits`, `unstakeUnits`, `tenderUnits`); not protocol-held, so the census counts them
+   */
   stakeVault: string;
 }
 
@@ -271,7 +274,7 @@ export interface SimCurve {
   lockedVestingAmount: bigint;
   /** base lamports left over after migration (to the leftover receiver) */
   leftoverAmount: bigint;
-  /** the unit mint's fixed supply: swap base + migration base + locked vesting + leftover */
+  /** the unit mint's supply: swap base + migration base + locked vesting + leftover at activation, less what tenders burned */
   supply: bigint;
   /** P0 per whole unit, `floor(X × 10^6 / swapBaseAmount)` (Stage 1 `clearing_price`) */
   p0: bigint;

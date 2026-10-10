@@ -34,6 +34,8 @@ import {
  *    and `collectCurveProceeds`, `CurveActivated`, `CurveGraduated` (Stage 1 RaiseSettled), `CurveProceedsCollected`,
  *    the `curveTrading` fee kind; the toy curve's buy and graduation commands and its mint and creation events are gone.
  *  - S3-CN: the curve census: the permissionless `syncCurveUnits` and `CurveUnitsSynced` (Stage 1 `sync_curve_units`).
+ *  - S3-ST: curve staking and tender: the holder's `stakeUnits`, `unstakeUnits` and `tenderUnits{fromStake, fromWallet}`,
+ *    `UnitsStaked` and `UnitsUnstaked` (units only), `RedemptionClaimed.fromStake` (a curve tender's; ours).
  */
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
@@ -219,6 +221,28 @@ describe('schemas', () => {
     expect(() => parseDomainEvent({ ...env, type: 'FinalClaimed', payload: { seriesId: sid, holder: 'h', amount: '5' } })).toThrow();
     // the domain schema version that carries them
     expect(domainJsonSchema().version).toBe('0.3.0');
+  });
+  it('has Stage 1\'s curve staking: stakeUnits, unstakeUnits, tenderUnits, UnitsStaked, UnitsUnstaked, RedemptionClaimed.fromStake (cause S3-ST)', () => {
+    const env = { chain: 'solana', cursor: '000000000001', seq: 1, blockTime: 1, blockRef: '1', txId: 't', finality: 'finalized' as const };
+    const sid = 'solana:abc';
+    // the holder signs each (Stage 1 curve.rs: `owner: Signer`); none is permissionless
+    expect(userCommandKinds.filter((k) => /stake|tender/i.test(k))).toEqual(['stakeUnits', 'unstakeUnits', 'tenderUnits']);
+    for (const cmd of [{ kind: 'stakeUnits', seriesId: sid, units: '10' }, { kind: 'unstakeUnits', seriesId: sid, units: '10' }, { kind: 'tenderUnits', seriesId: sid, fromStake: '10', fromWallet: '0' }]) {
+      expect(userCommandSchema.parse(cmd)).toEqual(cmd);
+      expect(() => serviceCommandSchema.parse(cmd)).toThrow();
+    }
+    expect(() => userCommandSchema.parse({ kind: 'tenderUnits', seriesId: sid, units: '10' })).toThrow(); // Stage 1's two arguments
+    // Stage 1's events (events.rs:483-497): units only, never amount-bearing
+    for (const type of ['UnitsStaked', 'UnitsUnstaked'] as const) {
+      const payload = { seriesId: sid, holder: 'h', units: '10', staked: '0' };
+      expect(parseDomainEvent({ ...env, type, payload }).payload).toEqual(payload);
+      expect(amountBearingEvents.has(type)).toBe(false);
+    }
+    // a curve tender's redemption names its staked part; a sealed-bid redemption has none
+    const tender = { seriesId: sid, holder: 'h', units: '10', amount: '5', fromStake: '4' };
+    expect(parseDomainEvent({ ...env, type: 'RedemptionClaimed', payload: tender }).payload).toEqual(tender);
+    const sealed = { seriesId: sid, holder: 'h', units: '10', amount: '5' };
+    expect(parseDomainEvent({ ...env, type: 'RedemptionClaimed', payload: sealed }).payload).toEqual(sealed);
   });
   it('the committed JSON schema is up to date', () => {
     const path = fileURLToPath(new URL('../schema/domain-v0.schema.json', import.meta.url));

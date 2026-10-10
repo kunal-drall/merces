@@ -118,6 +118,17 @@ in the position (`GET /series/{id}/position`, the `PositionView` schema, and `/m
   `{burned, refused}`).
 - A notice of a status change to Redeemed or Extinguished names the claims to send (`claimRedemption` and `claimTail`;
   `claimFinal`), never an amount.
+- **On a curve series** (S3 WP10, A-CURVE-6) only staked units earn: the position's `units` are the holder's stake
+  (`stakedUnits`), and `walletUnits` are the base lamports in its wallet, which earn nothing until staked (a wallet that
+  bought and never registered reads `registered: false` with its `walletUnits`). A curve position row, and so holder
+  access, comes from the first stake or a tender, never from buying or registering. Nothing burns on a claim
+  (`burnsUnits` "0"). The redemption is a tender (`tenderUnits`; its builder arrives with the other curve builders in
+  S3 WP12; `redemptionClaimable` previews what a tender of the stake and the wallet units within the quota pays), so
+  the redemption claim builder is 409 CurveUsesTender; the tail builder redeems nothing (`redeemsFirst: null`): it is
+  409 NoRedeemedUnits until the holder tendered, and `total` adds the pending payout the transaction also pays; the
+  final builder's `amount` = `total` is the pending payout (on a series that did not redeem, the stake's final share is
+  in it, so `finalClaimable` is 0 and `claimPayout` pays it too) plus the final share of the tendered units on a series
+  that redeemed. Unstaking credits the stake's earnings to the pending payout and pays nothing; the next claim pays it.
 
 **Registration.** Payouts accrue only to registered holders, from the registration on. A winning bid registers its
 bidder when it is processed (and a window purchase its buyer), so a holder rarely needs to. `POST

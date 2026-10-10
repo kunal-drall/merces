@@ -74,6 +74,13 @@ export interface SeriesState {
    * series. A report on a curve series needs one at or after its period's end (CurveUnitsNotSynced).
    */
   unitsSyncedAt: number | null;
+  /**
+   * Curve mode: the units holders hold in the series' stake vault (Stage 1 `staked_total`, base lamports), the only units
+   * that earn; "0" on a sealed-bid series. Never more than the last census (StakeExceedsOutstanding).
+   */
+  stakedTotal: Units;
+  /** Curve mode: the units tendered at the redemption so far (Stage 1 `tendered_total`, base lamports); "0" otherwise */
+  tenderedTotal: Units;
   capPerUnit: Money | null;
   paidPerUnitWad: Wad;
   accNetWad: Wad;
@@ -232,9 +239,21 @@ export interface PositionState {
   wallet: Address;
   /**
    * the holder's accrual weight (Stage 1 `accrual_units`): its balance, its auction units not yet delivered
-   * (`undeliveredUnits`) and the units held for a window ask
+   * (`undeliveredUnits`) and the units held for a window ask. On a curve series only staked units earn: `units` is the
+   * holder's stake (`stakedUnits`), and the units in its wallet (`walletUnits`) earn nothing
    */
   units: Units;
+  /**
+   * Curve mode: the holder's units in the series' stake vault (Stage 1 `Holder.staked_units`, base lamports), what it can
+   * unstake or tender from its stake; "0" on a sealed-bid series
+   */
+  stakedUnits: Units;
+  /**
+   * The units in the holder's wallet: on a curve series its base lamports of the unit mint (they earn nothing until
+   * staked; a wallet that holds units without being registered reads `registered: false`); on a sealed-bid series its
+   * own balance, `units − undeliveredUnits − escrowedUnits` (Stage 1 `unitsOf`)
+   */
+  walletUnits: Units;
   /** auction units allocated to the holder and not yet delivered (part of `units`) */
   undeliveredUnits: Units;
   /**
@@ -252,16 +271,24 @@ export interface PositionState {
   /**
    * what the holder's redemption pays now beside its pending payout (`claimRedemption`, or the redemption `claimTail` or
    * `claimFinal` runs first): the redemption price on the units not yet redeemed (its units less those held for a window
-   * ask) plus the tail catch-up on them; 0 unless the series redeemed and is Redeemed or Extinguished
+   * ask) plus the tail catch-up on them; 0 unless the series redeemed and is Redeemed or Extinguished. On a curve series
+   * what `tenderUnits` would pay as principal now for the holder's whole stake and the wallet units that fit the tender
+   * quota (`floor(P_redeem × units / 10^6)`; a tender has no tail catch-up), 0 unless the series redeemed
    */
   redemptionClaimable: Money;
   /**
    * what `claimTail` (Stage 1 `claim_tail`) pays as `TailClaimed`: Stage 1's `claimableTail` view, the tail since the
    * holder's tail cursor on its redeemed units or, before it redeems, on the units its redemption would redeem
-   * (`claim_tail` redeems first, paying `redemptionClaimable` and the pending payout in the redemption's own events)
+   * (`claim_tail` redeems first, paying `redemptionClaimable` and the pending payout in the redemption's own events). On
+   * a curve series the tail on the units the holder tendered only (`claim_tail` redeems nothing there)
    */
   tailClaimable: Money;
-  /** what `claimFinal` (Stage 1 `claim_final`) pays as the final-pool share after an extinguishment (it also pays `claimable`) */
+  /**
+   * what `claimFinal` (Stage 1 `claim_final`) pays as the final-pool share after an extinguishment (it also pays
+   * `claimable`). On a curve series that did not redeem the share of the holder's stake is credited into its pending
+   * payout by every settlement, so it is part of `claimable` (any claim pays it) and this is 0; on one that redeemed it is
+   * the share of the holder's tendered units
+   */
   finalClaimable: Money;
   /** a Stage 1 registered holder (payouts accrue to registered holders only) */
   registered: boolean;
@@ -377,7 +404,10 @@ export interface CurveState {
   unitsSold: Units;
   /** base lamports bought out of the curve, net of sells */
   baseSold: Units;
-  /** the unit mint's fixed supply: the swap base, the migration base, the issuer's locked allocation and the leftover */
+  /**
+   * the unit mint's supply: the swap base, the migration base, the issuer's locked allocation and the leftover, fixed at
+   * activation; only tenders burn units after a redemption (`tenderUnits`)
+   */
   baseSupply: Units;
   /** the curve's price per whole unit now (the stand-in's is P0 throughout) */
   spotPrice: Money;

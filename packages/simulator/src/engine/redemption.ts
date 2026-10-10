@@ -167,9 +167,12 @@ export function redeemBody(e: EngineCore, s: SimSeries, p: SimPosition, emit: Em
   emit('RedemptionClaimed', { seriesId: s.seriesId, holder: p.wallet, units: str(units), amount: str(principal) });
 }
 
-/** What a holder's redemption would pay now (`redeemBody` without the pending payout), moving nothing: the vault dust read. */
+/**
+ * What a holder's redemption would pay now (`redeemBody` without the pending payout), moving nothing: the vault dust
+ * read. Sealed-bid series only: a curve's holders tender (`tenderUnits`; the curve reads use `tenderPreview`).
+ */
 export function claimableRedemption(s: SimSeries, p: SimPosition): bigint {
-  if (!s.redemption || (s.status !== 'Redeemed' && s.status !== 'Extinguished')) return 0n;
+  if (s.curve || !s.redemption || (s.status !== 'Redeemed' && s.status !== 'Extinguished')) return 0n;
   const units = redeemableUnits(p);
   return scaledAmount(s.redemption.pricePerUnit, units, s.unitScale) + tailCatchUp(p, units);
 }
@@ -227,6 +230,7 @@ function tailSince(s: SimSeries, p: SimPosition, units: bigint): bigint {
  */
 export function claimableTail(s: SimSeries, p: SimPosition): bigint {
   if (!s.redemption) return 0n;
+  if (s.curve) return tailSince(s, p, p.redeemedUnits); // a curve's tail is paid on tendered units only (no redemption here)
   return tailSince(s, p, p.redeemedUnits > 0n ? p.redeemedUnits : redeemableUnits(p));
 }
 /**
@@ -237,7 +241,9 @@ export function claimableTail(s: SimSeries, p: SimPosition): bigint {
  * redeem: `claim_tail` pays on the redeemed units now, and the rest arrives with the next redemption.
  */
 export function tailOwed(s: SimSeries, p: SimPosition): bigint {
-  return s.redemption ? tailSince(s, p, p.redeemedUnits + redeemableUnits(p)) : 0n;
+  if (!s.redemption) return 0n;
+  if (s.curve) return tailSince(s, p, p.redeemedUnits);
+  return tailSince(s, p, p.redeemedUnits + redeemableUnits(p));
 }
 /**
  * Stage 1 `claim_tail` (SIM:1403-1417). Checks and effects, in order:
@@ -247,19 +253,26 @@ export function tailOwed(s: SimSeries, p: SimPosition): bigint {
  *  2. the signer is a registered holder (HolderNotRegistered);
  *  3. a holder that has redeemed nothing and still has accrual units is redeemed first (`redeemBody`: a pending auction
  *     bid delivered, the pending payout and the tail catch-up in `PayoutClaimed`, `UnitsBurned`, `RedemptionClaimed`);
+ *     on a curve series nothing is redeemed (claims.rs:365-391): the holder is settled on its stake, refused when it
+ *     tendered nothing (NoRedeemedUnits), and its pending payout is paid (`curveTailPending`);
  *  4. a holder that has still redeemed nothing is refused (NoRedeemedUnits: a late registration with no units, 22#98);
- *  5. the tail on its redeemed units since its tail cursor, `floor((tailAccWad − lastTailAccWad) × redeemedUnits / WAD)`,
- *     is paid from the vault and the cursor moves to `tailAccWad`.
+ *  5. the tail on its redeemed (a curve's: tendered) units since its tail cursor,
+ *     `floor((tailAccWad − lastTailAccWad) × redeemedUnits / WAD)`, is paid from the vault and the cursor moves to
+ *     `tailAccWad`.
  *
- * Events: the redemption body's when it runs, then `TailClaimed{amount}` (the tail only; 0 included, SPEC's
- * zero-amount rule).
+ * Events: the redemption body's when it runs (a curve's `PayoutClaimed{burnedUnits: 0}` for its pending payout, only
+ * when above 0), then `TailClaimed{amount}` (the tail only; 0 included, SPEC's zero-amount rule).
  */
 export function claimTail(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'claimTail' }>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
   if (!s.redemption) fail('NotRedeemed', 'the series has not redeemed');
   const p = s.positions.get(signer);
   if (!p || !p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');
-  if (p.redeemedUnits === 0n && accrualUnits(s, p) > 0n) redeemBody(e, s, p, emit);
+  if (s.curve) {
+    curveTailPending(e, s, p, emit);
+  } else if (p.redeemedUnits === 0n && accrualUnits(s, p) > 0n) {
+    redeemBody(e, s, p, emit);
+  }
   if (p.redeemedUnits === 0n) fail('NoRedeemedUnits', 'the holder has redeemed no units');
   const amount = tailSince(s, p, p.redeemedUnits);
   p.lastTailAccWad = s.tail.tailAccWad;
@@ -269,6 +282,26 @@ export function claimTail(e: EngineCore, signer: string, cmd: Extract<Command, {
   p.claimedTotal += amount;
   e.credit(p.wallet, s.terms.stablecoinMint, amount);
   emit('TailClaimed', { seriesId: s.seriesId, holder: p.wallet, amount: str(amount) });
+}
+
+/**
+ * Curve mode's part of `claimTail` (Stage 1 claims.rs:365-391): the units were tendered (`tenderUnits`), so nothing is
+ * redeemed here; the holder is settled on its stake and its pending payout is paid with the tail. Refused first when the
+ * holder tendered nothing (NoRedeemedUnits; the whole claim fails, as on Solana). The pending payout goes out as its own
+ * `PayoutClaimed{burnedUnits: 0}`, only when above 0 (S3 D3: `TailClaimed` carries the tail only).
+ */
+function curveTailPending(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): void {
+  settleHolder(e, s, p);
+  if (p.redeemedUnits === 0n) fail('NoRedeemedUnits', 'the holder has tendered no units');
+  const pending = p.pending;
+  if (pending === 0n) return;
+  p.pending = 0n;
+  if (pending > s.vaultBalance) throw new ChainError('ChainSpecific', 'vault invariant violated'); // never happens: every division floors
+  s.vaultBalance -= pending;
+  s.vaultDistributedNet += pending;
+  p.claimedTotal += pending;
+  e.credit(p.wallet, s.terms.stablecoinMint, pending);
+  emit('PayoutClaimed', { seriesId: s.seriesId, holder: p.wallet, amount: str(pending), burnedUnits: '0' });
 }
 
 /**

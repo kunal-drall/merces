@@ -54,9 +54,17 @@ function summary(e: DomainEvent): string | null {
     case 'UnitsTransferred': return `${p.units} units transferred in window ${p.windowId}`;
     case 'CurveGraduated': return `Curve filled: the raise settled with ${p.unitsSold} base units sold`;
     case 'CurveUnitsSynced': return `Units counted: ${p.unitsOutstanding} base units outstanding`;
+    case 'UnitsStaked': return `${p.units} base units staked`;
+    case 'UnitsUnstaked': return `${p.units} base units unstaked`;
     case 'FxFallbackFlagged': return `FX fallback flagged for ${p.pair} ${p.periodId}`;
     default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, VerifierKeyRegistered, HolderRegistered, FeeTaken, refunds, treasury, splits, curve proceeds: not in the public feed
   }
+}
+
+/** A curve-mode series (its units are base lamports; only staked units earn and only tenders burn). */
+async function isCurve(client: PoolClient, seriesId: string): Promise<boolean> {
+  const r = await client.query<{ raise_style: string }>('select raise_style from series where series_id = $1', [seriesId]);
+  return r.rows[0]?.raise_style === 'curve';
 }
 
 const money = (client: PoolClient, e: DomainEvent, kind: string, amount: string, extra: { periodId?: string | null; wallet?: string | null; detail?: Record<string, unknown> } = {}) =>
@@ -307,8 +315,15 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       // Stage 1's zero-amount rule: `burnRetired` on a wallet holding nothing emits a burn of 0 units, which changes
       // nothing (any wallet, also one that never held units: no position row, no money row, no activity line)
       if (BigInt(p.units) === 0n) break;
-      await client.query('update positions set units = greatest(units - $3, 0), burned_units = burned_units + $3, last_seq = $4 where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.units, e.seq]);
-      await client.query('update series set units_outstanding = greatest(units_outstanding - $2, 0), last_event_seq = $3 where series_id = $1', [p.seriesId, p.units, e.seq]);
+      if (await isCurve(client, p.seriesId)) {
+        // a curve's only burn is a tender (`tenderUnits`): staked and wallet units together. Units outstanding stay the
+        // count taken at redemption (Stage 1 takes no census after it), and the position is the RedemptionClaimed's to
+        // write (a wallet-only tender may have no row yet; only `fromStake` lowers the stake)
+        await client.query('update series set tendered_total = tendered_total + $2, last_event_seq = $3 where series_id = $1', [p.seriesId, p.units, e.seq]);
+      } else {
+        await client.query('update positions set units = greatest(units - $3, 0), burned_units = burned_units + $3, last_seq = $4 where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.units, e.seq]);
+        await client.query('update series set units_outstanding = greatest(units_outstanding - $2, 0), last_event_seq = $3 where series_id = $1', [p.seriesId, p.units, e.seq]);
+      }
       await money(client, e, 'burn', p.units, { wallet: p.holder, detail: { reason: p.reason } });
       break;
     }
@@ -321,8 +336,21 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     case 'RedemptionClaimed': {
       const p = e.payload as P<'RedemptionClaimed'>;
       // a holder's units are redeemed when it claims (Stage 1), not when the issuer redeems
-      await client.query('update positions set redeemed_units = redeemed_units + $3, last_seq = greatest(last_seq, $4) where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.units, e.seq]);
-      await money(client, e, 'redemption_claim', p.amount, { wallet: p.holder, detail: { units: p.units } });
+      if (p.fromStake !== undefined) {
+        // a curve tender (`tenderUnits`): the holder held and redeemed units, so the row is created when missing (a
+        // registered holder that tendered only wallet units; amendment M3). Only the staked part lowers its stake (and
+        // its accrual weight, which on a curve is the stake) and the series' stakes; the units burned are all of them
+        await client.query(
+          `insert into positions (series_id, wallet, units, staked_units, redeemed_units, burned_units, first_seq, last_seq) values ($1,$2,0,0,$3,$3,$5,$5)
+           on conflict (series_id, wallet) do update set redeemed_units = positions.redeemed_units + $3, burned_units = positions.burned_units + $3,
+             staked_units = greatest(positions.staked_units - $4, 0), units = greatest(positions.units - $4, 0), last_seq = greatest(positions.last_seq, $5)`,
+          [p.seriesId, p.holder, p.units, p.fromStake, e.seq],
+        );
+        await client.query('update series set staked_total = greatest(staked_total - $2, 0), last_event_seq = $3 where series_id = $1', [p.seriesId, p.fromStake, e.seq]);
+      } else {
+        await client.query('update positions set redeemed_units = redeemed_units + $3, last_seq = greatest(last_seq, $4) where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.units, e.seq]);
+      }
+      await money(client, e, 'redemption_claim', p.amount, { wallet: p.holder, detail: { units: p.units, ...(p.fromStake !== undefined ? { fromStake: p.fromStake } : {}) } });
       break;
     }
     case 'TailClaimed': {
@@ -440,6 +468,22 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       const p = e.payload as P<'CurveUnitsSynced'>;
       await client.query('insert into curve_census (series_id, seq, supply, protocol_held, units_outstanding, staked_total, synced_at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing', [p.seriesId, e.seq, p.supply, p.protocolHeld, p.unitsOutstanding, p.stakedTotal, e.blockTime]);
       await client.query('update series set units_outstanding = $2, units_synced_at = $3, staked_total = $4, last_event_seq = $5 where series_id = $1', [p.seriesId, p.unitsOutstanding, e.blockTime, p.stakedTotal, e.seq]);
+      break;
+    }
+    case 'UnitsStaked':
+    case 'UnitsUnstaked': {
+      // curve staking (Stage 1 `stake_units` / `unstake_units`): the holder's stake after the change is in the event. On a
+      // curve only staked units earn, so the position's units (its accrual weight) are its stake. The first stake creates
+      // the row, which is holder access (A-REV-10: a curve holder holds units in the series' stake vault); a registration
+      // alone never does. The series' stakes move by the units
+      const p = e.payload as P<'UnitsStaked'>;
+      await client.query(
+        `insert into positions (series_id, wallet, units, staked_units, first_seq, last_seq) values ($1,$2,$3,$3,$4,$4)
+         on conflict (series_id, wallet) do update set units = excluded.units, staked_units = excluded.staked_units, last_seq = excluded.last_seq where positions.last_seq < excluded.last_seq`,
+        [p.seriesId, p.holder, p.staked, e.seq],
+      );
+      const delta = e.type === 'UnitsStaked' ? p.units : `-${p.units}`;
+      await client.query('update series set staked_total = greatest(staked_total + $2::numeric, 0), last_event_seq = $3 where series_id = $1', [p.seriesId, delta, e.seq]);
       break;
     }
     case 'PauseRequested':

@@ -13,10 +13,16 @@ import { fail } from './errors.ts';
  * the cursor to the live accumulator, so nothing paid before it counts.
  */
 
+/** A holder record before anything happened to it (not stored). */
+export function blankPosition(wallet: string): SimPosition {
+  return { wallet, units: 0n, escrowed: 0n, pending: 0n, claimedTotal: 0n, redeemedUnits: 0n, registered: false, lastNetAccWad: 0n, lastTailAccWad: 0n, lastFinalAccWad: 0n, finalClaimed: false, stakedUnits: 0n };
+}
+
+/** `wallet`'s holder record in the series, created (blank) when it has none. */
 export function position(s: SimSeries, wallet: string): SimPosition {
   let p = s.positions.get(wallet);
   if (!p) {
-    p = { wallet, units: 0n, escrowed: 0n, pending: 0n, claimedTotal: 0n, redeemedUnits: 0n, registered: false, lastNetAccWad: 0n, lastTailAccWad: 0n, lastFinalAccWad: 0n, finalClaimed: false, stakedUnits: 0n };
+    p = blankPosition(wallet);
     s.positions.set(wallet, p);
   }
   return p;
@@ -57,25 +63,45 @@ export function heldUnits(s: SimSeries, p: SimPosition): bigint {
 export function accrualUnits(s: SimSeries, p: SimPosition): bigint {
   return s.curve ? p.stakedUnits : p.units;
 }
-/** The payout a registered holder accrued since its last settlement (0 for an unregistered one); moves nothing. */
+/**
+ * The payout a registered holder accrued since its last settlement (0 for an unregistered one); moves nothing. On a curve
+ * series (Stage 1 `settle_curve_holder`, curve.rs:516-535) it is weighed on the holder's stake, and while the series has
+ * not redeemed it also takes the stake's share of the final pool since the holder's final cursor (0 until an
+ * extinguishment distributes one): an extinguished curve's final share is paid as part of the pending payout.
+ */
 function accruedSince(s: SimSeries, p: SimPosition): bigint {
-  return p.registered ? settleHolderDelta(s.vault.netAccWad, p.lastNetAccWad, accrualUnits(s, p)) : 0n;
+  if (!p.registered) return 0n;
+  const w = accrualUnits(s, p);
+  const net = settleHolderDelta(s.vault.netAccWad, p.lastNetAccWad, w);
+  return curveTakesFinal(s) ? net + settleHolderDelta(s.final.finalAccWad, p.lastFinalAccWad, w) : net;
 }
-/** Fold a registered holder's accrual into `pending` and move its cursor; an unregistered holder accrues nothing. */
+/** Curve mode settles the final pool into `pending` while the series has not redeemed (Stage 1 `redemption_ts == 0`). */
+function curveTakesFinal(s: SimSeries): boolean {
+  return s.curve !== null && s.redemption === null;
+}
+/**
+ * Fold a registered holder's accrual into `pending` and move its cursor (on a curve series that has not redeemed, its
+ * final cursor too); an unregistered holder accrues nothing.
+ */
 function settleAccrual(s: SimSeries, p: SimPosition): void {
   if (!p.registered) return;
   p.pending += accruedSince(s, p);
   p.lastNetAccWad = s.vault.netAccWad;
+  if (curveTakesFinal(s)) p.lastFinalAccWad = s.final.finalAccWad;
 }
 /**
  * Stage 1 `settleHolder` (SIM:430-436), the cross-module contract: fold the holder's accrued payout into `pending` and
- * move its cursor. An unregistered holder is refused (HolderNotRegistered).
+ * move its cursor. An unregistered holder is refused (HolderNotRegistered). On a curve series it is Stage 1's
+ * `settle_curve_holder` (curve.rs:516-535), which every stake, unstake, tender and claim runs first.
  */
 export function settleHolder(_e: EngineCore, s: SimSeries, p: SimPosition): void {
   if (!p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');
   settleAccrual(s, p);
 }
-/** The net payout a holder could claim now: `pending` plus what accrued since its cursor (the read side of a claim). */
+/**
+ * The net payout a holder could claim now: `pending` plus what accrued since its cursor (the read side of a claim; on a
+ * curve series that has not redeemed, an extinguishment's final share included, as `claimPayout` pays it).
+ */
 export function claimableNet(s: SimSeries, p: SimPosition): bigint {
   return p.pending + accruedSince(s, p);
 }

@@ -107,6 +107,7 @@ document file (A-PRIV-4).
 | Auction settlement: rounds and rejections, the clearing price, units sold, proceeds, the failure reason, the mint gate | `series`, `settlement_rounds`, onchain | plain | public (`GET /series`, `GET /series/{id}/auction`; onchain); the activity feed names rounds, reasons and unit counts only, never an amount (the indexer's `summary()`) | — |
 | A bid's validity, processing and delivery state, and what it is owed (pending units and refund) or was delivered | `bids`, onchain | plain | owner (`/me/bids`); public onchain: Stage 1 keeps every bid's state in a public account, and anyone may deliver any bid (`deliverBid` pays the bidder only); the public preview projects each revealed bid's processing | — |
 | Positions, claims | `positions`, `money_events`, onchain | plain | holder, issuer, admin; public onchain | — |
+| Curve census, stakes and tenders (S3: the unit mint's supply and protocol-held balances, each holder's stake, the stake and tender totals) | `curve_census`, `positions.staked_units`, `series.staked_total`/`tendered_total`, onchain | plain | public onchain (Stage 1's `CurveUnitsSynced`, `UnitsStaked`, `UnitsUnstaked`, the stake vault); the activity feed names unit counts only, never an amount or a holder; none of it is income | — |
 
 ## Operational data
 

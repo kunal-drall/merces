@@ -100,6 +100,13 @@ export const STAGE1_SOLANA_CODE = {
   CurveUnitsInconsistent: 'ChainSpecific',
   CurveUnitsBelowStake: 'WrongStatus',
   CurveUnitsNotSynced: 'WrongStatus',
+  // staking and tender (S3 WP10): a stake, unstake or tender of 0 units (curve.rs:1264, :1343, :1439), more than the
+  // holder's stake unstaked or tendered (:1345, :1441-1444), stakes past the last census (:1269-1276), and wallet
+  // units past the tender quota (`wallet_tender_fits`, :1445-1454)
+  ZeroUnits: 'InvalidTerms',
+  InsufficientStake: 'InsufficientFunds',
+  StakeExceedsOutstanding: 'WrongStatus',
+  TenderQuotaExhausted: 'WrongStatus',
 } as const satisfies Record<string, ChainErrorCode>;
 
 /**

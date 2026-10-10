@@ -223,6 +223,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `holder`: string
 - `units`: decimal string (base units / WAD / units)
 - `amount`: decimal string (base units / WAD / units)
+- `fromStake?`: decimal string (base units / WAD / units)
 
 ### TailPayout (amount-bearing)
 
@@ -359,6 +360,20 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `unitsOutstanding`: decimal string (base units / WAD / units)
 - `stakedTotal`: decimal string (base units / WAD / units)
 
+### UnitsStaked
+
+- `seriesId`: string
+- `holder`: string
+- `units`: decimal string (base units / WAD / units)
+- `staked`: decimal string (base units / WAD / units)
+
+### UnitsUnstaked
+
+- `seriesId`: string
+- `holder`: string
+- `units`: decimal string (base units / WAD / units)
+- `staked`: decimal string (base units / WAD / units)
+
 ## Commands
 
 User commands are built into unsigned transactions for the user's wallet (`ChainPort.build`). Service commands are submitted by the backend's own low-privilege roles (`ChainPort.submit` as `keeper` or `allowlistManager`). Permissionless commands (Stage 1's sealed-bid settlement, holder registration and the Retired burn) may be sent by anyone: the keeper submits them (`ChainPort.submit`) and any wallet may build and sign them (`ChainPort.build`). Admin commands are built for the protocol multisig. The router command is posted by a registered tier-1 split router contract.
@@ -387,6 +402,9 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **commitWindowOrder**: `seriesId`: string; `windowId`: integer; `side`: `buy` \| `sell`; `commitment`: hex32; `deposit`: decimal string (base units / WAD / units); `units`: decimal string (base units / WAD / units)
 - **revealWindowOrder**: `seriesId`: string; `windowId`: integer; `side`: `buy` \| `sell`; `pricePerUnit`: decimal string (base units / WAD / units); `quantity`: decimal string (base units / WAD / units); `salt`: hex32
 - **curveSwap**: `seriesId`: string; `side`: `buy` \| `sell`; `amountIn`: decimal string (base units / WAD / units); `minimumAmountOut`: decimal string (base units / WAD / units)
+- **stakeUnits**: `seriesId`: string; `units`: decimal string (base units / WAD / units)
+- **unstakeUnits**: `seriesId`: string; `units`: decimal string (base units / WAD / units)
+- **tenderUnits**: `seriesId`: string; `fromStake`: decimal string (base units / WAD / units); `fromWallet`: decimal string (base units / WAD / units)
 - **stopIssuance**
 
 ### Service commands (keeper / allowlist manager)
@@ -426,8 +444,8 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ## Additions beyond the Part D2 list
 
-- Events: `IssuanceStopped` (C11.5), `VerifierKeyRegistered` (admin registers report-verifier keys); Stage 1's settlement events with Stage 1's names (S2): `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`, `HolderRegistered`; Stage 1's claim events (S3): `TailClaimed`, `FinalClaimed`; Stage 1's curve events (S3): `CurveActivated`, `CurveProceedsCollected`, `CurveUnitsSynced`.
-- Commands: `registerIssuer`, `stopIssuance`, `pauseReleases` (the issuer's own pause, C11.1), `crankPause`, `flagFxFallback`, `clearTransferWindow`, `commitWindowOrder`, `revealWindowOrder`, `curveSwap` (a Meteora DBC swap on live chains, not a Merces instruction), `registerVerifierKey`, `pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`, `postSplitReceipt`; the permissionless group with Stage 1's names (S2); Stage 1's claims `claimTail` and `claimFinal`, the permissionless `burnRetired`, and a curve's permissionless `completeCurve`, `collectCurveProceeds` and `syncCurveUnits` (S3).
+- Events: `IssuanceStopped` (C11.5), `VerifierKeyRegistered` (admin registers report-verifier keys); Stage 1's settlement events with Stage 1's names (S2): `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`, `HolderRegistered`; Stage 1's claim events (S3): `TailClaimed`, `FinalClaimed`; Stage 1's curve events (S3): `CurveActivated`, `CurveProceedsCollected`, `CurveUnitsSynced`, `UnitsStaked`, `UnitsUnstaked`.
+- Commands: `registerIssuer`, `stopIssuance`, `pauseReleases` (the issuer's own pause, C11.1), `crankPause`, `flagFxFallback`, `clearTransferWindow`, `commitWindowOrder`, `revealWindowOrder`, `curveSwap` (a Meteora DBC swap on live chains, not a Merces instruction), `registerVerifierKey`, `pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`, `postSplitReceipt`; the permissionless group with Stage 1's names (S2); Stage 1's claims `claimTail` and `claimFinal`, the permissionless `burnRetired`, a curve's permissionless `completeCurve`, `collectCurveProceeds` and `syncCurveUnits`, and its holders' `stakeUnits`, `unstakeUnits` and `tenderUnits` (S3).
 - Each addition closes a gap between the D2 list and Part C; Stage 1 wins on names and shapes, recorded in `INTERFACE_DRIFT.md`.
 
 ## Meanings on Stage 1 (since S1)
@@ -450,3 +468,4 @@ The shapes above are generated; these meanings changed in S1, when the simulator
 - **`burnRetired`.** Stage 1 `burn_retired`, permissionless (any wallet or the keeper): TerminalStatus unless the stored status is Retired; a wallet holding no units gives `UnitsBurned{units: 0}` before any registration check, also a wallet that never held units; otherwise HolderNotRegistered, then the holder is settled (its pending payout stays claimable) and its balance burns. It is the only burn command (the keepers send one per holder that still holds units).
 - **`extinguish`.** Refused unless the raise settled (RaiseNotSettled); only the unvested treasury returns to holders, and the issuer's estate may still draw the vested tranches.
 - **Curve mode (S3: Stage 1's curve lifecycle; Solana only).** A curve series' units are base lamports (`SeriesState.unitScale` 10^6); prices stay per whole unit. `createSeries` is the curve's activation: P0 = floor(X × 10^6 / swap base) must be at least 1 (CurveThresholdMismatch), then NewRaisesPaused and the issuer's allowlist; it emits `CurveActivated{unitsSold, issuePrice: P0}` and `RaiseOpened{0, 0}`, and the raise is Open. `curveSwap` trades on the curve's venue (Meteora's DBC on live chains; a labelled stand-in in the simulator until S5): no allowlist, no cap, no Merces event; the money sits in the pool, never in the treasury. `completeCurve` (permissionless; CurveNotComplete until the pool filled) settles at the pool's finish time with the P0 and units fixed at activation (`CurveGraduated`, Stage 1 `RaiseSettled` with proceeds 0, and `RaiseMintFinalized{proceeds: 0}`); it takes no census and registers nobody. `collectCurveProceeds` (permissionless, idempotent) moves the partner migration fee and surplus into the treasury and the partner trading fee to the fee collector (`CurveProceedsCollected`, `TreasuryFunded`, `FeeTaken{curveTrading}`). On a curve series the sealed-bid paths refuse with NotSealedBid (the raise, the settlement steps, the window, no cancel), `claimRedemption` with CurveUsesTender and `burnRetired` with CurveModeNoBurn; nothing burns and only staked units earn. **The census (S3 WP9).** `syncCurveUnits` (permissionless; NotCurveMode, RaiseNotOpen unless Open or Settled, TerminalStatus on a stored Retired, Redeemed or Extinguished series, CurveUnitsBelowStake) stores units outstanding = the unit mint's supply less the base lamports in protocol accounts (the DBC pool's base vault, the DAMM v2 pool's base vault, the locker escrow, the leftover receiver; never the stake vault) and its time (`SeriesState.unitsSyncedAt`), and emits `CurveUnitsSynced`; until the first census a curve's units outstanding are 0. The census is the vault's N, the bound on the stakes and the report proof's public input: a regular report needs one taken at or after its period's end, of more than 0 units (CurveUnitsNotSynced); a tail report proves over the units at redemption. `redeem` takes its own census with the DAMM v2 pool's base vault left out (B-C13: the deposit `floor(P × N / 10^6)` covers every unit holders could tender; `CurveUnitsSynced` before `RedemptionOpened`).
+- **Curve staking (S3 WP10: Stage 1's `stake_units`, `unstake_units`, `tender_units`; Solana only).** On a curve series only staked units earn: a registered holder (`registerHolder`, the only way a curve holder registers; it needs the allowlist) moves base lamports from its wallet into the series' stake vault with `stakeUnits` (NotCurveMode, RaiseNotOpen unless Open or Settled, TerminalStatus, ZeroUnits, NotAllowlisted: the wallet must be allowlisted now, StakeExceedsOutstanding: the stakes may not pass the last census, then HolderNotRegistered) and is paid on its stake from then on; units in wallets earn nothing and their share stays in the vault. Every stake change and claim settles the holder first at its old stake (the debt pattern; while the series has not redeemed, an extinguishment's final-pool share of the stake is settled into the pending payout too). `unstakeUnits` (in any status, no allowlist check: NotCurveMode, ZeroUnits, InsufficientStake, HolderNotRegistered) returns units to the wallet and credits what they earned into the holder's pending payout without paying it (Stage 1's code; SPEC §9 says "pays"): `claimPayout` pays it at any time, for any registered holder. Events `UnitsStaked{holder, units, staked}` and `UnitsUnstaked{holder, units, staked}` (`staked`: the holder's stake after it; units only). After a redemption a curve is redeemed by tender: `tenderUnits{fromStake, fromWallet}` (NotCurveMode, NotRedeemed, ZeroUnits, InsufficientStake, TenderQuotaExhausted, HolderNotRegistered; no allowlist check) burns the units and pays `floor(P_redeem × units / 10^6)` plus the pending payout; staked units are reserved for their holders and wallet units share what is left of the count taken at redemption. It emits `PayoutClaimed{burnedUnits: 0}` for the pending payout (only when above 0), `UnitsBurned{redemption}` and `RedemptionClaimed{units, amount: principal, fromStake}`; units outstanding stay the count taken at redemption. The claims on a curve: `claimPayout` never burns; `claimRedemption` is CurveUsesTender; `claimTail` pays the pending payout (its own `PayoutClaimed`) and the tail on the tendered units (NoRedeemedUnits without a tender; nothing is redeemed); `claimFinal` weighs the tendered units on a series that redeemed, else the stake (whose share is already in the pending payout), and burns nothing; `burnRetired` is CurveModeNoBurn. On Solana the holder record is an account each of these loads first, so an unregistered wallet fails before every check there (an adapter note).

@@ -26,6 +26,10 @@ const GENESIS = Date.UTC(2026, 0, 1) / 1000;
  *    treasury and no units outstanding, `CurveProceedsCollected` and `TreasuryFunded` fund the treasury, `FeeTaken`
  *    records the curve trading fee; was: buys minting units and funding the treasury, graduation setting both.
  *  - S3-CN: the curve census (`CurveUnitsSynced`) sets units outstanding, the census time and the stakes; each is kept.
+ *  - S3-ST: curve staking (`UnitsStaked`, `UnitsUnstaked`): the first stake creates the position (holder access), its
+ *    units are the stake, the series' stakes move; a curve tender (`RedemptionClaimed.fromStake`) upserts the position
+ *    (a wallet-only tender included) and lowers only the staked part; a curve `UnitsBurned` touches neither the
+ *    position's units nor units outstanding and adds to the tendered total (amendment M3).
  */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
@@ -345,6 +349,52 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect((await census()).map((r) => [r.units_outstanding, r.synced_at])).toEqual([['100000000', String(sync.blockTime)], ['100363637', String(redeem.blockTime)]]);
     const feed = (await t.pool.query("select summary from activity where series_id = $1 and kind = 'CurveUnitsSynced' order by seq", [seriesId])).rows;
     expect(feed).toEqual([{ summary: 'Units counted: 100000000 base units outstanding' }, { summary: 'Units counted: 100363637 base units outstanding' }]);
+  });
+
+  // cause S3-ST (amendment M3): stakes and tenders as the chain records them; a registration alone creates no position
+  it('projects curve stakes and tenders: the first stake creates the position, a tender upserts it, units outstanding never move', async () => {
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'curve-stake', genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const { seriesId } = await h.createCurve();
+    await h.fillCurve(seriesId);
+    const [a, b] = h.backers as [SimWallet, SimWallet];
+    for (const w of [a, b]) await h.registerHolder(seriesId, w);
+    await h.syncCurve(seriesId);
+    const position = async (w: SimWallet) => (await t.pool.query('select units::text, staked_units::text, redeemed_units::text, burned_units::text from positions where series_id = $1 and wallet = $2', [seriesId, w.address])).rows[0];
+    const series = async () => (await t.pool.query('select units_outstanding::text, staked_total::text, tendered_total::text from series where series_id = $1', [seriesId])).rows[0];
+    await idx.catchUp();
+    // registered, not staked: no position row (A-REV-10)
+    expect(await position(a)).toBeUndefined();
+    const aUnits = h.sim.curveUnitsOf(seriesId, a.address);
+    await h.stake(seriesId, a, aUnits);
+    await h.stake(seriesId, b, 10_000_000n);
+    await h.unstake(seriesId, b, 4_000_000n);
+    await idx.catchUp();
+    expect(await position(a)).toEqual({ units: aUnits.toString(), staked_units: aUnits.toString(), redeemed_units: '0', burned_units: '0' });
+    expect(await position(b)).toEqual({ units: '6000000', staked_units: '6000000', redeemed_units: '0', burned_units: '0' });
+    expect(await series()).toEqual({ units_outstanding: '100000000', staked_total: (aUnits + 6_000_000n).toString(), tendered_total: '0' });
+    await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
+    // a tenders its stake; b part of its stake and wallet units; a third holder, registered and never staked, its wallet
+    await h.tender(seriesId, a, aUnits, 0n);
+    const bWallet = h.sim.curveUnitsOf(seriesId, b.address);
+    await h.tender(seriesId, b, 2_000_000n, bWallet);
+    const c = h.backers[2]!;
+    await h.registerHolder(seriesId, c);
+    const cUnits = h.sim.curveUnitsOf(seriesId, c.address);
+    await h.tender(seriesId, c, 0n, cUnits);
+    await idx.catchUp();
+    expect(await position(a)).toEqual({ units: '0', staked_units: '0', redeemed_units: aUnits.toString(), burned_units: aUnits.toString() });
+    expect(await position(b)).toEqual({ units: '4000000', staked_units: '4000000', redeemed_units: (2_000_000n + bWallet).toString(), burned_units: (2_000_000n + bWallet).toString() });
+    expect(await position(c)).toEqual({ units: '0', staked_units: '0', redeemed_units: cUnits.toString(), burned_units: cUnits.toString() });
+    const tendered = aUnits + 2_000_000n + bWallet + cUnits;
+    expect(await series()).toEqual({ units_outstanding: '100000000', staked_total: '4000000', tendered_total: tendered.toString() });
+    // the chain agrees
+    expect(await h.sim.getSeries(seriesId)).toMatchObject({ unitsOutstanding: '100000000', stakedTotal: '4000000', tenderedTotal: tendered.toString() });
+    const claims = (await t.pool.query("select wallet, amount::text, detail from money_events where series_id = $1 and kind = 'redemption_claim' order by seq", [seriesId])).rows;
+    expect(claims.map((r) => [r.wallet, r.detail.fromStake])).toEqual([[a.address, aUnits.toString()], [b.address, '2000000'], [c.address, '0']]);
+    // the feed names units only
+    const feed = (await t.pool.query("select summary from activity where series_id = $1 and kind in ('UnitsStaked', 'UnitsUnstaked') order by seq", [seriesId])).rows;
+    expect(feed).toEqual([{ summary: `${aUnits} base units staked` }, { summary: '10000000 base units staked' }, { summary: '4000000 base units unstaked' }]);
   });
 
   // cause S2-MS (S2 WP3): the engine emits these from WP4; synthetic events on a real revealed raise drive the projections

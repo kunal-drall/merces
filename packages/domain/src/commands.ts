@@ -92,14 +92,18 @@ export const userCommands = {
    * Stage 1 `claim` (SIM:1268-1282): the holder's net payout (its pending payout) and nothing else: the tail is
    * `claimTail`'s and the final-pool share `claimFinal`'s. HolderNotRegistered for a wallet that is not a registered
    * holder. On a Retired series the holder's balance also burns (also when nothing is paid); on any other status nothing
-   * burns. Emits `PayoutClaimed{amount, burnedUnits}` always (0 included), then the burn.
+   * burns. Emits `PayoutClaimed{amount, burnedUnits}` always (0 included), then the burn. A curve series never burns
+   * (claims.rs:182-196): it pays what the holder's stake earned, and on an extinguished series that did not redeem its
+   * final-pool share too (the settlement credits it into the pending payout).
    */
   claimPayout: z.object({ kind: z.literal('claimPayout'), seriesId: seriesIdSchema }),
   /**
    * Stage 1 `claim_tail` (SIM:1403-1417): the tail on the holder's redeemed units since its tail cursor. NotRedeemed
    * before the issuer redeemed, HolderNotRegistered for a wallet that is not a registered holder; a holder that has not
    * redeemed and still has units is redeemed first (the redemption body), then NoRedeemedUnits if it has still redeemed
-   * nothing. Emits `TailClaimed` (the tail only; 0 included).
+   * nothing. Emits `TailClaimed` (the tail only; 0 included). A curve series redeems nothing here (claims.rs:365-391):
+   * the tail is paid on the units the holder tendered (NoRedeemedUnits without a tender), and its pending payout goes out
+   * first as `PayoutClaimed{burnedUnits: 0}` (only when above 0).
    */
   claimTail: z.object({ kind: z.literal('claimTail'), seriesId: seriesIdSchema }),
   /**
@@ -107,7 +111,9 @@ export const userCommands = {
    * TerminalStatus unless the series is Extinguished; a pending auction bid is delivered first; HolderNotRegistered.
    * On a series that redeemed, the holder's remaining units are redeemed first and its share is weighed on its redeemed
    * units, otherwise on its accrual units. Emits `FinalClaimed{units: weight, amount}` (0 included), then burns the
-   * holder's remaining units.
+   * holder's remaining units. A curve series burns nothing and redeems nothing here (claims.rs:424-452): the weight is the
+   * holder's tendered units on a series that redeemed, otherwise its stake, whose share the settlement already credited
+   * into the pending payout.
    */
   claimFinal: z.object({ kind: z.literal('claimFinal'), seriesId: seriesIdSchema }),
   requestPause: z.object({ kind: z.literal('requestPause'), seriesId: seriesIdSchema, until: z.number().int() }),
@@ -128,6 +134,33 @@ export const userCommands = {
    * no Merces event.
    */
   curveSwap: z.object({ kind: z.literal('curveSwap'), seriesId: seriesIdSchema, side: z.enum(['buy', 'sell']), amountIn: moneySchema, minimumAmountOut: moneySchema }),
+  /**
+   * Stage 1 `stake_units` (curve.rs:1250-1313), curve mode: moves `units` base lamports from the holder's wallet into the
+   * series' stake vault; on a curve series only staked units earn, from the moment they are staked (the holder is
+   * settled at its old stake first). NotCurveMode, RaiseNotOpen (Open or Settled), TerminalStatus (the stored status
+   * Retired, Redeemed or Extinguished), ZeroUnits, NotAllowlisted (the wallet must be allowlisted now),
+   * StakeExceedsOutstanding (the stakes may not pass the last census: take a census first), HolderNotRegistered.
+   * Emits `UnitsStaked`.
+   */
+  stakeUnits: z.object({ kind: z.literal('stakeUnits'), seriesId: seriesIdSchema, units: unitsSchema }),
+  /**
+   * Stage 1 `unstake_units` (curve.rs:1338-1383), curve mode, in any status and with no allowlist check: settles the
+   * holder (what its stake earned, and the final-pool share of an extinguished series that did not redeem, go into its
+   * pending payout) and returns `units` base lamports from the stake vault to its wallet. It pays no stablecoin: the
+   * pending payout is `claimPayout`'s (or `claimFinal`'s), at any time later. NotCurveMode, ZeroUnits,
+   * InsufficientStake, HolderNotRegistered. Emits `UnitsUnstaked`.
+   */
+  unstakeUnits: z.object({ kind: z.literal('unstakeUnits'), seriesId: seriesIdSchema, units: unitsSchema }),
+  /**
+   * Stage 1 `tender_units(from_stake, from_wallet)` (curve.rs:1426-1528), a curve series' redemption: a registered
+   * holder burns `fromStake` staked and `fromWallet` wallet base lamports and is paid `floor(P_redeem × units / 10^6)`
+   * plus its pending payout from the redemption deposit. Staked units are reserved for their holders; wallet units share
+   * what is left of the units counted at redemption (`unitsAtRedemption − tendered − staked`). No allowlist check.
+   * NotCurveMode, NotRedeemed, ZeroUnits, InsufficientStake, TenderQuotaExhausted, HolderNotRegistered. Emits
+   * `PayoutClaimed{burnedUnits: 0}` for the pending payout (only when above 0), `UnitsBurned{redemption}` and
+   * `RedemptionClaimed{units, amount: principal, fromStake}`.
+   */
+  tenderUnits: z.object({ kind: z.literal('tenderUnits'), seriesId: seriesIdSchema, fromStake: unitsSchema, fromWallet: unitsSchema }),
   stopIssuance: z.object({ kind: z.literal('stopIssuance') }),
 } as const;
 
@@ -160,7 +193,11 @@ export const permissionlessCommands = {
   processBid: z.object({ kind: z.literal('processBid'), seriesId: seriesIdSchema, bidder: addressSchema }),
   /** Stage 1 `deliver_bid`: pays a processed bid's refund and units to the bidder */
   deliverBid: z.object({ kind: z.literal('deliverBid'), seriesId: seriesIdSchema, bidder: addressSchema }),
-  /** Stage 1 `register_holder`: registers an allowlisted wallet as a holder of the series (idempotent) */
+  /**
+   * Stage 1 `register_holder`: registers an allowlisted wallet as a holder of the series (idempotent). On a curve series
+   * it is the only way a holder registers (nothing registers buyers or stakers on their own, claims.rs:35-45), and a
+   * holder must be registered to stake, unstake, tender and claim
+   */
   registerHolder: z.object({ kind: z.literal('registerHolder'), seriesId: seriesIdSchema, wallet: addressSchema }),
   /**
    * Stage 1 `burn_retired` (SIM:624-636): burns a holder's balance on a Retired series. TerminalStatus unless the stored
