@@ -163,7 +163,9 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     const a = await h.runRaise();
     const q = periodOf((await h.sim.getSeries(a.seriesId))!.settledAt!);
     const p = (await h.sim.getPeriod(a.seriesId, q.id))!;
-    // Stage 1's countdown runs from the period end; OnTime while ≤ 30 days, InGrace while ≤ 45 days, notice at 90 days
+    // Stage 1's countdown runs from the period end; OnTime while ≤ 30 days, InGrace while ≤ 45 days (cause G2: both bounds
+    // inclusive, REF status.ts:67-68), the formal notice at 90 days (cause N: Stage 1 formalNoticeDue is period end + 90
+    // days; was due date + 90 = period end + 120 days)
     expect([p.dueAt, p.graceEndsAt, p.formalNoticeAt]).toEqual([q.end + 30 * 86_400, q.end + 45 * 86_400, q.end + 90 * 86_400]);
     const sched = new KeeperScheduler(c, [statusCrankJob, deadlineRemindersJob]);
     const step = async (at: number) => {
@@ -172,16 +174,17 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
       return [r['status.crank']!.actions, r['reporting.reminders']!.actions, (await h.sim.getSeries(a.seriesId))!.status];
     };
     const sent = async () => (await t.pool.query('select kind from reminders_sent where target = $1 order by kind', [`${a.seriesId}:${q.id}`])).rows.map((r) => r.kind);
-    // exactly 30 days: still OnTime, nothing to crank; only the due-soon reminder (G2: 'report-due' went out at dueAt)
+    // exactly 30 days: still OnTime, nothing to crank; only the due-soon reminder (G2: 'report-due' went out at dueAt,
+    // with the crank recording InGrace)
     expect(await step(p.dueAt)).toEqual([0, 1, 'OnTime']);
     expect(await sent()).toEqual(['report-due-soon']);
     // one second later: InGrace is recorded and the issuer told
     expect(await step(p.dueAt + 1)).toEqual([1, 1, 'InGrace']);
     expect(await sent()).toEqual(['report-due', 'report-due-soon']);
-    expect(await step(p.graceEndsAt)).toEqual([0, 0, 'InGrace']);
+    expect(await step(p.graceEndsAt)).toEqual([0, 0, 'InGrace']); // exactly 45 days: still InGrace (G2; was Late)
     expect(await step(p.graceEndsAt + 1)).toEqual([1, 1, 'Late']);
     expect(await sent()).toEqual(['grace-end', 'report-due', 'report-due-soon']);
-    // the formal notice is recorded at period end + 90 days, once
+    // the formal notice is recorded at period end + 90 days, once (cause N; was at period end + 120 days)
     expect(await step(p.formalNoticeAt - 1)).toEqual([0, 0, 'Late']);
     expect((await h.sim.getSeries(a.seriesId))!.formalNoticeEmittedFor).toBeNull();
     expect(await step(p.formalNoticeAt)).toEqual([1, 0, 'Late']);

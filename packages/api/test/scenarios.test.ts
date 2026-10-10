@@ -11,6 +11,17 @@ import { makeRig } from './helpers.ts';
  * H1 — scenario tests at the service level, through the API, on the simulator. The chain-level twins live in
  * packages/simulator/test; these drive the same mechanics through builders, the tx relay, the read model and the
  * keepers, and assert what the API shows to each party.
+ *
+ * Pins that moved with Stage 1 (S1 WP12) carry a cause code. The figures were recomputed with Stage 1's own `Simulator`
+ * driven by its `ScenarioBuilder` over the same flows and the harness's terms (θ 60,000, 10% above it, 500 units at
+ * 9 USDC, hurdle 8%, a 5% payout fee, proceeds 4,500 released 50% at settlement and 25% at 90 and 180 days):
+ *  - R: Stage 1's report rules: the report opens the due without accrual (`Report.due`, SIM:1133), and the lateness
+ *    accrual (SIM:1173) is added when the payment lands;
+ *  - G2: Stage 1's status bounds are inclusive (countdown ≤ 30 days OnTime, ≤ 45 days InGrace; REF status.ts:67-68);
+ *  - G5: the tail due is the full payment as reported; `tailReceive` caps it when it is paid;
+ *  - RD: Stage 1's redeem: a holder's tail follows its own redemption claim (`redeemedUnits`);
+ *  - G7: an extinguishment returns only the unvested proceeds, through the final pool; vested tranches stay drawable;
+ *  - M6: tier 1 is a report tier only on a pure tier-1 series (SIM:1077).
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 void makeContext;
@@ -93,10 +104,14 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', unitsOutstanding: 500n, privateTerms: raise.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(100_000), termsCommitment: raise.terms.termsCommitment });
     const acc = await send(h.issuer, await h.sim.build(command, h.issuer.address), issuerTok);
     // the report opens the due without accrual (Stage 1 `Report.due`); accrual runs until the payment lands
+    // (cause R; was paymentDue 4,066,630,136 and accrual 66,630,136 on ReportAccepted)
     expect([acc.events[0]!.payload.paymentDue, acc.events[0]!.payload.accrual]).toEqual([USDC(4000).toString(), '0']);
     const live = (await h.sim.getPeriod(seriesId, '2026Q1'))!;
     const accrual = BigInt(live.accrual);
+    // Stage 1 lateAccrual: 76 whole days past grace (121 − 45) → floor(320 × 76 / 365) = 66.630136 USDC (cause R: now
+    // the live figure, paid with the payIn)
     expect(accrual).toBe((USDC(4000) * wadFromDecimal('0.08') * 76n) / (10n ** 18n * 365n));
+    expect(accrual).toBe(66_630_136n);
     expect(BigInt(live.paymentDue)).toBe(USDC(4000) + accrual);
     const pay = await send(h.issuer, await h.sim.build({ kind: 'payIn', seriesId, periodId: '2026Q1', amount: live.paymentDue }, h.issuer.address), issuerTok);
     expect(pay.events.map((e) => e.type)).toContain('ReleasesResumed');
@@ -176,13 +191,14 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     await h.sim.setTime(Math.max(await h.sim.now(), period.end + 86_400));
     const tail = await h.reportAndPay(seriesId, period.id, raise.privateTerms, raise.terms.termsCommitment, USDC(10_000), USDC(5_000_000), { liquidityEvent: true });
     // the report opens the full payment; the cap applies when it is paid (Stage 1 `tailReceive`), the rest is refunded
+    // (cause G5; was due = tailCapPerUnit × 500 at the report)
     expect(tail.due).toBe(tail.paymentStable);
     const payout = tail.events.find((e) => e.type === 'TailPayout')!.payload as { total: string };
     expect(BigInt(payout.total)).toBe(BigInt(quote.json().tailCapPerUnit) * 500n);
     await rig.sync();
     view = await rig.get(`/series/${seriesId}/redemption`, holderTok);
     expect(view.json().tail.open).toBe(false);
-    // closed because the tail cap is used up (Stage 1 tailExhausted), not because time ran out
+    // closed because the tail cap is used up (Stage 1 tailExhausted), not because time ran out (G5)
     expect(view.json().tail).toMatchObject({ exhausted: true, paidPerUnitWad: (BigInt(quote.json().tailCapPerUnit) * 10n ** 18n).toString(), paidPerUnit: quote.json().tailCapPerUnit });
     expect(view.json().tail.endsAt).toBeGreaterThan(await h.sim.now());
     expect(view.json().tail.payouts).toHaveLength(1);
@@ -211,10 +227,13 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     expect((await rig.get(`/series/${seriesId}/status`)).json().status).toBe('Extinguished');
     const claim = await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[2]!.address }, holderTok);
     // only the unvested 2,250 (tranches 1 and 2) goes to holders, through the final pool: 2,250 ÷ 5 holders, no fee
-    // (G7; was claimable 900 = all 4,500 unreleased ÷ 5 through the net payout)
+    // (G7; was claimable 900 = all 4,500 unreleased ÷ 5 through the net payout). Exact, not "≤ 450", whatever the shared
+    // clock: the extinguishment lands in the instant the raise settled, before the 90-day tranche vests.
+    // Stage 1: claim_final pays b2 450 USDC on the same flow.
     expect(claim.json()).toMatchObject({ claimable: '0', finalClaimable: USDC(450).toString() });
     const issuerTok = rig.token({ accountId: 'ex-iss', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
-    // tranche 0 vested at settlement and stays drawable after the extinguishment (G7; was 409, nothing left to draw)
+    // tranche 0 vested at settlement and stays drawable after the extinguishment (G7; was 409, nothing left to draw);
+    // Stage 1's claim_release pays the issuer 2,250 USDC on the same flow
     const draw = await rig.post(`/series/${seriesId}/treasury/build-draw`, {}, issuerTok);
     expect(draw.statusCode, draw.body).toBe(200);
     expect(draw.json().drawable).toEqual([{ index: 0, amount: USDC(2250).toString() }]);
@@ -224,7 +243,8 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
 
   it('multi-series issuer with tier-1 reconciliation: split receipts reduce the quarterly payment due', async () => {
     const h = rig.sol;
-    // tier 1 is a report tier only on a pure tier-1 series (Stage 1)
+    // tier 1 is a report tier only on a pure tier-1 series (cause M6: Stage 1 refuses a tier-1 report on any other series
+    // with TierNotEnabled; was the harness default tiers 1 + 2 + 3)
     const a = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
     const b = await h.runRaise({ terms: { unitsOffered: '300' }, bids: [{ backer: 0, price: USDC(15), qty: 60n }, { backer: 1, price: USDC(15), qty: 60n }, { backer: 2, price: USDC(15), qty: 60n }, { backer: 3, price: USDC(15), qty: 60n }, { backer: 4, price: USDC(15), qty: 60n }] });
     await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId: a.seriesId, router: h.router });

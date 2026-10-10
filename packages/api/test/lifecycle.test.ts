@@ -7,6 +7,16 @@ import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 
+/**
+ * Pins that moved with Stage 1 (S1 WP12) carry a cause code. The figures were recomputed with Stage 1's own `Simulator`
+ * (its `ScenarioBuilder`, the harness's terms: θ 60,000, 10% above it, 500 units at 9 USDC, cap 2.5×, hurdle 8%, k 2,
+ * a 5% payout fee) over the same flow: tranche 0 drawn, 20/40/60/80k year to date reported a day after each 2026 quarter,
+ * quote and redeem at settlement + 365 days + 10 s, b0 claims its redemption:
+ *  - G6: Stage 1's `redemptionQuote` over the tagged year ring: the 2026Q4 payment is tagged with the settlement year of
+ *    its deadline (2027-01-31, settlement year 1), so year 0 holds no gross, D_avg = 0 and the hurdle 9 × 1.08 = 9.72
+ *    decides below C_rem = 22.5 − 4 = 18.5; deposit 4,860, tail cap 8.78, b0's claim 972;
+ *  - C: Stage 1's zero-amount claim is a successful no-op (SIM:1268-1282): HTTP 200 with no events.
+ */
 describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
   beforeAll(async () => {
@@ -49,6 +59,15 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     expect(claim.json().claimable).toBe((USDC(2000) * 95n / 100n / 5n).toString());
     expect((await rig.post('/tx/send', await h.backers[0]!.sign(claim.json().tx as UnsignedTx), holderTok)).json().events[0].type).toBe('PayoutClaimed');
     expect((await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok)).statusCode).toBe(409);
+    // the builder refuses a claim with nothing in it, but the chain takes one: relayed anyway, a zero claim succeeds with
+    // no events (cause C: was 404, ChainNotFound)
+    const zero = await rig.post('/tx/send', await h.backers[0]!.sign(await h.sim.build({ kind: 'claimPayout', seriesId }, h.backers[0]!.address)), holderTok);
+    expect(zero.statusCode, zero.body).toBe(200);
+    expect(zero.json().events).toEqual([]);
+    // a wallet that is not a registered holder is still refused: 404 with Stage 1's HolderNotRegistered
+    const notHolder = await rig.post('/tx/send', await h.issuer.sign(await h.sim.build({ kind: 'claimPayout', seriesId }, h.issuer.address)), issuerTok);
+    expect(notHolder.statusCode).toBe(404);
+    expect(notHolder.json()).toMatchObject({ error: 'ChainNotFound', detail: { stage1: 'HolderNotRegistered' } });
     // R14 retirement view (not retired)
     const ret = await rig.get(`/series/${seriesId}/retirement`);
     expect(ret.json()).toMatchObject({ retired: false, paidPerUnit: USDC(4).toString(), capProgressBps: Math.floor((4 / 22.5) * 10_000) });
@@ -70,7 +89,7 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     expect(redeem.statusCode).toBe(200);
     expect((await rig.post('/tx/send', await h.issuer.sign(redeem.json().tx as UnsignedTx), issuerTok)).json().events.map((e: { type: string }) => e.type)).toEqual(['RedemptionOpened', 'StatusChanged']);
     const rc = await rig.post(`/series/${seriesId}/redemption/build-claim`, { holder: h.backers[0]!.address }, holderTok);
-    expect(rc.json()).toMatchObject({ units: '100', amount: USDC(972).toString() }); // 9.72 × 100 (G6; was 1,850)
+    expect(rc.json()).toMatchObject({ units: '100', amount: USDC(972).toString() }); // 9.72 × 100 (G6; was 18.5 × 100 = 1,850)
     expect((await rig.post('/tx/send', await h.backers[0]!.sign(rc.json().tx as UnsignedTx), holderTok)).statusCode).toBe(200);
     await rig.sync();
     const red = await rig.get(`/series/${seriesId}/redemption`, holderTok);

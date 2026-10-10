@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { dbTestsEnabled, type Pool } from '@merces/db';
 import { ContractService, TermsService, applicationCreateSchema, assembleSchema, tier3OpenSchema, tier3SignSchema, type ServiceContext } from '@merces/services';
+import { BN254_FR, CURRENCY_CODES, INDEXING_RULES, termsCommitmentField } from '@merces/math';
 import { buildSpec } from '../src/openapi/build.ts';
 import type { Session } from '../src/index.ts';
 import { makeRig } from './helpers.ts';
@@ -132,9 +133,34 @@ describe.skipIf(!dbTestsEnabled())('contract templates, contract signing and dra
     expect((await rig.t.pool.query("select state, terms_commitment from series_drafts where draft_id = 'draft-terms'")).rows[0]).toEqual({ state: 'draft', terms_commitment: null });
     const ok = await new TermsService(rig.ctx).setTerms('draft-terms', issuer, pub, priv);
     expect((await rig.t.pool.query("select commitment from terms_vault where draft_id = 'draft-terms'")).rows[0].commitment).toBe(ok.termsCommitment);
+    // the scheme is Stage 1's (cause PF: was SHA-256 over canonical JSON with a hex salt): the vault holds the opening
+    // of Poseidon(5)(θ, r, ISO-4217 numeric currency, indexing rule code, field salt), and Stage 1's own function over
+    // that opening gives the stored commitment
+    const vault = (await rig.t.pool.query("select ciphertext from terms_vault where draft_id = 'draft-terms'")).rows[0].ciphertext as string;
+    const opening = JSON.parse(rig.ctx.vault.decrypt(vault, 'terms:draft-terms')) as Record<string, string | number>;
+    // r = 10% / 1,000 units offered = 1e14 WAD per unit
+    expect(opening).toMatchObject({ scheme: 'poseidon5-v1', threshold: '65000000000', ratePerUnitWad: '100000000000000', reportingCurrency: 'USD', currencyCode: CURRENCY_CODES.USD, indexingRule: 'cpi-annual', indexingRuleCode: INDEXING_RULES.cpiYearly });
+    expect(BigInt(opening.termsSalt!)).toBeLessThan(BN254_FR);
+    const stage1 = termsCommitmentField({ theta: 65_000_000_000n, rWad: 100_000_000_000_000n, currencyCode: CURRENCY_CODES.USD, indexingRule: INDEXING_RULES.cpiYearly, termsSalt: BigInt(opening.termsSalt!) });
+    expect(ok.termsCommitment).toBe('0x' + stage1.toString(16).padStart(64, '0'));
+    // anyone recomputes it from the disclosed opening (POST /terms/commitment)
+    expect((await rig.post('/terms/commitment', opening)).json()).toEqual({ commitment: ok.termsCommitment, scheme: 'poseidon5-v1' });
   });
 
-  it('a draft whose vault payload predates the Poseidon terms scheme is refused at submission (S1 WP10)', async () => {
+  it('a reporting currency outside Stage 1\'s terms commitment is refused when the terms are set (S1 WP12)', async () => {
+    await draftRow('draft-nzd', 'draft');
+    const pub = { stablecoin: 'USDC' as const, unitsOffered: '1000', reservePrice: '8000000', minimumRaise: '4000000000', capMultiple: '2.5', lockupSeconds: 0, releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], hurdle: '0.05', payoutMultipleK: 2, tierFlags: { tier1: false, tier2: true, tier3: false, tier4: false }, reportingCurrency: 'NZD', raiseStyle: 'sealed' as const, country: 'US' };
+    // NZD has no ISO-4217 numeric code in Stage 1's CURRENCY_CODES, so no Poseidon commitment can carry it (cause PF:
+    // was accepted, the SHA-256 commitment took any currency string)
+    expect(Object.keys(CURRENCY_CODES)).not.toContain('NZD');
+    await expect(new TermsService(rig.ctx).setTerms('draft-nzd', issuer, pub, { threshold: '65000000000', shareRate: '0.10', indexingRule: 'cpi-annual' })).rejects.toMatchObject({ status: 422, detail: { issues: expect.arrayContaining([expect.objectContaining({ field: 'reportingCurrency', code: 'unsupported' })]) } });
+    expect((await rig.t.pool.query("select state, terms_commitment from series_drafts where draft_id = 'draft-nzd'")).rows[0]).toEqual({ state: 'draft', terms_commitment: null });
+    expect((await rig.t.pool.query("select count(*)::int as n from terms_vault where draft_id = 'draft-nzd'")).rows[0].n).toBe(0);
+    // and the public recompute endpoint refuses it the same way
+    expect((await rig.post('/terms/commitment', { threshold: '65000000000', ratePerUnitWad: '100000000000000', reportingCurrency: 'NZD', indexingRule: 'cpi-annual', termsSalt: '1' })).statusCode).toBe(422);
+  });
+
+  it('a draft whose vault payload predates the Poseidon terms scheme is refused at submission (S1 WP10; cause PF)', async () => {
     await draftRow('draft-legacy', 'contract_signed', { contractHash: '0x' + 'aa'.repeat(32), commitment: '0x' + 'bb'.repeat(32) });
     // a SHA-256-era payload: no scheme, a hex salt
     const ct = rig.ctx.vault.encrypt(JSON.stringify({ threshold: '65000000000', shareRate: '0.10', ratePerUnitWad: '100000000000000', reportingCurrency: 'USD', indexingRule: 'cpi-annual', salt: '0x' + '22'.repeat(32) }), 'terms:draft-legacy');

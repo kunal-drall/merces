@@ -10,7 +10,15 @@ import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 
-/** Edges of the lifecycle: windows on finished series, extinguishment accounting, curve raises that cannot be cancelled. */
+/**
+ * Edges of the lifecycle: windows on finished series, extinguishment accounting, curve raises that cannot be cancelled.
+ *
+ * Cause codes on the pins that moved with Stage 1 (S1 WP12; Stage 1's own `Simulator` gives the same figures for an
+ * extinguishment in the instant of settlement: the issuer's claim_release pays tranche 0, 2,250 of the 4,500 proceeds):
+ *  - G7: an extinguishment returns only the unvested proceeds (`proceeds − vested(now)`) through the final pool; the
+ *    vested tranches stay in the treasury, drawable by the issuer;
+ *  - M5: Stage 1 extinguishes a settled raise only (RaiseNotSettled), so an ungraduated curve cannot be extinguished.
+ */
 describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
   let adminTok: string;

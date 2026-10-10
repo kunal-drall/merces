@@ -130,7 +130,9 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     expect(vault.rows[0].ciphertext).not.toContain('65000000000');
     const priv = (await rig.get(`/drafts/${draft.draftId}/terms/private`, issuerTok)).json();
     expect(priv.terms.threshold).toBe('65000000000');
-    // the opening of Stage 1's Poseidon terms commitment, with the codes the circuit takes
+    // the opening of Stage 1's Poseidon terms commitment, with the codes the circuit takes (cause PF, S1: the terms
+    // commitment is Stage 1's Poseidon(5) over θ, r, the ISO-4217 numeric currency, the indexing rule code and a field
+    // salt; was SHA-256 over canonical JSON with a hex `salt`)
     expect(priv.terms).toMatchObject({ scheme: 'poseidon5-v1', reportingCurrency: 'USD', currencyCode: 840, indexingRule: 'cpi-annual', indexingRuleCode: 1 });
     expect(priv.terms.termsSalt).toMatch(/^\d{1,78}$/);
     // the whole disclosed payload can be posted as is
@@ -230,6 +232,7 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     const after = (await rig.get(`/series/${seriesId}/terms`, bTok2)).json();
     expect(after.terms.threshold).toBe('66950000000');
     expect(after.version).toBe(2);
+    // the amended commitment is Stage 1's Poseidon(5) over the indexed θ (cause PF)
     expect(after.commitment).toBe(termsCommitment({ theta: '66950000000', rWad: after.terms.ratePerUnitWad, currency: 'USD', indexingRule: 'cpi-annual', termsSalt: after.terms.termsSalt }));
     expect((await rig.get(`/series/${seriesId}`)).json().terms.termsCommitment).toBe(after.commitment);
   });

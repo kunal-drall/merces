@@ -1,7 +1,7 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { attestationMessage, fxAttestationMessage, type UnsignedTx } from '@merces/domain';
+import { ZERO_INCOME_COMMITMENT, attestationMessage, fxAttestationMessage, type UnsignedTx } from '@merces/domain';
 import { WAD, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { assembleOnDevice, checkTier3Opening } from '@merces/poi-device';
 import type { SimHarness } from '@merces/simulator';
@@ -9,6 +9,17 @@ import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const DAY = 86_400;
+/**
+ * Pins that moved with Stage 1 (S1 WP12) carry a cause code:
+ *  - R: Stage 1's report rules: the report opens the due without accrual; the first report of a reporting year chains
+ *    from ZERO (SIM:1096-1103); a tier-3 report proves the same six public signals as tier 2 and binds the attestor's
+ *    signature over the prior, the income commitment and liquidityEvent (SIM:1114-1118);
+ *  - P: Stage 1's hardship pauses: `request_pause` carries no end, so the requested `until` is advisory; the attestor's
+ *    `approve_pause` sets the end within Stage 1's bounds (`pauseApprovalError`: in the future, ≤ 1 year, ≤ 2 years in
+ *    total, ≤ 16 pauses); `approve_pause` is a status sync point (SIM:1284-1297);
+ *  - G7: an extinguishment returns only the unvested proceeds.
+ */
+
 /** The canary value the privacy suite scans the database and logs for (docs/SERVICES.md). */
 const CANARY = '7317317317';
 
@@ -125,6 +136,8 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
 
     // attestor device: decrypt (here: the plaintext the issuer encrypted), check the opening against the documents, sign
     const c = { seriesId, periodId, priorIncomeCommitment: dev.assembled.priorIncomeCommitment, incomeCommitment: dev.assembled.incomeCommitment };
+    // 2026Q1 is the series' first report and a year start: the prior the attestor signs over is ZERO (cause R)
+    expect(c.priorIncomeCommitment).toBe(ZERO_INCOME_COMMITMENT);
     expect(checkTier3Opening(opening, { ...c, documentedYtd: USDC(80_000) })).toEqual({ ok: true });
     const signature = await att.signMessage(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
     const signBody = { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, proof: dev.assembled.proof, attestation: { liquidityEvent: false, signature } };
@@ -154,7 +167,8 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const sent = await rig.post('/tx/send', await att.coSign(await h.issuer.sign(tx)), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     const accepted = sent.json().events.find((e: { type: string }) => e.type === 'ReportAccepted');
-    expect(accepted.payload).toMatchObject({ tier: 3, paymentDue: USDC(2000).toString(), accrual: '0' });
+    // 10% × (80,000 − 60,000) = 2,000 due, no accrual at the report (cause R), chained from ZERO
+    expect(accepted.payload).toMatchObject({ tier: 3, paymentDue: USDC(2000).toString(), accrual: '0', priorIncomeCommitment: ZERO_INCOME_COMMITMENT, incomeCommitment: c.incomeCommitment });
     expect((await rig.post(`/reports/${reportId}/submitted`, { txId: sent.json().txId }, issuerTok)).json().state).toBe('accepted');
     const pay = await rig.post(`/reports/${reportId}/build-payin`, {}, issuerTok);
     expect(pay.json().amount).toBe(USDC(2000).toString());
@@ -252,6 +266,8 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const sent = await rig.post('/tx/send', await h.issuer.sign(tx), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     expect(sent.json().events[0].type).toBe('PauseRequested');
+    // the requested end is advisory: recorded beside the request, no pause yet (cause P)
+    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 0, requested: true, requestedUntil: until, current: null });
 
     // private review: only the chosen attestor (or an admin) reads the ciphertext
     expect((await rig.get(`/attestor/hardship/${hardshipId}`, att1Tok)).statusCode).toBe(403);
@@ -273,6 +289,15 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     // decision: not the chosen attestor; approved end after the requested end; then approve with a shorter end
     expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: true }, att1Tok)).statusCode).toBe(403);
     expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: true, until: until + DAY }, attTok)).statusCode).toBe(422);
+    // the chain holds an approval to Stage 1's bounds whoever builds it: an attestor's own approvePause ending more than a
+    // year out is PauseTooLong, one ending now is InvalidPauseEnd; both 422 with nothing changed (cause P)
+    const chainNow = await h.sim.now();
+    for (const [end, name] of [[chainNow + 366 * DAY, 'PauseTooLong'], [chainNow, 'InvalidPauseEnd']] as const) {
+      const direct = await rig.post('/tx/send', await att.sign(await h.sim.build({ kind: 'approvePause', seriesId, until: end }, att.address)), attTok);
+      expect(direct.statusCode, name).toBe(422);
+      expect(direct.json()).toMatchObject({ error: 'ChainInvalidTerms', detail: { stage1: name } });
+    }
+    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 0, requested: true });
     const approvedUntil = until - 30 * DAY;
     const decided = await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: true, until: approvedUntil }, attTok, { 'idempotency-key': 'hard-decide-1' });
     expect(decided.statusCode, JSON.stringify(decided.json())).toBe(200);
@@ -286,6 +311,9 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     // first period ended, so the formal notice and the lateness release block are recorded with the approval
     expect(approved.json().events.map((e: { type: string }) => e.type)).toEqual(['PauseApproved', 'StatusChanged', 'FormalNoticeDue', 'ReleasesPaused']);
     expect((await h.sim.getSeries(seriesId))!.status).toBe('Paused');
+    // the pause runs from the approval to the approved end, 30 days before the requested one (cause P: the request's end
+    // was advisory)
+    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 1, requested: false, requestedUntil: null, current: { end: approvedUntil } });
     await rig.sync();
     expect((await rig.get(`/series/${seriesId}/status`)).json().status).toBe('Paused');
     const after = await rig.get(`/series/${seriesId}/hardship`, holderTok);

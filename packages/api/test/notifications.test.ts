@@ -101,6 +101,8 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     expect(rem.body).toContain(seriesId);
     expect(rem.body).toContain('2026Q1');
     expect(rem.body).toContain(new Date(dueAt * 1000).toISOString().slice(0, 10));
+    // the keeper sends 'report-due' once dueAt has passed, the first InGrace instant under Stage 1's inclusive bound
+    // (G2, S1 WP11: was sent at dueAt)
     expect(rem.body).toContain('InGrace');
     // no amounts: the only digits in the body are the period id, the series id and ISO dates
     const stripped = rem.body.replace(seriesId, '').replace(/\d{4}Q[1-4]/g, '').replace(/\d{4}-\d{2}-\d{2}/g, '');

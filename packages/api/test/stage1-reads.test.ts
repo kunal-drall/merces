@@ -15,6 +15,9 @@ const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return 
  * S1 WP11: the offchain mirrors and read consumers on Stage 1's rules. The redemption quote and its blockers follow
  * Stage 1's `redeem`; payIn is built for the open due with its live accrual; the Series row and the periods carry the
  * indexed reporting ledger; the status crank runs at the deadline instants; the statement shows each pool once.
+ *
+ * Cause code on the HTTP pins that moved (S1 WP12): E, Stage 1's error names and their codes: a payIn with no open due
+ * is NothingDue (code WrongStatus, HTTP 422), whether nothing was reported or the due was paid.
  */
 describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -71,6 +74,11 @@ describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () =>
     await sched.runAll();
     expect(submits).toEqual(['crankStatus']); // the indexed status is the derived one: nothing to record
 
+    // nothing reported yet: nothing is due (cause E: was NotFound "no accepted report for this period", HTTP 404)
+    const early = await rig.post('/tx/send', await h.issuer.sign(await h.sim.build({ kind: 'payIn', seriesId, periodId: q.id, amount: '1' }, h.issuer.address)), issuerTok);
+    expect(early.statusCode).toBe(422);
+    expect(early.json()).toMatchObject({ error: 'ChainWrongStatus', detail: { stage1: 'NothingDue' } });
+
     // report the quarter without paying: the due is open
     const rep = await h.buildReport({ seriesId, periodId: q.id, privateTerms: raise.privateTerms, incomeYtdNow: USDC(100_000) });
     await h.exec(h.issuer, rep.command);
@@ -104,7 +112,7 @@ describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () =>
     expect(paid.statusCode, paid.body).toBe(200);
     expect(paid.json().events.find((e: { type: string }) => e.type === 'PaymentReceived').payload).toMatchObject({ periodId: q.id, paymentDue: live.paymentDue, accrual: live.accrual });
     expect((await rig.post('/reports/rep_w11/build-payin', {}, issuerTok)).statusCode).toBe(409);
-    // a chain refusal carries Stage 1's error name
+    // a chain refusal carries Stage 1's error name (cause E: a paid period was Duplicate, also HTTP 422)
     const again = await rig.post('/tx/send', await h.issuer.sign(await h.sim.build({ kind: 'payIn', seriesId, periodId: q.id, amount: '1' }, h.issuer.address)), issuerTok);
     expect(again.statusCode).toBe(422);
     expect(again.json()).toMatchObject({ error: 'ChainWrongStatus', detail: { stage1: 'NothingDue' } });

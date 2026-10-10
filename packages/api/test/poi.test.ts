@@ -1,12 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { stripeFixtureFor, stripeGrossUntil } from '@merces/fixtures';
-import { parsePeriod, ratePerUnit, wadFromDecimal } from '@merces/math';
+import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { MemoryIncomeChain, assembleOnDevice, choosePrior } from '@merces/poi-device';
-import type { UnsignedTx } from '@merces/domain';
-import { makeRig } from './helpers.ts';
+import { ZERO_INCOME_COMMITMENT, mockProve, type UnsignedTx } from '@merces/domain';
+import { createServiceContext, serviceRoutes } from '@merces/services';
+import { buildApp, makeContext } from '../src/index.ts';
+import { SECRET, makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
+
+/*
+ * Pins that moved with Stage 1 (S1 WP12) carry a cause code:
+ *  - PF: Stage 1's report proof format: a Groth16 (BN254) proof over six public signals (terms commitment, units, FX,
+ *    prior income commitment, income commitment, payment), and Groth16 is the only system a process accepts unless it is
+ *    simulator-only and started with MERCES_PROOF_SYSTEM=mock (H3); the test rig opts into mock proofs as well;
+ *  - R: Stage 1's report rules: reports are sequential (WrongPeriod), and each report proves against the prior the
+ *    chain expects (SIM:1096-1103): ZERO at a year start, else the last accepted report's income commitment.
+ */
 
 describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with Stripe test data', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -58,10 +69,15 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
         // 2. device: the prior the chain expects (public), then commitment + Stage 1 Groth16 proof + attestation from the verifier (direct, not via the API)
         const expected = (await rig.get(`/series/${seriesId}/reporting/prior`)).json();
         expect(expected).toMatchObject({ periodId: q, nextExpectedPeriod: q, rule: q === '2026Q1' ? 'year-start' : 'chained', acceptsSuppliedPrior: false });
+        // the year starts from ZERO; later quarters chain from the last accepted report (cause R)
+        if (q === '2026Q1') expect(expected.expectedPriorIncomeCommitment).toBe(ZERO_INCOME_COMMITMENT);
+        else expect(expected.expectedPriorIncomeCommitment).toBe(chain.get(seriesId, q === '2026Q2' ? '2026Q1' : '2026Q2')!.incomeCommitment);
         const prior = choosePrior(chain, seriesId, q, expected.expectedPriorIncomeCommitment);
         const { assembled, entry } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, prior, incomeYtdNow: ytd, fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof, deviceSecret }, rig.verifier);
         chain.put(entry);
+        // the device proves with Stage 1's Groth16 by default (cause PF; was a mock digest over our own input layout)
         expect(assembled.proof.system).toBe('groth16-bn254');
+        expect(assembled.proof.publicInputs).toHaveLength(6);
         expect(assembled.priorIncomeCommitment).toBe(expected.expectedPriorIncomeCommitment);
         expect(JSON.stringify(assembled)).not.toContain(ytd.toString());
         if (q === '2026Q2') {
@@ -69,6 +85,11 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
           const ahead = await rig.post(`/series/${seriesId}/reports`, { ...assembled, periodId: '2026Q3' }, issuerTok);
           expect(ahead.statusCode).toBe(409);
           expect(ahead.json().detail).toMatchObject({ stage1: 'WrongPeriod', nextExpectedPeriod: '2026Q2' });
+          // a report that does not chain from Q1 (here: the year-start ZERO again) is refused before its proof is checked,
+          // naming the prior the chain will require (cause R: Stage 1 InvalidProof "prior commitment mismatch")
+          const unchained = await rig.post(`/series/${seriesId}/reports`, { ...assembled, priorIncomeCommitment: ZERO_INCOME_COMMITMENT }, issuerTok);
+          expect(unchained.statusCode).toBe(422);
+          expect(unchained.json().detail).toEqual({ expectedPrior: expected.expectedPriorIncomeCommitment });
           // the body is strict: a stray year-to-date figure is refused, and never echoed or stored
           const stray = await rig.post(`/series/${seriesId}/reports`, { ...assembled, incomeYtd: ytd.toString() }, issuerTok);
           expect(stray.statusCode).toBe(400);
@@ -87,6 +108,7 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
         expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
         const accepted = sent.json().events.find((e: { type: string }) => e.type === 'ReportAccepted');
         expect(accepted).toBeTruthy();
+        expect(accepted.payload.priorIncomeCommitment).toBe(expected.expectedPriorIncomeCommitment); // cause R
         const sub = await rig.post(`/reports/${reportId}/submitted`, { txId: sent.json().txId }, issuerTok);
         if (q === '2026Q3') {
           expect(sub.json().state).toBe('accepted');
@@ -161,5 +183,47 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     const due = sent.json().events[0].payload.paymentDue;
     expect(due).toBe(((ytd - 50_000_000_000n) * 10n / 100n * rate / 10n ** 18n).toString());
+  });
+
+  it('Groth16 is the default: a service left to its defaults accepts Stage 1 Groth16 proofs only and refuses a mock proof', async () => {
+    // the API as a deployment starts it: no proof verifier override, MERCES_PROOF_SYSTEM unset (cause PF, H3)
+    const saved = process.env.MERCES_PROOF_SYSTEM;
+    delete process.env.MERCES_PROOF_SYSTEM;
+    const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return silent; } } as never;
+    let app: Awaited<ReturnType<typeof buildApp>>;
+    try {
+      const ctx = createServiceContext(makeContext({ pool: rig.t.pool, chains: rig.ctx.chains, log: silent, sessionSecret: SECRET, devMode: true }), { esign: rig.esign, identity: rig.identity, zktls: rig.zktls, kms: rig.kms, verifier: rig.verifier, reportVerifierUrl: 'http://verifier.test' });
+      app = await buildApp(ctx, serviceRoutes);
+      await app.ready();
+    } finally {
+      if (saved !== undefined) process.env.MERCES_PROOF_SYSTEM = saved;
+    }
+    try {
+      const artifacts = (await app.inject({ method: 'GET', url: '/prover/artifacts' })).json();
+      expect(artifacts).toMatchObject({ system: 'groth16-bn254', acceptedSystems: ['groth16-bn254'] });
+      // a fresh series' first quarter, proven on the device; the same report with a mock proof over the same six signals
+      const h = rig.harness('monad');
+      const raise = await h.runRaise();
+      const seriesId = raise.seriesId;
+      const q = periodOf((await h.sim.getSeries(seriesId))!.settledAt!);
+      await h.sim.setTime(Math.max(await h.sim.now(), q.end + 86_400));
+      await rig.sync();
+      const issuerTok = rig.token({ accountId: 'iss-g16', wallets: [{ chain: h.sim.chain, address: h.issuer.address }], roles: ['issuer'] });
+      const privateTerms = { threshold: raise.privateTerms.theta.toString(), shareRate: '0.10', reportingCurrency: 'USD', indexingRule: raise.privateTerms.indexingRule, termsSalt: raise.privateTerms.termsSalt.toString() };
+      const expected = (await rig.get(`/series/${seriesId}/reporting/prior`)).json();
+      const prior = choosePrior(new MemoryIncomeChain(), seriesId, q.id, expected.expectedPriorIncomeCommitment);
+      const zktlsProof = rig.zktls.prove({ source: 'stripe', seriesId, periodId: q.id, figure: USDC(70_000), currency: 'USD', coversUntil: q.end, owner: h.issuer.address });
+      const { assembled } = await assembleOnDevice({ seriesId, periodId: q.id, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, prior, incomeYtdNow: USDC(70_000), fxAvgWad: 10n ** 18n, tier: 2, source: 'stripe', zktlsProof, deviceSecret: 'device-secret-g16' }, rig.verifier);
+      const mock = { ...assembled, proof: { system: 'mock' as const, proof: mockProve(assembled.proof.publicInputs), publicInputs: assembled.proof.publicInputs } };
+      const refused = await app.inject({ method: 'POST', url: `/series/${seriesId}/reports`, payload: mock, headers: { authorization: `Bearer ${issuerTok}` } });
+      expect(refused.statusCode, refused.body).toBe(422);
+      expect(refused.json().message).toBe('proof system mock is not accepted (this service verifies groth16-bn254)');
+      // the Groth16 report passes the same service
+      const ok = await app.inject({ method: 'POST', url: `/series/${seriesId}/reports`, payload: assembled, headers: { authorization: `Bearer ${issuerTok}` } });
+      expect(ok.statusCode, ok.body).toBe(201);
+      expect(ok.json()).toMatchObject({ verifiedOffchain: true, paymentStable: USDC(1000).toString() });
+    } finally {
+      await app.close();
+    }
   });
 });

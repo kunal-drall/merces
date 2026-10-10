@@ -128,10 +128,17 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     await h.sim.setTime(q1.end + 55 * 86_400);
     const { command } = await h.buildReport({ seriesId: a.seriesId, periodId: '2026Q1', unitsOutstanding: 500n, privateTerms: a.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(100_000), termsCommitment: a.terms.termsCommitment });
     const accepted = (await h.exec(h.issuer, command)).events.find((e) => e.type === 'ReportAccepted')!.payload as { paymentDue: string; accrual: string };
+    // Stage 1's report opens the due without accrual: 10% × (100,000 − 60,000) = 4,000 and accrual 0 (cause R: Stage 1
+    // `Report.due`, SIM:1133; was the due plus the accrual up to the report, which this test did not pin)
+    expect(accepted).toMatchObject({ paymentDue: USDC(4000).toString(), accrual: '0' });
     await idx.catchUp();
+    expect((await t.pool.query('select payment_due::text, accrual::text from periods where series_id = $1 and period_id = $2', [a.seriesId, '2026Q1'])).rows[0]).toEqual({ payment_due: USDC(4000).toString(), accrual: '0' });
     await h.sim.setTime(q1.end + 85 * 86_400);
     const live = (await h.sim.getPeriod(a.seriesId, '2026Q1'))!;
     expect(BigInt(live.paymentDue)).toBeGreaterThan(BigInt(accepted.paymentDue));
+    // Stage 1 lateAccrual at the payment: 40 whole days past grace → floor(4,000 × 8% × 40 / 365) = 35.068493 USDC
+    // (cause R; Stage 1's own pay on the same flow takes 4,035,068,493)
+    expect([live.accrual, live.paymentDue]).toEqual(['35068493', '4035068493']);
     const paid = await h.exec(h.issuer, { kind: 'payIn', seriesId: a.seriesId, periodId: '2026Q1', amount: live.paymentDue });
     expect(paid.events.find((e) => e.type === 'PaymentReceived')!.payload).toMatchObject({ source: 'payIn', paymentDue: live.paymentDue, accrual: live.accrual });
     await idx.catchUp();

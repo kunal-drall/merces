@@ -8,6 +8,15 @@ import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv
  * CONFORMANCE_CHAIN selects the target: simulator (default, both personalities), solana, evm:<chainKey>.
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
+/*
+ * Pins that moved with Stage 1 (S1 WP12) carry a cause code:
+ *  - R: Stage 1's report rules: reports are sequential (WrongPeriod, code WrongPhase), and the chain proves against the
+ *    series' live terms commitment, so a proof over other terms fails its public signals (InvalidProof);
+ *  - C: Stage 1's zero-amount claim is a successful no-op (SIM:1268-1282); a wallet with no registration is refused
+ *    (HolderNotRegistered, code NotFound);
+ *  - P: Stage 1's approve_pause takes an active attestor's signature (InvalidAttestorSignature, code InvalidAttestation);
+ *  - RD: Stage 1's claim_redemption of 0 units succeeds.
+ */
 const types = (evs: DomainEvent[]) => evs.map((e) => e.type);
 
 // Targets are known at collection time; each describe builds its own env, so a single-chain target runs once.
@@ -118,7 +127,7 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const z = await exec(e, e.issuer, zero.command);
     expect((z.events[0]!.payload as { paymentDue: string }).paymentDue).toBe('0');
     expect((await e.chain.getPeriod(seriesId, q.id))!.settled).toBe(true);
-    // the same report again: the period is no longer the next one (Stage 1 WrongPeriod)
+    // the same report again: the period is no longer the next one (Stage 1 WrongPeriod; cause R: was Duplicate)
     await expectChainError(exec(e, e.issuer, zero.command), 'WrongPhase');
     // next quarter: 75k income on a 60k threshold → 10% × 15k = 1500 gross
     const q2 = parsePeriod(q.quarter === 4 ? `${q.year + 1}Q1` : `${q.year}Q${q.quarter + 1}`);
@@ -126,7 +135,8 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const good = await e.buildReport({ seriesId, periodId: q2.id, unitsOutstanding: 500n, privateTerms: e.privateTerms, incomeYtdPrev: 0n, incomeYtdNow: USDC(75_000), termsCommitment: s.terms.termsCommitment });
     const tampered = { ...good.command, paymentStable: '1' };
     await expectChainError(exec(e, e.issuer, tampered), 'InvalidProof');
-    // a proof over other terms than the series' live commitment (Stage 1 vector 14)
+    // a proof over other terms than the series' live commitment (Stage 1 vector 14; cause R: was a command naming another
+    // termsCommitment, refused InvalidTerms; the command no longer carries one)
     const otherTerms = await e.buildReport({ seriesId, periodId: q2.id, unitsOutstanding: 500n, privateTerms: { ...e.privateTerms, termsSalt: e.privateTerms.termsSalt + 1n }, incomeYtdNow: USDC(75_000) });
     await expectChainError(exec(e, e.issuer, otherTerms.command), 'InvalidProof');
     const forged = { ...good.command, attestation: { ...good.command.attestation!, signature: '0x' + '22'.repeat(64) } };
@@ -141,7 +151,8 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     expect(v.balance).toBe(USDC(1425).toString());
     const claim = await exec(e, e.backers[0]!, { kind: 'claimPayout', seriesId });
     expect((claim.events[0]!.payload as { amount: string }).amount).toBe(USDC(285).toString());
-    // a second claim with nothing accrued is a successful no-op with no events (Stage 1's zero-amount rule)
+    // a second claim with nothing accrued is a successful no-op with no events (Stage 1's zero-amount rule; cause C: was
+    // NotFound)
     expect((await exec(e, e.backers[0]!, { kind: 'claimPayout', seriesId })).events).toEqual([]);
     expect(BigInt((await e.chain.getVault(seriesId))!.balance)).toBeGreaterThanOrEqual(0n);
   });
@@ -167,7 +178,9 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
   it('enforces roles: admin cannot touch a live series; keepers are permissionless; allowlist removal never strands value', async () => {
     const e = env();
     await expectChainError(exec(e, e.admin, { kind: 'drawRelease', seriesId }), 'Unauthorized');
-    await expectChainError(exec(e, e.admin, { kind: 'claimPayout', seriesId }), 'NotFound'); // admin holds no registration (Stage 1 HolderNotRegistered); the call itself is open to any holder
+    // admin holds no registration (Stage 1 HolderNotRegistered; cause C: still NotFound, unlike a registered holder's zero
+    // claim); the call itself is open to any holder
+    await expectChainError(exec(e, e.admin, { kind: 'claimPayout', seriesId }), 'NotFound');
     await expectChainError(exec(e, e.backers[0]!, { kind: 'registerAttestor', attestor: e.backers[0]!.address, active: true }), 'Unauthorized');
     await e.chain.submit({ kind: 'setAllowlist', wallet: e.backers[1]!.address, allowed: false }, 'allowlistManager');
     expect(await e.chain.isAllowlisted(e.backers[1]!.address)).toBe(false);
@@ -183,7 +196,8 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const now = await e.chain.now();
     const until = now + 10 * 86_400;
     await exec(e, e.issuer, { kind: 'requestPause', seriesId, until });
-    // Stage 1 approve_pause: a signer that is not an active attestor is InvalidAttestorSignature (code InvalidAttestation)
+    // Stage 1 approve_pause: a signer that is not an active attestor is InvalidAttestorSignature (code InvalidAttestation;
+    // cause P: was Unauthorized)
     await expectChainError(exec(e, e.backers[0]!, { kind: 'approvePause', seriesId, until }), 'InvalidAttestation');
     const ap = await exec(e, e.attestors[0]!, { kind: 'approvePause', seriesId, until });
     expect(types(ap.events)).toEqual(['PauseApproved', 'StatusChanged']);
