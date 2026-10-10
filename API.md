@@ -13,6 +13,12 @@ explains how to use the API; the spec is the source of truth for shapes.
   timestamps are unix seconds; periods are `YYYYQn`. Ids are chain-neutral: `seriesId = "<chain>:<address>"`.
 - **Chain neutrality**: no endpoint needs the client to know which chain a series is on. `GET /chains` lists chains,
   modes and stablecoins for the issuer's one-time choice; after that the id carries it.
+- **Signing context** (S4): Stage 1's signed messages (`MERCES_*_V1`) bind a deployment's domain, then a series key,
+  then their fields. `GET /chains` carries each chain's `signing` domain (null while its adapter cannot read it; signing
+  flows on that chain then answer 409 with `detail.reason` `signing-domain-unknown`), and the public
+  `GET /series/{seriesId}/signing` reads the series key and the four nonces (`pause`, `amendment`, `extinguish`,
+  `trueup`, u64 decimal strings) live from the chain. A PAUSE, AMEND, EXTINGUISH or TRUEUP signature binds the nonce it
+  was requested over and is dead once that nonce moves (409 `stale-nonce` where a signature is accepted).
 - **Sessions**: `POST /auth/nonce` → sign the message with the wallet → `POST /auth/verify` → `Authorization: Bearer
   <token>`. One account links a Solana and an EVM wallet (`POST /me/wallets/link`). Roles and eligibility are inside the
   token; refresh with `POST /me/session/refresh` after review decisions.

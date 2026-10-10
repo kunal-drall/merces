@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CURVE_TERMS_ZEROS, bidCommitment, rateUnits, runSettlement, termsCommitment, type DomainEvent } from '@merces/domain';
+import { CURVE_TERMS_ZEROS, assertSigningNetwork, bidCommitment, rateUnits, runSettlement, seriesKeyOf, termsCommitment, type DomainEvent } from '@merces/domain';
 import { WAD, capPerUnit, parsePeriod, ratePerUnit, requiredEscrow, wadFromDecimal } from '@merces/math';
 import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv } from '../src/env.ts';
 
@@ -7,6 +7,9 @@ import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes.
+ * S4 cause codes on new checks:
+ *  - S4-CTX: the signing context (S4 D6, D7): a chain's signing domain is null or one a signer may sign for (local ids on
+ *    a mock chain only, never a mainnet); a new series reads its Stage 1 series key and four nonces at 0.
  */
 
 /**
@@ -60,6 +63,11 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     expect(['solana', 'evm']).toContain(info.family);
     expect(Object.keys(info.stablecoins).length).toBeGreaterThan(0);
     if (info.family === 'evm') expect(info.stablecoins.USDG).toBeUndefined();
+    // cause S4-CTX: null until the adapter reads it; otherwise its family's and on the signers' allow-list
+    if (info.signing !== null) {
+      expect(info.signing.chainKind).toBe(info.family === 'solana' ? 1 : 2);
+      expect(() => assertSigningNetwork(info.signing!, { allowLocal: info.mode === 'mock' })).not.toThrow();
+    }
     expect((await chain.health()).ok).toBe(true);
     const t1 = await chain.now();
     const t2 = await chain.now();
@@ -83,6 +91,9 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     expect(s.phase).toBe('Draft');
     expect(s.terms.termsCommitment).toMatch(/^0x/);
     expect(s.terms).not.toHaveProperty('threshold');
+    // cause S4-CTX: Stage 1's series key for the id, and every signing nonce at 0
+    expect(s.seriesKey).toBe(seriesKeyOf(seriesId, e.chain.family));
+    expect(s.nonces).toEqual({ pause: '0', amendment: '0', extinguish: '0', trueup: '0' });
     void stranger;
   });
 

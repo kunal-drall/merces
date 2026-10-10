@@ -10,6 +10,11 @@ import { makeRig } from '../../api/test/helpers.ts';
  *  - holder/issuer operations on a series refuse a signed-in stranger (403)
  *  - backer-tier operations refuse an ineligible account (403)
  *  - public operations never return 401/403
+ *
+ * S4 cause codes:
+ *  - S4-CTX: the public read of Stage 1's signing context (`GET /series/{seriesId}/signing`: the domain, the series key
+ *    and the nonces) names "signing" in its path; it is listed by method and path, and checked to be a public GET whose
+ *    response carries no signature.
  */
 describe.skipIf(!dbTestsEnabled())('access-tier matrix (H3)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -62,7 +67,17 @@ describe.skipIf(!dbTestsEnabled())('access-tier matrix (H3)', () => {
     const text = JSON.stringify(spec);
     expect(text).not.toMatch(/privateKey|secretKey|seedPhrase/i);
     // the only signed thing accepted is the user's own signed tx relay
-    const ops = loadSpecOps().ops.filter((o) => /sign/i.test(o.path) && !/esign|contract|signed|sign-in|session/i.test(o.path));
+    // cause S4-CTX: the signing-context read is not a signing operation (a public GET returning public onchain values)
+    const contextReads = new Set(['GET /series/{seriesId}/signing']);
+    const all = loadSpecOps().ops;
+    for (const k of contextReads) {
+      const op = all.find((o) => `${o.method} ${o.path}` === k);
+      expect(op, k).toMatchObject({ method: 'GET', access: 'public' });
+    }
+    const schemas = (spec as { components: { schemas: Record<string, { properties?: Record<string, unknown> }> } }).components.schemas;
+    expect(JSON.stringify((spec as { paths: Record<string, unknown> }).paths['/series/{seriesId}/signing'])).toContain('#/components/schemas/SeriesSigningContext');
+    expect(Object.keys(schemas.SeriesSigningContext!.properties!).sort()).toEqual(['chain', 'domain', 'nonces', 'seriesId', 'seriesKey']);
+    const ops = all.filter((o) => /sign/i.test(o.path) && !/esign|contract|signed|sign-in|session/i.test(o.path) && !contextReads.has(`${o.method} ${o.path}`));
     expect(ops.map((o) => o.path).filter((p) => !p.endsWith('/sign'))).toEqual([]);
   });
 });

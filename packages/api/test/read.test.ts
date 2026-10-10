@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { parsePeriod } from '@merces/math';
-import type { DomainEvent } from '@merces/domain';
+import { seriesKeyOf, type DomainEvent } from '@merces/domain';
 import { project } from '@merces/indexer';
 import { SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
@@ -14,6 +14,10 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *
  * S3 cause codes:
  *  - S3-IX: a claim never creates a position (Stage 1's zero-amount rule lets a registered wallet with nothing send one).
+ *
+ * S4 cause codes:
+ *  - S4-CTX: the signing context (S4 D6, D7): `GET /chains` carries each chain's signing domain, and the public
+ *    `GET /series/{seriesId}/signing` reads the domain, the series key and the nonces live from the chain.
  */
 
 describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
@@ -171,7 +175,8 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
   });
 
   it('a series id with an unknown or missing chain prefix is 404 on every series route, never 500', async () => {
-    for (const url of ['/series/nochain:0xabc/auction', '/series/abc/auction/preview', '/series/nochain:1/retirement', '/series/nochain:1/window', '/series/nochain:1/curve', '/series/:1/auction', '/series/nochain:1/status']) {
+    // cause S4-CTX: the signing context joins the list
+    for (const url of ['/series/nochain:0xabc/auction', '/series/abc/auction/preview', '/series/nochain:1/retirement', '/series/nochain:1/window', '/series/nochain:1/curve', '/series/:1/auction', '/series/nochain:1/status', '/series/nochain:1/signing']) {
       const r = await rig.get(url);
       expect([url, r.statusCode]).toEqual([url, 404]);
       expect(r.json().error).toBe('NotFound');
@@ -180,6 +185,33 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     const tx = await rig.sol.sim.build({ kind: 'claimPayout', seriesId }, rig.sol.backers[0]!.address);
     const signed = await rig.sol.backers[0]!.sign({ ...tx, chain: 'nochain' });
     expect((await rig.post('/tx/send', signed, holderTok)).statusCode).toBe(400);
+  });
+
+  it('the signing context is public: each chain\'s domain on /chains, a series\' key and live nonces on /series/{id}/signing (S4-CTX)', async () => {
+    const sol = (await rig.sol.sim.info()).signing!;
+    const mon = (await rig.mon.sim.info()).signing!;
+    const chains = (await rig.get('/chains')).json().chains as { chain: string; signing: unknown }[];
+    expect(chains.map((c) => [c.chain, c.signing])).toEqual([['solana', sol], ['monad', mon]]);
+    expect([sol.chainKind, sol.chainId, mon.chainKind, mon.chainId]).toEqual([1, '104', 2, '31337']);
+    // anonymous: the domain, the series key and the nonces are public onchain
+    const s = await rig.get(`/series/${seriesId}/signing`);
+    expect(s.statusCode).toBe(200);
+    expect(s.json()).toEqual({ chain: 'solana', seriesId, seriesKey: seriesKeyOf(seriesId, 'solana'), domain: sol, nonces: { pause: '0', amendment: '0', extinguish: '0', trueup: '0' } });
+    expect((await rig.get(`/series/${monSeriesId}/signing`)).json()).toMatchObject({ chain: 'monad', seriesKey: seriesKeyOf(monSeriesId, 'evm'), domain: mon });
+    // read live from the chain, not from the index: a pause request moves the pause nonce at once
+    await rig.mon.exec(rig.mon.issuer, { kind: 'requestPause', seriesId: monSeriesId, until: (await rig.mon.sim.now()) + 10 * 86_400 });
+    expect((await rig.get(`/series/${monSeriesId}/signing`)).json().nonces).toEqual({ pause: '1', amendment: '0', extinguish: '0', trueup: '0' });
+    expect((await rig.get('/series/monad:0x' + '00'.repeat(20) + '/signing')).statusCode).toBe(404);
+    // a chain whose adapter cannot read its domain yet (the live adapters until S5): 409, value-free
+    const info = await rig.mon.sim.info();
+    const spy = vi.spyOn(rig.mon.sim, 'info').mockResolvedValue({ ...info, signing: null });
+    try {
+      const unknown = await rig.get(`/series/${monSeriesId}/signing`);
+      expect([unknown.statusCode, unknown.json().detail]).toEqual([409, { reason: 'signing-domain-unknown' }]);
+      expect((await rig.get('/chains')).json().chains.find((c: { chain: string }) => c.chain === 'monad').signing).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('dev routes: time travel and faucet exist in mock mode', async () => {

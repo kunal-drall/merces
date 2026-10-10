@@ -1,0 +1,39 @@
+# S4 signatures (Stage 1 SPEC v1.1.2 §1.3-§1.4): the context every MERCES_*_V1 signed message binds, read live from the
+# chain. The signing flows of the later S4 work packages join this fragment.
+tags:
+  - { name: signing, description: "Stage 1's signed messages (MERCES_*_V1): the signing domain, the series key and the series' live nonces (S4)" }
+components:
+  schemas:
+    SeriesNonces:
+      type: object
+      description: "A series' signing nonces as the chain stores them (Stage 1 pause_nonce, amendment_nonce, extinguish_nonce, trueup_nonce), u64 decimal strings. A PAUSE, AMEND, EXTINGUISH or TRUEUP signature binds the nonce it was requested over and is dead once that nonce moves: pause advances on each pause request and on its withdrawal (an approval does not), amendment on each accepted amendment, extinguish on the extinguishment, trueup on each accepted true-up. REPORT and FX signatures bind no nonce."
+      required: [pause, amendment, extinguish, trueup]
+      additionalProperties: false
+      properties:
+        pause: { type: string, pattern: '^(0|[1-9]\d{0,19})$' }
+        amendment: { type: string, pattern: '^(0|[1-9]\d{0,19})$' }
+        extinguish: { type: string, pattern: '^(0|[1-9]\d{0,19})$' }
+        trueup: { type: string, pattern: '^(0|[1-9]\d{0,19})$' }
+    SeriesSigningContext:
+      type: object
+      description: "What a signed message on this series binds before its fields: the deployment's domain, then the series key; and the live nonces. All public onchain."
+      required: [chain, seriesId, seriesKey, domain, nonces]
+      additionalProperties: false
+      properties:
+        chain: { type: string }
+        seriesId: { type: string }
+        seriesKey: { type: string, pattern: '^0x[0-9a-f]{64}$', description: "the series PDA's 32 bytes on Solana; bytes32(uint256(series_id)) on the EVM (the simulator's monad series ids are 20-byte pseudo-addresses, left-padded, until the EVM's counter ids)" }
+        domain: { $ref: '#/components/schemas/SigningDomain' }
+        nonces: { $ref: '#/components/schemas/SeriesNonces' }
+paths:
+  /series/{seriesId}/signing:
+    get:
+      operationId: getSeriesSigning
+      x-access: public
+      tags: [public, signing]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      description: "The series' signing context, read live from the chain: the deployment's signing domain, the series key and the four nonces (public onchain data; no signature, no income figure). Services read the nonces again when they accept a signature, so a signature over a nonce that has moved since is refused there (409 stale-nonce)."
+      responses:
+        '200': { description: The signing context, content: { application/json: { schema: { $ref: '#/components/schemas/SeriesSigningContext' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "The chain's signing domain is not known yet (detail.reason signing-domain-unknown): its adapter cannot read it (the live adapters until S5)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }

@@ -956,6 +956,13 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    id). A cloud KMS's DER signature and DER SPKI go through `@merces/ports`' normaliser (`signature65FromDer`,
    `addressFromSpki`) and the provider-neutral `RemoteSecp256k1Kms`; no provider is wired ("Open (S4)" question 1). The
    report verifier's key stays ed25519 until S4 WP6.
+   **S4 WP4:** the signing context is on the chain port (A-SIG-3): `ChainInfo.signing` (the domain, derived on read: the
+   simulator's from Stage 1's local ids, Solana tag 104 and EVM 31337, with a per-chain-key registry; null on the live
+   adapters until S5, whose signing flows answer 409 `signing-domain-unknown`), `SeriesState.seriesKey` (Solana the
+   series PDA, EVM `bytes32(uint256(id))`, the simulator's monad pseudo-address left-padded until S5's counter ids) and
+   `SeriesState.nonces {pause, amendment, extinguish, trueup}` (the ledger's own, u64 decimal strings; they replace
+   `amendmentNonce`, `extinguishNonce` and `pauses.nonce`). `GET /chains` carries the domain and the public
+   `GET /series/{seriesId}/signing` reads domain, key and nonces live.
 5. *Extinguishment.* Two distinct attestor signatures with a nonce; only **unvested** proceeds go to holders, vested
    but undrawn tranches stay with the estate (A31, H4); refused unless the raise settled.
    **S1:** applied (WP7): two distinct attestors (co-signing until S4), only the unvested proceeds, through the final

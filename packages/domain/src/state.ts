@@ -2,6 +2,7 @@ import type { LifecycleStatus, RaiseFailure, RaisePhase, RaiseStateName, SeriesT
 import type { Address, ChainFamily, ChainKey, ChainMode, Stablecoin } from './ids.ts';
 import type { TradingFeeSplitBps, UnitScale } from './curve.ts';
 import type { Money, Units, Wad } from './money.ts';
+import type { SigningDomain } from './signing.ts';
 
 /** Read-side state shapes returned by ChainPort. Money as strings; nothing chain-specific. */
 
@@ -19,6 +20,15 @@ export interface ChainInfo {
   newRaisesPaused: boolean;
   /** the chain's settlement limits (a property of the chain family, not of its state) */
   limits: ChainLimits;
+  /**
+   * The deployment's signing domain (Stage 1 SPEC §1.3): what every `MERCES_*_V1` message binds first,
+   * `keccak256(chain_kind_u8 ‖ chain_id_u64 ‖ registry_32)` (S4 D6). Derived on every read, never persisted: the
+   * simulator derives it from its personality and chain key (a per-chain-key registry, so two simulator chains never
+   * share a domain and no simulator signature is valid on a real deployment); a live adapter reads the registry's own
+   * (`ProtocolConfig.domain` on Solana, `MercesRegistry.domain()` on the EVM) and checks it against its manifest (S5).
+   * Null while the adapter cannot read it: signing flows then answer 409 `signing-domain-unknown`.
+   */
+  signing: SigningDomain | null;
 }
 
 /**
@@ -108,8 +118,15 @@ export interface SeriesState {
   yearGross: { year: number | null; grossWad: Wad }[];
   /** the final pool of an extinguished series */
   final: { accWad: Wad; units: Units; distributed: Money };
-  amendmentNonce: number;
-  extinguishNonce: number;
+  /**
+   * The series key every signed message binds after the domain (Stage 1 SPEC §1.4), `0x` + 64 hex: the series PDA's
+   * 32 bytes on Solana, `bytes32(uint256(series_id))` on the EVM. The simulator's monad series ids are 20-byte
+   * pseudo-addresses: their key is the address left-padded, a labelled stand-in until S5's counter ids (A-ID-1). Equal
+   * to `seriesKeyOf(seriesId, family)`; the chain's read is authoritative (S4 D7).
+   */
+  seriesKey: string;
+  /** the series' live signing nonces (S4 D7): what PAUSE, AMEND, EXTINGUISH and TRUEUP signatures bind */
+  nonces: SeriesNonces;
   /**
    * Stage 1's mint gate: a sealed raise's last bid is processed (or a curve completed, `completeCurve`). Payments,
    * reports, releases, redemption, extinguishment and windows wait for it (MintNotFinalized).
@@ -133,12 +150,26 @@ export interface SeriesReporting {
   lastIncomeCommitment: string;
 }
 
+/**
+ * A series' signing nonces as the chain stores them (Stage 1 `Ledger`: `pause_nonce`, `amendment_nonce`,
+ * `extinguish_nonce`, `trueup_nonce`), u64 decimal strings. A command never carries one: the chain checks the signature
+ * over its stored nonce, so a signature binds the nonce read when it was requested, and services read it again when they
+ * accept a signature and when they build (409 `stale-nonce` when it moved). Each advances only as Stage 1 advances it:
+ * `pause` on a pause request and on its withdrawal (an approval leaves it, clearing the request instead), `amendment` on
+ * each accepted amendment, `extinguish` on the extinguishment, `trueup` on each accepted true-up (S5).
+ */
+export interface SeriesNonces {
+  pause: string;
+  amendment: string;
+  extinguish: string;
+  trueup: string;
+}
+
 export interface SeriesPauses {
   /** pauses approved so far */
   count: number;
   /** Σ approved pause lengths */
   pausedTotalSeconds: number;
-  nonce: number;
   /** an issuer request is waiting for an attestor */
   requested: boolean;
   /** the end the issuer asked for (advisory; the attestor approves the actual end) */

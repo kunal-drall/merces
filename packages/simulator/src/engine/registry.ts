@@ -1,4 +1,4 @@
-import { ChainError, seriesTermsViolations, type Command } from '@merces/domain';
+import { ChainError, seriesTermsViolations, wallet32Of, type Command } from '@merces/domain';
 import { newFinalState, newTailState, newVaultState } from '@merces/math';
 import { deriveAddress } from '../addresses.ts';
 import { newAuction, type SimSeries, type SimTerms } from '../state.ts';
@@ -53,6 +53,15 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
     if (!e.state.allowlist.has(signer)) fail('NotAllowlisted', 'the issuer is not allowlisted');
   }
   const capWad = big(t.capMultipleWad);
+  // a hint (simulator and harness only) must be an address of the chain's family: the series key every signed message
+  // binds is its 32 bytes (`SeriesState.seriesKey`, S4 D7)
+  if (cmd.seriesAddressHint !== undefined) {
+    try {
+      wallet32Of(cmd.seriesAddressHint, e.state.config.family);
+    } catch {
+      throw new ChainError('InvalidTerms', `seriesAddressHint is not a ${e.state.config.family} address`);
+    }
+  }
   const address = cmd.seriesAddressHint ?? deriveAddress(e.state.config.family, `series:${signer}:${issuer.seriesIds.length}`);
   const seriesId = `${e.state.config.chain}:${address}`;
   if (e.state.series.has(seriesId)) throw new ChainError('Duplicate', 'series exists');

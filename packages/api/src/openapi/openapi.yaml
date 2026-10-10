@@ -80,6 +80,17 @@ components:
               network: { type: string }
               stablecoins: { type: array, items: { type: object, properties: { symbol: { type: string }, mint: { type: string }, decimals: { type: integer } } } }
               raiseStyles: { type: array, items: { type: string, enum: [sealed, curve] } }
+              signing: { oneOf: [{ $ref: '#/components/schemas/SigningDomain' }, { type: 'null' }], description: "The deployment's signing domain (S4), derived on every read; null while the chain's adapter cannot read it (the live adapters until S5), and signing flows on that chain answer 409 (detail.reason signing-domain-unknown)" }
+    SigningDomain:
+      type: object
+      description: "A deployment's signing domain (Stage 1 SPEC §1.3): what every MERCES_*_V1 signed message binds first. A simulator chain signs under Stage 1's local ids (Solana localnet cluster tag 104, EVM chain id 31337) with a registry derived from its chain key, so no simulator signature is valid on a real deployment; signers never sign for a mainnet."
+      required: [chainKind, chainId, registry, domain]
+      additionalProperties: false
+      properties:
+        chainKind: { type: integer, enum: [1, 2], description: 'Stage 1 ChainKind: 1 Solana, 2 EVM' }
+        chainId: { type: string, pattern: '^(0|[1-9]\d{0,19})$', description: 'u64 decimal: a Solana cluster tag (101 mainnet-beta, 102 testnet, 103 devnet, 104 localnet) or an EVM chain id' }
+        registry: { type: string, pattern: '^0x[0-9a-f]{64}$', description: "the registry's 32-byte wallet form: the merces_registry program id on Solana, the MercesRegistry address left-padded on the EVM" }
+        domain: { type: string, pattern: '^0x[0-9a-f]{64}$', description: 'keccak256(chain_kind_u8 ‖ chain_id_u64 ‖ registry_32)' }
     ReleaseTranche:
       type: object
       properties: { afterSeconds: { type: integer }, bps: { type: integer } }

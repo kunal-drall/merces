@@ -8,7 +8,9 @@ import { seriesOf } from './kit.ts';
 /*
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
- *    the builders take no series, window or side, and the salt is 32 bytes.
+ *    the builders take no series, window or side, and the salt is 32 bytes;
+ *  - S4-CTX: the series read carries Stage 1's signing nonces as `nonces {pause, amendment, extinguish, trueup}`, u64
+ *    decimal strings (S4 D7; were `amendmentNonce` / `extinguishNonce` numbers).
  */
 
 /**
@@ -61,7 +63,7 @@ describe('amendments and extinguishment', () => {
     const s = (await h.sim.getSeries(seriesId))!;
     expect(s.terms.termsCommitment).toBe(newCommitment);
     expect(s.capPerUnit).toBe((USDC(9) * 24n / 10n).toString());
-    expect(s.amendmentNonce).toBe(1); // E
+    expect(s.nonces).toEqual({ pause: '0', amendment: '1', extinguish: '0', trueup: '0' }); // E; cause S4-CTX
     // a proof over the old terms no longer matches the live commitment (vector 14)
     await h.sim.setTime(parsePeriod('2026Q1').end + DAY);
     await expectStage1Error(h.reportAndPay(seriesId, '2026Q1', privateTerms, terms.termsCommitment, 0n, 0n), 'InvalidProof');
@@ -79,7 +81,7 @@ describe('amendments and extinguishment', () => {
     // only tranches 1 and 2 (90 and 180 days) are unvested on 2026-04-02: 2,250 returns (G7; was all 4,500 unreleased)
     expect((ex.events[1]!.payload as { returnedToHolders: string }).returnedToHolders).toBe(USDC(2250).toString());
     const x = (await h.sim.getSeries(seriesId))!;
-    expect(x).toMatchObject({ status: 'Extinguished', extinguishNonce: 1, accNetWad: '0' }); // the net accumulator is untouched (G7)
+    expect(x).toMatchObject({ status: 'Extinguished', nonces: { amendment: '1', extinguish: '1' }, accNetWad: '0' }); // the net accumulator is untouched (G7); cause S4-CTX
     expect(x.final).toEqual({ accWad: (USDC(2250) * WAD / 500n).toString(), units: '500', distributed: USDC(2250).toString() });
     const treasury = (await h.sim.getTreasury(seriesId))!;
     expect(treasury).toMatchObject({ total: USDC(4500).toString(), released: '0', balance: USDC(2250).toString() });

@@ -28,7 +28,8 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
       const out = [];
       for (const c of ctx.chains.chains.values()) {
         const info = await c.info();
-        out.push({ chain: info.chain, family: info.family, mode: info.mode, network: info.network, stablecoins: Object.entries(info.stablecoins).map(([symbol, v]) => ({ symbol, mint: v!.mint, decimals: v!.decimals })), raiseStyles: info.family === 'solana' ? ['sealed', 'curve'] : ['sealed'] });
+        // `signing`: the deployment's signing domain (S4 D6), null while the chain's adapter cannot read it
+        out.push({ chain: info.chain, family: info.family, mode: info.mode, network: info.network, stablecoins: Object.entries(info.stablecoins).map(([symbol, v]) => ({ symbol, mint: v!.mint, decimals: v!.decimals })), raiseStyles: info.family === 'solana' ? ['sealed', 'curve'] : ['sealed'], signing: info.signing });
       }
       return { chains: out };
     },
@@ -108,6 +109,23 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
       // (`stage`, the planner's label) and the end of the current time-bound phase (null outside commit and reveal,
       // so while Settling too: settlement steps have no deadline)
       return { ...a, stage: settlementStage({ auction: a, bids }, now), now, phaseEndsAt: a.phase === 'Open' ? a.commitEndsAt : a.phase === 'Reveal' ? a.revealEndsAt : null };
+    },
+  });
+
+  defineRoute(app, ctx, {
+    method: 'GET', url: '/series/:seriesId/signing', access: 'public',
+    handler: async (req) => {
+      const { seriesId } = req.params as { seriesId: string };
+      const chain = ctx.chainFor(seriesId);
+      // the context every Stage 1 signed message on this series binds (S4 D6, D7), read live from the chain: the
+      // deployment's domain, the series key and the four nonces, all public onchain. A signature binds the nonce it was
+      // requested over; the services read it again when they accept one. The domain first: a chain whose adapter cannot
+      // read it yet has nothing to sign under
+      const info = await chain.info();
+      if (!info.signing) throw AppError.conflict(`the signing domain of chain ${chain.chain} is not known yet`, { reason: 'signing-domain-unknown' });
+      const series = await chain.getSeries(seriesId);
+      if (!series) throw AppError.notFound('series');
+      return { chain: chain.chain, seriesId, seriesKey: series.seriesKey, domain: info.signing, nonces: series.nonces };
     },
   });
 

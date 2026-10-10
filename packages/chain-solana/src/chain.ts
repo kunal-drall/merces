@@ -70,10 +70,16 @@ export class SolanaChain implements ChainPort {
     throw new ChainError('NotImplemented', `SolanaChain.${what}: Stage 1 clients are not generated yet (run \`pnpm stage1:sync\`)`, { programs: this.config.programs });
   }
 
+  /**
+   * `signing` is null until S5 (S4 D6): the live read is the registry's own domain (`ProtocolConfig.domain`, the keccak
+   * of chain kind 1, the cluster tag and the `merces_registry` program id), checked against the configured cluster's tag
+   * and the manifest's program id, with `health()` failing on a mismatch. While it is null, signing flows on this chain
+   * answer 409 `signing-domain-unknown`.
+   */
   async info(): Promise<ChainInfo> {
     const stablecoins: ChainInfo['stablecoins'] = {};
     for (const [k, mint] of Object.entries(this.config.stablecoins)) if (mint) stablecoins[k as 'USDC' | 'USDG'] = { mint, decimals: 6 };
-    return { chain: this.chain, family: 'solana', mode: 'live', network: this.config.cluster, stablecoins, modules: this.config.programs, admin: '', feeCollector: '', newRaisesPaused: false, limits: SOLANA_LIMITS };
+    return { chain: this.chain, family: 'solana', mode: 'live', network: this.config.cluster, stablecoins, modules: this.config.programs, admin: '', feeCollector: '', newRaisesPaused: false, limits: SOLANA_LIMITS, signing: null };
   }
 
   async health(): Promise<HealthReport> {

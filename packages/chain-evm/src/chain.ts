@@ -64,10 +64,16 @@ export class EvmChain implements ChainPort {
     throw new ChainError('NotImplemented', `EvmChain.${what}: Stage 1 ABIs are not generated yet (run \`pnpm stage1:sync\`)`, { contracts: this.config.contracts });
   }
 
+  /**
+   * `signing` is null until S5 (S4 D6): the live read is the registry's own domain (`MercesRegistry.domain()`, the
+   * keccak of chain kind 2, the chain id and the left-padded registry address), checked against the configured chain id
+   * and the manifest's `MercesRegistry` address, with `health()` failing on a mismatch. While it is null, signing flows
+   * on this chain answer 409 `signing-domain-unknown`.
+   */
   async info(): Promise<ChainInfo> {
     const stablecoins: ChainInfo['stablecoins'] = {};
     for (const [k, addr] of Object.entries(this.config.stablecoins)) if (addr) stablecoins[k as 'USDC' | 'USDG'] = { mint: addr.toLowerCase(), decimals: 6 };
-    return { chain: this.chain, family: 'evm', mode: 'live', network: this.config.network, stablecoins, modules: this.config.contracts, admin: '', feeCollector: '', newRaisesPaused: false, limits: EVM_LIMITS };
+    return { chain: this.chain, family: 'evm', mode: 'live', network: this.config.network, stablecoins, modules: this.config.contracts, admin: '', feeCollector: '', newRaisesPaused: false, limits: EVM_LIMITS, signing: null };
   }
 
   async health(): Promise<HealthReport> {

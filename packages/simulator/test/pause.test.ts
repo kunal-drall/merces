@@ -7,6 +7,12 @@ import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './hel
 const DAY = 86_400;
 const YEAR = 365 * DAY;
 
+/*
+ * S4 cause codes on the pins that moved:
+ *  - S4-CTX: the pause nonce is `SeriesState.nonces.pause`, a u64 decimal string, beside the other signing nonces (S4 D7;
+ *    was `pauses.nonce`, a number).
+ */
+
 describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
   it('request: issuer only, settled and not terminal; repeatable, also while paused; `until` is advisory', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
@@ -21,12 +27,14 @@ describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
     expect(types(r1.events)).toEqual(['PauseRequested']);
     // a second request is not refused; the advisory end is replaced
     await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 20 * DAY });
-    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ requested: true, nonce: 2, requestedUntil: now + 20 * DAY, count: 0, current: null });
+    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ requested: true, requestedUntil: now + 20 * DAY, count: 0, current: null });
+    expect((await h.sim.getSeries(seriesId))!.nonces.pause).toBe('2'); // cause S4-CTX: each request advances it
     expect(seriesOf(h.sim, seriesId).ledger.pauseRequestedAt).toBe(BigInt(now));
     // the chain does not hold the attestor to the advisory end (the attestor service does)
     const ap = await h.exec(h.attestors[0]!, { kind: 'approvePause', seriesId, until: now + 30 * DAY });
     expect(types(ap.events)).toEqual(['PauseApproved', 'StatusChanged']);
-    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ requested: false, requestedUntil: null, nonce: 2, count: 1, current: { start: now, end: now + 30 * DAY } });
+    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ requested: false, requestedUntil: null, count: 1, current: { start: now, end: now + 30 * DAY } });
+    expect((await h.sim.getSeries(seriesId))!.nonces.pause).toBe('2'); // cause S4-CTX: an approval does not advance it (SIM:650-670)
     // a request while paused is accepted (Stage 1 does not refuse it); approving it is AlreadyPaused
     await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 40 * DAY });
     await expectStage1Error(h.exec(h.attestors[0]!, { kind: 'approvePause', seriesId, until: now + 40 * DAY }), 'AlreadyPaused');

@@ -2556,6 +2556,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/series/{seriesId}/signing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The series' signing context, read live from the chain: the deployment's signing domain, the series key and the four nonces (public onchain data; no signature, no income figure). Services read the nonces again when they accept a signature, so a signature over a nonce that has moved since is refused there (409 stale-nonce). */
+        get: operations["getSeriesSigning"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/thresholds": {
         parameters: {
             query?: never;
@@ -2708,7 +2725,23 @@ export type components = {
                     decimals?: number;
                 }[];
                 raiseStyles?: ("sealed" | "curve")[];
+                /** @description The deployment's signing domain (S4), derived on every read; null while the chain's adapter cannot read it (the live adapters until S5), and signing flows on that chain answer 409 (detail.reason signing-domain-unknown) */
+                signing?: components["schemas"]["SigningDomain"] | null;
             }[];
+        };
+        /** @description A deployment's signing domain (Stage 1 SPEC §1.3): what every MERCES_*_V1 signed message binds first. A simulator chain signs under Stage 1's local ids (Solana localnet cluster tag 104, EVM chain id 31337) with a registry derived from its chain key, so no simulator signature is valid on a real deployment; signers never sign for a mainnet. */
+        SigningDomain: {
+            /**
+             * @description Stage 1 ChainKind: 1 Solana, 2 EVM
+             * @enum {integer}
+             */
+            chainKind: 1 | 2;
+            /** @description u64 decimal: a Solana cluster tag (101 mainnet-beta, 102 testnet, 103 devnet, 104 localnet) or an EVM chain id */
+            chainId: string;
+            /** @description the registry's 32-byte wallet form: the merces_registry program id on Solana, the MercesRegistry address left-padded on the EVM */
+            registry: string;
+            /** @description keccak256(chain_kind_u8 ‖ chain_id_u64 ‖ registry_32) */
+            domain: string;
         };
         ReleaseTranche: {
             afterSeconds?: number;
@@ -3951,6 +3984,22 @@ export type components = {
             body: string;
             /** Format: date-time */
             createdAt: string;
+        };
+        /** @description A series' signing nonces as the chain stores them (Stage 1 pause_nonce, amendment_nonce, extinguish_nonce, trueup_nonce), u64 decimal strings. A PAUSE, AMEND, EXTINGUISH or TRUEUP signature binds the nonce it was requested over and is dead once that nonce moves: pause advances on each pause request and on its withdrawal (an approval does not), amendment on each accepted amendment, extinguish on the extinguishment, trueup on each accepted true-up. REPORT and FX signatures bind no nonce. */
+        SeriesNonces: {
+            pause: string;
+            amendment: string;
+            extinguish: string;
+            trueup: string;
+        };
+        /** @description What a signed message on this series binds before its fields: the deployment's domain, then the series key; and the live nonces. All public onchain. */
+        SeriesSigningContext: {
+            chain: string;
+            seriesId: string;
+            /** @description the series PDA's 32 bytes on Solana; bytes32(uint256(series_id)) on the EVM (the simulator's monad series ids are 20-byte pseudo-addresses, left-padded, until the EVM's counter ids) */
+            seriesKey: string;
+            domain: components["schemas"]["SigningDomain"];
+            nonces: components["schemas"]["SeriesNonces"];
         };
         ThresholdRow: {
             /** @description ISO 3166-1 alpha-2 */
@@ -9487,6 +9536,39 @@ export interface operations {
             };
             /** @description Not an admin */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getSeriesSigning: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signing context */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesSigningContext"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description The chain's signing domain is not known yet (detail.reason signing-domain-unknown): its adapter cannot read it (the live adapters until S5) */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

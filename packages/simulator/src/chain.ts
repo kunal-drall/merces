@@ -7,7 +7,7 @@ import {
 } from '@merces/domain';
 import { wadToDecimal } from '@merces/math';
 import { DEFAULT_GENESIS, SimClock } from './clock.ts';
-import { deriveAddress, personalityConfig, personalityLimits, type Personality } from './addresses.ts';
+import { deriveAddress, personalityConfig, personalityLimits, personalityRegistry, personalitySigning, type Personality } from './addresses.ts';
 import { SimEngine, type EngineOptions } from './engine.ts';
 import { SIM_STATE_VERSION, type SimState } from './state.ts';
 import { stage1View, type Stage1View } from './stage1-view.ts';
@@ -204,7 +204,15 @@ export class SimulatorChain implements ChainPort {
   // ---------------------------------------------------------------- info
   async info(): Promise<ChainInfo> {
     const st = this.state;
-    return { chain: this.chain, family: this.family, mode: 'mock', network: st.config.network, stablecoins: st.config.stablecoins, modules: { simulator: this.address('program:simulator') }, admin: st.admin, feeCollector: st.feeCollector, newRaisesPaused: st.newRaisesPaused, limits: personalityLimits(st.config.personality) };
+    const p = st.config.personality;
+    // the registry and the signing domain are derived from the personality and the chain key on every read (S4 D6),
+    // never persisted, as the limits are
+    const registry = personalityRegistry(p, st.config.chain);
+    return {
+      chain: this.chain, family: this.family, mode: 'mock', network: st.config.network, stablecoins: st.config.stablecoins,
+      modules: { simulator: this.address('program:simulator'), [registry.module]: registry.address }, admin: st.admin, feeCollector: st.feeCollector, newRaisesPaused: st.newRaisesPaused,
+      limits: personalityLimits(p), signing: personalitySigning(p, st.config.chain),
+    };
   }
   async health(): Promise<HealthReport> {
     return { ok: true, mode: 'mock', latency_ms: 0, detail: `simulator ${this.personality} at t=${this.clock.now()}` };
@@ -219,11 +227,11 @@ export class SimulatorChain implements ChainPort {
     return i ? toIssuerState(i) : null;
   }
   async listSeries(): Promise<SeriesState[]> {
-    return [...this.state.series.values()].map((x) => toSeriesState(this.chain, x, this.clock.now()));
+    return [...this.state.series.values()].map((x) => toSeriesState(this.chain, this.family, x, this.clock.now()));
   }
   async getSeries(seriesId: string): Promise<SeriesState | null> {
     const x = this.state.series.get(seriesId);
-    return x ? toSeriesState(this.chain, x, this.clock.now()) : null;
+    return x ? toSeriesState(this.chain, this.family, x, this.clock.now()) : null;
   }
   async getAuction(seriesId: string): Promise<AuctionState | null> {
     const x = this.state.series.get(seriesId);

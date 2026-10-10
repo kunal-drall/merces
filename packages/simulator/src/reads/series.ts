@@ -1,4 +1,4 @@
-import type { IssuerState, SeriesState, UnitScale } from '@merces/domain';
+import { seriesKeyOf, type ChainFamily, type IssuerState, type SeriesState, type UnitScale } from '@merces/domain';
 import { nextExpectedPeriod } from '@merces/math';
 import type { SimIssuer, SimSeries } from '../state.ts';
 import { str as s } from '../engine/core.ts';
@@ -27,8 +27,12 @@ function legacyPause(x: SimSeries): SeriesState['pause'] {
   };
 }
 
-/** `status` is the status derived at `now` (Stage 1 `deriveStatus`): a hardship pause ends on its own at its end. */
-export function toSeriesState(chain: string, x: SimSeries, now: number): SeriesState {
+/**
+ * `status` is the status derived at `now` (Stage 1 `deriveStatus`): a hardship pause ends on its own at its end.
+ * `seriesKey` is what Stage 1's programs bind for the series (`seriesKeyOf`: the series address's 32 bytes on solana,
+ * the monad pseudo-address left-padded) and `nonces` are the ledger's own (S4 D7).
+ */
+export function toSeriesState(chain: string, family: ChainFamily, x: SimSeries, now: number): SeriesState {
   const t = x.terms;
   const l = x.ledger;
   const current = l.pauses.find((p) => p.start <= BigInt(now) && BigInt(now) < p.end) ?? null;
@@ -52,12 +56,14 @@ export function toSeriesState(chain: string, x: SimSeries, now: number): SeriesS
       lastIncomePeriod: pid(l.lastIncomePeriod), lastIncomeCommitment: l.lastIncomeCommitment,
     },
     pauses: {
-      count: l.pauses.length, pausedTotalSeconds: Number(l.pausedTotal), nonce: Number(l.pauseNonce), requested: l.pauseRequested,
+      count: l.pauses.length, pausedTotalSeconds: Number(l.pausedTotal), requested: l.pauseRequested,
       requestedUntil: l.pauseRequestedUntil === null ? null : Number(l.pauseRequestedUntil), current: current ? { start: Number(current.start), end: Number(current.end) } : null,
     },
     formalNoticeEmittedFor: pid(l.formalNoticeEmittedFor), carryWad: s(x.vault.carryWad), refundedToIssuer: s(x.vault.refundedToIssuer),
     yearGross: x.vault.yearGross.map((y) => ({ year: y.year, grossWad: s(y.grossWad) })),
     final: { accWad: s(x.final.finalAccWad), units: s(x.final.finalUnits), distributed: s(x.final.unreleasedDistributed) },
-    amendmentNonce: Number(l.amendmentNonce), extinguishNonce: Number(l.extinguishNonce), mintFinalized: mintFinalized(x),
+    seriesKey: seriesKeyOf(x.seriesId, family),
+    nonces: { pause: s(l.pauseNonce), amendment: s(l.amendmentNonce), extinguish: s(l.extinguishNonce), trueup: s(l.trueupNonce) },
+    mintFinalized: mintFinalized(x),
   };
 }

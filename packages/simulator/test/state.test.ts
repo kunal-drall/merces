@@ -10,7 +10,9 @@ import { seedFinal, seedHolder, seedLedger, seedPause, seedTail, seedVault, seri
 /*
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
- *    the builders take no series, window or side, and the salt is 32 bytes.
+ *    the builders take no series, window or side, and the salt is 32 bytes;
+ *  - S4-CTX: the series read carries the series key and Stage 1's four signing nonces as u64 decimal strings (S4 D7;
+ *    the pause nonce was `pauses.nonce`, a number).
  */
 
 const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json', import.meta.url);
@@ -123,7 +125,8 @@ describe('simulator state version 4', () => {
     expect(s.treasuryReturned).toBe(0n);
     const series = (await h.sim.getSeries(seriesId))!;
     expect(series.reporting).toEqual({ firstPeriod: null, nextExpectedPeriod: null, lastAcceptedPeriod: null, lastPaidPeriod: null, openDuePeriod: null, openDueAmount: '0', lastIncomePeriod: null, lastIncomeCommitment: ZERO_INCOME_COMMITMENT_HEX });
-    expect(series.pauses).toEqual({ count: 0, pausedTotalSeconds: 0, nonce: 0, requested: false, requestedUntil: null, current: null });
+    expect(series.pauses).toEqual({ count: 0, pausedTotalSeconds: 0, requested: false, requestedUntil: null, current: null }); // cause S4-CTX
+    expect(series.nonces).toEqual({ pause: '0', amendment: '0', extinguish: '0', trueup: '0' }); // cause S4-CTX
     expect(series.final).toEqual({ accWad: '0', units: '0', distributed: '0' });
     expect(series.yearGross).toHaveLength(4);
   });
