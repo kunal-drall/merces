@@ -3,9 +3,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { logCapture, createLogger } from '@merces/core';
 import { WAD, parsePeriod, ratePerUnit } from '@merces/math';
-import { DeviceError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, type DevicePrivateTerms } from '@merces/poi-device';
+import { DeviceError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, generateE2eKeyPair, openTier3Opening, sealTier3Opening, type DevicePrivateTerms } from '@merces/poi-device';
 import { SimWallet } from '@merces/simulator';
-import { attestationMessage, type UnsignedTx } from '@merces/domain';
+import { E2E_TIER3_OPENING, attestationMessage, parseE2eEnvelope, type UnsignedTx } from '@merces/domain';
 import { makeRig } from '../../api/test/helpers.ts';
 
 /**
@@ -16,6 +16,11 @@ import { makeRig } from '../../api/test/helpers.ts';
  * S1 WP10 adds: Stage 1 Groth16 proofs from the device; a year-to-date figure of 2^64 or more (Stage 1's range
  * errors put the value in their message, so every layer must answer with a code); the prior opening (a tier-2 report
  * hands it to the report verifier only); and tier 3's opening, which reaches the attestor end to end encrypted (M7).
+ *
+ * S1 review adds: a share rate (a private term) with more places than a WAD holds, which reached the operator log
+ * through an unhandled error; tier 3's opening sent hex- or base64-encoded instead of sealed, which was stored (the API
+ * now takes a merces-e2e v1 envelope only); and the scan looks for every canary in hex and base64 as well as in
+ * decimal, so an encoded leak fails it too.
  */
 const CANARY_INCOME = 7_317_317_317n; // 7,317.317317 in 6-decimal base units
 const CANARY_INCOME_2 = 9_191_919_191n;
@@ -24,10 +29,34 @@ const CANARY_INCOME_Q3 = 8_484_848_484n;
 const CANARY_HUGE = (1n << 64n) + 7_317n; // a year-to-date figure no u64 holds
 const CANARY_REASON = 'CANARY-HARDSHIP-REASON-4242';
 const CANARY_THRESHOLD = 6_161_616_161n;
+/** a share rate with 19 places, one more than a WAD holds (refused), and one with 18 (stored in the vault only) */
+const CANARY_SHARE_19 = '0.0642642642642642642';
+const CANARY_SHARE_18 = '0.064264264264264264';
 const CANARIES = [
   CANARY_INCOME.toString(), CANARY_INCOME_2.toString(), CANARY_INCOME_Q2.toString(), CANARY_INCOME_Q3.toString(), CANARY_HUGE.toString(), CANARY_REASON, CANARY_THRESHOLD.toString(),
-  '7317.317317', '9191.919191', '8282.828282', '8484.848484',
+  '7317.317317', '9191.919191', '8282.828282', '8484.848484', '0642642642642642642', '064264264264264264', '64264264264264264',
 ];
+
+/**
+ * A canary as the scan looks for it: as written, in hex (either case: a byte-aligned encoding contains the encoding of
+ * every substring), and in base64 at each of the three byte alignments it can start at (base64url is the same here:
+ * the canaries are ASCII digits, letters and dashes, whose encodings use neither + nor /).
+ */
+function encodedForms(c: string): string[] {
+  const b = Buffer.from(c, 'utf8');
+  const forms = [c, b.toString('hex'), b.toString('hex').toUpperCase()];
+  for (let j = 0; j < 3; j++) {
+    const n = Math.floor((b.length - j) / 3) * 3;
+    if (n >= 6) forms.push(b.subarray(j, j + n).toString('base64'));
+  }
+  return forms;
+}
+
+function leaks(text: string): string[] {
+  const out: string[] = [];
+  for (const c of CANARIES) if (encodedForms(c).some((f) => text.includes(f))) out.push(c);
+  return out;
+}
 
 const errorReports: string[] = [];
 const httpBodies: string[] = [];
@@ -146,19 +175,28 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     const opening = q3.tier3Opening!;
     expect(opening).toMatchObject({ incomeYtd: CANARY_INCOME_Q3.toString(), priorIncomeYtd: CANARY_INCOME_Q2.toString() });
     const docs = e2e(`1099-NEC box 1 ${CANARY_INCOME_Q3}`);
-    const plain = await post(`/series/${seriesId}/tier3/2026Q3`, { attestor: att.address, documentsCiphertext: docs, openingCiphertext: JSON.stringify(opening), estimatePaymentStable: '1' }, issuerTok);
-    expect(plain.statusCode).toBe(422);
-    errorReports.push(plain.body);
-    const encoded = await post(`/series/${seriesId}/tier3/2026Q3`, { attestor: att.address, documentsCiphertext: docs, openingCiphertext: Buffer.from(JSON.stringify(opening)).toString('base64'), estimatePaymentStable: '1' }, issuerTok);
-    expect(encoded.statusCode).toBe(422);
-    errorReports.push(encoded.body);
-    const opened = await post(`/series/${seriesId}/tier3/2026Q3`, { attestor: att.address, documentsCiphertext: docs, openingCiphertext: e2e(JSON.stringify(opening)), estimatePaymentStable: q3.assembled.paymentStable }, issuerTok);
+    // the opening in plaintext, in each encoding (the review's leak: bare hex was stored), and as ciphertext that is not
+    // a merces-e2e v1 envelope: all refused, with the reason and never the value
+    const raw = Buffer.from(JSON.stringify(opening));
+    expect(leaks(raw.toString('hex'))).toContain(CANARY_INCOME_Q3.toString()); // the scan sees an encoded leak
+    expect(leaks(raw.toString('base64'))).toContain(CANARY_INCOME_Q3.toString());
+    for (const bad of [JSON.stringify(opening), raw.toString('hex'), raw.toString('hex').toUpperCase(), '0x' + raw.toString('hex'), raw.toString('base64'), raw.toString('base64url'), e2e(JSON.stringify(opening))]) {
+      const r = await post(`/series/${seriesId}/tier3/2026Q3`, { attestor: att.address, documentsCiphertext: docs, openingCiphertext: bad, estimatePaymentStable: '1' }, issuerTok);
+      expect(r.statusCode, bad.slice(0, 40)).toBe(422);
+      expect(r.json().message).toMatch(/^openingCiphertext must be a merces-e2e v1 envelope sealed for the attestor: /);
+      errorReports.push(r.body);
+    }
+    // the issuer's device seals the opening for the attestor's X25519 key; only the attestor's device opens it
+    const attKeys = generateE2eKeyPair();
+    const opened = await post(`/series/${seriesId}/tier3/2026Q3`, { attestor: att.address, documentsCiphertext: docs, openingCiphertext: sealTier3Opening(opening, attKeys.publicKey), keyHint: 'canary attestor x25519 v1', estimatePaymentStable: q3.assembled.paymentStable }, issuerTok);
     expect(opened.statusCode, opened.body).toBe(201);
     const caseId = opened.json().caseId as string;
-    expect((await get(`/attestor/tier3/${caseId}`, attTok)).json().openingCiphertext).toBeTruthy();
-    // the attestor's device decrypts (here: the plaintext above), checks against the documents, signs
+    const sealed = (await get(`/attestor/tier3/${caseId}`, attTok)).json().openingCiphertext as string;
+    // the attestor's device opens the envelope, checks the opening against the documents, signs
+    const fromIssuer = openTier3Opening(sealed, attKeys.privateKey);
+    expect(fromIssuer).toEqual(opening);
     const c = { seriesId, periodId: '2026Q3', priorIncomeCommitment: q3.assembled.priorIncomeCommitment, incomeCommitment: q3.assembled.incomeCommitment };
-    expect(checkTier3Opening(opening, { ...c, documentedYtd: CANARY_INCOME_Q3 })).toEqual({ ok: true });
+    expect(checkTier3Opening(fromIssuer, { ...c, documentedYtd: CANARY_INCOME_Q3 })).toEqual({ ok: true });
     const signature = await att.signMessage(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
     const signBody = { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, proof: q3.assembled.proof, attestation: { liquidityEvent: false, signature } };
     expect((await post(`/attestor/tier3/${caseId}/sign`, { ...signBody, opening }, attTok)).statusCode).toBe(400);
@@ -169,16 +207,30 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     expect(sent3.statusCode, sent3.body).toBe(200);
     await payIfDue(rep3.json().reportId, sent3.json().events);
 
-    // 6. the private terms vault path (E4) with the canary threshold
+    // 6. the private terms vault path (E4) with the canary threshold and a canary share rate; a share rate with more
+    //    places than a WAD holds is refused by the schema, naming the rule (S1 review: it was a 500 whose message, with
+    //    the value, went to the operator log)
     const issuerApp = new SimWallet('solana', 'canary-draft-issuer');
     const draftTok = rig.token({ accountId: 'canary-draft', wallets: [{ chain: 'solana', address: issuerApp.address }], roles: ['issuer', 'admin'] });
     const draft = (await post('/drafts', { chain: 'solana', issuer: issuerApp.address }, draftTok)).json();
-    const set = await rig.put(`/drafts/${draft.draftId}/terms`, { public: { stablecoin: 'USDC', unitsOffered: '1000', reservePrice: '8000000', minimumRaise: '4000000000', capMultiple: '2.5', tierFlags: { tier1: false, tier2: true, tier3: false, tier4: false }, reportingCurrency: 'USD', country: 'US' }, private: { threshold: '61616161610000', shareRate: '0.10' } }, draftTok);
-    expect(set.statusCode).toBe(200);
+    const publicTerms = { stablecoin: 'USDC', unitsOffered: '1000', reservePrice: '8000000', minimumRaise: '4000000000', capMultiple: '2.5', tierFlags: { tier1: false, tier2: true, tier3: false, tier4: false }, reportingCurrency: 'USD', country: 'US' };
+    const tooPrecise = { threshold: '61616161610000', shareRate: CANARY_SHARE_19 };
+    const validated = await post('/terms/validate', { chain: 'solana', public: publicTerms, private: tooPrecise }, draftTok);
+    const refusedTerms = await rig.put(`/drafts/${draft.draftId}/terms`, { public: publicTerms, private: tooPrecise }, draftTok);
+    httpBodies.push(refusedTerms.body);
+    for (const r of [validated, refusedTerms]) {
+      expect(r.statusCode, r.body).toBe(400);
+      expect(r.json().detail.issues).toEqual([expect.objectContaining({ path: ['private', 'shareRate'], message: 'a decimal between 0 and 1 with at most 18 places' })]);
+      errorReports.push(r.body);
+    }
+    const set = await rig.put(`/drafts/${draft.draftId}/terms`, { public: publicTerms, private: { threshold: '61616161610000', shareRate: CANARY_SHARE_18 } }, draftTok);
+    httpBodies.push(set.body);
+    expect(set.statusCode, set.body).toBe(200);
     // 7. a hardship pause request with a canary reason: the API accepts only ciphertext; a plaintext reason must be rejected or never stored
     const pauseTx = await h.sim.build({ kind: 'requestPause', seriesId, until: (await h.sim.now()) + 30 * 86_400 }, h.issuer.address);
     await post('/tx/send', await h.issuer.sign(pauseTx), issuerTok);
-    (rig.ctx.log as { info(o: unknown, m: string): void }).info({ seriesId, reason: CANARY_REASON, incomeYtd: CANARY_INCOME_2.toString() }, 'canary probe through the production logger');
+    // (S1 review: the logger also censors Stage 1's openings and private terms)
+    (rig.ctx.log as { info(o: unknown, m: string): void }).info({ seriesId, reason: CANARY_REASON, incomeYtd: CANARY_INCOME_2.toString(), shareRate: CANARY_SHARE_18, theta: CANARY_THRESHOLD.toString(), opening, tier: { priorIncomeYtd: CANARY_INCOME_Q2.toString(), incomeSalt: q3.entry.incomeSalt.toString() } }, 'canary probe through the production logger');
     // 8. notifications/outbox and jobs carry statuses only
     await rig.sync();
 
@@ -187,17 +239,23 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     const tables = await rig.t.pool.query<{ table_name: string }>("select table_name from information_schema.tables where table_schema = current_schema() and table_type = 'BASE TABLE'");
     for (const { table_name } of tables.rows) {
       const rows = await rig.t.pool.query(`select row_to_json(t)::text as j from ${table_name} t`);
-      for (const r of rows.rows) for (const c of CANARIES) if ((r.j as string).includes(c)) found.push(`db:${table_name}: ${c}`);
+      for (const r of rows.rows) for (const c of leaks(r.j as string)) found.push(`db:${table_name}: ${c}`);
     }
-    for (const line of logCapture.lines) for (const c of CANARIES) if (line.includes(c)) found.push(`log: ${c}`);
-    for (const e of errorReports) for (const c of CANARIES) if (e.includes(c)) found.push(`error-report: ${c}`);
-    for (const b of httpBodies) for (const c of CANARIES) if (b.includes(c)) found.push(`http-body: ${c}`);
+    for (const line of logCapture.lines) for (const c of leaks(line)) found.push(`log: ${c}`);
+    for (const e of errorReports) for (const c of leaks(e)) found.push(`error-report: ${c}`);
+    for (const b of httpBodies) for (const c of leaks(b)) found.push(`http-body: ${c}`);
     expect(found, `canary values leaked: ${found.join(', ')}`).toEqual([]);
     // sanity: the probe reached the logger and the redaction did its job; the scans saw the flows
     expect(logCapture.lines.some((l) => l.includes('canary probe'))).toBe(true);
     expect(logCapture.lines.some((l) => l.includes('[redacted]'))).toBe(true);
     const t3 = (await rig.t.pool.query('select opening_ciphertext, proof, attestation from tier3_cases where case_id = $1', [caseId])).rows[0];
-    expect(t3.opening_ciphertext).toMatch(/^[A-Za-z0-9+/=]+$/);
+    // the stored opening is the sealed envelope, and the refused attempts stored nothing
+    expect(t3.opening_ciphertext).toBe(sealed);
+    expect(parseE2eEnvelope(t3.opening_ciphertext, E2E_TIER3_OPENING).ok).toBe(true);
+    expect((await rig.t.pool.query('select count(*)::int as n from tier3_cases where series_id = $1', [seriesId])).rows[0].n).toBe(1);
+    // the vault holds the canary share rate, encrypted: the issuer reads it back through disclosure
+    const disclosed = await rig.get(`/drafts/${draft.draftId}/terms/private`, draftTok);
+    expect(disclosed.json().terms).toMatchObject({ shareRate: CANARY_SHARE_18 });
     expect(t3.proof.system).toBe('groth16-bn254');
     expect((await rig.t.pool.query('select count(*)::int as n from reports where series_id = $1 and prior_income_commitment is not null', [seriesId])).rows[0].n).toBe(3);
   });

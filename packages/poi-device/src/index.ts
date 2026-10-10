@@ -10,6 +10,7 @@ import type { ReportVerifierPort } from '@merces/report-verifier';
 import type { Tier3Opening } from './attestor.ts';
 
 export * from './attestor.ts';
+export * from './e2e.ts';
 
 /**
  * What runs on the issuer's device for a quarterly ProofOfIncome report (SPEC v1.1.2 §1.5, §6.2, §8):
@@ -168,7 +169,7 @@ export interface DeviceReport {
   assembled: AssembledReport;
   /** keep in the device's income chain: the next quarter proves against it */
   entry: IncomeChainEntry;
-  /** tier 3 only: to encrypt for the attestor */
+  /** tier 3 only: seal it for the attestor with `sealTier3Opening` (merces-e2e v1); the API refuses anything else */
   tier3Opening: Tier3Opening | null;
 }
 

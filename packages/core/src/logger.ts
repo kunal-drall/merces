@@ -4,9 +4,12 @@ import pino, { type Logger as PinoLogger } from 'pino';
  * Privacy-safe logger. Keys that could carry raw income, documents or hardship reasons are redacted at the
  * logger level so no code path can log them by accident (ground rule: no raw income at rest).
  * In tests, every emitted line is also captured in memory so the canary test (H3) can scan it.
+ * The second line lists Stage 1's report and terms openings (S1): the income and terms salts, the prior's figure, θ,
+ * r and the share rate it comes from, the openings themselves and the device secret the salts derive from.
  */
 export const REDACTED_KEYS = [
   'income', 'incomeYtd', 'incomeYtdNow', 'incomeYtdPrev', 'figure', 'grossIncome', 'amountAttested', 'reason', 'hardshipReason', 'document', 'documents',
+  'incomeSalt', 'priorSalt', 'termsSalt', 'priorIncomeYtd', 'theta', 'rWad', 'shareRate', 'ratePerUnitWad', 'opening', 'priorOpening', 'tier3Opening', 'deviceSecret',
   'extractedParameters', 'extractedParameterValues', 'balance_transactions', 'payouts', 'threshold', 'salt', 'privateKey', 'secret', 'token', 'authorization', 'apiKey',
 ];
 

@@ -3,7 +3,8 @@
 A map of every personal data field: where it lives, who can read it, and when it is deleted. Ground rule: **no raw
 income at rest** — income figures, income documents and hardship reasons are never written to a database, a log, a
 queue or an error report. The canary test (`pnpm test:canary`) pushes distinctive values through every income flow and
-scans every table, the captured logs, the outbox/jobs rows and error responses; one hit fails CI.
+scans every table, the captured logs, the outbox/jobs rows and error responses for them, written out or encoded in hex or
+base64; one hit fails CI.
 
 Retention periods are an open question (Part J.9). Until Kunal sets them, nothing is deleted automatically; the
 "deleted when" column records the intended rule.
@@ -18,6 +19,27 @@ specific attestor; the server never holds the key), **hash** (a commitment or di
 An **e2e** row lists who can decrypt it. Admins can also fetch e2e ciphertext through the attestor routes (to route or
 reassign a case) but hold no key, so they cannot read it.
 
+## The end-to-end envelope (merces-e2e v1)
+
+A tier-3 income opening travels only in this envelope (ASSUMPTIONS A-PRIV-3; `@merces/domain` `e2e-envelope.ts`). The
+issuer's device seals it for the chosen attestor's X25519 public key (`@merces/poi-device` `sealTier3Opening`); the
+attestor's device opens it (`openTier3Opening`). The wire form is base64 (standard alphabet, padded, canonical) of:
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 1 | version `0x01`: X25519 + HKDF-SHA256 + AES-256-GCM |
+| 1 | 32 | the sender's ephemeral X25519 public key, fresh for every envelope |
+| 33 | 12 | the AES-GCM nonce, random |
+| 45 | n + 16 | the AES-256-GCM ciphertext of the n-byte payload, then its 16-byte tag |
+
+The key is HKDF-SHA256 over the X25519 shared secret, with salt = ephemeral public key ‖ attestor public key and info =
+`merces/e2e/v1` ‖ `0x00` ‖ purpose (`merces/tier3-opening/v1`); the 45 header bytes are the associated data. The server
+holds no key and checks the shape only: canonical base64, the version byte, an opening's size (64 to 4,096 payload
+bytes), a key and a nonce that are not placeholders, and a body that does not read as text. It refuses anything else,
+including the opening in plaintext, hex, base64 or base64url, and ciphertext in another format. The other e2e fields
+(documents, hardship reasons, evidence) are refused when they are plaintext, JSON, or an encoding of text or of a
+document file (A-PRIV-4).
+
 ## Income and the things derived from it
 
 | Field | Where | Storage | Readers | Deleted when |
@@ -26,12 +48,12 @@ reassign a case) but hold no key, so they cannot read it.
 | Income salt | device; derived from a device secret (HMAC-SHA512 under the device secret over the series and period, reduced mod the BN254 field order; `@merces/poi-device` `deriveIncomeSalt`), so a reinstalled device rebuilds its openings from its own records and no server-side copy exists (owner question 2, default). Sent to the verifier in memory only (tier 2) or end-to-end encrypted to the attestor (tier 3) | none | — | — |
 | Income commitment and the prior it chains from | `reports.income_commitment`, `reports.prior_income_commitment`, `periods`, `series.last_income_commitment`, onchain `ReportAccepted` | hash (Stage 1 Poseidon(2) over the year-to-date figure and the salt) | issuer, holders, public (onchain) | — |
 | Payment amounts (gross, fee, net, accrual) | `reports`, `periods`, `money_events`, `fees_ledger`, onchain | plain (public onchain in v1) | issuer, holders, admin; never in the public activity feed | end of retention |
-| Threshold θ, rate r and the terms salt | `terms_vault.ciphertext`; `terms_amendments.ciphertext` | vault | issuer, eligible backers (every read logged in `terms_access_log`; eligibility read live); the reviewing attestor on an amendment. No admin bypass. | series end + retention |
+| Threshold θ, rate r (and the share rate it comes from) and the terms salt | `terms_vault.ciphertext`; `terms_amendments.ciphertext` | vault | issuer, eligible backers (every read logged in `terms_access_log`; eligibility read live); the reviewing attestor on an amendment. No admin bypass. Never in an error message or a log: a share rate a WAD cannot hold is refused naming the rule only (A-TERMS-5), and the logger censors `theta`, `rWad`, `shareRate`, `ratePerUnitWad` and `termsSalt` | series end + retention |
 | Terms commitment | `series`, `series_drafts`, onchain | hash (Stage 1 Poseidon(5) over θ, r, the currency code, the indexing rule and the terms salt) | public | — |
 | zkTLS proof (contains the figure) | never on the server; device → verifier in memory | none | — | — |
 | Report proof + public inputs | `reports.proof`: Stage 1's Groth16 proof and its six public signals (terms commitment, units outstanding, FX rate, prior and income commitments, payment); never the witness, which stays inside the device's prover | plain | issuer, holders, admin | end of retention |
 | Verifier attestation (signature over series, period, prior and income commitments, tier and liquidity event) | `reports.attestation`, onchain | plain | issuer, holders, admin | — |
-| Tier-3 income opening (year-to-date figures and salts of the quarter and its prior) | `tier3_cases.opening_ciphertext` | e2e | the chosen attestor only, to check the commitments against the documents; server: nobody. The attestor's signed case carries commitments, the proof and the attestation only | case closed + retention |
+| Tier-3 income opening (year-to-date figures and salts of the quarter and its prior) | `tier3_cases.opening_ciphertext` | e2e (a merces-e2e v1 envelope; anything else is refused) | the chosen attestor only, to check the commitments against the documents; server: nobody. The attestor's signed case carries commitments, the proof and the attestation only | case closed + retention |
 | Tier-3 documents (tax returns, accounting exports) | `tier3_cases.documents_ciphertext`, `tier3_annual.documents_ciphertext` | e2e | the chosen attestor only (client-side decryption); server: nobody | case closed + retention |
 | Tier-3 attested payment | `tier3_cases`, `tier3_annual` (amounts only) | plain | issuer, attestor, admin | end of retention |
 | Income source kinds (stripe/deel/…) | `applications.income_source_kinds`, `income_sources.kind` | plain | owner, admin | account deletion |
@@ -89,7 +111,7 @@ reassign a case) but hold no key, so they cannot read it.
 | Terms access log | `terms_access_log` | plain | issuer, admin | series end + retention |
 | Notifications (statuses, ids, dates) | `notifications`, `email_outbox` (mock) | plain | owner; admin views are audited | read + retention |
 | Outbox payloads | `outbox` | plain (may carry amounts owed to the issuer) | admin | after dispatch + 30 days |
-| Logs | process stdout | redacted (income-bearing keys censored at the sink) | operators | log retention |
+| Logs | process stdout | redacted (income-bearing keys censored at the sink, with Stage 1's openings and private terms: `incomeSalt`, `priorSalt`, `termsSalt`, `priorIncomeYtd`, `theta`, `rWad`, `shareRate`, `ratePerUnitWad`, `opening`, `priorOpening`, `tier3Opening`, `deviceSecret`); error messages carry no values | operators | log retention |
 | Keeper runs, reconciliation runs | `keeper_runs`, `reconciliation_runs` | plain | admin | 90 days |
 
 ## What is onchain (C11.2)

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { createLogger, logCapture } from '@merces/core';
 import { dbTestsEnabled, type Pool } from '@merces/db';
 import { ContractService, TermsService, applicationCreateSchema, assembleSchema, tier3OpenSchema, tier3SignSchema, type ServiceContext } from '@merces/services';
 import { BN254_FR, CURRENCY_CODES, INDEXING_RULES, termsCommitmentField } from '@merces/math';
@@ -187,6 +188,54 @@ describe.skipIf(!dbTestsEnabled())('contract templates, contract signing and dra
     await draftRow('draft-bounds', 'draft');
     await expect(svc.setTerms('draft-bounds', issuer, bad, { threshold: '65000000000', shareRate: '0.10', indexingRule: 'cpi-annual' })).rejects.toMatchObject({ status: 422, detail: { issues: expect.arrayContaining([expect.objectContaining({ field: 'hurdle', code: 'out-of-bounds' })]) } });
     expect((await rig.t.pool.query("select state, terms_commitment from series_drafts where draft_id = 'draft-bounds'")).rows[0]).toEqual({ state: 'draft', terms_commitment: null });
+  });
+
+  // S1 review: a share rate with more than 18 places made wadFromDecimal throw a RangeError carrying the value, which
+  // the API answered with a 500 and wrote, value included, to the operator log. The share rate is a private term (it
+  // sets r): it is now refused by the schema with a message naming the rule, and wadFromDecimal's errors carry no value.
+  it('a share rate with more than 18 places is a 400 naming the rule; the value reaches no log line, error or response', async () => {
+    const SHARE_19 = '0.0642642642642642642';
+    const pub = { stablecoin: 'USDC' as const, unitsOffered: '1000', reservePrice: '8000000', minimumRaise: '4000000000', capMultiple: '2.5', lockupSeconds: 0, releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], hurdle: '0.05', payoutMultipleK: 2, tierFlags: { tier1: false, tier2: true, tier3: false, tier4: false }, reportingCurrency: 'USD', raiseStyle: 'sealed' as const, country: 'US' };
+    const tok = rig.token({ accountId: issuer.accountId, wallets: issuer.wallets, roles: ['issuer'] });
+    const silent = rig.ctx.log;
+    logCapture.enabled = true;
+    logCapture.silent = true;
+    logCapture.reset();
+    // the production logger and redaction, so an unhandled error would be captured exactly as it would reach stdout
+    (rig.ctx as { log: unknown }).log = createLogger('terms-probe', 'debug');
+    try {
+      const rule = expect.objectContaining({ path: ['private', 'shareRate'], message: 'a decimal between 0 and 1 with at most 18 places' });
+      const validate = await rig.post('/terms/validate', { chain: 'solana', public: pub, private: { threshold: '65000000000', shareRate: SHARE_19 } }, tok);
+      expect(validate.statusCode, validate.body).toBe(400);
+      expect(validate.json().detail.issues).toEqual([rule]);
+      await draftRow('draft-share', 'draft');
+      const set = await rig.put('/drafts/draft-share/terms', { public: pub, private: { threshold: '65000000000', shareRate: SHARE_19 } }, tok);
+      expect(set.statusCode, set.body).toBe(400);
+      expect(set.json().detail.issues).toEqual([rule]);
+      expect((await rig.t.pool.query("select count(*)::int as n from terms_vault where draft_id = 'draft-share'")).rows[0].n).toBe(0);
+      // a caller that skips the schema gets a field issue, not a thrown error
+      const direct = await new TermsService(rig.ctx).validate('solana', pub, { threshold: '65000000000', shareRate: SHARE_19, indexingRule: 'cpi-annual' }, 2026);
+      expect(direct.issues).toContainEqual({ field: 'shareRate', code: 'format', message: 'share rate must be a decimal between 0 and 1 with at most 18 places' });
+      expect(direct.derived.ratePerUnitWad).toBeNull();
+      // the capture saw nothing: no unhandled error was logged
+      expect(logCapture.lines).toEqual([]);
+      for (const out of [validate.body, set.body, JSON.stringify(direct)]) expect(out).not.toContain('642642642');
+      // 18 places are the most a WAD holds, and are accepted; so are a cap multiple and a hurdle with 18 places, while 19 are refused
+      const ok = await rig.post('/terms/validate', { chain: 'solana', public: { ...pub, capMultiple: '2.500000000000000000', hurdle: '0.050000000000000000' }, private: { threshold: '65000000000', shareRate: '0.064264264264264264' } }, tok);
+      expect(ok.statusCode, ok.body).toBe(200);
+      expect(ok.json().derived).toMatchObject({ ratePerUnitWad: (64_264_264_264_264_264n / 1000n).toString(), capMultipleWad: (25n * 10n ** 17n).toString(), hurdleWad: (5n * 10n ** 16n).toString() });
+      for (const field of ['capMultiple', 'hurdle']) {
+        const r = await rig.post('/terms/validate', { chain: 'solana', public: { ...pub, [field]: '0.0500000000000000001' }, private: null }, tok);
+        expect(r.statusCode, field).toBe(400);
+        expect(r.json().detail.issues).toEqual([expect.objectContaining({ path: ['public', field], message: 'a decimal with at most 18 places' })]);
+      }
+      expect(logCapture.lines).toEqual([]);
+    } finally {
+      (rig.ctx as { log: unknown }).log = silent;
+      logCapture.enabled = false;
+      logCapture.silent = false;
+      logCapture.reset();
+    }
   });
 
   it('a draft whose vault payload predates the Poseidon terms scheme is refused at submission (S1 WP10; cause PF)', async () => {

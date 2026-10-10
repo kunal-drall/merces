@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { WAD, ratePerUnit } from '@merces/math';
-import { ZERO_INCOME_COMMITMENT, incomeCommitment, reportPublicInputs, termsCommitment } from '@merces/domain';
+import { E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, ZERO_INCOME_COMMITMENT, incomeCommitment, parseE2eEnvelope, reportPublicInputs, termsCommitment } from '@merces/domain';
 import { Groth16ReportVerifier, LocalKms, MockZkTls, shutdownProofSystem } from '@merces/ports';
 import { ReportVerifier } from '@merces/report-verifier';
-import { DeviceError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, deriveIncomeSalt, type DeviceReportInput, type DevicePrivateTerms } from '../src/index.ts';
+import { DeviceError, E2eError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, deriveIncomeSalt, generateE2eKeyPair, openE2e, openTier3Opening, sealE2e, sealTier3Opening, type DeviceReportInput, type DevicePrivateTerms } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const CANARY_YTD = 7_317_317_317n;
@@ -85,5 +85,59 @@ describe('poi-device: Stage 1 Groth16 reports from the device income chain', () 
     expect(checkTier3Opening(o, { ...c, documentedYtd: USDC(90_000) })).toEqual({ ok: false, code: 'not-high-water' });
     expect(checkTier3Opening({ ...o, incomeSalt: '7' }, { ...c, documentedYtd: USDC(80_000) })).toEqual({ ok: false, code: 'commitment-mismatch' });
     expect(checkTier3Opening(o, { ...c, periodId: '2026Q2', documentedYtd: USDC(80_000) })).toEqual({ ok: false, code: 'wrong-context' });
+  });
+
+  // S1 review: the API took any base64/hex-looking string as the opening "ciphertext", so a hex encoding of the opening
+  // was stored at rest. The opening now travels in a merces-e2e v1 envelope, which the API parses and refuses otherwise.
+  it('tier 3: the opening is sealed for the attestor in a merces-e2e v1 envelope; only the attestor\'s key opens it', async () => {
+    const r = await assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD, tier: 3, source: 'attestor', zktlsProof: null }), null, { proofs: 'mock' });
+    const o = r.tier3Opening!;
+    const attestor = generateE2eKeyPair();
+    const other = generateE2eKeyPair();
+    const env = sealTier3Opening(o, attestor.publicKey);
+    // the shape the server checks: version 0x01, a 32-byte ephemeral key, a 12-byte nonce, the sealed opening and its tag
+    const parsed = parseE2eEnvelope(env, E2E_TIER3_OPENING);
+    expect(parsed.ok).toBe(true);
+    const bytes = Buffer.from(env, 'base64');
+    expect(bytes[0]).toBe(0x01);
+    expect(bytes.length).toBe(E2E_HEADER_BYTES + Buffer.byteLength(JSON.stringify(o)) + E2E_TAG_BYTES);
+    // nothing of the opening is readable in the envelope, in any encoding
+    for (const v of [CANARY_YTD.toString(), o.incomeSalt, o.incomeCommitment.slice(2)]) {
+      expect(env).not.toContain(v);
+      expect(bytes.toString('latin1')).not.toContain(v);
+      expect(bytes.toString('hex')).not.toContain(Buffer.from(v).toString('hex'));
+    }
+    // fresh ephemeral key and nonce every time
+    const again = sealTier3Opening(o, attestor.publicKey);
+    expect(again).not.toBe(env);
+    expect(Buffer.from(again, 'base64').subarray(1, E2E_HEADER_BYTES).equals(bytes.subarray(1, E2E_HEADER_BYTES))).toBe(false);
+    // the attestor's device opens it and checks it
+    const opened = openTier3Opening(env, attestor.privateKey);
+    expect(opened).toEqual(o);
+    expect(checkTier3Opening(opened, { seriesId, periodId: '2026Q1', priorIncomeCommitment: r.assembled.priorIncomeCommitment, incomeCommitment: r.assembled.incomeCommitment, documentedYtd: CANARY_YTD })).toEqual({ ok: true });
+    // another key, another purpose, or a changed byte (header or body) does not open; errors carry a code only
+    const codeOfOpen = (f: () => unknown): string | null => {
+      try {
+        f();
+        return null;
+      } catch (e) {
+        expect(e).toBeInstanceOf(E2eError);
+        expect(`${(e as Error).message}${(e as Error).stack}`).not.toContain(CANARY_YTD.toString());
+        return (e as E2eError).code;
+      }
+    };
+    expect(codeOfOpen(() => openTier3Opening(env, other.privateKey))).toBe('cannot-open');
+    expect(codeOfOpen(() => openE2e(sealE2e(JSON.stringify(o), attestor.publicKey, 'merces/other/v1'), attestor.privateKey, E2E_TIER3_OPENING))).toBe('cannot-open');
+    for (const at of [1, 40, E2E_HEADER_BYTES + 3, bytes.length - 1]) {
+      const t = Buffer.from(bytes);
+      t[at] = t[at]! ^ 0x01;
+      expect(codeOfOpen(() => openTier3Opening(t.toString('base64'), attestor.privateKey)), `byte ${at}`).toBe('cannot-open');
+    }
+    // a well-formed envelope of something that is not an opening is refused after opening
+    expect(codeOfOpen(() => openTier3Opening(sealE2e(JSON.stringify({ version: 'merces/tier3-opening/v0', note: 'x'.repeat(80) }), attestor.publicKey, E2E_TIER3_OPENING.purpose), attestor.privateKey))).toBe('not-an-opening');
+    // encodings of the opening are not envelopes
+    for (const enc of [Buffer.from(JSON.stringify(o)).toString('hex'), Buffer.from(JSON.stringify(o)).toString('base64')]) expect(codeOfOpen(() => openTier3Opening(enc, attestor.privateKey))).toBe('malformed');
+    expect(codeOfOpen(() => sealTier3Opening(o, 'not-a-key'))).toBe('bad-key');
+    expect(codeOfOpen(() => sealTier3Opening(o, Buffer.alloc(32).toString('base64')))).toBe('bad-key');
   });
 });

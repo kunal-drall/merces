@@ -1793,7 +1793,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description The issuer's device proves the quarter; the documents and the income opening (merces/tier3-opening/v1: year-to-date figure and salt, and the prior's) reach the attestor end to end encrypted. Both are opaque here. */
+        /** @description The issuer's device proves the quarter; the documents and the income opening (merces/tier3-opening/v1: year-to-date figure and salt, and the prior's) reach the attestor end to end encrypted. Both are opaque here. The opening must be a merces-e2e v1 envelope sealed for the attestor's X25519 key with purpose merces/tier3-opening/v1 (64 to 4,096 payload bytes; @merces/poi-device sealTier3Opening); anything else is refused. */
         post: operations["openTier3Case"];
         delete?: never;
         options?: never;
@@ -3073,8 +3073,10 @@ export type components = {
             };
             flags: components["schemas"]["AdminFlag"][];
         };
-        /** @description End-to-end ciphertext (base64, base64url or hex) encrypted on the client for the attestor's key. Plaintext and JSON are rejected (422). */
+        /** @description End-to-end ciphertext (base64, base64url or hex) encrypted on the client for the attestor's key. Plaintext, JSON, and any hex, base64 or base64url encoding of text, JSON or a document file are rejected (422). */
         Ciphertext: string;
+        /** @description A merces-e2e v1 envelope, in canonical base64 (standard alphabet, padded) of version 0x01 (1 byte) ‖ the sender's ephemeral X25519 public key (32) ‖ the AES-GCM nonce (12) ‖ the AES-256-GCM ciphertext of the payload and its 16-byte tag. Key = HKDF-SHA256(X25519 shared secret, salt = ephemeral public key ‖ recipient public key, info = "merces/e2e/v1" ‖ 0x00 ‖ purpose); associated data = the 45 header bytes. The server holds no key and checks the shape only; anything that does not parse as an envelope of the payload's size (the plaintext or an encoding of it included) is rejected (422). @merces/poi-device sealE2e / openE2e. */
+        E2eEnvelope: string;
         /** @description What holders and the issuer see — statuses and dates only, never ciphertext or decision codes. */
         HardshipStatus: {
             seriesId?: string;
@@ -6808,7 +6810,7 @@ export interface operations {
                 "application/json": {
                     attestor: string;
                     documentsCiphertext: components["schemas"]["Ciphertext"];
-                    openingCiphertext: components["schemas"]["Ciphertext"];
+                    openingCiphertext: components["schemas"]["E2eEnvelope"];
                     keyHint?: string | null;
                     estimatePaymentStable: components["schemas"]["Money"];
                 };
@@ -6824,14 +6826,14 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
-            /** @description Period not ended */
+            /** @description Period not ended, tier 3 disabled or a case already open/signed */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Plaintext-looking payload or unknown attestor */
+            /** @description Plaintext-looking documents, an opening that is not a merces-e2e v1 envelope, or an unknown attestor */
             422: {
                 headers: {
                     [name: string]: unknown;

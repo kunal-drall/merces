@@ -69,7 +69,7 @@ S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed 
   attestation v1 (with the prior and the liquidity flag); the API and every simulated chain verify the Groth16 proof
   (the ports' `Groth16ReportVerifier`). Mock proofs are refused unless a simulator-only process sets
   `MERCES_PROOF_SYSTEM=mock` (SECURITY.md). Tier 3: the device proves and the opening reaches the attestor end to end
-  encrypted (migration 017).
+  encrypted (migration 017), in a merces-e2e v1 envelope the API parses and otherwise refuses (S1 review; PRIVACY.md).
 - **Status and timing (WP4).** Stage 1's derived status (inclusive ≤ 30 / ≤ 45 days of unpaused time), the formal
   notice at period end + 90 days, Stage 1's sync points, hardship pauses with Stage 1's approval bounds (the requested
   end is advisory), releases gated by Stage 1's underlying lateness (B.9, partly).

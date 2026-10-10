@@ -1,17 +1,18 @@
 /**
  * Decimal-string codecs for WAD ratios and the UTC day index. Stage 1 has no equivalent of these (its terms carry
- * ratios as WAD integers already), so they stay ours.
+ * ratios as WAD integers already), so they stay ours. Errors carry no values: a share rate is part of the private
+ * terms, and an unhandled error's message reaches the operator logs.
  */
 import { WAD } from '@merces/sdk';
 
 /** Parse a ratio given as a decimal string ("0.025", "2.5") into WAD. Exact; no floating point. */
 export function wadFromDecimal(s: string): bigint {
   const m = /^(-)?(\d+)(?:\.(\d+))?$/.exec(s.trim());
-  if (!m) throw new RangeError(`not a decimal: ${s}`);
+  if (!m) throw new RangeError('not a decimal');
   const neg = m[1] === '-';
   const whole = BigInt(m[2]!);
   const frac = (m[3] ?? '').padEnd(18, '0');
-  if (frac.length > 18) throw new RangeError(`too many decimals for WAD: ${s}`);
+  if (frac.length > 18) throw new RangeError('too many decimals for WAD');
   const v = whole * WAD + BigInt(frac);
   return neg ? -v : v;
 }

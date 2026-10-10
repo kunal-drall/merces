@@ -13,16 +13,20 @@ import type { ServiceContext } from '../context.ts';
  * eligible backers, with every access logged. Clients can recompute the commitment (POST /terms/commitment).
  */
 
+/** A WAD ratio as a decimal string: at most 18 places, which is all `wadFromDecimal` can represent. */
+const WAD_DECIMAL = /^\d+(\.\d{1,18})?$/;
+const WAD_DECIMAL_MESSAGE = 'a decimal with at most 18 places';
+
 export const publicTermsSchema = z.object({
   stablecoin: z.enum(['USDC', 'USDG']),
   unitsOffered: z.string().regex(/^\d+$/),
   reservePrice: z.string().regex(/^\d+$/),
   minimumRaise: z.string().regex(/^\d+$/),
-  /** decimal, e.g. "2.5" */
-  capMultiple: z.string().regex(/^\d+(\.\d+)?$/).default(wadToDecimal(DEFAULTS.capMultipleWad)),
+  /** decimal, e.g. "2.5"; at most 18 places (WAD) */
+  capMultiple: z.string().regex(WAD_DECIMAL, WAD_DECIMAL_MESSAGE).default(wadToDecimal(DEFAULTS.capMultipleWad)),
   lockupSeconds: z.number().int().nonnegative().default(DEFAULTS.lockupSeconds),
   releaseSchedule: z.array(z.object({ afterSeconds: z.number().int().nonnegative(), bps: z.number().int().positive() })).min(1).default([{ afterSeconds: 0, bps: 5000 }, { afterSeconds: 90 * 86_400, bps: 2500 }, { afterSeconds: 180 * 86_400, bps: 2500 }]),
-  hurdle: z.string().regex(/^\d+(\.\d+)?$/).default(wadToDecimal(DEFAULTS.hurdleWad)),
+  hurdle: z.string().regex(WAD_DECIMAL, WAD_DECIMAL_MESSAGE).default(wadToDecimal(DEFAULTS.hurdleWad)),
   payoutMultipleK: z.number().int().positive().default(DEFAULTS.payoutMultipleK),
   tierFlags: z.object({ tier1: z.boolean(), tier2: z.boolean(), tier3: z.boolean(), tier4: z.boolean().default(false) }),
   reportingCurrency: z.string().regex(/^[A-Z]{3}$/),
@@ -33,8 +37,11 @@ export const publicTermsSchema = z.object({
 export const privateTermsSchema = z.object({
   /** annual threshold θ in reporting-currency base units (6 decimals) */
   threshold: z.string().regex(/^\d+$/),
-  /** total share rate as a decimal, e.g. "0.10" */
-  shareRate: z.string().regex(/^0?\.\d+$|^1(\.0+)?$/),
+  /**
+   * total share rate as a decimal in [0, 1], e.g. "0.10", with at most 18 places (WAD). The message names the rule,
+   * never the value: the share rate is a private term (it sets r).
+   */
+  shareRate: z.string().regex(/^0?\.\d{1,18}$|^1(\.0{1,18})?$/, 'a decimal between 0 and 1 with at most 18 places'),
   indexingRule: z.enum(['cpi-annual', 'none']).default('cpi-annual'),
 });
 
@@ -99,6 +106,15 @@ export interface ValidationIssue {
   message: string;
 }
 
+/** The share rate as WAD, or null when it is not a decimal with at most 18 places. */
+function shareRateWad(shareRate: string): bigint | null {
+  try {
+    return wadFromDecimal(shareRate);
+  } catch {
+    return null;
+  }
+}
+
 /** The public-terms field a canonical terms field comes from, where the names differ (the others share the name). */
 const PUBLIC_FIELD: Partial<Record<keyof SeriesTerms, string>> = { capMultipleWad: 'capMultiple', hurdleWad: 'hurdle' };
 
@@ -145,8 +161,11 @@ export class TermsService {
       floorPlaceholder = floor.placeholder;
     }
     if (priv) {
-      const share = wadFromDecimal(priv.shareRate);
-      if (share > WAD) {
+      // a caller that skipped the schema still gets a field issue: wadFromDecimal's error would end up a logged 500
+      const share = shareRateWad(priv.shareRate);
+      if (share === null) {
+        issues.push({ field: 'shareRate', code: 'format', message: 'share rate must be a decimal between 0 and 1 with at most 18 places' });
+      } else if (share > WAD) {
         // ratePerUnit enforces SPEC §1.5's r × units ≤ WAD and would refuse it: report the field instead
         issues.push({ field: 'shareRate', code: 'max', message: 'share rate cannot exceed 100%' });
       } else {

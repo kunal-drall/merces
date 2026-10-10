@@ -44,8 +44,11 @@ Ids: `ctx.newId('prefix')`. Every table gets `create table if not exists`. Statu
 ## Privacy rules (ground rule: no raw income at rest)
 Never store, log or return: income figures, income documents, hardship reasons, identity documents. Store
 ciphertext (`ctx.vault.encrypt`) or, for attestor documents, client-side (end-to-end) ciphertext the server cannot
-decrypt. Reason fields are codes. Notifications to holders carry statuses, never reasons. The canary test scans the
-database and logs for the value `7317317317`; a service that persists it fails CI.
+decrypt. A tier-3 opening is accepted only as a merces-e2e v1 envelope (`assertTier3OpeningEnvelope`; PRIVACY.md);
+other attestor ciphertext goes through `assertOpaqueCiphertext`. Error messages name the field and the rule, never the
+value (a share rate or θ is as private as income). Reason fields are codes. Notifications to holders carry statuses,
+never reasons. The canary test scans the database and logs for the value `7317317317` and its siblings, written out or
+encoded in hex or base64; a service that persists one fails CI.
 
 ## Tests
 Use the rig in `packages/api/test/helpers.ts`:

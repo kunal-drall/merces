@@ -1,9 +1,10 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { ZERO_INCOME_COMMITMENT, attestationMessage, fxAttestationMessage, type UnsignedTx } from '@merces/domain';
+import { E2E_TIER3_OPENING, ZERO_INCOME_COMMITMENT, attestationMessage, fxAttestationMessage, type UnsignedTx } from '@merces/domain';
 import { WAD, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
-import { assembleOnDevice, checkTier3Opening } from '@merces/poi-device';
+import { assembleOnDevice, checkTier3Opening, generateE2eKeyPair, openTier3Opening, sealE2e, sealTier3Opening } from '@merces/poi-device';
+import { assertOpaqueCiphertext, assertTier3OpeningEnvelope } from '@merces/services';
 import type { SimHarness } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
@@ -31,6 +32,11 @@ function e2e(plain: string): string {
   const ct = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
   return Buffer.concat([iv, ct, c.getAuthTag()]).toString('base64');
 }
+
+/** The attestor's X25519 key pair (its device keeps the private half); tier-3 openings are sealed for its public key. */
+const ATTESTOR_E2E = generateE2eKeyPair();
+/** A merces-e2e v1 envelope of an opening-sized payload, for requests refused for another reason. */
+const sealedStub = () => sealE2e(JSON.stringify({ version: 'merces/tier3-opening/v1', note: 'stub'.repeat(20) }), ATTESTOR_E2E.publicKey, E2E_TIER3_OPENING.purpose);
 
 describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardship, tier 3, FX fallback, extinguishment)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -92,21 +98,29 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const att = h.attestors[0]!;
     const periodId = '2026Q1';
     // the quarter has not ended yet
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: e2e('opening'), documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: USDC(1800).toString() }, issuerTok)).statusCode).toBe(409);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: sealedStub(), documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: USDC(1800).toString() }, issuerTok)).statusCode).toBe(409);
     await h.sim.setTime(parsePeriod(periodId).end + DAY);
     // plaintext documents are refused
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: e2e('opening'), documentsCiphertext: JSON.stringify({ documents: ['1040'], grossReceipts: CANARY }), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: e2e('opening'), documentsCiphertext: Buffer.from(JSON.stringify({ grossReceipts: CANARY, note: 'x' })).toString('base64'), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: sealedStub(), documentsCiphertext: JSON.stringify({ documents: ['1040'], grossReceipts: CANARY }), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: sealedStub(), documentsCiphertext: Buffer.from(JSON.stringify({ grossReceipts: CANARY, note: 'x' })).toString('base64'), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
     // unknown attestor
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: h.backers[0]!.address, openingCiphertext: e2e('opening'), documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: h.backers[0]!.address, openingCiphertext: sealedStub(), documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
     // the issuer's device proves the quarter (Stage 1 Groth16); the opening goes to the attestor end to end encrypted (M7)
     const dev = await assembleOnDevice({ seriesId, periodId, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', privateTerms: { threshold: raise.privateTerms.theta.toString(), ratePerUnitWad: raise.privateTerms.rWad.toString(), reportingCurrency: 'USD', indexingRule: raise.privateTerms.indexingRule, termsSalt: raise.privateTerms.termsSalt.toString() }, prior: null, incomeYtdNow: USDC(80_000), fxAvgWad: WAD, tier: 3, source: 'attestor', deviceSecret: 'issuer-device-secret' }, null);
     expect(dev.assembled.paymentStable).toBe(USDC(2000).toString());
     const opening = dev.tier3Opening!;
-    // a plaintext opening is refused like plaintext documents
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: e2e(DOCS_PLAIN), openingCiphertext: JSON.stringify(opening), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    // the opening must be a merces-e2e v1 envelope: plaintext, any encoding of it (S1 review: bare hex was stored), and
+    // ciphertext in another format are refused, and nothing is stored
+    const raw = Buffer.from(JSON.stringify(opening));
+    for (const bad of [JSON.stringify(opening), raw.toString('hex'), raw.toString('hex').toUpperCase(), '0x' + raw.toString('hex'), raw.toString('base64'), raw.toString('base64url'), e2e(JSON.stringify(opening))]) {
+      const r = await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: e2e(DOCS_PLAIN), openingCiphertext: bad, estimatePaymentStable: '1' }, issuerTok);
+      expect(r.statusCode, bad.slice(0, 40)).toBe(422);
+      expect(r.json().message).toMatch(/^openingCiphertext must be a merces-e2e v1 envelope sealed for the attestor: /);
+      expect(r.body).not.toContain(opening.incomeYtd);
+    }
+    expect((await rig.t.pool.query('select count(*)::int as n from tier3_cases where series_id = $1', [seriesId])).rows[0].n).toBe(0);
     const docs = e2e(DOCS_PLAIN);
-    const openingCiphertext = e2e(JSON.stringify(opening));
+    const openingCiphertext = sealTier3Opening(opening, ATTESTOR_E2E.publicKey);
     const opened = await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: docs, openingCiphertext, keyHint: 'attestor-1 x25519 key v1', estimatePaymentStable: USDC(1800).toString() }, issuerTok, { 'idempotency-key': 't3-q1' });
     expect(opened.statusCode, JSON.stringify(opened.json())).toBe(201);
     const caseId = opened.json().caseId as string;
@@ -115,7 +129,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(opened.json().openingCiphertext).toBeUndefined();
     // replay returns the same case; a second case for the period is refused
     expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: docs, openingCiphertext, keyHint: 'attestor-1 x25519 key v1', estimatePaymentStable: USDC(1800).toString() }, issuerTok, { 'idempotency-key': 't3-q1' })).json().caseId).toBe(caseId);
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: e2e(DOCS_PLAIN), openingCiphertext: e2e('x'.repeat(40)), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(409);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, documentsCiphertext: e2e(DOCS_PLAIN), openingCiphertext: sealedStub(), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(409);
 
     // the case is on the chosen attestor's queue only; only they (or an admin) read the ciphertext
     expect((await rig.get('/attestor/queue', attTok)).json().tier3.map((c: { caseId: string }) => c.caseId)).toEqual([caseId]);
@@ -134,7 +148,8 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const fields = spec.json().documents.flatMap((d: { fields: { name: string }[] }) => d.fields.map((f) => f.name));
     expect(fields).toEqual(expect.arrayContaining(['grossReceipts', 'w2Wages', 'form1099Totals', 'royalties']));
 
-    // attestor device: decrypt (here: the plaintext the issuer encrypted), check the opening against the documents, sign
+    // attestor device: open the envelope with its private key, check the opening against the documents, sign
+    expect(openTier3Opening(view.json().openingCiphertext, ATTESTOR_E2E.privateKey)).toEqual(opening);
     const c = { seriesId, periodId, priorIncomeCommitment: dev.assembled.priorIncomeCommitment, incomeCommitment: dev.assembled.incomeCommitment };
     // 2026Q1 is the series' first report and a year start: the prior the attestor signs over is ZERO (cause R)
     expect(c.priorIncomeCommitment).toBe(ZERO_INCOME_COMMITMENT);
@@ -241,7 +256,10 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const now = await h.sim.now();
     const until = now + 90 * DAY;
     // plaintext-looking payloads are refused before anything is stored
-    for (const bad of [JSON.stringify({ reason: 'medical', until }), 'my hardship reason is a long medical leave this year', Buffer.from(JSON.stringify({ reason: 'medical' })).toString('base64'), 'short']) {
+    // (S1 review: hex and base64 encodings of plain text are refused too, whichever words it uses)
+    const leave = 'leave from 2026-01-01 to 2026-04-01, letter from my doctor attached';
+    for (const bad of [JSON.stringify({ reason: 'medical', until }), 'my hardship reason is a long medical leave this year', Buffer.from(JSON.stringify({ reason: 'medical' })).toString('base64'), 'short',
+      Buffer.from('medical diagnosis, salary cut').toString('hex'), Buffer.from(leave).toString('hex').toUpperCase(), Buffer.from(leave).toString('base64'), Buffer.from(leave).toString('base64url')]) {
       const r = await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext: bad }, issuerTok);
       expect(r.statusCode, bad).toBe(422);
     }
@@ -383,5 +401,48 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
         expect(r.j, table).not.toMatch(/medical leave|discharge summary|death certificate|Schedule C gross/);
       }
     }
+  });
+});
+
+// S1 review: the guard read bare hex as base64 only, so hex-encoded plaintext (an opening, documents, a hardship reason)
+// passed and was stored. These run without a database.
+describe('end-to-end ciphertext guards', () => {
+  const refused = (f: () => void): string | null => {
+    try {
+      f();
+      return null;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  const plainDocs = '1040 Schedule C gross receipts 7317317317';
+  const opening = JSON.stringify({ version: 'merces/tier3-opening/v1', seriesId: 'solana:s', periodId: '2026Q3', incomeYtd: '8484848484', incomeSalt: '123', priorIncomeYtd: '8282828282', priorSalt: '456', priorIncomeCommitment: '0x' + '11'.repeat(32), incomeCommitment: '0x' + '22'.repeat(32) });
+
+  it('assertOpaqueCiphertext refuses plaintext in hex (bare, upper case, 0x), base64 and base64url, and encoded document files', () => {
+    for (const plain of [plainDocs, opening, 'medical diagnosis, salary cut']) {
+      const b = Buffer.from(plain);
+      for (const v of [b.toString('hex'), b.toString('hex').toUpperCase(), '0x' + b.toString('hex'), b.toString('base64'), b.toString('base64url')]) {
+        const m = refused(() => assertOpaqueCiphertext(v, 'documentsCiphertext'));
+        expect(m, v.slice(0, 40)).toMatch(/^documentsCiphertext /);
+        expect(m).not.toMatch(/7317317317|8484848484/);
+      }
+    }
+    const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n'), randomBytes(200)]);
+    expect(refused(() => assertOpaqueCiphertext(pdf.toString('base64'), 'documentsCiphertext'))).toMatch(/only encoded/);
+    // real ciphertext passes in each encoding the contract names
+    for (let i = 0; i < 50; i++) {
+      const ct = Buffer.from(e2e(plainDocs), 'base64');
+      for (const v of [ct.toString('base64'), ct.toString('base64url'), ct.toString('hex'), '0x' + ct.toString('hex')]) expect(refused(() => assertOpaqueCiphertext(v, 'documentsCiphertext')), v).toBeNull();
+    }
+  });
+
+  it('assertTier3OpeningEnvelope takes a merces-e2e v1 envelope only', () => {
+    const b = Buffer.from(opening);
+    for (const v of [opening, b.toString('hex'), b.toString('hex').toUpperCase(), '0x' + b.toString('hex'), b.toString('base64'), b.toString('base64url'), e2e(opening)]) {
+      const m = refused(() => assertTier3OpeningEnvelope(v));
+      expect(m, v.slice(0, 40)).toMatch(/^openingCiphertext must be a merces-e2e v1 envelope sealed for the attestor: /);
+      expect(m).not.toMatch(/8484848484|8282828282/);
+    }
+    expect(refused(() => assertTier3OpeningEnvelope(sealTier3Opening(JSON.parse(opening), ATTESTOR_E2E.publicKey)))).toBeNull();
   });
 });

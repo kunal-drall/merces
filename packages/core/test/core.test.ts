@@ -12,6 +12,21 @@ describe('logger redaction', () => {
     expect(logCapture.lines.join('\n')).toContain('visible');
     logCapture.enabled = false;
   });
+
+  it("redacts Stage 1's openings and private terms (S1): salts, the prior's figure, θ, r, the share rate, openings, the device secret", () => {
+    logCapture.enabled = true;
+    logCapture.silent = true;
+    logCapture.reset();
+    const log = createLogger('test', 'info');
+    const keys = ['incomeSalt', 'priorSalt', 'termsSalt', 'priorIncomeYtd', 'theta', 'rWad', 'shareRate', 'ratePerUnitWad', 'opening', 'priorOpening', 'tier3Opening', 'deviceSecret'];
+    for (const [i, k] of keys.entries()) log.info({ [k]: `6420${i}6420`, nested: { [k]: `6421${i}6421`, deeper: { [k]: `6422${i}6422` } } }, `probe ${k}`);
+    const out = logCapture.lines.join('\n');
+    expect(logCapture.lines).toHaveLength(keys.length);
+    for (const i of keys.keys()) for (const v of [`6420${i}6420`, `6421${i}6421`, `6422${i}6422`]) expect(out).not.toContain(v);
+    expect(out.match(/\[redacted\]/g)).toHaveLength(keys.length * 3);
+    logCapture.enabled = false;
+    logCapture.silent = false;
+  });
 });
 
 describe.skipIf(!dbTestsEnabled())('core db primitives', () => {

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
-import { attestationMessage, expectedPrior, fxAttestationMessage, hex32ToField, normaliseAddress, reportProofSchema, type ChainPort, type SeriesState, type UnsignedTx } from '@merces/domain';
+import { E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, attestationMessage, expectedPrior, fxAttestationMessage, hex32ToField, normaliseAddress, parseE2eEnvelope, readsAsText, reportProofSchema, type ChainPort, type SeriesState, type UnsignedTx } from '@merces/domain';
 import { parsePeriod, periodFrom, toPid } from '@merces/math';
 import { verifyWalletSignature } from '@merces/ports';
 import type { Session } from '@merces/api';
@@ -33,9 +33,10 @@ export const hardshipDecideSchema = z.object({ approve: z.boolean(), until: z.nu
 const hex32 = z.string().regex(/^0x[0-9a-f]{64}$/);
 /**
  * Tier 3 (critique M7). The issuer's device proves the report; the attestor checks the income commitment against the
- * documents with the opening (year-to-date figure and salt, and the prior's), which the issuer encrypts end to end for
- * the attestor exactly like the documents (`openingCiphertext`, opaque here). The attestor's signature carries the
- * commitments, the proof and the attestation only: never a figure, a salt or an opening.
+ * documents with the opening (year-to-date figure and salt, and the prior's), which the issuer's device seals end to
+ * end for the attestor in a merces-e2e v1 envelope (`openingCiphertext`, opaque here; anything that does not parse as
+ * one is refused). The attestor's signature carries the commitments, the proof and the attestation only: never a
+ * figure, a salt or an opening.
  */
 export const tier3OpenSchema = z.object({ attestor: z.string().min(1).max(64), documentsCiphertext: ciphertext, openingCiphertext: ciphertext, keyHint, estimatePaymentStable: money }).strict();
 export const tier3SignSchema = z.object({
@@ -67,9 +68,32 @@ function parsesAsJsonObject(s: string): boolean {
   }
 }
 
+/** File signatures of documents that were encoded instead of encrypted: PDF, ZIP (docx, xlsx), PNG, JPEG, gzip. */
+const FILE_MAGIC = [Buffer.from('%PDF-'), Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]), Buffer.from([0xff, 0xd8, 0xff]), Buffer.from([0x1f, 0x8b, 0x08])];
+
 /**
- * The server cannot prove a blob is encrypted, but it refuses anything that is evidently not: plaintext,
- * JSON (with a `reason` field or otherwise) and base64-wrapped JSON. Real E2E ciphertext is base64/base64url/hex.
+ * Every way the server can read the value as bytes: hex (bare, either case, or `0x`-prefixed) and base64 (Node's
+ * decoder takes base64url too). A bare hex string is also valid base64, so both readings are checked.
+ */
+function decodings(v: string): Buffer[] {
+  const out: Buffer[] = [];
+  const hex = v.startsWith('0x') ? v.slice(2) : v;
+  if (hex.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(hex)) out.push(Buffer.from(hex, 'hex'));
+  if (!v.startsWith('0x')) out.push(Buffer.from(v, 'base64'));
+  return out;
+}
+
+function encodedPlaintext(b: Buffer): boolean {
+  const text = b.toString('utf8');
+  return parsesAsJsonObject(text) || PLAINTEXT_WORDS.test(text) || readsAsText(b) || FILE_MAGIC.some((m) => b.subarray(0, m.length).equals(m));
+}
+
+/**
+ * The server cannot prove a blob is encrypted, but it refuses anything that is evidently not: plaintext, JSON (with a
+ * `reason` field or otherwise), and an encoding of either in hex, base64 or base64url (S1 review: bare hex was decoded
+ * as base64 only, so hex-encoded plaintext passed), or of a document file. Real E2E ciphertext is base64/base64url/hex
+ * and decodes to bytes that read as neither text nor a file. Messages name the field, never the value. A tier-3 opening
+ * must be a merces-e2e v1 envelope instead (`assertTier3OpeningEnvelope`).
  */
 export function assertOpaqueCiphertext(value: string, field: string): void {
   const v = value.trim();
@@ -77,13 +101,18 @@ export function assertOpaqueCiphertext(value: string, field: string): void {
   if (parsesAsJsonObject(v)) throw AppError.unprocessable(`${field} is plaintext JSON; encrypt it end-to-end for the attestor`);
   if (!/^(0x[0-9a-fA-F]+|[A-Za-z0-9+/=_-]+)$/.test(v)) throw AppError.unprocessable(`${field} must be end-to-end ciphertext (base64, base64url or hex), not plaintext`);
   if (PLAINTEXT_WORDS.test(v)) throw AppError.unprocessable(`${field} looks like plaintext; encrypt it end-to-end for the attestor`);
-  let decoded = '';
-  try {
-    decoded = Buffer.from(v.replace(/^0x/, ''), v.startsWith('0x') ? 'hex' : 'base64').toString('utf8');
-  } catch {
-    decoded = '';
-  }
-  if (decoded && (parsesAsJsonObject(decoded) || PLAINTEXT_WORDS.test(decoded))) throw AppError.unprocessable(`${field} is only encoded, not encrypted; encrypt it end-to-end for the attestor`);
+  if (decodings(v).some(encodedPlaintext)) throw AppError.unprocessable(`${field} is only encoded, not encrypted; encrypt it end-to-end for the attestor`);
+}
+
+/**
+ * A tier-3 opening carries two year-to-date figures and two salts, so the guess above is not enough (M7): it must be
+ * a merces-e2e v1 envelope (`@merces/domain` `e2e-envelope.ts`: version byte, ephemeral X25519 public key, nonce,
+ * AES-256-GCM ciphertext and tag, in canonical base64) of an opening's size, as `@merces/poi-device`
+ * `sealTier3Opening` produces. Anything else is refused, whatever its encoding. The message gives the reason only.
+ */
+export function assertTier3OpeningEnvelope(value: string): void {
+  const r = parseE2eEnvelope(value, E2E_TIER3_OPENING);
+  if (!r.ok) throw AppError.unprocessable(`openingCiphertext must be a merces-e2e v1 envelope sealed for the attestor: ${E2E_REFUSAL_TEXT[r.code]}`, { field: 'openingCiphertext', code: `e2e-${r.code}` });
 }
 
 const num = (x: unknown): number | null => (x === null || x === undefined ? null : Number(x));
@@ -303,7 +332,7 @@ export class AttestorService {
     const now = await chain.now();
     if (period.end > now) throw AppError.conflict('the period has not ended');
     assertOpaqueCiphertext(input.documentsCiphertext, 'documentsCiphertext');
-    assertOpaqueCiphertext(input.openingCiphertext, 'openingCiphertext');
+    assertTier3OpeningEnvelope(input.openingCiphertext);
     const attestor = normaliseAddress(input.attestor, chain.family);
     await this.requireRegisteredAttestor(chain, attestor);
     const dup = await this.ctx.pool.query("select case_id, state from tier3_cases where series_id = $1 and period_id = $2 and state in ('open','signed')", [seriesId, periodId]);
@@ -358,7 +387,7 @@ export class AttestorService {
         ] },
       ],
       opening: {
-        ciphertext: 'openingCiphertext (GET /attestor/tier3/{caseId}): merces/tier3-opening/v1 {seriesId, periodId, incomeYtd, incomeSalt, priorIncomeYtd, priorSalt, priorIncomeCommitment, incomeCommitment}, encrypted by the issuer\'s device for your key',
+        ciphertext: 'openingCiphertext (GET /attestor/tier3/{caseId}): merces/tier3-opening/v1 {seriesId, periodId, incomeYtd, incomeSalt, priorIncomeYtd, priorSalt, priorIncomeCommitment, incomeCommitment}, sealed by the issuer\'s device for your X25519 key in a merces-e2e v1 envelope (purpose merces/tier3-opening/v1; @merces/poi-device openTier3Opening)',
       },
       checks: [
         `documented year-to-date income: the sum of included fields in ${currency} base units for ${period.year} through ${new Date(period.end * 1000).toISOString().slice(0, 10)}`,

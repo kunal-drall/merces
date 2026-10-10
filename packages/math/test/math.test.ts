@@ -252,6 +252,20 @@ describe('fixed point', () => {
     expect(wadToDecimal(wadFromDecimal('0.025'))).toBe('0.025');
     expect(() => wadFromDecimal('1e5')).toThrow();
   });
+
+  it('accepts 18 places and refuses more; its errors carry no value (a share rate is a private term)', () => {
+    expect(wadFromDecimal('0.064264264264264264')).toBe(64_264_264_264_264_264n);
+    for (const bad of ['0.0642642642642642642', '6426426426e-9', 'x0.0642642642']) {
+      let err: unknown = null;
+      try {
+        wadFromDecimal(bad);
+      } catch (e) {
+        err = e;
+      }
+      expect(err, bad).toBeInstanceOf(RangeError);
+      expect(`${(err as Error).message}\n${(err as Error).stack}`).not.toMatch(/642642/);
+    }
+  });
 });
 
 describe('auction fees (interim auction family, S2)', () => {

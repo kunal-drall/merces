@@ -103,8 +103,10 @@ providers (`responseRedactions[].hash`) are adopted (Part J.3), the verifier can
 ## Privacy controls (summary; see PRIVACY.md)
 
 No income figure, income document, hardship reason or identity document is persisted or logged. The logger redacts
-income-bearing keys at the sink. The canary test pushes distinctive values through every income flow and scans every
-table, the captured logs, the outbox and error reports; finding one fails CI.
+income-bearing keys at the sink, with Stage 1's openings and private terms (salts, θ, r, the share rate, the device
+secret), and error messages carry no values. A tier-3 opening is accepted only as a merces-e2e v1 envelope sealed for the
+attestor (PRIVACY.md). The canary test pushes distinctive values through every income flow and scans every table, the
+captured logs, the outbox and error reports, in decimal, hex and base64; finding one fails CI.
 
 ## Reporting a vulnerability
 

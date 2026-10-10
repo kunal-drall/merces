@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { BN254_FR, CURRENCY_CODES, DEFAULT_PARAMETERS } from '@merces/math';
+import { randomBytes } from 'node:crypto';
 import {
-  DEFAULTS, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
+  DEFAULTS, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
   attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
-  makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, termsCommitment, userCommandSchema,
+  makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, termsCommitment, userCommandSchema,
   type IndexingRule,
 } from '../src/index.ts';
 
@@ -141,5 +142,64 @@ describe('protocol defaults', () => {
     expect(DEFAULTS.maxCumulativePauseSeconds).toBe(Number(DEFAULT_PARAMETERS.maxCumulativePauseSeconds));
     expect(DEFAULTS.maxPauses).toBe(16);
     expect([DEFAULTS.dueDays, DEFAULTS.graceDays, DEFAULTS.formalNoticeDays]).toEqual([DEFAULT_PARAMETERS.reportDueDays, DEFAULT_PARAMETERS.graceDays, DEFAULT_PARAMETERS.formalNoticeDays]);
+  });
+});
+
+// S1 review: a tier-3 opening must be a merces-e2e v1 envelope; the server refuses anything else by its shape (it holds
+// no key). The shape: base64(0x01 ‖ ephemeral X25519 public key (32) ‖ nonce (12) ‖ ciphertext ‖ tag (16)).
+describe('merces-e2e v1 envelope shape', () => {
+  const opening = JSON.stringify({ version: 'merces/tier3-opening/v1', seriesId: 'solana:s', periodId: '2026Q3', incomeYtd: '8484848484', incomeSalt: '123', priorIncomeYtd: '8282828282', priorSalt: '456', priorIncomeCommitment: '0x' + '11'.repeat(32), incomeCommitment: '0x' + '22'.repeat(32) });
+  const frame = (payload: Buffer, over: { version?: number; key?: Buffer; nonce?: Buffer } = {}) => Buffer.concat([Buffer.from([over.version ?? 1]), over.key ?? randomBytes(32), over.nonce ?? randomBytes(12), payload]);
+  // random bytes stand in for ciphertext ‖ tag: the server cannot tell them apart, which is the point
+  const sealedLike = (n: number) => frame(randomBytes(n + E2E_TAG_BYTES));
+  const code = (v: string) => {
+    const r = parseE2eEnvelope(v, E2E_TIER3_OPENING);
+    return r.ok ? 'ok' : r.code;
+  };
+
+  it('accepts the shape of a sealed opening and exposes its parts', () => {
+    const b = sealedLike(Buffer.byteLength(opening));
+    const r = parseE2eEnvelope(b.toString('base64'), E2E_TIER3_OPENING);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.envelope.version).toBe(1);
+    expect(Buffer.from(r.envelope.header).equals(b.subarray(0, E2E_HEADER_BYTES))).toBe(true);
+    expect(Buffer.from(r.envelope.ephemeralPublicKey).equals(b.subarray(1, 33))).toBe(true);
+    expect(Buffer.from(r.envelope.nonce).equals(b.subarray(33, 45))).toBe(true);
+    expect(r.envelope.sealed.length).toBe(Buffer.byteLength(opening) + E2E_TAG_BYTES);
+  });
+
+  it('refuses the opening in plaintext and in every encoding: hex (bare, upper case, 0x), base64, base64url', () => {
+    const raw = Buffer.from(opening);
+    expect(code(opening)).toBe('not-base64');
+    expect(code(raw.toString('hex'))).toBe('unknown-version');
+    expect(code(raw.toString('hex').toUpperCase())).toBe('unknown-version');
+    expect(code('0x' + raw.toString('hex'))).toBe('not-base64');
+    expect(code(raw.toString('base64'))).toBe('unknown-version');
+    expect(code(raw.toString('base64url'))).not.toBe('ok');
+  });
+
+  it('refuses a framed but unencrypted opening, placeholder keys and nonces, wrong sizes and non-canonical base64', () => {
+    const raw = Buffer.from(opening);
+    expect(code(frame(Buffer.concat([raw, randomBytes(16)])).toString('base64'))).toBe('plaintext');
+    expect(code(Buffer.concat([Buffer.from([1]), raw]).toString('base64'))).toBe('plaintext');
+    expect(code(frame(randomBytes(400), { key: Buffer.alloc(32) }).toString('base64'))).toBe('not-a-key');
+    expect(code(frame(randomBytes(400), { nonce: Buffer.alloc(12, 7) }).toString('base64'))).toBe('not-a-nonce');
+    expect(code(frame(randomBytes(400), { version: 2 }).toString('base64'))).toBe('unknown-version');
+    expect(code(sealedLike(E2E_TIER3_OPENING.minPayloadBytes - 1).toString('base64'))).toBe('too-short');
+    expect(code(sealedLike(E2E_TIER3_OPENING.minPayloadBytes).toString('base64'))).toBe('ok');
+    expect(code(sealedLike(E2E_TIER3_OPENING.maxPayloadBytes + 1).toString('base64'))).toBe('too-long');
+    const ok = sealedLike(300).toString('base64');
+    for (const v of [` ${ok}`, `${ok}\n`, ok.replace(/=+$/, ''), ok.replace(/\+/g, '-').replace(/\//g, '_') + (ok.includes('+') || ok.includes('/') ? '' : '-')]) expect(code(v)).toBe('not-base64');
+    expect(code('')).toBe('not-base64');
+  });
+
+  it('reads text (a ten-digit run, or nine bytes in ten printable from 32 bytes on) but not random bytes', () => {
+    expect(readsAsText(Buffer.from('x 8484848484 y'))).toBe(true);
+    expect(readsAsText(Buffer.from('1040 Schedule C gross receipts, see attached'))).toBe(true);
+    expect(readsAsText(Buffer.from('short text'))).toBe(false);
+    let hits = 0;
+    for (let i = 0; i < 2000; i++) if (readsAsText(randomBytes(32 + (i % 512)))) hits++;
+    expect(hits).toBe(0);
   });
 });
