@@ -1,4 +1,5 @@
 export * from './kms.ts';
+export * from './kms-secp256k1.ts';
 export * from './vault-crypto.ts';
 export * from './wallet-verify.ts';
 export * from './identity.ts';

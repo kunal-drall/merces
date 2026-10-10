@@ -57,7 +57,10 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   const ctx = base as ServiceContext;
   // dev seeds and keys are accepted only while every chain is the simulator (resolveSecret refuses otherwise)
   const simOnly = simulatorOnly(base.chains);
-  ctx.kms = over.kms ?? new LocalKms(resolveSecret(process.env, 'MERCES_LOCAL_KEY_SEED', { simulatorOnly: simOnly, devDefault: 'dev-seed-not-for-production' }));
+  // the in-process report verifier's key is the only local key the services hold; its algorithm is configuration (S4 WP3:
+  // ed25519 until S4 WP6 moves the verifier to Stage 1's secp256k1 key)
+  const verifierKeyId = process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1';
+  ctx.kms = over.kms ?? new LocalKms(resolveSecret(process.env, 'MERCES_LOCAL_KEY_SEED', { simulatorOnly: simOnly, devDefault: 'dev-seed-not-for-production' }), { [verifierKeyId]: 'ed25519' });
   ctx.vault = over.vault ?? vaultFromEnv(process.env, { simulatorOnly: simOnly });
   ctx.identity = over.identity ?? new MockIdentityCheck();
   ctx.esign = over.esign ?? new MockESign();
@@ -67,7 +70,7 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   ctx.proofVerifier = over.proofVerifier ?? reportProofVerifier({ acceptMock: reportProofSystemFromEnv(process.env, { simulatorOnly: simOnly }) === 'mock' });
   ctx.reportVerifierUrl = over.reportVerifierUrl ?? process.env.REPORT_VERIFIER_URL ?? 'http://localhost:3100';
   // In mock mode the verifier runs in-process with the same local key the standalone service derives (dev seed); live mode talks to the isolated service.
-  ctx.verifier = over.verifier ?? (base.devMode ? new ReportVerifier(ctx.zktls, ctx.kms, process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1') : new HttpReportVerifierClient(ctx.reportVerifierUrl));
+  ctx.verifier = over.verifier ?? (base.devMode ? new ReportVerifier(ctx.zktls, ctx.kms, verifierKeyId) : new HttpReportVerifierClient(ctx.reportVerifierUrl));
   ctx.signInDomain = over.signInDomain ?? process.env.MERCES_SIGNIN_DOMAIN ?? 'merces.local';
   // the owner's decision, never a built-in rate: a malformed or out-of-bounds setting stops the process here
   ctx.nonRevealChargeBps = over.nonRevealChargeBps !== undefined ? (over.nonRevealChargeBps === null ? null : checkNonRevealCharge(over.nonRevealChargeBps)) : nonRevealChargeSetting(process.env);

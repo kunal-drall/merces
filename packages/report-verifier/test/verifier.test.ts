@@ -4,9 +4,14 @@ import { ZERO_INCOME_COMMITMENT, attestationMessage, incomeCommitment, type Veri
 import { LocalKms, MockZkTls } from '@merces/ports';
 import { HttpReportVerifierClient, ReportVerifier, createVerifierServer, type AttestRequest } from '../src/index.ts';
 
+/*
+ * S4 cause codes:
+ *  - S4-KMS: a local KMS key id names its algorithm explicitly (S4 WP3; the verifier key stays ed25519 until S4 WP6).
+ */
+
 describe('report verifier (attestation v1: prior, liquidity event, high-water)', () => {
   const zktls = new MockZkTls();
-  const kms = new LocalKms('verifier-test');
+  const kms = new LocalKms('verifier-test', { 'rv-1': 'ed25519' }); // cause S4-KMS: explicit algorithm
   const verifier = new ReportVerifier(zktls, kms, 'rv-1');
   const seriesId = 'solana:abc';
   const figure = 7_317_317_317n; // canary value
@@ -68,7 +73,7 @@ describe('report verifier (attestation v1: prior, liquidity event, high-water)',
     expect(await verifier.attest(req({ ...base, priorOpening: { ...opening, incomeYtd: '1' }, priorAttestation: a1 }))).toEqual({ ok: false, code: 'prior-mismatch' });
     expect(await verifier.attest(req({ ...base, priorOpening: opening }))).toEqual({ ok: false, code: 'prior-unattested' });
     expect(await verifier.attest(req({ ...base, priorOpening: opening, priorAttestation: { ...a1, signature: '0x' + '00'.repeat(64) } }))).toEqual({ ok: false, code: 'prior-unattested' });
-    const other = await new ReportVerifier(zktls, new LocalKms('another-verifier'), 'rv-1').attest(req({ periodId: '2026Q1', zktlsProof: proofFor('2026Q1', figure), incomeCommitment: c1 }));
+    const other = await new ReportVerifier(zktls, new LocalKms('another-verifier', { 'rv-1': 'ed25519' }), 'rv-1').attest(req({ periodId: '2026Q1', zktlsProof: proofFor('2026Q1', figure), incomeCommitment: c1 }));
     if (!other.ok) throw new Error(other.code);
     expect(await verifier.attest(req({ ...base, priorOpening: opening, priorAttestation: other.attestation }))).toEqual({ ok: false, code: 'prior-unattested' });
     expect(await verifier.attest(req({ ...base, priorOpening: opening, priorAttestation: { ...a1, periodId: '2026Q3' } }))).toEqual({ ok: false, code: 'prior-unattested' });

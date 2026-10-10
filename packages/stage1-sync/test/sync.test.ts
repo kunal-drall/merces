@@ -30,6 +30,8 @@ import { locateStage1 } from '@merces/chains';
  *    `@merces/math` and `@merces/domain` on every sync; a drop without them fails it (never a skip).
  *  - S4-BID: since S4 WP2 the step also checks our hex `bidCommitment` and `orderCommitment` against KA's bid
  *    commitments, from the bidder's chain-local address.
+ *  - S4-KMS: since S4 WP3 the step also takes each known signature through the KMS DER path (a DER signature with s as
+ *    signed and s forced high, normalised by `@merces/ports`' `signature65FromDer`): "DER path 20/20".
  */
 
 /** A Stage 1 drop with only a manifest (plus extra files written by the caller). */
@@ -240,14 +242,15 @@ describe('stage1:sync', () => {
     expect(knownAnswersPath(ctx)).toBe(join(location.root, 'packages/vectors/known_answers.json'));
     const r = await checkSignatures(ctx);
     expect(r.status, r.details.join('\n')).toBe('ok');
-    expect(r.details[0]).toBe('signatures: ok (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets)');
+    expect(r.details[0]).toBe('signatures: ok (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets, DER path 20/20)'); // cause S4-KMS
     const total = SIGNING_REEXPORTS.length + Object.keys(SIGNING_RENAMED).length + 1;
     expect(r.details).toContain(`re-exports: ${total}/${total} signing names of @merces/math are @merces/sdk's own objects (deriveTestPrivateKey on @merces/math/testing only)`);
     expect(r.details.some((d) => d.includes('✗'))).toBe(false);
     // cause S4-BID: KA's bid commitments through Stage 1's bytes and through our builders
     expect(r.details).toContain('wallets: 4 through wallet32Of; domains: 2 through signingDomain; series keys: 2 through seriesKeyOf; bid commitments: 2 through bidCommitmentBytes, 2 through our bidCommitment and orderCommitment (the bidder\'s address)');
     const report = renderReport({ present: true, location: location.path, steps: [r], verdicts: [] });
-    expect(report).toContain('    signatures: ok (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets)');
+    expect(report).toContain('    signatures: ok (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets, DER path 20/20)'); // cause S4-KMS
+    expect(r.details).toContain('DER path: 20/20 known signatures from a KMS-style DER signature (s as signed and s forced high) through signature65FromDer (@merces/ports)');
     expect(report).toMatch(/Stage 1 signing primitives \(signatures\): OK — Stage 1's signing known answers reproduced byte for byte/);
     // the list is exactly the signing names the gateway re-exports from the SDK, each the SDK's own object
     const gw = gateway as unknown as Record<string, unknown>;
@@ -270,7 +273,8 @@ describe('stage1:sync', () => {
       k.wallets[2]!.wallet = '0x' + '00'.repeat(32);
     });
     expect(tampered.status).toBe('fail');
-    expect(tampered.details[0]).toBe('signatures: FAIL (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets)');
+    // cause S4-KMS: a message refused before its DER path does not count toward it
+    expect(tampered.details[0]).toBe('signatures: FAIL (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets, DER path 19/20)');
     expect(tampered.details).toContain('  ✗ messages[3] FX (evm-monad-testnet): the digest differs');
     expect(tampered.details).toContain('  ✗ wallets[2] evm: wallet32Of differs');
     expect(tampered.summary).toMatch(/2 known answer\(s\) not reproduced/);

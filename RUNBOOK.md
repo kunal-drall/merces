@@ -155,11 +155,22 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
 
 ## Keys
 
-- Development: `MERCES_KMS_PROVIDER=local` derives deterministic keys from `MERCES_LOCAL_KEY_SEED`. The report verifier's
-  key id is `REPORT_VERIFIER_KEY_ID` (default `report-verifier-1`); its public key must be registered onchain by the
-  multisig (`POST /admin/verifier-keys` builds the transaction). `dev:mock` registers it on the simulators automatically.
-- Production: a cloud KMS behind `KmsPort` (Part J.2). Rotation = register the new verifier key (keep the old one active
-  until in-flight reports land), switch `REPORT_VERIFIER_KEY_ID`, then deactivate the old key.
+- Development: `MERCES_KMS_PROVIDER=local` derives deterministic keys from `MERCES_LOCAL_KEY_SEED`. Each key id is
+  configured with its algorithm (since S4 WP3 nothing is inferred from the id, and an unconfigured id is an error);
+  a secp256k1 key is Stage 1's test-key derivation of `merces-local-kms:<seed>:<keyId>` and signs a digest as Stage 1
+  does (`signDigest`: `r ‖ s ‖ v`, low s, `v ∈ {27, 28}`, checked against the key's address before it is returned).
+  The report verifier's key id is `REPORT_VERIFIER_KEY_ID` (default `report-verifier-1`, ed25519 until S4 WP6 moves it
+  to Stage 1's secp256k1 key); its public key must be registered onchain by the multisig (`POST /admin/verifier-keys`
+  builds the transaction). `dev:mock` registers it on the simulators automatically.
+- Production: a cloud KMS behind `KmsPort`. S4 ships the provider-neutral adapter (`RemoteSecp256k1Kms` in
+  `@merces/ports`: the KMS's DER signature becomes Stage 1's 65 bytes, low s, the recovery id found against the key's
+  address, fail closed; the DER SPKI public key gives the address) but no provider: which one holds the report-verifier
+  key is an open owner question (STAGE1_INTEGRATION.md "Owner decisions and questions", S4 question 1), and the
+  verifier refuses any `MERCES_KMS_PROVIDER` but `local` until it is answered. Setup facts, each pinned to its source:
+  VERSIONS.md "Signing keys and KMS" (AWS: key spec `ECC_SECG_P256K1`, usage `SIGN_VERIFY`, `Sign` with
+  `ECDSA_SHA_256` and `MessageType=DIGEST`; GCP: `EC_SIGN_SECP256K1_SHA256` at HSM protection level, the digest in
+  `digest.sha256` unverified; HashiCorp Vault transit has no secp256k1 key). Rotation = register the new verifier key
+  (keep the old one active until in-flight reports land), switch `REPORT_VERIFIER_KEY_ID`, then deactivate the old key.
 - Vault key: `MERCES_VAULT_KEY_HEX` (32 bytes). Rotation re-encrypts `terms_vault`, `applications.notes_encrypted` and
   `contract_sessions.signed_document_encrypted`; the key id is stored beside each ciphertext.
 - Keeper fee payer: fund it with devnet SOL / testnet MON only; it never holds stablecoins. On Solana the settle and

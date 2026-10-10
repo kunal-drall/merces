@@ -4,9 +4,11 @@ import { readFileSync } from 'node:fs';
 import { privateKeyToAccount } from 'viem/accounts';
 import { hashMessage } from 'viem';
 import { mockProve, personalMessageDigest, recoverSigner, type Groth16ProofJson } from '@merces/domain';
+import { addressFromPrivateKey, isLowS, keccak256, parseSignature, publicKeyFromPrivate, signDigest } from '@merces/math';
+import { deriveTestPrivateKey } from '@merces/math/testing';
 import {
-  AesGcmVault, Groth16ReportVerifier, LocalKms, MockESign, MockIdentityCheck, MockProofVerifier, ed25519RawToSpki, proverArtifactFile, reportProofSystemFromEnv, reportProofVerifier,
-  shutdownProofSystem, signInMessage, stage1ProverArtifacts, verifyWalletSignature,
+  AesGcmVault, Groth16ReportVerifier, KmsKeyError, LocalKms, MockESign, MockIdentityCheck, MockProofVerifier, ed25519RawToSpki, kmsDigestSigner, proverArtifactFile, reportProofSystemFromEnv,
+  reportProofVerifier, shutdownProofSystem, signInMessage, stage1ProverArtifacts, verifyWalletSignature,
 } from '../src/index.ts';
 import { resolveSecret } from '../src/secrets.ts';
 
@@ -14,13 +16,25 @@ import { resolveSecret } from '../src/secrets.ts';
  * S4 cause codes:
  *  - S4-G: Stage 1's signing primitives through `@merces/math` and `@merces/domain` (signing.ts): the EIP-191 link-proof
  *    digest agrees with viem.
+ *  - S4-KMS: the KMS port signs a secp256k1 digest as Stage 1 does (`signDigest`: `r ‖ s ‖ v`, low s, v ∈ {27, 28},
+ *    self-verified) and `sign` is ed25519 only; a local key id names its algorithm (no inference from the id, an unknown
+ *    id is an error); the local secp256k1 key is Stage 1's test-key derivation of `merces-local-kms:<seed>:<keyId>`.
  */
+
+/** A raised KmsKeyError with this code (and no seed in its message). */
+async function refused(p: Promise<unknown>, code: string, seed?: string): Promise<void> {
+  const e = await p.then(() => null, (x: unknown) => x);
+  expect(e).toBeInstanceOf(KmsKeyError);
+  expect((e as KmsKeyError).code).toBe(code);
+  if (seed) expect((e as Error).message).not.toContain(seed);
+}
 
 describe('LocalKms', () => {
   it('derives stable ed25519 keys and produces verifiable signatures', async () => {
-    const kms = new LocalKms('seed');
+    // cause S4-KMS: the key id names its algorithm; the ed25519 derivation is unchanged (sha256 of the label)
+    const kms = new LocalKms('seed', { 'verifier-1': 'ed25519' });
     const a = await kms.publicKey('verifier-1');
-    const b = await new LocalKms('seed').publicKey('verifier-1');
+    const b = await new LocalKms('seed', { 'verifier-1': 'ed25519' }).publicKey('verifier-1');
     expect(a).toEqual(b);
     expect(a.algorithm).toBe('ed25519');
     const msg = new TextEncoder().encode('hello');
@@ -28,11 +42,56 @@ describe('LocalKms', () => {
     const pub = createPublicKey({ key: ed25519RawToSpki(Buffer.from(a.publicKeyHex, 'hex')), format: 'der', type: 'spki' });
     expect(edVerify(null, Buffer.from(msg), pub, Buffer.from(sig, 'hex'))).toBe(true);
     expect((await kms.spkiHex('verifier-1')).length).toBe(88);
+    // the secp256k1 methods refuse an ed25519 key
+    await refused(kms.signerAddress('verifier-1'), 'wrong-algorithm');
+    await refused(kms.signDigest('verifier-1', '0x' + '11'.repeat(32)), 'wrong-algorithm');
   });
-  it('derives secp256k1 keys with an EVM address', async () => {
-    const kms = new LocalKms('seed');
-    expect(await kms.evmAddress('keeper-evm')).toMatch(/^0x[0-9a-f]{40}$/);
-    expect((await kms.sign('keeper-evm', new Uint8Array([1, 2, 3]))).length).toBe(130);
+
+  it('cause S4-KMS: a secp256k1 key signs a digest as Stage 1 does: r ‖ s ‖ v, low s, v ∈ {27, 28}, recovering to its address', async () => {
+    const kms = new LocalKms('seed', { 'keeper-evm': 'secp256k1' });
+    // the key is Stage 1's test-key derivation of the label (in [1, n − 1]); it was raw sha256 before S4, unreduced
+    const priv = deriveTestPrivateKey('merces-local-kms:seed:keeper-evm');
+    const address = '0x' + Buffer.from(addressFromPrivateKey(priv)).toString('hex');
+    expect(await kms.signerAddress('keeper-evm')).toBe(address);
+    expect(await kms.publicKey('keeper-evm')).toEqual({ algorithm: 'secp256k1', publicKeyHex: Buffer.from(publicKeyFromPrivate(priv)).toString('hex') });
+    for (const text of ['MERCES_REPORT_V1 stand-in', 'another digest', '']) {
+      const digest = '0x' + Buffer.from(keccak256(new TextEncoder().encode(text))).toString('hex');
+      const sig = await kms.signDigest('keeper-evm', digest);
+      expect(sig).toMatch(/^0x[0-9a-f]{130}$/);
+      const parsed = parseSignature(sig); // Stage 1's parser: v ∈ {27, 28}, r in range, low s
+      expect([27, 28]).toContain(parsed.v);
+      expect(isLowS(parsed.s)).toBe(true);
+      expect(recoverSigner(digest, sig)).toBe(address);
+      // byte for byte Stage 1's signDigest (RFC 6979), the digest signed as it is: no hash, no prefix
+      expect(sig).toBe('0x' + Buffer.from(signDigest(digest, priv).bytes).toString('hex'));
+      // bytes and hex digests are the same digest
+      expect(await kms.signDigest('keeper-evm', Buffer.from(digest.slice(2), 'hex'))).toBe(sig);
+    }
+    // a digest must be exactly 32 bytes
+    await refused(kms.signDigest('keeper-evm', '0x' + '11'.repeat(31)), 'malformed-digest');
+    await refused(kms.signDigest('keeper-evm', new Uint8Array(33)), 'malformed-digest');
+    await refused(kms.signDigest('keeper-evm', '11'.repeat(32)), 'malformed-digest');
+    // sign() and spkiHex() are ed25519 only: a secp256k1 key never signs a message it hashes itself
+    await refused(kms.sign('keeper-evm', new Uint8Array([1, 2, 3])), 'wrong-algorithm');
+    await refused(kms.spkiHex('keeper-evm'), 'wrong-algorithm');
+    // a DigestSigner over the key
+    const signer = await kmsDigestSigner(kms, 'keeper-evm');
+    expect(signer.address).toBe(address);
+    const d = '0x' + 'ab'.repeat(32);
+    expect(await signer.signDigest(d)).toBe(await kms.signDigest('keeper-evm', d));
+  });
+
+  it('cause S4-KMS: the algorithm is configuration: an unknown key id or algorithm is an error, and the id implies nothing', async () => {
+    const kms = new LocalKms('seed-not-in-errors', { 'secp-looking-but-ed': 'ed25519', 'plain-name': 'secp256k1' });
+    expect((await kms.publicKey('secp-looking-but-ed')).algorithm).toBe('ed25519');
+    expect((await kms.publicKey('plain-name')).algorithm).toBe('secp256k1');
+    for (const call of [kms.publicKey('keeper-evm'), kms.sign('keeper-evm', new Uint8Array(1)), kms.signerAddress('keeper-evm'), kms.signDigest('keeper-evm', '0x' + '00'.repeat(32)), kms.spkiHex('keeper-evm')]) {
+      await refused(call, 'unknown-key', 'seed-not-in-errors');
+    }
+    expect(() => new LocalKms('seed', { k: 'p256' as never })).toThrow(KmsKeyError);
+    // two seeds, two keys; one seed, one key per id
+    expect(await new LocalKms('other', { 'plain-name': 'secp256k1' }).signerAddress('plain-name')).not.toBe(await kms.signerAddress('plain-name'));
+    expect(await new LocalKms('seed-not-in-errors', { 'plain-name': 'secp256k1' }).signerAddress('plain-name')).toBe(await kms.signerAddress('plain-name'));
   });
 });
 
@@ -64,7 +123,7 @@ describe('wallet signatures', () => {
     expect(recoverSigner(personalMessageDigest(sign), signature)).toBe(acct.address.toLowerCase());
   });
   it('verifies Solana ed25519 signatures', async () => {
-    const kms = new LocalKms('solana-user');
+    const kms = new LocalKms('solana-user', { wallet: 'ed25519' }); // cause S4-KMS: explicit algorithm
     const { publicKeyHex } = await kms.publicKey('wallet');
     const bs58 = (await import('bs58')).default;
     const address = bs58.encode(Buffer.from(publicKeyHex, 'hex'));

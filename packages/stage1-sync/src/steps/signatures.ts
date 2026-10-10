@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { stage1Path } from '@merces/chains';
 import {
   SIGNING_KINDS, bidCommitment, orderCommitment, recoverSigner, seriesKeyOf, signature65Hex, signingDigest, signingDomain, wallet32Of, type SigningFields,
@@ -7,10 +8,11 @@ import {
 } from '@merces/domain';
 import * as gateway from '@merces/math';
 import {
-  MAGIC, addressFromPrivateKey, bidCommitmentBytes, bidCommitmentPreimage, evmAddressFromWallet, fromPid, publicKeyFromPrivate, seriesKeyFromId,
+  MAGIC, SECP256K1_N, addressFromPrivateKey, bidCommitmentBytes, bidCommitmentPreimage, evmAddressFromWallet, fromPid, publicKeyFromPrivate, seriesKeyFromId,
   signDigest, toChecksumAddress,
 } from '@merces/math';
 import * as testing from '@merces/math/testing';
+import { signature65FromDer } from '@merces/ports';
 import * as sdk from '@merces/sdk';
 import type { StepReport } from '../report.ts';
 import type { StepCtx } from './generate.ts';
@@ -91,7 +93,10 @@ function seriesKeyFor(described: string): string | null {
  *   domain's hex `bidCommitment` and `orderCommitment` from the bidder's chain-local address (the Solana pubkey KA's
  *   note names, else the EVM address its padded wallet holds), whose `wallet32Of` must be KA's wallet;
  * - **messages**: `reportDigest` … `trueUpDigest` over our own domain and series key give KA's pre-image and digest,
- *   `signDigest` with the seed's key gives KA's signature byte for byte (RFC 6979), and `recoverSigner` its address.
+ *   `signDigest` with the seed's key gives KA's signature byte for byte (RFC 6979), and `recoverSigner` its address;
+ * - **the DER path** (S4 WP3): what a cloud KMS returns for the same key and digest (a DER signature, with whatever `s`
+ *   comes out: noble's own DER with `lowS: false`, and that signature with `s` forced high), through `@merces/ports`'
+ *   `signature65FromDer` (low `s`, the recovery id by trial against the signer's address), gives KA's signature back.
  *
  * No known answers in the drop is a failure, never a skip: the signing primitives cannot be proven without them.
  */
@@ -217,6 +222,7 @@ export async function checkSignatures(ctx: StepCtx): Promise<StepReport> {
   // messages
   const messages = need('messages', ka.messages);
   const kinds = new Set<string>();
+  let derPath = 0;
   for (const [i, m] of messages.entries()) {
     const at = `[${i}] ${m.kind} (${m.domain})`;
     guard('messages', at, () => {
@@ -238,17 +244,32 @@ export async function checkSignatures(ctx: StepCtx): Promise<StepReport> {
         return bad('messages', at, 'signDigest does not give the known signature');
       }
       if (recoverSigner(built.digest, m.signature) !== m.signerAddress) return bad('messages', at, 'recoverSigner does not give the signer');
+      // the DER path: a KMS's DER, s as it comes (high in most of KA's cases at the pin) and s forced high
+      const der = secp256k1.sign(bytes(built.digest), key, { prehash: false, lowS: false, format: 'der' });
+      const parsed = secp256k1.Signature.fromBytes(der, 'der');
+      const high = parsed.hasHighS() ? der : new secp256k1.Signature(parsed.r, SECP256K1_N - parsed.s).toBytes('der');
+      for (const [which, d] of [['as signed', der], ['s forced high', high]] as const) {
+        let got: string;
+        try {
+          got = signature65FromDer(d, built.digest, m.signerAddress);
+        } catch (e) {
+          return bad('messages', at, `the DER path (${which}) fails: ${(e as Error).message}`);
+        }
+        if (got !== m.signature) return bad('messages', at, `the DER path (${which}) does not give the known signature`);
+      }
+      derPath++;
     });
   }
   const missingKinds = SIGNING_KINDS.filter((k) => !kinds.has(k));
   if (messages.length && missingKinds.length) fail(`the known answers have no ${missingKinds.join(', ')} message`);
 
-  const counts = `${messages.length} messages, ${domains.length} domains, ${seriesKeys} series keys, ${bids.length} bid commitments, ${keys.length} keys, ${wallets.length} wallets`;
+  const counts = `${messages.length} messages, ${domains.length} domains, ${seriesKeys} series keys, ${bids.length} bid commitments, ${keys.length} keys, ${wallets.length} wallets, DER path ${derPath}/${messages.length}`;
   if (listed.length) fail(`${listed.length} known answer(s) not reproduced`);
   details.push(
     `keys: ${keys.length} from their seeds (private key, public key, address, EIP-55)`,
     `wallets: ${wallets.length} through wallet32Of; domains: ${domains.length} through signingDomain; series keys: ${seriesKeys} through seriesKeyOf; bid commitments: ${bids.length} through bidCommitmentBytes, ${ourBids} through our bidCommitment and orderCommitment (the bidder's address)`,
     `messages: ${messages.length} through reportDigest … trueUpDigest (pre-image, digest), signDigest (signature byte-equal, RFC 6979) and recoverSigner (the signer's address)`,
+    `DER path: ${derPath}/${messages.length} known signatures from a KMS-style DER signature (s as signed and s forced high) through signature65FromDer (@merces/ports)`,
     ...listed.slice(0, LISTED),
   );
   if (listed.length > LISTED) details.push(`  … and ${listed.length - LISTED} more`);
@@ -257,5 +278,5 @@ export async function checkSignatures(ctx: StepCtx): Promise<StepReport> {
     return { step: 'signatures', status: 'fail', summary: `Stage 1's signing known answers are not reproduced: ${failures.join('; ')}`, details };
   }
   details.unshift(`signatures: ok (${counts})`);
-  return { step: 'signatures', status: 'ok', summary: `Stage 1's signing known answers reproduced byte for byte through @merces/math and @merces/domain (${counts})`, details };
+  return { step: 'signatures', status: 'ok', summary: `Stage 1's signing known answers reproduced byte for byte through @merces/math, @merces/domain and @merces/ports' DER normaliser (${counts})`, details };
 }

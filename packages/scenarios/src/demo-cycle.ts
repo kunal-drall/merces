@@ -32,7 +32,7 @@ const mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ 
 const chains: ChainRegistry = { chains: new Map([['solana', sol.sim], ['monad', mon.sim]]), decisions: [], stage1: null, get: (c: string) => (c === 'solana' ? sol.sim : mon.sim), byFamily: (f: string) => (f === 'solana' ? sol.sim : mon.sim), close: async () => undefined };
 const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return silent; } } as never;
 const zktls = new MockZkTls();
-const kms = new LocalKms('demo-seed');
+const kms = new LocalKms('demo-seed', { 'report-verifier-demo': 'ed25519' });
 const verifier = new ReportVerifier(zktls, kms, 'report-verifier-demo');
 const spki = await kms.spkiHex('report-verifier-demo');
 for (const h of [sol, mon]) await h.exec(h.admin, { kind: 'registerVerifierKey', keyId: 'report-verifier-demo', publicKey: spki, active: true });

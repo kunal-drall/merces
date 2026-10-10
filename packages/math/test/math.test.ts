@@ -65,6 +65,7 @@ import {
  *  - S4-G: `@merces/math` re-exports Stage 1's signing primitives (the six signed messages, secp256k1 signing and
  *    recovery, the domain, the series key, the keccak bid commitment as `bidCommitmentBytes`, the wallet encodings,
  *    keccak256); the test-key derivation is only on `@merces/math/testing`, behind a grep gate.
+ *  - S4-KMS: the local KMS (`@merces/ports` kms.ts) derives its secp256k1 dev keys with it: a reviewed importer.
  */
 
 // ---------------------------------------------------------------- the gateway
@@ -154,12 +155,14 @@ const REPO = fileURLToPath(new URL('../../../', import.meta.url));
 /**
  * The only production `src` files that may name Stage 1's test-key derivation or import `@merces/math/testing` (cause
  * S4-G). Each S4 WP that needs a published test key adds its file here, reviewed: the vector runner and `stage1:sync`
- * (they replay Stage 1's known answers and vectors), and later the simulator harness, the local KMS and the dev seeds.
- * Services, the API, the keepers, the indexer, the report verifier and the device tool never may.
+ * (they replay Stage 1's known answers and vectors), the local KMS (S4 WP3, cause S4-KMS: its secp256k1 dev keys, behind
+ * a published seed the services accept only while every chain is the simulator), and later the simulator harness and
+ * the dev seeds. Services, the API, the keepers, the indexer, the report verifier and the device tool never may.
  */
 const TESTING_IMPORTERS = new Set([
   'packages/math/src/testing.ts',
   'packages/stage1-sync/src/steps/signatures.ts',
+  'packages/ports/src/kms.ts',
 ]);
 
 /** True when the code (comments stripped: the gateway's own JSDoc names the subpath) names the derivation or the subpath. */

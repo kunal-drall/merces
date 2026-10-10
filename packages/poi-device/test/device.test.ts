@@ -9,6 +9,8 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 /*
  * S3 cause codes:
  *  - S3-UL: a curve series' r is per base lamport (unit scale 10^6; S3 WP8).
+ * S4 cause codes:
+ *  - S4-KMS: a local KMS key id names its algorithm explicitly (S4 WP3; the verifier key stays ed25519 until S4 WP6).
  */
 const CANARY_YTD = 7_317_317_317n;
 const rWad = ratePerUnit(10n ** 17n, 500n);
@@ -18,7 +20,7 @@ const seriesId = 'solana:device-series';
 const secret = 'device-secret-not-for-production';
 
 const zktls = new MockZkTls();
-const verifier = new ReportVerifier(zktls, new LocalKms('device-test'), 'rv-device');
+const verifier = new ReportVerifier(zktls, new LocalKms('device-test', { 'rv-device': 'ed25519' }), 'rv-device'); // cause S4-KMS: explicit algorithm
 const proofFor = (periodId: string, figure: bigint) => zktls.prove({ source: 'stripe', seriesId, periodId, figure, currency: 'USD', coversUntil: 1_000, owner: 'issuer' });
 const input = (over: Partial<DeviceReportInput> & Pick<DeviceReportInput, 'periodId' | 'incomeYtdNow'>): DeviceReportInput => ({
   seriesId, termsCommitment: terms, unitsOutstanding: '500', privateTerms, prior: null, fxAvgWad: WAD, tier: 2, source: 'stripe', deviceSecret: secret, zktlsProof: proofFor(over.periodId, over.incomeYtdNow), ...over,

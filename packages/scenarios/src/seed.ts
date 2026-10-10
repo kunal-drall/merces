@@ -107,7 +107,7 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
   // an in-process report verifier whose key both simulators register)
   const quarters = Math.min(4, Math.max(0, opts.quarters ?? 0));
   const zktls = new MockZkTls();
-  const verifierKms = new LocalKms('seed-report-verifier');
+  const verifierKms = new LocalKms('seed-report-verifier', { [SEED_VERIFIER_KEY_ID]: 'ed25519' });
   const verifier = new ReportVerifier(zktls, verifierKms, SEED_VERIFIER_KEY_ID);
   if (quarters > 0) {
     const spki = await verifierKms.spkiHex(SEED_VERIFIER_KEY_ID);

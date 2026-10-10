@@ -538,6 +538,9 @@ importers:
       '@merces/simulator':
         specifier: workspace:*
         version: link:../simulator
+      '@noble/curves':
+        specifier: 2.4.0
+        version: 2.4.0
 
   stage1/circuits:
     dependencies:
