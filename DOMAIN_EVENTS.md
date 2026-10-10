@@ -187,6 +187,20 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `seriesId`: string
 - `holder`: string
 - `amount`: decimal string (base units / WAD / units)
+- `burnedUnits`: decimal string (base units / WAD / units)
+
+### TailClaimed (amount-bearing)
+
+- `seriesId`: string
+- `holder`: string
+- `amount`: decimal string (base units / WAD / units)
+
+### FinalClaimed (amount-bearing)
+
+- `seriesId`: string
+- `holder`: string
+- `units`: decimal string (base units / WAD / units)
+- `amount`: decimal string (base units / WAD / units)
 
 ### SeriesRetired
 
@@ -334,7 +348,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 ## Commands
 
-User commands are built into unsigned transactions for the user's wallet (`ChainPort.build`). Service commands are submitted by the backend's own low-privilege roles (`ChainPort.submit` as `keeper` or `allowlistManager`). Permissionless commands (Stage 1's sealed-bid settlement and holder registration) may be sent by anyone: the keeper submits them (`ChainPort.submit`) and any wallet may build and sign them (`ChainPort.build`). Admin commands are built for the protocol multisig. The router command is posted by a registered tier-1 split router contract.
+User commands are built into unsigned transactions for the user's wallet (`ChainPort.build`). Service commands are submitted by the backend's own low-privilege roles (`ChainPort.submit` as `keeper` or `allowlistManager`). Permissionless commands (Stage 1's sealed-bid settlement, holder registration and the Retired burn) may be sent by anyone: the keeper submits them (`ChainPort.submit`) and any wallet may build and sign them (`ChainPort.build`). Admin commands are built for the protocol multisig. The router command is posted by a registered tier-1 split router contract.
 
 ### User commands
 
@@ -349,6 +363,8 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **submitReport**: `seriesId`: string; `periodId`: period id (YYYYQn); `tier`: `1` \| `2` \| `3` \| `4`; `paymentStable`: decimal string (base units / WAD / units); `priorIncomeCommitment`: hex32; `incomeCommitment`: hex32; `fxBasis`: `accumulator` \| `attestor` \| `unity`; `fxAvgWad`: decimal string (base units / WAD / units); `pair`: pair (XXX/USD) \| null; `attestorRate`: object { attestor: string, rateWad: decimal string (base units / WAD / units), pair: pair (XXX/USD) } \| null; `proof`: object { system: `groth16-bn254`, proof: object { pi_a: array of decimal string (field element), pi_b: array of array of decimal string (field element), pi_c: array of decimal string (field element), protocol: `groth16`, curve: `bn128` }, publicInputs: array of decimal string (field element) } \| object { system: `mock`, proof: string, publicInputs: array of decimal string (field element) }; `attestation`: object { keyId: string, seriesId: string, periodId: period id (YYYYQn), priorIncomeCommitment: hex32, incomeCommitment: hex32, tier: `1` \| `2` \| `3` \| `4`, liquidityEvent: boolean, signature: string } \| null; `attestor`: string \| null; `liquidityEvent`: boolean
 - **payIn**: `seriesId`: string; `periodId`: period id (YYYYQn); `amount`: decimal string (base units / WAD / units)
 - **claimPayout**: `seriesId`: string
+- **claimTail**: `seriesId`: string
+- **claimFinal**: `seriesId`: string
 - **requestPause**: `seriesId`: string; `until`: integer
 - **approvePause**: `seriesId`: string; `until`: integer
 - **redeem**: `seriesId`: string; `maxPricePerUnit`: decimal string (base units / WAD / units)
@@ -380,6 +396,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **processBid**: `seriesId`: string; `bidder`: string
 - **deliverBid**: `seriesId`: string; `bidder`: string
 - **registerHolder**: `seriesId`: string; `wallet`: string
+- **burnRetired**: `seriesId`: string; `holder`: string
 
 ### Admin commands (multisig)
 
@@ -395,8 +412,8 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ## Additions beyond the Part D2 list
 
-- Events: `IssuanceStopped` (C11.5), `VerifierKeyRegistered` (admin registers report-verifier keys); Stage 1's settlement events with Stage 1's names (S2): `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`, `HolderRegistered`.
-- Commands: `registerIssuer`, `stopIssuance`, `pauseReleases` (the issuer's own pause, C11.1), `crankPause`, `flagFxFallback`, `clearTransferWindow`, `commitWindowOrder`, `revealWindowOrder`, `buyCurve`, `graduateCurve`, `registerVerifierKey`, `pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`, `postSplitReceipt`; the permissionless group with Stage 1's names (S2).
+- Events: `IssuanceStopped` (C11.5), `VerifierKeyRegistered` (admin registers report-verifier keys); Stage 1's settlement events with Stage 1's names (S2): `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`, `HolderRegistered`; Stage 1's claim events (S3): `TailClaimed`, `FinalClaimed`.
+- Commands: `registerIssuer`, `stopIssuance`, `pauseReleases` (the issuer's own pause, C11.1), `crankPause`, `flagFxFallback`, `clearTransferWindow`, `commitWindowOrder`, `revealWindowOrder`, `buyCurve`, `graduateCurve`, `registerVerifierKey`, `pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`, `postSplitReceipt`; the permissionless group with Stage 1's names (S2); Stage 1's claims `claimTail` and `claimFinal` and the permissionless `burnRetired` (S3).
 - Each addition closes a gap between the D2 list and Part C; Stage 1 wins on names and shapes, recorded in `INTERFACE_DRIFT.md`.
 
 ## Meanings on Stage 1 (since S1)
@@ -412,5 +429,9 @@ The shapes above are generated; these meanings changed in S1, when the simulator
 - **`ReportAccepted`.** `paymentDue` is the due the report opened (the payment less tier-1 split credit; 0 for a tail report that is not a liquidity event), without accrual; `accrual` is always "0"; `priorIncomeCommitment` is the commitment it chained from.
 - **`payIn` and `PaymentReceived`.** `payIn` pays the open due in full: `periodId` names the open due period and `amount` is the due plus Stage 1's lateness accrual when the payment lands; anyone may pay (NothingDue when nothing is open). `PaymentReceived.gross` is what the vault accepted; from a pay-in it carries the final `paymentDue` (due + accrual) and `accrual`; `source: 'tail'` is a tail payment (its own accumulator, outside the payout vault totals); `source: 'extinguishment'` is the unvested treasury returned through the final pool (fee 0, not an issuer payment).
 - **Pauses.** `requestPause.until` and `PauseRequested.until` are advisory (Stage 1's request has no end); `approvePause` sets the pause end within Stage 1's bounds, and a pause ends by itself at that end.
-- **`claimPayout`.** Pays the net payout and, after a redemption or an extinguishment, the tail and the holder's final-pool share (S3 splits them into their own commands). A holder that is not registered is refused; a zero claim succeeds with no transfer, and on a Retired or Extinguished series it still burns the holder's units.
+- **Claims (S3: Stage 1's claim family).** Every stablecoin amount a claim moves appears in exactly one event amount: `PayoutClaimed` (the net payout; inside a redemption, the pending payout and the tail catch-up), `RedemptionClaimed` (the redemption principal, units × price), `TailClaimed` (the tail), `FinalClaimed` (the pending payout and the final-pool share) and `BidDelivered` (a delivered refund). Claims need a registered holder (HolderNotRegistered), never current allowlist membership.
+- **`claimPayout`.** Pays the net payout and, after a redemption or an extinguishment, also the tail and the holder's final-pool share, until S3 makes it Stage 1's `claim` (the net payout only; `claimTail` and `claimFinal` below pay the rest). A holder that is not registered is refused; a zero claim succeeds with no transfer, and on a Retired or Extinguished series it still burns the holder's units. `PayoutClaimed.burnedUnits` names the units the claim burns (0 inside a redemption, whose burn is its own `UnitsBurned`).
+- **`claimTail`.** Stage 1 `claim_tail`: NotRedeemed until the issuer redeemed (the redemption time only, not the status); HolderNotRegistered; a holder that has redeemed nothing and still has units is redeemed first (the redemption body: `PayoutClaimed`, `UnitsBurned`, `RedemptionClaimed`); NoRedeemedUnits when it has still redeemed nothing (a holder registered late with no units). It pays the tail on its redeemed units since its tail cursor and emits `TailClaimed{amount}`, the tail only, also when it is 0.
+- **`claimFinal`.** Stage 1 `claim_final`: TerminalStatus unless the series is Extinguished; a pending auction bid is delivered first; HolderNotRegistered. On a series that redeemed, the holder's remaining units are redeemed first and its share is weighed on its redeemed units; otherwise on its accrual units (undelivered auction units and window-ask units included). It pays the pending payout plus the share (the share once: a second claim pays 0) and emits `FinalClaimed{units: weight, amount}`, also with zeros, then burns the holder's balance (`UnitsBurned{reason: extinguishment}`).
+- **`burnRetired`.** Stage 1 `burn_retired`, permissionless (any wallet or the keeper): TerminalStatus unless the stored status is Retired; a wallet holding no units gives `UnitsBurned{units: 0}` before any registration check, also a wallet that never held units; otherwise HolderNotRegistered, then the holder is settled (its pending payout stays claimable) and its balance burns. `crankBurn` sends the same for a list of holders, skipping those with nothing, until S3 retires it.
 - **`extinguish`.** Refused unless the raise settled (RaiseNotSettled); only the unvested treasury returns to holders, and the issuer's estate may still draw the vested tranches.

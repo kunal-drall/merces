@@ -88,6 +88,21 @@ export const userCommands = {
   }),
   payIn: z.object({ kind: z.literal('payIn'), seriesId: seriesIdSchema, periodId: periodIdSchema, amount: moneySchema }),
   claimPayout: z.object({ kind: z.literal('claimPayout'), seriesId: seriesIdSchema }),
+  /**
+   * Stage 1 `claim_tail` (SIM:1403-1417): the tail on the holder's redeemed units since its tail cursor. NotRedeemed
+   * before the issuer redeemed, HolderNotRegistered for a wallet that is not a registered holder; a holder that has not
+   * redeemed and still has units is redeemed first (the redemption body), then NoRedeemedUnits if it has still redeemed
+   * nothing. Emits `TailClaimed` (the tail only; 0 included).
+   */
+  claimTail: z.object({ kind: z.literal('claimTail'), seriesId: seriesIdSchema }),
+  /**
+   * Stage 1 `claim_final` (SIM:1449-1475): the holder's pending payout and its share of the final pool, once.
+   * TerminalStatus unless the series is Extinguished; a pending auction bid is delivered first; HolderNotRegistered.
+   * On a series that redeemed, the holder's remaining units are redeemed first and its share is weighed on its redeemed
+   * units, otherwise on its accrual units. Emits `FinalClaimed{units: weight, amount}` (0 included), then burns the
+   * holder's remaining units.
+   */
+  claimFinal: z.object({ kind: z.literal('claimFinal'), seriesId: seriesIdSchema }),
   requestPause: z.object({ kind: z.literal('requestPause'), seriesId: seriesIdSchema, until: z.number().int() }),
   approvePause: z.object({ kind: z.literal('approvePause'), seriesId: seriesIdSchema, until: z.number().int() }),
   redeem: z.object({ kind: z.literal('redeem'), seriesId: seriesIdSchema, maxPricePerUnit: moneySchema }),
@@ -103,6 +118,7 @@ export const userCommands = {
 export const serviceCommands = {
   snapshotRate: z.object({ kind: z.literal('snapshotRate'), pair: pairSchema, rateWad: wadSchema, confWad: wadSchema, publishTime: z.number().int(), /** opaque provider update payload (e.g. Pyth VAA) for live chains */ update: z.string().nullable() }),
   crankStatus: z.object({ kind: z.literal('crankStatus'), seriesId: seriesIdSchema }),
+  /** Stage 1 `burn_retired` for each listed holder, skipping a holder with no units (no event); `burnRetired` replaces it (S3) */
   crankBurn: z.object({ kind: z.literal('crankBurn'), seriesId: seriesIdSchema, holders: z.array(addressSchema) }),
   crankPause: z.object({ kind: z.literal('crankPause'), seriesId: seriesIdSchema }),
   openTransferWindow: z.object({ kind: z.literal('openTransferWindow'), seriesId: seriesIdSchema, commitEndsAt: z.number().int(), revealEndsAt: z.number().int() }),
@@ -113,8 +129,9 @@ export const serviceCommands = {
 } as const;
 
 /**
- * Stage 1's sealed-bid settlement (SPEC §5.2) and holder registration, with Stage 1's names. Anyone may send them: the
- * keeper `submit`s them and any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans them.
+ * Stage 1's sealed-bid settlement (SPEC §5.2), holder registration and the Retired burn, with Stage 1's names. Anyone
+ * may send them: the keeper `submit`s them and any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans
+ * the settlement steps.
  */
 export const permissionlessCommands = {
   /** Stage 1 `begin_settlement`: proposes a clearing price with the proposer's tally claims; starts the next round */
@@ -132,6 +149,13 @@ export const permissionlessCommands = {
   deliverBid: z.object({ kind: z.literal('deliverBid'), seriesId: seriesIdSchema, bidder: addressSchema }),
   /** Stage 1 `register_holder`: registers an allowlisted wallet as a holder of the series (idempotent) */
   registerHolder: z.object({ kind: z.literal('registerHolder'), seriesId: seriesIdSchema, wallet: addressSchema }),
+  /**
+   * Stage 1 `burn_retired` (SIM:624-636): burns a holder's balance on a Retired series. TerminalStatus unless the stored
+   * status is Retired; a wallet holding no units emits `UnitsBurned{units: 0}` before any registration check (also a
+   * wallet that never held any); otherwise HolderNotRegistered, then the holder is settled (its pending payout stays
+   * claimable) and its balance burns.
+   */
+  burnRetired: z.object({ kind: z.literal('burnRetired'), seriesId: seriesIdSchema, holder: addressSchema }),
 } as const;
 
 export const adminCommands = {

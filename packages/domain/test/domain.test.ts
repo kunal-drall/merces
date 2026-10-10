@@ -5,6 +5,7 @@ import { BN254_FR, CURRENCY_CODES, DEFAULT_PARAMETERS } from '@merces/math';
 import { randomBytes } from 'node:crypto';
 import {
   DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, seriesTermsViolations, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
+  amountBearingEvents, permissionlessCommandSchema,
   ChainError, attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, permissionlessCommandKinds, serviceCommandKinds, serviceCommandSchema, termsCommitment, userCommandKinds, userCommandSchema,
   type IndexingRule,
@@ -18,6 +19,12 @@ import {
  *  - S2-RH: registerHolder (`HolderRegistered`);
  *  - S2-E: Stage 1's auction error names (`detail.stage1`);
  *  - S2-PR: push delivery (`deliverBid`): the one-step settlement and the pull refund are retired.
+ *
+ * S3 cause codes:
+ *  - S3-TL: `claimTail` and `TailClaimed` (Stage 1 `claim_tail`);
+ *  - S3-FN: `claimFinal` and `FinalClaimed{units: weight}` (Stage 1 `claim_final`);
+ *  - S3-BR: `burnRetired{holder}` (Stage 1 `burn_retired`), permissionless;
+ *  - S3-BU: `PayoutClaimed.burnedUnits`.
  */
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
@@ -158,12 +165,40 @@ describe('schemas', () => {
   it('has no one-step settlement or pull refund (cause S2-MS, S2-PR: Stage 1 settles in steps and delivers)', () => {
     // the raise's wallet commands are Stage 1's four; the rest of the raise is the permissionless group
     expect(userCommandKinds.filter((k) => /Raise|Bid|Refund/.test(k))).toEqual(['openRaise', 'cancelRaise', 'commitBid', 'revealBid']);
-    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder']);
+    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired']); // cause S3-BR
     expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankBurn', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'graduateCurve', 'setAllowlist']);
     // submit takes both groups, each command once (the union's head is the first service command)
     expect(serviceCommandSchema.parse({ kind: 'deliverBid', seriesId: 'solana:abc', bidder: 'b' }).kind).toBe('deliverBid');
     expect(serviceCommandSchema.parse({ kind: 'snapshotRate', pair: 'EUR/USD', rateWad: '1', confWad: '0', publishTime: 1, update: null }).kind).toBe('snapshotRate');
     expect(() => serviceCommandSchema.parse({ kind: 'claimPayout', seriesId: 'solana:abc' })).toThrow();
+  });
+  it('has Stage 1\'s claim family: claimTail, claimFinal, burnRetired, TailClaimed, FinalClaimed and PayoutClaimed.burnedUnits (S3)', () => {
+    const env = { chain: 'solana', cursor: '000000000001', seq: 1, blockTime: 1, blockRef: '1', txId: 't', finality: 'finalized' as const };
+    const sid = 'solana:abc';
+    // cause S3-TL, S3-FN: the holder's own claims with Stage 1's names; S3-BR: the burn is permissionless, not a wallet command
+    expect(userCommandKinds.filter((k) => /^claim/.test(k))).toEqual(['claimPayout', 'claimTail', 'claimFinal', 'claimRedemption']);
+    for (const kind of ['claimTail', 'claimFinal'] as const) {
+      expect(userCommandSchema.parse({ kind, seriesId: sid })).toEqual({ kind, seriesId: sid });
+      expect(() => serviceCommandSchema.parse({ kind, seriesId: sid })).toThrow();
+    }
+    expect(permissionlessCommandSchema.parse({ kind: 'burnRetired', seriesId: sid, holder: 'h' })).toEqual({ kind: 'burnRetired', seriesId: sid, holder: 'h' });
+    expect(serviceCommandSchema.parse({ kind: 'burnRetired', seriesId: sid, holder: 'h' }).kind).toBe('burnRetired');
+    expect(() => permissionlessCommandSchema.parse({ kind: 'burnRetired', seriesId: sid })).toThrow(); // one holder per call, Stage 1's argument
+    expect(() => userCommandSchema.parse({ kind: 'burnRetired', seriesId: sid, holder: 'h' })).toThrow();
+    // the events: Stage 1's fields (SIM, EVM IPayoutClaims); every claim amount is amount-bearing (R28)
+    const payloads = {
+      PayoutClaimed: { seriesId: sid, holder: 'h', amount: '5', burnedUnits: '100' }, // cause S3-BU
+      TailClaimed: { seriesId: sid, holder: 'h', amount: '0' }, // cause S3-TL: a zero tail is an event
+      FinalClaimed: { seriesId: sid, holder: 'h', units: '100', amount: '0' }, // cause S3-FN: units = the weight
+    };
+    for (const [type, payload] of Object.entries(payloads)) {
+      expect(parseDomainEvent({ ...env, type, payload }).payload).toEqual(payload);
+      expect(amountBearingEvents.has(type as never)).toBe(true);
+    }
+    expect(() => parseDomainEvent({ ...env, type: 'PayoutClaimed', payload: { seriesId: sid, holder: 'h', amount: '5' } })).toThrow(); // S3-BU: required
+    expect(() => parseDomainEvent({ ...env, type: 'FinalClaimed', payload: { seriesId: sid, holder: 'h', amount: '5' } })).toThrow();
+    // the domain schema version that carries them
+    expect(domainJsonSchema().version).toBe('0.3.0');
   });
   it('the committed JSON schema is up to date', () => {
     const path = fileURLToPath(new URL('../schema/domain-v0.schema.json', import.meta.url));

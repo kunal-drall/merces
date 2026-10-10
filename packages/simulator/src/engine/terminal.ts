@@ -3,7 +3,7 @@ import { PARAMETER_BOUNDS, finalDistribute, settleHolderDelta, vested } from '@m
 import type { SimPosition, SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
-import { accrualUnits } from './holders.ts';
+import { accrualUnits, burnUnits, heldUnits, settleHolder } from './holders.ts';
 import { liveCapPerUnit, mintFinalized, setStatus } from './ledger.ts';
 import { redeemBody, redeemableUnits } from './redemption.ts';
 import { deliverPending } from './settlement.ts';
@@ -128,17 +128,14 @@ export function claimableFinal(s: SimSeries, p: SimPosition): bigint {
 }
 
 /**
- * A registered holder's share of the final pool of an extinguished series (Stage 1 `claim_final`'s amount,
- * SIM:1449-1475); nothing on any other series. On a series that redeemed (amendment M4), a holder that still has units
- * not held for a window ask has them redeemed first (`redeemBody`: the redemption price and the tail catch-up, paid at
- * once) and its share is weighed on its redeemed units; otherwise on its accrual units.
+ * A settled holder's weight and share of the final pool of an extinguished series (Stage 1 `claim_final`,
+ * SIM:1458-1468). On a series that redeemed (amendment M4), a holder that still has units not held for a window ask has
+ * them redeemed first (`redeemBody`: its pending payout, the redemption price and the tail catch-up, paid at once) and
+ * its share is weighed on its redeemed units; otherwise on its accrual units. The share is
  * `floor((finalAccWad − lastFinalAccWad) × weight / WAD)`, 0 after the first final claim; moves the final cursor and
- * marks the holder claimed. A pending auction bid is delivered first (`deliverPending`). The caller (`claimPayout`)
- * settles the holder before and burns its units after.
+ * marks the holder claimed. The caller has delivered a pending auction bid and settled the holder.
  */
-export function takeFinal(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): bigint {
-  if (s.status !== 'Extinguished') return 0n;
-  deliverPending(e, s, p.wallet, emit); // Stage 1's claim_final delivers a pending auction allocation first (SIM:1453)
+function finalShare(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): { weight: bigint; share: bigint } {
   let weight: bigint;
   if (s.redemption) {
     if (redeemableUnits(p) > 0n) redeemBody(e, s, p, emit);
@@ -146,8 +143,54 @@ export function takeFinal(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emi
   } else {
     weight = accrualUnits(s, p);
   }
-  const amount = p.finalClaimed ? 0n : settleHolderDelta(s.final.finalAccWad, p.lastFinalAccWad, weight);
+  const share = p.finalClaimed ? 0n : settleHolderDelta(s.final.finalAccWad, p.lastFinalAccWad, weight);
   p.lastFinalAccWad = s.final.finalAccWad;
   p.finalClaimed = true;
-  return amount;
+  return { weight, share };
+}
+
+/**
+ * A registered holder's share of the final pool of an extinguished series (Stage 1 `claim_final`'s share,
+ * SIM:1449-1475; `finalShare`); nothing on any other series. A pending auction bid is delivered first
+ * (`deliverPending`). The caller (`claimPayout`) settles the holder before and burns its units after; `claimFinal` is the
+ * command with Stage 1's own order and event.
+ */
+export function takeFinal(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): bigint {
+  if (s.status !== 'Extinguished') return 0n;
+  deliverPending(e, s, p.wallet, emit); // Stage 1's claim_final delivers a pending auction allocation first (SIM:1453)
+  return finalShare(e, s, p, emit).share;
+}
+
+/**
+ * Stage 1 `claim_final` (SIM:1449-1475). Checks and effects, in order:
+ *
+ *  1. the stored status is Extinguished (TerminalStatus);
+ *  2. a pending auction bid is delivered (`deliverPending`: its refund and units);
+ *  3. the signer is a registered holder (HolderNotRegistered), settled on the vault cursor;
+ *  4. its weight and share (`finalShare`: on a series that redeemed, its remaining units are redeemed first and it is
+ *     weighed on its redeemed units; otherwise on its accrual units); the share is paid once;
+ *  5. it is paid `pending + share` from the vault and its balance burns (reason `extinguishment`; the units held for a
+ *     window ask stay until the window returns them).
+ *
+ * Events: `BidDelivered` (a pending bid), the redemption body's when it runs, then `FinalClaimed{units: weight, amount:
+ * pending + share}` (0 included, SPEC's zero-amount rule) and the `UnitsBurned` of the remaining balance (the EVM
+ * order: the claim event before its burn).
+ */
+export function claimFinal(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'claimFinal' }>, emit: Emit): void {
+  const s = e.series(cmd.seriesId);
+  if (s.status !== 'Extinguished') fail('TerminalStatus', 'the series is not extinguished');
+  deliverPending(e, s, signer, emit); // SIM:1453
+  const p = s.positions.get(signer);
+  if (!p || !p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');
+  settleHolder(e, s, p);
+  const { weight, share } = finalShare(e, s, p, emit);
+  const amount = p.pending + share;
+  p.pending = 0n;
+  if (amount > s.vaultBalance) throw new ChainError('ChainSpecific', 'vault invariant violated'); // never happens: every division floors
+  s.vaultBalance -= amount;
+  s.vaultDistributedNet += amount;
+  p.claimedTotal += amount;
+  e.credit(p.wallet, s.terms.stablecoinMint, amount);
+  emit('FinalClaimed', { seriesId: s.seriesId, holder: p.wallet, units: str(weight), amount: str(amount) });
+  burnUnits(s, p, heldUnits(s, p), 'extinguishment', emit);
 }

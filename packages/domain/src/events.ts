@@ -171,7 +171,23 @@ export const eventPayloads = {
   }),
   PaymentRefunded: z.object({ ...seriesScoped, periodId: periodIdSchema.nullable(), amount: moneySchema, reason: z.enum(['cap', 'overpayment']) }),
   FeeTaken: z.object({ ...seriesScoped, kind: feeKindSchema, amount: moneySchema, payer: addressSchema }),
-  PayoutClaimed: z.object({ ...seriesScoped, holder: addressSchema, amount: moneySchema }),
+  /**
+   * Stage 1 `PayoutClaimed`: `amount` is the net payout the claim paid; `burnedUnits` the units the claim burns (a
+   * Retired series' balance; 0 otherwise). Inside the redemption body (`claimRedemption`, and the redemption a
+   * `claimTail` or `claimFinal` runs first) it carries the holder's pending payout and the tail catch-up, with
+   * `burnedUnits` 0 (the body's burn is its own `UnitsBurned`). Until S3 retires the bundle, `claimPayout` also pays the
+   * tail and the final-pool share in it and burns on an Extinguished series too.
+   */
+  PayoutClaimed: z.object({ ...seriesScoped, holder: addressSchema, amount: moneySchema, burnedUnits: unitsSchema }),
+  /** Stage 1 `TailClaimed` (`claimTail`): the tail paid on the holder's redeemed units, the tail only (0 included) */
+  TailClaimed: z.object({ ...seriesScoped, holder: addressSchema, amount: moneySchema }),
+  /**
+   * Stage 1 `FinalClaimed` (`claimFinal`, the reference simulator's and the EVM's payload): `units` is the weight the
+   * holder's final-pool share was taken on (its redeemed units on a series that redeemed, else its accrual units) and
+   * `amount` its pending payout plus that share (0 included). A redemption run first pays in its own events. Emitted
+   * before the `UnitsBurned` of the holder's remaining units.
+   */
+  FinalClaimed: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, amount: moneySchema }),
   SeriesRetired: z.object({ ...seriesScoped, paidPerUnitWad: wadSchema }),
   UnitsBurned: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema, reason: z.enum(['cap', 'redemption', 'extinguishment']) }),
   RedemptionOpened: z.object({ ...seriesScoped, pricePerUnit: moneySchema, unitsOutstanding: unitsSchema, deposit: moneySchema, tailCapPerUnit: moneySchema, tailEndsAt: z.number().int() }),
@@ -258,6 +274,6 @@ export function isEvent<T extends EventType>(e: DomainEvent, type: T): e is Doma
 export const amountBearingEvents: ReadonlySet<EventType> = new Set<EventType>([
   'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'SettlementProposed', 'SettlementRejected', 'UnitsAllocated',
   'BidDelivered', 'RaiseMintFinalized', 'TreasuryFunded', 'FundsReleased', 'SplitReceipt', 'ReportAccepted',
-  'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout',
+  'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'TailClaimed', 'FinalClaimed', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout',
   'SeriesExtinguished', 'TransferWindowCleared', 'CurveGraduated',
 ]);

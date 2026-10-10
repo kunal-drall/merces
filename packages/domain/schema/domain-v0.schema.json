@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://merces.dev/schema/domain-v0.json",
   "title": "Merces canonical domain model v0",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "envelope": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "oneOf": [
@@ -2233,11 +2233,169 @@
               "amount": {
                 "type": "string",
                 "pattern": "^\\d+$"
+              },
+              "burnedUnits": {
+                "type": "string",
+                "pattern": "^\\d+$"
               }
             },
             "required": [
               "seriesId",
               "holder",
+              "amount",
+              "burnedUnits"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "TailClaimed"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "holder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "holder",
+              "amount"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "FinalClaimed"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "holder": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "units": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "holder",
+              "units",
               "amount"
             ],
             "additionalProperties": false
@@ -4940,11 +5098,71 @@
         "amount": {
           "type": "string",
           "pattern": "^\\d+$"
+        },
+        "burnedUnits": {
+          "type": "string",
+          "pattern": "^\\d+$"
         }
       },
       "required": [
         "seriesId",
         "holder",
+        "amount",
+        "burnedUnits"
+      ],
+      "additionalProperties": false
+    },
+    "TailClaimed": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "holder",
+        "amount"
+      ],
+      "additionalProperties": false
+    },
+    "FinalClaimed": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "holder",
+        "units",
         "amount"
       ],
       "additionalProperties": false
@@ -6309,6 +6527,44 @@
       ],
       "additionalProperties": false
     },
+    "claimTail": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "claimTail"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "claimFinal": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "claimFinal"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
     "requestPause": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -6994,6 +7250,31 @@
         "kind",
         "seriesId",
         "wallet"
+      ],
+      "additionalProperties": false
+    },
+    "burnRetired": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "burnRetired"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "holder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "holder"
       ],
       "additionalProperties": false
     },

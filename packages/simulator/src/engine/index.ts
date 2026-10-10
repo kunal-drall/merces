@@ -10,13 +10,13 @@ import { fail } from './errors.ts';
 import { auctionPhase, cancelRaise, commitBid, openRaise, revealBid } from './auction.ts';
 import { buyCurve, graduateCurve } from './curve.ts';
 import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
-import { claimPayout, crankBurn, payIn, postSplitReceipt } from './payments.ts';
-import { claimRedemption, quote, redeem } from './redemption.ts';
+import { burnRetired, claimPayout, crankBurn, payIn, postSplitReceipt } from './payments.ts';
+import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
 import { submitReport } from './reports.ts';
 import { beginSettlement, deliverBid, finalizeSettlement, processBid, registerHolder, tallyBids } from './settlement.ts';
 import { accrualNow, approvePause, crankPause, crankStatus, deadlines, reportablePeriods, requestPause, type PeriodDeadlines } from './status.ts';
-import { amendTerms, extinguish } from './terminal.ts';
+import { amendTerms, claimFinal, extinguish } from './terminal.ts';
 import { drawRelease, pauseReleases } from './treasury.ts';
 import { clearTransferWindow, commitWindowOrder, openTransferWindow, revealWindowOrder } from './window.ts';
 
@@ -91,6 +91,8 @@ export class SimEngine implements EngineCore {
       case 'processBid': service('any'); return processBid(this, cmd, emit);
       case 'deliverBid': service('any'); return deliverBid(this, cmd, emit);
       case 'registerHolder': service('any'); return registerHolder(this, cmd, emit);
+      // Stage 1's Retired burn: permissionless (any wallet, or the keeper)
+      case 'burnRetired': service('any'); return burnRetired(this, cmd, emit);
       case 'drawRelease': return drawRelease(this, user(), cmd, now, emit);
       case 'pauseReleases': return pauseReleases(this, user(), cmd, emit);
       case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit, ctx);
@@ -103,6 +105,8 @@ export class SimEngine implements EngineCore {
       case 'crankStatus': service('any'); return crankStatus(this, cmd, now, emit);
       case 'redeem': return redeem(this, user(), cmd, now, emit);
       case 'claimRedemption': return claimRedemption(this, user(), cmd, emit);
+      case 'claimTail': return claimTail(this, user(), cmd, emit);
+      case 'claimFinal': return claimFinal(this, user(), cmd, emit);
       case 'amendTerms': return amendTerms(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit);
       case 'extinguish': return extinguish(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit);
       case 'snapshotRate': service('keeper'); return snapshotRate(this, cmd, now, emit);

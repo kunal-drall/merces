@@ -14,7 +14,7 @@ export function domainJsonSchema(): Record<string, unknown> {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     $id: 'https://merces.dev/schema/domain-v0.json',
     title: 'Merces canonical domain model v0',
-    version: '0.2.0',
+    version: '0.3.0',
     envelope: z.toJSONSchema(domainEventSchema, { target: 'draft-2020-12' }),
     events,
     commands,

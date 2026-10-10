@@ -14,6 +14,11 @@ const GENESIS = Date.UTC(2026, 0, 1) / 1000;
  *  - S2-FP: a failed raise keeps its price and would-be results;
  *  - S2-RH: registerHolder (`HolderRegistered`);
  *  - S2-PU: per-bid money movement: `TreasuryFunded` per processed winner, one treasury money row each.
+ *
+ * S3 cause codes:
+ *  - S3-TL, S3-FN: `TailClaimed` and `FinalClaimed` write `tail_claim` and `final_claim` money rows (above 0 only) and
+ *    add to an existing position's `claimed_total`, never creating a position (A-REV-10);
+ *  - S3-Z: a burn of 0 units (`burnRetired` on a wallet holding nothing) changes nothing in the read model.
  */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
@@ -482,6 +487,68 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     }
     expect((await h.sim.getAuction(invalid.seriesId))).toMatchObject({ revealedCount: 2, validCount: 0 });
     expect((await h.sim.getAuction(zero.seriesId))).toMatchObject({ bidCount: 0 });
+  });
+
+  it('projects the claim family: tail and final claims as money rows above 0, positions updated never created, a burn of 0 ignored', async () => {
+    const key = 'claims-family';
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 } });
+    const [b0, b1] = [h.backers[0]!, h.backers[1]!];
+    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
+    const settledAt = (await h.sim.getSeries(seriesId))!.settledAt!;
+    await h.sim.setTime(settledAt + 11);
+    await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(100).toString() });
+    // white-box: a tail of 1.5 per unit in the vault (the tail state's accumulator, as a paid tail leaves it)
+    const live = h.sim.state.series.get(seriesId)!;
+    live.tail.tailAccWad = USDC(1.5) * WAD;
+    live.vaultBalance += USDC(750);
+    // b0: redeemed first, then its tail (150); a second claim of 0
+    await h.exec(b0, { kind: 'claimTail', seriesId });
+    await h.exec(b0, { kind: 'claimTail', seriesId });
+    await h.sim.setTime(settledAt + 12);
+    await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    // b1: redeemed first, then its final share 4.5 × 100; a second claim of 0
+    await h.exec(b1, { kind: 'claimFinal', seriesId });
+    await h.exec(b1, { kind: 'claimFinal', seriesId });
+    await idx.catchUp();
+
+    const rows = async (kind: string) => (await t.pool.query('select wallet, amount::text, detail from money_events where series_id = $1 and kind = $2 order by seq', [seriesId, kind])).rows;
+    expect(await rows('tail_claim')).toEqual([{ wallet: b0.address, amount: USDC(150).toString(), detail: {} }]);
+    expect(await rows('final_claim')).toEqual([{ wallet: b1.address, amount: USDC(450).toString(), detail: { units: '100' } }]);
+    // the redemption principal is its own row; claimed_total sums what the holder was paid as payouts, tail and final
+    expect((await rows('redemption_claim')).map((r) => [r.wallet, r.amount])).toEqual([[b0.address, USDC(900).toString()], [b1.address, USDC(900).toString()]]);
+    const pos = async (w: string) => (await t.pool.query('select units::text, redeemed_units::text, claimed_total::text from positions where series_id = $1 and wallet = $2', [seriesId, w])).rows[0];
+    expect(await pos(b0.address)).toEqual({ units: '0', redeemed_units: '100', claimed_total: USDC(150).toString() });
+    expect(await pos(b1.address)).toEqual({ units: '0', redeemed_units: '100', claimed_total: USDC(450).toString() });
+    // the public feed names no amount
+    const act = (await t.pool.query("select kind, summary from activity where series_id = $1 and kind in ('TailClaimed', 'FinalClaimed') order by seq", [seriesId])).rows;
+    expect(act).toEqual([
+      { kind: 'TailClaimed', summary: 'A holder claimed its tail payout' }, { kind: 'TailClaimed', summary: 'A holder claimed its tail payout' },
+      { kind: 'FinalClaimed', summary: 'A holder claimed its final-pool share' }, { kind: 'FinalClaimed', summary: 'A holder claimed its final-pool share' },
+    ]);
+
+    // a claim by a wallet with no position (a registration alone, A-REV-10) creates none, and a burn of 0 changes nothing
+    let seq = 2_000_000;
+    const ev = <T extends EventType>(type: T, payload: EventPayload<T>): DomainEvent => ({ chain: key, cursor: String(++seq).padStart(12, '0'), seq, blockTime: 1_780_000_000, blockRef: String(seq), txId: `synthetic-${seq}`, finality: 'finalized', type, payload }) as DomainEvent;
+    const outsider = 'registered-only-claimer';
+    const c = await t.pool.connect();
+    try {
+      await c.query('begin');
+      for (const e of [
+        ev('TailClaimed', { seriesId, holder: outsider, amount: '0' }),
+        ev('FinalClaimed', { seriesId, holder: outsider, units: '0', amount: '0' }),
+        ev('UnitsBurned', { seriesId, holder: outsider, units: '0', reason: 'cap' }),
+      ]) await project(c, e);
+      await c.query('commit');
+    } finally {
+      c.release();
+    }
+    expect(await pos(outsider)).toBeUndefined();
+    expect((await t.pool.query('select count(*)::int as n from money_events where series_id = $1 and wallet = $2', [seriesId, outsider])).rows[0].n).toBe(0);
+    expect((await t.pool.query('select units_outstanding::text from series where series_id = $1', [seriesId])).rows[0].units_outstanding).toBe('300');
+    // anyone may send a burn of 0 for any wallet: it adds no line to the public feed
+    expect((await t.pool.query("select count(*)::int as n from activity where chain = $1 and seq > 2000000 and kind = 'UnitsBurned'", [key])).rows[0].n).toBe(0);
   });
 
   it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {

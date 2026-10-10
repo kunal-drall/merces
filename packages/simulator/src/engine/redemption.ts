@@ -3,7 +3,7 @@ import { U64_MAX, WAD, newTailState, pidAt, redemptionQuote, settleHolderDelta, 
 import type { SimPeriod, SimPosition, SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
-import { burnUnits, settleHolder } from './holders.ts';
+import { accrualUnits, burnUnits, settleHolder } from './holders.ts';
 import { derivedStatus, liveCapPerUnit, mintFinalized, retire, setStatus } from './ledger.ts';
 import { deliverPending } from './settlement.ts';
 import { syncStatus } from './status.ts';
@@ -121,8 +121,8 @@ function tailCatchUp(p: SimPosition, units: bigint): bigint {
  * added to `redeemedUnits`), pay `pending + P_redeem × units + tail catch-up` from the vault, burn those units (reason
  * `redemption`).
  *
- * Events: `BidDelivered` (a pending bid), `PayoutClaimed` for the pending payout and the tail catch-up (when > 0;
- * `claimPayout`'s carries the tail too), `UnitsBurned`, `RedemptionClaimed{units, amount: P_redeem × units}`.
+ * Events: `BidDelivered` (a pending bid), `PayoutClaimed{burnedUnits: 0}` for the pending payout and the tail catch-up
+ * (when > 0; `claimPayout`'s carries the tail too), `UnitsBurned`, `RedemptionClaimed{units, amount: P_redeem × units}`.
  */
 export function redeemBody(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): void {
   const r = s.redemption!;
@@ -140,7 +140,7 @@ export function redeemBody(e: EngineCore, s: SimSeries, p: SimPosition, emit: Em
   if (payout > 0n) {
     s.vaultDistributedNet += payout;
     p.claimedTotal += payout;
-    emit('PayoutClaimed', { seriesId: s.seriesId, holder: p.wallet, amount: str(payout) });
+    emit('PayoutClaimed', { seriesId: s.seriesId, holder: p.wallet, amount: str(payout), burnedUnits: '0' });
   }
   r.claimed += principal;
   burnUnits(s, p, units, 'redemption', emit);
@@ -199,8 +199,8 @@ function tailSince(s: SimSeries, p: SimPosition, units: bigint): bigint {
  * The tail a holder could take now, without moving its cursor: Stage 1's `claimableTail` view (MercesVault.sol:747-753)
  * and the tail `claim_tail` pays (SIM:1403-1417). It is weighed on the holder's redeemed units or, for a holder that
  * has not redeemed yet, on the units its redemption would redeem (`units − escrowed`), because `claim_tail` redeems
- * them first. 0 before a redemption. Until S3 adds `claimTail`, such a holder sends `claimRedemption` and then
- * `claimPayout` takes this tail (SH-CLM-2).
+ * them first. 0 before a redemption. `claimTail` pays exactly this (until S3 retires the bundle, `claimPayout` also pays
+ * it once the holder has redeemed).
  */
 export function claimableTail(s: SimSeries, p: SimPosition): bigint {
   if (!s.redemption) return 0n;
@@ -217,10 +217,42 @@ export function tailOwed(s: SimSeries, p: SimPosition): bigint {
   return s.redemption ? tailSince(s, p, p.redeemedUnits + redeemableUnits(p)) : 0n;
 }
 /**
+ * Stage 1 `claim_tail` (SIM:1403-1417). Checks and effects, in order:
+ *
+ *  1. the series redeemed (NotRedeemed; Stage 1 checks the redemption time only, not the status, so an extinguished
+ *     series that redeemed still pays its tail);
+ *  2. the signer is a registered holder (HolderNotRegistered);
+ *  3. a holder that has redeemed nothing and still has accrual units is redeemed first (`redeemBody`: a pending auction
+ *     bid delivered, the pending payout and the tail catch-up in `PayoutClaimed`, `UnitsBurned`, `RedemptionClaimed`);
+ *  4. a holder that has still redeemed nothing is refused (NoRedeemedUnits: a late registration with no units, 22#98);
+ *  5. the tail on its redeemed units since its tail cursor, `floor((tailAccWad − lastTailAccWad) × redeemedUnits / WAD)`,
+ *     is paid from the vault and the cursor moves to `tailAccWad`.
+ *
+ * Events: the redemption body's when it runs, then `TailClaimed{amount}` (the tail only; 0 included, SPEC's
+ * zero-amount rule).
+ */
+export function claimTail(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'claimTail' }>, emit: Emit): void {
+  const s = e.series(cmd.seriesId);
+  if (!s.redemption) fail('NotRedeemed', 'the series has not redeemed');
+  const p = s.positions.get(signer);
+  if (!p || !p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');
+  if (p.redeemedUnits === 0n && accrualUnits(s, p) > 0n) redeemBody(e, s, p, emit);
+  if (p.redeemedUnits === 0n) fail('NoRedeemedUnits', 'the holder has redeemed no units');
+  const amount = tailSince(s, p, p.redeemedUnits);
+  p.lastTailAccWad = s.tail.tailAccWad;
+  if (amount > s.vaultBalance) throw new ChainError('ChainSpecific', 'vault invariant violated'); // never happens: every division floors
+  s.vaultBalance -= amount;
+  s.vaultDistributedNet += amount;
+  p.claimedTotal += amount;
+  e.credit(p.wallet, s.terms.stablecoinMint, amount);
+  emit('TailClaimed', { seriesId: s.seriesId, holder: p.wallet, amount: str(amount) });
+}
+
+/**
  * The tail a holder takes now (Stage 1 `claim_tail`'s amount on its redeemed units, SIM:1411-1412); moves its tail
  * cursor. Nothing (and no cursor move) before a redemption or for a holder with no redeemed units: `claimPayout`
- * carries the tail until S3 adds `claimTail` with its own refusals and its redemption first (the read side,
- * `claimableTail`, counts those units already).
+ * carries the tail until S3 makes it Stage 1's `claim` (`claimTail` has the refusals and the redemption first; the read
+ * side, `claimableTail`, counts those units already).
  */
 export function takeTail(_e: EngineCore, s: SimSeries, p: SimPosition): bigint {
   if (!s.redemption || p.redeemedUnits === 0n) return 0n;

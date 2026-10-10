@@ -34,8 +34,11 @@ function summary(e: DomainEvent): string | null {
     case 'ReportAccepted': return `Report accepted for ${p.periodId} (tier ${p.tier})`;
     case 'PaymentReceived': return `Payment received${p.periodId ? ` for ${p.periodId}` : ''}`;
     case 'PayoutClaimed': return 'A holder claimed a payout';
+    case 'TailClaimed': return 'A holder claimed its tail payout';
+    case 'FinalClaimed': return 'A holder claimed its final-pool share';
     case 'SeriesRetired': return 'Series reached its cap and retired';
-    case 'UnitsBurned': return `${p.units} units burned (${p.reason})`;
+    // a burn of 0 (`burnRetired` on a wallet holding nothing, which anyone may send) is not in the feed
+    case 'UnitsBurned': return p.units === '0' ? null : `${p.units} units burned (${p.reason})`;
     case 'RedemptionOpened': return 'Issuer opened redemption';
     case 'RedemptionClaimed': return 'A holder claimed redemption';
     case 'TailPayout': return `Tail payout for ${p.periodId}`;
@@ -294,6 +297,9 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       break;
     case 'UnitsBurned': {
       const p = e.payload as P<'UnitsBurned'>;
+      // Stage 1's zero-amount rule: `burnRetired` on a wallet holding nothing emits a burn of 0 units, which changes
+      // nothing (any wallet, also one that never held units: no position row, no money row, no activity line)
+      if (BigInt(p.units) === 0n) break;
       await client.query('update positions set units = greatest(units - $3, 0), burned_units = burned_units + $3, last_seq = $4 where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.units, e.seq]);
       await client.query('update series set units_outstanding = greatest(units_outstanding - $2, 0), last_event_seq = $3 where series_id = $1', [p.seriesId, p.units, e.seq]);
       await money(client, e, 'burn', p.units, { wallet: p.holder, detail: { reason: p.reason } });
@@ -310,6 +316,21 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       // a holder's units are redeemed when it claims (Stage 1), not when the issuer redeems
       await client.query('update positions set redeemed_units = redeemed_units + $3, last_seq = greatest(last_seq, $4) where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.units, e.seq]);
       await money(client, e, 'redemption_claim', p.amount, { wallet: p.holder, detail: { units: p.units } });
+      break;
+    }
+    case 'TailClaimed': {
+      const p = e.payload as P<'TailClaimed'>;
+      // the holder's own claim adds to an existing position only: a claim never creates one, so it grants no holder
+      // access (A-REV-10); a zero claim writes no money row
+      await client.query('update positions set claimed_total = claimed_total + $3, last_seq = greatest(last_seq, $4) where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.amount, e.seq]);
+      if (BigInt(p.amount) > 0n) await money(client, e, 'tail_claim', p.amount, { wallet: p.holder });
+      break;
+    }
+    case 'FinalClaimed': {
+      const p = e.payload as P<'FinalClaimed'>;
+      // as TailClaimed: an existing position only, no money row for a zero claim; the weight goes in the detail
+      await client.query('update positions set claimed_total = claimed_total + $3, last_seq = greatest(last_seq, $4) where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.amount, e.seq]);
+      if (BigInt(p.amount) > 0n) await money(client, e, 'final_claim', p.amount, { wallet: p.holder, detail: { units: p.units } });
       break;
     }
     case 'TailPayout': {

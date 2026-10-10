@@ -23,6 +23,9 @@ import { seedAuction, seedBid, seriesOf } from './kit.ts';
  *  - S2-DA: a bidder removed from the allowlist stays valid and is delivered;
  *  - S2-NRC: the non-reveal charge hold (0 bps applies; a charge is never credited);
  *  - S2-RH: `registerHolder` and `HolderRegistered`.
+ *
+ * S3 cause codes:
+ *  - S3-BR: `burnRetired` joins the permissionless group (its own cases are in claims.test.ts).
  */
 
 interface Bid { w: SimWallet; price: bigint; qty: bigint; reveal?: boolean; deposit?: bigint }
@@ -92,7 +95,8 @@ describe('the chain\'s settlement limits and the permissionless group', () => {
       { kind: 'deliverBid', seriesId, bidder: h.backers[0]!.address },
       { kind: 'registerHolder', seriesId, wallet: h.backers[1]!.address },
     ];
-    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds);
+    // cause S3-BR: every settlement step and registration; `burnRetired` needs a Retired series (claims.test.ts)
+    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => k !== 'burnRetired'));
     for (const cmd of cmds) {
       const tx = await h.sim.build(cmd, anyone.address);
       expect(tx.command).toEqual(cmd);

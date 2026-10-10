@@ -33,6 +33,8 @@ export const STAGE1_CODE = {
   LockupActive: 'TooEarly',
   UnreportedPeriods: 'WrongStatus',
   NotRedeemed: 'WrongStatus',
+  // the claim family (S3): `claim_tail` for a holder that has redeemed nothing and has nothing left to redeem
+  NoRedeemedUnits: 'WrongStatus',
   PauseNotRequested: 'WrongStatus',
   AlreadyPaused: 'WrongStatus',
   NotPaused: 'WrongStatus',
