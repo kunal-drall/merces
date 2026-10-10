@@ -54,7 +54,7 @@ export function graduate(s: SimSeries, now: number, emit: Emit): void {
     allocated += amount;
     return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false, returned: false };
   });
-  emit('CurveGraduated', { seriesId: s.seriesId, raised: str(c.raised), unitsOutstanding: str(s.unitsOutstanding) });
+  emit('CurveGraduated', { seriesId: s.seriesId, raised: str(c.raised), unitsOutstanding: str(s.unitsOutstanding), issuePrice: str(s.issuePrice) });
 }
 export function graduateCurve(e: EngineCore, cmd: Extract<Command, { kind: 'graduateCurve' }>, emit: Emit): void {
   const s = e.series(cmd.seriesId);

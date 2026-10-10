@@ -134,7 +134,16 @@ export const eventPayloads = {
   AttestorRegistered: z.object({ attestor: addressSchema, active: z.boolean() }),
   VerifierKeyRegistered: z.object({ keyId: z.string(), publicKey: z.string(), active: z.boolean() }),
   CurveSeriesCreated: z.object({ ...seriesScoped, issuer: addressSchema, quoteStablecoin: stablecoinSchema, graduationThreshold: moneySchema }),
-  CurveGraduated: z.object({ ...seriesScoped, raised: moneySchema, unitsOutstanding: unitsSchema }),
+  CurveGraduated: z.object({
+    ...seriesScoped,
+    raised: moneySchema,
+    unitsOutstanding: unitsSchema,
+    /**
+     * The issue price the chain stored at graduation (the curve's P0, as `AuctionSettled.clearingPrice` is a sealed
+     * raise's): the cap per unit is Stage 1's `capPerUnit(capMultipleWad, issuePrice)`, floor.
+     */
+    issuePrice: moneySchema,
+  }),
 } as const;
 
 export type EventType = keyof typeof eventPayloads;

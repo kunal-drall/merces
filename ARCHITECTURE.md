@@ -53,8 +53,10 @@ amount. The API serves lists and histories from the read model and reads per-req
 period standings) live from the chain. Stage 1's reporting ledger (first and next expected period, last accepted and
 paid period, the open due, the income chain head, the period whose formal notice was recorded) is projected into
 `series` like everything else (migration 017; from `AuctionSettled`/`CurveGraduated`, `ReportAccepted`,
-`PaymentReceived`, `SeriesExtinguished` and `FormalNoticeDue`), so the series views have one source; the report
-prior a device must prove against is read live (`GET /series/{id}/reporting/prior`).
+`PaymentReceived`, `SeriesRetired`, `SeriesExtinguished` and `FormalNoticeDue`), so the series views have one source;
+the report prior a device must prove against is read live (`GET /series/{id}/reporting/prior`). The issue price comes
+from the event that set it onchain (`AuctionSettled.clearingPrice`, `CurveGraduated.issuePrice`) and the cap per unit
+is Stage 1's `capPerUnit` on it (floor), at settlement or graduation and again after each `TermsAmended`.
 
 ## Write side
 

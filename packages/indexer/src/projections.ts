@@ -222,7 +222,9 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       break;
     }
     case 'SeriesRetired':
-      await client.query('update series set last_event_seq = $2 where series_id = $1', [sid, e.seq]);
+      // the cap is met and nothing more is owed: Stage 1's `retire` clears the open due on every path (SIM:445-454),
+      // also when a split receipt retires the series with a reported due unpaid (no payment can follow on a Retired series)
+      await client.query('update series set open_due_period = null, open_due_amount = 0, last_event_seq = $2 where series_id = $1', [sid, e.seq]);
       break;
     case 'UnitsBurned': {
       const p = e.payload as P<'UnitsBurned'>;
@@ -319,7 +321,14 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     case 'CurveGraduated': {
       const p = e.payload as P<'CurveGraduated'>;
       await client.query('update curves set graduated = true, raised = $2 where series_id = $1', [p.seriesId, p.raised]);
-      await client.query("update series set phase = 'Settled', settled_at = $2, units_sold = $3, units_outstanding = $3, treasury_total = $4, lockup_ends_at = $2 + lockup_seconds, first_period = $6, next_expected_period = coalesce(next_expected_period, $6), last_event_seq = $5 where series_id = $1", [p.seriesId, e.blockTime, p.unitsOutstanding, p.raised, e.seq, periodAt(e.blockTime)]);
+      // graduation sets the issue price, and with it the cap per unit, as an auction's settlement does (AuctionSettled)
+      const s = await client.query<{ cap_multiple_wad: string }>('select cap_multiple_wad::text from series where series_id = $1', [p.seriesId]);
+      const row = s.rows[0];
+      const cap = row ? capPerUnit(BigInt(row.cap_multiple_wad), BigInt(p.issuePrice)).toString() : null;
+      await client.query(
+        "update series set phase = 'Settled', settled_at = $2, issue_price = $7, units_sold = $3, units_outstanding = $3, cap_per_unit = $8, treasury_total = $4, lockup_ends_at = $2 + lockup_seconds, first_period = $6, next_expected_period = coalesce(next_expected_period, $6), last_event_seq = $5 where series_id = $1",
+        [p.seriesId, e.blockTime, p.unitsOutstanding, p.raised, e.seq, periodAt(e.blockTime), p.issuePrice, cap],
+      );
       break;
     }
     case 'PauseRequested':

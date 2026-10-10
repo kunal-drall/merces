@@ -5,7 +5,8 @@ import type { BidState } from '@merces/domain';
  *
  * The reporting-ledger fields (`nextExpectedPeriod`, `openDuePeriod`, `formalNoticeEmittedFor`, ...) come from the
  * indexer's projection of Stage 1's ledger (migration 017: AuctionSettled / CurveGraduated, ReportAccepted,
- * PaymentReceived, SeriesExtinguished, FormalNoticeDue), one source with the rest of the row, never a live chain read
+ * PaymentReceived, SeriesRetired, SeriesExtinguished, FormalNoticeDue), one source with the rest of the row, never a
+ * live chain read
  * (critique M8). `status` is the status the chain last stored (its StatusChanged events). The open due's amount is a
  * payment amount, which PRIVACY.md gives to the issuer, holders and admins only: the public row says only whether a
  * due is open (`paymentOutstanding`); the amount is in `reportingRow` (served at the holder-or-issuer tier).

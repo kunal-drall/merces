@@ -35,6 +35,10 @@ describe('curve mode (solana)', () => {
     // the curve keeps selling and graduates as usual
     const buy = await h.exec(h.backers[2]!, { kind: 'buyCurve', seriesId, amountIn: USDC(600).toString(), minUnitsOut: '0' });
     expect(types(buy.events)).toEqual(['UnitsMinted', 'TreasuryFunded', 'CurveGraduated']);
+    // the event carries the issue price graduation stored (raised / units sold), the base of the cap per unit
+    const graduated = (await h.sim.getSeries(seriesId))!;
+    expect(buy.events[2]!.payload).toEqual({ seriesId, raised: USDC(2100).toString(), unitsOutstanding: graduated.unitsOutstanding, issuePrice: graduated.issuePrice });
+    expect(graduated.issuePrice).toBe((USDC(2100) / BigInt(graduated.unitsSold)).toString());
     // a graduated curve is a settled raise: only the unvested half of its 2,100 treasury goes to the final pool (G7)
     const ex = await extinguish();
     expect(types(ex.events)).toEqual(['PaymentReceived', 'SeriesExtinguished', 'StatusChanged']);

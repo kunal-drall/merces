@@ -96,6 +96,12 @@ describe.skipIf(!dbTestsEnabled())('M6 Meteora support (E14)', () => {
     await expect(h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 }, 'keeper')).rejects.toMatchObject({ code: 'WrongPhase' });
     expect((await rig.get(`/series/${seriesId}`)).json().phase).toBe('Settled');
     expect((await rig.get(`/series/${seriesId}`)).json().curve.graduated).toBe(true);
+    // graduation set the issue price and the cap per unit onchain; the read model serves the same figures (S1 review)
+    const onchain = (await h.sim.getSeries(seriesId))!;
+    expect(onchain.issuePrice).not.toBeNull();
+    expect((await rig.get(`/series/${seriesId}`)).json()).toMatchObject({ issuePrice: onchain.issuePrice, capPerUnit: onchain.capPerUnit });
+    const statement = await rig.get(`/admin/accounting/series/${seriesId}`, adminTok);
+    expect(statement.json().cap).toMatchObject({ issuePrice: onchain.issuePrice, perUnit: onchain.capPerUnit, remainingPerUnit: onchain.capPerUnit });
     expect((await rig.post('/admin/curves/monitor', {}, backerTok)).statusCode).toBe(403);
   });
 

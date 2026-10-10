@@ -82,7 +82,10 @@ S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed 
 - **Offchain mirrors (WP10, WP11).** The redemption quote, tail and retirement views, accounting (C_remaining, the
   tail pool, the extinguishment line), the indexer's cap per unit and reporting ledger (served on `Series`), the
   keepers' status instants and reminders, and the OpenAPI shapes follow Stage 1. `claimable` stays the net payout;
-  the tail and the final share are separate fields (M9).
+  the tail and the final share are separate fields (M9). S1 review: a retirement clears the indexed open due on
+  every path, as Stage 1's `retire` does (a split receipt that reaches the cap left it open); a graduated curve's issue
+  price travels on `CurveGraduated.issuePrice` (a canonical field added for it, recorded in INTERFACE_DRIFT.md) and the
+  indexer sets its cap per unit from it, so the statement's C_remaining and later amendments see the chain's cap.
 - **Vector runner (WP9a, WP9b, WP13).** `pnpm stage1:vectors` (`packages/stage1-sync/src/stage1-vectors`): a
   reference backend (Stage 1's own simulator), a merces backend (our `SimulatorChain` through op translators and the
   shim table, never persisted, real Groth16 verification with the ports' verifier) and a lockstep oracle that names

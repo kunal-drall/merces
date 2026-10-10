@@ -292,6 +292,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `seriesId`: string
 - `raised`: decimal string (base units / WAD / units)
 - `unitsOutstanding`: decimal string (base units / WAD / units)
+- `issuePrice`: decimal string (base units / WAD / units)
 
 ## Commands
 

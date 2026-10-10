@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
-import { parsePeriod } from '@merces/math';
-import { PgSimPersistence, SimHarness, SimulatorChain } from '@merces/simulator';
+import { WAD, capPerUnit, parsePeriod } from '@merces/math';
+import { PgSimPersistence, SimHarness, SimulatorChain, defaultTerms } from '@merces/simulator';
 import { ZERO_INCOME_COMMITMENT, type ChainPort, type DomainEvent } from '@merces/domain';
 import { Indexer } from '../src/index.ts';
 
@@ -16,6 +16,15 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
   afterAll(async () => {
     await t.drop();
   });
+  const quiet = { warn() {}, debug() {}, error() {}, info() {} } as never;
+  /** Stage 1's reporting ledger as the indexer projected it into `series` (M8). */
+  const ledgerRow = async (seriesId: string) => (await t.pool.query('select first_period, next_expected_period, last_accepted_period, last_paid_period, open_due_period, open_due_amount::text, last_income_period, last_income_commitment, formal_notice_emitted_for from series where series_id = $1', [seriesId])).rows[0];
+  /** The same ledger read from the chain. */
+  const chainLedger = async (h: SimHarness, seriesId: string) => {
+    const s = (await h.sim.getSeries(seriesId))!;
+    const r = s.reporting;
+    return { first_period: r.firstPeriod, next_expected_period: r.nextExpectedPeriod, last_accepted_period: r.lastAcceptedPeriod, last_paid_period: r.lastPaidPeriod, open_due_period: r.openDuePeriod, open_due_amount: r.openDueAmount, last_income_period: r.lastIncomePeriod, last_income_commitment: r.lastAcceptedPeriod === null ? null : r.lastIncomeCommitment, formal_notice_emitted_for: s.formalNoticeEmittedFor };
+  };
 
   it('projects a full cycle from both chains into one read model, resumably and idempotently', async () => {
     const sol = await SimHarness.create('solana', { genesis: GENESIS });
@@ -150,17 +159,13 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
 
   it('projects Stage 1\'s reporting ledger and the report prior (M8): the series row follows the chain', async () => {
     const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'ledger', genesis: GENESIS, acceptMockProofs: true }) });
-    const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
     const a = await h.runRaise();
-    const ledgerRow = async () => (await t.pool.query('select first_period, next_expected_period, last_accepted_period, last_paid_period, open_due_period, open_due_amount::text, last_income_period, last_income_commitment, formal_notice_emitted_for from series where series_id = $1', [a.seriesId])).rows[0];
-    const chainLedger = async () => {
-      const s = (await h.sim.getSeries(a.seriesId))!;
-      const r = s.reporting;
-      return { first_period: r.firstPeriod, next_expected_period: r.nextExpectedPeriod, last_accepted_period: r.lastAcceptedPeriod, last_paid_period: r.lastPaidPeriod, open_due_period: r.openDuePeriod, open_due_amount: r.openDueAmount, last_income_period: r.lastIncomePeriod, last_income_commitment: r.lastAcceptedPeriod === null ? null : r.lastIncomeCommitment, formal_notice_emitted_for: s.formalNoticeEmittedFor };
-    };
+    const row = () => ledgerRow(a.seriesId);
+    const chain = () => chainLedger(h, a.seriesId);
     await idx.catchUp();
-    expect(await ledgerRow()).toEqual(await chainLedger());
-    expect((await ledgerRow()).next_expected_period).toBe('2026Q1');
+    expect(await row()).toEqual(await chain());
+    expect((await row()).next_expected_period).toBe('2026Q1');
     // Q1 below the threshold: due 0, paid at once
     await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
     const q1 = await h.buildReport({ seriesId: a.seriesId, periodId: '2026Q1', privateTerms: a.privateTerms, incomeYtdNow: USDC(10_000) });
@@ -170,8 +175,8 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const q2 = await h.buildReport({ seriesId: a.seriesId, periodId: '2026Q2', privateTerms: a.privateTerms, incomeYtdNow: USDC(100_000) });
     await h.exec(h.issuer, q2.command);
     await idx.catchUp();
-    expect(await ledgerRow()).toEqual(await chainLedger());
-    expect(await ledgerRow()).toMatchObject({ last_accepted_period: '2026Q2', next_expected_period: '2026Q3', last_paid_period: '2026Q1', open_due_period: '2026Q2', open_due_amount: q2.paymentStable.toString(), last_income_commitment: q2.command.incomeCommitment });
+    expect(await row()).toEqual(await chain());
+    expect(await row()).toMatchObject({ last_accepted_period: '2026Q2', next_expected_period: '2026Q3', last_paid_period: '2026Q1', open_due_period: '2026Q2', open_due_amount: q2.paymentStable.toString(), last_income_commitment: q2.command.incomeCommitment });
     const priors = (await t.pool.query('select period_id, prior_income_commitment from periods where series_id = $1 order by period_id', [a.seriesId])).rows;
     expect(priors).toEqual([{ period_id: '2026Q1', prior_income_commitment: ZERO_INCOME_COMMITMENT }, { period_id: '2026Q2', prior_income_commitment: q1.command.incomeCommitment }]);
     await h.exec(h.issuer, { kind: 'payIn', seriesId: a.seriesId, periodId: '2026Q2', amount: (await h.sim.getPeriod(a.seriesId, '2026Q2'))!.paymentDue });
@@ -179,8 +184,52 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     await h.sim.setTime(parsePeriod('2026Q3').end + 91 * 86_400);
     await h.sim.submit({ kind: 'crankStatus', seriesId: a.seriesId }, 'keeper');
     await idx.catchUp();
-    expect(await ledgerRow()).toEqual(await chainLedger());
-    expect(await ledgerRow()).toMatchObject({ last_paid_period: '2026Q2', open_due_period: null, open_due_amount: '0', formal_notice_emitted_for: '2026Q3' });
+    expect(await row()).toEqual(await chain());
+    expect(await row()).toMatchObject({ last_paid_period: '2026Q2', open_due_period: null, open_due_amount: '0', formal_notice_emitted_for: '2026Q3' });
+  });
+
+  // S1 review: Stage 1's `retire` clears the open due on every path (SIM:445-454). A payment for the open period
+  // clears it on its own; a split receipt that reaches the cap does not, and no payIn can follow on a Retired series,
+  // so the row must follow SeriesRetired or it keeps an open due forever.
+  it('a retirement clears the open due, through a split receipt and through a payIn: the series row follows the chain', async () => {
+    for (const personality of ['solana', 'monad'] as const) {
+      const h = await SimHarness.create(personality, { sim: SimulatorChain.createSync({ personality, chainKey: `retire-${personality}`, genesis: GENESIS, acceptMockProofs: true }) });
+      const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+      const status = async (seriesId: string) => (await t.pool.query('select status from series where series_id = $1', [seriesId])).rows[0].status;
+      // the cap is 2.5 × 9 = 22.5 USDC per unit, 11,250 USDC over 500 units
+      const split = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
+      const paid = await h.runRaise();
+      await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId: split.seriesId, router: h.router });
+      await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
+      // a pure tier-1 series reports Q1 and leaves the due open
+      const q1 = await h.buildReport({ seriesId: split.seriesId, periodId: '2026Q1', privateTerms: split.privateTerms, incomeYtdNow: USDC(100_000), tier: 1 });
+      await h.exec(h.issuer, q1.command);
+      await idx.catchUp();
+      expect(await ledgerRow(split.seriesId)).toEqual(await chainLedger(h, split.seriesId));
+      expect(await ledgerRow(split.seriesId)).toMatchObject({ open_due_period: '2026Q1', open_due_amount: q1.paymentStable.toString() });
+      // the router's income reaches the cap: the series retires with the Q1 due unpaid, and Stage 1 owes nothing more
+      const receipt = await h.sim.postSplitReceipt(h.router, split.seriesId, USDC(20_000));
+      expect(receipt.events.map((e) => e.type)).toEqual(['PaymentRefunded', 'FeeTaken', 'PaymentReceived', 'StatusChanged', 'SeriesRetired', 'SplitReceipt']);
+      await idx.catchUp();
+      expect((await h.sim.getSeries(split.seriesId))!.reporting).toMatchObject({ openDuePeriod: null, openDueAmount: '0' });
+      expect(await status(split.seriesId)).toBe('Retired');
+      expect(await ledgerRow(split.seriesId)).toEqual(await chainLedger(h, split.seriesId));
+      expect(await ledgerRow(split.seriesId)).toMatchObject({ last_paid_period: null, open_due_period: null, open_due_amount: '0' });
+      // the period keeps the due it reported and stays unsettled, on the chain and in the row
+      const period = (await h.sim.getPeriod(split.seriesId, '2026Q1'))!;
+      expect(period).toMatchObject({ paymentDue: q1.paymentStable.toString(), settled: false });
+      expect((await t.pool.query('select payment_due::text, settled from periods where series_id = $1 and period_id = $2', [split.seriesId, '2026Q1'])).rows[0]).toEqual({ payment_due: period.paymentDue, settled: period.settled });
+      // a payIn that reaches the cap: the payment closes the due, then the series retires (the row still follows)
+      const big = await h.buildReport({ seriesId: paid.seriesId, periodId: '2026Q1', privateTerms: paid.privateTerms, incomeYtdNow: USDC(200_000) });
+      await h.exec(h.issuer, big.command);
+      const due = (await h.sim.getPeriod(paid.seriesId, '2026Q1'))!.paymentDue;
+      const pay = await h.exec(h.issuer, { kind: 'payIn', seriesId: paid.seriesId, periodId: '2026Q1', amount: due });
+      expect(pay.events.map((e) => e.type)).toContain('SeriesRetired');
+      await idx.catchUp();
+      expect(await status(paid.seriesId)).toBe('Retired');
+      expect(await ledgerRow(paid.seriesId)).toEqual(await chainLedger(h, paid.seriesId));
+      expect(await ledgerRow(paid.seriesId)).toMatchObject({ last_paid_period: '2026Q1', open_due_period: null, open_due_amount: '0' });
+    }
   });
 
   it('projects the cap per unit with Stage 1\'s floor at settlement and after an amendment (never SQL rounding)', async () => {
@@ -199,6 +248,34 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect(await cap()).toEqual({ cap_multiple_wad: m.toString(), cap_per_unit: '21600000' });
     const sql = (await t.pool.query('select ($1::numeric * $2::numeric / 1000000000000000000)::numeric(38,0)::text as v', [m.toString(), USDC(9).toString()])).rows[0].v;
     expect(sql).toBe('21600001'); // what the old SQL projection stored
+  });
+
+  // S1 review: graduation sets a curve's issue price and its cap per unit onchain, as settlement does for an auction;
+  // the row had neither, so the statement's C_remaining, the holdings' yield and every later amendment saw no cap.
+  it('projects a graduated curve\'s issue price and cap per unit (Stage 1\'s floor), and the cap after an amendment', async () => {
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'curve-cap', genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    const { terms } = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: USDC(1200).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' });
+    const seriesId = ((await h.exec(h.issuer, { kind: 'createSeries', terms })).events[0]!.payload as { seriesId: string }).seriesId;
+    const types: string[] = [];
+    for (const b of [0, 1, 2]) types.push(...(await h.exec(h.backers[b]!, { kind: 'buyCurve', seriesId, amountIn: USDC(400).toString(), minUnitsOut: '0' })).events.map((e) => e.type));
+    expect(types.at(-1)).toBe('CurveGraduated');
+    await idx.catchUp();
+    const row = async () => (await t.pool.query('select phase, issue_price::text, cap_multiple_wad::text, cap_per_unit::text from series where series_id = $1', [seriesId])).rows[0];
+    const chain = (await h.sim.getSeries(seriesId))!;
+    expect(chain.issuePrice).not.toBeNull();
+    expect(await row()).toEqual({ phase: 'Settled', issue_price: chain.issuePrice, cap_multiple_wad: terms.capMultipleWad, cap_per_unit: chain.capPerUnit });
+    expect(chain.capPerUnit).toBe(capPerUnit(BigInt(terms.capMultipleWad), BigInt(chain.issuePrice!)).toString());
+    // an issuer-favourable amendment: the new cap is Stage 1's capPerUnit on the projected issue price, floor. m puts
+    // m × P0 / 1e18 just past 2·P0 + ½, where rounding (a SQL numeric cast) would store one more than the chain
+    const p0 = BigInt(chain.issuePrice!);
+    const m = 2n * WAD + (WAD / 2n + p0 - 1n) / p0;
+    await h.exec(h.issuer, { kind: 'amendTerms', seriesId, termsCommitment: terms.termsCommitment, capMultipleWad: m.toString(), attestor: h.attestors[0]!.address }, [h.attestors[0]!]);
+    await idx.catchUp();
+    const amended = (await h.sim.getSeries(seriesId))!.capPerUnit;
+    expect(amended).toBe((2n * p0).toString());
+    expect(await row()).toMatchObject({ cap_multiple_wad: m.toString(), cap_per_unit: amended });
   });
 
   it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {

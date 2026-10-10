@@ -3513,12 +3513,17 @@
               "unitsOutstanding": {
                 "type": "string",
                 "pattern": "^\\d+$"
+              },
+              "issuePrice": {
+                "type": "string",
+                "pattern": "^\\d+$"
               }
             },
             "required": [
               "seriesId",
               "raised",
-              "unitsOutstanding"
+              "unitsOutstanding",
+              "issuePrice"
             ],
             "additionalProperties": false
           }
@@ -4953,12 +4958,17 @@
         "unitsOutstanding": {
           "type": "string",
           "pattern": "^\\d+$"
+        },
+        "issuePrice": {
+          "type": "string",
+          "pattern": "^\\d+$"
         }
       },
       "required": [
         "seriesId",
         "raised",
-        "unitsOutstanding"
+        "unitsOutstanding",
+        "issuePrice"
       ],
       "additionalProperties": false
     }

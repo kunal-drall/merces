@@ -15,8 +15,9 @@ alter table tier3_cases add column if not exists attestation jsonb;
 
 -- critique M8: Stage 1's reporting ledger in the series read model, projected by the indexer from SeriesCreated /
 -- AuctionSettled / CurveGraduated (first period), ReportAccepted (accepted, income chain head, open due),
--- PaymentReceived (paid, open due cleared), SeriesExtinguished (open due cleared) and FormalNoticeDue. The API serves
--- these columns (one source with the rest of `series`), not live chain reads. Period ids are "YYYYQn".
+-- PaymentReceived (paid, open due cleared), SeriesRetired and SeriesExtinguished (open due cleared) and
+-- FormalNoticeDue. The API serves these columns (one source with the rest of `series`), not live chain reads. Period
+-- ids are "YYYYQn".
 alter table series add column if not exists first_period text;
 alter table series add column if not exists next_expected_period text;
 alter table series add column if not exists last_accepted_period text;

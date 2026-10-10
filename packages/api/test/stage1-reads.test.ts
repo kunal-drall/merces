@@ -166,4 +166,27 @@ describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () =>
     expect((await rig.get(`/series/${seriesId}`)).json().capPerUnit).toBe(USDC(18).toString());
     expect((await rig.get(`/series/${seriesId}/redemption/quote`, issuerTok)).json().blockedBy).toEqual(['TerminalStatus']);
   });
+
+  // S1 review: a split receipt that reaches the cap retires the series with a reported due unpaid. Stage 1's `retire`
+  // clears the open due; the served row said a payment was outstanding on a Retired series, for good.
+  it('a series retired by a split receipt has no open due: the Series row and the reporting ledger say so', async () => {
+    const h = rig.mon;
+    const raise = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
+    const seriesId = raise.seriesId;
+    const holderTok = rig.token({ accountId: 'w11-split-b0', wallets: [{ chain: 'monad', address: h.backers[0]!.address }], roles: ['backer'] });
+    await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId, router: h.router });
+    const q = periodOf((await h.sim.getSeries(seriesId))!.settledAt!);
+    await h.sim.setTime(q.end + 86_400);
+    const rep = await h.buildReport({ seriesId, periodId: q.id, privateTerms: raise.privateTerms, incomeYtdNow: USDC(100_000), tier: 1 });
+    await h.exec(h.issuer, rep.command);
+    await rig.sync();
+    expect((await rig.get(`/series/${seriesId}`)).json()).toMatchObject({ status: 'OnTime', openDuePeriod: q.id, paymentOutstanding: true });
+    await h.sim.postSplitReceipt(h.router, seriesId, USDC(20_000));
+    expect((await h.sim.getSeries(seriesId))!.reporting).toMatchObject({ openDuePeriod: null, openDueAmount: '0' });
+    await rig.sync();
+    expect((await rig.get(`/series/${seriesId}`)).json()).toMatchObject({ status: 'Retired', lastPaidPeriod: null, openDuePeriod: null, paymentOutstanding: false });
+    const per = await rig.get(`/series/${seriesId}/periods`, holderTok);
+    expect(per.statusCode).toBe(200);
+    expect(per.json().reporting).toMatchObject({ lastPaidPeriod: null, openDuePeriod: null, openDueAmount: '0' });
+  });
 });
