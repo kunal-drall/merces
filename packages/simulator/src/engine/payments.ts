@@ -3,7 +3,7 @@ import { DAY, U64_MAX, lateAccrual, periodEnd, periodOf, settlementYear, vaultRe
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
-import { burn, burnUnits, settleHolder } from './holders.ts';
+import { burnUnits, settleHolder } from './holders.ts';
 import { ledgerClock, liveCapPerUnit, mintFinalized, periodIdOf, retire, statusParams } from './ledger.ts';
 import { payTail, takeTail } from './redemption.ts';
 import { periodRecord, syncReleaseBlock, syncStatus } from './status.ts';
@@ -147,9 +147,10 @@ export function postSplitReceipt(e: EngineCore, router: string, cmd: Extract<Com
  * Stage 1 `claim` (SIM:1268-1282), with the tail (`claim_tail`) and the final pool (`claim_final`) in the same command
  * until S3 splits them. A holder with no registration is refused (HolderNotRegistered). Settle the holder on the vault
  * cursor, pay `pending` + tail + final (`takeFinal`, which on a redeemed series runs the redemption body first). A
- * Retired series burns the holder's units, an Extinguished one those not held for a window ask (as `claim_final`
- * does), even when nothing is paid. Nothing to pay and nothing to burn is a successful no-op with no events (Stage 1's
- * zero-amount rule).
+ * Retired or Extinguished series burns the holder's balance, the units not held for a window ask (Stage 1 burns
+ * `unitsOf`, which excludes the ask escrow: SIM:1275, 1470), even when nothing is paid; the escrowed units come back
+ * when the window clears and burn at the next claim. Nothing to pay and nothing to burn is a successful no-op with no
+ * events (Stage 1's zero-amount rule).
  */
 export function claimPayout(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'claimPayout' }>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
@@ -168,22 +169,26 @@ export function claimPayout(e: EngineCore, signer: string, cmd: Extract<Command,
     e.credit(signer, s.terms.stablecoinMint, amount);
     emit('PayoutClaimed', { seriesId: s.seriesId, holder: signer, amount: str(amount) });
   }
-  if (s.status === 'Retired') burn(s, p, 'cap', emit);
-  // `claim_final` burns the holder's balance (SIM:1470): units held for a window ask come back when the window clears
+  // `claim` and `claim_final` burn the holder's balance (SIM:1275, 1470): units held for a window ask come back when
+  // the window clears (WP8)
+  if (s.status === 'Retired') burnUnits(s, p, p.units - p.escrowed, 'cap', emit);
   else if (s.status === 'Extinguished') burnUnits(s, p, p.units - p.escrowed, 'extinguishment', emit);
 }
 /**
  * Stage 1 `burn_retired` (SIM:624-636), for each listed holder: the stored status must be Retired (TerminalStatus; an
  * Extinguished series is refused, since burning before `claim_final` would zero the holder's final-pool weight). A
- * holder with no units is a no-op; otherwise settle it (its `pending` stays claimable) and burn every unit.
+ * holder with no balance is a no-op; otherwise settle it (its `pending` stays claimable) and burn its balance. The
+ * balance excludes the units held for a window ask (Stage 1 `unitsOf`, SIM:627): they burn once the window returns
+ * them.
  */
 export function crankBurn(e: EngineCore, cmd: Extract<Command, { kind: 'crankBurn' }>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
   if (s.status !== 'Retired') fail('TerminalStatus', 'units are burned by the crank only on a Retired series');
   for (const h of cmd.holders) {
     const p = s.positions.get(h);
-    if (!p || p.units === 0n) continue;
+    const balance = p ? p.units - p.escrowed : 0n;
+    if (!p || balance === 0n) continue;
     settleHolder(e, s, p);
-    burn(s, p, 'cap', emit);
+    burnUnits(s, p, balance, 'cap', emit);
   }
 }

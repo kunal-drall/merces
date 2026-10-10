@@ -2,6 +2,7 @@ import type { AuctionExpect, HolderExpect, LedgerExpect } from '@merces/math';
 import { WAD, nextExpectedPeriod } from '@merces/math';
 import type { SimSeries } from './state.ts';
 import { derivedStatus, ledgerClock, liveCapPerUnit, mintFinalized } from './engine/ledger.ts';
+import { windowEscrow } from './reads/window.ts';
 
 /**
  * Stage 1's view of one series, built from the simulator state: the shapes of the Stage 1 vector `expect` step
@@ -133,14 +134,9 @@ export function moneyView(s: SimSeries): MoneyView {
   };
   const w = s.transferWindows.at(-1);
   if (w) {
-    let stable = 0n;
-    let units = 0n;
-    for (const o of w.orders.values()) {
-      if (o.side === 'buy') stable += o.deposit;
-      else units += o.escrowedUnits;
-    }
-    out.windowEscrowStable = D(stable);
-    out.windowEscrowUnits = D(units);
+    const escrow = windowEscrow(w);
+    out.windowEscrowStable = D(escrow.stable);
+    out.windowEscrowUnits = D(escrow.units);
   }
   return out;
 }

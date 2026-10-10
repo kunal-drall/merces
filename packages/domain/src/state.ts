@@ -235,6 +235,10 @@ export interface TransferWindowState {
   cleared: boolean;
   clearingPrice: Money | null;
   orderCount: number;
+  /** stablecoin held for the window's buy orders (their deposits not yet paid out or refunded); "0" once cleared */
+  escrowStable: Money;
+  /** units held for the window's ask orders (still in the sellers' positions, earning payouts); "0" once cleared */
+  escrowUnits: Units;
 }
 
 export interface CurveState {

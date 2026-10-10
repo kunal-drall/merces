@@ -35,7 +35,8 @@ export function registerHolder(s: SimSeries, p: SimPosition): void {
 }
 /**
  * The units a holder's payouts accrue on (Stage 1 `accrual_units`, SPEC §6.1: balance + undelivered auction units +
- * ask-escrow units). Our raise delivers at settlement and window asks keep their units in `units`, so it is `units`.
+ * ask-escrow units). Our raise delivers at settlement and window asks keep their units in `units` (`escrowed` marks
+ * them), so it is `units`.
  */
 export function accrualUnits(_s: SimSeries, p: SimPosition): bigint {
   return p.units;
@@ -69,7 +70,8 @@ export function setUnits(s: SimSeries, p: SimPosition, units: bigint): void {
 }
 /**
  * Burn `units` of a holder's units (Stage 1 `burn`, SIM:438-443): settle, reduce its units and `unitsOutstanding`,
- * `UnitsBurned`. Zero is a no-op. The redemption body burns only the units not held for a window ask (`redeemBody`).
+ * `UnitsBurned`. Zero is a no-op. Every caller burns the holder's balance, the units not held for a window ask (Stage 1
+ * `unitsOf` excludes the ask escrow): the redemption body, the final claim and the Retired burns.
  */
 export function burnUnits(s: SimSeries, p: SimPosition, units: bigint, reason: 'cap' | 'redemption' | 'extinguishment', emit: Emit): void {
   if (units === 0n) return;
@@ -77,8 +79,4 @@ export function burnUnits(s: SimSeries, p: SimPosition, units: bigint, reason: '
   setUnits(s, p, p.units - units);
   s.unitsOutstanding -= units;
   emit('UnitsBurned', { seriesId: s.seriesId, holder: p.wallet, units: str(units), reason });
-}
-/** Burn every unit a holder has. */
-export function burn(s: SimSeries, p: SimPosition, reason: 'cap' | 'redemption' | 'extinguishment', emit: Emit): void {
-  burnUnits(s, p, p.units, reason, emit);
 }
