@@ -1,6 +1,6 @@
 import { AppError, audit, getFlag } from '@merces/core';
 import { orderCommitment, type ChainPort, type SeriesState, type UnsignedTx } from '@merces/domain';
-import { interim } from '@merces/math';
+import { YEAR, interim, redemptionQuote, type YearGrossRing } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -69,36 +69,31 @@ export class LifecycleService {
   }
 
   // ---- R15 redemption
-  /** Per-unit gross accepted per full year since settlement, from the indexed money events (D_avg input). */
-  private async annualGrossPerUnit(seriesId: string, series: SeriesState, now: number): Promise<bigint[]> {
-    if (series.settledAt === null) return [];
-    const full = Math.floor((now - series.settledAt) / (365 * 86_400));
-    if (full <= 0) return [];
-    const r = await this.ctx.pool.query<{ y: number; total: string }>(
-      "select floor((block_time - $2) / 31536000)::int as y, sum(amount)::text as total from money_events where series_id = $1 and kind = 'payment' and (detail->>'source') in ('payIn','split') group by 1",
-      [seriesId, series.settledAt],
-    );
-    const by = new Map(r.rows.map((x) => [Number(x.y), BigInt(x.total)]));
-    const units = BigInt(series.unitsSold);
-    return Array.from({ length: full }, (_, y) => (units > 0n ? (by.get(y) ?? 0n) / units : 0n));
-  }
-
+  /**
+   * The chain's own quote: Stage 1's `redemptionQuote` over the series' live cap, `paidPerUnitWad` and tagged year ring
+   * (`SeriesState.yearGross`), exactly what `redeem` computes at `now`. `boundBy` keeps the version-1 labels
+   * (`cap`, `hurdle`, `payout`) until WP11 adds Stage 1's `decidedBy`.
+   */
   async quote(seriesId: string): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
-    if (s.phase !== 'Settled' || s.issuePrice === null || s.capPerUnit === null) throw AppError.conflict('series has not settled');
+    if (s.phase !== 'Settled' || s.issuePrice === null || s.capPerUnit === null || s.settledAt === null) throw AppError.conflict('series has not settled');
     const now = await chain.now();
-    const history = await this.annualGrossPerUnit(seriesId, s, now);
-    const q = interim.redemptionQuote({ capPerUnit: BigInt(s.capPerUnit), paidPerUnitWad: BigInt(s.paidPerUnitWad), issuePrice: BigInt(s.issuePrice), hurdleWad: BigInt(s.terms.hurdleWad), payoutMultipleK: BigInt(s.terms.payoutMultipleK), settlementTs: s.settledAt!, nowTs: now, annualGrossPerUnit: history });
+    const t = BigInt(Math.max(0, now - s.settledAt));
+    const ring = s.yearGross.map((y) => ({ year: y.year, grossWad: BigInt(y.grossWad) })) as unknown as YearGrossRing;
+    const q = redemptionQuote({ p0: BigInt(s.issuePrice), hurdleRateWad: BigInt(s.terms.hurdleWad), payoutMultipleK: s.terms.payoutMultipleK, t, capPerUnit: BigInt(s.capPerUnit), paidPerUnitWad: BigInt(s.paidPerUnitWad), yearGross: ring, unitsOutstanding: BigInt(s.unitsOutstanding) });
+    const boundBy = q.decidedBy === 'cap_remaining' ? 'cap' : q.decidedBy === 'payout_multiple' ? 'payout' : 'hurdle';
+    const payoutTerm = q.dAvg === null ? null : BigInt(s.terms.payoutMultipleK) * q.dAvg;
     const blockers: string[] = [];
     if (s.lockupEndsAt !== null && now < s.lockupEndsAt) blockers.push(`lockup ends at ${s.lockupEndsAt}`);
-    if (['Retired', 'Redeemed', 'Extinguished', 'Paused'].includes(s.status)) blockers.push(`status is ${s.status}`);
+    // Stage 1 redeem refuses a terminal or Late series; a Paused one may redeem (WP11 adds the remaining Stage 1 names)
+    if (['Retired', 'Redeemed', 'Extinguished', 'Late'].includes(s.status)) blockers.push(`status is ${s.status}`);
     for (const p of await chain.listPeriods(seriesId)) if (!p.settled) blockers.push(`period ${p.periodId} must be reported and paid first (A-RED-1)`);
     return {
       seriesId, now, lockupEndsAt: s.lockupEndsAt, unitsOutstanding: s.unitsOutstanding,
-      pricePerUnit: q.pricePerUnit.toString(), deposit: (q.pricePerUnit * BigInt(s.unitsOutstanding)).toString(), boundBy: q.boundBy,
-      terms: { capRemaining: q.capRemaining.toString(), hurdlePrice: q.hurdlePrice.toString(), payoutTerm: q.payoutTerm === null ? null : q.payoutTerm.toString(), kTimesDavgYears: history.length, hurdleWad: s.terms.hurdleWad, payoutMultipleK: s.terms.payoutMultipleK },
+      pricePerUnit: q.pRedeem.toString(), deposit: q.deposit.toString(), boundBy,
+      terms: { capRemaining: q.cRemaining.toString(), hurdlePrice: q.pHurdle.toString(), payoutTerm: payoutTerm === null ? null : payoutTerm.toString(), kTimesDavgYears: Number(t / YEAR), hurdleWad: s.terms.hurdleWad, payoutMultipleK: s.terms.payoutMultipleK },
       tailCapPerUnit: q.tailCapPerUnit.toString(), blockers, redeemable: blockers.length === 0,
     };
   }

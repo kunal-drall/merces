@@ -58,13 +58,6 @@ export function settleHolder(_e: EngineCore, s: SimSeries, p: SimPosition): void
   if (!p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');
   settleAccrual(s, p);
 }
-/**
- * @deprecated the lenient settle (an unregistered holder is skipped) the redemption body uses until WP6 moves it to
- * `settleHolder`.
- */
-export function settlePosition(s: SimSeries, p: SimPosition): void {
-  settleAccrual(s, p);
-}
 /** The net payout a holder could claim now: `pending` plus what accrued since its cursor (the read side of a claim). */
 export function claimableNet(s: SimSeries, p: SimPosition): bigint {
   return p.pending + accruedSince(s, p);
@@ -76,7 +69,7 @@ export function setUnits(s: SimSeries, p: SimPosition, units: bigint): void {
 }
 /**
  * Burn `units` of a holder's units (Stage 1 `burn`, SIM:438-443): settle, reduce its units and `unitsOutstanding`,
- * `UnitsBurned`. Zero is a no-op. The redemption body burns only the units not held for a window ask (WP6).
+ * `UnitsBurned`. Zero is a no-op. The redemption body burns only the units not held for a window ask (`redeemBody`).
  */
 export function burnUnits(s: SimSeries, p: SimPosition, units: bigint, reason: 'cap' | 'redemption' | 'extinguishment', emit: Emit): void {
   if (units === 0n) return;

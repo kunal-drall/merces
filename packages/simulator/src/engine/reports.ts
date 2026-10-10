@@ -55,8 +55,7 @@ export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport
   if (isTail) {
     const r = s.redemption!;
     if (periodStart(pid) > BigInt(r.openedAt) + BigInt(DEFAULTS.tailSeconds)) fail('TailEnded', 'the tail window has closed');
-    const tail = tailCapState(s);
-    if (cmd.liquidityEvent && (tail.tailCapPerUnit === 0n || tail.tailExhausted)) fail('NoTailDue', 'no tail is owed');
+    if (cmd.liquidityEvent && (s.tail.tailCapPerUnit === 0n || s.tail.tailExhausted)) fail('NoTailDue', 'no tail is owed');
   }
   // 11. tier: enabled for the series; tier 1 only on a pure tier-1 series (tier 4 cannot be enabled, registry.ts)
   const f = s.terms.tierFlags;
@@ -162,17 +161,6 @@ function periodPid(periodId: string): number {
   } catch {
     return fail('WrongPeriod', 'malformed period id');
   }
-}
-
-/**
- * The tail's cap per unit and whether it is used up. WP6 keeps the tail on `s.tail` (Stage 1's `TailState`); until
- * then the cap lives on the redemption and exhaustion follows the per-unit tally `payIn` keeps.
- */
-export function tailCapState(s: SimSeries): { tailCapPerUnit: bigint; tailExhausted: boolean } {
-  if (s.tail.tailCapPerUnit > 0n || s.tail.tailExhausted) return s.tail;
-  const r = s.redemption;
-  if (!r) return { tailCapPerUnit: 0n, tailExhausted: false };
-  return { tailCapPerUnit: r.tailCapPerUnit, tailExhausted: r.tailCapPerUnit > 0n && r.tailPaidPerUnit >= r.tailCapPerUnit };
 }
 
 /** FX (SIM:1075-1094 order). The accumulator and attestor-fallback branches are ours until S5 moves FX to Stage 1. */

@@ -15,6 +15,7 @@ export const STAGE1_CODE = {
   WrongPeriod: 'WrongPhase',
   ReportTooEarly: 'TooEarly',
   PaymentOutstanding: 'WrongStatus',
+  TrueUpOutstanding: 'WrongStatus',
   TailEnded: 'TooLate',
   NoTailDue: 'WrongStatus',
   TierNotEnabled: 'NotPermitted',

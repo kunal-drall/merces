@@ -183,8 +183,13 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     view = await rig.get(`/series/${seriesId}/redemption`, holderTok);
     expect(view.json().tail.open).toBe(false);
     expect(view.json().tail.payouts).toHaveLength(1);
+    // a holder's tail follows its own redemption (Stage 1 sets redeemedUnits when the holder claims; cause RD: before
+    // WP6 every holder was redeemed at redeem time): nothing to claim until b0 redeems, then its tail share
+    expect((await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok)).statusCode).toBe(409);
+    const rc = await rig.post(`/series/${seriesId}/redemption/build-claim`, { holder: h.backers[0]!.address }, holderTok);
+    await send(h.backers[0]!, rc.json().tx as UnsignedTx, holderTok);
     const claim = await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[0]!.address }, holderTok);
-    expect(BigInt(claim.json().tailClaimable)).toBeGreaterThan(0n);
+    expect(BigInt(claim.json().tailClaimable)).toBe((BigInt(payout.total) * 95n / 100n) / 5n);
   });
 
   it('extinguishment: two attestors end all claims; unreleased treasury returns to holders; nothing else is owed', async () => {

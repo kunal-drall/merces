@@ -216,12 +216,13 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     case 'RedemptionOpened': {
       const p = e.payload as P<'RedemptionOpened'>;
       await client.query('update series set redeemed_at = $2, redemption_price = $3, last_event_seq = $4 where series_id = $1', [p.seriesId, e.blockTime, p.pricePerUnit, e.seq]);
-      await client.query('update positions set redeemed_units = units where series_id = $1', [p.seriesId]);
       await money(client, e, 'redemption', p.deposit, { detail: { pricePerUnit: p.pricePerUnit, unitsOutstanding: p.unitsOutstanding, tailCapPerUnit: p.tailCapPerUnit, tailEndsAt: p.tailEndsAt } });
       break;
     }
     case 'RedemptionClaimed': {
       const p = e.payload as P<'RedemptionClaimed'>;
+      // a holder's units are redeemed when it claims (Stage 1), not when the issuer redeems
+      await client.query('update positions set redeemed_units = redeemed_units + $3, last_seq = greatest(last_seq, $4) where series_id = $1 and wallet = $2', [p.seriesId, p.holder, p.units, e.seq]);
       await money(client, e, 'redemption_claim', p.amount, { wallet: p.holder, detail: { units: p.units } });
       break;
     }

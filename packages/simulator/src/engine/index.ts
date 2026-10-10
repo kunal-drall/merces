@@ -11,7 +11,7 @@ import { auctionPhase, cancelRaise, claimRefund, commitBid, openRaise, revealBid
 import { buyCurve, graduateCurve } from './curve.ts';
 import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
 import { claimPayout, crankBurn, payIn, postSplitReceipt } from './payments.ts';
-import { annualGrossPerUnit, claimRedemption, quote, redeem } from './redemption.ts';
+import { claimRedemption, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
 import { submitReport } from './reports.ts';
 import { accrualNow, approvePause, crankPause, crankStatus, deadlines, reportablePeriods, requestPause, type PeriodDeadlines } from './status.ts';
@@ -170,14 +170,11 @@ export class SimEngine implements EngineCore {
   deadlines(s: SimSeries, period: Period, now: number): PeriodDeadlines {
     return deadlines(s, period, now);
   }
-  /** Per-unit gross for each FULL year since settlement (for D_avg). */
-  annualGrossPerUnit(s: SimSeries, now: number): bigint[] {
-    return annualGrossPerUnit(s, now);
-  }
   /** The reveal phase is time-derived: commitEndsAt ≤ now < revealEndsAt. */
   auctionPhase(s: SimSeries, now: number): 'Draft' | 'Open' | 'Reveal' | 'SettleDue' | 'Settled' | 'Failed' | 'Cancelled' {
     return auctionPhase(s, now);
   }
+  /** Stage 1's redemption quote at `now` (`redemptionQuote` over the vault's year ring and the live cap). */
   quote(s: SimSeries, now: number): ReturnType<typeof quote> {
     return quote(s, now);
   }

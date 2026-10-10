@@ -23,8 +23,6 @@ export const DEFAULTS = {
   /** Pyth vs Chainlink deviation band — placeholder until Kunal sets it (Part J.8); Stage 1's default is 200 (FX moves in S5). */
   fxDeviationBandBps: 100,
   maxRateAgeSeconds: 3_600,
-  /** @deprecated Use `tailSeconds` (Stage 1's 365-day tail); kept until the redemption engine moves (WP6). */
-  tailMonths: 12,
   /** The tail clause runs this long after redemption (Stage 1: one 365-day year, min = max). */
   tailSeconds: Number(DEFAULT_PARAMETERS.tailSeconds),
   trueUpDays: 60,

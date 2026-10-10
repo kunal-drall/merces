@@ -1,11 +1,11 @@
 import { ChainError, type Command } from '@merces/domain';
-import { DAY, U64_MAX, interim, lateAccrual, periodEnd, periodOf, settlementYear, vaultReceiveGross, type ReceiveResult } from '@merces/math';
+import { DAY, U64_MAX, lateAccrual, periodEnd, periodOf, settlementYear, vaultReceiveGross, type ReceiveResult } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
 import { burn, settleHolder } from './holders.ts';
 import { ledgerClock, liveCapPerUnit, mintFinalized, periodIdOf, retire, statusParams } from './ledger.ts';
-import { payTail, takeTail, yearIndex } from './redemption.ts';
+import { payTail, takeTail } from './redemption.ts';
 import { periodRecord, syncReleaseBlock, syncStatus } from './status.ts';
 import { takeFinal } from './terminal.ts';
 
@@ -54,11 +54,6 @@ export function vaultReceive(e: EngineCore, s: SimSeries, gross: bigint, anchorT
   // our life-to-date totals (the API vault totals; the tail adds to them too)
   s.grossPaidTotal += result.accepted;
   s.feesTotal += result.fee;
-  // bridge for the version-1 redemption quote (`quote`, `annualGrossPerUnit`) until WP6 moves it to Stage 1's
-  // `redemptionQuote` over `vault.paidPerUnitWad` and `vault.yearGross`
-  s.paidPerUnitWad = s.vault.paidPerUnitWad;
-  const y = yearIndex(s, now);
-  s.grossByYear.set(y, (s.grossByYear.get(y) ?? 0n) + result.accepted);
   emit('PaymentReceived', {
     seriesId, periodId: receipt.periodId, gross: str(result.accepted), fee: str(result.fee), net: str(result.netAdded), source: receipt.source, paidPerUnitWad: str(s.vault.paidPerUnitWad),
     ...(receipt.due ? { paymentDue: str(receipt.due.paymentDue), accrual: str(receipt.due.accrual) } : {}),
@@ -78,7 +73,7 @@ export function vaultReceive(e: EngineCore, s: SimSeries, gross: bigint, anchorT
  *
  *  1. the mint is final (MintNotFinalized), something is due (NothingDue);
  *  2. ours: `cmd.periodId` names the open due period (InvalidTerms; the live adapter checks it offchain);
- *  3. a Redeemed series pays its tail (WP6), with no accrual and no sync after it;
+ *  3. a Redeemed series pays its tail as reported (`payTail`, Stage 1 `tailReceive`), with no accrual and no sync after it;
  *  4. otherwise `total = openDueAmount + lateAccrual(...)` at `now` (u64, AmountOutOfRange); ours: `amount` must be
  *     exactly `total` (InvalidTerms; Stage 1's `pay` takes no amount);
  *  5. debit the payer (InsufficientEscrow), `vaultReceive` with the year anchored on the period's report deadline
@@ -96,16 +91,11 @@ export function payIn(e: EngineCore, signer: string, cmd: Extract<Command, { kin
   const amount = big(cmd.amount);
   const p = periodRecord(s, periodId);
   if (s.status === 'Redeemed') {
-    // the tail due as reported, no accrual (SIM:1157-1172). WP6 moves it onto Stage 1's `tailReceive`; until then the
-    // tail cap applies when the money lands: the payer is charged the accepted part only and `PaymentRefunded`
-    // records the excess.
+    // the tail due as reported, no accrual (SIM:1157-1172): the payer pays all of it, `tailReceive` applies the tail
+    // cap and the excess goes back to the issuer (`payTail`)
     const due = l.openDueAmount;
     if (amount !== due) throw new ChainError('InvalidTerms', `payIn must equal the amount due ${due}`);
-    const r = s.redemption!;
-    const perUnit = interim.tailPayoutPerUnit(due / r.unitsAtRedemption, r.tailCapPerUnit, r.tailPaidPerUnit);
-    const accepted = perUnit * r.unitsAtRedemption;
-    if (accepted > 0n) payTail(e, s, signer, p, accepted, now, emit);
-    if (due > accepted) emit('PaymentRefunded', { seriesId: s.seriesId, periodId, amount: str(due - accepted), reason: 'cap' });
+    payTail(e, s, signer, p, due, now, emit);
     settle(s, p.periodId, now);
     return; // Stage 1 does not sync after a tail payment
   }

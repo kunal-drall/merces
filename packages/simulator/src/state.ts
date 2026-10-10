@@ -67,9 +67,9 @@ export interface SimPosition {
   pending: bigint;
   claimedTotal: bigint;
   redeemedUnits: bigint;
-  /** @deprecated WP6 (the tail cursor becomes `lastTailAccWad`) */
+  /** @deprecated WP6 (the tail cursor is `lastTailAccWad`; no longer read or written) */
   tailDebt: bigint;
-  /** @deprecated WP6 */
+  /** @deprecated WP6 (no longer read or written) */
   redemptionClaimed: boolean;
   // ---- Stage 1 holder record (SIM:82-90); set by `registerHolder` (SIM:406-416)
   registered: boolean;
@@ -132,9 +132,9 @@ export interface SimRedemption {
   claimed: bigint;
   tailCapPerUnit: bigint;
   tailEndsAt: number;
-  /** @deprecated WP6 (`SimSeries.tail.tailPaidPerUnitWad`) */
+  /** @deprecated WP6 (`SimSeries.tail.tailPaidPerUnitWad`; no longer read or written) */
   tailPaidPerUnit: bigint;
-  /** @deprecated WP6 (`SimSeries.tail.tailAccWad`) */
+  /** @deprecated WP6 (`SimSeries.tail.tailAccWad`; no longer read or written) */
   accTailNetWad: bigint;
 }
 
@@ -225,15 +225,12 @@ export interface SimSeries {
   unitsSold: bigint;
   unitsOutstanding: bigint;
   capPerUnit: bigint | null;
-  /**
-   * @deprecated WP5 (`vault.paidPerUnitWad`). Kept equal to it by `vaultReceive` only for the version-1 redemption
-   * quote, until WP6 moves the quote to Stage 1's `redemptionQuote`.
-   */
+  /** @deprecated WP5 (`vault.paidPerUnitWad`; no longer read or written since WP6 moved the quote to Stage 1's) */
   paidPerUnitWad: bigint;
   /** @deprecated WP5 (`vault.netAccWad`; no longer read or written) */
   accNetWad: bigint;
   vaultBalance: bigint;
-  /** @deprecated WP5 (`vault.grossReceived`; the API vault totals are `grossPaidTotal`/`feesTotal`). Only the tail (WP6) still adds to it. */
+  /** @deprecated WP5 (`vault.grossReceived`; the API vault totals are `grossPaidTotal`/`feesTotal`; no longer read or written) */
   vaultGrossTotal: bigint;
   /** @deprecated WP5 (`vault.feeCollected`; see `vaultGrossTotal`) */
   vaultFeesTotal: bigint;
@@ -258,10 +255,7 @@ export interface SimSeries {
   pausedSecondsTotal: number;
   redemption: SimRedemption | null;
   extinguishedAt: number | null;
-  /**
-   * gross accepted per settlement-year index (0 = first year after settlement), for D_avg
-   * @deprecated WP5 (`vault.yearGross`). Still filled by `vaultReceive` for the version-1 redemption quote until WP6.
-   */
+  /** @deprecated WP5 (`vault.yearGross`, Stage 1's tagged year ring the quote reads; no longer read or written) */
   grossByYear: Map<number, bigint>;
   /** life-to-date gross the vault accepted (regular, split and tail payments; not an extinguishment return): the API vault total */
   grossPaidTotal: bigint;

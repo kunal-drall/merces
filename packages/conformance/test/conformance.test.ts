@@ -206,6 +206,11 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const c = await exec(e, e.backers[2]!, { kind: 'claimRedemption', seriesId });
     expect(types(c.events)).toContain('UnitsBurned');
     expect(types(c.events)).toContain('RedemptionClaimed');
-    await expectChainError(exec(e, e.backers[2]!, { kind: 'claimRedemption', seriesId }), 'NotFound');
+    // a second claim has nothing left to redeem: a claim of 0 units succeeds and burns nothing (Stage 1 SIM:1375-1401;
+    // cause RD: was NotFound); a wallet with no registration is refused (Stage 1 HolderNotRegistered)
+    const again = await exec(e, e.backers[2]!, { kind: 'claimRedemption', seriesId });
+    expect(types(again.events)).toEqual(['RedemptionClaimed']);
+    expect(again.events[0]!.payload).toMatchObject({ units: '0', amount: '0' });
+    await expectChainError(exec(e, e.admin, { kind: 'claimRedemption', seriesId }), 'NotFound');
   });
 });

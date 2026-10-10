@@ -52,26 +52,28 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     // R14 retirement view (not retired)
     const ret = await rig.get(`/series/${seriesId}/retirement`);
     expect(ret.json()).toMatchObject({ retired: false, paidPerUnit: USDC(4).toString(), capProgressBps: Math.floor((4 / 22.5) * 10_000) });
-    // R15: quote before lockup end lists the blocker; after a full year the cap term binds (matches the simulator test)
+    // R15: quote before lockup end lists the blocker; after a full year the hurdle decides (matches the simulator test)
     const settledAt = (await h.sim.getSeries(seriesId))!.settledAt!;
     let quote = await rig.get(`/series/${seriesId}/redemption/quote`, holderTok);
     expect(quote.json().blockers.some((b: string) => b.includes('lockup'))).toBe(true);
     expect((await rig.post(`/series/${seriesId}/redemption/build-redeem`, { maxPricePerUnit: USDC(100).toString() }, issuerTok)).statusCode).toBe(409);
     await h.sim.setTime(settledAt + 365 * 86_400 + 10);
     quote = await rig.get(`/series/${seriesId}/redemption/quote`, issuerTok);
-    expect(quote.json()).toMatchObject({ redeemable: true, pricePerUnit: USDC(18.5).toString(), boundBy: 'cap', deposit: USDC(18.5 * 500).toString() });
+    // Stage 1's quote over the year ring: the 2026Q4 payment is tagged with settlement year 1 (its deadline), so
+    // k × D_avg = 0 and the hurdle 9.72 decides below C_rem 18.5 (G6; was 18.5 bound by the cap, payoutTerm 20, deposit 9,250)
+    expect(quote.json()).toMatchObject({ redeemable: true, pricePerUnit: USDC(9.72).toString(), boundBy: 'hurdle', deposit: USDC(4_860).toString(), tailCapPerUnit: USDC(8.78).toString() });
     expect(quote.json().terms.hurdlePrice).toBe(USDC(9.72).toString());
-    expect(quote.json().terms.payoutTerm).toBe(USDC(20).toString());
-    const redeem = await rig.post(`/series/${seriesId}/redemption/build-redeem`, { maxPricePerUnit: USDC(18.5).toString() }, issuerTok);
+    expect(quote.json().terms.payoutTerm).toBe('0');
+    const redeem = await rig.post(`/series/${seriesId}/redemption/build-redeem`, { maxPricePerUnit: USDC(9.72).toString() }, issuerTok);
     expect(redeem.statusCode).toBe(200);
     expect((await rig.post('/tx/send', await h.issuer.sign(redeem.json().tx as UnsignedTx), issuerTok)).json().events.map((e: { type: string }) => e.type)).toEqual(['RedemptionOpened', 'StatusChanged']);
     const rc = await rig.post(`/series/${seriesId}/redemption/build-claim`, { holder: h.backers[0]!.address }, holderTok);
-    expect(rc.json()).toMatchObject({ units: '100', amount: USDC(1850).toString() });
+    expect(rc.json()).toMatchObject({ units: '100', amount: USDC(972).toString() }); // 9.72 × 100 (G6; was 1,850)
     expect((await rig.post('/tx/send', await h.backers[0]!.sign(rc.json().tx as UnsignedTx), holderTok)).statusCode).toBe(200);
     await rig.sync();
     const red = await rig.get(`/series/${seriesId}/redemption`, holderTok);
     expect(red.json().status).toBe('Redeemed');
-    expect(red.json().tail.open).toBe(false); // price equalled C_remaining → no tail
+    expect(red.json().tail.open).toBe(true); // the hurdle decided: 18.5 − 9.72 = 8.78 per unit of tail room (G6; was closed)
     expect(red.json().claims.count).toBe(1);
     // R19: windows switched off → 403; on → builders work after lockup
     const win = await rig.get(`/series/${seriesId}/window`);
