@@ -103,6 +103,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
+        /** @description The chain's auction record: Stage 1's stored raise state beside the display phase, the counts, the current settlement round and its running tally, the results once finalized, where the settlement stands (stage) and the end of the current time-bound phase (null while Settling). */
         get: operations["getAuction"];
         put?: never;
         post?: never;
@@ -1260,6 +1261,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description Checks a bid before it is built: the commit phase, the allowlist, one bid per wallet, Stage 1's validity rule (reserve, 1 ≤ quantity ≤ the wallet cap; a bid that breaks it can be committed but is invalid at reveal and refunded in full), the u64 range and the balance; returns the deposit a commit locks (Stage 1 requiredEscrow: price × quantity plus the auction fee on it). */
         post: operations["precheckBid"];
         delete?: never;
         options?: never;
@@ -1315,7 +1317,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/series/{seriesId}/bids/build-refund": {
+    "/series/{seriesId}/bids/build-deliver": {
         parameters: {
             query?: never;
             header?: never;
@@ -1324,7 +1326,59 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        post: operations["buildClaimRefund"];
+        /** @description Builds Stage 1's deliver_bid for a processed, undelivered bid: it pays the bidder its refund and its units. The keepers deliver every bid; this is the bidder's "deliver now", or anyone's when the keepers stall (delivery is permissionless and always pays the bidder). `signer` defaults to the bidder and must be one of the caller's wallets. */
+        post: operations["buildDeliverBid"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/auction/build-step": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Builds the next step of a sealed raise's settlement for `signer` (one of the caller's wallets), with the planner the keepers use: after the reveal end the honest proposal (beginSettlement), the tally pages, finalizeSettlement, a processBid per bid, then a deliverBid per bid. Every step is permissionless; sign it, relay it with POST /tx/send and ask again. Use it when the keepers stall, or to settle a raise with no bid before the keepers' 24-hour grace ends. */
+        post: operations["buildSettlementStep"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/raise/build-open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Builds the issuer's openRaise (Stage 1 open_raise). The chain sets the commit end to now + the series' commit duration and the reveal end to the commit end + its reveal duration. Stage 1's checks run first, in its order. */
+        post: operations["buildOpenRaise"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/raise/build-cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Builds the issuer's cancelRaise (Stage 1 cancel_raise): an Open sealed raise that has no bid, at any time (also after its reveal end). A curve-mode series is cancellable while Draft or Open with no curve units minted. */
+        post: operations["buildCancelRaise"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1370,6 +1424,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
+        /** @description The settlement Stage 1 would reach on the revealed bids (public onchain once revealed), with Stage 1's math: the honest proposal, the outcome (a raise that would sell no unit fails, as SPEC and both chains do) and each revealed bid's processing. Every revealed bid counts, its bidder still allowlisted or not, as the settlement does. Projected while the raise is Open or Settling; null when no single clearing price exists. `stage` is where the settlement stands; `settleDue` is stage = awaiting-proposal. */
         get: operations["getAuctionPreview"];
         put?: never;
         post?: never;
@@ -2469,7 +2524,7 @@ export type components = {
                 [key: string]: unknown;
             }) | null;
         };
-        /** @description A Stage 1 error name (SPEC v1.1.2 §11, `@merces/sdk` ERRORS), e.g. WrongPeriod, PaymentOutstanding, ReportTooEarly, TierNotEnabled, InvalidProof, SeriesLate, LockupActive, UnreportedPeriods, NothingDue, HolderNotRegistered, TerminalStatus, RaiseNotSettled, MintNotFinalized, UnfavourableAmendment, PauseTooLong, InsufficientEscrow, AmountOutOfRange. */
+        /** @description A Stage 1 error name (SPEC v1.1.2 §11, `@merces/sdk` ERRORS), e.g. WrongPeriod, PaymentOutstanding, ReportTooEarly, TierNotEnabled, InvalidProof, SeriesLate, LockupActive, UnreportedPeriods, NothingDue, HolderNotRegistered, TerminalStatus, RaiseNotSettled, MintNotFinalized, UnfavourableAmendment, PauseTooLong, InsufficientEscrow, AmountOutOfRange. The sealed-bid raise and its settlement (SPEC §5.1–§5.2): NotIssuer, RaiseNotDraft, ContractHashMissing, NotAllowlisted, NewRaisesPaused, RaiseNotOpen, BidsExist, CommitPhaseClosed, BidExists, ZeroEscrow, RevealNotStarted, RevealPhaseClosed, AlreadyRevealed, CommitmentMismatch, BidNotFound, SettlementNotReady, TallyInProgress, NotSettling, TallyIncomplete, AlreadyProcessed, NotProcessed, AlreadyDelivered. */
         Stage1ErrorName: string;
         ChainHealth: {
             chain?: string;
@@ -2529,6 +2584,153 @@ export type components = {
                 tier4?: boolean;
             };
             reportingCurrency?: string;
+            /** @description the sealed raise's commit phase (Stage 1 commit_duration; 1 hour–30 days): openRaise sets the commit end to now + this. Null on a row indexed before S2 */
+            commitDurationSeconds?: number | null;
+            /** @description the sealed raise's reveal phase (Stage 1 reveal_duration; 1 hour–7 days), after the commit end. Null on a row indexed before S2 */
+            revealDurationSeconds?: number | null;
+            /** @description the non-reveal charge the series recorded at creation (Stage 1 create_series). Reserved: the charge is an owner hold and is not applied (an unrevealed bid is refunded in full); series created during the hold record 0. Null on a row indexed before S2 */
+            nonRevealChargeBps?: number | null;
+        };
+        /** @description A sealed raise's settlement as indexed (public onchain state): the current round and how it ended, and what finalizeSettlement wrote. A failed raise keeps its price and its would-be units and proceeds here, with the reason; the series' issuePrice stays null. */
+        SeriesAuction: {
+            /** @description the settlement round (Stage 1 tally_round): 0 before the first proposal */
+            round?: number;
+            roundRejected?: boolean;
+            rejectionReason?: components["schemas"]["SettlementRejection"] | null;
+            /** @description null before finalization and when no bid was valid */
+            clearingPrice?: components["schemas"]["Money"] | null;
+            unitsSold?: string;
+            proceeds?: components["schemas"]["Money"];
+            failureReason?: components["schemas"]["RaiseFailure"] | null;
+            /** @description when the raise settled or failed */
+            finalizedAt?: number | null;
+        };
+        /**
+         * @description For display: an Open raise is shown as Open during its commit phase and Reveal from its commit end until settlement begins (on the series row, which the indexer keeps, it stays Open); Settling between the first proposal and finalization
+         * @enum {string}
+         */
+        RaisePhase: "Draft" | "Open" | "Reveal" | "Settling" | "Settled" | "Failed" | "Cancelled";
+        /**
+         * @description Stage 1's stored raise state, never time-derived (what settlement planning reads, with the phase ends)
+         * @enum {string}
+         */
+        RaiseState: "Draft" | "Open" | "Settling" | "Settled" | "Failed" | "Cancelled";
+        /**
+         * @description why finalizeSettlement failed the raise: no valid bid, or the proceeds (or the units sold) fell short of the minimum raise
+         * @enum {string}
+         */
+        RaiseFailure: "NoValidBids" | "MinRaise";
+        /**
+         * @description why a settlement round's proposal was rejected at finalization
+         * @enum {string}
+         */
+        SettlementRejection: "ClaimMismatch" | "InvalidClearingPrice";
+        /**
+         * @description Where a raise stands in Stage 1's settlement (a derived label, not chain state): awaiting-proposal covers an Open raise past its reveal end and a Settling raise whose round was rejected; processing a finalized raise with bids to process (the mint is not final); delivering a final mint with a processed bid not yet delivered; failed-complete a failed raise with every deposit delivered back
+         * @enum {string}
+         */
+        SettlementStage: "draft" | "commit" | "reveal" | "awaiting-proposal" | "tallying" | "awaiting-finalize" | "processing" | "delivering" | "complete" | "failed-complete" | "cancelled";
+        /** @description A sealed raise's auction record as the chain holds it (Stage 1 SPEC §5.1–§5.2). Every amount is public onchain: the escrow, the current round's proposal and running tally, and the results finalizeSettlement wrote (for a MinRaise failure, the would-be price, units and proceeds). */
+        AuctionState: {
+            seriesId?: string;
+            phase?: components["schemas"]["RaisePhase"];
+            raiseState?: components["schemas"]["RaiseState"];
+            stage?: components["schemas"]["SettlementStage"];
+            /** @description chain time */
+            now?: number;
+            /** @description the end of the current time-bound phase: the commit end while Open, the reveal end while Reveal; null otherwise (settlement steps have no deadline) */
+            phaseEndsAt?: number | null;
+            commitEndsAt?: number | null;
+            revealEndsAt?: number | null;
+            bidCount?: number;
+            revealedCount?: number;
+            /** @description revealed bids valid under Stage 1's rule (fixed at reveal) */
+            validCount?: number;
+            /** @description stablecoin the auction holds: the deposits, less what processing moved out, less the refunds delivered */
+            escrowTotal?: components["schemas"]["Money"];
+            /** @description units allocated to winners and not yet delivered */
+            escrowUnits?: string;
+            /** @description Stage 1 tally_round: 0 before the first proposal */
+            round?: number;
+            roundRejected?: boolean;
+            rejectionReason?: components["schemas"]["SettlementRejection"] | null;
+            /** @description the current round's proposal (the rejected one while roundRejected); null before the first */
+            proposal?: {
+                clearingPrice?: components["schemas"]["Money"];
+                qAboveClaim?: string;
+                qAtClaim?: string;
+                rClaim?: string;
+            } | null;
+            /** @description the current round's running tally */
+            tally?: {
+                talliedCount?: number;
+                qAbove?: string;
+                qAt?: string;
+                allocSum?: string;
+                minValidPrice?: string | null;
+            };
+            /** @description the price finalizeSettlement cleared (kept on a MinRaise failure); null before it and when no bid was valid */
+            clearingPrice?: components["schemas"]["Money"] | null;
+            qAbove?: string;
+            qAt?: string;
+            /** @description units for the bids exactly at the clearing price (r_claim of the accepted round; 0 when failed) */
+            R?: string;
+            unitsSold?: string;
+            proceeds?: components["schemas"]["Money"];
+            finalizedAt?: number | null;
+            failureReason?: components["schemas"]["RaiseFailure"] | null;
+            bidsProcessed?: number;
+            unitsMinted?: string;
+            /** @description the last bid is processed: the money paths open (Stage 1 MintNotFinalized until then) */
+            mintFinalized?: boolean;
+        };
+        /** @description One of the caller's bids, with the chain's own figures (nothing computed offchain). A processed bid is owed pendingUnits and pendingRefund until it is delivered; the keepers deliver every bid, and POST /series/{seriesId}/bids/build-deliver delivers it sooner. */
+        Bid: {
+            seriesId?: string;
+            chain?: string;
+            bidder?: string;
+            /** @description the series' phase, as indexed */
+            phase?: string;
+            /** @description the escrow the commit locked */
+            deposit?: components["schemas"]["Money"];
+            /** @description null until revealed */
+            revealed?: {
+                pricePerUnit?: components["schemas"]["Money"];
+                quantity?: string;
+            } | null;
+            /** @description fixed at reveal (Stage 1 isBidValid: reserve, 1 ≤ quantity ≤ the wallet cap, escrow ≥ the required escrow); an invalid bid is refunded in full. Null until revealed */
+            valid?: boolean | null;
+            processed?: boolean;
+            delivered?: boolean;
+            /** @description units allocated when processed */
+            allocatedUnits?: string;
+            /** @description units a processed bid is owed until delivered; "0" otherwise */
+            pendingUnits?: string;
+            /** @description the refund a processed bid is owed until delivered (Stage 1 pendingRefund); "0" otherwise */
+            pendingRefund?: components["schemas"]["Money"];
+            /** @description the same refund as pendingRefund; null when the chain has no such bid */
+            refundable?: components["schemas"]["Money"] | null;
+            /** @description the refund delivered so far, as indexed (BidDelivered) */
+            refunded?: components["schemas"]["Money"];
+        };
+        /** @description The next settlement step, built for the signer to sign and relay with POST /tx/send. Every step is permissionless. */
+        SettlementStep: {
+            stage: components["schemas"]["SettlementStage"];
+            /** @description the step: beginSettlement {clearingPrice, qAboveClaim, qAtClaim} (the honest proposal, from the revealed bids with Stage 1's math), tallyBids {maxBids} (one page; the chain's page limit), finalizeSettlement, processBid {bidder} or deliverBid {bidder} */
+            command: {
+                /** @enum {string} */
+                kind: "beginSettlement" | "tallyBids" | "finalizeSettlement" | "processBid" | "deliverBid";
+                seriesId: string;
+            } & {
+                [key: string]: unknown;
+            };
+            tx: components["schemas"]["UnsignedTx"];
+        };
+        /** @description Why there is no step to build (409 detail): wait (the reveal phase has not ended; until), done (every bid is delivered, or the raise is cancelled or still a draft), curve (a curve series has no sealed-bid settlement), or the planner's stuck code (ValidityMismatch, NoClearingPrice, ProposalRejected, ProposalAlreadyRejected, NoRevealEnd, NothingToProcess: an operator matter, never retried by itself) */
+        SettlementStepRefusal: {
+            stage?: components["schemas"]["SettlementStage"] | null;
+            reason?: string;
+            until?: number;
         };
         Series: {
             seriesId?: string;
@@ -2538,8 +2740,7 @@ export type components = {
             stablecoin?: "USDC" | "USDG";
             /** @enum {string} */
             raiseStyle?: "sealed" | "curve";
-            /** @enum {string} */
-            phase?: "Draft" | "Open" | "Reveal" | "Settled" | "Failed" | "Cancelled";
+            phase?: components["schemas"]["RaisePhase"];
             /** @enum {string} */
             status?: "OnTime" | "InGrace" | "Late" | "Paused" | "Retired" | "Redeemed" | "Extinguished";
             terms?: components["schemas"]["SeriesTerms"];
@@ -2569,6 +2770,10 @@ export type components = {
             paymentOutstanding?: boolean;
             /** @description the period whose formal notice the chain recorded (period end + 90 days of unpaused time) */
             formalNoticeEmittedFor?: string | null;
+            /** @description Stage 1's mint gate: a sealed raise's last bid is processed (or a curve graduated). Payments, reports, releases, redemption, extinguishment and transfer windows wait for it (MintNotFinalized) */
+            mintFinalized?: boolean;
+            /** @description null for a curve-mode series */
+            auction?: components["schemas"]["SeriesAuction"] | null;
         };
         /** @description Stage 1's reporting ledger of a series, as indexed from its events (holder-or-issuer tier: it carries the open due's amount) */
         SeriesReporting: {
@@ -2753,7 +2958,7 @@ export type components = {
             /** @enum {string} */
             stablecoin: "USDC" | "USDG";
             /** @enum {string} */
-            phase: "Draft" | "Open" | "Reveal" | "Settled" | "Failed" | "Cancelled";
+            phase: "Draft" | "Open" | "Reveal" | "Settling" | "Settled" | "Failed" | "Cancelled";
             /** @enum {string} */
             status: "OnTime" | "InGrace" | "Late" | "Paused" | "Retired" | "Redeemed" | "Extinguished";
             settledAt?: number | null;
@@ -3564,13 +3769,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Auction state (phase */
+            /** @description The auction record */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["AuctionState"];
                 };
             };
             404: components["responses"]["NotFound"];
@@ -3662,7 +3867,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Live series ranked for the landing page */
+            /** @description Live series ranked for the landing page (raises taking bids or settling, and settled series), no amounts */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3900,13 +4105,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The caller's bids and refund status */
+            /** @description The caller's bids with their settlement and delivery, as the chain holds them */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        bids?: components["schemas"]["Bid"][];
+                    };
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -5576,7 +5783,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Allowlist */
+            /** @description The issues (empty = ok), the deposit, the wallet cap in units, the fee and the phase ends */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5689,7 +5896,7 @@ export interface operations {
             };
         };
     };
-    buildClaimRefund: {
+    buildDeliverBid: {
         parameters: {
             query?: never;
             header?: never;
@@ -5703,25 +5910,163 @@ export interface operations {
             content: {
                 "application/json": {
                     bidder: string;
+                    /** @description the wallet that signs and sends it (default: the bidder) */
+                    signer?: string;
                 };
             };
         };
         responses: {
-            /** @description Unsigned claimRefund transaction and the refundable amount */
+            /** @description The unsigned deliverBid and what it delivers */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        tx?: components["schemas"]["UnsignedTx"];
+                        pendingUnits?: string;
+                        pendingRefund?: components["schemas"]["Money"];
+                    };
                 };
             };
-            /** @description Not settled or nothing to refund */
-            409: {
+            /** @description The signer is not one of the caller's wallets */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            /** @description The bid is not processed yet (detail.stage1 NotProcessed) or already delivered (AlreadyDelivered) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    buildSettlementStep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    signer: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The next step */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettlementStep"];
+                };
+            };
+            /** @description The signer is not one of the caller's wallets */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            /** @description No step to build: detail is a SettlementStepRefusal (wait, done, curve or a stuck code) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"] & {
+                        detail?: components["schemas"]["SettlementStepRefusal"];
+                    };
+                };
+            };
+        };
+    };
+    buildOpenRaise: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The unsigned openRaise and the phase durations it will apply */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx?: components["schemas"]["UnsignedTx"];
+                        commitDurationSeconds?: number;
+                        revealDurationSeconds?: number;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Refused, with detail.stage1: RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused; or a curve-mode series, which runs no sealed-bid raise */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    buildCancelRaise: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The unsigned cancelRaise */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx?: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Refused, with detail.stage1: RaiseNotOpen or BidsExist (or a curve series with units minted) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -5800,13 +6145,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Offchain clearing preview from revealed bids and whether settlement is due */
+            /** @description The stage, the counts, the projection (or null) and the settled result */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        seriesId?: string;
+                        phase?: string;
+                        stage?: components["schemas"]["SettlementStage"];
+                        bidCount?: number;
+                        revealedCount?: number;
+                        validCount?: number;
+                        settleDue?: boolean;
+                        projected?: Record<string, never> | null;
+                        settled?: Record<string, never> | null;
+                    };
                 };
             };
             404: components["responses"]["NotFound"];

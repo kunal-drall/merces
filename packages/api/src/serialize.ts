@@ -1,3 +1,5 @@
+const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
+
 /**
  * Row → API shapes. Money stays a string; bigint columns arrive as strings from pg.
  *
@@ -8,6 +10,9 @@
  * (critique M8). `status` is the status the chain last stored (its StatusChanged events). The open due's amount is a
  * payment amount, which PRIVACY.md gives to the issuer, holders and admins only: the public row says only whether a
  * due is open (`paymentOutstanding`); the amount is in `reportingRow` (served at the holder-or-issuer tier).
+ *
+ * The auction's settlement (S2: the round, the results `finalizeSettlement` wrote, the mint gate) comes from the same
+ * projection (migration 019) and is public onchain state, like the bids it settles.
  */
 export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -37,6 +42,11 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
       termsCommitment: r.terms_commitment,
       tierFlags: r.tier_flags,
       reportingCurrency: r.reporting_currency,
+      // the sealed raise's phases (Stage 1 create_series; null on rows indexed before S2) and the non-reveal charge the
+      // series recorded (an owner hold: series created during it record 0, and settlement applies 0 whatever is recorded)
+      commitDurationSeconds: num(r.commit_duration_seconds),
+      revealDurationSeconds: num(r.reveal_duration_seconds),
+      nonRevealChargeBps: num(r.non_reveal_charge_bps),
     },
     createdAt: Number(r.created_at),
     openedAt: r.opened_at === null ? null : Number(r.opened_at),
@@ -59,6 +69,27 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
     openDuePeriod: r.open_due_period ?? null,
     paymentOutstanding: BigInt(String(r.open_due_amount ?? '0')) > 0n,
     formalNoticeEmittedFor: r.formal_notice_emitted_for ?? null,
+    // Stage 1's mint gate: the last bid of a sealed raise is processed, or a curve graduated
+    mintFinalized: r.mint_finalized === true,
+    auction: r.raise_style === 'sealed' ? auctionRow(r) : null,
+  };
+}
+
+/**
+ * A sealed raise's settlement as indexed (S2; public onchain state): the current round and whether it was rejected,
+ * and what `finalizeSettlement` wrote. A failed raise keeps its price and its would-be units and proceeds here (with
+ * `failureReason`); the series' `issuePrice` stays null. `finalizedAt` is when the raise settled or failed.
+ */
+function auctionRow(r: Record<string, unknown>): Record<string, unknown> {
+  return {
+    round: Number(r.settlement_round ?? 0),
+    roundRejected: r.round_rejected === true,
+    rejectionReason: r.rejection_reason ?? null,
+    clearingPrice: r.auction_clearing_price ?? null,
+    unitsSold: String(r.auction_units_sold ?? '0'),
+    proceeds: String(r.auction_proceeds ?? '0'),
+    failureReason: r.auction_failure_reason ?? null,
+    finalizedAt: num(r.auction_finalized_at),
   };
 }
 

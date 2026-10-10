@@ -28,7 +28,7 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     await rig.close();
   });
 
-  it('prechecks, builds commit/reveal/refund, keeps only encrypted backups, previews clearing and settles by keeper', async () => {
+  it('prechecks, builds commit/reveal/deliver, keeps only encrypted backups, previews clearing and settles by keeper', async () => {
     const h = rig.harness('monad');
     const { terms } = (await import('@merces/simulator')).defaultTerms(h.sim, { unitsOffered: '1000', walletCapBps: 1000, ...phases });
     await h.exec(h.issuer, { kind: 'registerIssuer' });
@@ -86,8 +86,9 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
       { bidder: backer.address, units: '0', cost: '0', fee: '0', refund: USDC(1010).toString() },
       { bidder: b2.address, units: '0', cost: '0', fee: '0', refund: USDC(4545).toString() },
     ]);
-    // the build path refuses a delivery before the bid is processed
-    expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: backer.address }, tok)).statusCode).toBe(409);
+    // the build path refuses a delivery before the bid is processed (cause S2-PR: build-deliver, was build-refund)
+    const early = await rig.post(`/series/${seriesId}/bids/build-deliver`, { bidder: backer.address }, tok);
+    expect([early.statusCode, early.json().detail]).toEqual([409, { stage1: 'NotProcessed' }]);
     // cause S2-MS: the keepers settle in Stage 1's steps once the reveal phase is over; a pass with nothing to do is harmless
     const svc = new AuctionService(rig.ctx as never);
     expect(await svc.advanceSettlements({ deliver: true })).toEqual({ advanced: [], stuck: [], failed: [] });
@@ -102,7 +103,8 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     // cause S2-PR: the keeper delivered the deposit in full; nothing is left for the bidder's own delivery (409)
     expect(BigInt(await h.sim.getBalance(backer.address, 'USDC')) - before).toBe(USDC(1010));
     expect(await h.sim.getBid(seriesId, backer.address)).toMatchObject({ processed: true, delivered: true, pendingRefund: '0' });
-    expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: backer.address }, tok)).statusCode).toBe(409);
+    const late = await rig.post(`/series/${seriesId}/bids/build-deliver`, { bidder: backer.address }, tok);
+    expect([late.statusCode, late.json().detail]).toEqual([409, { stage1: 'AlreadyDelivered' }]);
     // the notice comes from the indexer, in the transaction that projects the finalized AuctionFailed event
     await rig.sync();
     const notified = await rig.t.pool.query("select payload->>'kind' as kind from outbox where payload->>'seriesId' = $1", [seriesId]);

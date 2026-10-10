@@ -191,10 +191,6 @@ export interface BidState {
   pendingUnits: Units;
   pendingRefund: Money;
   delivered: boolean;
-  /** @deprecated the refund delivered so far (the delivered `pendingRefund`); the read model keeps the history (S2 WP7) */
-  refunded: Money;
-  /** @deprecated `processed` (S2 WP7) */
-  settled: boolean;
 }
 
 export interface TreasuryState {

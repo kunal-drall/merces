@@ -106,11 +106,13 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     // cause S2-PR: the refund was pushed at delivery: the deposit 1212 USDC (100 × 12 + 1%) less the cost 100 × 9 = 900
     // and its 9 fee → 303 USDC delivered; nothing is refundable any more and the delivery builder refuses (409)
     expect(mine.json().bids[0]).toMatchObject({ valid: true, processed: true, delivered: true, pendingUnits: '0', pendingRefund: '0', refundable: '0', refunded: USDC(303).toString() });
-    expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: rig.sol.backers[0]!.address }, holderTok)).statusCode).toBe(409);
+    // cause S2-PR: the delivery builder is build-deliver (was build-refund)
+    const again = await rig.post(`/series/${seriesId}/bids/build-deliver`, { bidder: rig.sol.backers[0]!.address }, holderTok);
+    expect([again.statusCode, again.json().detail]).toEqual([409, { stage1: 'AlreadyDelivered' }]);
     // a bidder at the clearing price who won everything had nothing to refund
     const lastTok = rig.token({ accountId: 'b4', wallets: [{ chain: 'solana', address: rig.sol.backers[4]!.address }], roles: ['backer'] });
     expect((await rig.get('/me/bids', lastTok)).json().bids[0]).toMatchObject({ refundable: '0', refunded: '0', delivered: true });
-    expect((await rig.post(`/series/${seriesId}/bids/build-refund`, { bidder: rig.sol.backers[4]!.address }, lastTok)).statusCode).toBe(409);
+    expect((await rig.post(`/series/${seriesId}/bids/build-deliver`, { bidder: rig.sol.backers[4]!.address }, lastTok)).statusCode).toBe(409); // cause S2-PR
   });
 
   // cause S2-RH: Stage 1's register_holder is permissionless for any allowlisted wallet, so a registration alone is not

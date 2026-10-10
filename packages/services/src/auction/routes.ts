@@ -21,7 +21,15 @@ export function registerAuctionRoutes(app: FastifyInstance, base: AppContext): v
     const b = z.object({ bidder: z.string(), pricePerUnit: z.string().regex(/^\d+$/), quantity: z.string().regex(/^\d+$/), salt: z.string() }).parse(req.body);
     return s.buildReveal(sid(req), session!, b.bidder, b.pricePerUnit, b.quantity, b.salt);
   } });
-  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/bids/build-refund', access: 'account', handler: async (req, _r, session) => s.buildRefund(sid(req), session!, z.object({ bidder: z.string() }).parse(req.body).bidder) });
+  // every settlement step is permissionless: any signed-in account builds them for one of its own wallets
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/bids/build-deliver', access: 'account', handler: async (req, _r, session) => {
+    const b = z.object({ bidder: z.string().min(1), signer: z.string().min(1).optional() }).parse(req.body);
+    return s.buildDeliver(sid(req), session!, b.bidder, b.signer);
+  } });
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/auction/build-step', access: 'account', handler: async (req, _r, session) => s.buildSettlementStep(sid(req), session!, z.object({ signer: z.string().min(1) }).parse(req.body).signer) });
+  // the issuer opens and cancels its own raise
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/raise/build-open', access: 'issuer', handler: async (req) => s.buildOpenRaise(sid(req)) });
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/raise/build-cancel', access: 'issuer', handler: async (req) => s.buildCancelRaise(sid(req)) });
   defineRoute(app, ctx, { method: 'PUT', url: '/series/:seriesId/bids/backup', access: 'backer', handler: async (req, _r, session) => {
     const b = z.object({ bidder: z.string(), ciphertext: z.string().min(1), keyHint: z.string().max(200).nullable().default(null) }).parse(req.body);
     return s.putBackup(sid(req), session!, b.bidder, b.ciphertext, b.keyHint);

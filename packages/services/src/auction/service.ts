@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AppError, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import {
-  ChainError, auctionRulesOf, bidCommitment, processingOrder, proposalFor, revealedBidsOf, runSettlement, settlementOutcome, settlementStage,
+  ChainError, auctionRulesOf, bidCommitment, nextSettlementStep, processingOrder, proposalFor, readSettlementView, revealedBidsOf, runSettlement, settlementOutcome, settlementStage,
   type AuctionTermsInput, type ChainPort, type PermissionlessCommand, type SettlementBidView, type SettlementProposal, type SettlementStage,
   type SettlementStuckReason, type UnsignedTx,
 } from '@merces/domain';
@@ -14,7 +14,8 @@ import type { ServiceContext } from '../context.ts';
  * E6 — auction service, on Stage 1's sealed-bid auction (SPEC §5.1–§5.2; S2). Pre-checks a bid against Stage 1's
  * validity rule and required escrow before it is built; stores client-encrypted reveal backups it cannot read; previews
  * the settlement offchain with Stage 1's math (the honest proposal, the tally, the D7 outcome and each bid's processing);
- * builds a bidder's own delivery; and drives settlement and delivery for the keepers (`advanceSettlements`, `deliverDue`).
+ * builds the issuer's open and cancel, a delivery and the next settlement step for any wallet (every settlement step is
+ * permissionless); and drives settlement and delivery for the keepers (`advanceSettlements`, `deliverDue`).
  * It can never reveal a bid on its own: reveals need the bidder's price, quantity and salt, which only the bidder (or
  * their encrypted backup) holds.
  */
@@ -143,19 +144,90 @@ export class AuctionService {
   }
 
   /**
-   * The bidder's own delivery (Stage 1 `deliver_bid`, permissionless): a `deliverBid` for its processed, undelivered
-   * bid, which pays it the refund (`refundable`, the chain's `pendingRefund`) and its units. 409 before the bid is
-   * processed and once it is delivered (the keepers deliver every bid; this is the bidder's "deliver now"). The route
-   * keeps its S1 path until WP7 renames it.
+   * A delivery (Stage 1 `deliver_bid`, permissionless): a `deliverBid` for a processed, undelivered bid, which pays the
+   * bidder its refund (`pendingRefund`) and its units (`pendingUnits`). The keepers deliver every bid; this is the
+   * bidder's "deliver now", or anyone's when the keepers stall. `signer` (the wallet that sends it) defaults to the
+   * bidder and must be one of the caller's wallets; any wallet may deliver any bid, and the bidder is always the one
+   * paid. 409 before the bid is processed (NotProcessed) and once it is delivered (AlreadyDelivered).
    */
-  async buildRefund(seriesId: string, session: Session, bidder: string): Promise<{ tx: UnsignedTx; refundable: string }> {
+  async buildDeliver(seriesId: string, session: Session, bidder: string, signer?: string): Promise<{ tx: UnsignedTx; pendingUnits: string; pendingRefund: string }> {
     const chain = this.ctx.chainFor(seriesId);
-    await this.requireWallet(session, chain.chain, bidder);
+    const from = signer ?? bidder;
+    await this.requireWallet(session, chain.chain, from);
     const bid = await chain.getBid(seriesId, bidder);
     if (!bid) throw AppError.notFound('bid');
-    if (!bid.processed) throw AppError.conflict('the bid is not processed yet');
-    if (bid.delivered) throw AppError.conflict('the bid is already delivered');
-    return { tx: await chain.build({ kind: 'deliverBid', seriesId, bidder }, bidder), refundable: bid.pendingRefund };
+    if (!bid.processed) throw AppError.conflict('the bid is not processed yet', { stage1: 'NotProcessed' });
+    if (bid.delivered) throw AppError.conflict('the bid is already delivered', { stage1: 'AlreadyDelivered' });
+    return { tx: await chain.build({ kind: 'deliverBid', seriesId, bidder }, from), pendingUnits: bid.pendingUnits, pendingRefund: bid.pendingRefund };
+  }
+
+  /**
+   * The next settlement step as an unsigned transaction for `signer` (one of the caller's wallets): the planner the
+   * keepers use (`nextSettlementStep`, from the chain's stored raise state and its clock, deliveries included), so a
+   * wallet can drive a settlement itself when the keepers stall, or settle a raise with no bid inside the keepers' grace
+   * (A-AUC-12). Every step is permissionless. Relaying each step and asking again reaches mint finalisation, then delivers
+   * each bid. 409 with `{stage, reason}` when there is nothing to build: `wait` (until the reveal end, `until`), `done`,
+   * or the planner's stuck code (`SettlementStuckReason`; an operator matter).
+   */
+  async buildSettlementStep(seriesId: string, session: Session, signer: string): Promise<{ stage: SettlementStage; command: PermissionlessCommand; tx: UnsignedTx }> {
+    const chain = this.ctx.chainFor(seriesId);
+    await this.requireWallet(session, chain.chain, signer);
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    if (s.terms.raiseStyle !== 'sealed') throw AppError.conflict('a curve-mode series has no sealed-bid settlement', { stage: null, reason: 'curve' });
+    const view = await readSettlementView(chain, seriesId);
+    if (!view) throw AppError.notFound('auction');
+    const [now, info] = await Promise.all([chain.now(), chain.info()]);
+    const step = nextSettlementStep(view, { now, limits: info.limits, deliver: true });
+    switch (step.kind) {
+      case 'submit':
+        return { stage: step.stage, command: step.command, tx: await chain.build(step.command, signer) };
+      case 'wait':
+        throw AppError.conflict(`nothing to settle before the reveal end (${step.until})`, { stage: step.stage, reason: 'wait', until: step.until });
+      case 'done':
+        throw AppError.conflict('the settlement is complete', { stage: step.stage, reason: 'done' });
+      case 'stuck':
+        throw AppError.conflict(`the settlement cannot go on (${step.reason})`, { stage: step.stage, reason: step.reason });
+    }
+  }
+
+  /**
+   * The issuer's `openRaise` (Stage 1 `open_raise`), with Stage 1's checks in its order so a refusal comes before the
+   * wallet signs: a Draft raise (RaiseNotDraft), a contract hash (ContractHashMissing), the issuer still allowlisted
+   * (NotAllowlisted), new raises not paused (NewRaisesPaused); then the chain's guard that a curve-mode series runs no
+   * sealed-bid raise (its curve starts at creation). The chain sets the phase ends from the series' durations when it
+   * executes. 409 on a refusal, with the Stage 1 name where Stage 1 has one.
+   */
+  async buildOpenRaise(seriesId: string): Promise<{ tx: UnsignedTx; commitDurationSeconds: number; revealDurationSeconds: number }> {
+    const chain = this.ctx.chainFor(seriesId);
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    if (s.phase !== 'Draft') throw AppError.conflict(`the raise is ${s.phase}`, { stage1: 'RaiseNotDraft' });
+    if (/^0x0*$/.test(s.terms.contractHash)) throw AppError.conflict('the series has no contract hash', { stage1: 'ContractHashMissing' });
+    if (!(await chain.isAllowlisted(s.issuer))) throw AppError.conflict('the issuer is not allowlisted', { stage1: 'NotAllowlisted' });
+    if ((await chain.info()).newRaisesPaused) throw AppError.conflict('new raises are paused', { stage1: 'NewRaisesPaused' });
+    if (s.terms.raiseStyle !== 'sealed') throw AppError.conflict('a curve-mode series runs no sealed-bid raise');
+    return { tx: await chain.build({ kind: 'openRaise', seriesId }, s.issuer), commitDurationSeconds: s.terms.commitDurationSeconds, revealDurationSeconds: s.terms.revealDurationSeconds };
+  }
+
+  /**
+   * The issuer's `cancelRaise` (Stage 1 `cancel_raise`): an Open sealed raise with no bid (RaiseNotOpen, BidsExist; no
+   * time limit, so a raise that drew no bid can be cancelled after its reveal end). A curve series keeps our rules (S5):
+   * cancellable while Draft or Open with no curve units minted. 409 on a refusal.
+   */
+  async buildCancelRaise(seriesId: string): Promise<{ tx: UnsignedTx }> {
+    const chain = this.ctx.chainFor(seriesId);
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    if (s.terms.raiseStyle === 'sealed') {
+      if (s.phase !== 'Open') throw AppError.conflict(`the raise is ${s.phase}`, { stage1: 'RaiseNotOpen' });
+      const a = await chain.getAuction(seriesId);
+      if ((a?.bidCount ?? 0) > 0) throw AppError.conflict('bids exist; the raise can no longer be cancelled', { stage1: 'BidsExist' });
+    } else {
+      if (s.phase !== 'Open' && s.phase !== 'Draft') throw AppError.conflict(`the raise is ${s.phase}`);
+      if (BigInt(s.unitsOutstanding) > 0n) throw AppError.conflict('curve units exist; the raise can no longer be cancelled');
+    }
+    return { tx: await chain.build({ kind: 'cancelRaise', seriesId }, s.issuer) };
   }
 
   // ---- client-encrypted backups

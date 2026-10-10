@@ -20,8 +20,8 @@ export class AppError extends Error {
   static notFound(what: string): AppError {
     return new AppError(404, 'NotFound', `${what} not found`);
   }
-  static conflict(message: string): AppError {
-    return new AppError(409, 'Conflict', message);
+  static conflict(message: string, detail?: Record<string, unknown>): AppError {
+    return new AppError(409, 'Conflict', message, detail);
   }
   static unprocessable(message: string, detail?: Record<string, unknown>): AppError {
     return new AppError(422, 'Unprocessable', message, detail);

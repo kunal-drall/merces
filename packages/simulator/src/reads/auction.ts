@@ -27,7 +27,6 @@ export function toBid(seriesId: string, b: SimBid): BidState {
     revealed: b.revealed ? { pricePerUnit: s(b.revealed.pricePerUnit), quantity: s(b.revealed.quantity) } : null,
     revealIndex: b.revealed ? b.revealIndex : null, valid: b.revealed ? b.valid : null, talliedRound: b.talliedRound, processed: b.processed,
     allocatedUnits: s(b.allocation), pendingUnits: s(owed ? b.pendingUnits : 0n), pendingRefund: s(owed ? b.pendingRefund : 0n), delivered: b.delivered,
-    refunded: s(b.delivered ? b.pendingRefund : 0n), settled: b.processed,
   };
 }
 

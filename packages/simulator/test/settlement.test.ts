@@ -163,8 +163,9 @@ describe('Stage 1 settlement, step by step', () => {
     expect(await escrow()).toBe(USDC(404).toString());
     // position units do not move at delivery: they joined the position at processing
     expect(await h.sim.getPosition(seriesId, h.backers[0]!.address)).toMatchObject({ units: '100', undeliveredUnits: '0' });
-    expect(await h.sim.getBid(seriesId, h.backers[0]!.address)).toMatchObject({ processed: true, delivered: true, allocatedUnits: '100', pendingUnits: '0', pendingRefund: '0', refunded: USDC(303).toString() });
-    expect(await h.sim.getBid(seriesId, h.backers[1]!.address)).toMatchObject({ processed: true, delivered: false, pendingUnits: '100', pendingRefund: USDC(202).toString(), refunded: '0' });
+    // cause S2-PR: the bid read drops the deprecated `refunded` (S2 WP7); the refund delivered is the BidDelivered event's
+    expect(await h.sim.getBid(seriesId, h.backers[0]!.address)).toMatchObject({ processed: true, delivered: true, allocatedUnits: '100', pendingUnits: '0', pendingRefund: '0' });
+    expect(await h.sim.getBid(seriesId, h.backers[1]!.address)).toMatchObject({ processed: true, delivered: false, pendingUnits: '100', pendingRefund: USDC(202).toString() });
     await h.settle(seriesId, 'deliver');
     expect(await h.sim.getAuction(seriesId)).toMatchObject({ escrowTotal: '0', escrowUnits: '0' });
   });
@@ -451,7 +452,8 @@ describe('the mint gate, delivery and holders', () => {
     expect((await h.sim.getSeries(seriesId))!.terms.nonRevealChargeBps).toBe(100);
     await h.settle(seriesId, 'deliver');
     expect((await h.sim.getSeries(seriesId))!.phase).toBe('Settled');
-    expect(await h.sim.getBid(seriesId, h.backers[4]!.address)).toMatchObject({ revealed: null, processed: true, delivered: true, refunded: USDC(909).toString() });
+    // cause S2-PR: the bid read drops the deprecated `refunded` (S2 WP7); the full refund shows in the balance
+    expect(await h.sim.getBid(seriesId, h.backers[4]!.address)).toMatchObject({ revealed: null, processed: true, delivered: true, pendingRefund: '0' });
     expect(await balance(h, h.backers[4]!.address)).toBe(1_000_000_000_000n);
     // the fee collector holds the auction fees only (4 × 1% of 10 × 100)
     expect(await balance(h, h.sim.state.feeCollector)).toBe(USDC(40));

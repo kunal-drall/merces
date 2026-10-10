@@ -84,7 +84,7 @@ components:
         chain: { type: string }
         issuer: { type: string }
         stablecoin: { type: string, enum: [USDC, USDG] }
-        phase: { type: string, enum: [Draft, Open, Reveal, Settled, Failed, Cancelled] }
+        phase: { type: string, enum: [Draft, Open, Reveal, Settling, Settled, Failed, Cancelled] }
         status: { type: string, enum: [OnTime, InGrace, Late, Paused, Retired, Redeemed, Extinguished] }
         settledAt: { type: [integer, 'null'] }
         feeRates:

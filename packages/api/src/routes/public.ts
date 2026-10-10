@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '@merces/core';
+import { settlementStage } from '@merces/domain';
 import { defineRoute } from '../app.ts';
 import type { AppContext } from '../context.ts';
 import { reportingRow, seriesRow } from '../serialize.ts';
@@ -89,10 +90,12 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
     handler: async (req) => {
       const { seriesId } = req.params as { seriesId: string };
       const chain = ctx.chainFor(seriesId);
-      const a = await chain.getAuction(seriesId);
+      const [a, bids, now] = await Promise.all([chain.getAuction(seriesId), chain.listBids(seriesId), chain.now()]);
       if (!a) throw AppError.notFound('series');
-      const now = await chain.now();
-      return { ...a, now, phaseEndsAt: a.phase === 'Open' ? a.commitEndsAt : a.phase === 'Reveal' ? a.revealEndsAt : null };
+      // the chain's auction record (Stage 1's stored `raiseState` beside the display `phase`), where the settlement stands
+      // (`stage`, the planner's label) and the end of the current time-bound phase (null outside commit and reveal,
+      // so while Settling too: settlement steps have no deadline)
+      return { ...a, stage: settlementStage({ auction: a, bids }, now), now, phaseEndsAt: a.phase === 'Open' ? a.commitEndsAt : a.phase === 'Reveal' ? a.revealEndsAt : null };
     },
   });
 
@@ -134,10 +137,11 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
   defineRoute(app, ctx, {
     method: 'GET', url: '/arena', access: 'public',
     handler: async () => {
-      // The Arena ranks live series by verification tier and standing. No amounts.
+      // The Arena ranks live series by verification tier and standing: raises taking bids or settling, and settled
+      // series. No amounts.
       const r = await ctx.pool.query(
         `select s.*, (select count(*) from positions p where p.series_id = s.series_id and p.units > 0)::int as holder_count
-         from series s where s.phase in ('Open','Settled') order by case s.status when 'OnTime' then 0 when 'InGrace' then 1 when 'Paused' then 2 when 'Late' then 3 else 4 end, s.created_at desc limit 100`,
+         from series s where s.phase in ('Open','Settling','Settled') order by case s.status when 'OnTime' then 0 when 'InGrace' then 1 when 'Paused' then 2 when 'Late' then 3 else 4 end, s.created_at desc limit 100`,
       );
       return {
         arena: r.rows.map((x) => ({

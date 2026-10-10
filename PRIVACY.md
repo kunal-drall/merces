@@ -104,6 +104,8 @@ document file (A-PRIV-4).
 | Bid price, quantity, salt | client; revealed onchain at reveal time | none until reveal (public afterwards) | — | — |
 | Reveal backup | `bid_backups.ciphertext` (plaintext fields rejected) | client-encrypted | owner; server: nobody | after settlement + retention |
 | Commitment, deposit | `bids`, onchain | plain | owner, issuer; public onchain | — |
+| Auction settlement: rounds and rejections, the clearing price, units sold, proceeds, the failure reason, the mint gate | `series`, `settlement_rounds`, onchain | plain | public (`GET /series`, `GET /series/{id}/auction`; onchain) | — |
+| A bid's validity, processing and delivery, and what it is owed (pending units and refund) or was delivered | `bids`, onchain | plain | owner (`/me/bids`); public onchain (the public preview projects each revealed bid's processing) | — |
 | Positions, claims | `positions`, `money_events`, onchain | plain | holder, issuer, admin; public onchain | — |
 
 ## Operational data

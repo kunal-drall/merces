@@ -34,7 +34,10 @@ explains how to use the API; the spec is the source of truth for shapes.
 → set terms (`PUT /drafts/{id}/terms`; `POST /terms/validate` to dry-run) → sign the contract and charter
 (`POST /drafts/{id}/contract/prepare`, then the provider's signing URL; `GET /drafts/{id}/contract`) → build and send
 `createSeries` (`POST /drafts/{id}/build-create-series`, `POST /tx/send`, `POST /drafts/{id}/link-created`) → open the
-raise (chain `openRaise`) → draw treasury (`POST /series/{id}/treasury/build-draw`) → each quarter: `GET
+raise (`POST /series/{id}/raise/build-open`: Stage 1's `open_raise`; the chain sets the commit end to now + the series'
+commit duration and the reveal end after its reveal duration; 409 with `detail.stage1` RaiseNotDraft, ContractHashMissing,
+NotAllowlisted or NewRaisesPaused) or cancel it while it has no bid (`POST /series/{id}/raise/build-cancel`, at any time,
+also after the reveal end; 409 RaiseNotOpen or BidsExist) → draw treasury (`POST /series/{id}/treasury/build-draw`) → each quarter: `GET
 /series/{id}/reporting/schedule`, `POST …/reporting/zktls-session`, the device proves and gets an attestation from the
 report verifier (`GET /reporting/verifier`), `POST /series/{id}/reports` (returns the `submitReport` tx), `POST
 /reports/{id}/build-payin` (the exact remaining due: a late period accrues per day, so a pay-in built on one day of
@@ -43,16 +46,38 @@ lateness is refused onchain after the next day boundary; rebuild it) → hardshi
 
 **Backer**: apply → `GET /arena`, `GET /series/{id}`, `GET /series/{id}/terms` (eligible backers only, logged) →
 `POST /series/{id}/bids/precheck` → compute the commitment client-side (or `POST …/bids/commitment`) → `POST
-…/bids/build-commit` → keep an encrypted backup (`PUT …/bids/backup`) → reveal (`POST …/bids/build-reveal`) → the keepers
-deliver every bid's refund and units after settlement (`POST …/bids/build-refund` builds the bidder's own `deliverBid` to
-take them sooner) → `GET /me/holdings`, `GET /series/{id}/payouts`, claims (`POST
-/series/{id}/payouts/build-claim`), redemption claims. Curve-mode buys (`POST /series/{id}/curve/build-buy`) need a wallet on that
+…/bids/build-commit` → keep an encrypted backup (`PUT …/bids/backup`) → reveal (`POST …/bids/build-reveal`) → after the
+reveal end the keepers settle the raise in Stage 1's steps and then push every bid's refund and units (`deliverBid`): there
+is nothing to claim. "Deliver now": `POST …/bids/build-deliver {bidder, signer?}` builds Stage 1's `deliver_bid` for a
+processed, undelivered bid (`signer` defaults to the bidder and must be one of your wallets; any wallet may deliver any
+bid, and the bidder is always the one paid; 409 `detail.stage1` NotProcessed or AlreadyDelivered) → `GET /me/holdings`,
+`GET /series/{id}/payouts`, claims (`POST /series/{id}/payouts/build-claim`), redemption claims. Curve-mode buys (`POST /series/{id}/curve/build-buy`) need a wallet on that
 chain's allowlist (403 otherwise) and, while the curve is bonding, stay within the wallet cap shown by
 `GET /series/{id}/curve` (`walletCap`; 422 with the remaining allowance otherwise). After graduation no cap applies. The auction preview counts every revealed bid, its bidder still allowlisted or not, as
 Stage 1's settlement does (S2).
-`GET /me/bids` shows the chain's figures: `refundable` (= `pendingRefund`) and `pendingUnits` are what a processed bid is
-still owed until it is delivered ("0" otherwise), with the bid's `valid`, `processed` and `delivered`, and `refunded`, the
-refund delivered so far.
+`GET /me/bids` shows the chain's figures (the `Bid` schema): `pendingRefund` (also `refundable`) and `pendingUnits` are what
+a processed bid is still owed until it is delivered ("0" otherwise), with the bid's `deposit`, `revealed`, `valid` (fixed at
+reveal: an invalid bid is refunded in full), `processed`, `delivered`, `allocatedUnits`, and `refunded`, the refund
+delivered so far, as indexed.
+
+**Settlement** (Stage 1 SPEC §5.2; every step is permissionless). After the reveal end a settlement runs in steps: the
+honest proposal (`beginSettlement`), the tally pages (`tallyBids`), `finalizeSettlement` (Settled, or Failed with
+NoValidBids or MinRaise; a raise that would sell no unit fails), a `processBid` per bid (the mint is final after the last:
+payments, reports, releases, redemption, extinguishment and windows wait for it, `MintNotFinalized`), then a `deliverBid`
+per bid. The keepers do all of it (a raise that drew no bid waits 24 hours past its reveal end, so its issuer can still
+cancel it). Anyone can drive it instead: `POST /series/{id}/auction/build-step {signer}` returns `{stage, command, tx}`,
+the next step built for one of your wallets; sign it, relay it with `POST /tx/send` and ask again. 409 when there is nothing
+to build, with `detail = {stage, reason}`: `wait` (before the reveal end, with `until`), `done`, `curve`, or the
+planner's stuck code (an operator matter). `GET /series/{id}/auction` is the chain's auction record (the `AuctionState`
+schema): the display `phase` (Reveal after the commit end; Settling between the first proposal and the finalize) beside
+Stage 1's stored `raiseState`, the counts, the current round, its proposal and running tally, the results once finalized
+(a failed raise keeps its price and would-be results), `stage` (where the settlement stands: `awaiting-proposal`,
+`tallying`, `awaiting-finalize`, `processing`, `delivering`, `complete`, …), `now` and `phaseEndsAt` (null while
+Settling: steps have no deadline). The series row carries `mintFinalized`, the raise's `terms.commitDurationSeconds` /
+`revealDurationSeconds` and, for a sealed raise, `auction` (round, rejection, clearing price, units sold, proceeds,
+failure reason, `finalizedAt`). `terms.nonRevealChargeBps` is what the series recorded; the charge is an owner hold and
+is not applied (series created during the hold record 0). `GET /arena` lists raises taking bids or settling, and settled
+series.
 
 **Attestor**: `GET /attestor/queue` → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
 attestations, extinguishment transactions (two signers).

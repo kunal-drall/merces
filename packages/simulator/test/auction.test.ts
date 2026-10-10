@@ -29,8 +29,8 @@ describe('auction edge cases', () => {
     expect(failureReason).toBe('MinRaise');
     expect(await h.sim.getAuction(seriesId)).toMatchObject({ raiseState: 'Failed', clearingPrice: USDC(10).toString(), unitsSold: '10', proceeds: USDC(100).toString(), failureReason: 'MinRaise', mintFinalized: true });
     expect([s.issuePrice, s.unitsSold, s.unitsOutstanding]).toEqual([null, '0', '0']);
-    // cause S2-PR: the deposit came back through delivery (was claimRefund)
-    expect(await h.sim.getBid(seriesId, h.backers[0]!.address)).toMatchObject({ processed: true, delivered: true, refunded: USDC(101).toString() });
+    // cause S2-PR: the deposit came back through delivery (was claimRefund); the bid read drops the deprecated `refunded`
+    expect(await h.sim.getBid(seriesId, h.backers[0]!.address)).toMatchObject({ processed: true, delivered: true, pendingRefund: '0' });
     expect(await h.sim.getBalance(h.backers[0]!.address, 'USDC')).toBe('1000000000000');
     expect(await h.sim.getBalance(h.sim.state.feeCollector, 'USDC')).toBe('0');
   });

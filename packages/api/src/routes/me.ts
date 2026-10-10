@@ -46,6 +46,11 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
     },
   });
 
+  /**
+   * The caller's bids (S2): the chain's own figures, nothing computed offchain. `valid` is fixed at reveal; `processed`
+   * and `delivered` are the bid's settlement; `pendingUnits` / `pendingRefund` (and `refundable`, the same refund) are
+   * what a processed, undelivered bid is still owed, else "0"; `refunded` is the refund delivered so far, as indexed.
+   */
   defineRoute(app, ctx, {
     method: 'GET', url: '/me/bids', access: 'account',
     handler: async (_req, _reply, session) => {
@@ -64,8 +69,6 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
           // the refunds delivered so far, as indexed (BidDelivered)
           refunded: x.refunded,
           refundable: !live ? null : owed ? live.pendingRefund : '0',
-          /** @deprecated `processed` (S2 WP7 removes it) */
-          settled: live?.processed ?? false,
         });
       }
       return { bids };
