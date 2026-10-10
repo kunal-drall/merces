@@ -64,8 +64,9 @@ paid period, the open due, the income chain head, the period whose formal notice
 `series` like everything else (migration 017; from `AuctionSettled`/`CurveGraduated`, `ReportAccepted`,
 `PaymentReceived`, `SeriesRetired`, `SeriesExtinguished` and `FormalNoticeDue`), so the series views have one source;
 the report prior a device must prove against is read live (`GET /series/{id}/reporting/prior`). The issue price comes
-from the event that set it onchain (`AuctionSettled.clearingPrice`, `CurveGraduated.issuePrice`) and the cap per unit
-is Stage 1's `capPerUnit` on it (floor), at settlement or graduation and again after each `TermsAmended`.
+from the event that set it onchain (`AuctionSettled.clearingPrice`; a curve's P0 from `CurveActivated.issuePrice` and
+`CurveGraduated.issuePrice`) and the cap per unit is Stage 1's `capPerUnit` on it (floor), at settlement, at a curve's
+activation and completion, and again after each `TermsAmended`.
 
 ## Write side
 
@@ -83,7 +84,7 @@ Nothing in the backend signs for a user. Services return `UnsignedTx` objects (`
 | poi | reporting schedule and deadlines, zkTLS sessions, FX basis, offchain proof and attestation verification, report store (commitments and amounts only), submit/payIn builders, tier-1 reconciliation |
 | auction | pre-checks on Stage 1's escrow and validity rules, open/cancel/commit/reveal/deliver builders and the next settlement step for any wallet, encrypted reveal backups, the settlement preview (Stage 1's math), settlement and delivery for the keepers (separate jobs, delivery retries and stuck alerts), reveal reminders |
 | lifecycle | treasury draws and pause, payout claims behind `PayoutClaimBuilder` (private payouts can slot in), redemption quote/builders/tail, retirement, transfer windows (flag-gated) |
-| meteora | curve-mode config generation, graduation monitoring, buy builder with a USDG→USDC swap route through the DEX port; no cap at any stage (every response carries `noCap` and the one statement) |
+| meteora | curve-mode config generation; the curve read (the chain's `CurveState`); a monitor that completes a filled curve and collects its proceeds (Stage 1's permissionless `completeCurve`, `collectCurveProceeds`); a buy builder (`curveSwap` on the chain's quote, any wallet, `earns: false` for one not approved) with a USDG→USDC swap route through the DEX port; no cap at any stage (every response carries `noCap` and the one statement) and the buyer notice (`CURVE_BUYER_NOTICE`) |
 | threshold | admin-curated median income and inflation table with history; yearly indexing candidates |
 | attestor | attestor queue, hardship review (end-to-end encrypted), tier-3 cases and annual true-up, fallback FX signing, two-attestor extinguishment |
 | accounting | fee ledger, per-series statements, reconciliation of indexed totals against onchain balances, CSV export |

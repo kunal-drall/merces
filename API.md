@@ -51,8 +51,17 @@ reveal end the keepers settle the raise in Stage 1's steps and then push every b
 is nothing to claim. "Deliver now": `POST …/bids/build-deliver {bidder, signer?}` builds Stage 1's `deliver_bid` for a
 processed, undelivered bid (`signer` defaults to the bidder and must be one of your wallets; any wallet may deliver any
 bid, and the bidder is always the one paid; 409 `detail.stage1` NotProcessed or AlreadyDelivered) → `GET /me/holdings`,
-`GET /series/{id}/payouts`, claims (below). Curve-mode buys (`POST /series/{id}/curve/build-buy`) need a wallet on that
-chain's allowlist (403 otherwise). **No cap:** a curve raise has no wallet cap at any stage, before or after the curve
+`GET /series/{id}/payouts`, claims (below). Curve-mode buys (`POST /series/{id}/curve/build-buy`) build a `curveSwap`
+buy (a Meteora DBC swap on a live chain; the simulator's stand-in pool until S5) against the chain's quote
+(`ChainPort.quoteCurveSwap`), for any linked wallet: a wallet that is not on the chain's allowlist gets `earns: false`
+and a warning (it can trade, never register, stake or earn), not a 403 (S3 WP8); 409 once the curve filled. A curve
+series is Open from its creation (its activation fixes P0); the admin monitor (`POST /admin/curves/monitor`) completes
+it once the pool filled (`completeCurve`, settling at the pool's finish time) and collects its proceeds
+(`collectCurveProceeds`: the partner migration fee into the treasury, the partner trading fee to the fee collector,
+kind `curveTrading` in the fee ledger). Every sealed-bid builder refuses a curve series with 409 `detail.stage1`
+NotSealedBid (open, cancel, commit, reveal, deliver, the settlement step, the preview); the redemption claim builder
+refuses it with CurveUsesTender and the admin burn crank with CurveModeNoBurn. Every curve response carries the buyer
+notice (`CURVE_BUYER_NOTICE` with the curve's figures, A-CURVE-8). **No cap:** a curve raise has no wallet cap at any stage, before or after the curve
 fills; a wallet buys and holds any number of units. Every curve read and builder says so in one statement
 (`walletCap: null`, `noCap: true`, `noCapStatement`, the schema `CurveNoCap`), and so do the series read (`noCap`,
 `noCapStatement`; a curve series' `terms.walletCapBps` is Stage 1's 0, never a cap) and the transfer-window read. A curve

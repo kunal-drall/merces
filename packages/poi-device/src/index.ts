@@ -133,6 +133,12 @@ export interface DeviceReportInput {
   unitsOutstanding: string;
   /** units offered at creation: r = s / N uses N offered when only `shareRate` is known */
   unitsOffered?: string;
+  /**
+   * The series' accounting units per whole unit (`SeriesState.unitScale`: "1", or "1000000" base lamports on a curve
+   * series). r is per accounting unit (Stage 1 registry lib.rs:594-600), so the N it is derived over is the units offered
+   * × this. Default "1".
+   */
+  unitScale?: string;
   privateTerms: DevicePrivateTerms;
   /** the previous quarter's entry this report chains from (see `choosePrior`); null = ZERO */
   prior: IncomeChainEntry | null;
@@ -188,7 +194,7 @@ export async function assembleOnDevice(input: DeviceReportInput, verifier: Repor
   const t = input.privateTerms;
   const units = guard('out-of-range', () => u64(input.unitsOutstanding));
   const theta = guard('out-of-range', () => u64(t.threshold));
-  const rate = guard('out-of-range', () => (t.ratePerUnitWad !== undefined ? u64(t.ratePerUnitWad) : ratePerUnit(decimalToWad(t.shareRate ?? '0'), BigInt(input.unitsOffered ?? input.unitsOutstanding))));
+  const rate = guard('out-of-range', () => (t.ratePerUnitWad !== undefined ? u64(t.ratePerUnitWad) : ratePerUnit(decimalToWad(t.shareRate ?? '0'), input.unitsOffered !== undefined ? BigInt(input.unitsOffered) * BigInt(input.unitScale ?? '1') : BigInt(input.unitsOutstanding))));
   const currencyCode = guard('unsupported-currency', () => currencyCodeOf(t.reportingCurrency));
   const indexingCode = INDEXING_RULE_CODE[t.indexingRule];
   if (indexingCode === undefined) throw new DeviceError('terms-mismatch');

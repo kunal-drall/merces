@@ -905,80 +905,6 @@
           },
           "type": {
             "type": "string",
-            "const": "UnitsMinted"
-          },
-          "payload": {
-            "type": "object",
-            "properties": {
-              "seriesId": {
-                "type": "string",
-                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-              },
-              "holder": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 64
-              },
-              "units": {
-                "type": "string",
-                "pattern": "^\\d+$"
-              }
-            },
-            "required": [
-              "seriesId",
-              "holder",
-              "units"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "chain",
-          "cursor",
-          "seq",
-          "blockTime",
-          "blockRef",
-          "txId",
-          "finality",
-          "type",
-          "payload"
-        ],
-        "additionalProperties": false
-      },
-      {
-        "type": "object",
-        "properties": {
-          "chain": {
-            "type": "string"
-          },
-          "cursor": {
-            "type": "string"
-          },
-          "seq": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "blockTime": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
-          },
-          "blockRef": {
-            "type": "string"
-          },
-          "txId": {
-            "type": "string"
-          },
-          "finality": {
-            "type": "string",
-            "enum": [
-              "finalized",
-              "confirmed"
-            ]
-          },
-          "type": {
-            "type": "string",
             "const": "SettlementProposed"
           },
           "payload": {
@@ -2147,7 +2073,8 @@
                 "type": "string",
                 "enum": [
                   "auction",
-                  "payout"
+                  "payout",
+                  "curveTrading"
                 ]
               },
               "amount": {
@@ -4002,7 +3929,7 @@
           },
           "type": {
             "type": "string",
-            "const": "CurveSeriesCreated"
+            "const": "CurveActivated"
           },
           "payload": {
             "type": "object",
@@ -4011,28 +3938,43 @@
                 "type": "string",
                 "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
               },
-              "issuer": {
+              "dbcConfig": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 64
               },
-              "quoteStablecoin": {
+              "dbcPool": {
                 "type": "string",
-                "enum": [
-                  "USDC",
-                  "USDG"
-                ]
+                "minLength": 1,
+                "maxLength": 64
               },
-              "graduationThreshold": {
+              "baseMint": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "dbcCreator": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "unitsSold": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "issuePrice": {
                 "type": "string",
                 "pattern": "^\\d+$"
               }
             },
             "required": [
               "seriesId",
-              "issuer",
-              "quoteStablecoin",
-              "graduationThreshold"
+              "dbcConfig",
+              "dbcPool",
+              "baseMint",
+              "dbcCreator",
+              "unitsSold",
+              "issuePrice"
             ],
             "additionalProperties": false
           }
@@ -4093,24 +4035,108 @@
                 "type": "string",
                 "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
               },
-              "raised": {
-                "type": "string",
-                "pattern": "^\\d+$"
-              },
-              "unitsOutstanding": {
-                "type": "string",
-                "pattern": "^\\d+$"
-              },
               "issuePrice": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "unitsSold": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "settledAt": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "issuePrice",
+              "unitsSold",
+              "settledAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "CurveProceedsCollected"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "migrationFee": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "surplus": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "tradingFee": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "proceeds": {
                 "type": "string",
                 "pattern": "^\\d+$"
               }
             },
             "required": [
               "seriesId",
-              "raised",
-              "unitsOutstanding",
-              "issuePrice"
+              "migrationFee",
+              "surplus",
+              "tradingFee",
+              "proceeds"
             ],
             "additionalProperties": false
           }
@@ -4552,31 +4578,6 @@
         "unitsSold",
         "proceeds",
         "minimumRaise"
-      ],
-      "additionalProperties": false
-    },
-    "UnitsMinted": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "type": "object",
-      "properties": {
-        "seriesId": {
-          "type": "string",
-          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-        },
-        "holder": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64
-        },
-        "units": {
-          "type": "string",
-          "pattern": "^\\d+$"
-        }
-      },
-      "required": [
-        "seriesId",
-        "holder",
-        "units"
       ],
       "additionalProperties": false
     },
@@ -5061,7 +5062,8 @@
           "type": "string",
           "enum": [
             "auction",
-            "payout"
+            "payout",
+            "curveTrading"
           ]
         },
         "amount": {
@@ -5741,7 +5743,7 @@
       ],
       "additionalProperties": false
     },
-    "CurveSeriesCreated": {
+    "CurveActivated": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "properties": {
@@ -5749,28 +5751,43 @@
           "type": "string",
           "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
         },
-        "issuer": {
+        "dbcConfig": {
           "type": "string",
           "minLength": 1,
           "maxLength": 64
         },
-        "quoteStablecoin": {
+        "dbcPool": {
           "type": "string",
-          "enum": [
-            "USDC",
-            "USDG"
-          ]
+          "minLength": 1,
+          "maxLength": 64
         },
-        "graduationThreshold": {
+        "baseMint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "dbcCreator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "unitsSold": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "issuePrice": {
           "type": "string",
           "pattern": "^\\d+$"
         }
       },
       "required": [
         "seriesId",
-        "issuer",
-        "quoteStablecoin",
-        "graduationThreshold"
+        "dbcConfig",
+        "dbcPool",
+        "baseMint",
+        "dbcCreator",
+        "unitsSold",
+        "issuePrice"
       ],
       "additionalProperties": false
     },
@@ -5782,24 +5799,59 @@
           "type": "string",
           "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
         },
-        "raised": {
-          "type": "string",
-          "pattern": "^\\d+$"
-        },
-        "unitsOutstanding": {
-          "type": "string",
-          "pattern": "^\\d+$"
-        },
         "issuePrice": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "unitsSold": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "settledAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "issuePrice",
+        "unitsSold",
+        "settledAt"
+      ],
+      "additionalProperties": false
+    },
+    "CurveProceedsCollected": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "migrationFee": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "surplus": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "tradingFee": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "proceeds": {
           "type": "string",
           "pattern": "^\\d+$"
         }
       },
       "required": [
         "seriesId",
-        "raised",
-        "unitsOutstanding",
-        "issuePrice"
+        "migrationFee",
+        "surplus",
+        "tradingFee",
+        "proceeds"
       ],
       "additionalProperties": false
     }
@@ -6819,23 +6871,30 @@
       ],
       "additionalProperties": false
     },
-    "buyCurve": {
+    "curveSwap": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "properties": {
         "kind": {
           "type": "string",
-          "const": "buyCurve"
+          "const": "curveSwap"
         },
         "seriesId": {
           "type": "string",
           "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
         },
+        "side": {
+          "type": "string",
+          "enum": [
+            "buy",
+            "sell"
+          ]
+        },
         "amountIn": {
           "type": "string",
           "pattern": "^\\d+$"
         },
-        "minUnitsOut": {
+        "minimumAmountOut": {
           "type": "string",
           "pattern": "^\\d+$"
         }
@@ -6843,8 +6902,9 @@
       "required": [
         "kind",
         "seriesId",
+        "side",
         "amountIn",
-        "minUnitsOut"
+        "minimumAmountOut"
       ],
       "additionalProperties": false
     },
@@ -7027,25 +7087,6 @@
         "pair",
         "periodId",
         "reason"
-      ],
-      "additionalProperties": false
-    },
-    "graduateCurve": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "graduateCurve"
-        },
-        "seriesId": {
-          "type": "string",
-          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-        }
-      },
-      "required": [
-        "kind",
-        "seriesId"
       ],
       "additionalProperties": false
     },
@@ -7247,6 +7288,44 @@
         "kind",
         "seriesId",
         "holder"
+      ],
+      "additionalProperties": false
+    },
+    "completeCurve": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "completeCurve"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "collectCurveProceeds": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "collectCurveProceeds"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
       ],
       "additionalProperties": false
     },

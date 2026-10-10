@@ -1,6 +1,6 @@
 import type { PoolClient } from '@merces/db';
 import type { DomainEvent, EventPayload } from '@merces/domain';
-import { DEFAULTS } from '@merces/domain';
+import { DEFAULTS, unitScaleOf } from '@merces/domain';
 import { capPerUnit, fromPid, pidAt, toPid } from '@merces/math';
 
 type P<T extends DomainEvent['type']> = EventPayload<T>;
@@ -15,14 +15,14 @@ function summary(e: DomainEvent): string | null {
   switch (e.type) {
     case 'IssuerRegistered': return 'Issuer registered';
     case 'SeriesCreated': return 'Series created';
-    case 'CurveSeriesCreated': return 'Curve-mode series created';
-    case 'RaiseOpened': return 'Raise opened for sealed bids';
+    case 'CurveActivated': return 'Curve opened: units are bought and sold on its bonding curve';
+    // a curve's activation opens its raise with no commit or reveal phase (Stage 1 RaiseOpened{0, 0})
+    case 'RaiseOpened': return p.commitEndsAt === 0 ? null : 'Raise opened for sealed bids';
     case 'RaiseCancelled': return 'Raise cancelled before any bids';
     case 'BidCommitted': return 'A sealed bid was committed';
     case 'BidRevealed': return 'A bid was revealed';
     case 'AuctionSettled': return `Auction settled: ${p.unitsSold} units sold`;
     case 'AuctionFailed': return `Auction failed (${p.reason}); deposits are returned to the bidders`;
-    case 'UnitsMinted': return `${p.units} units minted to a holder`;
     case 'SettlementProposed': return `Settlement proposed (round ${p.round})`;
     case 'SettlementRejected': return `Settlement round ${p.round} rejected (${p.reason})`;
     case 'UnitsAllocated': return `${p.units} units allocated to a bidder`;
@@ -52,9 +52,9 @@ function summary(e: DomainEvent): string | null {
     case 'TransferWindowOpened': return `Transfer window ${p.windowId} opened`;
     case 'TransferWindowCleared': return `Transfer window ${p.windowId} cleared: ${p.unitsTransferred} units moved`;
     case 'UnitsTransferred': return `${p.units} units transferred in window ${p.windowId}`;
-    case 'CurveGraduated': return 'Curve graduated to the DEX';
+    case 'CurveGraduated': return `Curve filled: the raise settled with ${p.unitsSold} base units sold`;
     case 'FxFallbackFlagged': return `FX fallback flagged for ${p.pair} ${p.periodId}`;
-    default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, VerifierKeyRegistered, HolderRegistered, FeeTaken, refunds, treasury, splits: not in the public feed
+    default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, VerifierKeyRegistered, HolderRegistered, FeeTaken, refunds, treasury, splits, curve proceeds: not in the public feed
   }
 }
 
@@ -86,21 +86,31 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       await client.query(
         `insert into series (series_id, chain, issuer, stablecoin, stablecoin_mint, raise_style, units_offered, reserve_price, minimum_raise, cap_multiple_wad, lockup_seconds, release_schedule,
            auction_fee_bps, payout_fee_bps, hurdle_wad, payout_multiple_k, wallet_cap_bps, due_days, grace_days, formal_notice_days, contract_hash, terms_commitment, tier_flags, reporting_currency, created_at, last_event_seq,
-           commit_duration_seconds, reveal_duration_seconds, non_reveal_charge_bps)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) on conflict (series_id) do nothing`,
+           commit_duration_seconds, reveal_duration_seconds, non_reveal_charge_bps, unit_scale)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) on conflict (series_id) do nothing`,
         [p.seriesId, e.chain, p.issuer, t.stablecoin, t.stablecoinMint, t.raiseStyle, t.unitsOffered, t.reservePrice, t.minimumRaise, t.capMultipleWad, t.lockupSeconds, JSON.stringify(t.releaseSchedule), t.auctionFeeBps, t.payoutFeeBps, t.hurdleWad, t.payoutMultipleK, t.walletCapBps, t.dueDays, t.graceDays, t.formalNoticeDays, t.contractHash, t.termsCommitment, JSON.stringify(t.tierFlags), t.reportingCurrency, e.blockTime, e.seq,
-          t.commitDurationSeconds, t.revealDurationSeconds, t.nonRevealChargeBps],
+          t.commitDurationSeconds, t.revealDurationSeconds, t.nonRevealChargeBps, unitScaleOf(t.raiseStyle).toString()],
       );
       break;
     }
-    case 'CurveSeriesCreated': {
-      const p = e.payload as P<'CurveSeriesCreated'>;
-      await client.query('insert into curves (series_id, quote_stablecoin, graduation_threshold) values ($1,$2,$3) on conflict do nothing', [p.seriesId, p.quoteStablecoin, p.graduationThreshold]);
+    case 'CurveActivated': {
+      // a curve's activation (its creation here): the pool, P0 and the units sold are fixed now (Stage 1 registry
+      // `mark_curve_activated`), so the issue price and the cap per unit are known while the curve sells
+      const p = e.payload as P<'CurveActivated'>;
+      const s = await client.query<{ cap_multiple_wad: string; minimum_raise: string }>('select cap_multiple_wad::text, minimum_raise::text from series where series_id = $1', [p.seriesId]);
+      const row = s.rows[0];
+      const cap = row ? capPerUnit(BigInt(row.cap_multiple_wad), BigInt(p.issuePrice)).toString() : null;
+      await client.query(
+        'insert into curves (series_id, dbc_config, dbc_pool, base_mint, dbc_creator, migration_quote_threshold, issue_price, units_sold) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict (series_id) do nothing',
+        [p.seriesId, p.dbcConfig, p.dbcPool, p.baseMint, p.dbcCreator, row?.minimum_raise ?? '0', p.issuePrice, p.unitsSold],
+      );
+      await client.query("update series set phase = 'Open', opened_at = $2, issue_price = $3, units_sold = $4, cap_per_unit = $5, last_event_seq = $6 where series_id = $1", [p.seriesId, e.blockTime, p.issuePrice, p.unitsSold, cap, e.seq]);
       break;
     }
     case 'RaiseOpened': {
+      // a curve's activation opens its raise with 0 and 0 (no commit or reveal phase): recorded as no phase ends
       const p = e.payload as P<'RaiseOpened'>;
-      await client.query("update series set phase = 'Open', opened_at = $2, commit_ends_at = $3, reveal_ends_at = $4, last_event_seq = $5 where series_id = $1", [p.seriesId, e.blockTime, p.commitEndsAt, p.revealEndsAt, e.seq]);
+      await client.query("update series set phase = 'Open', opened_at = $2, commit_ends_at = nullif($3::bigint, 0), reveal_ends_at = nullif($4::bigint, 0), last_event_seq = $5 where series_id = $1", [p.seriesId, e.blockTime, p.commitEndsAt, p.revealEndsAt, e.seq]);
       break;
     }
     case 'RaiseCancelled':
@@ -183,8 +193,10 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       // loser, an invalid or unrevealed bid, every bid of a failed raise) is owed its deposit in full until delivered
       // (Stage 1 `processBid` with no allocation: escrow less the non-reveal charge, which is held at 0, A-AUC-11), so
       // the row stays whole for the reads that fall back to it (/me/bids)
+      // A curve's completion finalises its mint too, but its units outstanding come from its census (Stage 1
+      // `complete_curve` takes none), so they stay as they are
       const p = e.payload as P<'RaiseMintFinalized'>;
-      await client.query("update series set mint_finalized = true, units_outstanding = case when phase = 'Settled' then $2::numeric else units_outstanding end, last_event_seq = $3 where series_id = $1", [p.seriesId, p.unitsSold, e.seq]);
+      await client.query("update series set mint_finalized = true, units_outstanding = case when phase = 'Settled' and raise_style = 'sealed' then $2::numeric else units_outstanding end, last_event_seq = $3 where series_id = $1", [p.seriesId, p.unitsSold, e.seq]);
       await client.query('update bids set pending_refund = case when not processed and not delivered then deposit else pending_refund end, processed = true where series_id = $1', [p.seriesId]);
       break;
     }
@@ -195,23 +207,13 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       await client.query('insert into holder_registrations (series_id, wallet, registered_seq) values ($1,$2,$3) on conflict (series_id, wallet) do nothing', [p.seriesId, p.holder, e.seq]);
       break;
     }
-    case 'UnitsMinted': {
-      // a curve buy (a sealed raise's winners are allocated with UnitsAllocated and delivered with BidDelivered)
-      const p = e.payload as P<'UnitsMinted'>;
-      await client.query('update bids set allocated_units = allocated_units + $3 where series_id = $1 and bidder = $2', [p.seriesId, p.holder, p.units]);
-      await client.query(
-        'insert into positions (series_id, wallet, units, first_seq, last_seq) values ($1,$2,$3,$4,$4) on conflict (series_id, wallet) do update set units = positions.units + excluded.units, last_seq = excluded.last_seq where positions.last_seq < excluded.last_seq',
-        [p.seriesId, p.holder, p.units, e.seq],
-      );
-      break;
-    }
     case 'TreasuryFunded': {
-      // a sealed raise funds its treasury bid by bid at processing (each winner's cost, Stage 1 `process_bid`), one
-      // treasury money row each; a curve funds it buy by buy before graduation (CurveGraduated then sets the same total),
-      // so a graduated curve adds nothing here
+      // a sealed raise funds its treasury bid by bid at processing (each winner's cost, Stage 1 `process_bid`); a curve
+      // at the collection that brings its proceeds (`collectCurveProceeds`; a curve buy never funds it). One treasury
+      // money row each
       const p = e.payload as P<'TreasuryFunded'>;
-      const r = await client.query("update series set treasury_total = treasury_total + $2, last_event_seq = $3 where series_id = $1 and (raise_style = 'sealed' or phase <> 'Settled') returning raise_style", [p.seriesId, p.amount, e.seq]);
-      if (r.rows[0]?.raise_style === 'sealed') await money(client, e, 'treasury', p.amount);
+      await client.query('update series set treasury_total = treasury_total + $2, last_event_seq = $3 where series_id = $1', [p.seriesId, p.amount, e.seq]);
+      await money(client, e, 'treasury', p.amount);
       break;
     }
     case 'FundsReleased': {
@@ -410,18 +412,25 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       break;
     }
     case 'CurveGraduated': {
+      // Stage 1 `complete_curve`: the curve raise settles at the pool's finish time with the P0 and units sold fixed at
+      // activation (the reporting ledger starts at that quarter). It funds no treasury (collection does) and sets no
+      // units outstanding (the curve's census does); `RaiseMintFinalized` marks the mint final
       const p = e.payload as P<'CurveGraduated'>;
-      await client.query('update curves set graduated = true, raised = $2 where series_id = $1', [p.seriesId, p.raised]);
-      // a graduated curve's units are final at once (Stage 1 `complete_curve`)
-      await client.query('update series set mint_finalized = true where series_id = $1', [p.seriesId]);
-      // graduation sets the issue price, and with it the cap per unit, as an auction's settlement does (AuctionSettled)
+      await client.query('update curves set completed = true, settled_at = $2 where series_id = $1', [p.seriesId, p.settledAt]);
       const s = await client.query<{ cap_multiple_wad: string }>('select cap_multiple_wad::text from series where series_id = $1', [p.seriesId]);
       const row = s.rows[0];
       const cap = row ? capPerUnit(BigInt(row.cap_multiple_wad), BigInt(p.issuePrice)).toString() : null;
       await client.query(
-        "update series set phase = 'Settled', settled_at = $2, issue_price = $7, units_sold = $3, units_outstanding = $3, cap_per_unit = $8, treasury_total = $4, lockup_ends_at = $2 + lockup_seconds, first_period = $6, next_expected_period = coalesce(next_expected_period, $6), last_event_seq = $5 where series_id = $1",
-        [p.seriesId, e.blockTime, p.unitsOutstanding, p.raised, e.seq, periodAt(e.blockTime), p.issuePrice, cap],
+        "update series set phase = 'Settled', settled_at = $2, issue_price = $3, units_sold = $4, cap_per_unit = $5, lockup_ends_at = $2 + lockup_seconds, first_period = $6, next_expected_period = coalesce(next_expected_period, $6), last_event_seq = $7 where series_id = $1",
+        [p.seriesId, p.settledAt, p.issuePrice, p.unitsSold, cap, periodAt(p.settledAt), e.seq],
       );
+      break;
+    }
+    case 'CurveProceedsCollected': {
+      // what one collection moved: the migration fee and surplus reached the treasury (its `TreasuryFunded` follows),
+      // the trading fee the fee collector (its `FeeTaken` follows); `proceeds` is the treasury's total after it
+      const p = e.payload as P<'CurveProceedsCollected'>;
+      await client.query('update curves set proceeds = $2, migration_fee = migration_fee + $3, surplus = surplus + $4, trading_fee = trading_fee + $5 where series_id = $1', [p.seriesId, p.proceeds, p.migrationFee, p.surplus, p.tradingFee]);
       break;
     }
     case 'PauseRequested':

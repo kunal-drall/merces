@@ -91,6 +91,17 @@ export class AuctionService {
   }
 
   /**
+   * A sealed-bid series, read from the chain (404 when unknown). Every auction builder refuses a curve series first
+   * with 409 NotSealedBid (S3 amendment M7), as the chain does: a curve raise is its bonding curve, with no auction.
+   */
+  private async sealedSeries(chain: ChainPort, seriesId: string): Promise<NonNullable<Awaited<ReturnType<ChainPort['getSeries']>>>> {
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    if (s.terms.raiseStyle !== 'sealed') throw AppError.conflict('a curve-mode series runs no sealed-bid raise', { stage1: 'NotSealedBid' });
+    return s;
+  }
+
+  /**
    * R18/R17 pre-checks against Stage 1's rules (S2): the commit phase, the allowlist, one bid per wallet, and the bid's
    * validity as Stage 1 fixes it at reveal (`isBidValid`: reserve, 1 ≤ quantity ≤ the auction's wallet cap, escrow ≥
    * `requiredEscrow`). A bid that breaks a validity rule can still be committed, but it is invalid at reveal and refunded
@@ -99,8 +110,7 @@ export class AuctionService {
   async precheck(seriesId: string, session: Session, input: z.infer<typeof precheckSchema>): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
     await this.requireWallet(session, chain.chain, input.bidder);
-    const s = await chain.getSeries(seriesId);
-    if (!s) throw AppError.notFound('series');
+    const s = await this.sealedSeries(chain, seriesId);
     const issues: { code: string; message: string }[] = [];
     const auction = await chain.getAuction(seriesId);
     if (auction?.phase !== 'Open') issues.push({ code: 'phase', message: `auction is ${auction?.phase ?? 'not open'}` });
@@ -126,6 +136,7 @@ export class AuctionService {
   async buildCommit(seriesId: string, session: Session, bidder: string, commitment: string, deposit: string): Promise<{ tx: UnsignedTx }> {
     const chain = this.ctx.chainFor(seriesId);
     await this.requireWallet(session, chain.chain, bidder);
+    await this.sealedSeries(chain, seriesId);
     return { tx: await chain.build({ kind: 'commitBid', seriesId, commitment, deposit }, bidder) };
   }
 
@@ -137,6 +148,7 @@ export class AuctionService {
   async buildReveal(seriesId: string, session: Session, bidder: string, pricePerUnit: string, quantity: string, salt: string): Promise<{ tx: UnsignedTx }> {
     const chain = this.ctx.chainFor(seriesId);
     await this.requireWallet(session, chain.chain, bidder);
+    await this.sealedSeries(chain, seriesId);
     const bid = await chain.getBid(seriesId, bidder);
     if (!bid) throw AppError.notFound('bid');
     if (bidCommitment({ seriesId, bidder, pricePerUnit, quantity, salt }) !== bid.commitment) throw AppError.unprocessable('these values do not match the committed bid');
@@ -154,6 +166,7 @@ export class AuctionService {
     const chain = this.ctx.chainFor(seriesId);
     const from = signer ?? bidder;
     await this.requireWallet(session, chain.chain, from);
+    await this.sealedSeries(chain, seriesId);
     const bid = await chain.getBid(seriesId, bidder);
     if (!bid) throw AppError.notFound('bid');
     if (!bid.processed) throw AppError.conflict('the bid is not processed yet', { stage1: 'NotProcessed' });
@@ -172,9 +185,7 @@ export class AuctionService {
   async buildSettlementStep(seriesId: string, session: Session, signer: string): Promise<{ stage: SettlementStage; command: PermissionlessCommand; tx: UnsignedTx }> {
     const chain = this.ctx.chainFor(seriesId);
     await this.requireWallet(session, chain.chain, signer);
-    const s = await chain.getSeries(seriesId);
-    if (!s) throw AppError.notFound('series');
-    if (s.terms.raiseStyle !== 'sealed') throw AppError.conflict('a curve-mode series has no sealed-bid settlement', { stage: null, reason: 'curve' });
+    await this.sealedSeries(chain, seriesId);
     const view = await readSettlementView(chain, seriesId);
     if (!view) throw AppError.notFound('auction');
     const [now, info] = await Promise.all([chain.now(), chain.info()]);
@@ -193,40 +204,32 @@ export class AuctionService {
 
   /**
    * The issuer's `openRaise` (Stage 1 `open_raise`), with Stage 1's checks in its order so a refusal comes before the
-   * wallet signs: a Draft raise (RaiseNotDraft), a contract hash (ContractHashMissing), the issuer still allowlisted
-   * (NotAllowlisted), new raises not paused (NewRaisesPaused); then the chain's guard that a curve-mode series runs no
-   * sealed-bid raise (its curve starts at creation). The chain sets the phase ends from the series' durations when it
-   * executes. 409 on a refusal, with the Stage 1 name where Stage 1 has one.
+   * wallet signs: a sealed-bid series (NotSealedBid: a curve's raise opens at its creation), a Draft raise
+   * (RaiseNotDraft), a contract hash (ContractHashMissing), the issuer still allowlisted (NotAllowlisted), new raises not
+   * paused (NewRaisesPaused). The chain sets the phase ends from the series' durations when it executes. 409 on a
+   * refusal, with the Stage 1 name where Stage 1 has one.
    */
   async buildOpenRaise(seriesId: string): Promise<{ tx: UnsignedTx; commitDurationSeconds: number; revealDurationSeconds: number }> {
     const chain = this.ctx.chainFor(seriesId);
-    const s = await chain.getSeries(seriesId);
-    if (!s) throw AppError.notFound('series');
+    const s = await this.sealedSeries(chain, seriesId);
     if (s.phase !== 'Draft') throw AppError.conflict(`the raise is ${s.phase}`, { stage1: 'RaiseNotDraft' });
     if (/^0x0*$/.test(s.terms.contractHash)) throw AppError.conflict('the series has no contract hash', { stage1: 'ContractHashMissing' });
     if (!(await chain.isAllowlisted(s.issuer))) throw AppError.conflict('the issuer is not allowlisted', { stage1: 'NotAllowlisted' });
     if ((await chain.info()).newRaisesPaused) throw AppError.conflict('new raises are paused', { stage1: 'NewRaisesPaused' });
-    if (s.terms.raiseStyle !== 'sealed') throw AppError.conflict('a curve-mode series runs no sealed-bid raise');
     return { tx: await chain.build({ kind: 'openRaise', seriesId }, s.issuer), commitDurationSeconds: s.terms.commitDurationSeconds, revealDurationSeconds: s.terms.revealDurationSeconds };
   }
 
   /**
-   * The issuer's `cancelRaise` (Stage 1 `cancel_raise`): an Open sealed raise with no bid (RaiseNotOpen, BidsExist; no
-   * time limit, so a raise that drew no bid can be cancelled after its reveal end). A curve series keeps our rules (S5):
-   * cancellable while Draft or Open with no curve units minted. 409 on a refusal.
+   * The issuer's `cancelRaise` (Stage 1 `cancel_raise`): a sealed-bid series (NotSealedBid: a curve raise has no cancel,
+   * no failure and no deadline), an Open raise with no bid (RaiseNotOpen, BidsExist; no time limit, so a raise that drew
+   * no bid can be cancelled after its reveal end). 409 on a refusal.
    */
   async buildCancelRaise(seriesId: string): Promise<{ tx: UnsignedTx }> {
     const chain = this.ctx.chainFor(seriesId);
-    const s = await chain.getSeries(seriesId);
-    if (!s) throw AppError.notFound('series');
-    if (s.terms.raiseStyle === 'sealed') {
-      if (s.phase !== 'Open') throw AppError.conflict(`the raise is ${s.phase}`, { stage1: 'RaiseNotOpen' });
-      const a = await chain.getAuction(seriesId);
-      if ((a?.bidCount ?? 0) > 0) throw AppError.conflict('bids exist; the raise can no longer be cancelled', { stage1: 'BidsExist' });
-    } else {
-      if (s.phase !== 'Open' && s.phase !== 'Draft') throw AppError.conflict(`the raise is ${s.phase}`);
-      if (BigInt(s.unitsOutstanding) > 0n) throw AppError.conflict('curve units exist; the raise can no longer be cancelled');
-    }
+    const s = await this.sealedSeries(chain, seriesId);
+    if (s.phase !== 'Open') throw AppError.conflict(`the raise is ${s.phase}`, { stage1: 'RaiseNotOpen' });
+    const a = await chain.getAuction(seriesId);
+    if ((a?.bidCount ?? 0) > 0) throw AppError.conflict('bids exist; the raise can no longer be cancelled', { stage1: 'BidsExist' });
     return { tx: await chain.build({ kind: 'cancelRaise', seriesId }, s.issuer) };
   }
 
@@ -254,12 +257,11 @@ export class AuctionService {
    * `processBid` under `auctionRulesOf`). Every revealed bid counts, its bidder still allowlisted or not: Stage 1 checks
    * the allowlist at commit only, and settles and delivers a bidder removed since (S2-DA). Shown while the raise is Open or
    * Settling; null when no single clearing price exists. `stage` is where the settlement stands; `settleDue` is
-   * `stage === 'awaiting-proposal'`.
+   * `stage === 'awaiting-proposal'`. A curve series has no auction to preview (409 NotSealedBid).
    */
   async preview(seriesId: string): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
-    const s = await chain.getSeries(seriesId);
-    if (!s) throw AppError.notFound('series');
+    const s = await this.sealedSeries(chain, seriesId);
     const a = await chain.getAuction(seriesId);
     if (!a) throw AppError.notFound('auction');
     const now = await chain.now();

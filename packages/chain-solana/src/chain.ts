@@ -133,6 +133,8 @@ export class SolanaChain implements ChainPort {
   async listVerifierKeys(): Promise<never> { return this.notReady('listVerifierKeys'); }
   async getTransferWindow(): Promise<never> { return this.notReady('getTransferWindow'); }
   async getCurve(): Promise<never> { return this.notReady('getCurve'); }
+  /** Meteora's DBC quote (`swapQuote2` through the Meteora port) arrives with the adapter's curve work (S5). */
+  async quoteCurveSwap(): Promise<never> { return this.notReady('quoteCurveSwap'); }
   async getBalance(wallet: string, stablecoin: 'USDC' | 'USDG'): Promise<string> {
     const mint = this.config.stablecoins[stablecoin];
     if (!mint) return '0';

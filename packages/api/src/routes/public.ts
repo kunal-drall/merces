@@ -81,7 +81,19 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
       if (!r.rows[0]) throw AppError.notFound('series');
       const holders = await ctx.pool.query<{ n: number }>('select count(*)::int as n from positions where series_id = $1 and units > 0', [seriesId]);
       const curve = await ctx.pool.query('select * from curves where series_id = $1', [seriesId]);
-      return { ...seriesRow(r.rows[0]), holderCount: holders.rows[0]!.n, curve: curve.rows[0] ? { quoteStablecoin: curve.rows[0].quote_stablecoin, graduationThreshold: curve.rows[0].graduation_threshold, raised: curve.rows[0].raised, graduated: curve.rows[0].graduated, note: `Curve-mode units have a live public price. ${CURVE_NO_CAP}` } : null };
+      // a curve series' curve as indexed (Stage 1's activation, completion and collections; the live pool is
+      // GET /series/{id}/curve): the pool, its target, P0, units sold (base lamports), whether it filled, and the proceeds
+      const c = curve.rows[0];
+      return {
+        ...seriesRow(r.rows[0]), holderCount: holders.rows[0]!.n,
+        curve: c
+          ? {
+            dbcPool: c.dbc_pool, baseMint: c.base_mint, migrationQuoteThreshold: c.migration_quote_threshold, issuePrice: c.issue_price, unitsSold: c.units_sold,
+            completed: c.completed, settledAt: c.settled_at === null ? null : Number(c.settled_at), proceeds: c.proceeds, migrationFee: c.migration_fee, surplus: c.surplus, tradingFee: c.trading_fee,
+            note: `Curve-mode units have a live public price and earn only when staked. ${CURVE_NO_CAP}`,
+          }
+          : null,
+      };
     },
   });
 

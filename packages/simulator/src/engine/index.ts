@@ -8,7 +8,7 @@ import type { SimSeries, SimState } from '../state.ts';
 import { balKey, type EngineCore, type EngineOptions, type Emit, type ExecContext } from './core.ts';
 import { fail } from './errors.ts';
 import { auctionPhase, cancelRaise, commitBid, openRaise, revealBid } from './auction.ts';
-import { buyCurve, graduateCurve } from './curve.ts';
+import { collectCurveProceeds, completeCurve, curveSwap } from './curve.ts';
 import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
 import { burnRetired, claimPayout, payIn, postSplitReceipt } from './payments.ts';
 import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
@@ -91,8 +91,10 @@ export class SimEngine implements EngineCore {
       case 'processBid': service('any'); return processBid(this, cmd, emit);
       case 'deliverBid': service('any'); return deliverBid(this, cmd, emit);
       case 'registerHolder': service('any'); return registerHolder(this, cmd, emit);
-      // Stage 1's Retired burn: permissionless (any wallet, or the keeper)
+      // Stage 1's Retired burn and a curve's completion and proceeds: permissionless (any wallet, or the keeper)
       case 'burnRetired': service('any'); return burnRetired(this, cmd, emit);
+      case 'completeCurve': service('any'); return completeCurve(this, cmd, emit);
+      case 'collectCurveProceeds': service('any'); return collectCurveProceeds(this, cmd, emit);
       case 'drawRelease': return drawRelease(this, user(), cmd, now, emit);
       case 'pauseReleases': return pauseReleases(this, user(), cmd, emit);
       case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit, ctx);
@@ -114,8 +116,8 @@ export class SimEngine implements EngineCore {
       case 'commitWindowOrder': return commitWindowOrder(this, user(), cmd, now, emit);
       case 'revealWindowOrder': return revealWindowOrder(this, user(), cmd, now, emit);
       case 'clearTransferWindow': service('any'); return clearTransferWindow(this, cmd, now, emit);
-      case 'buyCurve': return buyCurve(this, user(), cmd, now, emit);
-      case 'graduateCurve': service('any'); return graduateCurve(this, cmd, emit);
+      // a trade on the curve's venue (Meteora's DBC on live chains; the stand-in pool here)
+      case 'curveSwap': return curveSwap(this, user(), cmd, now, emit);
       case 'setAllowlist': service('allowlistManager'); return setAllowlist(this, cmd, emit);
       case 'registerAttestor': admin(); this.state.attestors.set(cmd.attestor, cmd.active); emit('AttestorRegistered', { attestor: cmd.attestor, active: cmd.active }); return;
       case 'registerVerifierKey': admin(); this.state.verifierKeys.set(cmd.keyId, { publicKey: cmd.publicKey, active: cmd.active }); emit('VerifierKeyRegistered', { keyId: cmd.keyId, publicKey: cmd.publicKey, active: cmd.active }); return;

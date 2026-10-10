@@ -116,6 +116,7 @@ export class EvmChain implements ChainPort {
   async listVerifierKeys(): Promise<never> { return this.notReady('listVerifierKeys'); }
   async getTransferWindow(): Promise<never> { return this.notReady('getTransferWindow'); }
   async getCurve(): Promise<null> { return null; } // curve mode is Solana-only
+  async quoteCurveSwap(): Promise<never> { throw new ChainError('NotPermitted', 'curve mode is Solana only: the EVM refuses a curve series (CurveModeUnsupported)'); }
   async getBalance(wallet: string, stablecoin: 'USDC' | 'USDG'): Promise<string> {
     const token = this.config.stablecoins[stablecoin];
     if (!token) return '0';

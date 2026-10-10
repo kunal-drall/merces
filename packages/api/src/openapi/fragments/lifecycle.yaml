@@ -180,7 +180,7 @@ paths:
         '200':
           description: "Unsigned claimRedemption (Stage 1's claim_redemption); the units burn on claim. units are the units redeemed (the holder's units less those held for a window ask); amount is everything it pays: the redemption price on them and their tail catch-up (redemption, redemptionClaimable) and the pending payout (payout, claimable), which the redemption pays too."
           content: { application/json: { schema: { type: object, required: [tx, units, amount, redemption, payout], properties: { tx: { $ref: '#/components/schemas/UnsignedTx' }, units: { type: string }, amount: { $ref: '#/components/schemas/Money' }, redemption: { $ref: '#/components/schemas/Money' }, payout: { $ref: '#/components/schemas/Money' } } } } }
-        '409': { description: 'No redemption is open (detail.stage1 NotRedeemed), or the holder has no units left to redeem' }
+        '409': { description: 'A curve-mode series, whose holders tender instead (detail.stage1 CurveUsesTender); no redemption is open (NotRedeemed), or the holder has no units left to redeem' }
   /series/{seriesId}/redemption:
     get:
       operationId: getRedemption
@@ -195,7 +195,7 @@ paths:
       x-access: public
       tags: [lifecycle]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Cap progress and burn progress, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+      responses: { '200': { description: 'Cap progress and burn progress; burnable is false on a curve-mode series, whose units never burn (Stage 1 CurveModeNoBurn)', content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
   /series/{seriesId}/retirement/crank-burn:
     post:
       operationId: burnRetiredHolders
@@ -203,7 +203,7 @@ paths:
       tags: [lifecycle]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: "One permissionless burnRetired (Stage 1's burn_retired) per holder that still holds units: burned counts the holders burned, refused those the chain refused (not registered)", content: { application/json: { schema: { type: object, properties: { burned: { type: integer }, refused: { type: integer } } } } } }, '409': { description: The series is not Retired (Stage 1 TerminalStatus) } }
+      responses: { '200': { description: "One permissionless burnRetired (Stage 1's burn_retired) per holder that still holds units: burned counts the holders burned, refused those the chain refused (not registered)", content: { application/json: { schema: { type: object, properties: { burned: { type: integer }, refused: { type: integer } } } } } }, '409': { description: 'A curve-mode series, whose units never burn (detail.stage1 CurveModeNoBurn), or the series is not Retired (TerminalStatus)' } }
   /series/{seriesId}/window:
     get:
       operationId: getTransferWindow

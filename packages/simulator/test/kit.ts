@@ -65,7 +65,7 @@ export function seedHolder(chain: SimulatorChain, seriesId: string, wallet: stri
   const s = seriesOf(chain, seriesId);
   const { register, ...fields } = patch;
   const p = position(s, wallet);
-  if (register) registerHolder(s, p);
+  if (register) registerHolder(s, p, () => undefined); // white-box: no event
   Object.assign(p, fields);
   return p;
 }

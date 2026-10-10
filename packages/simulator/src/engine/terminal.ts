@@ -55,8 +55,9 @@ export function amendTerms(e: EngineCore, signers: string[], cmd: Extract<Comman
  *
  *  1. two distinct attestors (SameAttestor);
  *  2. each is active and co-signs (InvalidAttestorSignature);
- *  3. the raise settled (RaiseNotSettled): a Draft or Open sealed raise and an ungraduated curve cannot be extinguished
- *     (amendment M5; they end by cancellation or failure instead), nor can a Cancelled or Failed one;
+ *  3. the raise settled (RaiseNotSettled): a Draft or Open sealed raise cannot be extinguished (amendment M5; it ends by
+ *     cancellation or failure instead), nor can a Cancelled or Failed one, nor a curve before `completeCurve` (Stage 1
+ *     exit.rs:229-236; an unfilled curve has nothing in its treasury);
  *  4. the mint is final (MintNotFinalized);
  *  5. the stored status is not Extinguished (TerminalStatus); Retired and Redeemed are allowed.
  *
@@ -158,7 +159,7 @@ function finalShare(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): { 
  *  4. its weight and share (`finalShare`: on a series that redeemed, its remaining units are redeemed first and it is
  *     weighed on its redeemed units; otherwise on its accrual units); the share is paid once;
  *  5. it is paid `pending + share` from the vault and its balance burns (reason `extinguishment`; the units held for a
- *     window ask stay until the window returns them).
+ *     window ask stay until the window returns them); a curve series burns nothing (claims.rs:424-452).
  *
  * Events: `BidDelivered` (a pending bid), the redemption body's when it runs, then `FinalClaimed{units: weight, amount:
  * pending + share}` (0 included, SPEC's zero-amount rule) and the `UnitsBurned` of the remaining balance (the EVM
@@ -180,5 +181,5 @@ export function claimFinal(e: EngineCore, signer: string, cmd: Extract<Command, 
   p.claimedTotal += amount;
   e.credit(p.wallet, s.terms.stablecoinMint, amount);
   emit('FinalClaimed', { seriesId: s.seriesId, holder: p.wallet, units: str(weight), amount: str(amount) });
-  burnUnits(s, p, heldUnits(s, p), 'extinguishment', emit);
+  if (!s.curve) burnUnits(s, p, heldUnits(s, p), 'extinguishment', emit);
 }

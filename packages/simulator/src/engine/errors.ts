@@ -85,6 +85,16 @@ export const STAGE1_SOLANA_CODE = {
   CurveThresholdZero: 'InvalidTerms',
   CurveTermsNotZero: 'InvalidTerms',
   CurveQuoteMintMismatch: 'InvalidTerms',
+  // curve activation (activate_curve, curve.rs:799-805; S3 WP8): P0 = floor(X × 10^6 / swap base) must be at least 1
+  CurveThresholdMismatch: 'InvalidTerms',
+  // the curve's lifecycle (S3 WP8): a curve command on a sealed-bid series, a sealed-bid command on a curve series (the
+  // raise, the settlement and the window; Stage 1 fails the settlement steps on the missing auction account, ours by
+  // name), completion before the pool filled, and the sealed-bid exits closed on a curve (claims.rs:252, :342)
+  NotCurveMode: 'WrongPhase',
+  NotSealedBid: 'WrongPhase',
+  CurveNotComplete: 'TooEarly',
+  CurveModeNoBurn: 'NotPermitted',
+  CurveUsesTender: 'NotPermitted',
 } as const satisfies Record<string, ChainErrorCode>;
 
 /**

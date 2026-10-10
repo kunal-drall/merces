@@ -21,6 +21,10 @@ const GENESIS = Date.UTC(2026, 0, 1) / 1000;
  *  - S3-Z: a burn of 0 units (`burnRetired` on a wallet holding nothing) changes nothing in the read model;
  *  - S3-IX: `PayoutClaimed` adds to an existing position only (it never creates one, so a registration and a claim of 0
  *    grant no holder access, A-REV-10) and writes a `payout` money row above 0 only, with the units it burns noted.
+ *  - S3-CV: a curve on Stage 1's lifecycle (migration 020): `CurveActivated` fixes P0 and the cap while the curve sells
+ *    (`RaiseOpened{0, 0}` records no phase ends and no feed line), `CurveGraduated` settles at the finish time with no
+ *    treasury and no units outstanding, `CurveProceedsCollected` and `TreasuryFunded` fund the treasury, `FeeTaken`
+ *    records the curve trading fee; was: buys minting units and funding the treasury, graduation setting both.
  */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
@@ -269,25 +273,38 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect(sql).toBe('21600001'); // what the old SQL projection stored
   });
 
-  // S1 review: graduation sets a curve's issue price and its cap per unit onchain, as settlement does for an auction;
-  // the row had neither, so the statement's C_remaining, the holdings' yield and every later amendment saw no cap.
-  it('projects a graduated curve\'s issue price and cap per unit (Stage 1\'s floor), and the cap after an amendment', async () => {
+  // S1 review: a curve's issue price and its cap per unit must be projected (the statement's C_remaining, the holdings'
+  // yield and every later amendment read them). cause S3-CV: they are fixed at activation (Stage 1 mark_curve_activated),
+  // the raise settles at the pool's finish time, and only the collection funds the treasury (migration 020)
+  it("projects a curve's activation, completion and proceeds, its issue price and cap per unit (Stage 1's floor), and the cap after an amendment", async () => {
     const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'curve-cap', genesis: GENESIS, acceptMockProofs: true }) });
     const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
-    const { terms } = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: USDC(1200).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' });
-    const seriesId = ((await h.exec(h.issuer, { kind: 'createSeries', terms })).events[0]!.payload as { seriesId: string }).seriesId;
-    const types: string[] = [];
-    for (const b of [0, 1, 2]) types.push(...(await h.exec(h.backers[b]!, { kind: 'buyCurve', seriesId, amountIn: USDC(400).toString(), minUnitsOut: '0' })).events.map((e) => e.type));
-    expect(types.at(-1)).toBe('CurveGraduated');
+    const { seriesId, terms } = await h.createCurve();
+    const row = async () => (await t.pool.query('select phase, issue_price::text, units_sold::text, unit_scale::text, cap_multiple_wad::text, cap_per_unit::text, commit_ends_at, settled_at, mint_finalized, units_outstanding::text, treasury_total::text from series where series_id = $1', [seriesId])).rows[0];
+    const curveRow = async () => (await t.pool.query('select dbc_pool, base_mint, migration_quote_threshold::text, issue_price::text, units_sold::text, completed, settled_at, proceeds::text, migration_fee::text, surplus::text, trading_fee::text from curves where series_id = $1', [seriesId])).rows[0];
     await idx.catchUp();
-    const row = async () => (await t.pool.query('select phase, issue_price::text, cap_multiple_wad::text, cap_per_unit::text from series where series_id = $1', [seriesId])).rows[0];
+    const P0 = '10000000'; // merces-common curve.rs:120-131
+    const cap = capPerUnit(BigInt(terms.capMultipleWad), BigInt(P0)).toString();
+    expect(await row()).toEqual({ phase: 'Open', issue_price: P0, units_sold: '100000000', unit_scale: '1000000', cap_multiple_wad: terms.capMultipleWad, cap_per_unit: cap, commit_ends_at: null, settled_at: null, mint_finalized: false, units_outstanding: '0', treasury_total: '0' });
+    const curve = (await h.sim.getCurve(seriesId))!;
+    expect(await curveRow()).toEqual({ dbc_pool: curve.dbcPool, base_mint: curve.baseMint, migration_quote_threshold: '1000000000', issue_price: P0, units_sold: '100000000', completed: false, settled_at: null, proceeds: '0', migration_fee: '0', surplus: '0', trading_fee: '0' });
+    for (const [i, amount] of [400, 350, 300].entries()) await h.curveBuy(seriesId, h.backers[i]!, USDC(amount));
+    const finishTs = (await h.sim.getCurve(seriesId))!.finishCurveTimestamp!;
+    await h.sim.advanceTime(86_400);
+    await h.completeAndCollect(seriesId);
+    await idx.catchUp();
+    // settled at the finish time; no units outstanding (the census's, S3 WP9); the treasury is the partner migration fee
+    expect(await row()).toMatchObject({ phase: 'Settled', settled_at: String(finishTs), mint_finalized: true, units_outstanding: '0', treasury_total: '990000000', cap_per_unit: cap });
+    expect(await curveRow()).toMatchObject({ completed: true, settled_at: String(finishTs), proceeds: '990000000', migration_fee: '990000000', surplus: '0', trading_fee: '8080809' });
+    const money = (await t.pool.query("select kind, amount::text from money_events where series_id = $1 and kind in ('treasury', 'fee') order by seq", [seriesId])).rows;
+    expect(money).toEqual([{ kind: 'treasury', amount: '990000000' }, { kind: 'fee', amount: '8080809' }]);
+    expect((await t.pool.query('select kind, payer, amount::text from fees_ledger where series_id = $1', [seriesId])).rows).toEqual([{ kind: 'curveTrading', payer: curve.dbcPool, amount: '8080809' }]);
+    // the public feed: the curve's opening and its fill, never an amount; the activation's RaiseOpened{0, 0} is not a sealed raise's opening
+    const feed = (await t.pool.query('select kind, summary from activity where series_id = $1 order by seq', [seriesId])).rows;
+    expect(feed.map((r) => r.kind)).toEqual(['SeriesCreated', 'CurveActivated', 'CurveGraduated', 'RaiseMintFinalized']);
+    for (const r of feed) expect(r.summary).not.toMatch(/990|8080809|USDC/);
     const chain = (await h.sim.getSeries(seriesId))!;
-    expect(chain.issuePrice).not.toBeNull();
-    expect(await row()).toEqual({ phase: 'Settled', issue_price: chain.issuePrice, cap_multiple_wad: terms.capMultipleWad, cap_per_unit: chain.capPerUnit });
-    // cause S2-MS: a graduated curve's units are final at once (migration 019's mint gate)
-    expect((await t.pool.query('select mint_finalized from series where series_id = $1', [seriesId])).rows[0].mint_finalized).toBe(true);
-    expect(chain.capPerUnit).toBe(capPerUnit(BigInt(terms.capMultipleWad), BigInt(chain.issuePrice!)).toString());
+    expect(chain.capPerUnit).toBe(cap);
     // an issuer-favourable amendment: the new cap is Stage 1's capPerUnit on the projected issue price, floor. m puts
     // m × P0 / 1e18 just past 2·P0 + ½, where rounding (a SQL numeric cast) would store one more than the chain
     const p0 = BigInt(chain.issuePrice!);

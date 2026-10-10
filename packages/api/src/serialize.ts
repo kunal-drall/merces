@@ -79,7 +79,7 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
     openDuePeriod: r.open_due_period ?? null,
     paymentOutstanding: BigInt(String(r.open_due_amount ?? '0')) > 0n,
     formalNoticeEmittedFor: r.formal_notice_emitted_for ?? null,
-    // Stage 1's mint gate: the last bid of a sealed raise is processed, or a curve graduated
+    // Stage 1's mint gate: the last bid of a sealed raise is processed, or a curve completed (completeCurve)
     mintFinalized: r.mint_finalized === true,
     auction: r.raise_style === 'sealed' ? auctionRow(r) : null,
   };

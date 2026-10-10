@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { CURVE_TERMS_ZEROS, DEFAULTS, INDEXING_RULE_CODE, currencyCodeOf, normaliseAddress, randomFieldSalt, seriesTermsViolations, termsCommitment, type BoundedTerms, type SeriesTerms, type UnsignedTx } from '@merces/domain';
+import { CURVE_TERMS_ZEROS, DEFAULTS, INDEXING_RULE_CODE, currencyCodeOf, normaliseAddress, randomFieldSalt, rateUnits, seriesTermsViolations, termsCommitment, type BoundedTerms, type SeriesTerms, type UnsignedTx } from '@merces/domain';
 import { U64_MAX, WAD, ratePerUnit, wadFromDecimal, wadToDecimal } from '@merces/math';
 import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -197,7 +197,9 @@ export class TermsService {
         // ratePerUnit enforces SPEC §1.5's r × units ≤ WAD and would refuse it: report the field instead
         issues.push({ field: 'shareRate', code: 'max', message: 'share rate cannot exceed 100%' });
       } else {
-        const r = units > 0n ? ratePerUnit(share, units) : 0n;
+        // r is per accounting unit: per unit offered on a sealed raise, per base lamport on a curve (`rateUnits`: the
+        // units offered × 10^6; Stage 1 registry lib.rs:594-600, B-C2)
+        const r = units > 0n ? ratePerUnit(share, rateUnits({ unitsOffered: pub.unitsOffered, raiseStyle: pub.raiseStyle })) : 0n;
         ratePerUnitWad = r.toString();
         if (r <= 0n) issues.push({ field: 'shareRate', code: 'positive', message: 'share rate must be positive' });
       }

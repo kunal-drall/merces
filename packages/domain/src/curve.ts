@@ -46,3 +46,71 @@ export const CURVE_TERMS_ZEROS: { readonly [K in (typeof CURVE_ZERO_TERMS)[numbe
  */
 export const CURVE_NO_CAP =
   'No cap: a curve raise has no wallet cap at any stage. Any wallet can hold any number of units, before and after the curve fills, and there is no limit on how many units a wallet buys or sells.';
+
+/** What `curveBuyerNotice` fills into `CURVE_BUYER_NOTICE`: figures from the curve's own read (`CurveState`). */
+export interface CurveNoticeFigures {
+  /** the trading fee every trade pays, bps (`CurveState.tradingFeeBps`; 100 = 1%) */
+  tradingFeeBps: number;
+  /** X, the quote the curve must take in to fill, stablecoin base units with 6 decimals (`CurveState.migrationQuoteThreshold`) */
+  target: string | bigint;
+  /** Meteora's migration fee, percent of X (`CurveState.migrationFeePercentage`); the partner's share funds the treasury */
+  migrationFeePercentage: number;
+}
+
+/**
+ * The buyer notice for a curve raise (owner direction, S3 amendments H2 and M1), with `{fee}`, `{target}` and
+ * `{migrationFee}` left for `curveBuyerNotice` to fill. Every fact is Stage 1's (curve mode, SPEC §9; CURVE_MODE.md;
+ * PROCEEDS_OPTIONS.md):
+ *  - the buyer pays into Meteora's pool, not to Merces; nobody can take that money out before the curve fills, and
+ *    Merces cannot repay it (the DBC quote vault; `collect_curve_proceeds` withdraws only after completion);
+ *  - selling back into the curve is the only exit before then; nothing refunds a buyer (no cancel, no failure);
+ *  - there is no deadline, and a curve that never fills pays the issuer nothing (the treasury of an uncompleted curve
+ *    stays 0);
+ *  - every trade pays the trading fee, most of it to Merces (the partner, 80% with no creator share) and the rest to
+ *    Meteora, and it is never returned, even when the curve never fills (`claim_trading_fee` at any time);
+ *  - no cap (`CURVE_NO_CAP`);
+ *  - only staked units earn, staking needs an approved (allowlisted) and registered wallet, and unstaking is always
+ *    open (`stake_units`, `unstake_units`); a wallet never approved and registered cannot stake or tender and receives
+ *    nothing, so selling is its only exit (`register_holder` needs the allowlist; `tender_units` the holder record);
+ *  - the treasury receives the partner's migration fee (and any surplus) once the curve fills;
+ *  - if the issuer stops paying, the series can be extinguished and the unvested treasury is shared among staked
+ *    units, or tendered units after a redemption (`extinguish`, `claim_final`);
+ *  - at a redemption staked units are reserved and wallet units share the rest (`wallet_tender_fits`).
+ * The issuer is never said to "default": the notice says "stops paying".
+ */
+export const CURVE_BUYER_NOTICE = [
+  'Before you buy units of a curve raise.',
+  "- You buy from Meteora's bonding curve, not from Merces or the issuer. The price is public and moves as people buy and sell.",
+  '- Every trade pays a trading fee ({fee}%): most of it goes to Merces, the rest to Meteora. It is never returned, even if the curve never fills.',
+  "- Until the curve fills (its graduation), the USDC you pay, less the fee, sits in Meteora's pool, not with Merces, and Merces cannot repay it. Nobody can take it out: not Merces, not the issuer.",
+  '- Before graduation the only way out is to sell your units back into the curve, at its price at that moment, less the fee. The raise cannot be cancelled and nobody refunds you.',
+  '- There is no deadline. The curve fills only when buyers have paid in its full target ({target} USDC), and it may never fill. If the curve never fills, the issuer receives nothing.',
+  `- ${CURVE_NO_CAP}`,
+  '- Stake to earn. To earn, your wallet must be approved (allowlisted) and registered for this series, and you must stake your units in its stake vault. Unstaked units earn nothing. You can unstake at any time; what your staked units earned stays yours to claim.',
+  '- A wallet that is not approved and registered cannot stake, cannot tender at a redemption and receives nothing from the series: it can only sell.',
+  "- When the curve fills, the series treasury receives {migrationFee}% of the target (and any surplus above it) and releases it to the issuer on the series' schedule; the rest of the pool becomes trading liquidity.",
+  '- If the issuer stops paying, payouts stop: the series shows as late, a formal notice follows, and the series can be extinguished. The unvested treasury is then shared among staked units, or among tendered units after a redemption.',
+  '- At a redemption, staked units are reserved for their holders; units left in wallets share a limited quota, first come, first served.',
+].join('\n');
+
+/** A decimal figure of base units with 6 decimals, grouped by thousands (1000000000 → "1,000"). */
+function sixDecimals(x: bigint): string {
+  const whole = (x / 1_000_000n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const frac = (x % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : whole;
+}
+
+/** A bps figure as a percentage (100 → "1", 125 → "1.25"). */
+function percentOfBps(bps: number): string {
+  const whole = Math.trunc(bps / 100);
+  const frac = String(bps % 100).padStart(2, '0').replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : String(whole);
+}
+
+/** `CURVE_BUYER_NOTICE` with the curve's own figures: its trading fee, its target and Meteora's migration fee. */
+export function curveBuyerNotice(f: CurveNoticeFigures): string {
+  return CURVE_BUYER_NOTICE
+    .replace('{fee}', percentOfBps(f.tradingFeeBps))
+    .replace('{target}', sixDecimals(BigInt(f.target)))
+    .replace('{migrationFee}', String(f.migrationFeePercentage));
+}

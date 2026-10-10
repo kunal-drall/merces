@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { BN254_FR, CURRENCY_CODES, DEFAULT_PARAMETERS } from '@merces/math';
 import { randomBytes } from 'node:crypto';
 import {
-  CURVE_NO_CAP, CURVE_TERMS_ZEROS, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
+  CURVE_BUYER_NOTICE, CURVE_NO_CAP, CURVE_TERMS_ZEROS, curveBuyerNotice, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
   amountBearingEvents, permissionlessCommandSchema,
   ChainError, attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, permissionlessCommandKinds, serviceCommandKinds, serviceCommandSchema, termsCommitment, userCommandKinds, userCommandSchema,
@@ -28,7 +28,11 @@ import {
  *  - S3-CT: curve terms are Stage 1's (registry create_series, lib.rs:462-572): lockup, wallet cap and raise durations 0
  *    (CurveTermsNotZero), a positive threshold (CurveThresholdZero), USDC (CurveQuoteMintMismatch), in the registry's
  *    order; the sealed-only rules (minimum raise reachable, a wallet cap of one unit) do not apply;
- *  - S3-NC: "no cap": one statement (`CURVE_NO_CAP`) for every curve read and notice.
+ *  - S3-NC: "no cap": one statement (`CURVE_NO_CAP`) for every curve read and notice; the buyer notice
+ *    (`CURVE_BUYER_NOTICE`, amendments H2 and M1) states every required fact.
+ *  - S3-CV: Stage 1's curve lifecycle vocabulary: `curveSwap` (a Meteora DBC swap), the permissionless `completeCurve`
+ *    and `collectCurveProceeds`, `CurveActivated`, `CurveGraduated` (Stage 1 RaiseSettled), `CurveProceedsCollected`,
+ *    the `curveTrading` fee kind; the toy curve's buy and graduation commands and its mint and creation events are gone.
  */
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
@@ -158,8 +162,12 @@ describe('schemas', () => {
     expect(() => userCommandSchema.parse({ kind: 'payIn', seriesId: 'solana:abc', periodId: '2026Q5', amount: '1' })).toThrow();
   });
   it('covers every event listed in Part D2', () => {
-    const required = ['IssuerRegistered', 'SeriesCreated', 'RaiseOpened', 'RaiseCancelled', 'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'UnitsMinted', 'TreasuryFunded', 'FundsReleased', 'ReleasesPaused', 'ReleasesResumed', 'SplitReceipt', 'ReportAccepted', 'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'SeriesRetired', 'UnitsBurned', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout', 'PauseRequested', 'PauseApproved', 'PauseEnded', 'StatusChanged', 'FormalNoticeDue', 'TermsAmended', 'SeriesExtinguished', 'RateSnapshot', 'FxFallbackFlagged', 'TransferWindowOpened', 'TransferWindowCleared', 'UnitsTransferred', 'AllowlistUpdated', 'AttestorRegistered', 'CurveSeriesCreated', 'CurveGraduated'];
+    const required = ['IssuerRegistered', 'SeriesCreated', 'RaiseOpened', 'RaiseCancelled', 'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'TreasuryFunded', 'FundsReleased', 'ReleasesPaused', 'ReleasesResumed', 'SplitReceipt', 'ReportAccepted', 'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'SeriesRetired', 'UnitsBurned', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout', 'PauseRequested', 'PauseApproved', 'PauseEnded', 'StatusChanged', 'FormalNoticeDue', 'TermsAmended', 'SeriesExtinguished', 'RateSnapshot', 'FxFallbackFlagged', 'TransferWindowOpened', 'TransferWindowCleared', 'UnitsTransferred', 'AllowlistUpdated', 'AttestorRegistered', 'CurveGraduated'];
     for (const r of required) expect(eventTypes).toContain(r);
+    // cause S3-CV: a curve's buys are Meteora's (no Merces mint event) and its creation is Stage 1's activation
+    // (CurveActivated; was the toy curve's creation event); its proceeds arrive with CurveProceedsCollected
+    expect(eventTypes.filter((t) => /Minted$|^CurveSeries/.test(t))).toEqual([]);
+    for (const r of ['CurveActivated', 'CurveProceedsCollected']) expect(eventTypes).toContain(r);
     // cause S2-MS / S2-RH: Stage 1's settlement events and holder registration, with Stage 1's names
     for (const r of ['SettlementProposed', 'SettlementRejected', 'UnitsAllocated', 'BidDelivered', 'RaiseMintFinalized', 'HolderRegistered']) expect(eventTypes).toContain(r);
     // cause S2-PR: a bid's refund reaches the bidder with BidDelivered (the pull refund's event is retired); the one
@@ -169,10 +177,14 @@ describe('schemas', () => {
   it('has no one-step settlement or pull refund (cause S2-MS, S2-PR: Stage 1 settles in steps and delivers)', () => {
     // the raise's wallet commands are Stage 1's four; the rest of the raise is the permissionless group
     expect(userCommandKinds.filter((k) => /Raise|Bid|Refund/.test(k))).toEqual(['openRaise', 'cancelRaise', 'commitBid', 'revealBid']);
-    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired']); // cause S3-BR
+    // cause S3-BR, S3-CV: a curve's completion and proceeds are permissionless (Stage 1 complete_curve, collect_curve_proceeds)
+    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds']);
     // cause S3-BR: burnRetired{holder} (permissionless, above) replaces the S1 list burn crank (`holders[]`), so no service
-    // command burns any more
-    expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'graduateCurve', 'setAllowlist']);
+    // command burns any more; cause S3-CV: completion is permissionless `completeCurve` (was a service graduation command)
+    expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'setAllowlist']);
+    // cause S3-CV: a curve trade is `curveSwap` (a Meteora DBC swap; was the toy curve's buy command), buy or sell
+    expect(userCommandKinds.filter((k) => /[Cc]urve/.test(k))).toEqual(['curveSwap']);
+    expect(userCommandSchema.parse({ kind: 'curveSwap', seriesId: 'solana:abc', side: 'sell', amountIn: '1', minimumAmountOut: '0' }).kind).toBe('curveSwap');
     // submit takes both groups, each command once (the union's head is the first service command)
     expect(serviceCommandSchema.parse({ kind: 'deliverBid', seriesId: 'solana:abc', bidder: 'b' }).kind).toBe('deliverBid');
     expect(serviceCommandSchema.parse({ kind: 'snapshotRate', pair: 'EUR/USD', rateWad: '1', confWad: '0', publishTime: 1, update: null }).kind).toBe('snapshotRate');
@@ -300,6 +312,43 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
     expect(CURVE_NO_CAP).toMatch(/^No cap: /);
     for (const clause of ['no wallet cap at any stage', 'any number of units', 'before and after the curve fills']) expect(CURVE_NO_CAP).toContain(clause);
     expect(CURVE_NO_CAP).not.toMatch(/default/i);
+  });
+
+  // cause S3-NC (amendments H2 and M1, the owner's wording): every clause of the buyer notice, each Stage 1's fact
+  it('the buyer notice states every required fact, says "stops paying" and never "default"', () => {
+    const filled = curveBuyerNotice({ tradingFeeBps: 100, target: 1_000_000_000n, migrationFeePercentage: 99 });
+    for (const text of [CURVE_BUYER_NOTICE, filled]) {
+      const clauses: [string, RegExp][] = [
+        // before graduation the money sits in Meteora's pool, not with Merces, and Merces cannot repay it
+        ['in the pool', /until the curve fills \(its graduation\), the USDC you pay, less the fee, sits in Meteora's pool, not with Merces, and Merces cannot repay it/i],
+        // the only exit before graduation is selling back into the curve
+        ['the only exit', /before graduation the only way out is to sell your units back into the curve/i],
+        ['no deadline', /there is no deadline/i],
+        ['the issuer receives nothing', /if the curve never fills, the issuer receives nothing/i],
+        // the trading fee: most of it to Merces, the rest to Meteora, never returned, even if the curve never fills
+        ['the fee', /every trade pays a trading fee \((\{fee\}|1)%\): most of it goes to Merces, the rest to Meteora\. It is never returned, even if the curve never fills/i],
+        // no wallet cap: any wallet holds any amount, before and after graduation (the one statement)
+        ['no cap', new RegExp(CURVE_NO_CAP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))],
+        ['no cap, plainly', /No cap: a curve raise has no wallet cap at any stage\. Any wallet can hold any number of units, before and after the curve fills/],
+        // to earn: approved and staked; unstaked units earn nothing; unstake at any time
+        ['stake to earn', /to earn, your wallet must be approved \(allowlisted\) and registered for this series, and you must stake your units/i],
+        ['unstaked earn nothing', /unstaked units earn nothing/i],
+        ['unstake any time', /you can unstake at any time/i],
+        // a wallet not approved and registered: no stake, no tender, nothing from the series, only selling
+        ['not approved', /a wallet that is not approved and registered cannot stake, cannot tender at a redemption and receives nothing from the series: it can only sell/i],
+        // the issuer stops paying: extinguishment shares the unvested treasury among staked (or tendered) units
+        ['stops paying', /if the issuer stops paying, payouts stop/i],
+        ['extinguished', /the series can be extinguished\. The unvested treasury is then shared among staked units, or among tendered units after a redemption/i],
+      ];
+      for (const [name, re] of clauses) expect(text, name).toMatch(re);
+      expect(text).not.toMatch(/default/i);
+    }
+    // the curve's own figures: its 1% fee, its 1,000 USDC target, Meteora's 99% migration fee to the treasury
+    expect(filled).toContain('a trading fee (1%)');
+    expect(filled).toContain('its full target (1,000 USDC)');
+    expect(filled).toContain('the series treasury receives 99% of the target');
+    expect(filled).not.toMatch(/\{(fee|target|migrationFee)\}/);
+    expect(curveBuyerNotice({ tradingFeeBps: 125, target: '1234567890', migrationFeePercentage: 50 })).toMatch(/\(1\.25%\)[\s\S]*1,234\.56789 USDC[\s\S]*receives 50% of the target/);
   });
 });
 

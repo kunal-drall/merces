@@ -153,7 +153,7 @@ export function postSplitReceipt(e: EngineCore, router: string, cmd: Extract<Com
  *     auction units not yet delivered are not burned; they burn at the next claim or by `burnRetired` once the window
  *     returns them or they are delivered), also when nothing is paid. On any other status nothing burns: an
  *     Extinguished holder's units are its final-pool weight and burn at `claimFinal`, a Redeemed holder's at its
- *     redemption.
+ *     redemption. A curve series never burns (Stage 1 claims.rs:182-196: `PayoutClaimed{burnedUnits: 0}`).
  *
  * Events: `PayoutClaimed{amount, burnedUnits}` always, zeros included (SPEC's zero-amount rule: a claim of nothing
  * succeeds and emits its event), then the `UnitsBurned` of a Retired balance (the EVM order: the claim event before its
@@ -166,7 +166,7 @@ export function claimPayout(e: EngineCore, signer: string, cmd: Extract<Command,
   settleHolder(e, s, p);
   const amount = p.pending;
   p.pending = 0n;
-  const burned = s.status === 'Retired' ? heldUnits(s, p) : 0n;
+  const burned = s.status === 'Retired' && !s.curve ? heldUnits(s, p) : 0n;
   if (amount > s.vaultBalance) throw new ChainError('ChainSpecific', 'vault invariant violated'); // never happens: every division floors
   s.vaultBalance -= amount;
   s.vaultDistributedNet += amount;
@@ -178,6 +178,7 @@ export function claimPayout(e: EngineCore, signer: string, cmd: Extract<Command,
 /**
  * Stage 1 `burn_retired` (SIM:624-636), permissionless. Checks and effects, in order:
  *
+ *  0. a curve series' units never burn (CurveModeNoBurn, claims.rs:252; before anything else, a zero balance too);
  *  1. the stored status is Retired (TerminalStatus; an Extinguished series is refused, since burning before
  *     `claimFinal` would zero the holder's final-pool weight);
  *  2. a wallet whose balance is 0 emits `UnitsBurned{units: 0}` and nothing else, before any registration check, so a
@@ -190,6 +191,7 @@ export function claimPayout(e: EngineCore, signer: string, cmd: Extract<Command,
  */
 export function burnRetired(e: EngineCore, cmd: Extract<Command, { kind: 'burnRetired' }>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
+  if (s.curve) fail('CurveModeNoBurn', 'curve-mode units are never burned');
   if (s.status !== 'Retired') fail('TerminalStatus', 'units are burned only on a Retired series');
   const p = s.positions.get(cmd.holder);
   const balance = p ? heldUnits(s, p) : 0n;

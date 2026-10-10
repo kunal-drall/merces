@@ -2,6 +2,7 @@ import { ChainError, orderCommitment, type Command } from '@merces/domain';
 import { interim } from '@merces/math';
 import type { SimSeries, SimTransferWindow } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
+import { requireSealedBid } from './auction.ts';
 import { fail } from './errors.ts';
 import { heldUnits, position, registerHolder, setUnits, settleHolder } from './holders.ts';
 import { mintFinalized } from './ledger.ts';
@@ -23,13 +24,14 @@ import { syncStatus } from './status.ts';
 
 // ------------------------------------------------------------------ open, commit, reveal
 /**
- * `open_window`: our checks (the mint gate with Stage 1's `MintNotFinalized`, the lockup one with `LockupActive`), then
- * `syncStatus` (SIM:1497), then the window.
+ * `open_window`: a sealed-bid series (NotSealedBid, window.rs:119), our checks (the mint gate with Stage 1's
+ * `MintNotFinalized`, the lockup one with `LockupActive`), then `syncStatus` (SIM:1497), then the window.
  */
 export function openTransferWindow(e: EngineCore, cmd: Extract<Command, { kind: 'openTransferWindow' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
-  // curve units trade freely on the DEX pool after graduation (A-CURVE-2): no window, so no window cap or allowlist
-  if (s.curve) throw new ChainError('WrongPhase', 'curve units trade on the DEX pool, not in transfer windows');
+  // curve units trade freely in the curve and on the DEX pool (A-CURVE-2): no window (Stage 1 `open_window` refuses a
+  // curve series first, NotSealedBid, window.rs:119), so no window cap or allowlist
+  requireSealedBid(s);
   if (s.phase !== 'Settled' || TERMINAL.has(s.status)) throw new ChainError('WrongStatus', 'series cannot open a window');
   if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids'); // SIM:1489
   if (now < s.settledAt! + s.terms.lockupSeconds) fail('LockupActive', 'the lockup has not ended'); // code TooEarly, as before

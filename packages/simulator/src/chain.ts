@@ -1,6 +1,6 @@
 import {
   ChainError, adminCommandSchema, permissionlessCommandSchema, serviceCommandSchema, userCommandSchema,
-  type AdminCommand, type AuctionState, type BidState, type ChainInfo, type ChainPort, type CurveState, type DomainEvent, type HealthReport,
+  type AdminCommand, type AuctionState, type BidState, type ChainInfo, type ChainPort, type CurveState, type CurveSwapQuote, type DomainEvent, type HealthReport,
   type Groth16ProofJson, type IssuerState, type PeriodState, type PositionState, type QuarterRateState, type RateAccumulatorState, type RedemptionState, type SeriesState,
   type PermissionlessCommand, type ServiceCommand, type ServiceRole, type SignedTx, type Stablecoin, type TransferWindowState, type TreasuryState, type TxResult, type UnsignedTx,
   type UserCommand, type VaultState,
@@ -13,7 +13,9 @@ import { SIM_STATE_VERSION, type SimState } from './state.ts';
 import { stage1View, type Stage1View } from './stage1-view.ts';
 import type { SimPersistence } from './persistence.ts';
 import { toAuctionState, toBid } from './reads/auction.ts';
-import { toCurveState } from './reads/curve.ts';
+import { toCurveState, toCurveSwapQuote } from './reads/curve.ts';
+import { curveOf, dammTrade, migrateCurve, releaseLockedUnits } from './engine/curve.ts';
+import { balKey } from './engine/core.ts';
 import { toQuarterRate, toRateAccumulator } from './reads/fx.ts';
 import { listPeriodStates, toPeriodState } from './reads/periods.ts';
 import { listPositionStates, toPosition } from './reads/positions.ts';
@@ -154,6 +156,32 @@ export class SimulatorChain implements ChainPort {
     if (!x) throw new ChainError('NotFound', `series ${seriesId} not found`);
     return stage1View(x, this.clock.now());
   }
+  /** A wallet's base lamports of a curve series' unit mint (its token balance; a curve's units live in wallets). */
+  curveUnitsOf(seriesId: string, wallet: string): bigint {
+    const x = this.state.series.get(seriesId);
+    if (!x?.curve) throw new ChainError('NotFound', `curve series ${seriesId} not found`);
+    return this.state.balances.get(balKey(wallet, x.curve.baseMint)) ?? 0n;
+  }
+  /**
+   * Curve stand-in hooks (base lamports only; like `fund`, not reachable through ChainPort): the migration to the DAMM
+   * pool, a locker release to `to` and a DAMM trade (`units > 0` to the wallet, `< 0` from it). Atomic: a refused hook
+   * changes nothing.
+   */
+  async curveHook(seriesId: string, hook: { kind: 'migrate'; protocolBaseFee?: bigint; leftover?: bigint } | { kind: 'lockerRelease'; to: string; units: bigint } | { kind: 'dammTrade'; wallet: string; units: bigint }): Promise<void> {
+    await this.run(() => {
+      const backup = structuredClone(this.engine.state);
+      try {
+        const x = this.engine.series(seriesId);
+        curveOf(x);
+        if (hook.kind === 'migrate') migrateCurve(this.engine, x, hook);
+        else if (hook.kind === 'lockerRelease') releaseLockedUnits(this.engine, x, hook.to, hook.units);
+        else dammTrade(this.engine, x, hook.wallet, hook.units);
+      } catch (e) {
+        this.engine.state = backup;
+        throw e;
+      }
+    });
+  }
   /** Tier-1 router hook: a registered split router posts a receipt. */
   async postSplitReceipt(router: string, seriesId: string, amount: bigint): Promise<TxResult> {
     return this.run(() => this.engine.execute({ kind: 'postSplitReceipt', seriesId, amount: s(amount) }, { kind: 'router', router }));
@@ -270,6 +298,12 @@ export class SimulatorChain implements ChainPort {
     const x = this.state.series.get(seriesId);
     if (!x?.curve) return null;
     return toCurveState(seriesId, x);
+  }
+  async quoteCurveSwap(seriesId: string, side: 'buy' | 'sell', amountIn: string): Promise<CurveSwapQuote> {
+    const x = this.state.series.get(seriesId);
+    if (!x) throw new ChainError('NotFound', `series ${seriesId} not found`);
+    curveOf(x);
+    return toCurveSwapQuote(seriesId, x, side, amountIn);
   }
   async getBalance(wallet: string, stablecoin: Stablecoin): Promise<string> {
     const c = this.state.config.stablecoins[stablecoin];

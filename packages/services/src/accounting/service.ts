@@ -39,7 +39,8 @@ export type ExportQuery = z.infer<typeof exportQuerySchema>;
 
 export const runsQuerySchema = z.object({ limit: limitParam(20, 100) });
 
-export type FeeKind = 'auction' | 'payout';
+/** `auction` (sealed raise), `payout` (each payment into the vault), `curveTrading` (Merces' share of a curve's trading fees) */
+export type FeeKind = 'auction' | 'payout' | 'curveTrading';
 
 export interface FeeRow {
   chain: string;
@@ -59,6 +60,7 @@ export interface FeeSeriesTotal {
   stablecoin: string | null;
   auction: string;
   payout: string;
+  curveTrading: string;
   total: string;
   count: number;
 }
@@ -165,15 +167,16 @@ export class AccountingService {
       [...args, q.limit],
     );
     const byKind = await this.ctx.pool.query<{ kind: FeeKind; total: string; n: string }>(`select f.kind, sum(f.amount) as total, count(*) as n from fees_ledger f ${where} group by f.kind`, args);
-    const bySeries = await this.ctx.pool.query<{ series_id: string; chain: string; stablecoin: string | null; auction: string; payout: string; total: string; n: string }>(
+    const bySeries = await this.ctx.pool.query<{ series_id: string; chain: string; stablecoin: string | null; auction: string; payout: string; curve_trading: string; total: string; n: string }>(
       `select f.series_id, f.chain, s.stablecoin,
               sum(case when f.kind = 'auction' then f.amount else 0 end) as auction,
               sum(case when f.kind = 'payout' then f.amount else 0 end) as payout,
+              sum(case when f.kind = 'curveTrading' then f.amount else 0 end) as curve_trading,
               sum(f.amount) as total, count(*) as n
        from fees_ledger f left join series s on s.series_id = f.series_id ${where} group by f.series_id, f.chain, s.stablecoin order by f.chain, f.series_id`,
       args,
     );
-    const kinds: Record<FeeKind, string> = { auction: '0', payout: '0' };
+    const kinds: Record<FeeKind, string> = { auction: '0', payout: '0', curveTrading: '0' };
     let total = 0n;
     let count = 0;
     for (const k of byKind.rows) {
@@ -186,7 +189,7 @@ export class AccountingService {
       rows: rows.rows.map((r) => ({ chain: r.chain, seq: Number(r.seq), seriesId: r.series_id, stablecoin: r.stablecoin, kind: r.kind, payer: r.payer, amount: r.amount, blockTime: Number(r.block_time), txId: r.tx_id })),
       rowCount: count,
       truncated: rows.rows.length < count,
-      totals: { total: total.toString(), count, byKind: kinds, bySeries: bySeries.rows.map((r) => ({ seriesId: r.series_id, chain: r.chain, stablecoin: r.stablecoin, auction: r.auction, payout: r.payout, total: r.total, count: Number(r.n) })) },
+      totals: { total: total.toString(), count, byKind: kinds, bySeries: bySeries.rows.map((r) => ({ seriesId: r.series_id, chain: r.chain, stablecoin: r.stablecoin, auction: r.auction, payout: r.payout, curveTrading: r.curve_trading, total: r.total, count: Number(r.n) })) },
     };
   }
 
@@ -224,7 +227,7 @@ export class AccountingService {
       [seriesId],
     );
 
-    const feeByKind: Record<FeeKind, string> = { auction: '0', payout: '0' };
+    const feeByKind: Record<FeeKind, string> = { auction: '0', payout: '0', curveTrading: '0' };
     for (const f of fees.rows) feeByKind[f.kind] = f.total;
     const moneyTotals: Record<string, { count: number; total: string }> = {};
     for (const m of money.rows) moneyTotals[m.kind] = { count: Number(m.n), total: m.total };
@@ -278,7 +281,7 @@ export class AccountingService {
         progressBps: capPerUnit !== null && capPerUnit > 0n ? Number((paidPerUnitWad * 10_000n) / (capPerUnit * WAD)) : null,
       },
       payments: { grossPaidTotal: regular.gross.toString(), netDistributed: regular.net.toString(), feesTaken: regular.fee.toString(), count: regular.count },
-      fees: { auction: feeByKind.auction, payout: feeByKind.payout, total: (BigInt(feeByKind.auction) + BigInt(feeByKind.payout)).toString(), vaultFeesTotal: s.fees_total },
+      fees: { auction: feeByKind.auction, payout: feeByKind.payout, curveTrading: feeByKind.curveTrading, total: (BigInt(feeByKind.auction) + BigInt(feeByKind.payout) + BigInt(feeByKind.curveTrading)).toString(), vaultFeesTotal: s.fees_total },
       payouts: {
         claimed: claimed.toString(), unclaimed: (distributable > claimed ? distributable - claimed : 0n).toString(), count: claimCount,
         byPool: { payout: claimedByPool.payout.toString(), tail: claimedByPool.tail.toString(), final: claimedByPool.final.toString() },

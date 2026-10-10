@@ -105,7 +105,6 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
     TransferWindowOpened: ['WindowOpened'],
     TransferWindowCleared: ['WindowCleared'],
     UnitsTransferred: ['OrderDelivered'],
-    CurveSeriesCreated: ['SeriesCreated'],
     CurveGraduated: ['RaiseSettled'],
   },
   commands: {
@@ -119,28 +118,30 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
     crankPause: ['end_pause'],
     openTransferWindow: ['open_window'],
     clearTransferWindow: ['finalize_window'],
-    graduateCurve: ['complete_curve'],
     setAllowlist: ['set_allowed'],
     pauseNewRaises: ['set_flags'],
     registerSplitRouter: ['init_router', 'createRouterReceiver'],
     postSplitReceipt: ['route'],
   },
   none: {
-    UnitsMinted: 'curve buys are DBC swaps sent straight to Meteora\'s program, so no Merces event carries them; a sealed raise\'s winners get UnitsAllocated and BidDelivered',
-    buyCurve: 'curve buys are Meteora DBC swaps sent straight to Meteora\'s program; Merces has no buy instruction (curve mode is Solana only; EVM createSeries reverts CurveModeUnsupported)',
-    TreasuryFunded: 'Solana: no deposit event; the adapter synthesises one per processed winner from UnitsAllocated.cost (the EVM emits ProceedsDeposited)',
+    curveSwap: 'a Meteora DBC swap2, not a Merces instruction: curve trades go straight to Meteora\'s program and no Merces event carries them (the simulator runs a labelled stand-in pool until S5; curve mode is Solana only, EVM createSeries reverts CurveModeUnsupported)',
+    TreasuryFunded: 'Solana: no deposit event; the adapter synthesises one per processed winner from UnitsAllocated.cost and one from CurveProceedsCollected (its migration fee and surplus) on a curve (the EVM emits ProceedsDeposited)',
     flagFxFallback: 'no flag command: the FX deviation flag is emitted by the snapshot and the attestor fallback rate travels with submit_report',
   },
   synthesis: {
-    FeeTaken: 'also synthesised per processed winner from UnitsAllocated.fee (kind auction); NonRevealCharged is dropped while the owner holds the non-reveal charge (the EVM emits it with 0 for every unrevealed bid, Solana only above 0), and lifting the hold synthesises FeeTaken{kind: nonReveal} from its charge',
+    FeeTaken: 'also synthesised per processed winner from UnitsAllocated.fee (kind auction) and from CurveProceedsCollected.trading_fee (kind curveTrading); NonRevealCharged is dropped while the owner holds the non-reveal charge (the EVM emits it with 0 for every unrevealed bid, Solana only above 0), and lifting the hold synthesises FeeTaken{kind: nonReveal} from its charge',
   },
 };
 
 /** Curve mode is Solana only (SPEC v1.1.2 §9; EVM createSeries reverts CurveModeUnsupported): not applicable on EVM. */
-const SOLANA_ONLY = new Set(['buyCurve', 'graduateCurve', 'CurveSeriesCreated', 'CurveGraduated']);
+const SOLANA_ONLY = new Set(['curveSwap', 'completeCurve', 'collectCurveProceeds', 'CurveActivated', 'CurveGraduated', 'CurveProceedsCollected']);
 
 /** Field spellings that mean the same thing in both vocabularies. */
-const FIELD_ALIASES: Record<string, string[]> = { seriesId: ['series', 'series_id'], periodId: ['period'], minimumRaise: ['min_raise'] };
+const FIELD_ALIASES: Record<string, string[]> = {
+  seriesId: ['series', 'series_id'], periodId: ['period'], minimumRaise: ['min_raise'],
+  // a curve's P0 is Stage 1's `clearing_price` (registry CurveActivated, RaiseSettled); a settlement time `settlement_ts`
+  issuePrice: ['clearing_price'], settledAt: ['settlement_ts'],
+};
 
 /** Stage 1 items that only another Merces program or contract may call: the registry write interface, inter-module calls, the transfer hook. */
 const STAGE1_INTERNAL = new Set(

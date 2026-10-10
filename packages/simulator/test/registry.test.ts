@@ -16,6 +16,8 @@ import { seriesOf } from './kit.ts';
  *  - S2-E: Stage 1's open_raise error names (`detail.stage1`) and check order.
  *
  * S3 cause codes:
+ *  - S3-CV: a curve series' creation is its activation (CurveActivated, then RaiseOpened{0, 0}; was the toy curve's
+ *    creation event);
  *  - S3-CT: a curve series takes Stage 1's curve terms (registry create_series, lib.rs:462-572): lockup, wallet cap and
  *    raise durations 0 (CurveTermsNotZero), a positive threshold (CurveThresholdZero), USDC (CurveQuoteMintMismatch);
  *    the EVM refuses curve mode first (CurveModeUnsupported, MercesRegistry.sol:481).
@@ -95,7 +97,7 @@ describe('createSeries on Stage 1 create_series rules (S2-CR)', () => {
     const { terms } = defaultTerms(h.sim, curve);
     expect([terms.lockupSeconds, terms.walletCapBps, terms.commitDurationSeconds, terms.revealDurationSeconds]).toEqual([0, 0, 0, 0]);
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
-    expect(types(created.events)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
+    expect(types(created.events)).toEqual(['SeriesCreated', 'CurveActivated', 'RaiseOpened']); // cause S3-CV: creation activates the curve (was the toy curve's creation event)
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     expect((await h.sim.getSeries(seriesId))!.terms).toMatchObject({ lockupSeconds: 0, walletCapBps: 0, commitDurationSeconds: 0, revealDurationSeconds: 0 });
     // any other value is refused, field by field (Stage 1 curve_mode.rs:630-643: lockup 1, wallet cap 1,000 bps)
@@ -106,7 +108,7 @@ describe('createSeries on Stage 1 create_series rules (S2-CR)', () => {
     }
     // the sealed bounds on them are not checked (Stage 1 bounds its defaults there), nor the held non-reveal charge
     const charged = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, nonRevealChargeBps: 1001 }).terms });
-    expect(types(charged.events)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
+    expect(types(charged.events)).toEqual(['SeriesCreated', 'CurveActivated', 'RaiseOpened']);
     // the other bounds still hold on a curve series
     const e = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, auctionFeeBps: 1001 }).terms }));
     expect(e.detail).toEqual({ stage1: 'ParameterOutOfBounds' });
@@ -124,7 +126,7 @@ describe('createSeries on Stage 1 create_series rules (S2-CR)', () => {
     expect([usdg.code, usdg.detail]).toEqual(['InvalidTerms', { stage1: 'CurveQuoteMintMismatch' }]);
     // the threshold is the curve's target, not bounded by reserve × units, and there is no one-unit cap rule
     const big = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, unitsOffered: '1', reservePrice: '1', minimumRaise: USDC(1_000_000).toString() }).terms });
-    expect(types(big.events)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
+    expect(types(big.events)).toEqual(['SeriesCreated', 'CurveActivated', 'RaiseOpened']);
     // the registry's order: the threshold before the zeros, the zeros before the quote mint
     const first = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, minimumRaise: '0', walletCapBps: 1000, stablecoin: 'USDG' }).terms }));
     expect(first.detail).toEqual({ stage1: 'CurveThresholdZero' });

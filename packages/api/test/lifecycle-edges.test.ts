@@ -76,18 +76,18 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     expect(st.payouts.unclaimed).toBe(half);
   });
 
-  it('an ungraduated curve: buys fund the treasury in the read model; the raise can be neither cancelled nor extinguished', async () => {
+  // cause S3-CV: a curve's buys sit in Meteora's pool, not in the treasury (Stage 1: the treasury of an unfilled curve is
+  // 0), and a curve raise has no cancel (NotSealedBid; was: buys funding the treasury, cancel refused only once units existed)
+  it('an unfilled curve: buys never fund the treasury; the raise can be neither cancelled nor extinguished', async () => {
     const h = rig.sol;
-    const { terms } = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' });
-    const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
-    const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
-    await h.exec(h.backers[0]!, { kind: 'buyCurve', seriesId, amountIn: USDC(1000).toString(), minUnitsOut: '0' });
-    await h.exec(h.backers[1]!, { kind: 'buyCurve', seriesId, amountIn: USDC(500).toString(), minUnitsOut: '0' });
+    const { seriesId } = await h.createCurve();
+    await h.curveBuy(seriesId, h.backers[0]!, USDC(400));
+    await h.curveBuy(seriesId, h.backers[1]!, USDC(350));
     await rig.sync();
-    expect((await rig.t.pool.query('select treasury_total::text as t from series where series_id = $1', [seriesId])).rows[0].t).toBe(USDC(1500).toString());
-    // with units out there is no raise to cancel
-    await expect(h.exec(h.issuer, { kind: 'cancelRaise', seriesId })).rejects.toMatchObject({ code: 'TooLate' });
-    // nor can it be extinguished before it graduates: Stage 1 extinguishes a settled raise only (M5: was the whole
+    expect((await rig.t.pool.query('select treasury_total::text as t from series where series_id = $1', [seriesId])).rows[0].t).toBe('0');
+    // a curve raise cannot be cancelled, before or after buys (no cancel, no failure, no deadline)
+    await expect(h.exec(h.issuer, { kind: 'cancelRaise', seriesId })).rejects.toMatchObject({ code: 'WrongPhase', detail: { stage1: 'NotSealedBid' } });
+    // nor can it be extinguished before it completes: Stage 1 extinguishes a settled raise only (M5: was the whole
     // treasury returned to the curve buyers)
     await expect(h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!])).rejects.toMatchObject({ code: 'WrongPhase', detail: { stage1: 'RaiseNotSettled' } });
     // and the attestor service does not build the doomed transaction
@@ -97,10 +97,23 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     expect(req.statusCode, req.body).toBe(409);
     await rig.sync();
     const row = (await rig.t.pool.query('select status, extinguished_at, treasury_total::text as t, treasury_released::text as r from series where series_id = $1', [seriesId])).rows[0];
-    expect(row).toMatchObject({ extinguished_at: null, t: USDC(1500).toString(), r: '0' });
+    expect(row).toMatchObject({ extinguished_at: null, t: '0', r: '0' });
     expect(row.status).not.toBe('Extinguished');
     expect((await rig.get('/admin/accounting/reconcile', adminTok)).json().checks.filter((c: { ok: boolean }) => !c.ok)).toEqual([]);
-    // the curve keeps bonding, with no cap at any stage (cause S3-NC: was "under its wallet cap")
-    expect((await rig.get(`/series/${seriesId}/curve`)).json()).toMatchObject({ walletCap: null, noCap: true, noCapStatement: CURVE_NO_CAP });
+    // cause S3-CV: the retirement read never offers a burn on a curve (its units never burn, CurveModeNoBurn), the admin
+    // burn crank refuses it, and the redemption claim builder sends a curve holder to tendering (CurveUsesTender). The
+    // positions row stands in for a staker's (stakes create them from S3 WP10), which holder access needs
+    const ret = (await rig.get(`/series/${seriesId}/retirement`)).json();
+    expect(ret).toMatchObject({ burnable: false });
+    expect(ret.note).toMatch(/never burned/);
+    const crank = await rig.post(`/series/${seriesId}/retirement/crank-burn`, {}, adminTok);
+    expect([crank.statusCode, crank.json().detail]).toEqual([409, { stage1: 'CurveModeNoBurn' }]);
+    await rig.t.pool.query('insert into positions (series_id, wallet, units, first_seq, last_seq) values ($1, $2, 1, 0, 0) on conflict do nothing', [seriesId, h.backers[0]!.address]);
+    const holderTok = rig.token({ accountId: 'curve-holder', wallets: [{ chain: 'solana', address: h.backers[0]!.address }], roles: ['backer'] });
+    const tender = await rig.post(`/series/${seriesId}/redemption/build-claim`, { holder: h.backers[0]!.address }, holderTok);
+    expect([tender.statusCode, tender.json().detail]).toEqual([409, { stage1: 'CurveUsesTender' }]);
+    // the curve keeps bonding, with no cap at any stage (cause S3-NC: was "under its wallet cap"); its buyers' money is
+    // in the pool, net of the fee
+    expect((await rig.get(`/series/${seriesId}/curve`)).json()).toMatchObject({ walletCap: null, noCap: true, noCapStatement: CURVE_NO_CAP, onchain: { quoteReserve: USDC(396 + 346.5).toString(), poolComplete: false } });
   });
 });

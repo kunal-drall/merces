@@ -11,6 +11,11 @@ import { GENESIS } from './helpers.ts';
  *  - S2-AD: commit and reveal durations are series terms; `openRaise` derives the phase ends from them;
  *  - S2-CR: Stage 1's creation rules on the raise's own terms (commit 1 hour–30 days, reveal 1 hour–7 days, non-reveal
  *    charge 0–1,000 bps).
+ *
+ * S3 cause codes:
+ *  - S3-CT: curve terms and the chain-only error names (S3 D16);
+ *  - S3-CV: a curve series' creation is its activation (CurveActivated, RaiseOpened{0, 0}), checked as Stage 1's
+ *    `activate_curve` and `mark_curve_activated` check it.
  */
 async function rejection(p: Promise<unknown>): Promise<ChainError> {
   const e = await p.then(() => null, (x: unknown) => x);
@@ -176,7 +181,11 @@ describe('Stage 1 error names on simulator errors', () => {
     expect(refused.detail).toEqual({ stage1: 'NewRaisesPaused' });
     await h.exec(h.admin, { kind: 'pauseNewRaises', paused: false });
     await h.exec(h.issuer, { kind: 'openRaise', seriesId });
-    expect((await h.exec(h.issuer, { kind: 'createSeries', terms: curve })).events.map((x) => x.type)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
+    // cause S3-CV: creation activates the curve (was SeriesCreated and the toy curve's creation event)
+    expect((await h.exec(h.issuer, { kind: 'createSeries', terms: curve })).events.map((x) => x.type)).toEqual(['SeriesCreated', 'CurveActivated', 'RaiseOpened']);
+    // the activation also needs the issuer still allowlisted (registry mark_curve_activated, lib.rs:1010-1013)
+    await h.sim.submit({ kind: 'setAllowlist', wallet: h.issuer.address, allowed: false }, 'allowlistManager');
+    expect((await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: curve }))).detail).toEqual({ stage1: 'NotAllowlisted' });
   });
 
   it('a debit beyond the balance is InsufficientFunds with Stage 1 name InsufficientEscrow', async () => {

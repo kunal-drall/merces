@@ -28,7 +28,12 @@ export type RaiseFailure = z.infer<typeof raiseFailureSchema>;
 
 export const raiseStyleSchema = z.enum(['sealed', 'curve']);
 export const tierSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
-export const feeKindSchema = z.enum(['auction', 'payout']);
+/**
+ * `auction`: a sealed raise's fee on each winner's cost; `payout`: the fee on each payment into the vault;
+ * `curveTrading`: Merces' (the partner's) share of a curve's trading fees, collected from the pool by
+ * `collectCurveProceeds` (Meteora keeps its own share).
+ */
+export const feeKindSchema = z.enum(['auction', 'payout', 'curveTrading']);
 export const paymentSourceSchema = z.enum(['payIn', 'split', 'redemption', 'tail', 'extinguishment']);
 export const fxBasisSchema = z.enum(['accumulator', 'attestor', 'unity']);
 
@@ -97,6 +102,10 @@ export const eventPayloads = {
   IssuerRegistered: z.object({ issuer: addressSchema }),
   IssuanceStopped: z.object({ issuer: addressSchema }),
   SeriesCreated: z.object({ ...seriesScoped, issuer: addressSchema, terms: seriesTermsSchema }),
+  /**
+   * Stage 1 `RaiseOpened`: a sealed raise's `openRaise`, with its phase ends; a curve series' creation (its activation)
+   * with 0 and 0, as Stage 1's `activate_curve` emits it (curve.rs:824-830): a curve raise has no commit or reveal phase.
+   */
   RaiseOpened: z.object({ ...seriesScoped, commitEndsAt: z.number().int(), revealEndsAt: z.number().int() }),
   RaiseCancelled: z.object({ ...seriesScoped }),
   BidCommitted: z.object({ ...seriesScoped, bidder: addressSchema, commitment: hash32Schema, deposit: moneySchema, order: z.number().int() }),
@@ -116,8 +125,6 @@ export const eventPayloads = {
    * as proceeds / clearingPrice when the price is above 0, else 0). Every deposit is returned in full.
    */
   AuctionFailed: z.object({ ...seriesScoped, reason: raiseFailureSchema, clearingPrice: moneySchema, unitsSold: unitsSchema, proceeds: moneySchema, minimumRaise: moneySchema }),
-  /** a curve buy's units (a DBC swap on live chains); a sealed raise's winners get `UnitsAllocated` and `BidDelivered` */
-  UnitsMinted: z.object({ ...seriesScoped, holder: addressSchema, units: unitsSchema }),
   /** Stage 1 `begin_settlement`: round `round` proposes `clearingPrice` (the proposer's claims are on the auction record) */
   SettlementProposed: z.object({ ...seriesScoped, clearingPrice: moneySchema, round: z.number().int().positive() }),
   /** Stage 1 `finalize_settlement` refused the round's proposal; the tally stays and a new round may be proposed */
@@ -130,13 +137,22 @@ export const eventPayloads = {
   UnitsAllocated: z.object({ ...seriesScoped, bidder: addressSchema, units: unitsSchema, cost: moneySchema, fee: moneySchema, refund: moneySchema }),
   /** Stage 1 `deliver_bid`: the processed bid's units and refund reach the bidder */
   BidDelivered: z.object({ ...seriesScoped, bidder: addressSchema, units: unitsSchema, refund: moneySchema }),
-  /** Stage 1: the last `process_bid` finalises the mint (`unitsOutstanding = unitsSold`); 0 and 0 for a failed raise */
+  /**
+   * Stage 1: the last `process_bid` finalises the mint (`unitsOutstanding = unitsSold`); 0 and 0 for a failed raise. A
+   * curve's `completeCurve` emits it with the curve's units sold (base lamports) and proceeds 0, and leaves units
+   * outstanding to the curve's census.
+   */
   RaiseMintFinalized: z.object({ ...seriesScoped, unitsSold: unitsSchema, proceeds: moneySchema }),
   /**
    * A wallet's first registration as a holder of the series (Stage 1 `registerHolder`): by `register_holder`, a winning
    * `process_bid` or a window purchase. Payouts accrue to registered holders only.
    */
   HolderRegistered: z.object({ ...seriesScoped, holder: addressSchema }),
+  /**
+   * Stablecoin into the series treasury: a sealed raise's winner's cost at processing; a curve's proceeds (the migration
+   * fee and surplus) at the `collectCurveProceeds` that brings them. A curve buy never funds it: the buyers' money sits
+   * in the curve's pool until it fills.
+   */
   TreasuryFunded: z.object({ ...seriesScoped, amount: moneySchema }),
   FundsReleased: z.object({ ...seriesScoped, amount: moneySchema, trancheIndex: z.number().int() }),
   ReleasesPaused: z.object({ ...seriesScoped, reason: z.enum(['Late', 'IssuerRequest']) }),
@@ -218,17 +234,26 @@ export const eventPayloads = {
   AllowlistUpdated: z.object({ wallet: addressSchema, allowed: z.boolean() }),
   AttestorRegistered: z.object({ attestor: addressSchema, active: z.boolean() }),
   VerifierKeyRegistered: z.object({ keyId: z.string(), publicKey: z.string(), active: z.boolean() }),
-  CurveSeriesCreated: z.object({ ...seriesScoped, issuer: addressSchema, quoteStablecoin: stablecoinSchema, graduationThreshold: moneySchema }),
-  CurveGraduated: z.object({
-    ...seriesScoped,
-    raised: moneySchema,
-    unitsOutstanding: unitsSchema,
-    /**
-     * The issue price the chain stored at graduation (the curve's P0, as `AuctionSettled.clearingPrice` is a sealed
-     * raise's): the cap per unit is Stage 1's `capPerUnit(capMultipleWad, issuePrice)`, floor.
-     */
-    issuePrice: moneySchema,
-  }),
+  /**
+   * Stage 1's registry `CurveActivated` (registry events.rs:172-180): a curve series is created and activated at once
+   * here (its creation is the activation, S3). `dbcConfig` and `dbcPool` are the curve's pool, `baseMint` its unit mint
+   * (6 decimals: units are base lamports), `dbcCreator` the pool creator; `unitsSold` is the swap base the curve sells
+   * (base lamports) and `issuePrice` its P0 = floor(X × 10^6 / unitsSold) per whole unit (Stage 1 `clearing_price`), from
+   * which the cap per unit follows. The raise is Open; `RaiseOpened{0, 0}` follows.
+   */
+  CurveActivated: z.object({ ...seriesScoped, dbcConfig: addressSchema, dbcPool: addressSchema, baseMint: addressSchema, dbcCreator: addressSchema, unitsSold: unitsSchema, issuePrice: moneySchema }),
+  /**
+   * Stage 1 `RaiseSettled` on a curve (`completeCurve`, curve.rs:861-906): the curve raise settles at `settledAt`, the
+   * pool's finish time (when the curve filled), with the P0 (`issuePrice`) and units sold fixed at activation, proceeds
+   * 0 (the treasury is funded by `collectCurveProceeds`). Units outstanding stay with the curve's census.
+   */
+  CurveGraduated: z.object({ ...seriesScoped, issuePrice: moneySchema, unitsSold: unitsSchema, settledAt: z.number().int() }),
+  /**
+   * Stage 1 `CurveProceedsCollected` (curve.rs:1206-1212): what one `collectCurveProceeds` moved. `migrationFee` and
+   * `surplus` reached the treasury (once each, after the curve filled), `tradingFee` the fee collector (the partner's
+   * share of the trading fees accrued since the last collection); `proceeds` is the treasury's total proceeds after it.
+   */
+  CurveProceedsCollected: z.object({ ...seriesScoped, migrationFee: moneySchema, surplus: moneySchema, tradingFee: moneySchema, proceeds: moneySchema }),
 } as const;
 
 export type EventType = keyof typeof eventPayloads;
@@ -285,5 +310,5 @@ export const amountBearingEvents: ReadonlySet<EventType> = new Set<EventType>([
   'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'SettlementProposed', 'SettlementRejected', 'UnitsAllocated',
   'BidDelivered', 'RaiseMintFinalized', 'TreasuryFunded', 'FundsReleased', 'SplitReceipt', 'ReportAccepted',
   'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'TailClaimed', 'FinalClaimed', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout',
-  'SeriesExtinguished', 'TransferWindowCleared', 'CurveGraduated',
+  'SeriesExtinguished', 'TransferWindowCleared', 'CurveActivated', 'CurveGraduated', 'CurveProceedsCollected',
 ]);

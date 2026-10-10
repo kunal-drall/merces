@@ -20,6 +20,9 @@ import { locateStage1 } from '@merces/chains';
  * S3 cause codes:
  *  - S3-M: the math step lists the curve family ported from merces-common (A-MATH-3) and checks its Rust at the pin.
  *  - S3-NC: a curve raise has no cap at any stage, so the interim cap family is the window cap (S5) only.
+ *  - S3-CV: Stage 1's curve lifecycle vocabulary: `curveSwap` (a Meteora DBC swap2; was the toy curve's buy command),
+ *    `completeCurve` and `collectCurveProceeds` with Stage 1's names (was a service graduation command under an alias),
+ *    and no mint event for a curve buy.
  */
 
 /** A Stage 1 drop with only a manifest (plus extra files written by the caller). */
@@ -100,7 +103,10 @@ describe('stage1:sync', () => {
     // `claim` by a look-alike)
     expect(md).toMatch(/\| deliverBid \| deliver_bid \| seriesId←series \(account\), bidder←bidder \(account\) \| none \|/);
     expect(md).toMatch(/\| claimPayout \| claim \(alias\)/);
-    expect(md).toMatch(/\| buyCurve \| \*\*missing\*\* \| — \| curve buys are Meteora DBC swaps/);
+    // cause S3-CV: a curve trade is `curveSwap`, a Meteora DBC swap2 (was the toy curve's buy); no Merces instruction pairs with it
+    expect(md).toMatch(/\| curveSwap \| \*\*missing\*\* \| — \| a Meteora DBC swap2, not a Merces instruction/);
+    // the toy curve's names are gone from the drift report (its buy and graduation commands, its mint and creation events)
+    expect(md).not.toMatch(/(buy|graduate)Curve\b|UnitsMint|CurveSeriesCreat/);
     expect(md).toContain('callable only by another Merces program or contract');
     expect(md).toMatch(/mark_terminal \(merces_protocol\)/);
     expect(md).not.toMatch(/\| — \| mark_terminal \|/);

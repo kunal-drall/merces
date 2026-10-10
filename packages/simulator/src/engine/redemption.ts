@@ -92,12 +92,14 @@ export function redeem(e: EngineCore, signer: string, cmd: Extract<Command, { ki
 }
 
 /**
- * Stage 1 `claim_redemption` (SIM:1395-1401): NotRedeemed unless the series redeemed and its stored status is
- * Redeemed or Extinguished; HolderNotRegistered for a wallet that is not a registered holder. A holder with nothing
- * left to redeem still settles (a claim of 0 units is allowed).
+ * Stage 1 `claim_redemption` (SIM:1395-1401): a curve series tenders instead (CurveUsesTender first, claims.rs:342);
+ * NotRedeemed unless the series redeemed and its stored status is Redeemed or Extinguished; HolderNotRegistered for a
+ * wallet that is not a registered holder. A holder with nothing left to redeem still settles (a claim of 0 units is
+ * allowed).
  */
 export function claimRedemption(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'claimRedemption' }>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
+  if (s.curve) fail('CurveUsesTender', 'a curve-mode series is redeemed by tendering units');
   if (!s.redemption || (s.status !== 'Redeemed' && s.status !== 'Extinguished')) fail('NotRedeemed', 'the series has not redeemed');
   const p = s.positions.get(signer);
   if (!p || !p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');

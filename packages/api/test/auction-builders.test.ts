@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { ChainError, type SignedTx, type UnsignedTx } from '@merces/domain';
+import { ChainError, bidCommitment, type SignedTx, type UnsignedTx } from '@merces/domain';
 import { defaultTerms, type SimHarness, type SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
@@ -85,20 +85,34 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
     expect([r.statusCode, r.json().detail]).toEqual([409, { stage1: 'BidsExist' }]);
   });
 
-  it('a curve-mode series runs no sealed-bid raise: no open, no settlement step; its cancel keeps our curve rule', async () => {
+  // cause S3-CV (amendment M7): every auction builder refuses a curve series with 409 NotSealedBid, as the chain does (was:
+  // open 409 without a name, the settlement step 409 'curve', and a cancel built while no curve units existed)
+  it('a curve-mode series runs no sealed-bid raise: every auction builder is 409 NotSealedBid', async () => {
     const h = rig.sol;
-    const { terms } = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' });
-    if (!(await h.sim.getIssuer(h.issuer.address))) await h.exec(h.issuer, { kind: 'registerIssuer' });
-    const seriesId = ((await h.exec(h.issuer, { kind: 'createSeries', terms })).events[0]!.payload as { seriesId: string }).seriesId;
+    const { seriesId } = await h.createCurve();
     await rig.sync();
     const issuerTok = walletTok(h, h.issuer, 'curve-issuer', ['issuer']);
-    const open = await rig.post(`/series/${seriesId}/raise/build-open`, {}, issuerTok);
-    expect([open.statusCode, open.json().detail]).toEqual([409, null]);
-    const step = await rig.post(`/series/${seriesId}/auction/build-step`, { signer: h.issuer.address }, issuerTok);
-    expect([step.statusCode, step.json().detail]).toEqual([409, { stage: null, reason: 'curve' }]);
-    expect((await rig.post(`/series/${seriesId}/raise/build-cancel`, {}, issuerTok)).statusCode).toBe(200);
-    await h.exec(h.backers[0]!, { kind: 'buyCurve', seriesId, amountIn: USDC(100).toString(), minUnitsOut: '0' });
-    expect((await rig.post(`/series/${seriesId}/raise/build-cancel`, {}, issuerTok)).statusCode).toBe(409);
+    const bidderTok = await rig.grant({ accountId: 'curve-bidder', wallets: [{ chain: h.sim.chain, address: h.backers[0]!.address }], roles: ['backer'] });
+    const notSealed = [409, { stage1: 'NotSealedBid' }];
+    const bidder = h.backers[0]!.address;
+    const salt = '0x' + '01'.repeat(32);
+    const commitment = bidCommitment({ seriesId, bidder, pricePerUnit: USDC(10), quantity: 1n, salt });
+    for (const [url, body, tok] of [
+      [`/series/${seriesId}/raise/build-open`, {}, issuerTok],
+      [`/series/${seriesId}/raise/build-cancel`, {}, issuerTok],
+      [`/series/${seriesId}/auction/build-step`, { signer: h.issuer.address }, issuerTok],
+      [`/series/${seriesId}/bids/precheck`, { bidder, pricePerUnit: USDC(10).toString(), quantity: '1' }, bidderTok],
+      [`/series/${seriesId}/bids/build-commit`, { bidder, commitment, deposit: USDC(20).toString() }, bidderTok],
+      [`/series/${seriesId}/bids/build-reveal`, { bidder, pricePerUnit: USDC(10).toString(), quantity: '1', salt }, bidderTok],
+      [`/series/${seriesId}/bids/build-deliver`, { bidder }, bidderTok],
+    ] as const) {
+      const r = await rig.post(url, body, tok);
+      expect([r.statusCode, r.json().detail], url).toEqual(notSealed);
+    }
+    const preview = await rig.get(`/series/${seriesId}/auction/preview`);
+    expect([preview.statusCode, preview.json().detail]).toEqual(notSealed);
+    await h.curveBuy(seriesId, h.backers[0]!, USDC(100));
+    expect((await rig.post(`/series/${seriesId}/raise/build-cancel`, {}, issuerTok)).json().detail).toEqual({ stage1: 'NotSealedBid' });
     expect((await rig.get(`/series/${seriesId}`)).json().auction).toBeNull();
   });
 

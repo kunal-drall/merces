@@ -96,8 +96,9 @@ describe('the chain\'s settlement limits and the permissionless group', () => {
       { kind: 'deliverBid', seriesId, bidder: h.backers[0]!.address },
       { kind: 'registerHolder', seriesId, wallet: h.backers[1]!.address },
     ];
-    // cause S3-BR: every settlement step and registration; `burnRetired` needs a Retired series (claims.test.ts)
-    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => k !== 'burnRetired'));
+    // cause S3-BR: every settlement step and registration; `burnRetired` needs a Retired series (claims.test.ts), and
+    // `completeCurve` and `collectCurveProceeds` a curve series (curve.test.ts; cause S3-CV)
+    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['burnRetired', 'completeCurve', 'collectCurveProceeds'].includes(k)));
     for (const cmd of cmds) {
       const tx = await h.sim.build(cmd, anyone.address);
       expect(tx.command).toEqual(cmd);

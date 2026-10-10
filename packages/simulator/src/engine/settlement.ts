@@ -1,6 +1,6 @@
 import { ChainError, auctionRulesOf, settlementOutcome, type Command } from '@merces/domain';
 import {
-  beginSettlement as stage1BeginSettlement, bpsOf, capPerUnit, processBid as stage1ProcessBid, tallyBids as stage1TallyBids,
+  beginSettlement as stage1BeginSettlement, capPerUnit, processBid as stage1ProcessBid, tallyBids as stage1TallyBids,
   type BidOutcome, type RevealedBid, type Tally,
 } from '@merces/math';
 import { personalityLimits } from '../addresses.ts';
@@ -8,7 +8,9 @@ import { emptyTally, type SimBid, type SimSeries } from '../state.ts';
 import { str, u64, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
 import { position, registerHolder as registerHolderBody, setUnits } from './holders.ts';
+import { requireSealedBid } from './auction.ts';
 import { pidAtTime } from './ledger.ts';
+import { splitTranches } from './treasury.ts';
 
 /**
  * Stage 1's multi-step settlement of a sealed-bid raise (SPEC v1.1 §5.2; Stage 1 simulator SIM:928-1028, REF
@@ -19,7 +21,8 @@ import { pidAtTime } from './ledger.ts';
  *   beginSettlement → tallyBids (pages) → finalizeSettlement → processBid (every bid) → deliverBid (every bid)
  *
  * Every step is permissionless (any wallet or the keeper). Ours where Stage 1's TS reference has no counterpart: the
- * paged `tallyBids` and its TallyIncomplete (the chains'), and D7 (a round that sells 0 units fails MinRaise).
+ * paged `tallyBids` and its TallyIncomplete (the chains'), and D7 (a round that sells 0 units fails MinRaise). Every
+ * step refuses a curve series first (NotSealedBid; S3 amendment M7: Stage 1 fails them on the missing auction account).
  */
 
 type Cmd<K extends Command['kind']> = Extract<Command, { kind: K }>;
@@ -43,6 +46,7 @@ function asRevealed(b: SimBid): RevealedBid {
  */
 export function beginSettlement(e: EngineCore, cmd: Cmd<'beginSettlement'>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
+  requireSealedBid(s);
   const a = s.auction;
   if (s.phase !== 'Open' && s.phase !== 'Settling') fail('RaiseNotOpen', `the raise is ${s.phase}`);
   if (s.revealEndsAt === null || now < s.revealEndsAt) fail('SettlementNotReady', 'the reveal phase has not ended');
@@ -68,6 +72,7 @@ export function beginSettlement(e: EngineCore, cmd: Cmd<'beginSettlement'>, now:
  */
 export function tallyBids(e: EngineCore, cmd: Cmd<'tallyBids'>, _emit: Emit): void {
   const s = e.series(cmd.seriesId);
+  requireSealedBid(s);
   const a = s.auction;
   if (s.phase !== 'Settling' || a.roundRejected || !a.proposal) fail('NotSettling', 'no settlement round is open');
   const pageMax = personalityLimits(e.state.config.personality).tallyPageMax;
@@ -97,6 +102,7 @@ export function tallyBids(e: EngineCore, cmd: Cmd<'tallyBids'>, _emit: Emit): vo
  */
 export function finalizeSettlement(e: EngineCore, cmd: Cmd<'finalizeSettlement'>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
+  requireSealedBid(s);
   const a = s.auction;
   if (s.phase !== 'Settling' || !a.proposal || a.roundRejected) fail('NotSettling', 'no settlement round is open');
   if (a.tally.talliedCount !== a.revealedCount) fail('TallyIncomplete', 'revealed bids remain to be tallied');
@@ -146,6 +152,7 @@ export function finalizeSettlement(e: EngineCore, cmd: Cmd<'finalizeSettlement'>
  */
 export function processBid(e: EngineCore, cmd: Cmd<'processBid'>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
+  requireSealedBid(s);
   const a = s.auction;
   if (s.phase !== 'Settled' && s.phase !== 'Failed') fail('RaiseNotSettled', 'the raise is not settled or failed');
   const b = s.bids.get(cmd.bidder);
@@ -208,12 +215,7 @@ export function finalizeMint(s: SimSeries, emit: Emit): void {
     if (a.unitsMinted !== a.unitsSold || s.treasuryTotal !== a.proceeds) throw new ChainError('ChainSpecific', 'minted units or proceeds differ from the settlement'); // never happens
     a.mintFinalized = true;
     s.unitsOutstanding = a.unitsSold;
-    let allocated = 0n;
-    s.tranches = s.terms.releaseSchedule.map((t, i, arr) => {
-      const amount = i === arr.length - 1 ? s.treasuryTotal - allocated : bpsOf(s.treasuryTotal, BigInt(t.bps));
-      allocated += amount;
-      return { index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount, drawn: false, returned: false };
-    });
+    s.tranches = splitTranches(s);
     emit('RaiseMintFinalized', { seriesId: s.seriesId, unitsSold: str(a.unitsSold), proceeds: str(a.proceeds) });
     return;
   }
@@ -228,6 +230,7 @@ export function finalizeMint(s: SimSeries, emit: Emit): void {
  */
 export function deliverBid(e: EngineCore, cmd: Cmd<'deliverBid'>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
+  requireSealedBid(s);
   const b = s.bids.get(cmd.bidder);
   if (!b) fail('BidNotFound', 'no bid for this wallet');
   if (!b.processed) fail('NotProcessed', 'the bid is not processed yet');

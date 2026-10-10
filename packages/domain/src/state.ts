@@ -95,8 +95,8 @@ export interface SeriesState {
   amendmentNonce: number;
   extinguishNonce: number;
   /**
-   * Stage 1's mint gate: a sealed raise's last bid is processed (or a curve graduated). Payments, reports, releases,
-   * redemption, extinguishment and windows wait for it (MintNotFinalized).
+   * Stage 1's mint gate: a sealed raise's last bid is processed (or a curve completed, `completeCurve`). Payments,
+   * reports, releases, redemption, extinguishment and windows wait for it (MintNotFinalized).
    */
   mintFinalized: boolean;
 }
@@ -335,12 +335,65 @@ export interface TransferWindowState {
   escrowUnits: Units;
 }
 
+/**
+ * A curve series' bonding curve (curve mode, Solana only) as the chain reads it. Base quantities are base lamports (the
+ * series' accounting unit, 10^6 per whole unit); prices per whole unit. Until S5 the simulator runs a labelled stand-in
+ * for Meteora's Dynamic Bonding Curve (`venue: 'simulator-stand-in'`): it sells at the constant price P0 and models the
+ * pool's reserve, its trading fee, the fill at the target and its protocol-held base balances; Meteora's real venue
+ * (`'meteora-dbc'`) arrives with the Solana adapter. No cap applies at any stage (`CURVE_NO_CAP`).
+ */
 export interface CurveState {
   seriesId: string;
+  venue: 'simulator-stand-in' | 'meteora-dbc';
+  dbcConfig: Address;
+  dbcPool: Address;
+  /** the series' unit mint (6 decimals) */
+  baseMint: Address;
   quoteStablecoin: Stablecoin;
-  raised: Money;
-  unitsOutstanding: Units;
+  /** X: the quote the pool must hold for the curve to fill (the terms' minimum raise) */
+  migrationQuoteThreshold: Money;
+  /** the quote the pool holds for the curve (buys net of the trading fee, less sells); the treasury holds none of it */
+  quoteReserve: Money;
+  /** progress toward the target, `floor(quoteReserve × 10000 / X)`, at most 10000 */
+  progressBps: number;
+  /** when the curve filled (the raise's settlement time); null while it has not */
+  finishCurveTimestamp: number | null;
+  /** the pool reached its target: no more trades on the curve */
+  poolComplete: boolean;
+  /** `completeCurve` ran: the raise is Settled at `finishCurveTimestamp` */
+  settled: boolean;
+  /** P0 per whole unit, fixed at activation (Stage 1 `clearing_price`) */
+  issuePrice: Money;
+  /** the base lamports the curve sells (Stage 1 `units_sold`, the pool's swap base), fixed at activation */
+  unitsSold: Units;
+  /** base lamports bought out of the curve, net of sells */
+  baseSold: Units;
+  /** the unit mint's fixed supply: the swap base, the migration base, the issuer's locked allocation and the leftover */
+  baseSupply: Units;
+  /** the curve's price per whole unit now (the stand-in's is P0 throughout) */
   spotPrice: Money;
-  graduationThreshold: Money;
-  graduated: boolean;
+  /** the trading fee every buy and sell pays, in bps (100 = 1%); the partner (Merces) takes most of it, Meteora the rest */
+  tradingFeeBps: number;
+  /** Meteora's migration fee, percent of X; the partner's share of it funds the series treasury */
+  migrationFeePercentage: number;
+  /** the partner's trading fees accrued in the pool and not collected yet */
+  tradingFeeUncollected: Money;
+  /** what `collectCurveProceeds` moved so far: the migration fee and surplus into the treasury, the trading fee to the fee collector */
+  collected: { migrationFee: Money; surplus: Money; tradingFee: Money; proceeds: Money };
+}
+
+/**
+ * A quote for a `curveSwap` at the chain's current state (`ChainPort.quoteCurveSwap`). `buy`: `amountIn` stablecoin in,
+ * `amountUsed` of it charged (less only when the trade fills the curve: the rest is never taken), `fee` the trading
+ * fee on it, `amountOut` base lamports out. `sell`: `amountIn` base lamports in, `amountOut` stablecoin out after the
+ * `fee`. `fillsCurve`: this trade fills the curve.
+ */
+export interface CurveSwapQuote {
+  seriesId: string;
+  side: 'buy' | 'sell';
+  amountIn: Money;
+  amountUsed: Money;
+  amountOut: Money;
+  fee: Money;
+  fillsCurve: boolean;
 }

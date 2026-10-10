@@ -1,6 +1,6 @@
 import { ChainError, type Command } from '@merces/domain';
-import { releasable } from '@merces/math';
-import type { SimSeries } from '../state.ts';
+import { releasable, trancheAmounts } from '@merces/math';
+import type { SimSeries, SimTranche } from '../state.ts';
 import { str, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
 import { mintFinalized } from './ledger.ts';
@@ -10,6 +10,16 @@ import { releasesBlockedByLateness, syncStatus } from './status.ts';
 /** The release schedule in Stage 1's shape (`ReleaseTranche`: offset from settlement, bps). */
 function schedule(s: SimSeries): { atOffsetSeconds: bigint; bps: number }[] {
   return s.tranches.map((t) => ({ atOffsetSeconds: BigInt(t.afterSeconds), bps: t.bps }));
+}
+
+/**
+ * The release tranches of the treasury's proceeds (Stage 1 `trancheAmounts`: `floor(proceeds × bps / 10000)` each, the
+ * last the remainder), drawable from the settlement time plus each offset. A sealed raise splits them when its mint is
+ * final; a curve at the collection that brings its proceeds.
+ */
+export function splitTranches(s: SimSeries): SimTranche[] {
+  const amounts = trancheAmounts(s.treasuryTotal, s.terms.releaseSchedule.map((t) => ({ atOffsetSeconds: BigInt(t.afterSeconds), bps: t.bps })));
+  return s.terms.releaseSchedule.map((t, i) => ({ index: i, afterSeconds: t.afterSeconds, bps: t.bps, amount: amounts[i]!, drawn: false, returned: false }));
 }
 
 /**

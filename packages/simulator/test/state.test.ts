@@ -20,6 +20,8 @@ const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json',
  * S3 cause codes:
  *  - S3-V4: simulator state version 4 (S3: the unit scale, the stake and tender totals, the census time and each
  *    holder's stake); versions 1 to 3 are refused, never upgraded.
+ *  - S3-UL: a curve series keeps base lamports (unit scale 10^6) from its creation.
+ *  - S3-CV: a curve's completion settles at the pool's finish time and registers nobody (Stage 1 complete_curve).
  */
 describe('simulator state version 4', () => {
   it('round-trips the Stage 1 vault, tail and final states and bigint pauses through serialisation and structuredClone', async () => {
@@ -67,7 +69,7 @@ describe('simulator state version 4', () => {
     expect(() => deserialiseState(JSON.stringify(v4))).not.toThrow();
   });
 
-  it('a new series has scale 1, no stake, no tender and no census; a new holder has no stake (S3-V4)', async () => {
+  it('a new series has its scale (1, or 10^6 on a curve), no stake, no tender and no census; a new holder has no stake (S3-V4)', async () => {
     for (const raiseStyle of ['sealed', 'curve'] as const) {
       const h = await SimHarness.create('solana', { genesis: GENESIS });
       await h.exec(h.issuer, { kind: 'registerIssuer' });
@@ -75,9 +77,10 @@ describe('simulator state version 4', () => {
       const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, overrides).terms });
       const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
       const s = seriesOf(h.sim, seriesId);
-      // a curve series keeps base lamports (10^6) from WP8; until then every series has scale 1
-      expect([s.unitScale, s.stakedTotal, s.tenderedTotal, s.unitsSyncedAt], raiseStyle).toEqual([1n, 0n, 0n, null]);
-      expect((await h.sim.getSeries(seriesId))!.unitScale).toBe('1');
+      // cause S3-UL: a curve series keeps base lamports (10^6; was 1 until WP8)
+      const scale = raiseStyle === 'curve' ? 1_000_000n : 1n;
+      expect([s.unitScale, s.stakedTotal, s.tenderedTotal, s.unitsSyncedAt], raiseStyle).toEqual([scale, 0n, 0n, null]);
+      expect((await h.sim.getSeries(seriesId))!.unitScale).toBe(scale.toString());
       expect(seedHolder(h.sim, seriesId, h.backers[0]!.address).stakedUnits).toBe(0n);
     }
   });
@@ -163,22 +166,23 @@ describe('Stage 1 registration, first period and money views', () => {
     expect(ledgerClock(s).firstPeriod).toBe(toPid('2026Q1'));
   });
 
-  it('a curve graduation registers every buyer and sets the first period', async () => {
+  // cause S3-CV: Stage 1's complete_curve registers nobody (a curve holder registers itself, allowlisted) and settles at
+  // the pool's finish time (was: every buyer registered at graduation, settled when the threshold was crossed)
+  it("a curve's completion registers nobody and sets the first period from the pool's finish time", async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
-    const { terms } = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' });
-    const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
-    const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
-    await h.exec(h.backers[0]!, { kind: 'buyCurve', seriesId, amountIn: USDC(500).toString(), minUnitsOut: '0' });
-    expect(seriesOf(h.sim, seriesId).positions.get(h.backers[0]!.address)!.registered).toBe(false);
-    await h.exec(h.backers[1]!, { kind: 'buyCurve', seriesId, amountIn: USDC(500).toString(), minUnitsOut: '0' });
-    await h.exec(h.backers[2]!, { kind: 'buyCurve', seriesId, amountIn: USDC(500).toString(), minUnitsOut: '0' });
-    await h.exec(h.backers[3]!, { kind: 'buyCurve', seriesId, amountIn: USDC(600).toString(), minUnitsOut: '0' });
+    const { seriesId } = await h.createCurve();
+    await h.curveBuy(seriesId, h.backers[0]!, USDC(400));
+    expect(seriesOf(h.sim, seriesId).positions.size).toBe(0);
+    await h.curveBuy(seriesId, h.backers[1]!, USDC(350));
+    await h.sim.advanceTime(100 * 86_400); // into 2026Q2
+    await h.curveBuy(seriesId, h.backers[2]!, USDC(300));
+    await h.sim.advanceTime(100 * 86_400); // completed in 2026Q3: the first period is still the fill's quarter
+    expect(h.sim.stage1View(seriesId).ledger.mintFinalized).toBe(false);
+    await h.sim.submit({ kind: 'completeCurve', seriesId }, 'keeper');
     const s = seriesOf(h.sim, seriesId);
-    expect(s.curve!.graduated).toBe(true);
-    expect(s.ledger.firstPeriod).toBe(toPid('2026Q1'));
-    for (const b of h.backers.slice(0, 4)) expect(s.positions.get(b.address)!.registered).toBe(true);
-    expect(h.sim.stage1View(seriesId).ledger.mintFinalized).toBe(true);
+    expect(s.ledger.firstPeriod).toBe(toPid('2026Q2'));
+    expect([...s.positions.values()].filter((p) => p.registered)).toEqual([]);
+    expect(h.sim.stage1View(seriesId).ledger).toMatchObject({ mintFinalized: true, raiseState: 'Settled', unitsOutstanding: '0', unitsSold: '100000000', clearingPrice: '10000000', proceeds: '0' });
   });
 
   it('a window buyer with a fill becomes a registered holder', async () => {

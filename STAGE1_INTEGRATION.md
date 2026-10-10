@@ -39,7 +39,7 @@ Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitigno
 | 1. `stage1:sync` | runs end to end with `--no-conformance` |
 | detect | ok: `stage1.map.json` (hand-written) over the pinned submodule |
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
-| diff | drift: **Solana** 4 canonical items without a counterpart, 249 field mismatches, 79 extra Stage 1 items; **Monad testnet** 2 / 210 / 89 (`INTERFACE_DRIFT.md`; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range); the new item without a counterpart on each chain is `UnitsMinted`, now a curve buy only (a Meteora DBC swap). The rest is left to the adapters' mappers (D6.2) and the rest of section B (S3–S5) |
+| diff | drift: **Solana** 4 canonical items without a counterpart, 249 field mismatches, 79 extra Stage 1 items; **Monad testnet** 2 / 210 / 89 (`INTERFACE_DRIFT.md`; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range); the new item without a counterpart on each chain was the curve buy's mint event. S3 WP8: 3 / 219 / 72 and 1 / 206 / 85: the curve's buy command and mint event are gone (a curve trade is `curveSwap`, a Meteora DBC `swap2`, which has no Merces counterpart by design), `completeCurve`, `collectCurveProceeds`, `CurveActivated` and `CurveProceedsCollected` match Stage 1 by name, and `issuePrice` and `settledAt` read Stage 1's `clearing_price` and `settlement_ts`. The rest is left to the adapters' mappers (D6.2) and the rest of section B (S3–S5) |
 | math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window cap and the FX family (both S5; S3 WP7: a curve raise has no cap). S3 WP5: beside them, 16 names ported from Stage 1's Rust (merces-common: the unit scale, the vault, tail and redemption at a scale, curve mode's arithmetic), because Stage 1's TypeScript has no `unit_scale`; at scale 1 each calls Stage 1's own function, and the step checks their merces-common items at the pin ("45/45 re-exports are Stage 1's own objects; 16 ported (curve, A-MATH-3)"). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2, A-MATH-3) |
 | vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 36/42 PASS, 42/42 at expected status`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A), 03 PASS-WITH-DIVERGENCES (DIV-NRC-1, the non-reveal hold); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, and parts on 03 at #65 exactly as recorded. 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. Our eleven S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) pass on Stage 1's simulator, on ours and in lockstep, 55/55 runs. Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
 | conformance | **blocked**: no devnet or testnet deployment |
@@ -144,7 +144,7 @@ B.1 (auction settlement), the raise's part of B.8 and `register_holder` from B.3
   them) and the events `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`,
   `RaiseMintFinalized` and `HolderRegistered`; `BidRevealed.valid`; `AuctionSettled` carries `RaiseSettled`'s fields only
   and `AuctionFailed` `RaiseFailed`'s plus `unitsSold`. The one-step settlement, the pull refund and its event are
-  deleted (WP8); `UnitsMinted` is a curve buy only. `ChainInfo.limits` gives each chain's tally page and bid limit
+  deleted (WP8); the curve buy's mint event went in S3 WP8 (a curve trade is Meteora's DBC swap, no Merces event). `ChainInfo.limits` gives each chain's tally page and bid limit
   (A-AUC-6). One planner (`nextSettlementStep`, from the stored raise state) and one driver (`runSettlement`) serve the
   keepers, the harness, conformance and the API; one helper (`settlementOutcome`) applies D7 (A-AUC-7). The domain
   schema is version 0.2.0: 48 events, 42 commands.
@@ -265,11 +265,23 @@ Open since S3, with the default S3 uses meanwhile (recorded by the work package 
    tests and fixtures. This bends A-MATH-1 ("import, don't rewrite"); the alternative is to block curve staking on
    Stage 1's TypeScript. Asked of Stage 1: add `unit_scale` to its TypeScript (and the curve functions), so the port
    becomes an import (see "Known gaps"). Since S3 WP6 every money path runs through the family with the series' unit
-   scale (simulator state version 4, `SimSeries.unitScale`; 1 for every series until curve mode keeps base lamports in
-   WP8): the vault receipt, the redemption quote and deposit (the engine's and the lifecycle service's), the
+   scale (simulator state version 4, `SimSeries.unitScale`; 1 on a sealed-bid series, 10^6 base lamports on a curve
+   since WP8): the vault receipt, the redemption quote and deposit (the engine's and the lifecycle service's), the
    redemption principal, the tail and `TailPayout.perUnit`. At scale 1 they are Stage 1's own functions, so the
    vectors, the lockstep and every pin are unchanged; a white-box test rescales a series to 10^6 and gets the same
    money. `SeriesState.unitScale` and the API's series read (derived from the raise style) carry it.
+2. **The curve buy builder warns, it does not refuse (S3 decision 3, A-CURVE-2).** Onchain anyone can buy on a curve
+   (Meteora's DBC has no allowlist), so `build-buy` builds the trade for any linked wallet and tells one that is not
+   approved `earns: false` with a warning (it can trade, never register, stake, tender or earn); the `backer` tier is
+   kept for building buys through Merces (WP8). Owner: refuse instead?
+3. **The curve venue is a stand-in at the constant price P0 (S3 decision 5, A-CURVE-1).** The simulator's DBC stand-in
+   sells at P0 throughout (exactly X per swap base), so dev:mock prices look flat; no Merces money rule depends on the
+   price path (P0, the proceeds and the census follow from X, the swap base and balances). Stage 1's DBC primitives
+   (`solana/meteora/src/math.ts`) arrive with the Meteora port in S5. The stand-in's partial-fill charge is ours (WP8).
+4. **`issuer_accepts_public_price` (S3 decision 7).** Stage 1's registry requires it true for a curve series
+   (`PublicPriceNotAccepted`, registry lib.rs:501-506). The canonical terms have no such field: choosing a curve raise is
+   taken as the consent, and the Solana adapter sets the flag (S5). Owner: an explicit consent field in the terms
+   instead?
 
 Open since S1, with the same defaults:
 
@@ -296,6 +308,9 @@ Open since S1, with the same defaults:
 | No pushed claims: Stage 1 lets anyone claim for a holder (`claimFor`, any payer); the canonical claims are the holder's own (A-CLM-3) | S5 / owner |
 | No `retire_if_capped`, `withdraw_pause_request` or `end_pause` commands; `requestPause.until` advisory (B.6) | S5 |
 | `payIn` exact-amount and period guards (Stage 1's `pay` takes neither) | S5 (adapters drop them) |
+| Curve activation folded into `createSeries` (no `prepare_curve` / `activate_curve` issuer steps, no DBC config validation: creator fee, fee claimer, mint extensions); the adapter sends Stage 1's steps and sets `issuer_accepts_public_price` (S3 WP8, A-ADM-2) | S5 (adapters) |
+| The curve's venue is a labelled stand-in for Meteora's DBC: constant price P0, our partial-fill charge, the base supply's split in `curve_config.json`'s proportions; the DAMM migration, the locker and DAMM trades only as harness hooks; `curveSwap` is a venue command, not a Merces instruction; its swap rounding differs from DBC's (Stage 1's fixture buyers hold 99,999,998 base lamports, the stand-in's 100,000,000) | S5 (Meteora port) |
+| A curve raise's cancel is refused with NotSealedBid (Stage 1 fails `cancel_raise` on the missing auction account, as it does the other auction steps on a curve) | — (ours) |
 | Scale-aware math is ported from merces-common @1bfc66b (A-MATH-3, S3 WP5): 16 names in `@merces/math` (`src/curve`), not Stage 1 objects; scale 1 runs Stage 1's own functions; `stage1:sync` fails when one of their merces-common items changes | until Stage 1 ships TypeScript counterparts |
 | Tier 1: no router year-to-date binding; split receipts stand in for the router credit | tier-1 milestone |
 | True-up, the FX accumulator (trading-day coverage) and the `tier4Enabled` flag (B.6, B.9) | S5 |
@@ -353,8 +368,9 @@ redemption slippage guard (`maxPricePerUnit`) checked before submitting, since S
 **S2:** the settlement commands and events take Stage 1's own names (`beginSettlement` … `deliverBid`,
 `registerHolder`; `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`,
 `HolderRegistered`), so the aliases from the one-step auction's items (its refund event, its pull refund, its one-step
-settlement, and `UnitsMinted` ↔ `UnitsAllocated`) are gone, and so are those items (S2 WP8); `UnitsMinted` is a curve
-buy only, which has no Merces event (a DBC swap). `AuctionSettled` carries Stage 1's `RaiseSettled` fields only (no
+settlement, and the curve mint event ↔ `UnitsAllocated`) are gone, and so are those items (S2 WP8); since S3 WP8 a curve
+trade is `curveSwap`, which no Merces event carries (a DBC `swap2`), and `completeCurve` and `collectCurveProceeds` take
+Stage 1's names (the graduation alias is gone; `CurveGraduated` keeps its alias `RaiseSettled`). `AuctionSettled` carries Stage 1's `RaiseSettled` fields only (no
 total fees: each winner's fee is a `FeeTaken`). `AuctionFailed` keeps its
 approved alias (`RaiseFailed`) with Stage 1's fields plus one of ours: `unitsSold`, which Stage 1's event omits; the
 adapters derive it as `proceeds / clearingPrice` when the price is above 0 (exact: proceeds = price × units), else 0,
@@ -475,14 +491,19 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
     `PayoutDistributed`), and the Solana decoder must accept only Merces program frames and skip failed transactions.
    **S1:** the period codec (`toPid`/`fromPid` over Stage 1 period ids) is in `@merces/math`; the rest is adapter work
    (D6.2).
-11. *Curve mode.* Solana only; no `buyCurve` in Merces (a DBC swap; the backend could still build the unsigned
-    Meteora swap); `activate_curve`, `complete_curve`, `collect_curve_proceeds`, `sync_curve_units`, staking and
+11. *Curve mode.* Solana only; no buy instruction in Merces (a DBC swap; the backend builds the unsigned `curveSwap`); `activate_curve`, `complete_curve`, `collect_curve_proceeds`, `sync_curve_units`, staking and
     tender; no cancel, failure or extinguishment before graduation; units in base lamports (6 decimals). Our Meteora
     service must generate configs with creator fee 0 and the Merces PDA as fee claimer, or activation fails (H3).
    **S1:** only extinguishment (refused before graduation, WP7). The rest is S5; the owner decided curve raises carry
    no wallet cap.
    **S3:** curve staking comes forward (owner). WP7: curve terms carry Stage 1's zeros and no cap remains on any curve
-   path (simulator, buy builder, reads; `CURVE_NO_CAP`).
+   path (simulator, buy builder, reads; `CURVE_NO_CAP`). WP8: Stage 1's lifecycle: creation is the activation (P0 at
+   least 1, CurveThresholdMismatch; `CurveActivated`, `RaiseOpened{0, 0}`; the raise Open), base lamports (unit scale
+   10^6; r per base lamport), `curveSwap` on a labelled DBC stand-in (constant P0, 1% fee, partial fill at X, the whole
+   base supply in protocol accounts, migration, locker and DAMM moves as harness hooks), `completeCurve` at the pool's
+   finish time (no census, no registration), `collectCurveProceeds` (the treasury 0 until then; tranches at the first
+   collection; `FeeTaken{curveTrading}`), no cancel, NotSealedBid on every sealed-bid path, CurveUsesTender and
+   CurveModeNoBurn, the buyer notice (A-CURVE-1, -3, -4, -7, -8; migration 020).
 12. *Math.* Replace the six disagreeing families with Stage 1's formulas (or import `@merces/reference`), then
     replay the 25 vectors through a Stage 1 op runner on the simulator with full-state expectations.
    **S1:** applied (WP1, WP9a, WP9b): `@merces/reference` is imported through `@merces/math`, and Stage 1's vectors are

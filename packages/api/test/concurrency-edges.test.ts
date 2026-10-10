@@ -123,15 +123,16 @@ describe.skipIf(!dbTestsEnabled())('concurrency and past-holder edges', () => {
     expect((await rig.t.pool.query('select 1 from auction_deliveries where series_id = $1', [seriesId])).rowCount).toBe(0);
   });
 
-  it('a cancelled curve raise refuses buys, in the builder and onchain', async () => {
+  // cause S3-CV: a curve raise cannot be cancelled (NotSealedBid); a filled curve refuses buys, in the builder (before
+  // any USDG swap is built) and onchain (was: a cancelled curve)
+  it('a filled curve refuses buys, in the builder and onchain', async () => {
     const h = rig.sol;
-    const { terms } = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' });
-    const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
-    const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
-    await h.exec(h.issuer, { kind: 'cancelRaise', seriesId });
+    const { seriesId } = await h.createCurve();
+    await expect(h.exec(h.issuer, { kind: 'cancelRaise', seriesId })).rejects.toMatchObject({ code: 'WrongPhase', detail: { stage1: 'NotSealedBid' } });
+    for (const [i, amount] of [400, 350, 300].entries()) await h.curveBuy(seriesId, h.backers[i]!, USDC(amount));
     const tok = await rig.grant({ accountId: 'curve-cancel-b1', wallets: [{ chain: 'solana', address: h.backers[1]!.address }], roles: ['backer'] });
     const buy = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[1]!.address, amountIn: USDC(10).toString(), payIn: 'USDG' }, tok);
     expect(buy.statusCode).toBe(409);
-    await expect(h.exec(h.backers[1]!, { kind: 'buyCurve', seriesId, amountIn: USDC(10).toString(), minUnitsOut: '0' })).rejects.toMatchObject({ code: 'WrongPhase' });
+    await expect(h.curveBuy(seriesId, h.backers[1]!, USDC(10))).rejects.toMatchObject({ code: 'WrongPhase' });
   });
 });

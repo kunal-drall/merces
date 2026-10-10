@@ -1378,7 +1378,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Builds the issuer's cancelRaise (Stage 1 cancel_raise): an Open sealed raise that has no bid, at any time (also after its reveal end). A curve-mode series is cancellable while Draft or Open with no curve units minted. */
+        /** @description Builds the issuer's cancelRaise (Stage 1 cancel_raise): an Open sealed raise that has no bid, at any time (also after its reveal end). A curve raise has no cancel (no failure and no deadline either): 409 NotSealedBid. */
         post: operations["buildCancelRaise"];
         delete?: never;
         options?: never;
@@ -2782,7 +2782,7 @@ export type components = {
             };
             tx: components["schemas"]["UnsignedTx"];
         };
-        /** @description Why there is no step to build (409 detail): wait (the reveal phase has not ended; until), done (every bid is delivered, or the raise is cancelled or still a draft), curve (a curve series has no sealed-bid settlement), or the planner's stuck code (ValidityMismatch, NoClearingPrice, ProposalRejected, ProposalAlreadyRejected, NoRevealEnd, NothingToProcess: an operator matter, never retried by itself) */
+        /** @description Why there is no step to build (409 detail): wait (the reveal phase has not ended; until), done (every bid is delivered, or the raise is cancelled or still a draft), or the planner's stuck code (ValidityMismatch, NoClearingPrice, ProposalRejected, ProposalAlreadyRejected, NoRevealEnd, NothingToProcess: an operator matter, never retried by itself) */
         SettlementStepRefusal: {
             stage?: components["schemas"]["SettlementStage"] | null;
             reason?: string;
@@ -2835,7 +2835,7 @@ export type components = {
             paymentOutstanding?: boolean;
             /** @description the period whose formal notice the chain recorded (period end + 90 days of unpaused time) */
             formalNoticeEmittedFor?: string | null;
-            /** @description Stage 1's mint gate: a sealed raise's last bid is processed (or a curve graduated). Payments, reports, releases, redemption, extinguishment and transfer windows wait for it (MintNotFinalized) */
+            /** @description Stage 1's mint gate: a sealed raise's last bid is processed (or a curve completed, completeCurve). Payments, reports, releases, redemption, extinguishment and transfer windows wait for it (MintNotFinalized) */
             mintFinalized?: boolean;
             /** @description null for a curve-mode series */
             auction?: components["schemas"]["SeriesAuction"] | null;
@@ -2853,7 +2853,8 @@ export type components = {
         };
         SeriesDetail: components["schemas"]["Series"] & {
             holderCount?: number;
-            curve?: Record<string, never> | null;
+            /** @description a curve series' curve as indexed; null on a sealed-bid series */
+            curve?: components["schemas"]["SeriesCurve"] | null;
         };
         /** @description Public activity never carries an amount. */
         Activity: {
@@ -2993,11 +2994,11 @@ export type components = {
             /** @enum {string|null} */
             stablecoin: "USDC" | "USDG" | null;
             /**
-             * @description 1% auction fee on cleared bids or 5% payout fee at pay-in (C5)
+             * @description 1% auction fee on cleared bids, 5% payout fee at pay-in (C5), or Merces' (the partner's) share of a curve's 1% trading fee, collected from the pool by collectCurveProceeds
              * @enum {string}
              */
-            kind: "auction" | "payout";
-            /** @description the bidder (auction) or the issuer's wallet the fee was taken from at pay-in (payout) */
+            kind: "auction" | "payout" | "curveTrading";
+            /** @description the bidder (auction), the issuer's wallet the fee was taken from at pay-in (payout), or the curve's pool (curveTrading) */
             payer: string;
             amount: components["schemas"]["Money"];
             /** @description unix seconds */
@@ -3010,6 +3011,7 @@ export type components = {
             stablecoin: string | null;
             auction: components["schemas"]["Money"];
             payout: components["schemas"]["Money"];
+            curveTrading: components["schemas"]["Money"];
             total: components["schemas"]["Money"];
             count: number;
         };
@@ -3031,6 +3033,7 @@ export type components = {
                 byKind: {
                     auction: components["schemas"]["Money"];
                     payout: components["schemas"]["Money"];
+                    curveTrading: components["schemas"]["Money"];
                 };
                 bySeries: components["schemas"]["AccountingFeeSeriesTotal"][];
             };
@@ -3094,6 +3097,7 @@ export type components = {
             fees: {
                 auction?: components["schemas"]["Money"];
                 payout?: components["schemas"]["Money"];
+                curveTrading?: components["schemas"]["Money"];
                 total?: components["schemas"]["Money"];
                 /** @description payout fees as accumulated on the series row (should equal fees.payout) */
                 vaultFeesTotal?: components["schemas"]["Money"];
@@ -3523,10 +3527,76 @@ export type components = {
             noCap: true;
             /** @description the one no-cap statement */
             noCapStatement: string;
-            /** @description the plain-language notice for curve buyers */
+            /** @description the buyer notice (CURVE_BUYER_NOTICE with the curve's own figures): Meteora's pool holds the money until the curve fills, selling back is the only exit before then, no deadline, an issuer receives nothing if the curve never fills, the trading fee (most of it Merces', never returned), no cap, stake to earn, a wallet not approved can only sell, what happens if the issuer stops paying */
             notice: string;
         } & {
             [key: string]: unknown;
+        };
+        CurveStatus: components["schemas"]["CurveNoCap"] & {
+            seriesId?: string;
+            onchain?: components["schemas"]["CurveState"] | null;
+            /** @description the Meteora port's pool state, when the series was configured */
+            pool?: Record<string, never> | null;
+            configured?: boolean;
+            /** @description the last monitor check: what it read and the lifecycle steps it sent */
+            graduationMonitor?: Record<string, never> | null;
+        };
+        /** @description A curve series' bonding curve as the chain reads it. Base quantities in base lamports (10^6 per whole unit), prices per whole unit. Until S5 the simulator runs a labelled stand-in for Meteora's DBC (venue simulator-stand-in): the constant price P0, Stage 1's config's 1% trading fee, the fill at the target. */
+        CurveState: {
+            seriesId: string;
+            /** @enum {string} */
+            venue: "simulator-stand-in" | "meteora-dbc";
+            dbcConfig: string;
+            dbcPool: string;
+            /** @description the unit mint (6 decimals) */
+            baseMint: string;
+            /** @enum {string} */
+            quoteStablecoin: "USDC";
+            /** @description X: the quote the pool must hold to fill (the minimum raise) */
+            migrationQuoteThreshold: components["schemas"]["Money"];
+            /** @description buyers' money in the pool, net of the fee (the treasury holds none of it) */
+            quoteReserve: components["schemas"]["Money"];
+            progressBps: number;
+            /** @description when the curve filled (the settlement time) */
+            finishCurveTimestamp: number | null;
+            poolComplete: boolean;
+            /** @description completeCurve ran */
+            settled: boolean;
+            /** @description P0 per whole unit, fixed at activation */
+            issuePrice: components["schemas"]["Money"];
+            /** @description the base lamports the curve sells */
+            unitsSold: string;
+            /** @description base lamports */
+            baseSold: string;
+            /** @description base lamports */
+            baseSupply: string;
+            spotPrice: components["schemas"]["Money"];
+            tradingFeeBps: number;
+            migrationFeePercentage: number;
+            tradingFeeUncollected: components["schemas"]["Money"];
+            collected: {
+                migrationFee: components["schemas"]["Money"];
+                surplus: components["schemas"]["Money"];
+                tradingFee: components["schemas"]["Money"];
+                proceeds: components["schemas"]["Money"];
+            };
+        };
+        /** @description A curve series' curve as indexed from Stage 1's activation, completion and collections (the live pool is GET /series/{seriesId}/curve) */
+        SeriesCurve: {
+            dbcPool?: string;
+            baseMint?: string;
+            migrationQuoteThreshold?: components["schemas"]["Money"];
+            /** @description P0 per whole unit */
+            issuePrice?: components["schemas"]["Money"];
+            /** @description base lamports */
+            unitsSold?: string;
+            completed?: boolean;
+            settledAt?: number | null;
+            proceeds?: components["schemas"]["Money"];
+            migrationFee?: components["schemas"]["Money"];
+            surplus?: components["schemas"]["Money"];
+            tradingFee?: components["schemas"]["Money"];
+            note?: string;
         };
         Notification: {
             notificationId: string;
@@ -5920,6 +5990,15 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            /** @description A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     computeBidCommitment: {
@@ -5983,6 +6062,15 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            /** @description A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     buildRevealBid: {
@@ -6013,6 +6101,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+            /** @description A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Values do not match the committed bid */
@@ -6065,7 +6162,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["NotFound"];
-            /** @description The bid is not processed yet (detail.stage1 NotProcessed) or already delivered (AlreadyDelivered) */
+            /** @description The bid is not processed yet (detail.stage1 NotProcessed) or already delivered (AlreadyDelivered); a curve-mode series (NotSealedBid) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6111,14 +6208,17 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["NotFound"];
-            /** @description No step to build: detail is a SettlementStepRefusal (wait, done, curve or a stuck code) */
+            /** @description No step to build: detail is a SettlementStepRefusal (wait, done or a stuck code); a curve-mode series, which has no auction, is refused with detail.stage1 NotSealedBid */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["Error"] & {
-                        detail?: components["schemas"]["SettlementStepRefusal"];
+                        detail?: components["schemas"]["SettlementStepRefusal"] | {
+                            /** @constant */
+                            stage1?: "NotSealedBid";
+                        };
                     };
                 };
             };
@@ -6151,7 +6251,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-            /** @description Refused, with detail.stage1: RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused; or a curve-mode series, which runs no sealed-bid raise */
+            /** @description Refused, with detail.stage1: NotSealedBid (a curve-mode series runs no sealed-bid raise: its curve opens at creation), RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6187,7 +6287,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-            /** @description Refused, with detail.stage1: RaiseNotOpen or BidsExist (or a curve series with units minted) */
+            /** @description Refused, with detail.stage1: NotSealedBid (a curve-mode series), RaiseNotOpen or BidsExist */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6293,6 +6393,15 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+            /** @description A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     adminAccountingFees: {
@@ -8045,7 +8154,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description No redemption is open (detail.stage1 NotRedeemed), or the holder has no units left to redeem */
+            /** @description A curve-mode series, whose holders tender instead (detail.stage1 CurveUsesTender); no redemption is open (NotRedeemed), or the holder has no units left to redeem */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8089,7 +8198,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Cap progress and burn progress */
+            /** @description Cap progress and burn progress; burnable is false on a curve-mode series, whose units never burn (Stage 1 CurveModeNoBurn) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8125,7 +8234,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description The series is not Retired (Stage 1 TerminalStatus) */
+            /** @description A curve-mode series, whose units never burn (detail.stage1 CurveModeNoBurn), or the series is not Retired (TerminalStatus) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8312,13 +8421,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Curve progress, spot price, graduation state, no cap (a curve raise has no wallet cap at any stage) and the plain notice */
+            /** @description The curve as the chain reads it (onchain: the pool's target and progress, P0, whether it filled, completion and what was collected), the Meteora port's pool, no cap (a curve raise has no wallet cap at any stage), the buyer notice and the last monitor check */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CurveNoCap"];
+                    "application/json": components["schemas"]["CurveStatus"];
                 };
             };
             404: components["responses"]["NotFound"];
@@ -8376,7 +8485,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Curve quote, minimum units out, an unsigned buy transaction and, when paying in USDG, the swap route to sign first; no cap (a wallet buys any amount, whatever it holds) and the notice */
+            /** @description The chain's quote (CurveSwapQuote), the minimum out, an unsigned curveSwap buy and, when paying in USDG, the swap route to sign first; earns (false for a wallet that is not approved: it can trade, never earn) with a warning; no cap (a wallet buys any amount, whatever it holds) and the buyer notice */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8392,7 +8501,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The curve graduated (buy on the DEX pool), or the series or raise is closed */
+            /** @description The curve has filled (its units trade on the DEX pool), or the amount buys nothing */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8417,13 +8526,17 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Graduation check across curve-mode series; cranks graduation when the threshold is crossed */
+            /** @description Checks every curve-mode series and cranks Stage 1's permissionless lifecycle: completeCurve once the pool filled while the raise is Open, then collectCurveProceeds while proceeds or trading fees wait in the pool */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        checked?: number;
+                        completed?: string[];
+                        collected?: string[];
+                    };
                 };
             };
         };

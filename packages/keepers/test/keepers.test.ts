@@ -19,6 +19,7 @@ const DAY = 86_400;
  *    separate jobs (was one job, and before S2 the one-step settlement).
  * S3 cause codes:
  *  - S3-BR: `burn.crank` sends one `burnRetired{holder}` per holder still holding units (was one list burn crank, `holders[]`).
+ *  - S3-CV: `burn.crank` skips curve series: their units never burn (Stage 1 CurveModeNoBurn).
  */
 
 /** A registry of one chain, for a test that needs its own series ids, reminder ledger or a wrapped port. */
@@ -85,6 +86,23 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     const c = await sol.exec(sol.backers[0]!, { kind: 'claimPayout', seriesId: a.seriesId });
     expect(BigInt((c.events[0]!.payload as { amount: string }).amount)).toBeGreaterThan(0n);
     expect(c.events.map((e) => e.type)).toEqual(['PayoutClaimed']);
+  });
+
+  // cause S3-CV: a curve series' units never burn (CurveModeNoBurn, claims.rs:252), so the burn crank never sends one,
+  // whatever its status. White-box: a Retired curve with a holder showing units (a census and stakes arrive in S3 WP9-10)
+  it('burn.crank skips a curve series, even a Retired one with holders', async () => {
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'curve-burn', genesis: GENESIS, acceptMockProofs: true }) });
+    const { seriesId } = await h.createCurve();
+    await h.fillCurve(seriesId);
+    await h.exec(h.backers[0]!, { kind: 'registerHolder', seriesId, wallet: h.backers[0]!.address });
+    const x = h.sim.state.series.get(seriesId)!;
+    x.status = 'Retired';
+    x.positions.get(h.backers[0]!.address)!.units = 5n;
+    expect((await h.sim.listPositions(seriesId)).map((p) => p.units)).toEqual(['5']);
+    // the chain would refuse the burn, so sending it would be an error; the job sends nothing
+    await expect(h.sim.submit({ kind: 'burnRetired', seriesId, holder: h.backers[0]!.address }, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'CurveModeNoBurn' } });
+    const curveCtx = createServiceContext(makeContext({ pool: t.pool, chains: registryOf('curve-burn', h.sim), log: silent, sessionSecret: 's', devMode: true }));
+    expect(await burnCrankJob.run(curveCtx)).toEqual({ actions: 0, errors: [] });
   });
 
   it('rate keeper snapshots once per day per pair per chain, resolves feed ids, cross-checks Chainlink and flags deviation', async () => {

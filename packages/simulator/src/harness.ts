@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto';
 import {
-  CURVE_TERMS_ZEROS, DEFAULTS, attestationMessage, bidCommitment, currencyCodeOf, hex32ToField, incomeCommitment, INDEXING_RULE_CODE, mockProve, reportPublicInputs, runSettlement, termsCommitment,
+  CURVE_TERMS_ZEROS, DEFAULTS, attestationMessage, rateUnits, bidCommitment, currencyCodeOf, hex32ToField, incomeCommitment, INDEXING_RULE_CODE, mockProve, reportPublicInputs, runSettlement, termsCommitment,
   type AdminCommand, type ChainPort, type Command, type IndexingRule, type PermissionlessCommand, type RaiseFailure, type ReportProof, type SeriesTerms, type SettlementGoal, type SettlementRun,
   type Stablecoin, type TxResult, type UserCommand, type VerifierAttestation,
 } from '@merces/domain';
@@ -52,13 +52,15 @@ export function harnessFieldSalt(label: string): bigint {
  * Default series terms: 500 units, θ = 60,000 USD, a 10% total share (r = 0.10 / 500 per unit), CPI indexing, tiers
  * 2 and 3 (tier 1 is valid only on a pure tier-1 series: pass `tierFlags` for one). A curve series (`raiseStyle:
  * 'curve'`) gets Stage 1's zeros for the lockup, the wallet cap and the raise durations (`CURVE_TERMS_ZEROS`;
- * CurveTermsNotZero otherwise) unless `over` sets them.
+ * CurveTermsNotZero otherwise) unless `over` sets them, and its r is per base lamport (`rateUnits`: the units offered ×
+ * 10^6; Stage 1 registry lib.rs:594-600).
  */
 export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & { privateTerms?: PrivateTerms } = {}): { terms: SeriesTerms; privateTerms: PrivateTerms } {
   const { privateTerms: givenPrivate, ...termsOver } = over;
   const stablecoin: Stablecoin = over.stablecoin ?? 'USDC';
   const unitsOffered = over.unitsOffered ?? '500';
-  const privateTerms: PrivateTerms = givenPrivate ?? { theta: 60_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), BigInt(unitsOffered)), currency: over.reportingCurrency ?? 'USD', indexingRule: 'cpi-annual', termsSalt: HARNESS_TERMS_SALT };
+  const rUnits = rateUnits({ unitsOffered, raiseStyle: over.raiseStyle ?? 'sealed' });
+  const privateTerms: PrivateTerms = givenPrivate ?? { theta: 60_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), rUnits), currency: over.reportingCurrency ?? 'USD', indexingRule: 'cpi-annual', termsSalt: HARNESS_TERMS_SALT };
   const commitment = termsCommitment(privateTerms);
   const terms: SeriesTerms = {
     stablecoin,
@@ -347,6 +349,43 @@ export class SimHarness {
     const a = (await this.sim.getAuction(seriesId))!;
     const clearingPrice = a.raiseState === 'Settled' ? BigInt(a.clearingPrice ?? '0') : 0n;
     return { seriesId, terms, privateTerms, clearingPrice, failureReason: a.failureReason };
+  }
+
+  /**
+   * Create a curve-mode series (Solana only): its creation activates the curve (the stand-in pool, P0, the raise Open).
+   * Defaults are Stage 1's worked series (curve_mode.rs; `curve_config.json`): 100 units, X = 1,000 USDC, so P0 = 10 USDC
+   * per unit and the curve sells 100,000,000 base lamports.
+   */
+  async createCurve(opts: { terms?: Partial<SeriesTerms>; privateTerms?: PrivateTerms } = {}): Promise<{ seriesId: string; terms: SeriesTerms; privateTerms: PrivateTerms }> {
+    const { terms, privateTerms } = defaultTerms(this.sim, { unitsOffered: '100', minimumRaise: '1000000000', ...(opts.terms ?? {}), raiseStyle: 'curve', privateTerms: opts.privateTerms });
+    if (!(await this.sim.getIssuer(this.issuer.address))) await this.exec(this.issuer, { kind: 'registerIssuer' });
+    const created = await this.exec(this.issuer, { kind: 'createSeries', terms });
+    const seriesId = (created.events.find((e) => e.type === 'SeriesCreated')!.payload as { seriesId: string }).seriesId;
+    return { seriesId, terms, privateTerms };
+  }
+
+  /** Buy on the curve with `amountIn` stablecoin (the trading fee included), any slippage. */
+  async curveBuy(seriesId: string, wallet: SimWallet, amountIn: bigint): Promise<TxResult> {
+    return this.exec(wallet, { kind: 'curveSwap', seriesId, side: 'buy', amountIn: amountIn.toString(), minimumAmountOut: '0' });
+  }
+
+  /** Sell `units` base lamports back into the curve, any slippage. */
+  async curveSell(seriesId: string, wallet: SimWallet, units: bigint): Promise<TxResult> {
+    return this.exec(wallet, { kind: 'curveSwap', seriesId, side: 'sell', amountIn: units.toString(), minimumAmountOut: '0' });
+  }
+
+  /**
+   * Fill the curve as Stage 1's `launched()` does (curve_mode.rs:91-114): buys of 400, 350 and 300 USDC by `wallets`
+   * (the last a partial fill at X), then, as the keeper, `completeCurve` and `collectCurveProceeds`.
+   */
+  async fillCurve(seriesId: string, wallets: SimWallet[] = this.backers.slice(0, 3)): Promise<void> {
+    for (const [i, amount] of [400n, 350n, 300n].entries()) await this.curveBuy(seriesId, wallets[i]!, amount * 1_000_000n);
+    await this.completeAndCollect(seriesId);
+  }
+
+  /** As the keeper: `completeCurve`, then `collectCurveProceeds`. */
+  async completeAndCollect(seriesId: string): Promise<TxResult[]> {
+    return [await this.sim.submit({ kind: 'completeCurve', seriesId }, 'keeper'), await this.sim.submit({ kind: 'collectCurveProceeds', seriesId }, 'keeper')];
   }
 
   /**

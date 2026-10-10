@@ -208,7 +208,7 @@ components:
         tx: { $ref: '#/components/schemas/UnsignedTx' }
     SettlementStepRefusal:
       type: object
-      description: 'Why there is no step to build (409 detail): wait (the reveal phase has not ended; until), done (every bid is delivered, or the raise is cancelled or still a draft), curve (a curve series has no sealed-bid settlement), or the planner''s stuck code (ValidityMismatch, NoClearingPrice, ProposalRejected, ProposalAlreadyRejected, NoRevealEnd, NothingToProcess: an operator matter, never retried by itself)'
+      description: 'Why there is no step to build (409 detail): wait (the reveal phase has not ended; until), done (every bid is delivered, or the raise is cancelled or still a draft), or the planner''s stuck code (ValidityMismatch, NoClearingPrice, ProposalRejected, ProposalAlreadyRejected, NoRevealEnd, NothingToProcess: an operator matter, never retried by itself)'
       properties:
         stage: { oneOf: [{ $ref: '#/components/schemas/SettlementStage' }, { type: 'null' }] }
         reason: { type: string }
@@ -248,7 +248,7 @@ components:
         openDuePeriod: { type: [string, 'null'], description: 'the reported period whose due is unpaid (one at a time); the next report is refused (PaymentOutstanding) until it is paid' }
         paymentOutstanding: { type: boolean, description: 'a reported due is unpaid; its amount is served at the holder-or-issuer tier (GET /series/{seriesId}/periods, reporting.openDueAmount)' }
         formalNoticeEmittedFor: { type: [string, 'null'], description: the period whose formal notice the chain recorded (period end + 90 days of unpaused time) }
-        mintFinalized: { type: boolean, description: "Stage 1's mint gate: a sealed raise's last bid is processed (or a curve graduated). Payments, reports, releases, redemption, extinguishment and transfer windows wait for it (MintNotFinalized)" }
+        mintFinalized: { type: boolean, description: "Stage 1's mint gate: a sealed raise's last bid is processed (or a curve completed, completeCurve). Payments, reports, releases, redemption, extinguishment and transfer windows wait for it (MintNotFinalized)" }
         auction: { oneOf: [{ $ref: '#/components/schemas/SeriesAuction' }, { type: 'null' }], description: null for a curve-mode series }
     SeriesReporting:
       type: object
@@ -267,7 +267,7 @@ components:
         - type: object
           properties:
             holderCount: { type: integer }
-            curve: { type: [object, 'null'] }
+            curve: { oneOf: [{ $ref: '#/components/schemas/SeriesCurve' }, { type: 'null' }], description: "a curve series' curve as indexed; null on a sealed-bid series" }
     Activity:
       type: object
       description: Public activity never carries an amount.
@@ -1082,7 +1082,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder, pricePerUnit, quantity], properties: { bidder: { type: string }, pricePerUnit: { $ref: '#/components/schemas/Money' }, quantity: { type: string } } } } } }
       description: "Checks a bid before it is built: the commit phase, the allowlist, one bid per wallet, Stage 1's validity rule (reserve, 1 ≤ quantity ≤ the wallet cap; a bid that breaks it can be committed but is invalid at reveal and refunded in full), the u64 range and the balance; returns the deposit a commit locks (Stage 1 requiredEscrow: price × quantity plus the auction fee on it)."
-      responses: { '200': { description: 'The issues (empty = ok), the deposit, the wallet cap in units, the fee and the phase ends', content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: 'The issues (empty = ok), the deposit, the wallet cap in units, the fee and the phase ends', content: { application/json: { schema: { type: object } } } }, '409': { description: 'A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } } }
   /series/{seriesId}/bids/commitment:
     post:
       operationId: computeBidCommitment
@@ -1100,7 +1100,7 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder, commitment, deposit], properties: { bidder: { type: string }, commitment: { type: string }, deposit: { $ref: '#/components/schemas/Money' } } } } } }
-      responses: { '200': { description: Unsigned commitBid transaction, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Unsigned commitBid transaction, content: { application/json: { schema: { type: object } } } }, '409': { description: 'A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } } }
   /series/{seriesId}/bids/build-reveal:
     post:
       operationId: buildRevealBid
@@ -1109,7 +1109,7 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder, pricePerUnit, quantity, salt], properties: { bidder: { type: string }, pricePerUnit: { type: string }, quantity: { type: string }, salt: { type: string } } } } } }
-      responses: { '200': { description: Unsigned revealBid transaction (values checked against the commitment), content: { application/json: { schema: { type: object } } } }, '422': { description: Values do not match the committed bid } }
+      responses: { '200': { description: Unsigned revealBid transaction (values checked against the commitment), content: { application/json: { schema: { type: object } } } }, '422': { description: Values do not match the committed bid }, '409': { description: 'A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } } }
   /series/{seriesId}/bids/build-deliver:
     post:
       operationId: buildDeliverBid
@@ -1123,7 +1123,7 @@ paths:
         '200': { description: The unsigned deliverBid and what it delivers, content: { application/json: { schema: { type: object, properties: { tx: { $ref: '#/components/schemas/UnsignedTx' }, pendingUnits: { type: string }, pendingRefund: { $ref: '#/components/schemas/Money' } } } } } }
         '403': { description: The signer is not one of the caller's wallets }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: 'The bid is not processed yet (detail.stage1 NotProcessed) or already delivered (AlreadyDelivered)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: 'The bid is not processed yet (detail.stage1 NotProcessed) or already delivered (AlreadyDelivered); a curve-mode series (NotSealedBid)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /series/{seriesId}/auction/build-step:
     post:
       operationId: buildSettlementStep
@@ -1137,7 +1137,7 @@ paths:
         '200': { description: The next step, content: { application/json: { schema: { $ref: '#/components/schemas/SettlementStep' } } } }
         '403': { description: The signer is not one of the caller's wallets }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: 'No step to build: detail is a SettlementStepRefusal (wait, done, curve or a stuck code)', content: { application/json: { schema: { allOf: [{ $ref: '#/components/schemas/Error' }, { type: object, properties: { detail: { $ref: '#/components/schemas/SettlementStepRefusal' } } }] } } } }
+        '409': { description: 'No step to build: detail is a SettlementStepRefusal (wait, done or a stuck code); a curve-mode series, which has no auction, is refused with detail.stage1 NotSealedBid', content: { application/json: { schema: { allOf: [{ $ref: '#/components/schemas/Error' }, { type: object, properties: { detail: { oneOf: [{ $ref: '#/components/schemas/SettlementStepRefusal' }, { type: object, properties: { stage1: { type: string, const: NotSealedBid } } }] } } }] } } } }
   /series/{seriesId}/raise/build-open:
     post:
       operationId: buildOpenRaise
@@ -1150,7 +1150,7 @@ paths:
         '200': { description: The unsigned openRaise and the phase durations it will apply, content: { application/json: { schema: { type: object, properties: { tx: { $ref: '#/components/schemas/UnsignedTx' }, commitDurationSeconds: { type: integer }, revealDurationSeconds: { type: integer } } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { description: 'Refused, with detail.stage1: RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused; or a curve-mode series, which runs no sealed-bid raise', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: 'Refused, with detail.stage1: NotSealedBid (a curve-mode series runs no sealed-bid raise: its curve opens at creation), RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /series/{seriesId}/raise/build-cancel:
     post:
       operationId: buildCancelRaise
@@ -1158,12 +1158,12 @@ paths:
       tags: [bids]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      description: "Builds the issuer's cancelRaise (Stage 1 cancel_raise): an Open sealed raise that has no bid, at any time (also after its reveal end). A curve-mode series is cancellable while Draft or Open with no curve units minted."
+      description: "Builds the issuer's cancelRaise (Stage 1 cancel_raise): an Open sealed raise that has no bid, at any time (also after its reveal end). A curve raise has no cancel (no failure and no deadline either): 409 NotSealedBid."
       responses:
         '200': { description: The unsigned cancelRaise, content: { application/json: { schema: { type: object, properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { description: 'Refused, with detail.stage1: RaiseNotOpen or BidsExist (or a curve series with units minted)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: 'Refused, with detail.stage1: NotSealedBid (a curve-mode series), RaiseNotOpen or BidsExist', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /series/{seriesId}/bids/backup:
     put:
       operationId: putBidBackup
@@ -1188,4 +1188,4 @@ paths:
       tags: [bids]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       description: "The settlement Stage 1 would reach on the revealed bids (public onchain once revealed), with Stage 1's math: the honest proposal, the outcome (a raise that would sell no unit fails, as SPEC and both chains do) and each revealed bid's processing. Every revealed bid counts, its bidder still allowlisted or not, as the settlement does. Projected while the raise is Open or Settling; null when no single clearing price exists. `stage` is where the settlement stands; `settleDue` is stage = awaiting-proposal."
-      responses: { '200': { description: 'The stage, the counts, the projection (or null) and the settled result', content: { application/json: { schema: { type: object, properties: { seriesId: { type: string }, phase: { type: string }, stage: { $ref: '#/components/schemas/SettlementStage' }, bidCount: { type: integer }, revealedCount: { type: integer }, validCount: { type: integer }, settleDue: { type: boolean }, projected: { type: [object, 'null'] }, settled: { type: [object, 'null'] } } } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+      responses: { '200': { description: 'The stage, the counts, the projection (or null) and the settled result', content: { application/json: { schema: { type: object, properties: { seriesId: { type: string }, phase: { type: string }, stage: { $ref: '#/components/schemas/SettlementStage' }, bidCount: { type: integer }, revealedCount: { type: integer }, validCount: { type: integer }, settleDue: { type: boolean }, projected: { type: [object, 'null'] }, settled: { type: [object, 'null'] } } } } } }, '404': { $ref: '#/components/responses/NotFound' }, '409': { description: 'A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } } }

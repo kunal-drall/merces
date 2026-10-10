@@ -1,8 +1,9 @@
 import { ChainError, seriesTermsViolations, type Command } from '@merces/domain';
-import { WAD, newFinalState, newTailState, newVaultState } from '@merces/math';
+import { newFinalState, newTailState, newVaultState } from '@merces/math';
 import { deriveAddress } from '../addresses.ts';
 import { newAuction, type SimSeries, type SimTerms } from '../state.ts';
-import { big, str, type EngineCore, type Emit } from './core.ts';
+import { big, type EngineCore, type Emit } from './core.ts';
+import { activateCurve, curveP0 } from './curve.ts';
 import { fail } from './errors.ts';
 import { newLedger } from './ledger.ts';
 
@@ -40,11 +41,17 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   const violation = seriesTermsViolations(t)[0];
   if (violation) fail(violation.stage1, violation.message);
   if (/^0x0{64}$/.test(t.contractHash)) throw new ChainError('InvalidTerms', 'contract hash required: a raise needs a signed contract');
-  // New raises paused: Stage 1 refuses open_raise (NewRaisesPaused, SIM:875), never create_series, so a sealed series
-  // is still created (openRaise refuses). A curve raise starts at creation here: its creation is the curve's
-  // activation, which Stage 1 refuses while paused (Solana registry `mark_curve_activated`).
-  if (t.raiseStyle === 'curve' && e.state.newRaisesPaused) fail('NewRaisesPaused', 'new raises are paused by the protocol admin');
   if (t.tierFlags.tier4) throw new ChainError('InvalidTerms', 'tier 4 is switched off');
+  // A curve raise starts at creation here: its creation is the curve's activation (Stage 1 `activate_curve` and the
+  // registry's `mark_curve_activated`), checked in their order before the series exists: P0 at least 1
+  // (CurveThresholdMismatch, curve.rs:799-805), new raises not paused (NewRaisesPaused), the issuer still allowlisted
+  // (NotAllowlisted; registry lib.rs:1001-1013). New raises paused: Stage 1 refuses a sealed raise's open_raise
+  // (NewRaisesPaused, SIM:875), never create_series, so a sealed series is still created (openRaise refuses).
+  const curve = t.raiseStyle === 'curve' ? curveP0({ terms: { minimumRaise: big(t.minimumRaise), unitsOffered: big(t.unitsOffered) } }) : null;
+  if (curve) {
+    if (e.state.newRaisesPaused) fail('NewRaisesPaused', 'new raises are paused by the protocol admin');
+    if (!e.state.allowlist.has(signer)) fail('NotAllowlisted', 'the issuer is not allowlisted');
+  }
   const capWad = big(t.capMultipleWad);
   const address = cmd.seriesAddressHint ?? deriveAddress(e.state.config.family, `series:${signer}:${issuer.seriesIds.length}`);
   const seriesId = `${e.state.config.chain}:${address}`;
@@ -75,8 +82,8 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
     reportingCurrency: t.reportingCurrency,
     raiseStyle: t.raiseStyle,
   };
-  // the unit scale is 1 for every series until curve mode keeps base lamports (S3 WP8); every money path passes it to
-  // the scale-aware `@merces/math` functions, which run Stage 1's own at scale 1
+  // the unit scale is 1 for a sealed-bid series and 10^6 for a curve (set at its activation below); every money path
+  // passes it to the scale-aware `@merces/math` functions, which run Stage 1's own at scale 1
   const s: SimSeries = {
     seriesId, address, issuer: signer, terms, unitScale: 1n, phase: 'Draft', status: 'OnTime', createdAt: now, openedAt: null, commitEndsAt: null, revealEndsAt: null, settledAt: null,
     issuePrice: null, unitsSold: 0n, unitsOutstanding: 0n, capPerUnit: null, vaultBalance: 0n, vaultDistributedNet: 0n,
@@ -88,11 +95,7 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   e.state.series.set(seriesId, s);
   issuer.seriesIds.push(seriesId);
   emit('SeriesCreated', { seriesId, issuer: signer, terms: t });
-  if (t.raiseStyle === 'curve') {
-    const threshold = terms.minimumRaise;
-    s.curve = { quoteStablecoin: 'USDC', raised: 0n, basePrice: terms.reservePrice, slopeWad: WAD / 1000n, graduationThreshold: threshold, graduated: false };
-    emit('CurveSeriesCreated', { seriesId, issuer: signer, quoteStablecoin: 'USDC', graduationThreshold: str(threshold) });
-  }
+  if (curve) activateCurve(e, s, curve.p0, curve.swapBase, now, emit);
 }
 
 // ------------------------------------------------------------------ allowlist

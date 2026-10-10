@@ -6,8 +6,9 @@ import { seriesTermsSchema, tierSchema, fxBasisSchema } from './events.ts';
 /**
  * Canonical commands (Part D2). User commands are built into unsigned transactions for the user's wallet.
  * Service commands are submitted by the backend's own low-privilege roles (keeper, allowlist manager).
- * Permissionless commands (Stage 1's sealed-bid settlement and holder registration) may be sent by anyone: the keeper
- * `submit`s them, and any wallet may `build` and sign them (self-delivery, or a fallback when the keepers stall).
+ * Permissionless commands (Stage 1's sealed-bid settlement, holder registration, the Retired burn and a curve's
+ * completion and proceeds) may be sent by anyone: the keeper `submit`s them, and any wallet may `build` and sign them
+ * (self-delivery, or a fallback when the keepers stall).
  * Admin commands are built for the protocol multisig.
  */
 
@@ -117,7 +118,16 @@ export const userCommands = {
   extinguish: z.object({ kind: z.literal('extinguish'), seriesId: seriesIdSchema, attestors: z.array(addressSchema).length(2) }),
   commitWindowOrder: z.object({ kind: z.literal('commitWindowOrder'), seriesId: seriesIdSchema, windowId: z.number().int(), side: z.enum(['buy', 'sell']), commitment: hash32Schema, deposit: moneySchema, units: unitsSchema }),
   revealWindowOrder: z.object({ kind: z.literal('revealWindowOrder'), seriesId: seriesIdSchema, windowId: z.number().int(), side: z.enum(['buy', 'sell']), pricePerUnit: moneySchema, quantity: unitsSchema, salt: hash32Schema }),
-  buyCurve: z.object({ kind: z.literal('buyCurve'), seriesId: seriesIdSchema, amountIn: moneySchema, minUnitsOut: unitsSchema }),
+  /**
+   * A trade on a curve series' bonding curve (curve mode, Solana only). On a live chain it is a Meteora DBC swap
+   * (`swap2`) the wallet sends straight to Meteora's program, not a Merces instruction; the simulator runs a labelled
+   * stand-in pool (S3; Meteora's own venue in S5). `buy`: `amountIn` stablecoin, the trading fee included, for base
+   * lamports (the last buy before the curve fills takes the rest of the curve and is charged only what that costs).
+   * `sell`: `amountIn` base lamports back into the curve, before it fills only, for stablecoin less the trading fee.
+   * Fewer than `minimumAmountOut` out refuses the trade. No allowlist and no cap: any wallet trades any amount. Emits
+   * no Merces event.
+   */
+  curveSwap: z.object({ kind: z.literal('curveSwap'), seriesId: seriesIdSchema, side: z.enum(['buy', 'sell']), amountIn: moneySchema, minimumAmountOut: moneySchema }),
   stopIssuance: z.object({ kind: z.literal('stopIssuance') }),
 } as const;
 
@@ -128,13 +138,12 @@ export const serviceCommands = {
   openTransferWindow: z.object({ kind: z.literal('openTransferWindow'), seriesId: seriesIdSchema, commitEndsAt: z.number().int(), revealEndsAt: z.number().int() }),
   clearTransferWindow: z.object({ kind: z.literal('clearTransferWindow'), seriesId: seriesIdSchema, windowId: z.number().int() }),
   flagFxFallback: z.object({ kind: z.literal('flagFxFallback'), pair: pairSchema, periodId: periodIdSchema, reason: z.enum(['coverage', 'deviation']) }),
-  graduateCurve: z.object({ kind: z.literal('graduateCurve'), seriesId: seriesIdSchema }),
   setAllowlist: z.object({ kind: z.literal('setAllowlist'), wallet: addressSchema, allowed: z.boolean() }),
 } as const;
 
 /**
- * Stage 1's sealed-bid settlement (SPEC §5.2), holder registration and the Retired burn, with Stage 1's names. Anyone
- * may send them: the keeper `submit`s them and any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans
+ * Stage 1's sealed-bid settlement (SPEC §5.2), holder registration, the Retired burn and a curve's completion and
+ * proceeds, with Stage 1's names. Anyone may send them: the keeper `submit`s them and any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans
  * the settlement steps.
  */
 export const permissionlessCommands = {
@@ -160,6 +169,20 @@ export const permissionlessCommands = {
    * claimable) and its balance burns.
    */
   burnRetired: z.object({ kind: z.literal('burnRetired'), seriesId: seriesIdSchema, holder: addressSchema }),
+  /**
+   * Stage 1 `complete_curve` (curve.rs:861-906): once the curve's pool has filled (its quote reserve reached the target
+   * and it has a finish time), settles the curve raise at that finish time with the price and units fixed at creation;
+   * the units are final at once. NotCurveMode, RaiseNotOpen, CurveNotComplete. Takes no census and registers nobody.
+   * Emits `CurveGraduated` (Stage 1 `RaiseSettled`, proceeds 0) and `RaiseMintFinalized{proceeds: 0}`.
+   */
+  completeCurve: z.object({ kind: z.literal('completeCurve'), seriesId: seriesIdSchema }),
+  /**
+   * Stage 1 `collect_curve_proceeds` (curve.rs:1112-1214), idempotent: once the pool has filled, the partner migration
+   * fee and the partner surplus move into the series treasury (each once); at any time the partner trading fee moves to
+   * the fee collector. NotCurveMode, RaiseNotOpen (Open or Settled). Emits `CurveProceedsCollected`, then
+   * `TreasuryFunded` and `FeeTaken{curveTrading}` when they are above 0.
+   */
+  collectCurveProceeds: z.object({ kind: z.literal('collectCurveProceeds'), seriesId: seriesIdSchema }),
 } as const;
 
 export const adminCommands = {

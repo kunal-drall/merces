@@ -7,7 +7,7 @@ paths:
       x-access: public
       tags: [curve]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: 'Curve progress, spot price, graduation state, no cap (a curve raise has no wallet cap at any stage) and the plain notice', content: { application/json: { schema: { $ref: '#/components/schemas/CurveNoCap' } } } }, '404': { $ref: '#/components/responses/NotFound' }, '409': { description: Not a curve-mode series } }
+      responses: { '200': { description: "The curve as the chain reads it (onchain: the pool's target and progress, P0, whether it filled, completion and what was collected), the Meteora port's pool, no cap (a curve raise has no wallet cap at any stage), the buyer notice and the last monitor check", content: { application/json: { schema: { $ref: '#/components/schemas/CurveStatus' } } } }, '404': { $ref: '#/components/responses/NotFound' }, '409': { description: Not a curve-mode series } }
   /series/{seriesId}/curve/configure:
     post:
       operationId: configureCurve
@@ -25,9 +25,9 @@ paths:
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [buyer, amountIn], properties: { buyer: { type: string }, amountIn: { $ref: '#/components/schemas/Money' }, payIn: { type: string, enum: [USDC, USDG] }, slippageBps: { type: integer } } } } } }
       responses:
-        '200': { description: 'Curve quote, minimum units out, an unsigned buy transaction and, when paying in USDG, the swap route to sign first; no cap (a wallet buys any amount, whatever it holds) and the notice', content: { application/json: { schema: { $ref: '#/components/schemas/CurveNoCap' } } } }
-        '403': { description: Not an eligible backer, the wallet is not linked to the caller, or it is not on the chain's allowlist }
-        '409': { description: 'The curve graduated (buy on the DEX pool), or the series or raise is closed' }
+        '200': { description: "The chain's quote (CurveSwapQuote), the minimum out, an unsigned curveSwap buy and, when paying in USDG, the swap route to sign first; earns (false for a wallet that is not approved: it can trade, never earn) with a warning; no cap (a wallet buys any amount, whatever it holds) and the buyer notice", content: { application/json: { schema: { $ref: '#/components/schemas/CurveNoCap' } } } }
+        '403': { description: Not an eligible backer, or the wallet is not linked to the caller }
+        '409': { description: 'The curve has filled (its units trade on the DEX pool), or the amount buys nothing' }
         '422': { description: 'Not a Solana series; stablecoin unavailable' }
   /admin/curves/monitor:
     post:
@@ -35,7 +35,7 @@ paths:
       x-access: admin
       tags: [admin]
       security: [{ session: [] }]
-      responses: { '200': { description: Graduation check across curve-mode series; cranks graduation when the threshold is crossed, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: "Checks every curve-mode series and cranks Stage 1's permissionless lifecycle: completeCurve once the pool filled while the raise is Open, then collectCurveProceeds while proceeds or trading fees wait in the pool", content: { application/json: { schema: { type: object, properties: { checked: { type: integer }, completed: { type: array, items: { type: string } }, collected: { type: array, items: { type: string } } } } } } } }
 components:
   schemas:
     CurveNoCap:
@@ -47,4 +47,63 @@ components:
         walletCap: { type: 'null', description: 'always null (there is no wallet cap)' }
         noCap: { type: boolean, const: true }
         noCapStatement: { type: string, description: the one no-cap statement }
-        notice: { type: string, description: the plain-language notice for curve buyers }
+        notice: { type: string, description: "the buyer notice (CURVE_BUYER_NOTICE with the curve's own figures): Meteora's pool holds the money until the curve fills, selling back is the only exit before then, no deadline, an issuer receives nothing if the curve never fills, the trading fee (most of it Merces', never returned), no cap, stake to earn, a wallet not approved can only sell, what happens if the issuer stops paying" }
+    CurveStatus:
+      allOf:
+        - $ref: '#/components/schemas/CurveNoCap'
+        - type: object
+          properties:
+            seriesId: { type: string }
+            onchain: { oneOf: [{ $ref: '#/components/schemas/CurveState' }, { type: 'null' }] }
+            pool: { type: [object, 'null'], description: "the Meteora port's pool state, when the series was configured" }
+            configured: { type: boolean }
+            graduationMonitor: { type: [object, 'null'], description: 'the last monitor check: what it read and the lifecycle steps it sent' }
+    CurveState:
+      type: object
+      description: "A curve series' bonding curve as the chain reads it. Base quantities in base lamports (10^6 per whole unit), prices per whole unit. Until S5 the simulator runs a labelled stand-in for Meteora's DBC (venue simulator-stand-in): the constant price P0, Stage 1's config's 1% trading fee, the fill at the target."
+      required: [seriesId, venue, dbcConfig, dbcPool, baseMint, quoteStablecoin, migrationQuoteThreshold, quoteReserve, progressBps, finishCurveTimestamp, poolComplete, settled, issuePrice, unitsSold, baseSold, baseSupply, spotPrice, tradingFeeBps, migrationFeePercentage, tradingFeeUncollected, collected]
+      properties:
+        seriesId: { type: string }
+        venue: { type: string, enum: [simulator-stand-in, meteora-dbc] }
+        dbcConfig: { type: string }
+        dbcPool: { type: string }
+        baseMint: { type: string, description: the unit mint (6 decimals) }
+        quoteStablecoin: { type: string, enum: [USDC] }
+        migrationQuoteThreshold: { $ref: '#/components/schemas/Money', description: 'X: the quote the pool must hold to fill (the minimum raise)' }
+        quoteReserve: { $ref: '#/components/schemas/Money', description: "buyers' money in the pool, net of the fee (the treasury holds none of it)" }
+        progressBps: { type: integer, minimum: 0, maximum: 10000 }
+        finishCurveTimestamp: { type: [integer, 'null'], description: 'when the curve filled (the settlement time)' }
+        poolComplete: { type: boolean }
+        settled: { type: boolean, description: completeCurve ran }
+        issuePrice: { $ref: '#/components/schemas/Money', description: 'P0 per whole unit, fixed at activation' }
+        unitsSold: { type: string, pattern: '^\d+$', description: the base lamports the curve sells }
+        baseSold: { type: string, pattern: '^\d+$', description: base lamports }
+        baseSupply: { type: string, pattern: '^\d+$', description: base lamports }
+        spotPrice: { $ref: '#/components/schemas/Money' }
+        tradingFeeBps: { type: integer }
+        migrationFeePercentage: { type: integer }
+        tradingFeeUncollected: { $ref: '#/components/schemas/Money' }
+        collected:
+          type: object
+          required: [migrationFee, surplus, tradingFee, proceeds]
+          properties:
+            migrationFee: { $ref: '#/components/schemas/Money' }
+            surplus: { $ref: '#/components/schemas/Money' }
+            tradingFee: { $ref: '#/components/schemas/Money' }
+            proceeds: { $ref: '#/components/schemas/Money' }
+    SeriesCurve:
+      type: object
+      description: "A curve series' curve as indexed from Stage 1's activation, completion and collections (the live pool is GET /series/{seriesId}/curve)"
+      properties:
+        dbcPool: { type: string }
+        baseMint: { type: string }
+        migrationQuoteThreshold: { $ref: '#/components/schemas/Money' }
+        issuePrice: { $ref: '#/components/schemas/Money', description: P0 per whole unit }
+        unitsSold: { type: string, pattern: '^\d+$', description: base lamports }
+        completed: { type: boolean }
+        settledAt: { type: [integer, 'null'] }
+        proceeds: { $ref: '#/components/schemas/Money' }
+        migrationFee: { $ref: '#/components/schemas/Money' }
+        surplus: { $ref: '#/components/schemas/Money' }
+        tradingFee: { $ref: '#/components/schemas/Money' }
+        note: { type: string }

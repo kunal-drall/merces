@@ -6,6 +6,10 @@ import { ReportVerifier } from '@merces/report-verifier';
 import { DeviceError, E2eError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, deriveIncomeSalt, generateE2eKeyPair, openE2e, openTier3Opening, sealE2e, sealTier3Opening, type DeviceReportInput, type DevicePrivateTerms } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
+/*
+ * S3 cause codes:
+ *  - S3-UL: a curve series' r is per base lamport (unit scale 10^6; S3 WP8).
+ */
 const CANARY_YTD = 7_317_317_317n;
 const rWad = ratePerUnit(10n ** 17n, 500n);
 const privateTerms: DevicePrivateTerms = { threshold: USDC(5_000).toString(), ratePerUnitWad: rWad.toString(), reportingCurrency: 'USD', indexingRule: 'cpi-annual', termsSalt: '123456789123456789123456789' };
@@ -74,6 +78,19 @@ describe('poi-device: Stage 1 Groth16 reports from the device income chain', () 
     const q1 = await assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD }), verifier, { proofs: 'mock' });
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q3', incomeYtdNow: CANARY_YTD, prior: q1.entry }), verifier, { proofs: 'mock' }))).toEqual(['prior-mismatch', null]);
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q2', incomeYtdNow: CANARY_YTD, prior: { ...q1.entry, incomeYtd: 1n } }), verifier, { proofs: 'mock' }))).toEqual(['prior-mismatch', null]);
+  });
+
+  // cause S3-UL: on a curve series r is per base lamport (Stage 1 registry lib.rs:594-600, B-C2): a device that knows only
+  // the share rate derives r over the units offered × the series' unit scale (10^6), as the terms service does
+  it('derives r per base lamport from the share rate on a curve series (units offered × the unit scale)', async () => {
+    const shareTerms: DevicePrivateTerms = { threshold: privateTerms.threshold, shareRate: '0.10', reportingCurrency: 'USD', indexingRule: 'cpi-annual', termsSalt: privateTerms.termsSalt };
+    const curveTerms = termsCommitment({ theta: privateTerms.threshold, rWad: 1_000_000_000n, currency: 'USD', indexingRule: 'cpi-annual', termsSalt: privateTerms.termsSalt }); // 0.10 WAD / 10^8
+    const curveInput = (unitScale?: string) => input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD, termsCommitment: curveTerms, unitsOutstanding: '99999998', unitsOffered: '100', unitScale, privateTerms: shareTerms });
+    const r = await assembleOnDevice(curveInput('1000000'), verifier, { proofs: 'mock' });
+    expect(r.assembled.proof.publicInputs[0]).toBe(BigInt(curveTerms).toString());
+    // without the scale the device would derive r per whole unit, which opens another commitment
+    const e = await assembleOnDevice(curveInput(), verifier, { proofs: 'mock' }).then(() => null, (x: unknown) => x);
+    expect((e as DeviceError).code).toBe('terms-mismatch');
   });
 
   it('tier 3: the device proves; the opening for the attestor checks against the commitments and the documents', async () => {

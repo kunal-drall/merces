@@ -14,8 +14,8 @@ import type { PersonalityConfig } from './addresses.ts';
  * Version 4 (S3) adds the unit scale and curve staking: `SimSeries.unitScale` (accounting units per whole unit, Stage 1's
  * `Ledger.unit_scale`), the stake and tender totals and the census time, and each holder's `stakedUnits`. Every money
  * path takes the unit scale through `@merces/math`'s scale-aware family (Stage 1's own functions at scale 1). The
- * curve record (`SimCurve`) is completed under the same version before anything is deployed (S3 WP8). States of another
- * version are never upgraded in place.
+ * curve record (`SimCurve`: the stand-in pool, its base-mint accounts and its proceeds) was completed under the same
+ * version before anything was deployed (S3 WP8). States of another version are never upgraded in place.
  */
 export const SIM_STATE_VERSION = 4;
 
@@ -227,13 +227,78 @@ export interface SimTransferWindow {
   orders: Map<string, SimWindowOrder>;
 }
 
+/** The protocol-side base-mint accounts of a curve series (their balances are in `SimState.balances` under `baseMint`). */
+export interface SimCurveAccounts {
+  /** the DBC pool's base vault: the swap base not sold yet, and before migration the migration base, the issuer's locked allocation and the leftover */
+  dbcBaseVault: string;
+  /** the DAMM v2 pool's base vault after migration */
+  dammBaseVault: string;
+  /** the Jupiter locker's escrow of the issuer's locked allocation after migration */
+  lockerEscrow: string;
+  /** the leftover receiver (the curve authority PDA) after `withdraw_leftover` */
+  leftoverReceiver: string;
+  /** the series' stake vault (Stage 1 `ATA(PDA["curve_stake", series], base_mint)`; used from S3 WP10); not protocol-held */
+  stakeVault: string;
+}
+
+/**
+ * A curve series' bonding curve (curve mode, Solana only; S3 WP8). Meteora's Dynamic Bonding Curve is not in the
+ * checkout, so the simulator runs a **labelled stand-in** (`venue`) for it, never a Merces instruction: it sells the swap
+ * base at the constant price P0 (exactly X per swap base, so the curve fills when its base is sold and its reserve
+ * reaches X), takes Stage 1's generated config's trading fee (1%, 20% of it Meteora's, the rest the partner's), fills
+ * the last buy partially at X, and holds the unit mint's fixed supply in protocol accounts. Migration, the locker and
+ * DAMM trades are harness hooks that only move base lamports. Meteora's own venue (Stage 1's DBC math through the
+ * Meteora port) replaces it in S5. Quote amounts here are the pool's accounting; the treasury holds none of them until
+ * `collectCurveProceeds`.
+ */
 export interface SimCurve {
+  venue: 'simulator-stand-in';
   quoteStablecoin: Stablecoin;
-  raised: bigint;
-  basePrice: bigint;
-  slopeWad: bigint;
-  graduationThreshold: bigint;
-  graduated: boolean;
+  dbcConfig: string;
+  dbcPool: string;
+  /** the pool's creator: the issuer */
+  dbcCreator: string;
+  /** the unit mint (6 decimals); base lamports are its base units */
+  baseMint: string;
+  accounts: SimCurveAccounts;
+  /** X: the pool's migration quote threshold, the terms' minimum raise (Stage 1 requires them equal) */
+  migrationQuoteThreshold: bigint;
+  /** base lamports the curve sells (`unitsOffered × 10^6`; Stage 1 `units_sold`) */
+  swapBaseAmount: bigint;
+  /** base lamports deposited into the DAMM v2 pool at migration */
+  migrationBaseAmount: bigint;
+  /** the issuer's locked allocation, base lamports (to the locker escrow at migration) */
+  lockedVestingAmount: bigint;
+  /** base lamports left over after migration (to the leftover receiver) */
+  leftoverAmount: bigint;
+  /** the unit mint's fixed supply: swap base + migration base + locked vesting + leftover */
+  supply: bigint;
+  /** P0 per whole unit, `floor(X × 10^6 / swapBaseAmount)` (Stage 1 `clearing_price`) */
+  p0: bigint;
+  /** the trading fee on every buy and sell, bps (Stage 1's config: 1%) */
+  tradingFeeBps: bigint;
+  /** Meteora's share of every trading fee, percent (20; the rest is the partner's with no creator share) */
+  protocolFeePercent: bigint;
+  /** Meteora's migration fee, percent of X (99), and the creator's share of it (0: the issuer creates the pool) */
+  migrationFeePercentage: number;
+  creatorMigrationFeePercentage: number;
+  /** the quote the pool holds for the curve: buys net of the fee, less sells (DBC `quote_reserve`) */
+  quoteReserve: bigint;
+  /** Meteora's share of the trading fees (never collected by Merces) */
+  protocolQuoteFee: bigint;
+  /** the partner's trading fees accrued and not collected yet (DBC `partner_quote_fee`) */
+  partnerQuoteFee: bigint;
+  /** swap base bought out of the pool, net of sells */
+  baseSold: bigint;
+  /** when the pool filled (DBC `finish_curve_timestamp`); null before */
+  finishTs: number | null;
+  /** the partner migration fee and the partner surplus were withdrawn (each once, DBC's flags) */
+  migrationFeeWithdrawn: boolean;
+  surplusWithdrawn: boolean;
+  /** the migration hook ran (base moved to the DAMM pool, the locker and the leftover receiver) */
+  migrated: boolean;
+  /** what `collectCurveProceeds` moved so far */
+  collected: { migrationFee: bigint; surplus: bigint; tradingFee: bigint };
 }
 
 /**
@@ -286,7 +351,7 @@ export interface SimSeries {
   terms: SimTerms;
   /**
    * Accounting units per whole unit (Stage 1 `Ledger.unit_scale`): 1 for a sealed-bid series, 10^6 base lamports for a
-   * curve series (from S3 WP8; 1 until then). Units outstanding, weights, stakes and tenders are in accounting units,
+   * curve series. Units outstanding, weights, stakes and tenders are in accounting units,
    * prices (the issue price, the cap, `P_redeem`) per whole unit; the vault's per-unit WAD figures are per accounting
    * unit. Every money path passes it to `@merces/math`'s scale-aware functions, which run Stage 1's own at scale 1.
    */
@@ -299,9 +364,9 @@ export interface SimSeries {
   commitEndsAt: number | null;
   revealEndsAt: number | null;
   settledAt: number | null;
-  /** a settled raise's clearing price (or a graduated curve's price); null otherwise (a failed raise's price is `auction.clearingPrice`) */
+  /** a settled raise's clearing price, or a curve's P0 from its activation; null otherwise (a failed raise's price is `auction.clearingPrice`) */
   issuePrice: bigint | null;
-  /** a settled raise's units sold (or a curve's); 0 otherwise */
+  /** a settled raise's units sold, or a curve's swap base from its activation (base lamports); 0 otherwise */
   unitsSold: bigint;
   /** 0 until the mint is final (`auction.mintFinalized`): Stage 1 sets it after the last `processBid` */
   unitsOutstanding: bigint;
@@ -316,7 +381,7 @@ export interface SimSeries {
   releasesPausedByIssuer: boolean;
   bids: Map<string, SimBid>;
   bidOrder: number;
-  /** the sealed-bid auction (Stage 1's record; a curve series keeps the initial one, with `mintFinalized` set at graduation) */
+  /** the sealed-bid auction (Stage 1's record; a curve series keeps the initial one, with `mintFinalized` set by `completeCurve`) */
   auction: SimAuction;
   positions: Map<string, SimPosition>;
   periods: Map<string, SimPeriod>;

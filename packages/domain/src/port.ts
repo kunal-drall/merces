@@ -3,7 +3,7 @@ import type { AdminCommand, PermissionlessCommand, ServiceCommand, ServiceRole, 
 import type { Address, ChainFamily, ChainKey, ChainMode, Stablecoin } from './ids.ts';
 import type { Money } from './money.ts';
 import type {
-  AuctionState, BidState, ChainInfo, CurveState, HealthReport, IssuerState, PeriodState, PositionState, QuarterRateState,
+  AuctionState, BidState, ChainInfo, CurveState, CurveSwapQuote, HealthReport, IssuerState, PeriodState, PositionState, QuarterRateState,
   RateAccumulatorState, RedemptionState, SeriesState, TransferWindowState, TreasuryState, VaultState,
 } from './state.ts';
 
@@ -43,6 +43,11 @@ export interface ChainPort {
   listVerifierKeys(): Promise<{ keyId: string; publicKey: string }[]>;
   getTransferWindow(seriesId: string): Promise<TransferWindowState | null>;
   getCurve(seriesId: string): Promise<CurveState | null>;
+  /**
+   * Quote a `curveSwap` on a curve series at the current state (moves nothing): the simulator's stand-in pool; the live
+   * adapters quote Meteora's pool from S5 (NotImplemented until then).
+   */
+  quoteCurveSwap(seriesId: string, side: 'buy' | 'sell', amountIn: Money): Promise<CurveSwapQuote>;
   getBalance(wallet: Address, stablecoin: Stablecoin): Promise<Money>;
 
   // ---- events ----

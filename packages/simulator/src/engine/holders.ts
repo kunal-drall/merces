@@ -9,8 +9,8 @@ import { fail } from './errors.ts';
  *
  * A registered holder's payout accrues as `floor((vault.netAccWad − lastNetAccWad) × accrualUnits / WAD)`
  * (`settleHolderDelta`); settling folds it into `pending` and moves the cursor. Payouts accrue to registered holders
- * only: registration (auction allocation, curve graduation, a window buy fill) sets the cursor to the live
- * accumulator, so nothing paid before it counts.
+ * only: registration (auction allocation, a window buy fill, or `registerHolder`, the only way on a curve series) sets
+ * the cursor to the live accumulator, so nothing paid before it counts.
  */
 
 export function position(s: SimSeries, wallet: string): SimPosition {
@@ -24,17 +24,17 @@ export function position(s: SimSeries, wallet: string): SimPosition {
 /**
  * Stage 1 `registerHolder` (SIM:406-416): idempotent. Sets the net cursor to the live `vault.netAccWad`; the tail and
  * final cursors start at 0, so a holder registered after a redemption or extinguishment still gets its full slice.
- * The first registration emits `HolderRegistered` (as both chains do) when `emit` is given: the `registerHolder`
- * command, a winning `processBid` and a window buy fill. A curve's graduation registers its buyers without the event
- * (the curve is ours until S5).
+ * The first registration emits `HolderRegistered` (as both chains do): the `registerHolder` command, a winning
+ * `processBid` and a window buy fill. A curve series registers a holder only through `registerHolder` (Stage 1: an
+ * allowlisted wallet; its completion registers nobody).
  */
-export function registerHolder(s: SimSeries, p: SimPosition, emit?: Emit): void {
+export function registerHolder(s: SimSeries, p: SimPosition, emit: Emit): void {
   if (p.registered) return;
   p.registered = true;
   p.lastNetAccWad = s.vault.netAccWad;
   p.lastTailAccWad = 0n;
   p.lastFinalAccWad = 0n;
-  emit?.('HolderRegistered', { seriesId: s.seriesId, holder: p.wallet });
+  emit('HolderRegistered', { seriesId: s.seriesId, holder: p.wallet });
 }
 /** Auction units allocated to `wallet` and not yet delivered (Stage 1 `pending_units` of a processed, undelivered bid). */
 export function undeliveredUnits(s: SimSeries, wallet: string): bigint {
@@ -51,10 +51,11 @@ export function heldUnits(s: SimSeries, p: SimPosition): bigint {
 /**
  * The units a holder's payouts accrue on (Stage 1 `accrual_units`, SPEC §6.1: balance + undelivered auction units +
  * ask-escrow units). `units` holds all three: a processed winner's units join it at `processBid` (delivery moves
- * none), and a window ask keeps its units there (`escrowed` marks them).
+ * none), and a window ask keeps its units there (`escrowed` marks them). On a curve series only staked units earn
+ * (Stage 1 `settle_curve_holder`, curve.rs:516-535): the holder's `stakedUnits`; units in its wallet earn nothing.
  */
-export function accrualUnits(_s: SimSeries, p: SimPosition): bigint {
-  return p.units;
+export function accrualUnits(s: SimSeries, p: SimPosition): bigint {
+  return s.curve ? p.stakedUnits : p.units;
 }
 /** The payout a registered holder accrued since its last settlement (0 for an unregistered one); moves nothing. */
 function accruedSince(s: SimSeries, p: SimPosition): bigint {

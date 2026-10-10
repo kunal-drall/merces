@@ -14,6 +14,7 @@ import {
  *
  * S3 cause codes:
  *  - S3-BR: `burnRetired{holder}` (Stage 1 `burn_retired`) joins the permissionless group.
+ *  - S3-CV: a curve's `completeCurve` and `collectCurveProceeds` (Stage 1 `complete_curve`, `collect_curve_proceeds`) join it too.
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const SOLANA: ChainLimits = { tallyPageMax: 24, maxBidsPerAuction: null };
@@ -56,13 +57,16 @@ describe('permissionless commands and the settlement events (cause S2-MS)', () =
       { kind: 'deliverBid', seriesId: SID, bidder: 'b0' },
       { kind: 'registerHolder', seriesId: SID, wallet: 'w0' }, // cause S2-RH: Stage 1's `wallet` argument on both chains
       { kind: 'burnRetired', seriesId: SID, holder: 'w0' }, // cause S3-BR: Stage 1's `burn_retired` (EVM `burnRetired(seriesId, holder)`)
+      // cause S3-CV: a curve's completion and proceeds, Stage 1's `complete_curve` and `collect_curve_proceeds` (anyone)
+      { kind: 'completeCurve', seriesId: SID },
+      { kind: 'collectCurveProceeds', seriesId: SID },
     ];
     for (const c of cmds) {
       expect(permissionlessCommandSchema.parse(c)).toEqual(c);
       expect(serviceCommandSchema.parse(c)).toEqual(c);
     }
     expect(serviceCommandSchema.parse({ kind: 'crankStatus', seriesId: SID }).kind).toBe('crankStatus');
-    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired']); // cause S3-BR
+    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds']); // cause S3-BR, S3-CV
     for (const maxBids of [0, 1.5, -1]) expect(() => permissionlessCommandSchema.parse({ kind: 'tallyBids', seriesId: SID, maxBids })).toThrow();
     expect(() => permissionlessCommandSchema.parse({ kind: 'beginSettlement', seriesId: SID, clearingPrice: '9.5', qAboveClaim: '0', qAtClaim: '0' })).toThrow();
     expect(() => userCommandSchema.parse({ kind: 'deliverBid', seriesId: SID, bidder: 'b0' })).toThrow();

@@ -207,11 +207,13 @@ export class LifecycleService {
    * when the holder has no units left to redeem (its units less those held for a window ask). `units` are the units it
    * redeems (and burns); `amount` is everything it pays: the redemption price on them and their tail catch-up
    * (`redemptionClaimable`) and the holder's pending payout (`claimable`), which the redemption pays too (`payout`; it
-   * is `PayoutClaimed` beside `RedemptionClaimed`).
+   * is `PayoutClaimed` beside `RedemptionClaimed`). A curve series is redeemed by tendering units instead: 409
+   * CurveUsesTender.
    */
   async buildClaimRedemption(seriesId: string, session: Session, holder: string): Promise<{ tx: UnsignedTx; units: string; amount: string; redemption: string; payout: string }> {
     const chain = this.ctx.chainFor(seriesId);
     this.requireWallet(session, chain.chain, holder);
+    if ((await chain.getSeries(seriesId))?.terms.raiseStyle === 'curve') throw AppError.conflict('a curve-mode series is redeemed by tendering units', { stage1: 'CurveUsesTender' });
     const r = await chain.getRedemption(seriesId);
     if (!r) throw AppError.conflict('no redemption open', { stage1: 'NotRedeemed' });
     const p = await chain.getPosition(seriesId, holder);
@@ -261,7 +263,10 @@ export class LifecycleService {
     const paidPerUnit = BigInt(s.paidPerUnitWad) / WAD;
     return {
       seriesId, status: s.status, retired: s.status === 'Retired', capPerUnit: s.capPerUnit, paidPerUnit: paidPerUnit.toString(), capRemaining: cap === null ? null : capRemaining(cap, BigInt(s.paidPerUnitWad)).toString(), capProgressBps: cap && cap > 0n ? Number((paidPerUnit * 10_000n) / cap) : 0,
-      unitsOutstanding: s.unitsOutstanding, holdersWithUnits: unburned.length, burnable: s.status === 'Retired', note: 'Units of a Retired series burn on a payout claim (claimPayout, also one that pays nothing) or by the permissionless burnRetired, one holder at a time (the keepers send it for every holder still holding units); units of an Extinguished series burn at the final claim (claimFinal); a redeemed holder\'s units burn at its redemption. Burned holders keep their claimable payouts.',
+      unitsOutstanding: s.unitsOutstanding, holdersWithUnits: unburned.length, burnable: s.status === 'Retired' && s.terms.raiseStyle === 'sealed',
+      note: s.terms.raiseStyle === 'curve'
+        ? 'Curve-mode units are never burned (Stage 1 CurveModeNoBurn): on a Retired curve series holders keep their units and claim what their staked units earned; a redemption burns the units tendered.'
+        : 'Units of a Retired series burn on a payout claim (claimPayout, also one that pays nothing) or by the permissionless burnRetired, one holder at a time (the keepers send it for every holder still holding units); units of an Extinguished series burn at the final claim (claimFinal); a redeemed holder\'s units burn at its redemption. Burned holders keep their claimable payouts.',
     };
   }
 
@@ -317,13 +322,15 @@ export class LifecycleService {
   /**
    * Admin trigger for the Retired burn (the `burn.crank` keeper job runs it too): one permissionless `burnRetired` (Stage
    * 1 `burn_retired`) per holder that still holds units (`heldUnits`: a burn of nothing would only emit a burn of 0).
-   * A Retired series only: 409 otherwise (Stage 1 refuses any other status, TerminalStatus). A holder the chain refuses
-   * (not registered, HolderNotRegistered) is skipped and counted in `refused`.
+   * A Retired sealed-bid series only: 409 on a curve series (its units never burn, CurveModeNoBurn) and on any other
+   * status (Stage 1 refuses it, TerminalStatus). A holder the chain refuses (not registered, HolderNotRegistered) is
+   * skipped and counted in `refused`.
    */
   async burnRetiredHolders(seriesId: string, by: string): Promise<{ burned: number; refused: number }> {
     const chain = this.ctx.chainFor(seriesId);
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
+    if (s.terms.raiseStyle === 'curve') throw AppError.conflict('curve-mode units are never burned', { stage1: 'CurveModeNoBurn' });
     if (s.status !== 'Retired') throw AppError.conflict(`units are burned by burnRetired only on a Retired series (series is ${s.status}; an extinguished holder's units burn at claimFinal, a redeemed holder's at its redemption)`, { stage1: 'TerminalStatus' });
     const holders = (await chain.listPositions(seriesId)).filter((p) => heldUnits(p) > 0n).map((p) => p.wallet);
     let burned = 0;

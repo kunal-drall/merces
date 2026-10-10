@@ -64,8 +64,10 @@ proves or verifies must do the same, or it will not exit.
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final
 pool (version 2, S1), the raise's own terms and Stage 1's multi-step auction settlement (version 3, S2), it carries each
 series' unit scale (Stage 1's `unit_scale`: 1 for a sealed-bid series, 10^6 base lamports per whole unit for a curve
-series), curve staking (the stake and tender totals, the census time, each holder's stake) and, from S3 WP8, the curve
-record, completed under the same version before anything is deployed. A persisted chain of another version is never
+series), curve staking (the stake and tender totals, the census time, each holder's stake) and the curve record (S3
+WP8: the DBC stand-in pool, its base-mint accounts, P0 and what was collected), completed under the same version before
+anything was deployed. Migration 020 reshapes the read model's `curves` table (the old rows are dropped with it; a reset
+re-indexes them). A persisted chain of another version is never
 upgraded in place: `SimulatorChain.create` refuses it with `SimStateVersionError`, so the API and `dev:mock` stop at
 boot on a database that still holds a version-1, -2 or -3 chain. Reset the simulated chains **before deploying the
 version-4 build**, and again after S3 WP8 (no environment holds simulator data worth keeping):

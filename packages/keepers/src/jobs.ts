@@ -210,7 +210,7 @@ export const pauseCrankJob: KeeperJob = {
  * (`heldUnits`: its units less the auction units not yet delivered and those held for a window ask, which Stage 1 does
  * not burn), so nothing is sent for a holder with nothing to burn. An action is one holder burned. An Extinguished
  * series is never cranked: Stage 1 refuses it (TerminalStatus), since the holder's units are its weight in the final
- * pool until `claimFinal`. A holder the chain refuses with an expected code (a status that moved, WrongStatus; a holder
+ * pool until `claimFinal`. Nor is a curve series: its units never burn (CurveModeNoBurn). A holder the chain refuses with an expected code (a status that moved, WrongStatus; a holder
  * not registered, NotFound) is skipped and the others are still sent.
  */
 export const burnCrankJob: KeeperJob = {
@@ -220,7 +220,7 @@ export const burnCrankJob: KeeperJob = {
     let actions = 0;
     const errors: string[] = [];
     await forEachSettled(ctx, errors, async (chain, s) => {
-      if (s.status !== 'Retired') return;
+      if (s.status !== 'Retired' || s.terms.raiseStyle === 'curve') return;
       const holders = (await chain.listPositions(s.seriesId)).filter((p) => heldUnits(p) > 0n).map((p) => p.wallet);
       for (const holder of holders) {
         try {
