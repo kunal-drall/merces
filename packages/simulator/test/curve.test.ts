@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SimHarness, defaultTerms } from '../src/index.ts';
-import { GENESIS, USDC, expectChainError, types } from './helpers.ts';
+import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './helpers.ts';
 
 describe('curve mode (solana)', () => {
   async function curveSeries() {
@@ -23,30 +23,40 @@ describe('curve mode (solana)', () => {
     expect(types(ok.events)).toEqual(['UnitsMinted', 'TreasuryFunded']);
   });
 
-  it('extinguishing an ungraduated curve returns the treasury to holders and refuses further buys and graduation', async () => {
+  // Stage 1 extinguishes only a settled raise (exit.rs:229-236, SIM:1425): an ungraduated curve has not settled, so it is
+  // refused (cause M5: the owner adopted Stage 1's rule; was "the whole treasury goes back to the curve buyers")
+  it('refuses to extinguish an ungraduated curve; once graduated, holders share its unvested treasury', async () => {
     const { h, seriesId } = await curveSeries();
-    const backer = h.backers[0]!;
-    const before = BigInt(await h.sim.getBalance(backer.address, 'USDC'));
-    await h.exec(backer, { kind: 'buyCurve', seriesId, amountIn: USDC(1000).toString(), minUnitsOut: '0' });
+    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
+    const extinguish = () => h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    await h.exec(h.backers[0]!, { kind: 'buyCurve', seriesId, amountIn: USDC(1000).toString(), minUnitsOut: '0' });
     await h.exec(h.backers[1]!, { kind: 'buyCurve', seriesId, amountIn: USDC(500).toString(), minUnitsOut: '0' });
-    const ex = await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);
+    await expectStage1Error(extinguish(), 'RaiseNotSettled'); // M5: was PaymentReceived + SeriesExtinguished
+    // the curve keeps selling and graduates as usual
+    const buy = await h.exec(h.backers[2]!, { kind: 'buyCurve', seriesId, amountIn: USDC(600).toString(), minUnitsOut: '0' });
+    expect(types(buy.events)).toEqual(['UnitsMinted', 'TreasuryFunded', 'CurveGraduated']);
+    // a graduated curve is a settled raise: only the unvested half of its 2,100 treasury goes to the final pool (G7)
+    const ex = await extinguish();
     expect(types(ex.events)).toEqual(['PaymentReceived', 'SeriesExtinguished', 'StatusChanged']);
-    expect(ex.events[0]!.payload).toMatchObject({ source: 'extinguishment', gross: USDC(1500).toString(), fee: '0' });
-    expect((ex.events[1]!.payload as { returnedToHolders: string }).returnedToHolders).toBe(USDC(1500).toString());
-    // the holder recovers its pro-rata share of the treasury and its units burn on claim
-    const claim = await h.exec(backer, { kind: 'claimPayout', seriesId });
-    expect(types(claim.events)).toEqual(['PayoutClaimed', 'UnitsBurned']);
-    const recovered = BigInt(await h.sim.getBalance(backer.address, 'USDC')) - (before - USDC(1000));
-    expect(recovered).toBeGreaterThan(0n);
-    expect(recovered).toBeLessThanOrEqual(USDC(1500));
-    // nothing more can enter or graduate an extinguished curve
-    await expectChainError(h.exec(h.backers[2]!, { kind: 'buyCurve', seriesId, amountIn: USDC(5000).toString(), minUnitsOut: '0' }), 'WrongStatus');
-    await expectChainError(h.sim.submit({ kind: 'graduateCurve', seriesId }, 'keeper'), 'WrongStatus');
+    expect((ex.events[1]!.payload as { returnedToHolders: string }).returnedToHolders).toBe(USDC(1050).toString());
+    const s = (await h.sim.getSeries(seriesId))!;
+    expect(s.final.units).toBe(s.unitsOutstanding);
+    // every buyer was registered at graduation and claims its pro-rata share; its units burn on claim
+    let claimed = 0n;
+    for (const b of [h.backers[0]!, h.backers[1]!, h.backers[2]!]) {
+      const units = BigInt((await h.sim.getPosition(seriesId, b.address))!.units);
+      const claim = await h.exec(b, { kind: 'claimPayout', seriesId });
+      expect(types(claim.events)).toEqual(['PayoutClaimed', 'UnitsBurned']);
+      const amount = BigInt((claim.events[0]!.payload as { amount: string }).amount);
+      expect(amount).toBe((USDC(1050) * units) / BigInt(s.unitsOutstanding));
+      claimed += amount;
+    }
+    expect(USDC(1050) - claimed).toBeLessThan(3n); // flooring dust only
   });
 
-  it('extinguishing a curve nobody bought simply cancels it', async () => {
+  it('refuses to extinguish a curve nobody bought', async () => {
     const { h, seriesId } = await curveSeries();
-    const ex = await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);
-    expect(types(ex.events)).toEqual(['RaiseCancelled', 'SeriesExtinguished', 'StatusChanged']);
+    // M5: was RaiseCancelled + SeriesExtinguished
+    await expectStage1Error(h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]), 'RaiseNotSettled');
   });
 });

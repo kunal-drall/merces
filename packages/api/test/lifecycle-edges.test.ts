@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { setFlag } from '@merces/core';
@@ -47,7 +48,7 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     expect(BigInt(await h.sim.getBalance(buyer, 'USDC'))).toBe(USDC(10_000));
   });
 
-  it('extinguishing a settled series returns the treasury to holders without counting it as an issuer payment', async () => {
+  it('extinguishing a settled series returns the unvested treasury to holders without counting it as an issuer payment', async () => {
     const h = rig.sol;
     const { seriesId } = await h.runRaise();
     await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);
@@ -55,12 +56,16 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     const rec = await rig.get('/admin/accounting/reconcile', adminTok);
     expect(rec.json().checks.filter((c: { ok: boolean }) => !c.ok)).toEqual([]);
     const st = (await rig.get(`/admin/accounting/series/${seriesId}`, adminTok)).json();
-    expect(st.treasury).toMatchObject({ released: st.treasury.total, balance: '0' });
+    // only the unvested half (tranches 1 and 2) leaves the treasury; tranche 0 vested at settlement and stays there,
+    // undrawn and drawable by the issuer (G7; was released = total, balance 0, all of it returned)
+    const half = (BigInt(st.treasury.total) / 2n).toString();
+    expect(st.treasury).toMatchObject({ released: '0', balance: half });
+    expect(st.extinguishment.returnedToHolders).toBe(half);
     expect(st.payments.grossPaidTotal).toBe('0');
-    expect(BigInt(st.payments.netDistributed)).toBe(BigInt(st.treasury.total));
+    expect(st.payments.netDistributed).toBe(half);
   });
 
-  it('an ungraduated curve: buys fund the treasury in the read model; after extinguishment holders claim it and the raise cannot be cancelled', async () => {
+  it('an ungraduated curve: buys fund the treasury in the read model; the raise can be neither cancelled nor extinguished', async () => {
     const h = rig.sol;
     const { terms } = defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
@@ -71,20 +76,20 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     expect((await rig.t.pool.query('select treasury_total::text as t from series where series_id = $1', [seriesId])).rows[0].t).toBe(USDC(1500).toString());
     // with units out there is no raise to cancel
     await expect(h.exec(h.issuer, { kind: 'cancelRaise', seriesId })).rejects.toMatchObject({ code: 'TooLate' });
-    await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);
-    await expect(h.exec(h.issuer, { kind: 'cancelRaise', seriesId })).rejects.toMatchObject({ code: 'WrongStatus' });
-    let claimed = 0n;
-    for (const b of [h.backers[0]!, h.backers[1]!]) claimed += BigInt(((await h.exec(b, { kind: 'claimPayout', seriesId })).events[0]!.payload as { amount: string }).amount);
-    expect(USDC(1500) - claimed).toBeLessThan(10n); // rounding dust only
+    // nor can it be extinguished before it graduates: Stage 1 extinguishes a settled raise only (M5: was the whole
+    // treasury returned to the curve buyers)
+    await expect(h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!])).rejects.toMatchObject({ code: 'WrongPhase', detail: { stage1: 'RaiseNotSettled' } });
+    // and the attestor service does not build the doomed transaction
+    const attTok = rig.token({ accountId: 'edge-att', wallets: [{ chain: 'solana', address: h.attestors[0]!.address }], roles: ['attestor'] });
+    const evidence = Buffer.from(randomBytes(48)).toString('base64');
+    const req = await rig.post('/attestor/extinguish', { seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address], evidenceCiphertext: evidence }, attTok);
+    expect(req.statusCode, req.body).toBe(409);
     await rig.sync();
-    const row = (await rig.t.pool.query('select status, treasury_total::text as t, treasury_released::text as r, gross_paid_total::text as g from series where series_id = $1', [seriesId])).rows[0];
-    expect(row).toMatchObject({ status: 'Extinguished', t: USDC(1500).toString(), r: USDC(1500).toString(), g: '0' });
+    const row = (await rig.t.pool.query('select status, extinguished_at, treasury_total::text as t, treasury_released::text as r from series where series_id = $1', [seriesId])).rows[0];
+    expect(row).toMatchObject({ extinguished_at: null, t: USDC(1500).toString(), r: '0' });
+    expect(row.status).not.toBe('Extinguished');
     expect((await rig.get('/admin/accounting/reconcile', adminTok)).json().checks.filter((c: { ok: boolean }) => !c.ok)).toEqual([]);
-    // the cap view says plainly that this curve is closed rather than 'until graduation'
-    expect((await rig.get(`/series/${seriesId}/curve`)).json().walletCap).toMatchObject({ enforced: false, note: 'Curve buys are closed and this curve will not graduate.' });
-    // and the curve no longer builds buys (a USDG buyer would otherwise swap for real and then revert)
-    const tok = await rig.grant({ accountId: 'curve-b0', wallets: [{ chain: 'solana', address: h.backers[0]!.address }], roles: ['backer'] });
-    const buy = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[0]!.address, amountIn: USDC(10).toString(), payIn: 'USDG' }, tok);
-    expect(buy.statusCode).toBe(409);
+    // the curve keeps bonding under its wallet cap
+    expect((await rig.get(`/series/${seriesId}/curve`)).json().walletCap).toMatchObject({ enforced: true });
   });
 });

@@ -256,7 +256,8 @@ export class AccountingService {
       fees: { auction: feeByKind.auction, payout: feeByKind.payout, total: (BigInt(feeByKind.auction) + BigInt(feeByKind.payout)).toString(), vaultFeesTotal: s.fees_total },
       payouts: { claimed: claimed.toString(), unclaimed: (netDistributed > claimed ? netDistributed - claimed : 0n).toString(), count: moneyTotals.payout?.count ?? 0 },
       refunds: { total: sum('refund').toString(), bids: refunds.rows[0]?.bids ?? '0', payments: refunds.rows[0]?.payments ?? '0' },
-      treasury: { total: s.treasury_total, released: s.treasury_released, balance: (treasuryTotal - treasuryReleased).toString(), releasesPaused: s.releases_paused },
+      // an extinguishment returns the unvested proceeds to holders: they leave the treasury without being released
+      treasury: { total: s.treasury_total, released: s.treasury_released, balance: (treasuryTotal - treasuryReleased - sum('extinguishment')).toString(), releasesPaused: s.releases_paused },
       redemption: { price: s.redemption_price, redeemedAt: ts(s.redeemed_at), deposit: sum('redemption').toString(), claimed: sum('redemption_claim').toString() },
       tail: { total: sum('tail').toString() },
       extinguishment: { extinguishedAt: ts(s.extinguished_at), returnedToHolders: sum('extinguishment').toString() },

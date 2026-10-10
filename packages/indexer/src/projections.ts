@@ -249,8 +249,9 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     }
     case 'SeriesExtinguished': {
       const p = e.payload as P<'SeriesExtinguished'>;
-      // the chain marks the whole treasury released when it returns the unreleased part to holders
-      await client.query('update series set extinguished_at = $2, treasury_released = treasury_total, last_event_seq = $3 where series_id = $1', [p.seriesId, e.blockTime, e.seq]);
+      // only the unvested proceeds return to holders (Stage 1 SIM:1431); the vested part stays in the treasury and the
+      // issuer may still draw it, so `treasury_released` moves only with `FundsReleased`
+      await client.query('update series set extinguished_at = $2, last_event_seq = $3 where series_id = $1', [p.seriesId, e.blockTime, e.seq]);
       await money(client, e, 'extinguishment', p.returnedToHolders, { detail: { attestors: p.attestors } });
       break;
     }

@@ -5626,7 +5626,7 @@ paths:
         "403":
           description: Neither attestor is linked to the account
         "409":
-          description: Already extinguished
+          description: Already extinguished, or the raise has not settled (an open raise or an ungraduated curve cannot be extinguished)
         "422":
           description: Attestors not distinct or not registered; plaintext-looking evidence
   /attestor/extinguish/{requestId}:

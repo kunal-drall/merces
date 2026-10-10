@@ -191,7 +191,7 @@ paths:
       security: [{ session: [] }]
       parameters: [{ name: Idempotency-Key, in: header, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [seriesId, attestors, evidenceCiphertext], properties: { seriesId: { type: string }, attestors: { type: array, minItems: 2, maxItems: 2, items: { type: string }, description: two distinct registered attestors; both sign }, evidenceCiphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] } } } } } }
-      responses: { '201': { description: The request and the unsigned extinguish transaction (signer = first attestor, co-signer = second), content: { application/json: { schema: { type: object, properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }, '403': { description: Neither attestor is linked to the account }, '409': { description: Already extinguished }, '422': { description: Attestors not distinct or not registered; plaintext-looking evidence } }
+      responses: { '201': { description: The request and the unsigned extinguish transaction (signer = first attestor, co-signer = second), content: { application/json: { schema: { type: object, properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }, '403': { description: Neither attestor is linked to the account }, '409': { description: 'Already extinguished, or the raise has not settled (an open raise or an ungraduated curve cannot be extinguished)' }, '422': { description: Attestors not distinct or not registered; plaintext-looking evidence } }
   /attestor/extinguish/{requestId}:
     get:
       operationId: getExtinguishment

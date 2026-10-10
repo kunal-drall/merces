@@ -295,7 +295,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(409); // paused: no new request
   });
 
-  it('extinguishment: two distinct registered attestors sign one transaction; the chain returns unreleased treasury to holders', async () => {
+  it('extinguishment: two distinct registered attestors sign one transaction; the chain returns unvested treasury to holders', async () => {
     const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     const evidence = e2e(`death certificate ${CANARY}`);
     expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a1.address], evidenceCiphertext: evidence }, attTok)).statusCode).toBe(422);
@@ -321,7 +321,10 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     const ext = sent.json().events.find((e: { type: string }) => e.type === 'SeriesExtinguished');
     expect(ext.payload.attestors).toEqual([a1.address, a2.address]);
-    expect(BigInt(ext.payload.returnedToHolders)).toBeGreaterThan(0n);
+    // every tranche vested by 2027 (180 days after settlement), so nothing returns to holders: the vested treasury stays
+    // drawable by the issuer (G7; was > 0, the whole unreleased treasury)
+    expect(ext.payload.returnedToHolders).toBe('0');
+    expect(sent.json().events.map((e: { type: string }) => e.type)).not.toContain('PaymentReceived');
     await rig.sync();
     expect((await rig.get(`/series/${seriesId}/status`)).json().status).toBe('Extinguished');
     expect((await rig.get(`/attestor/extinguish/${requestId}`, attTok)).json()).toMatchObject({ state: 'sent', seriesStatus: 'Extinguished' });

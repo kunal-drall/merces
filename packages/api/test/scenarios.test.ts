@@ -192,7 +192,7 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     expect(BigInt(claim.json().tailClaimable)).toBe((BigInt(payout.total) * 95n / 100n) / 5n);
   });
 
-  it('extinguishment: two attestors end all claims; unreleased treasury returns to holders; nothing else is owed', async () => {
+  it('extinguishment: two attestors end all claims; unvested treasury returns to holders; nothing else is owed', async () => {
     const h = rig.sol;
     const raise = await h.runRaise();
     const seriesId = raise.seriesId;
@@ -207,9 +207,14 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     await rig.sync();
     expect((await rig.get(`/series/${seriesId}/status`)).json().status).toBe('Extinguished');
     const claim = await rig.post(`/series/${seriesId}/payouts/build-claim`, { holder: h.backers[2]!.address }, holderTok);
-    expect(claim.json().claimable).toBe(USDC(900).toString()); // 4,500 unreleased ÷ 5 holders, no fee
+    // only the unvested 2,250 (tranches 1 and 2) goes to holders, through the final pool: 2,250 ÷ 5 holders, no fee
+    // (G7; was claimable 900 = all 4,500 unreleased ÷ 5 through the net payout)
+    expect(claim.json()).toMatchObject({ claimable: '0', finalClaimable: USDC(450).toString() });
     const issuerTok = rig.token({ accountId: 'ex-iss', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
-    expect((await rig.post(`/series/${seriesId}/treasury/build-draw`, {}, issuerTok)).statusCode).toBe(409);
+    // tranche 0 vested at settlement and stays drawable after the extinguishment (G7; was 409, nothing left to draw)
+    const draw = await rig.post(`/series/${seriesId}/treasury/build-draw`, {}, issuerTok);
+    expect(draw.statusCode, draw.body).toBe(200);
+    expect(draw.json().drawable).toEqual([{ index: 0, amount: USDC(2250).toString() }]);
     const sched = await rig.get(`/series/${seriesId}/reporting/schedule`, issuerTok);
     expect(sched.json().status).toBe('Extinguished');
   });

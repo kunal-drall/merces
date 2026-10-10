@@ -6822,7 +6822,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Already extinguished */
+            /** @description Already extinguished, or the raise has not settled (an open raise or an ungraduated curve cannot be extinguished) */
             409: {
                 headers: {
                     [name: string]: unknown;
