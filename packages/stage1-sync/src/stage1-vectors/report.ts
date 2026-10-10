@@ -53,7 +53,7 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
     '',
     `Stage 1 parity vectors in ${source.dir}${source.commit ? ` at ${source.commit}` : ''} (schema 2, SPEC 1.1), replayed by the Stage 1 vector runner (\`packages/stage1-sync/src/stage1-vectors\`, \`pnpm stage1:vectors\`).`,
     '',
-    `Every \`expect\` compares the keys it carries, each as a whole value; every \`expect_revert\` must raise the named Stage 1 error and leave the state unchanged; Σ stablecoin equals Σ \`fund\` after every step, and the unit supply holds at every \`expect\`. Proofs are verified for real with the ports' \`Groth16ReportVerifier\` (Stage 1's verifier and development verification key): ${proofs.verified} distinct proofs, ${proofs.invalid} invalid (the vectors' deliberate tamper cases).`,
+    `Every \`expect\` compares the keys it carries, each as a whole value; every \`expect_revert\` must raise the named Stage 1 error, the transaction that raised must leave the state and the event log unchanged (checked before the merces backend restores anything), and the world must then be as it was before the call; Σ stablecoin equals Σ \`fund\` after every step, and the unit supply holds at every \`expect\`. Proofs are verified for real with the ports' \`Groth16ReportVerifier\` (Stage 1's verifier and development verification key): ${proofs.verified} distinct proofs, ${proofs.invalid} invalid (the vectors' deliberate tamper cases).`,
     '',
     ...(extra.notes?.length ? [...extra.notes, ''] : []),
     '## Results',
@@ -87,6 +87,17 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
   if (!waived.length) lines.push('None.');
   for (const { r, i } of waived) lines.push(`- ${r.vector} #${i.index} \`${i.op}\` on ${r.world}: ${i.kind.toUpperCase()}${i.shimId ? ` (${i.shimId})` : ''}, waived`);
 
+  const atomic = runs.flatMap((r) => r.runnerAtomic.map((a) => ({ r, a })));
+  lines.push(
+    '',
+    '## Runner-atomic reverts',
+    '',
+    'Expected reverts of a call the merces backend carries out as several transactions, where some went through before one raised the expected error: the runner undid them, so the call reverted as a whole by the runner\'s doing, not the engine\'s (not parity).',
+    '',
+  );
+  if (!atomic.length) lines.push('None: every expected revert raised in the call\'s first transaction.');
+  for (const { r, a } of atomic) lines.push(`- ${r.vector} #${a.index} \`${a.op}\`${a.shimId ? ` (${a.shimId})` : ''} on ${r.world}: ${a.rolledBack} transaction${a.rolledBack > 1 ? 's' : ''} undone by the runner`);
+
   const used = new Map<string, Set<string>>();
   for (const r of runs) for (const id of Object.keys(r.shims)) (used.get(id) ?? used.set(id, new Set()).get(id)!).add(r.vector.slice(0, 2));
   for (const r of runs) for (const i of r.issues) if (i.shimId) (used.get(i.shimId) ?? used.set(i.shimId, new Set()).get(i.shimId)!).add(r.vector.slice(0, 2));
@@ -94,14 +105,14 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
     '',
     '## Shims (not parity)',
     '',
-    'The merces backend runs these Stage 1 ops through canonical calls of another shape (S1 plan §5.3). A step run through a shim is executed and checked, but it is not parity for that op; `blocked` and `n/a` rows are not run at all. The reference backend runs Stage 1\'s own simulator and uses none of them. "Used in" lists the vectors of this report that went through the row.',
+    'The merces backend runs these Stage 1 ops through canonical calls of another shape (S1 plan §5.3). A step run through a shim is executed and checked, but it is not parity for that op; `blocked` and `n/a` rows are not run at all. A runner-atomic row may send several transactions for one Stage 1 call, and the runner undoes the ones that went through when a later one reverts. The reference backend runs Stage 1\'s own simulator and uses none of them. "Used in" lists the vectors of this report that went through the row, the calls of `expect_revert` steps included.',
     '',
     '| ID | Stage 1 op | Our call | Why it is a shim | Removed in | Used in |',
     '| --- | --- | --- | --- | --- | --- |',
   );
   for (const s of SHIMS) {
     const v = used.get(s.id);
-    const kind = s.kind === 'shim' ? '' : ` (${s.kind.toUpperCase()})`;
+    const kind = s.kind === 'shim' ? (s.runnerAtomic ? ' (runner-atomic)' : '') : ` (${s.kind.toUpperCase()})`;
     lines.push(`| ${s.id}${kind} | ${s.ops.map((o) => `\`${o}\``).join(', ')} | ${s.call} | ${s.why} | ${s.removedIn} | ${v ? [...v].sort().join(', ') : '—'} |`);
   }
   lines.push(

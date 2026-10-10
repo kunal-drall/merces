@@ -3,7 +3,7 @@ import { SimError, Simulator, type Call } from '@merces/reference';
 import { nonProtocol, RunnerError, type Raised } from './errors.ts';
 import type { LoadedVector } from './load.ts';
 import { verifyReportCached } from './proofs.ts';
-import type { Applied, FxRequest, World } from './world.ts';
+import type { Applied, Attempt, FxRequest, World } from './world.ts';
 
 /**
  * The reference backend: Stage 1's own `Simulator` (`@merces/reference`, SIM), the executable spec. It runs every op
@@ -48,6 +48,16 @@ export class ReferenceWorld implements World {
       this.setVerify(true);
     }
     return { kind: 'direct' };
+  }
+
+  /** Stage 1's simulator restores nothing after a call raises, so what it left is what the call left (SIM:488-497). */
+  async attempt(call: Call): Promise<Attempt> {
+    const before = this.sim.serialize();
+    try {
+      return { ok: true, applied: await this.apply(call) };
+    } catch (error) {
+      return { ok: false, error, applied: { kind: 'direct' }, leaked: this.sim.serialize() !== before, rolledBack: 0 };
+    }
   }
 
   classify(e: unknown): Raised {

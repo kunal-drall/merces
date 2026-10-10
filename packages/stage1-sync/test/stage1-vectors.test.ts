@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ChainError } from '@merces/domain';
+import type { Step } from '@merces/reference';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   EXPECTED_S1,
@@ -19,9 +21,12 @@ import {
   fromJson,
   listVectorFiles,
   loadVector,
+  opLabel,
   renderParity,
+  replayVector,
   runStage1Vectors,
   shutdown,
+  waiverFor,
   type LoadedVector,
   type RunReport,
   type World,
@@ -154,18 +159,25 @@ describe('stage1 vector runner: checks are not vacuous', () => {
     expect(through.status).toBe('FAIL');
   }, 60_000);
 
-  it('a revert that changes the state fails, and a non-protocol exception is reported by class only', async () => {
+  it('a revert that changes the state fails, even when the world restores it afterwards, and a non-protocol exception is reported by class only', async () => {
     const v = loadVector(join(VECTORS, '01_happy_path.json'));
     const step = v.steps.find((s) => s.op === 'expect_revert')!;
     if (step.op !== 'expect_revert') throw new Error('unreachable');
     let state = 'a';
-    const fake = (thrown: unknown, mutate: boolean): World => ({
+    /** `mutate`: the failing call changes the state; `restore`: the world then puts it back, as the merces world does */
+    const fake = (thrown: unknown, mutate: boolean, restore = false): World => ({
       backend: 'reference',
       label: 'fake',
       setTime: () => {},
       apply: async () => {
-        if (mutate) state = 'b';
         throw thrown;
+      },
+      attempt: async () => {
+        const before = state;
+        if (mutate) state = 'b';
+        const leaked = state !== before;
+        if (restore) state = before;
+        return { ok: false, error: thrown, applied: { kind: 'direct' }, leaked, rolledBack: 0 };
       },
       classify: (e) => new ReferenceWorld(v).classify(e),
       snapshot: () => ({}),
@@ -178,6 +190,12 @@ describe('stage1 vector runner: checks are not vacuous', () => {
     const changed = await checkRevert(fake(new SimError(step.error, 'detail'), true), step);
     expect(changed).toEqual({ result: 'fail', message: `${step.call.op} reverted with ${step.error} but changed the state`, diverged: true });
     state = 'a';
+    // the comparison is made before the world's rollback: a restored leak still fails, and the replay can go on
+    const restored = await checkRevert(fake(new SimError(step.error, 'detail'), true, true), step);
+    expect(restored).toEqual({ result: 'fail', message: `${step.call.op} reverted with ${step.error} but changed the state`, diverged: false });
+    expect(state).toBe('a');
+    const clean = await checkRevert(fake(new SimError(step.error, 'detail'), false), step);
+    expect(clean).toEqual({ result: 'ok', applied: { kind: 'direct' }, rolledBack: 0 });
     const secret = 'income 123456789 salt 987654321';
     const other = await checkRevert(fake(new TypeError(secret), false), step);
     expect(other).toEqual({ result: 'fail', message: `expected revert ${step.error} for ${step.call.op}, got a non-protocol exception TypeError`, diverged: false });
@@ -196,14 +214,41 @@ describe('stage1 vector runner: compare', () => {
 });
 
 describe('stage1 vector runner: S1 expectations and the op map', () => {
-  it('every target expects PASS (waivers only for blocked or n/a rows); the others are NOT-IN-S1 with a milestone', () => {
+  it('every target expects PASS (waivers only for blocked or n/a rows, each naming the op of its step); the others are NOT-IN-S1 with a milestone', () => {
     expect(Object.keys(EXPECTED_S1).sort()).toEqual(listVectorFiles(VECTORS).map((f) => f.split('/').at(-1)!.slice(0, 2)));
     for (const [id, e] of Object.entries(EXPECTED_S1)) {
       if ((TARGETS_S1 as readonly string[]).includes(id)) {
         expect(e.status, id).not.toBe('NOT-IN-S1');
-        for (const w of e.waivers ?? []) expect(['blocked', 'n/a']).toContain(SHIM_BY_ID.get(w.id)?.kind);
+        const v = loadVector(listVectorFiles(VECTORS).find((f) => f.split('/').at(-1)!.startsWith(`${id}_`))!);
+        for (const w of e.waivers ?? []) {
+          const row = SHIM_BY_ID.get(w.id);
+          expect(['blocked', 'n/a'], `${id}#${w.step}`).toContain(row?.kind);
+          // the step the waiver names is that op in the vector, and the row stands for that op
+          expect(opLabel(v.steps[w.step]!), `${id}#${w.step}`).toBe(w.op);
+          expect(row?.ops, `${id}#${w.step}`).toContain(w.op.replace(/^expect_revert /, ''));
+        }
       } else expect(e.status === 'NOT-IN-S1' && !!e.milestone, id).toBe(true);
     }
+  });
+
+  // review finding "Waivers match any shim-less BLOCKED op at a waived step index": the id was compared only when the
+  // op carried a shim row, so any op outside S1 (no row) landing on 01#32, 01#34 or 05#42 was waived
+  it('a waiver covers only its own step, op and row', () => {
+    const w = EXPECTED_S1['01']!.waivers!;
+    const step = (op: string, revert = true): Step => (revert ? { t: '0', op: 'expect_revert', call: { op }, error: 'X' } : { t: '0', op }) as unknown as Step;
+    expect(waiverFor(w, 34, step('retire_if_capped'), { kind: 'blocked', shimId: 'BLK-1' })).toEqual({ step: 34, op: 'expect_revert retire_if_capped', id: 'BLK-1' });
+    expect(waiverFor(w, 32, step('transfer_units'), { kind: 'n/a', shimId: 'NA-1' })).toEqual({ step: 32, op: 'expect_revert transfer_units', id: 'NA-1' });
+    // an op outside S1 carries no row: never waived, at a waived index or anywhere
+    expect(waiverFor(w, 34, step('end_pause'), { kind: 'blocked' })).toBeUndefined();
+    expect(waiverFor(w, 32, step('end_pause'), { kind: 'blocked' })).toBeUndefined();
+    // the same row at another index, or the op as an action instead of inside expect_revert
+    expect(waiverFor(w, 33, step('retire_if_capped'), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
+    expect(waiverFor(w, 34, step('retire_if_capped', false), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
+    // another row's waiver at the index, a row that does not stand for the op, a kind the row does not have
+    expect(waiverFor(w, 32, step('retire_if_capped'), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
+    expect(waiverFor(w, 34, step('end_pause'), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
+    expect(waiverFor(w, 34, step('retire_if_capped'), { kind: 'n/a', shimId: 'BLK-1' })).toBeUndefined();
+    expect(waiverFor(undefined, 34, step('retire_if_capped'), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
   });
 
   it('every op the vectors use is mapped, and every shim the map names is a row for that op', () => {
@@ -290,6 +335,15 @@ describe('stage1 vector runner: merces backend', () => {
     }
   }, 120_000);
 
+  it('lockstep counts the shims of passing reverts (11: amend_terms at #45 and redeem at #43 run only inside expect_revert)', async () => {
+    const r = (await runStage1Vectors({ dir: VECTORS, backend: 'lockstep', only: ['11'], personalities: ['solana'] })).runs[0]!;
+    expect(r.issues).toEqual([]);
+    expect(r.status).toBe('PASS');
+    expect(r.shims['SH-AMD-1']).toBe(1);
+    expect(r.shims['SH-RED-1']).toBe(1);
+    expect(r.runnerAtomic).toEqual([]);
+  }, 60_000);
+
   it('lockstep stops at the first step after which the backends disagree', async () => {
     const src = raw('01_happy_path');
     // an op the merces backend does not run in S1, after the settled expect: the states part there
@@ -339,6 +393,119 @@ describe('stage1 vector runner: merces backend', () => {
     expect(run.issues).toEqual([{ index: i, op: 'begin_settlement', kind: 'blocked', message: 'cannot run on this backend yet; not run (Stage 1 rejects this proposal (ClaimMismatch); one-step settlement cannot represent a rejected round)', shimId: 'SH-AUC-3' }]);
     expect(run.status).toBe('BLOCKED');
   }, 60_000);
+
+  // review finding "Waivers match any shim-less BLOCKED op at a waived step index": 01#34 turned into an op outside S1
+  // (no shim row) was waived by BLK-1, so the vector came out PASS-WITH-WAIVERS (ok) on both the runner and lockstep
+  it('a waived index holding another op is BLOCKED on the runner and in lockstep', async () => {
+    const src = raw('01_happy_path');
+    expect(src.steps[34]).toMatchObject({ op: 'expect_revert', call: { op: 'retire_if_capped' } });
+    const endPause = structuredClone(src);
+    endPause.steps[34] = { t: src.steps[34]!.t, op: 'expect_revert', call: { op: 'end_pause', actor: 'issuer', series: 'S1' }, error: 'NotPaused' };
+    // the same op as an action, not the revert check the waiver names
+    const asAction = structuredClone(src);
+    asAction.steps[34] = { t: src.steps[34]!.t, op: 'retire_if_capped', series: 'S1' };
+    for (const [mutated, op] of [[endPause, 'expect_revert end_pause'], [asAction, 'retire_if_capped']] as const) {
+      const v = fromJson(mutated, '01_happy_path');
+      const r = await runStage1Vectors({ vectors: [v], backend: 'merces', personalities: ['solana'], until: 36 });
+      const run = r.runs[0]!;
+      expect(run.status, op).toBe('BLOCKED');
+      expect(run.issues.find((i) => i.index === 34), op).toMatchObject({ op, kind: 'blocked' });
+      expect(run.issues.find((i) => i.index === 34)!.waived, op).toBeUndefined();
+      expect(run.issues.find((i) => i.index === 32)?.waived, op).toBe(true);
+      expect(run.atExpected, op).toBe(false);
+      expect(r.ok, op).toBe(false);
+    }
+    const lock = (await runStage1Vectors({ vectors: [fromJson(endPause, '01_happy_path')], backend: 'lockstep', personalities: ['solana'], until: 36 })).runs[0]!;
+    expect(lock.status).toBe('BLOCKED');
+    expect(lock.issues.find((i) => i.index === 34)).toEqual({ index: 34, op: 'expect_revert end_pause', kind: 'blocked', message: 'the merces backend does not run this call (end_pause is not in S1 (S5))' });
+    expect(lock.atExpected).toBe(false);
+  }, 120_000);
+
+  // disputed review finding "The 'revert leaves state unchanged' check cannot fail on the merces backend": the world
+  // restored every op that threw before the check compared, so an engine whose reverted transactions leaked a change
+  // still passed vector 04
+  it('a reverted transaction that changes the engine fails its revert check, although the world restores the state', async () => {
+    const v = loadVector(join(VECTORS, '04_zero_quarters.json'));
+    const world = await MercesWorld.create(v, { personality: 'solana' });
+    const engine = world.chain.engine;
+    const execute = engine.execute.bind(engine);
+    let leaks = 0;
+    engine.execute = ((...a: Parameters<typeof execute>) => {
+      try {
+        return execute(...a);
+      } catch (e) {
+        engine.state.txCount += 1000; // after the engine restored its own backup
+        leaks++;
+        throw e;
+      }
+    }) as typeof engine.execute;
+    try {
+      const run = await replayVector(world, v);
+      const reverts = v.steps.flatMap((s, i) => (s.op === 'expect_revert' ? [[i, `${s.call.op} reverted with ${s.error} but changed the state`]] : []));
+      expect(reverts).toHaveLength(6);
+      expect(leaks).toBe(6);
+      expect(run.status).toBe('FAIL');
+      expect(run.issues.map((i) => [i.index, i.message])).toEqual(reverts);
+      // each leak was undone by the world, so the replay went on to the end
+      expect(run.executed).toBe(run.total);
+    } finally {
+      await world.close();
+    }
+  }, 120_000);
+
+  it('a multi-transaction shim that reverts in its second transaction is runner-atomic; its row must say so', async () => {
+    // 09#82: b4 never claimed its redemption, so claim_tail (SH-CLM-2) sends claimRedemption, then claimPayout
+    const src = raw('09_tail_clause');
+    expect(src.steps[82]).toMatchObject({ op: 'claim_tail', actor: 'b4', series: 'S1' });
+    const t = src.steps[82]!.t as string;
+    const reverting = structuredClone(src);
+    reverting.steps[82] = { t, op: 'expect_revert', call: { op: 'claim_tail', actor: 'b4', series: 'S1' }, error: 'NoTailDue' };
+    /** b4's claimPayout at #82 raises NoTailDue, after changing the engine when `leak` */
+    const refusePayout = (world: MercesWorld, leak: boolean) => {
+      const engine = world.chain.engine;
+      const execute = engine.execute.bind(engine);
+      const b4 = world.actors.address('b4');
+      engine.execute = ((cmd, actor, ctx) => {
+        if (cmd.kind === 'claimPayout' && (actor as { signers?: string[] }).signers?.[0] === b4 && world.now() === Number(t)) {
+          if (leak) engine.state.txCount += 1000;
+          throw new ChainError('NotPermitted', 'claimPayout refused by the test', { stage1: 'NoTailDue' });
+        }
+        return execute(cmd, actor, ctx);
+      }) as typeof engine.execute;
+    };
+    const replay = async (vector: LoadedVector, leak?: boolean) => {
+      const world = await MercesWorld.create(vector, { personality: 'solana' });
+      if (leak !== undefined) refusePayout(world, leak);
+      try {
+        return { run: await replayVector(world, vector, { until: 82 }), world };
+      } finally {
+        await world.close();
+      }
+    };
+    const v = fromJson(reverting, '09_tail_clause');
+    // claimRedemption went through, claimPayout reverted cleanly: the runner undid the first, and says so
+    const { run } = await replay(v, false);
+    expect(run.issues).toEqual([]);
+    expect(run.status).toBe('PASS');
+    expect(run.runnerAtomic).toEqual([{ index: 82, op: 'expect_revert claim_tail', shimId: 'SH-CLM-2', rolledBack: 1 }]);
+    expect(run.shims['SH-CLM-2']).toBe(1);
+    const md = renderParity([{ backend: 'merces', runs: [{ ...run, expected: EXPECTED_S1['09']!, atExpected: true }], notRun: [], proofs: { verified: 0, invalid: 0, cacheHits: 0 }, ok: true }], { dir: 'x' });
+    expect(md).toContain('- 09_tail_clause #82 `expect_revert claim_tail` (SH-CLM-2) on merces/solana: 1 transaction undone by the runner');
+    expect(md).toMatch(/\| SH-CLM-2 \(runner-atomic\) \| `claim_tail` \|[^\n]*\| 09 \|/);
+    // the second transaction's own revert is checked against the state just before it, not the op's start
+    const leaked = (await replay(v, true)).run;
+    expect(leaked.issues).toEqual([{ index: 82, op: 'expect_revert claim_tail', kind: 'fail', message: 'claim_tail reverted with NoTailDue but changed the state' }]);
+    // a shim row not marked runner-atomic may not send two transactions for one call
+    const row = SHIM_BY_ID.get('SH-CLM-2') as { runnerAtomic?: true };
+    delete row.runnerAtomic;
+    try {
+      const unmarked = (await replay(fromJson(src, '09_tail_clause'))).run;
+      expect(unmarked.status).toBe('FAIL');
+      expect(unmarked.issues).toEqual([{ index: 82, op: 'claim_tail', kind: 'fail', message: 'claim_tail went through 2 transactions, but shim row SH-CLM-2 is not marked runner-atomic' }]);
+    } finally {
+      row.runnerAtomic = true;
+    }
+  }, 120_000);
 
   // Stage 1's create_series rules (SIM:756-781) on both backends: every refusal raises Stage 1's error and leaves the
   // state untouched, and terms at the bounds themselves are accepted (review finding "createSeries skips Stage 1's
@@ -449,6 +616,15 @@ describe('stage1 vector runner: merces backend', () => {
     for (const s of SHIM_BY_ID.values()) expect(section, s.id).toContain(`| ${s.id}`);
     expect(section).toMatch(/\| SH-AUC-3 \| `begin_settlement` \|[^\n]*\| S2 \| 01, 04, 05, 06, 07, 09, 11, 19, 23, 25 \|/);
     expect(section).toMatch(/\| BLK-1 \(BLOCKED\) \| `retire_if_capped` \|/);
+    // review finding "VECTOR_PARITY.md 'Used in' leaves out shims exercised by expect_revert steps": the calls of
+    // passing reverts went through their shims too (amend_terms at 05#44 and 11#45, redeem at 01#33, 05#43, 11#43)
+    for (const id of ['05', '11']) for (const r of report.runs.filter((x) => x.id === id)) expect(r.shims['SH-AMD-1'], `${id} ${r.world}`).toBe(1);
+    for (const r of report.runs.filter((x) => x.id === '01')) expect(r.shims['SH-RED-1'], r.world).toBe(1);
+    expect(section).toMatch(/\| SH-AMD-1 \| `amend_terms` \|[^\n]*\| S4 \| 05, 11 \|/);
+    expect(section).toMatch(/\| SH-RED-1 \| `redeem` \|[^\n]*\| — \| 01, 05, 06, 09, 11, 23, 25 \|/);
+    expect(section).toMatch(/\| SH-CLM-2 \(runner-atomic\) \| `claim_tail` \|/);
+    expect(md).toContain('## Runner-atomic reverts\n\nExpected reverts of a call');
+    expect(md).toContain("None: every expected revert raised in the call's first transaction.");
     // privacy canary: no vector key, terms salt or income salt reaches the report
     const secrets = new Set<string>();
     for (const f of listVectorFiles(VECTORS)) {

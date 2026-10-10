@@ -1,12 +1,12 @@
 import type { ExpectRevertStep, Step } from '@merces/reference';
 import { compareExpect, fxRequestOf, type Diff } from './compare.ts';
 import { RunnerError, describeRaised } from './errors.ts';
-import type { Waiver } from './expected.ts';
-import { callOf, type LoadedVector } from './load.ts';
+import { waiverFor, type Waiver } from './expected.ts';
+import { callOf, opLabel, type LoadedVector } from './load.ts';
 import { MercesWorld } from './merces-world.ts';
 import { ReferenceWorld } from './reference-world.ts';
 import { checkRevert } from './revert.ts';
-import { statusOf, type StepIssue, type VectorRun } from './run.ts';
+import { statusOf, type RunnerAtomicStep, type StepIssue, type VectorRun } from './run.ts';
 import type { Applied, VectorPersonality } from './world.ts';
 
 /**
@@ -20,7 +20,8 @@ import type { Applied, VectorPersonality } from './world.ts';
  *   field, not only those an `expect` carries).
  * - At an `expect`, the full snapshot of its series is compared, in flight or not.
  * - An action must succeed on both; an `expect_revert` must revert on both with the same Stage 1 error and leave the
- *   merces state unchanged (a merces op that is blocked or n/a there is noted, not a divergence).
+ *   merces state unchanged, checked before the merces world restores anything (`checkRevert`; a merces op that is
+ *   blocked or n/a there is noted, not a divergence; a runner-atomic revert is recorded).
  * - An action the merces backend cannot run (blocked, n/a) is a divergence: the states part from there on.
  *
  * Diffs carry public values only (the snapshots are the `expect` views).
@@ -33,16 +34,13 @@ export interface LockstepOptions {
 
 const MAX_DIFFS = 40;
 
-function opLabel(step: Step): string {
-  return step.op === 'expect_revert' ? `expect_revert ${step.call.op}` : step.op;
-}
-
 export async function replayLockstep(vector: LoadedVector, personality: VectorPersonality, opts: LockstepOptions = {}): Promise<VectorRun> {
   const started = Date.now();
   const ref = await ReferenceWorld.create(vector);
   const mer = await MercesWorld.create(vector, { personality });
   const issues: StepIssue[] = [];
   const shims: Record<string, number> = {};
+  const runnerAtomic: RunnerAtomicStep[] = [];
   let executed = 0;
   let stopped: VectorRun['stopped'];
 
@@ -52,8 +50,11 @@ export async function replayLockstep(vector: LoadedVector, personality: VectorPe
   };
   const noted = (index: number, step: Step, applied: Applied): void => {
     const kind = applied.kind === 'n/a' ? 'n/a' : 'blocked';
-    const waived = opts.waivers?.some((w) => w.step === index && (!applied.shimId || w.id === applied.shimId));
+    const waived = waiverFor(opts.waivers, index, step, applied) !== undefined;
     issues.push({ index, op: opLabel(step), kind, message: `the merces backend does not run this call${applied.note ? ` (${applied.note})` : ''}`, ...(applied.shimId ? { shimId: applied.shimId } : {}), ...(waived ? { waived: true } : {}) });
+  };
+  const countShim = (applied: Applied): void => {
+    if (applied.kind === 'shim' && applied.shimId) shims[applied.shimId] = (shims[applied.shimId] ?? 0) + 1;
   };
   /** Compare the full snapshots of the named series (all of them when null); the global view when there is none. */
   const compare = (names: string[] | null, fx?: Record<string, number[]>): Diff[] => {
@@ -108,6 +109,9 @@ export async function replayLockstep(vector: LoadedVector, personality: VectorPe
         else if (m.result === 'fail') {
           diverge(index, step, m.message);
           break;
+        } else {
+          if (m.applied) countShim(m.applied);
+          if (m.rolledBack > 0) runnerAtomic.push({ index, op: opLabel(step), ...(m.applied?.shimId ? { shimId: m.applied.shimId } : {}), rolledBack: m.rolledBack });
         }
         continue;
       }
@@ -127,7 +131,7 @@ export async function replayLockstep(vector: LoadedVector, personality: VectorPe
         diverge(index, step, 'the merces backend did not run this action, so the states part here');
         break;
       }
-      if (applied.kind === 'shim' && applied.shimId) shims[applied.shimId] = (shims[applied.shimId] ?? 0) + 1;
+      countShim(applied);
       if (ref.inFlight().length === 0) {
         const diffs = compare(null);
         if (diffs.length) {
@@ -154,6 +158,7 @@ export async function replayLockstep(vector: LoadedVector, personality: VectorPe
     ...(stopped ? { stopped } : {}),
     issues,
     shims,
+    runnerAtomic,
     ms: Date.now() - started,
   };
 }

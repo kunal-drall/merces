@@ -22,6 +22,21 @@ export interface Applied {
   note?: string;
 }
 
+/**
+ * How one call ended (`World.attempt`), for the `expect_revert` check (revert.ts). When it raised:
+ * - `error`: what it raised (`World.classify` names it);
+ * - `applied`: how the world was carrying it out (absent when it could not translate the call at all);
+ * - `leaked`: the transaction that raised (or, with no transaction, the call) had changed the protocol state or the
+ *   event log by the time it raised, measured **before** the world restores anything: a revert must be atomic on its
+ *   own, as a reverted Stage 1 call is;
+ * - `rolledBack`: transactions of the same call that went through before one raised, which the world then undid. Only
+ *   a call the backend carries out as several transactions has any (its revert is atomic by the runner's doing, not the
+ *   engine's: "runner-atomic", not parity).
+ */
+export type Attempt =
+  | { ok: true; applied: Applied }
+  | { ok: false; error: unknown; applied?: Applied; leaked: boolean; rolledBack: number };
+
 /** `expect.fx` request: pair id → the periods whose quarter averages the step checks. */
 export type FxRequest = Record<string, number[]>;
 
@@ -37,6 +52,8 @@ export interface World {
   setTime(t: bigint): void;
   /** Run one action. Throws what the protocol raised when it reverts. */
   apply(call: Call): Promise<Applied>;
+  /** Run one call and say how it ended without throwing; the world is restored when it raised (see `Attempt`). */
+  attempt(call: Call): Promise<Attempt>;
   /** Classify an error `apply` threw. */
   classify(e: unknown): Raised;
   /**

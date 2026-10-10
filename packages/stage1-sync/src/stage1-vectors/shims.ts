@@ -17,6 +17,12 @@ export interface Shim {
   removedIn: string;
   /** `blocked` and `n/a` rows: the op is not run at all */
   kind: 'shim' | 'blocked' | 'n/a';
+  /**
+   * The row may send more than one transaction for one Stage 1 call. When a later one reverts, the runner undoes the
+   * ones that went through, so the call reverts as a whole by the runner's doing, not the engine's (runner-atomic; the
+   * merces backend refuses a multi-transaction op through a row without this mark).
+   */
+  runnerAtomic?: true;
 }
 
 export const SHIMS: readonly Shim[] = [
@@ -35,7 +41,7 @@ export const SHIMS: readonly Shim[] = [
   { id: 'SH-PAU-1', ops: ['request_pause'], call: 'requestPause{until: t + maxPauseSeconds}', why: "Stage 1's request has no end", removedIn: 'S5', kind: 'shim' },
   { id: 'SH-PAU-2', ops: ['approve_pause'], call: 'approvePause{until: pauseEnd} sent by the attestor wallet', why: 'signatures as arguments are S4', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-CLM-1', ops: ['claim'], call: 'claimPayout', why: 'S1 claimPayout = claim + tail + final', removedIn: 'S3', kind: 'shim' },
-  { id: 'SH-CLM-2', ops: ['claim_tail'], call: 'claimRedemption first when nothing is redeemed yet and units remain (SIM:1409), then claimPayout', why: 'no claimTail command', removedIn: 'S3', kind: 'shim' },
+  { id: 'SH-CLM-2', ops: ['claim_tail'], call: 'claimRedemption first when nothing is redeemed yet and units remain (SIM:1409), then claimPayout', why: 'no claimTail command', removedIn: 'S3', kind: 'shim', runnerAtomic: true },
   { id: 'SH-CLM-3', ops: ['claim_final'], call: 'claimPayout', why: 'no claimFinal command', removedIn: 'S3', kind: 'shim' },
   { id: 'SH-BRN-1', ops: ['burn_retired'], call: 'keeper crankBurn{holders: [holder]}', why: 'batch shape', removedIn: '—', kind: 'shim' },
   { id: 'SH-RED-1', ops: ['redeem'], call: 'redeem{maxPricePerUnit: U64_MAX}', why: 'Stage 1 has no slippage bound', removedIn: '—', kind: 'shim' },

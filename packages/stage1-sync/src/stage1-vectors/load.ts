@@ -144,3 +144,8 @@ export function callOf(step: Step): Call | null {
   if (step.op === 'expect_revert') return step.call;
   return step as unknown as Call;
 }
+
+/** A step's op as reports name it: `expect_revert <call op>` for a revert, the op otherwise. */
+export function opLabel(step: Step): string {
+  return step.op === 'expect_revert' ? `expect_revert ${step.call.op}` : step.op;
+}

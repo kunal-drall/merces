@@ -11,9 +11,10 @@ import type { OpKind } from '../world.ts';
  * How the merces backend runs one Stage 1 op (S1 plan §5.1, §5.3): its kind, the shim-table row when it is a shim
  * (or blocked / n/a), and `run`, the canonical call(s). `blocked` and `n/a` have no `run`: nothing is executed.
  *
- * `run` performs the engine calls first and updates the runner's bookkeeping only after they succeeded; the world
- * runs it atomically (state, events and bookkeeping are restored if any part throws), so a multi-call shim reverts as
- * one Stage 1 call does.
+ * `run` performs the engine calls first, each through `OpContext.send` or `submit` (the only way a translator changes
+ * the engine, apart from `fund`'s faucet credit), and updates the runner's bookkeeping only after they succeeded. The world checks that a transaction
+ * that raises leaves the engine as it found it, then restores the whole op (state, events and bookkeeping), so a
+ * multi-call shim reverts as one Stage 1 call does; such a shim's row is marked `runnerAtomic` (shims.ts).
  */
 export interface Translation {
   kind: OpKind;
@@ -41,9 +42,9 @@ export interface OpContext {
   seriesBook(name: string): SeriesBook;
   /** the engine's live state of a vector series name (read it after the calls: a failed call replaces the state) */
   seriesState(name: string): SimSeries;
-  /** build, sign (and co-sign) and send a user or admin command */
+  /** build, sign (and co-sign) and send a user or admin command (one transaction) */
   send(signer: SimWallet, cmd: UserCommand | AdminCommand, coSigners?: SimWallet[]): Promise<TxResult>;
-  /** submit a service command under one of the backend's roles */
+  /** submit a service command under one of the backend's roles (one transaction) */
   submit(cmd: ServiceCommand, role: ServiceRole): Promise<TxResult>;
 }
 

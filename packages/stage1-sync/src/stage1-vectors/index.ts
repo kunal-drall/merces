@@ -22,9 +22,9 @@ import { ReferenceWorld } from './reference-world.ts';
 import { replayVector, type VectorRun } from './run.ts';
 import { PERSONALITIES, type Backend, type VectorPersonality, type WorldFactory } from './world.ts';
 
-export { TARGETS_S1, EXPECTED_S1, EXPECTED_REFERENCE, expectedS1, describeExpected, type Expected, type ExpectedStatus, type Waiver } from './expected.ts';
-export { loadVector, loadVectors, fromJson, listVectorFiles, type LoadedVector } from './load.ts';
-export { replayVector, statusOf, type VectorRun, type VectorStatus, type StepIssue, type ReplayOptions } from './run.ts';
+export { TARGETS_S1, EXPECTED_S1, EXPECTED_REFERENCE, expectedS1, describeExpected, waiverFor, type Expected, type ExpectedStatus, type Waiver } from './expected.ts';
+export { loadVector, loadVectors, fromJson, listVectorFiles, opLabel, type LoadedVector } from './load.ts';
+export { replayVector, statusOf, type VectorRun, type VectorStatus, type StepIssue, type RunnerAtomicStep, type ReplayOptions } from './run.ts';
 export { compareExpect, type Diff } from './compare.ts';
 export { checkRevert, type RevertOutcome } from './revert.ts';
 export { RunnerError, canonicalErrorName, classifyChainError, type Raised } from './errors.ts';
@@ -35,7 +35,7 @@ export { replayLockstep, type LockstepOptions } from './oracle.ts';
 export { TRANSLATORS, NOT_IN_S1, translate } from './ops/index.ts';
 export { SHIMS, SHIM_BY_ID, type Shim } from './shims.ts';
 export { renderParity, renderSummary, writeParity, type ParitySource } from './report.ts';
-export { PERSONALITIES, type Backend, type World, type WorldFactory, type Applied, type OpKind, type VectorPersonality } from './world.ts';
+export { PERSONALITIES, type Backend, type World, type WorldFactory, type Applied, type Attempt, type OpKind, type VectorPersonality } from './world.ts';
 
 /** Worlds by backend. */
 const FACTORIES: Partial<Record<Backend, WorldFactory>> = {

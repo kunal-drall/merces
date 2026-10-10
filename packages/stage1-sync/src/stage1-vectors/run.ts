@@ -1,9 +1,9 @@
 import type { ExpectRevertStep, Step } from '@merces/reference';
 import { compareExpect, fxRequestOf, type Diff } from './compare.ts';
 import { describeRaised, RunnerError } from './errors.ts';
-import type { Waiver } from './expected.ts';
+import { waiverFor, type Waiver } from './expected.ts';
 import { stableConserved, unitsConserved } from './invariants.ts';
-import { callOf, type LoadedVector } from './load.ts';
+import { callOf, opLabel, type LoadedVector } from './load.ts';
 import { checkRevert } from './revert.ts';
 import type { Applied, Backend, VectorPersonality, World } from './world.ts';
 
@@ -24,6 +24,19 @@ export interface StepIssue {
   waived?: boolean;
 }
 
+/**
+ * An expected revert that was atomic by the runner's doing, not the engine's: transactions of the same call went
+ * through before one reverted, and the world undid them (a runner-atomic shim row; not parity).
+ */
+export interface RunnerAtomicStep {
+  index: number;
+  /** `expect_revert <call op>` */
+  op: string;
+  shimId?: string;
+  /** transactions the runner undid */
+  rolledBack: number;
+}
+
 export interface VectorRun {
   id: string;
   vector: string;
@@ -38,8 +51,10 @@ export interface VectorRun {
   /** set when the replay did not reach the end */
   stopped?: { index: number; reason: 'until' | 'stop-before' | 'diverged' | 'too-many-failures' };
   issues: StepIssue[];
-  /** shim-table rows the world ran ops through, with how many steps */
+  /** shim-table rows the world ran ops through (the calls of passing `expect_revert` steps included), with how many steps */
   shims: Record<string, number>;
+  /** expected reverts the runner made atomic (see `RunnerAtomicStep`) */
+  runnerAtomic: RunnerAtomicStep[];
   ms: number;
 }
 
@@ -52,10 +67,6 @@ export interface ReplayOptions {
   waivers?: readonly Waiver[];
   /** stop after this many failing steps (default 25) */
   maxFailures?: number;
-}
-
-function opLabel(step: Step): string {
-  return step.op === 'expect_revert' ? `expect_revert ${step.call.op}` : step.op;
 }
 
 /** The status a list of issues amounts to. */
@@ -77,6 +88,7 @@ export async function replayVector(world: World, vector: LoadedVector, opts: Rep
   const started = Date.now();
   const issues: StepIssue[] = [];
   const shims: Record<string, number> = {};
+  const runnerAtomic: RunnerAtomicStep[] = [];
   const maxFailures = opts.maxFailures ?? 25;
   let funded = 0n;
   let executed = 0;
@@ -87,7 +99,7 @@ export async function replayVector(world: World, vector: LoadedVector, opts: Rep
   };
   const notRun = (index: number, step: Step, applied: Applied) => {
     const kind = applied.kind === 'n/a' ? 'n/a' : 'blocked';
-    const waiver = opts.waivers?.find((w) => w.step === index && (!applied.shimId || w.id === applied.shimId));
+    const waiver = waiverFor(opts.waivers, index, step, applied);
     const what = kind === 'n/a' ? 'not applicable on this backend; not run' : 'cannot run on this backend yet; not run';
     issues.push({ index, op: opLabel(step), kind, message: applied.note ? `${what} (${applied.note})` : what, ...(applied.shimId ? { shimId: applied.shimId } : {}), ...(waiver ? { waived: true } : {}) });
   };
@@ -127,6 +139,11 @@ export async function replayVector(world: World, vector: LoadedVector, opts: Rep
           fail(index, step, r.message);
           diverged = r.diverged;
         } else if (r.result === 'skipped') notRun(index, step, r.applied);
+        else {
+          // the call went through its translation (a shim, maybe) before it raised the expected error
+          if (r.applied) countShim(r.applied);
+          if (r.rolledBack > 0) runnerAtomic.push({ index, op: opLabel(step), ...(r.applied?.shimId ? { shimId: r.applied.shimId } : {}), rolledBack: r.rolledBack });
+        }
       } else {
         if (step.op === 'fund') funded += BigInt(step.amount);
         try {
@@ -169,6 +186,7 @@ export async function replayVector(world: World, vector: LoadedVector, opts: Rep
     ...(stopped ? { stopped } : {}),
     issues,
     shims,
+    runnerAtomic,
     ms: Date.now() - started,
   };
 }

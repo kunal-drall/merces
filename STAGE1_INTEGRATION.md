@@ -98,7 +98,15 @@ S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed 
 - **Vector runner (WP9a, WP9b, WP13).** `pnpm stage1:vectors` (`packages/stage1-sync/src/stage1-vectors`): a
   reference backend (Stage 1's own simulator), a merces backend (our `SimulatorChain` through op translators and the
   shim table, never persisted, real Groth16 verification with the ports' verifier) and a lockstep oracle that names
-  the first field where the two disagree. The merces gate runs in the default test suite.
+  the first field where the two disagree. The merces gate runs in the default test suite. S1 review: a waiver covers
+  only its own step (the vector's step index, the op as the report names it, so `expect_revert retire_if_capped` is not
+  the action, and the shim row of the right kind); an op outside S1 has no row and is never waived, where any of them
+  landing on 01#32, 01#34 or 05#42 had been. The `expect_revert` check compares the engine right after the failing
+  transaction raised, before the merces world undoes the op; it had compared only afterwards, so a revert that changed
+  the state could not fail there. A call the backend carries out as several transactions (`claim_tail`, SH-CLM-2) is
+  undone by the runner when a later one reverts: such a revert is reported as runner-atomic, and a shim row not marked
+  runner-atomic may send only one transaction. "Used in" counts the shims of calls that reverted as expected
+  (`amend_terms` in 05 and 11, `redeem` in 01, 05 and 11).
 - **Tests (WP12).** Every pin S1 moved names its cause code; the moved figures were recomputed with Stage 1's own
   simulator.
 
@@ -149,7 +157,7 @@ Open, with the default S1 uses meanwhile:
 | Non-reveal charge (owner hold) | after the owner decides |
 | One-step auction: greedy fill by price then commit order, cap clamp at allocation, de-allowlisted bidders excluded, pull refunds (B.1) | S2 |
 | One-step transfer windows; no windows flag, eligibility or fee (B.2) | S5 |
-| `claimPayout` = claim + tail + final; no explicit `register_holder` (B.3) | S3 |
+| `claimPayout` = claim + tail + final; no explicit `register_holder` (B.3); `claim_tail` is `claimRedemption` then `claimPayout`, two transactions (runner-atomic in the vector runner) | S3 |
 | No `retire_if_capped`, `withdraw_pause_request` or `end_pause` commands; `requestPause.until` advisory (B.6) | S5 |
 | `payIn` exact-amount and period guards (Stage 1's `pay` takes neither) | S5 (adapters drop them) |
 | Tier 1: no router year-to-date binding; split receipts stand in for the router credit | tier-1 milestone |
@@ -373,7 +381,8 @@ to the base unit; a mismatch means the simulator is wrong and is fixed.
    proofs verified, or the runner or the checkout is broken) and on the merces backend (our simulator, the S1 target
    vectors on both personalities, each at its expected status; the default test suite runs the same gate). Report
    proofs are verified with the ports' `Groth16ReportVerifier`, the verifier the API and the simulated chains run. `VECTOR_PARITY.md` lists the results,
-   the findings with leaf-path diffs, waived steps, the shims used ("not parity") and the op inventory. A single JSON
+   the findings with leaf-path diffs, waived steps, runner-atomic reverts, the shims used ("not parity", the calls of
+   expected reverts included) and the op inventory. A single JSON
    file of `scenarios` (the earlier Merces format) is replayed through the harness.
 6. **conformance** — the H2 suite against each live chain (`CONFORMANCE_CHAIN=solana|evm:<chain>`).
 7. **verdict** — per chain: ready for `live` only when no step failed and both **diff** and **conformance** are `ok`

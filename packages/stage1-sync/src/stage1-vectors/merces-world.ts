@@ -1,15 +1,32 @@
 import type { AdminCommand, ServiceCommand, ServiceRole, TxResult, UserCommand } from '@merces/domain';
 import type { Call } from '@merces/reference';
-import { SimulatorChain, serialiseState, type SimSeries, type SimWallet } from '@merces/simulator';
+import { SimulatorChain, serialiseState, type SimSeries, type SimState, type SimWallet } from '@merces/simulator';
 import { Actors } from './actors.ts';
 import type { Book, SeriesBook } from './book.ts';
 import { RunnerError, classifyChainError, type Raised } from './errors.ts';
 import { VectorKeyring } from './keys.ts';
 import type { LoadedVector } from './load.ts';
 import { translate, type OpContext } from './ops/index.ts';
+import type { Translation } from './ops/types.ts';
 import { verifyReportCached } from './proofs.ts';
+import { SHIM_BY_ID } from './shims.ts';
 import { checkUnitSupply, mercesSnapshot, seenAfter, totalStable } from './view.ts';
-import type { Applied, FxRequest, VectorPersonality, World, WorldOptions } from './world.ts';
+import type { Applied, Attempt, FxRequest, VectorPersonality, World, WorldOptions } from './world.ts';
+
+/** One op in flight: the engine as the op found it, and its transactions so far (`MercesWorld.attempt`). */
+interface OpTrace {
+  state: SimState;
+  events: number;
+  /** transactions that went through */
+  committed: number;
+  /** a transaction raised and left the engine's state or event log changed (before the runner restored anything) */
+  leaked: boolean;
+}
+
+/** What a reverted transaction must leave as it found it: the protocol state and the event log. */
+function engineFingerprint(state: SimState, events: number): string {
+  return `${events}:${serialiseState(state)}`;
+}
 
 /**
  * The merces backend (S1 plan D7, §5): our `SimulatorChain` replaying a Stage 1 vector through the op translators
@@ -19,9 +36,13 @@ import type { Applied, FxRequest, VectorPersonality, World, WorldOptions } from 
  *   the ports' `Groth16ReportVerifier` (Stage 1's verifier, as the API's simulator chains run it) behind the runner's
  *   per-process tally: every report proof is checked for real.
  * - The clock is set to each step's `t` before the step, `expect` and `expect_revert` included (SIM:475-482).
- * - Each op runs atomically: a translator that sends several transactions (or updates the runner's bookkeeping after
- *   one) is undone as a whole if any part throws, so an expected revert leaves state, events and bookkeeping
- *   byte-identical, as a reverted Stage 1 call does.
+ * - A transaction that raises must leave the engine's state and event log as it found them, checked right after it
+ *   raised and before the runner restores anything, so the `expect_revert` check sees the engine's own atomicity
+ *   (`Attempt.leaked`). Then the op is undone as a whole: a translator that sends several transactions (or updates the
+ *   runner's bookkeeping after one) leaves state, events and bookkeeping byte-identical, as a reverted Stage 1 call
+ *   does. Undoing transactions that went through is the runner's atomicity, not the engine's: such a revert is
+ *   reported as runner-atomic (`Attempt.rolledBack`). A shim may send more than one transaction only if its row is
+ *   marked `runnerAtomic`; the one direct op that does, `allowlist`, sends one `setAllowlist` per wallet of its list.
  * - Errors are compared by their Stage 1 name (`ChainError.detail.stage1`); anything else is reported by class only.
  *
  * Privacy: the vector's `witness` and `seriesPrivate` were dropped at load; the vector keys live only in `keyring`;
@@ -35,6 +56,8 @@ export class MercesWorld implements World, OpContext {
   readonly keyring: VectorKeyring;
   readonly mint: string;
   private bookState: Book;
+  /** the op `attempt` is running, while it runs */
+  private op: OpTrace | null = null;
 
   private constructor(
     readonly vector: LoadedVector,
@@ -86,11 +109,30 @@ export class MercesWorld implements World, OpContext {
     const tx = await this.chain.build(cmd, signer.address, coSigners.map((c) => c.address));
     let signed = await signer.sign(tx);
     for (const c of coSigners) signed = await c.coSign(signed);
-    return this.chain.send(signed);
+    return this.transact(() => this.chain.send(signed));
   }
 
   submit(cmd: ServiceCommand, role: ServiceRole): Promise<TxResult> {
-    return this.chain.submit(cmd, role);
+    return this.transact(() => this.chain.submit(cmd, role));
+  }
+
+  /**
+   * One transaction of the op in flight. If it raises, the engine must be as it was just before it (the op's own
+   * snapshot for its first transaction): a difference is recorded as a leak before anything is restored.
+   */
+  private async transact(fn: () => Promise<TxResult>): Promise<TxResult> {
+    const op = this.op;
+    if (!op) return fn();
+    const engine = this.chain.engine;
+    const before = op.committed === 0 ? undefined : engineFingerprint(engine.state, engine.events.length);
+    try {
+      const r = await fn();
+      op.committed++;
+      return r;
+    } catch (e) {
+      if (engineFingerprint(engine.state, engine.events.length) !== (before ?? engineFingerprint(op.state, op.events))) op.leaked = true;
+      throw e;
+    }
   }
 
   // ---------------------------------------------------------------- World
@@ -102,28 +144,44 @@ export class MercesWorld implements World, OpContext {
   }
 
   async apply(call: Call): Promise<Applied> {
-    const tr = translate(this, call);
-    const applied: Applied = { kind: tr.kind, ...(tr.shimId ? { shimId: tr.shimId } : {}), ...(tr.note ? { note: tr.note } : {}) };
-    if (!tr.run) return applied;
-    await this.atomic(tr.run);
-    this.bookState.seen = seenAfter(this);
-    return applied;
+    const a = await this.attempt(call);
+    if (!a.ok) throw a.error;
+    return a.applied;
   }
 
-  /** Run `fn`; if it throws, restore the chain state, its event log and the bookkeeping, then rethrow. */
-  private async atomic(fn: () => Promise<void>): Promise<void> {
-    const engine = this.chain.engine;
-    const state = structuredClone(engine.state);
-    const events = engine.events.length;
-    const book = JSON.stringify(this.bookState);
+  /**
+   * Translate and run one call. If any part throws, the transactions' own atomicity has already been checked
+   * (`transact`); then the chain state, its event log and the bookkeeping are restored as the op found them.
+   */
+  async attempt(call: Call): Promise<Attempt> {
+    let tr: Translation;
     try {
-      await fn();
-    } catch (e) {
-      engine.state = state;
-      engine.events.length = events;
-      this.bookState = JSON.parse(book) as Book;
-      throw e;
+      tr = translate(this, call);
+    } catch (error) {
+      return { ok: false, error, leaked: false, rolledBack: 0 };
     }
+    const applied: Applied = { kind: tr.kind, ...(tr.shimId ? { shimId: tr.shimId } : {}), ...(tr.note ? { note: tr.note } : {}) };
+    if (!tr.run) return { ok: true, applied };
+    const engine = this.chain.engine;
+    const op: OpTrace = { state: structuredClone(engine.state), events: engine.events.length, committed: 0, leaked: false };
+    const book = JSON.stringify(this.bookState);
+    this.op = op;
+    try {
+      await tr.run();
+      // the shim table says which rows are runner-atomic; a row that is not must stay one transaction
+      if (op.committed > 1 && applied.kind === 'shim' && !SHIM_BY_ID.get(applied.shimId!)?.runnerAtomic) {
+        throw new RunnerError(`${call.op} went through ${op.committed} transactions, but shim row ${applied.shimId} is not marked runner-atomic`);
+      }
+    } catch (error) {
+      engine.state = op.state;
+      engine.events.length = op.events;
+      this.bookState = JSON.parse(book) as Book;
+      return { ok: false, error, applied, leaked: op.leaked, rolledBack: op.committed };
+    } finally {
+      this.op = null;
+    }
+    this.bookState.seen = seenAfter(this);
+    return { ok: true, applied };
   }
 
   classify(e: unknown): Raised {
