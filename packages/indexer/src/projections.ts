@@ -176,10 +176,13 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     }
     case 'RaiseMintFinalized': {
       // the last process_bid: every bid of the series is processed (losers emit nothing), and a settled raise's units
-      // become outstanding (Stage 1 sets units_outstanding here, not at settlement)
+      // become outstanding (Stage 1 sets units_outstanding here, not at settlement). A bid processed without an event (a
+      // loser, an invalid or unrevealed bid, every bid of a failed raise) is owed its deposit in full until delivered
+      // (Stage 1 `processBid` with no allocation: escrow less the non-reveal charge, which is held at 0, A-AUC-11), so
+      // the row stays whole for the reads that fall back to it (/me/bids)
       const p = e.payload as P<'RaiseMintFinalized'>;
       await client.query("update series set mint_finalized = true, units_outstanding = case when phase = 'Settled' then $2::numeric else units_outstanding end, last_event_seq = $3 where series_id = $1", [p.seriesId, p.unitsSold, e.seq]);
-      await client.query('update bids set processed = true where series_id = $1', [p.seriesId]);
+      await client.query('update bids set pending_refund = case when not processed and not delivered then deposit else pending_refund end, processed = true where series_id = $1', [p.seriesId]);
       break;
     }
     case 'HolderRegistered': {

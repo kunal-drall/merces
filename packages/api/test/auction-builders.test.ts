@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import type { SignedTx, UnsignedTx } from '@merces/domain';
+import { ChainError, type SignedTx, type UnsignedTx } from '@merces/domain';
 import { defaultTerms, type SimHarness, type SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
@@ -160,11 +160,11 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
     await rig.sync();
     const [b0, b1] = [h.backers[0]!, h.backers[1]!];
     const tok0 = walletTok(h, b0, 'deliver-b0');
-    // the final bid shape: the chain's figures, nothing computed offchain, no `settled`
+    // the final bid shape: the chain's figures, nothing computed offchain, no `settled` (S2 review fix: with their source)
     const before = (await rig.get('/me/bids', tok0)).json().bids as Record<string, unknown>[];
     const mine = before.find((b) => b.seriesId === seriesId)!;
     expect(mine).toEqual({
-      seriesId, chain: 'monad', bidder: b0.address, phase: 'Settled', deposit: USDC(1212).toString(), revealed: { pricePerUnit: USDC(12).toString(), quantity: '100' }, valid: true,
+      seriesId, chain: 'monad', bidder: b0.address, phase: 'Settled', deposit: USDC(1212).toString(), source: 'chain', revealed: { pricePerUnit: USDC(12).toString(), quantity: '100' }, valid: true,
       processed: true, delivered: false, allocatedUnits: '100', pendingUnits: '100', pendingRefund: USDC(303).toString(), refundable: USDC(303).toString(), refunded: '0',
     });
     expect((await rig.post(`/series/${seriesId}/bids/build-deliver`, { bidder: b0.address })).statusCode).toBe(401);
@@ -194,5 +194,73 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
     const after = ((await rig.get('/me/bids', tok0)).json().bids as Record<string, unknown>[]).find((b) => b.seriesId === seriesId)!;
     expect(after).toMatchObject({ processed: true, delivered: true, pendingUnits: '0', pendingRefund: '0', refundable: '0', refunded: USDC(303).toString() });
     expect(after).not.toHaveProperty('settled');
+  });
+
+  // S2 review fix: /me/bids took processed, delivered and what is owed from the chain but allocatedUnits from the
+  // indexer, so between a processBid (or a deliverBid) and the indexer's next pass one response contradicted itself
+  // (processed, 100 units owed, 0 allocated; delivered, nothing owed, nothing refunded). Each bid now comes from one
+  // source: the chain's read, or the indexed row as a whole when the chain has no read of it
+  it('/me/bids reads each bid from one source: the chain\'s read while the indexer lags, else the indexed row as a whole', async () => {
+    const h = rig.mon;
+    const b0 = h.backers[0]!;
+    const tok0 = walletTok(h, b0, 'one-source-b0');
+    const { seriesId } = await h.runRaise({ settle: 'finalize' }); // settled, no bid processed yet
+    await rig.sync();
+    const mine = async () => ((await rig.get('/me/bids', tok0)).json().bids as Record<string, unknown>[]).find((b) => b.seriesId === seriesId)!;
+    const owed = { processed: true, delivered: false, allocatedUnits: '100', pendingUnits: '100', pendingRefund: USDC(303).toString(), refundable: USDC(303).toString(), refunded: '0' };
+    // processed on chain, not indexed yet: the chain's figures, the allocation included
+    await h.exec(h.backers[4]!, { kind: 'processBid', seriesId, bidder: b0.address });
+    expect(await mine()).toMatchObject({ source: 'chain', ...owed });
+    await rig.sync();
+    expect(await mine()).toMatchObject({ source: 'chain', ...owed });
+    // delivered on chain, not indexed yet: nothing owed, and the refund delivered is not known yet (null, never "0")
+    await h.exec(h.backers[4]!, { kind: 'deliverBid', seriesId, bidder: b0.address });
+    const delivered = { processed: true, delivered: true, allocatedUnits: '100', pendingUnits: '0', pendingRefund: '0', refundable: '0' };
+    expect(await mine()).toMatchObject({ source: 'chain', ...delivered, refunded: null });
+    await rig.sync();
+    const fromChain = await mine();
+    expect(fromChain).toMatchObject({ source: 'chain', ...delivered, refunded: USDC(303).toString() });
+    // a chain with no bid read (a live adapter before S5): the indexed row as a whole, which agrees once synced
+    const realGetBid = h.sim.getBid.bind(h.sim);
+    h.sim.getBid = async () => {
+      throw new ChainError('NotImplemented', 'no bid read');
+    };
+    try {
+      expect(await mine()).toEqual({ ...fromChain, source: 'index' });
+      // the indexed row lags but stays whole: the next bids are settled on chain and not indexed yet
+      await h.settle(seriesId, 'process');
+      const b1 = (await rig.get('/me/bids', walletTok(h, h.backers[1]!, 'one-source-b1'))).json().bids.find((b: { seriesId: string }) => b.seriesId === seriesId);
+      expect(b1).toMatchObject({ source: 'index', processed: false, delivered: false, allocatedUnits: '0', pendingUnits: '0', pendingRefund: '0', refundable: '0', refunded: '0' });
+    } finally {
+      h.sim.getBid = realGetBid;
+    }
+    await rig.sync();
+    await h.settle(seriesId, 'deliver');
+    await rig.sync();
+  });
+
+  // S2 review fix: the indexed row a /me/bids fallback reads is whole for a bid processed without an event too (a loser,
+  // an invalid or unrevealed bid, every bid of a failed raise): it is owed its deposit in full from RaiseMintFinalized
+  it('/me/bids from the index agrees with the chain for a bid processed without an event (a failed raise)', async () => {
+    const h = rig.mon;
+    const b2 = h.backers[2]!;
+    const tok = walletTok(h, b2, 'one-source-failed');
+    const { seriesId, failureReason } = await h.runRaise({ bids: [{ backer: 2, price: USDC(10), qty: 10n }], settle: 'process' });
+    expect(failureReason).toBe('MinRaise');
+    await rig.sync();
+    const mine = async () => ((await rig.get('/me/bids', tok)).json().bids as Record<string, unknown>[]).find((b) => b.seriesId === seriesId)!;
+    const fromChain = await mine();
+    const owed = { processed: true, delivered: false, allocatedUnits: '0', pendingUnits: '0', pendingRefund: USDC(101).toString(), refundable: USDC(101).toString(), refunded: '0' };
+    expect(fromChain).toMatchObject({ source: 'chain', phase: 'Failed', deposit: USDC(101).toString(), ...owed });
+    const realGetBid = h.sim.getBid.bind(h.sim);
+    h.sim.getBid = async () => null; // the chain has no such bid
+    try {
+      expect(await mine()).toEqual({ ...fromChain, source: 'index' });
+    } finally {
+      h.sim.getBid = realGetBid;
+    }
+    await h.settle(seriesId, 'deliver');
+    await rig.sync();
+    expect(await mine()).toMatchObject({ source: 'chain', processed: true, delivered: true, pendingRefund: '0', refunded: USDC(101).toString() });
   });
 });

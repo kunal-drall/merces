@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { defineRoute } from '../app.ts';
 import type { AppContext } from '../context.ts';
 import { WAD } from '@merces/math';
+import { ChainError, type BidState, type ChainPort } from '@merces/domain';
 
 export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
   defineRoute(app, ctx, {
@@ -47,9 +48,14 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   /**
-   * The caller's bids (S2): the chain's own figures, nothing computed offchain. `valid` is fixed at reveal; `processed`
-   * and `delivered` are the bid's settlement; `pendingUnits` / `pendingRefund` (and `refundable`, the same refund) are
-   * what a processed, undelivered bid is still owed, else "0"; `refunded` is the refund delivered so far, as indexed.
+   * The caller's bids (S2). Each bid's settlement fields come from one source, never a mix, so a response cannot
+   * contradict itself while the indexer catches up: the chain's read of the bid (`source: 'chain'`: `revealed`,
+   * `valid`, `processed`, `delivered`, `allocatedUnits` and what a processed, undelivered bid is still owed,
+   * `pendingUnits` / `pendingRefund`, with `refundable` the same refund), or, when the chain has no read of the bid, the
+   * indexed row as a whole (`source: 'index'`). `refunded`, the refund delivered, is carried only by the delivery
+   * event (Solana zeroes the bid's pending refund at delivery), so it is indexed: "0" while the bid is undelivered,
+   * then the indexed refund once the indexer has projected the delivery, and null in between (the chain shows the bid
+   * delivered and the indexer has not caught up yet).
    */
   defineRoute(app, ctx, {
     method: 'GET', url: '/me/bids', access: 'account',
@@ -58,20 +64,39 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
       const r = await ctx.pool.query('select b.*, s.phase, s.chain from bids b join series s on s.series_id = b.series_id where b.bidder = any($1) order by b.bid_order', [wallets]);
       const bids = [];
       for (const x of r.rows) {
-        const live = await ctx.chainFor(x.series_id).getBid(x.series_id, x.bidder);
-        // what the chain still owes the bidder (Stage 1's pendingRefund of a processed, undelivered bid; "0" otherwise):
-        // the keepers deliver it, or the bidder delivers it now (S2: push delivery, nothing computed offchain)
-        const owed = !!live && live.processed && !live.delivered;
-        bids.push({
-          seriesId: x.series_id, chain: x.chain, bidder: x.bidder, phase: x.phase, deposit: x.deposit, revealed: live?.revealed ?? null, valid: live?.valid ?? null,
-          processed: live?.processed ?? false, delivered: live?.delivered ?? false, allocatedUnits: x.allocated_units,
-          pendingUnits: owed ? live.pendingUnits : '0', pendingRefund: owed ? live.pendingRefund : '0',
-          // the refunds delivered so far, as indexed (BidDelivered)
-          refunded: x.refunded,
-          refundable: !live ? null : owed ? live.pendingRefund : '0',
-        });
+        const base = { seriesId: x.series_id, chain: x.chain, bidder: x.bidder, phase: x.phase, deposit: x.deposit };
+        const live = await chainBid(ctx.chainFor(x.series_id), x.series_id, x.bidder);
+        if (live) {
+          // what the chain still owes the bidder (Stage 1's pending units and refund of a processed, undelivered bid; "0"
+          // otherwise): the keepers deliver it, or any wallet delivers it now (S2: push delivery)
+          const owed = live.processed && !live.delivered;
+          bids.push({
+            ...base, source: 'chain', revealed: live.revealed, valid: live.valid, processed: live.processed, delivered: live.delivered, allocatedUnits: live.allocatedUnits,
+            pendingUnits: owed ? live.pendingUnits : '0', pendingRefund: owed ? live.pendingRefund : '0', refundable: owed ? live.pendingRefund : '0',
+            refunded: !live.delivered ? '0' : x.delivered ? x.refunded : null,
+          });
+        } else {
+          // the indexed row as a whole (UnitsAllocated, BidDelivered and RaiseMintFinalized keep it consistent)
+          const owed = x.processed && !x.delivered;
+          bids.push({
+            ...base, source: 'index', revealed: x.revealed_price === null ? null : { pricePerUnit: x.revealed_price, quantity: x.revealed_quantity }, valid: x.valid ?? null,
+            processed: x.processed, delivered: x.delivered, allocatedUnits: x.allocated_units,
+            pendingUnits: owed ? x.pending_units : '0', pendingRefund: owed ? x.pending_refund : '0', refundable: owed ? x.pending_refund : '0',
+            refunded: x.refunded,
+          });
+        }
       }
       return { bids };
     },
   });
+}
+
+/** The chain's read of a bid; null when the chain has no such bid or no bid read (a live adapter before S5). */
+async function chainBid(chain: ChainPort, seriesId: string, bidder: string): Promise<BidState | null> {
+  try {
+    return await chain.getBid(seriesId, bidder);
+  } catch (e) {
+    if (e instanceof ChainError && e.code === 'NotImplemented') return null;
+    throw e;
+  }
 }

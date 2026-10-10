@@ -57,8 +57,11 @@ chain's allowlist (403 otherwise) and, while the curve is bonding, stay within t
 Stage 1's settlement does (S2).
 `GET /me/bids` shows the chain's figures (the `Bid` schema): `pendingRefund` (also `refundable`) and `pendingUnits` are what
 a processed bid is still owed until it is delivered ("0" otherwise), with the bid's `deposit`, `revealed`, `valid` (fixed at
-reveal: an invalid bid is refunded in full), `processed`, `delivered`, `allocatedUnits`, and `refunded`, the refund
-delivered so far, as indexed.
+reveal: an invalid bid is refunded in full), `processed`, `delivered` and `allocatedUnits`. Each bid's figures come from one
+source, never a mix (`source`): the chain's read of the bid, or the indexed row as a whole when the chain has no read of
+it (it may lag the chain by an indexer pass). `refunded`, the refund delivered, is indexed (only the delivery event
+carries it): "0" while the bid is undelivered, and null while the chain shows the bid delivered and the indexer has not
+projected the delivery yet.
 
 **Settlement** (Stage 1 SPEC §5.2; every step is permissionless). After the reveal end a settlement runs in steps: the
 honest proposal (`beginSettlement`), the tally pages (`tallyBids`), `finalizeSettlement` (Settled, or Failed with

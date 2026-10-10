@@ -2684,7 +2684,7 @@ export type components = {
             /** @description the last bid is processed: the money paths open (Stage 1 MintNotFinalized until then) */
             mintFinalized?: boolean;
         };
-        /** @description One of the caller's bids, with the chain's own figures (nothing computed offchain). A processed bid is owed pendingUnits and pendingRefund until it is delivered; the keepers deliver every bid, and POST /series/{seriesId}/bids/build-deliver delivers it sooner. */
+        /** @description One of the caller's bids. Its settlement fields come from one source, never a mix (source): the chain's read of the bid, or, when the chain has no read of it, the indexed row as a whole. A processed bid is owed pendingUnits and pendingRefund until it is delivered; the keepers deliver every bid, and POST /series/{seriesId}/bids/build-deliver delivers it sooner. */
         Bid: {
             seriesId?: string;
             chain?: string;
@@ -2693,6 +2693,11 @@ export type components = {
             phase?: string;
             /** @description the escrow the commit locked */
             deposit?: components["schemas"]["Money"];
+            /**
+             * @description where revealed, valid, processed, delivered, allocatedUnits, pendingUnits, pendingRefund and refundable come from: the chain's read of the bid, or the indexed row (when the chain has no read of it; it may lag the chain by an indexer pass)
+             * @enum {string}
+             */
+            source?: "chain" | "index";
             /** @description null until revealed */
             revealed?: {
                 pricePerUnit?: components["schemas"]["Money"];
@@ -2708,10 +2713,10 @@ export type components = {
             pendingUnits?: string;
             /** @description the refund a processed bid is owed until delivered (Stage 1 pendingRefund); "0" otherwise */
             pendingRefund?: components["schemas"]["Money"];
-            /** @description the same refund as pendingRefund; null when the chain has no such bid */
-            refundable?: components["schemas"]["Money"] | null;
-            /** @description the refund delivered so far, as indexed (BidDelivered) */
-            refunded?: components["schemas"]["Money"];
+            /** @description the same refund as pendingRefund */
+            refundable?: components["schemas"]["Money"];
+            /** @description the refund delivered, as indexed (only the delivery event carries it): "0" while the bid is undelivered; null while the chain shows the bid delivered and the indexer has not projected the delivery yet (an indexer pass) */
+            refunded?: components["schemas"]["Money"] | null;
         };
         /** @description The next settlement step, built for the signer to sign and relay with POST /tx/send. Every step is permissionless. */
         SettlementStep: {
@@ -4105,7 +4110,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The caller's bids with their settlement and delivery, as the chain holds them */
+            /** @description The caller's bids with their settlement and delivery, as the chain holds them (each bid from one source: the chain's read, or the indexed row when the chain has no read of it) */
             200: {
                 headers: {
                     [name: string]: unknown;
