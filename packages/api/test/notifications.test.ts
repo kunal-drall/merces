@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { dispatchOutbox, enqueueOutbox } from '@merces/core';
 import { IdentityService } from '@merces/services';
-import { notificationsOutboxHandler, safeData } from '@merces/services/src/notifications/service.ts';
+import { TEMPLATES, notificationsOutboxHandler, safeData } from '@merces/services/src/notifications/service.ts';
 import type { SimHarness } from '@merces/simulator';
 import { SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
@@ -81,7 +81,7 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
   });
 
   it('handler: resolves recipients per kind, writes one inbox row each, emails only where enabled and addressed, carries statuses and dates only', async () => {
-    const reminder = { kind: 'reporting.report-due', seriesId, periodId: '2026Q1', wallet: h.issuer.address, dueAt, graceEndsAt };
+    const reminder = { kind: 'reporting.report-due', seriesId, periodId: '2026Q1', wallet: h.issuer.address, dueAt, graceEndsAt, outstanding: 'report', status: 'InGrace' };
     await enqueueOutbox(rig.t.pool, 'notification', reminder);
     await enqueueOutbox(rig.t.pool, 'notification', { kind: 'payout.available', seriesId, periodId: '2026Q1' });
     await enqueueOutbox(rig.t.pool, 'notification', { kind: 'series.PauseEnded', seriesId });
@@ -102,12 +102,13 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     expect(rem.body).toContain('2026Q1');
     expect(rem.body).toContain(new Date(dueAt * 1000).toISOString().slice(0, 10));
     // the keeper sends 'report-due' once dueAt has passed, the first InGrace instant under Stage 1's inclusive bound
-    // (G2, S1 WP11: was sent at dueAt)
-    expect(rem.body).toContain('InGrace');
+    // (G2, S1 WP11: was sent at dueAt); the status named is the one the keeper read from the chain (S1 review: it was
+    // hard-coded InGrace)
+    expect(rem.body).toContain('Status: InGrace.');
     // no amounts: the only digits in the body are the period id, the series id and ISO dates
     const stripped = rem.body.replace(seriesId, '').replace(/\d{4}Q[1-4]/g, '').replace(/\d{4}-\d{2}-\d{2}/g, '');
     expect(stripped).not.toMatch(/\d/);
-    expect(Object.keys(rem.data).sort()).toEqual(['dueAt', 'graceEndsAt', 'periodId', 'seriesId', 'wallet']);
+    expect(Object.keys(rem.data).sort()).toEqual(['dueAt', 'graceEndsAt', 'outstanding', 'periodId', 'seriesId', 'status', 'wallet']);
     expect(rem.email_sent_at).not.toBeNull();
     const sc = iss.find((n) => n.kind === 'series.StatusChanged')!;
     expect(sc.body).toContain('from OnTime to InGrace');
@@ -148,7 +149,7 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
   it('handler: redelivery of the same payload does not duplicate inbox rows or emails; a series not indexed yet is retried', async () => {
     const before = await rig.t.pool.query('select count(*)::int as n from notifications');
     const mails = (await emails()).length;
-    await enqueueOutbox(rig.t.pool, 'notification', { kind: 'reporting.report-due', seriesId, periodId: '2026Q1', wallet: h.issuer.address, dueAt, graceEndsAt });
+    await enqueueOutbox(rig.t.pool, 'notification', { kind: 'reporting.report-due', seriesId, periodId: '2026Q1', wallet: h.issuer.address, dueAt, graceEndsAt, outstanding: 'report', status: 'InGrace' });
     await enqueueOutbox(rig.t.pool, 'notification', { kind: 'payout.available', seriesId, periodId: '2026Q1' });
     expect(await dispatch()).toEqual({ dispatched: 2, failed: 0 });
     expect((await rig.t.pool.query('select count(*)::int as n from notifications')).rows[0].n).toBe(before.rows[0].n);
@@ -170,6 +171,29 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     expect(safeData({ kind: 'series.ReleasesPaused', seriesId: 's', payload: { seriesId: 's', reason: 'Late' } })).toEqual({ seriesId: 's' });
     expect(safeData({ kind: 'fx.deviation', chain: 'monad', pair: 'EUR/USD', deviationBps: 150 })).toEqual({ chain: 'monad', pair: 'EUR/USD' });
     expect(safeData({ kind: 'x', paymentDue: '1000000', accrual: '5', incomeYtd: CANARY, periodId: '2026Q2' })).toEqual({ periodId: '2026Q2' });
+  });
+
+  it('reporting reminders name the status the keeper read from the chain, never one assumed from the milestone, and what is owed', () => {
+    const base = { seriesId: 's', periodId: '2026Q2', wallet: 'w', dueAt: 1_785_456_000, graceEndsAt: 1_786_752_000 };
+    const render = (p: Record<string, unknown>) => TEMPLATES[String(p.kind)]!(safeData(p));
+    // S1 review: a Late series was told 'Status: InGrace' (hard-coded); the status is now the payload's
+    expect(render({ kind: 'reporting.report-due', ...base, outstanding: 'report', status: 'Late' }).body).toMatch(/grace period has started\. The grace period ends on 2026-08-15\. Status: Late\.$/);
+    expect(render({ kind: 'reporting.grace-end', ...base, outstanding: 'payment', status: 'Late' }).body).toMatch(/Status: Late\.$/);
+    // a payload queued without a status (or with something that is not a lifecycle status) names none
+    for (const status of [undefined, '', 'paid in full', CANARY]) {
+      for (const kind of ['reporting.report-due', 'reporting.grace-end']) {
+        const body = render({ kind, ...base, status }).body;
+        expect(body).not.toContain('Status:');
+        expect(body).not.toContain(CANARY);
+      }
+    }
+    // a reported period whose payment is open: the payment is what is owed
+    const pay = render({ kind: 'reporting.report-due-soon', ...base, outstanding: 'payment', status: 'OnTime' });
+    expect(pay).toEqual({ subject: 'Payment due soon', body: 'The payment for series s, period 2026Q2 is due by 2026-07-31.' });
+    expect(render({ kind: 'reporting.report-due', ...base, outstanding: 'payment', status: 'InGrace' }).subject).toBe('Payment due');
+    // otherwise (and for a payload without the field) the report is
+    expect(render({ kind: 'reporting.report-due-soon', ...base }).subject).toBe('Report due soon');
+    expect(render({ kind: 'reporting.report-due', ...base, outstanding: 'report' }).body).toMatch(/^The report for series s, period 2026Q2 was due by 2026-07-31/);
   });
 
   it('inbox routes: list, unread filter, limit, mark read (own rows only, idempotent)', async () => {

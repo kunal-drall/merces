@@ -91,7 +91,10 @@ S1 ran as work packages WP0–WP13 and an integration gate (G2), each committed 
   A position's `tailClaimable` is Stage 1's `claimableTail` view, which counts a holder that has not redeemed yet on
   the units its redemption would redeem (`claim_tail` redeems first), and the vault's dust counts that tail too; the
   payout claim builder leaves it out until the holder has redeemed, since `claimPayout` has no redemption step
-  (A-REV-24).
+  (A-REV-24). Report-deadline reminders go only to the earliest unpaid period, the one Stage 1's `deriveStatus` counts
+  from, and name the status the chain derives when they are queued and what is owed (the report or the payment); they
+  had reminded every unsettled period with a hard-coded InGrace, so a series Late on an unpaid Q1 was told InGrace about
+  a Q2 report the chain could not take (A-REV-25).
 - **Vector runner (WP9a, WP9b, WP13).** `pnpm stage1:vectors` (`packages/stage1-sync/src/stage1-vectors`): a
   reference backend (Stage 1's own simulator), a merces backend (our `SimulatorChain` through op translators and the
   shim table, never persisted, real Groth16 verification with the ports' verifier) and a lockstep oracle that names

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { makeContext } from '@merces/api';
-import { createServiceContext, type ServiceContext } from '@merces/services';
+import { TEMPLATES, createServiceContext, safeData, type ServiceContext } from '@merces/services';
 import { MockChainlink, MockPyth } from '@merces/ports';
 import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimulatorChain } from '@merces/simulator';
@@ -190,10 +190,69 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     expect(await step(p.formalNoticeAt)).toEqual([1, 0, 'Late']);
     expect((await h.sim.getSeries(a.seriesId))!.formalNoticeEmittedFor).toBe(q.id);
     expect(await step(p.formalNoticeAt + 3600)).toEqual([0, 0, 'Late']);
-    // the reminders carry the chain's instants
+    // the reminders carry the chain's instants, what is outstanding and the status the chain derived when each was queued
     const notes = await t.pool.query("select payload from outbox where topic = 'notification' and payload->>'seriesId' = $1 and payload->>'kind' like 'reporting.%' order by id", [a.seriesId]);
-    expect(notes.rows.map((r) => [r.payload.kind, r.payload.dueAt, r.payload.graceEndsAt])).toEqual([
-      ['reporting.report-due-soon', p.dueAt, p.graceEndsAt], ['reporting.report-due', p.dueAt, p.graceEndsAt], ['reporting.grace-end', p.dueAt, p.graceEndsAt],
+    expect(notes.rows.map((r) => [r.payload.kind, r.payload.dueAt, r.payload.graceEndsAt, r.payload.outstanding, r.payload.status])).toEqual([
+      ['reporting.report-due-soon', p.dueAt, p.graceEndsAt, 'report', 'OnTime'], ['reporting.report-due', p.dueAt, p.graceEndsAt, 'report', 'InGrace'], ['reporting.grace-end', p.dueAt, p.graceEndsAt, 'report', 'Late'],
     ]);
+  });
+
+  it('reminders follow the earliest unpaid period, as Stage 1 derives status: a later period waits, and a notice names the chain\'s status and what is owed', async () => {
+    // S1 review: the job reminded every unsettled period with a status assumed from that period's own deadline, so an
+    // issuer whose unpaid Q1 kept the series Late was told 'Status: InGrace' about a Q2 report the chain could not take
+    for (const personality of ['solana', 'monad'] as const) {
+      const key = `${personality}-earliest-unpaid`;
+      const h = await SimHarness.create(personality, { sim: SimulatorChain.createSync({ personality, chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+      const reg: ChainRegistry = { chains: new Map([[key, h.sim]]), decisions: [], stage1: null, get: () => h.sim, byFamily: () => h.sim, close: async () => undefined };
+      const c = createServiceContext(makeContext({ pool: t.pool, chains: reg, log: silent, sessionSecret: 's', devMode: true }));
+      const a = await h.runRaise();
+      const q1 = periodOf((await h.sim.getSeries(a.seriesId))!.settledAt!);
+      const q2 = periodOf(q1.end + 86_400);
+      const sched = new KeeperScheduler(c, [statusCrankJob, deadlineRemindersJob]);
+      const notices = async () => (await t.pool.query("select payload from outbox where topic = 'notification' and payload->>'seriesId' = $1 and payload->>'kind' like 'reporting.%' order by id", [a.seriesId])).rows.map((r) => r.payload as Record<string, unknown>);
+      const render = (n: Record<string, unknown>) => TEMPLATES[String(n.kind)]!(safeData(n));
+      // the issuer reports Q1 five days after its end and never pays: Q1 holds the open due, so Q1 alone drives the status
+      await h.sim.setTime(q1.end + 5 * 86_400);
+      await h.exec(h.issuer, (await h.buildReport({ seriesId: a.seriesId, periodId: q1.id, privateTerms: a.privateTerms, termsCommitment: a.terms.termsCommitment, incomeYtdPrev: 0n, incomeYtdNow: USDC(100_000) })).command);
+      const rep = (await h.sim.getSeries(a.seriesId))!.reporting;
+      expect([rep.openDuePeriod, BigInt(rep.openDueAmount) > 0n, rep.nextExpectedPeriod]).toEqual([q1.id, true, q2.id]);
+      const p1 = (await h.sim.getPeriod(a.seriesId, q1.id))!;
+      const p2 = (await h.sim.getPeriod(a.seriesId, q2.id))!;
+      const statuses: string[] = [];
+      for (const at of [p1.dueAt - 7 * 86_400, p1.dueAt + 1, p1.graceEndsAt + 1, p2.dueAt - 7 * 86_400, p2.dueAt + 1, p2.graceEndsAt + 1]) {
+        await h.sim.setTime(at);
+        expect((await sched.runAll())['reporting.reminders']!.ok).toBe(true);
+        statuses.push((await h.sim.getSeries(a.seriesId))!.status);
+      }
+      expect(statuses).toEqual(['OnTime', 'InGrace', 'Late', 'Late', 'Late', 'Late']);
+      // Q2's own deadlines passed, but Q2 is not the earliest unpaid period: the chain still refuses its report and the
+      // issuer hears nothing about it; Q1's reminders say the payment is owed and name the status the chain derived
+      await expect(h.buildReport({ seriesId: a.seriesId, periodId: q2.id, privateTerms: a.privateTerms, termsCommitment: a.terms.termsCommitment, incomeYtdPrev: 0n, incomeYtdNow: USDC(200_000) }).then((r) => h.exec(h.issuer, r.command))).rejects.toThrow(/not paid/);
+      expect((await t.pool.query('select kind from reminders_sent where target = $1', [`${a.seriesId}:${q2.id}`])).rows).toEqual([]);
+      const q1Notes = await notices();
+      expect(q1Notes.map((n) => [n.kind, n.periodId, n.outstanding, n.status])).toEqual([
+        ['reporting.report-due-soon', q1.id, 'payment', 'OnTime'], ['reporting.report-due', q1.id, 'payment', 'InGrace'], ['reporting.grace-end', q1.id, 'payment', 'Late'],
+      ]);
+      expect(q1Notes.map((n) => render(n).subject)).toEqual(['Payment due soon', 'Payment due', 'Grace period ended']);
+      expect(render(q1Notes[1]!).body).toContain(`The payment for series ${a.seriesId}, period ${q1.id} was due by`);
+      expect(render(q1Notes[1]!).body).toMatch(/Status: InGrace\.$/);
+      expect(render(q1Notes[2]!).body).toMatch(/Status: Late\.$/);
+      // once Q1 is paid, Q2 is the earliest unpaid period and its countdown is past 45 days: the series is Late and the
+      // late keeper's Q2 reminders all say so (none claims InGrace), asking for the report
+      await h.sim.setTime(p2.graceEndsAt + 2 * 86_400);
+      const live = (await h.sim.getPeriod(a.seriesId, q1.id))!;
+      await h.exec(h.issuer, { kind: 'payIn', seriesId: a.seriesId, periodId: q1.id, amount: (BigInt(live.paymentDue) - BigInt(live.paid)).toString() });
+      expect((await sched.runAll())['reporting.reminders']!.actions).toBe(3);
+      expect((await h.sim.getSeries(a.seriesId))!.status).toBe('Late');
+      const q2Notes = (await notices()).slice(3);
+      expect(q2Notes.map((n) => [n.kind, n.periodId, n.outstanding, n.status])).toEqual([
+        ['reporting.report-due-soon', q2.id, 'report', 'Late'], ['reporting.report-due', q2.id, 'report', 'Late'], ['reporting.grace-end', q2.id, 'report', 'Late'],
+      ]);
+      const due = render(q2Notes[1]!);
+      expect(due.subject).toBe('Report due');
+      expect(due.body).toMatch(/Status: Late\.$/);
+      expect(q2Notes.map((n) => render(n).body).join(' ')).not.toContain('InGrace');
+      expect((await sched.runAll())['reporting.reminders']!.actions).toBe(0);
+    }
   });
 });

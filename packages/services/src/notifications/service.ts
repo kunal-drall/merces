@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit, type OutboxHandler } from '@merces/core';
 import type { Queryable } from '@merces/db';
-import { hashCanonical } from '@merces/domain';
+import { hashCanonical, lifecycleStatusSchema } from '@merces/domain';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -51,7 +51,7 @@ export const preferencesSchema = z.object({
  */
 const SAFE_KEYS = [
   'accountId', 'applicationId', 'seriesId', 'periodId', 'chain', 'pair', 'year', 'wallet', 'attestor',
-  'dueAt', 'graceEndsAt', 'revealEndsAt', 'until', 'trueUpDueAt', 'outcome', 'from', 'to', 'windowId',
+  'dueAt', 'graceEndsAt', 'revealEndsAt', 'until', 'trueUpDueAt', 'outcome', 'from', 'to', 'status', 'outstanding', 'windowId',
   'caseId', 'hardshipId', 'annualId', 'amendmentId', 'draftId',
 ] as const;
 type SafeKey = (typeof SAFE_KEYS)[number];
@@ -83,6 +83,10 @@ export function fmtDate(v: string | number | undefined): string {
 type Template = (d: SafeData) => { subject: string; body: string };
 const series = (d: SafeData) => `series ${d.seriesId ?? '?'}`;
 const period = (d: SafeData) => (d.periodId ? `, period ${d.periodId}` : '');
+/** what a reporting reminder says is outstanding: the payment of a reported period, else the report */
+const owed = (d: SafeData, title = false) => (d.outstanding === 'payment' ? (title ? 'Payment' : 'payment') : title ? 'Report' : 'report');
+/** the series' status as the chain derived it when the notice was queued; nothing when the payload carries none (or no lifecycle status) */
+const status = (d: SafeData) => (typeof d.status === 'string' && lifecycleStatusSchema.safeParse(d.status).success ? ` Status: ${d.status}.` : '');
 
 export const TEMPLATES: Record<string, Template> = {
   'application.submitted': (d) => ({ subject: 'Application submitted', body: `Application ${d.applicationId} has been submitted and is waiting for review. Status: submitted.` }),
@@ -96,12 +100,15 @@ export const TEMPLATES: Record<string, Template> = {
   'auction.failed': (d) => ({ subject: 'Raise did not settle', body: `The raise for ${series(d)} did not settle. Status: Failed. Deposits can be reclaimed.` }),
   'bid.reveal-reminder': (d) => ({ subject: 'Reveal your bid', body: `Reveal your bid on ${series(d)} before ${fmtDate(d.revealEndsAt)}.` }),
   // The reporting reminders follow Stage 1's inclusive bounds: `dueAt` is the last OnTime instant and `graceEndsAt` the
-  // last InGrace one. The keeper sends 'report-due' only once `dueAt` has passed (countdown > 30 days, the first
-  // InGrace instant) and 'grace-end' once `graceEndsAt` has passed (> 45 days, Late); before `dueAt` the period is
-  // still OnTime, so only 'report-due-soon' (which names no status) can go out then.
-  'reporting.report-due-soon': (d) => ({ subject: 'Report due soon', body: `The report for ${series(d)}${period(d)} is due by ${fmtDate(d.dueAt)}.` }),
-  'reporting.report-due': (d) => ({ subject: 'Report due', body: `The report for ${series(d)}${period(d)} was due by ${fmtDate(d.dueAt)} and the grace period has started. The grace period ends on ${fmtDate(d.graceEndsAt)}. Status: InGrace.` }),
-  'reporting.grace-end': (d) => ({ subject: 'Grace period ended', body: `The grace period for ${series(d)}${period(d)} ended on ${fmtDate(d.graceEndsAt)}. Status: Late.` }),
+  // last InGrace one. The keeper reminds only the earliest unpaid period (the one Stage 1's `deriveStatus` counts from),
+  // sending 'report-due' once its `dueAt` has passed and 'grace-end' once its `graceEndsAt` has passed. The status a
+  // notice names is the series' status the chain derived when the keeper queued it (`status`), never one assumed from
+  // the milestone: an overdue true-up makes a series Late before its grace period ends, and a keeper that runs late finds
+  // it Late already. A payload without it (queued before the keeper sent it) names no status. `outstanding` says whether
+  // the period's report or, once reported, its payment is still due; 'report-due-soon' names no status.
+  'reporting.report-due-soon': (d) => ({ subject: `${owed(d, true)} due soon`, body: `The ${owed(d)} for ${series(d)}${period(d)} is due by ${fmtDate(d.dueAt)}.` }),
+  'reporting.report-due': (d) => ({ subject: `${owed(d, true)} due`, body: `The ${owed(d)} for ${series(d)}${period(d)} was due by ${fmtDate(d.dueAt)} and the grace period has started. The grace period ends on ${fmtDate(d.graceEndsAt)}.${status(d)}` }),
+  'reporting.grace-end': (d) => ({ subject: 'Grace period ended', body: `The grace period for ${series(d)}${period(d)} ended on ${fmtDate(d.graceEndsAt)}.${status(d)}` }),
   'series.StatusChanged': (d) => ({ subject: 'Series status changed', body: `${series(d)} changed from ${d.from ?? '?'} to ${d.to ?? '?'}.` }),
   'series.FormalNoticeDue': (d) => ({ subject: 'Formal notice due', body: `A formal notice is due for ${series(d)}${period(d)}. Status: Late.` }),
   'series.ReleasesPaused': (d) => ({ subject: 'Treasury releases paused', body: `Treasury releases for ${series(d)} are paused. Status: ReleasesPaused.` }),

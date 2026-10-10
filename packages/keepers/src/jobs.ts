@@ -84,15 +84,26 @@ export const revealRemindersJob: KeeperJob = {
 };
 
 /**
- * The status milestones of a series that time alone moves (Stage 1 `deriveStatus` on the earliest unpaid period:
- * `openDuePeriod` while a due is open, else the next expected period): InGrace at the first instant after `dueAt`
- * (countdown > 30 days), Late at the first instant after `graceEndsAt` (> 45 days) and the formal notice at
- * `formalNoticeAt` (≥ 90 days). The instants are the chain's period read (`projectDeadlines`, counted in unpaused time
- * from the period end); only those already reached are returned.
+ * The only period Stage 1's `deriveStatus` counts from (`earliestUnpaid`): `openDuePeriod` while a due is open (its
+ * report is in, its payment is outstanding), else the next expected period (its report is outstanding). Every later
+ * period waits on it: Stage 1 refuses their reports (WrongPeriod / PaymentOutstanding) and their countdowns move no
+ * status until it is paid. Null before settlement.
+ */
+export function earliestUnpaidPeriod(s: Series): { periodId: string; outstanding: 'report' | 'payment' } | null {
+  const rep = s.reporting;
+  if (BigInt(rep.openDueAmount) > 0n && rep.openDuePeriod !== null) return { periodId: rep.openDuePeriod, outstanding: 'payment' };
+  return rep.nextExpectedPeriod === null ? null : { periodId: rep.nextExpectedPeriod, outstanding: 'report' };
+}
+
+/**
+ * The status milestones of a series that time alone moves (Stage 1 `deriveStatus` on the earliest unpaid period,
+ * `earliestUnpaidPeriod`): InGrace at the first instant after `dueAt` (countdown > 30 days), Late at the first instant
+ * after `graceEndsAt` (> 45 days) and the formal notice at `formalNoticeAt` (≥ 90 days). The instants are the chain's
+ * period read (`projectDeadlines`, counted in unpaused time from the period end); only those already reached are
+ * returned.
  */
 export async function reachedMilestones(chain: ChainPort, s: Series, now: number): Promise<{ periodId: string; milestones: ('InGrace' | 'Late' | 'FormalNotice')[] } | null> {
-  const rep = s.reporting;
-  const periodId = BigInt(rep.openDueAmount) > 0n && rep.openDuePeriod !== null ? rep.openDuePeriod : rep.nextExpectedPeriod;
+  const periodId = earliestUnpaidPeriod(s)?.periodId ?? null;
   if (periodId === null) return null;
   const p = await chain.getPeriod(s.seriesId, periodId);
   if (!p) return null;
@@ -187,10 +198,15 @@ export const burnCrankJob: KeeperJob = {
 };
 
 /**
- * Report-deadline reminders (C8), at the chain's instants (`projectDeadlines`, Stage 1's inclusive bounds): 7 days
- * before `dueAt` (the last OnTime instant), at the first InGrace instant (`dueAt + 1`: more than 30 days of unpaused
- * time since the period end) and at the first Late instant (`graceEndsAt + 1`: more than 45 days). Recorded once per
- * milestone.
+ * Report-deadline reminders (C8), for the earliest unpaid period only (`earliestUnpaidPeriod`, the period Stage 1's
+ * `deriveStatus` counts from, as `reachedMilestones`): a later period is never reminded while an earlier one holds the
+ * status, since the chain cannot take its report yet and its own countdown moves nothing; it is reminded once it
+ * becomes the earliest unpaid period. The instants are the chain's (`projectDeadlines`, Stage 1's inclusive bounds):
+ * 7 days before `dueAt` (the last OnTime instant), the first instant after `dueAt` (more than 30 days of unpaused time
+ * since the period end) and the first instant after `graceEndsAt` (more than 45 days). The notice carries what is
+ * outstanding (the report, or the payment of a reported period) and the series' status as the chain derives it when
+ * the notice is queued (Stage 1 `deriveStatus`, which an overdue true-up also makes Late), never a status assumed from
+ * the milestone. Recorded once per milestone and period.
  */
 export const deadlineRemindersJob: KeeperJob = {
   name: 'reporting.reminders',
@@ -200,20 +216,21 @@ export const deadlineRemindersJob: KeeperJob = {
     const errors: string[] = [];
     await forEachSettled(ctx, errors, async (chain, s, now) => {
       if (['Retired', 'Redeemed', 'Extinguished', 'Paused'].includes(s.status)) return;
-      for (const p of await chain.listPeriods(s.seriesId)) {
-        if (p.settled) continue;
-        const milestones: [string, number][] = [['report-due-soon', p.dueAt - 7 * 86_400], ['report-due', p.dueAt + 1], ['grace-end', p.graceEndsAt + 1]];
-        for (const [kind, at] of milestones) {
-          if (now < at) continue;
-          // the ledger row and the notice commit together: a crash between them can neither lose nor repeat it
-          const fresh = await withTransaction(ctx.pool, async (db) => {
-            const ins = await db.query('insert into reminders_sent (kind, target, recipient) values ($1,$2,$3) on conflict do nothing', [kind, `${s.seriesId}:${p.periodId}`, s.issuer]);
-            if (!ins.rowCount) return false;
-            await enqueueOutbox(db, 'notification', { kind: `reporting.${kind}`, seriesId: s.seriesId, periodId: p.periodId, wallet: s.issuer, dueAt: p.dueAt, graceEndsAt: p.graceEndsAt });
-            return true;
-          });
-          if (fresh) actions++;
-        }
+      const due = earliestUnpaidPeriod(s);
+      if (!due) return;
+      const p = await chain.getPeriod(s.seriesId, due.periodId);
+      if (!p || p.settled) return;
+      const milestones: [string, number][] = [['report-due-soon', p.dueAt - 7 * 86_400], ['report-due', p.dueAt + 1], ['grace-end', p.graceEndsAt + 1]];
+      for (const [kind, at] of milestones) {
+        if (now < at) continue;
+        // the ledger row and the notice commit together: a crash between them can neither lose nor repeat it
+        const fresh = await withTransaction(ctx.pool, async (db) => {
+          const ins = await db.query('insert into reminders_sent (kind, target, recipient) values ($1,$2,$3) on conflict do nothing', [kind, `${s.seriesId}:${p.periodId}`, s.issuer]);
+          if (!ins.rowCount) return false;
+          await enqueueOutbox(db, 'notification', { kind: `reporting.${kind}`, seriesId: s.seriesId, periodId: p.periodId, wallet: s.issuer, dueAt: p.dueAt, graceEndsAt: p.graceEndsAt, outstanding: due.outstanding, status: s.status });
+          return true;
+        });
+        if (fresh) actions++;
       }
     });
     return { actions, errors };
