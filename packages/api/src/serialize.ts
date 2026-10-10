@@ -78,7 +78,8 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
 /**
  * A sealed raise's settlement as indexed (S2; public onchain state): the current round and whether it was rejected,
  * and what `finalizeSettlement` wrote. A failed raise keeps its price and its would-be units and proceeds here (with
- * `failureReason`); the series' `issuePrice` stays null. `finalizedAt` is when the raise settled or failed.
+ * `failureReason`); the series' `issuePrice` stays null. A NoValidBids failure found no price: `clearingPrice` is null
+ * (the indexer records it so; the chains' RaiseFailed carries 0). `finalizedAt` is when the raise settled or failed.
  */
 function auctionRow(r: Record<string, unknown>): Record<string, unknown> {
   return {

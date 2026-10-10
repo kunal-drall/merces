@@ -132,11 +132,14 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       break;
     }
     case 'AuctionFailed': {
-      // a failed raise keeps its price and would-be results on the auction (Stage 1); the series' issue price stays unset
+      // a failed raise keeps its price and would-be results on the auction (Stage 1); the series' issue price stays unset.
+      // NoValidBids found no price: the chains' RaiseFailed carries 0 there (as the event does), and the read model
+      // records null, as the chain's auction read and the API contract do
       const p = e.payload as P<'AuctionFailed'>;
+      const clearingPrice = p.reason === 'NoValidBids' ? null : p.clearingPrice;
       await client.query(
         "update series set phase = 'Failed', auction_failure_reason = $2, auction_clearing_price = $3, auction_units_sold = $4, auction_proceeds = $5, auction_finalized_at = $6, last_event_seq = $7 where series_id = $1",
-        [p.seriesId, p.reason, p.clearingPrice, p.unitsSold, p.proceeds, e.blockTime, e.seq],
+        [p.seriesId, p.reason, clearingPrice, p.unitsSold, p.proceeds, e.blockTime, e.seq],
       );
       break;
     }

@@ -104,7 +104,8 @@ export const eventPayloads = {
     ...seriesScoped, clearingPrice: moneySchema, unitsSold: unitsSchema, proceeds: moneySchema, settledAt: z.number().int(),
   }),
   /**
-   * Stage 1 `RaiseFailed`. NoValidBids carries a price, units and proceeds of 0; MinRaise carries the price that cleared
+   * Stage 1 `RaiseFailed`. NoValidBids carries a price, units and proceeds of 0 (no price was found: the indexer records
+   * the price as null, as the chain's auction read shows it); MinRaise carries the price that cleared
    * and the would-be units sold and proceeds (`unitsSold` is ours: Stage 1's event omits it, and live adapters derive it
    * as proceeds / clearingPrice when the price is above 0, else 0). Every deposit is returned in full.
    */

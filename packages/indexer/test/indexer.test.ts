@@ -463,6 +463,27 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect(act.rows).toEqual([{ summary: 'Auction failed (MinRaise); deposits are returned to the bidders' }]);
   });
 
+  // S2 review fix: a NoValidBids failure found no price. The event carries Stage 1's 0 (as the chains' RaiseFailed
+  // does); the read model records null, as the chain's auction read and the API contract (SeriesAuction) do
+  it('projects a NoValidBids failure (every revealed bid invalid, or no bid at all) with no clearing price', async () => {
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'novalid-raise', genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    // one bid below the reserve, one above the wallet cap: both revealed, neither valid
+    const invalid = await h.runRaise({ bids: [{ backer: 0, price: 1n, qty: 10n }, { backer: 1, price: USDC(10), qty: 300n }] });
+    const zero = await h.runRaise({ bids: [] });
+    await idx.catchUp();
+    for (const { seriesId, failureReason } of [invalid, zero]) {
+      expect(failureReason).toBe('NoValidBids');
+      expect((await h.sim.getAuction(seriesId))!.clearingPrice).toBeNull();
+      const event = (await t.pool.query("select payload from events where chain = 'novalid-raise' and type = 'AuctionFailed' and payload->>'seriesId' = $1", [seriesId])).rows[0].payload;
+      expect(event).toMatchObject({ reason: 'NoValidBids', clearingPrice: '0', unitsSold: '0', proceeds: '0' });
+      const row = (await t.pool.query('select phase, issue_price, auction_failure_reason, auction_clearing_price::text, auction_units_sold::text, auction_proceeds::text, auction_finalized_at is not null as finalized from series where series_id = $1', [seriesId])).rows[0];
+      expect(row).toEqual({ phase: 'Failed', issue_price: null, auction_failure_reason: 'NoValidBids', auction_clearing_price: null, auction_units_sold: '0', auction_proceeds: '0', finalized: true });
+    }
+    expect((await h.sim.getAuction(invalid.seriesId))).toMatchObject({ revealedCount: 2, validCount: 0 });
+    expect((await h.sim.getAuction(zero.seriesId))).toMatchObject({ bidCount: 0 });
+  });
+
   it('keeps indexing the other chains when one chain fails, and still reports the failure', async () => {
     const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'isolated', genesis: GENESIS, acceptMockProofs: true }) });
     await h.runRaise();

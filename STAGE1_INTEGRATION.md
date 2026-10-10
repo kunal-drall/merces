@@ -337,7 +337,9 @@ buy only, which has no Merces event (a DBC swap). `AuctionSettled` carries Stage
 total fees: each winner's fee is a `FeeTaken`). `AuctionFailed` keeps its
 approved alias (`RaiseFailed`) with Stage 1's fields plus one of ours: `unitsSold`, which Stage 1's event omits; the
 adapters derive it as `proceeds / clearingPrice` when the price is above 0 (exact: proceeds = price × units), else 0,
-and `reason` from the price (0: NoValidBids; otherwise MinRaise).
+and `reason` from the price (0: NoValidBids; otherwise MinRaise). The adapters pass a NoValidBids `RaiseFailed`'s price
+of 0 through as is; the indexer records that price as null (no bid was valid, so no price was found), as the chain's
+auction read and the API's `SeriesAuction.clearingPrice` do.
 
 **B. Canonical model changes (Stage 1 wins).**
 

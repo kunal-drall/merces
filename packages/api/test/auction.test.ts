@@ -132,6 +132,31 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     expect(mine(await svc.advanceSettlements({ deliver: true }), ids)).toEqual({ advanced: [{ seriesId: left, steps: ['beginSettlement', 'finalizeSettlement'], stage: 'failed-complete' }], stuck: [], failed: [] });
     expect(await h.sim.getAuction(left)).toMatchObject({ raiseState: 'Failed', failureReason: 'NoValidBids', clearingPrice: null, mintFinalized: true });
     expect((await h.sim.getSeries(cancelled))!.phase).toBe('Cancelled');
+    // S2 review fix: the indexed series row agrees with the chain's read: no bid, so no price (null, not "0")
+    await rig.sync();
+    expect((await rig.get(`/series/${left}`)).json().auction).toMatchObject({ clearingPrice: null, unitsSold: '0', proceeds: '0', failureReason: 'NoValidBids' });
+  });
+
+  // S2 review fix: a NoValidBids failure found no price. Stage 1's RaiseFailed carries 0 there; every read says null, as
+  // the contract does (SeriesAuction.clearingPrice: "null ... when no bid was valid"): the indexed series row, the series
+  // list and the issuer's series beside the chain's auction read
+  it('a NoValidBids failure (every revealed bid invalid, or no bid at all) reads with no clearing price everywhere', async () => {
+    const h = rig.harness('monad');
+    // one bid below the reserve, one above the wallet cap: both revealed, neither valid
+    const invalid = await h.runRaise({ bids: [{ backer: 0, price: 1n, qty: 10n }, { backer: 1, price: USDC(10), qty: 300n }], terms: phases });
+    const zero = await h.runRaise({ bids: [], terms: phases });
+    await rig.sync();
+    for (const { seriesId, failureReason } of [invalid, zero]) {
+      expect(failureReason).toBe('NoValidBids');
+      const auction = { clearingPrice: null, unitsSold: '0', proceeds: '0', failureReason: 'NoValidBids' };
+      const row = (await rig.get(`/series/${seriesId}`)).json();
+      expect(row).toMatchObject({ phase: 'Failed', issuePrice: null, auction });
+      expect(row.auction.finalizedAt).not.toBeNull();
+      expect(((await rig.get('/series?limit=200')).json().series as { seriesId: string }[]).find((s) => s.seriesId === seriesId)).toMatchObject({ auction });
+      const issuer = (await rig.get(`/issuers/${h.sim.chain}:${h.issuer.address}`)).json();
+      expect((issuer.series as { seriesId: string }[]).find((s) => s.seriesId === seriesId)).toMatchObject({ auction });
+      expect((await rig.get(`/series/${seriesId}/auction`)).json()).toMatchObject({ raiseState: 'Failed', clearingPrice: null, failureReason: 'NoValidBids', stage: 'failed-complete' });
+    }
   });
 
   // S2 amendment L7: a keeper failure carries a code, never an adapter message (Stage 1 messages can embed values)
