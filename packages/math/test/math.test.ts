@@ -7,14 +7,19 @@ import {
   PAYMENT_RANGE_ERROR,
   SeriesStatus,
   WAD,
+  beginSettlement,
   capRemaining,
+  claimsFor,
   countdown,
   deadlineSeconds,
   deriveStatus,
+  finalizeSettlement,
+  findClearingPrice,
   formalNoticeDue,
   fromPid,
   graceSeconds,
   interim,
+  isBidValid,
   isPausedAt,
   newYearGross,
   parsePeriod,
@@ -22,17 +27,31 @@ import {
   periodFrom,
   periodOf,
   periodsBetween,
+  processBid,
   projectDeadlines,
   ratePerUnit,
   redemptionQuote,
+  requiredEscrow,
   standingOf,
   statusParamsOf,
+  tallyBids,
   toPid,
   wadFromDecimal,
   wadToDecimal,
+  walletCapUnitsAtAuction,
+  type AuctionRules,
   type LedgerClock,
   type Pause,
+  type RevealedBid,
+  type SettledState,
 } from '../src/index.ts';
+
+/**
+ * Pins that moved with Stage 1 in S2 carry a cause code:
+ *  - S2-G: `@merces/math` re-exports Stage 1's auction family (SPEC v1.1 §5.1–§5.2: the auction's wallet cap, the
+ *    required escrow, validity at reveal, begin/tally/finalize, per-bid processing, honest claims and the clearing
+ *    price); the interim auction family stays under `interim` until its callers move (S2 WP8 deletes it).
+ */
 
 // ---------------------------------------------------------------- the gateway
 
@@ -54,6 +73,8 @@ const REFERENCE_REEXPORTS = [
   'hurdlePrice', 'averageAnnualGross', 'redemptionQuote', 'newTailState', 'tailReceive', 'newFinalState', 'finalDistribute',
   'MAX_RELEASE_TRANCHES', 'validateReleaseSchedule', 'trancheAmounts', 'vested', 'releasable',
   'owedYtd', 'paymentUsd',
+  // cause S2-G: Stage 1's auction family
+  'walletCapUnitsAtAuction', 'requiredEscrow', 'isBidValid', 'beginSettlement', 'tallyBids', 'isClearingPriceValid', 'finalizeSettlement', 'marginalAllocation', 'processBid', 'claimsFor', 'findClearingPrice',
 ] as const;
 
 describe('@merces/math gateway', () => {
@@ -68,9 +89,11 @@ describe('@merces/math gateway', () => {
     const ours = ['periodOf', 'periodOfPid', 'periodFrom', 'parsePeriod', 'periodsBetween', 'toPid', 'fromPid', 'wadFromDecimal', 'wadToDecimal', 'utcDayIndex', 'ratePerUnit', 'paymentStable', 'PAYMENT_RANGE_ERROR', 'statusParamsOf', 'projectDeadlines', 'standingOf', 'capRemaining'];
     const keys = Object.keys(gateway);
     expect([...keys].sort()).toEqual([...SDK_REEXPORTS, 'pidAt', ...Object.keys(SDK_RENAMED), ...REFERENCE_REEXPORTS, ...ours, 'interim'].sort());
-    // Stage 1's positional quarterPayment (θ third) and the S2 auction cap are deliberately not re-exported
+    // Stage 1's positional quarterPayment (θ third) and Stage 1's `walletCapUnits` (the redemption-window cap, S5) are
+    // deliberately not re-exported; the auction's cap is `walletCapUnitsAtAuction` (cause S2-G)
     expect(keys).not.toContain('quarterPayment');
     expect(keys).not.toContain('walletCapUnits');
+    expect(gateway.walletCapUnitsAtAuction).toBe(ref.walletCapUnitsAtAuction);
     expect(gateway.redemptionQuote).toBe(ref.redemptionQuote);
   });
   it('`interim` keeps exactly the auction family (S2) and the FX family (S5)', () => {
@@ -238,6 +261,71 @@ describe('projectDeadlines against Stage 1 countdown, deriveStatus and formalNot
     const later = [{ start: e + d(20), end: e + d(30) }];
     expect(projectDeadlines(8104, later, e + d(10), params)).toEqual(projectDeadlines(8104, [], e + d(10), params));
     expect(projectDeadlines(8104, later, e + d(20), params).dueAt).toBe(e + d(40));
+  });
+});
+
+// ---------------------------------------------------------------- Stage 1's auction family (S2)
+
+describe('Stage 1 auction family (SPEC v1.1 §5.1–§5.2; cause S2-G)', () => {
+  const usdc = (n: number) => BigInt(n) * 1_000_000n;
+  // the harness's default raise (`defaultTerms` and `runRaise` in packages/simulator/src/harness.ts): 500 units, reserve
+  // 8 USDC, minimum raise 4,000, wallet cap 20% (100 units), auction fee 1%, no non-reveal charge (S2 holds it at 0)
+  const rules: AuctionRules = { unitsOffered: 500n, reservePrice: usdc(8), minRaise: usdc(4_000), walletCapBps: 2000, auctionFeeBps: 100, nonRevealChargeBps: 0 };
+  const revealed = (price: bigint, quantity: bigint, revealIndex: number): RevealedBid => {
+    const escrow = requiredEscrow(price, quantity, rules.auctionFeeBps);
+    return { price, quantity, escrow, valid: isBidValid(price, quantity, escrow, rules), revealIndex };
+  };
+  // five backers bid 12 / 11 / 10 / 10 / 9 USDC × 100 units, each escrowing exactly price × quantity plus the 1% fee
+  const bids = [12, 11, 10, 10, 9].map((p, i) => revealed(usdc(p), 100n, i));
+
+  it('the default harness raise: clears at 9 USDC, sells out, takes 9 USDC of fee per bid and refunds 303/202/101/101/0', () => {
+    // why most `runRaise` pins survive S2: Stage 1 settles this raise the way the interim clearing did (the same
+    // figures from Stage 1's own Simulator: every backer pays 909 USDC for 100 units)
+    expect(walletCapUnitsAtAuction(rules.unitsOffered, rules.walletCapBps)).toBe(100n);
+    expect(bids.map((b) => b.escrow)).toEqual([1_212, 1_111, 1_010, 1_010, 909].map(usdc));
+    expect(bids.every((b) => b.valid)).toBe(true);
+    const price = findClearingPrice(bids, rules.unitsOffered);
+    expect(price).toBe(usdc(9));
+    const claims = claimsFor(bids, price!);
+    expect(claims).toEqual({ qAboveClaim: 400n, qAtClaim: 100n });
+    const proposal = beginSettlement(rules.unitsOffered, price!, claims.qAboveClaim, claims.qAtClaim);
+    expect(proposal.rClaim).toBe(100n);
+    const tally = tallyBids(bids, proposal);
+    expect(tally).toEqual({ qAbove: 400n, qAt: 100n, allocSum: 100n, minValidPrice: usdc(9), talliedCount: 5 });
+    expect(finalizeSettlement(tally, 5, rules, proposal)).toEqual({ kind: 'settled', clearingPrice: usdc(9), R: 100n, qAt: 100n, qAbove: 400n, unitsSold: 500n, proceeds: usdc(4_500) });
+    const settled: SettledState = { failed: false, clearingPrice: usdc(9), R: 100n, qAt: 100n };
+    const outcomes = bids.map((b) => processBid({ ...b, revealed: true }, settled, rules));
+    for (const o of outcomes) expect(o).toMatchObject({ alloc: 100n, cost: usdc(900), fee: usdc(9), charge: 0n });
+    expect(outcomes.map((o) => o.pendingRefund)).toEqual([303, 202, 101, 101, 0].map(usdc));
+    // the interim clearing (deleted in S2 WP8) gave the same price, units, proceeds and fees on this raise
+    const old = interim.clearAuction({
+      bids: bids.map((b, i) => ({ bidder: `b${i}`, pricePerUnit: b.price, quantity: b.quantity, order: i })),
+      unitsOffered: rules.unitsOffered, reservePrice: rules.reservePrice, minimumRaise: rules.minRaise, walletCapUnits: 100n, auctionFeeBps: 100n,
+    });
+    expect([old.clearingPrice, old.unitsSold, old.proceeds, old.totalFees]).toEqual([usdc(9), 500n, usdc(4_500), usdc(45)]);
+  });
+
+  it('a bid above the wallet cap is invalid (not trimmed to the cap): it is tallied for nothing and refunded in full', () => {
+    // 300 units on a 100-unit cap, fully escrowed: invalid at reveal (the interim clearing trimmed it to the cap)
+    const over = revealed(usdc(12), 300n, 5);
+    expect(over.valid).toBe(false);
+    expect(isBidValid(usdc(12), 100n, requiredEscrow(usdc(12), 100n, 100), rules)).toBe(true);
+    expect(isBidValid(usdc(12), 101n, requiredEscrow(usdc(12), 101n, 100), rules)).toBe(false);
+    // the clearing is the default raise's: the invalid bid counts toward `talliedCount` only
+    const all = [...bids, over];
+    expect(findClearingPrice(all, rules.unitsOffered)).toBe(usdc(9));
+    expect(tallyBids(all, beginSettlement(rules.unitsOffered, usdc(9), 400n, 100n))).toEqual({ qAbove: 400n, qAt: 100n, allocSum: 100n, minValidPrice: usdc(9), talliedCount: 6 });
+    const settled: SettledState = { failed: false, clearingPrice: usdc(9), R: 100n, qAt: 100n };
+    expect(processBid({ ...over, revealed: true }, settled, rules)).toEqual({ alloc: 0n, cost: 0n, fee: 0n, pendingRefund: usdc(3_636), charge: 0n });
+  });
+
+  it('the auction wallet cap has no minimum of one unit (the interim cap rounded up to one)', () => {
+    expect(walletCapUnitsAtAuction(5n, 1000)).toBe(0n);
+    expect(interim.walletCapUnits(5n, 1_000n)).toBe(1n);
+    // so no bid on such a series is valid (Stage 1's create_series refuses a cap below one unit)
+    const tiny: AuctionRules = { ...rules, unitsOffered: 5n, walletCapBps: 1000 };
+    expect(isBidValid(usdc(9), 1n, requiredEscrow(usdc(9), 1n, 100), tiny)).toBe(false);
+    expect(walletCapUnitsAtAuction(10n, 1000)).toBe(1n);
   });
 });
 

@@ -9,8 +9,9 @@
  * term builder's per-unit rate, a value-free payment wrapper, deadline projection and a display cap.
  *
  * The interim Merces math (Part C) survives only under `interim.*`, and since the end of S1 only the auction family
- * (`clearAuction`, `walletCapUnits`, `bidDeposit`, `auctionFee`; S2) and the FX family (`quarterAverageRate`,
- * `coverageOk`, `deviationBps`, `withinBand`, `pythToWad`; S5).
+ * (`clearAuction`, `walletCapUnits`, `bidDeposit`, `auctionFee`; S2 moves its callers to Stage 1's auction family below
+ * and deletes it in WP8) and the FX family (`quarterAverageRate`, `coverageOk`, `deviationBps`, `withinBand`,
+ * `pythToWad`; S5).
  */
 export * as interim from './interim/index.ts';
 
@@ -80,7 +81,8 @@ export {
 
 // ---------------------------------------------------------------- Stage 1 reference math (@merces/reference)
 // Not re-exported: Stage 1's positional `quarterPayment(r, N, θ, x, prior)` (θ third; use `paymentStable`) and
-// `walletCapUnits` (the auction family moves in S2).
+// Stage 1's `walletCapUnits` (the redemption-window cap, `window.ts`; S5). The auction's cap is
+// `walletCapUnitsAtAuction` below; it has no minimum of one (the creation rule keeps it ≥ 1).
 export {
   // status, deadlines and accrual (SPEC v1.1 §6.4)
   isTerminal,
@@ -133,6 +135,26 @@ export {
   // income (SPEC §8)
   owedYtd,
   paymentUsd,
+  // sealed-bid auction and multi-step settlement (SPEC v1.1 §5.1–§5.2)
+  walletCapUnitsAtAuction,
+  requiredEscrow,
+  isBidValid,
+  beginSettlement,
+  tallyBids,
+  isClearingPriceValid,
+  finalizeSettlement,
+  marginalAllocation,
+  processBid,
+  claimsFor,
+  findClearingPrice,
+  type AuctionRules,
+  type RevealedBid,
+  type Proposal,
+  type Tally,
+  type FinalizeOutcome,
+  type BidOutcome,
+  type SettledState,
+  type RejectionReason,
 } from '@merces/reference';
 
 // The shapes of Stage 1's vector `expect` views (types only, nothing runs): the simulator's stage1 view builds them.

@@ -21,6 +21,8 @@ export const REFERENCE_REEXPORTS = [
   'MAX_RELEASE_TRANCHES', 'validateReleaseSchedule', 'trancheAmounts', 'vested', 'releasable',
   // income
   'owedYtd', 'paymentUsd',
+  // auction (SPEC §5.1-5.2; S2)
+  'walletCapUnitsAtAuction', 'requiredEscrow', 'isBidValid', 'beginSettlement', 'tallyBids', 'isClearingPriceValid', 'finalizeSettlement', 'marginalAllocation', 'processBid', 'claimsFor', 'findClearingPrice',
 ] as const;
 
 /**
@@ -151,7 +153,7 @@ function writeParity(ctx: StepCtx, r: { pkg: string | null; commit: string | nul
     `- Stage 1 math package: ${r.pkg ?? '(none named)'}${r.commit ? ` at ${r.commit}` : ''}.`,
   ];
   if (r.identical !== undefined) {
-    lines.push(`- \`@merces/math\` re-exports ${REFERENCE_REEXPORTS.length} Stage 1 reference names (status, vault, redemption, treasury, income); ${r.identical} are Stage 1's own objects. It also re-exports \`@merces/sdk\`'s fixed point, periods, pauses, year ring, parameters and error names.`);
+    lines.push(`- \`@merces/math\` re-exports ${REFERENCE_REEXPORTS.length} Stage 1 reference names (status, vault, redemption, treasury, income, auction); ${r.identical} are Stage 1's own objects. It also re-exports \`@merces/sdk\`'s fixed point, periods, pauses, year ring, parameters and error names.`);
   }
   lines.push(
     '- No function-by-function comparison: the gateway runs Stage 1\'s functions, so comparing them would compare Stage 1 with itself. Behavioural parity is measured by the Stage 1 vector runner (`VECTOR_PARITY.md`). The last comparison of the interim math against Stage 1 (6 of 12 families disagreeing) is in this file\'s git history.',

@@ -1,4 +1,4 @@
-import { BPS_DENOMINATOR, MAX_RELEASE_TRANCHES, PARAMETER_BOUNDS, mulDiv, validateReleaseSchedule, wadToDecimal, type Parameters } from '@merces/math';
+import { MAX_RELEASE_TRANCHES, PARAMETER_BOUNDS, validateReleaseSchedule, wadToDecimal, walletCapUnitsAtAuction, type Parameters } from '@merces/math';
 import type { SeriesTerms } from './events.ts';
 
 /**
@@ -78,10 +78,8 @@ export function seriesTermsViolations(t: BoundedTerms): TermsViolation[] {
   if (units < 1n) out.push({ field: 'unitsOffered', stage1: 'InvalidTerms', code: 'positive', message: 'units offered must be positive' });
   if (reserve < 1n) out.push({ field: 'reservePrice', stage1: 'InvalidTerms', code: 'positive', message: 'reserve price must be positive' });
   if (BigInt(t.minimumRaise) > reserve * units) out.push({ field: 'minimumRaise', stage1: 'InvalidTerms', code: 'unreachable', message: 'minimum raise exceeds units × reserve price' });
-  // SIM:779: Stage 1's walletCapUnitsAtAuction, floor(units offered × wallet cap bps / 10000) with Stage 1's mulDiv, at
-  // least one unit (the auction family itself is re-exported with S2)
-  const capBps = BigInt(t.walletCapBps);
-  if (units >= 1n && capBps >= 0n && mulDiv(units, capBps, BPS_DENOMINATOR) < 1n) {
+  // SIM:779: Stage 1's walletCapUnitsAtAuction (floor(units offered × wallet cap bps / 10000)) is at least one unit
+  if (units >= 1n && t.walletCapBps >= 0 && walletCapUnitsAtAuction(units, t.walletCapBps) < 1n) {
     out.push({ field: 'unitsOffered', stage1: 'InvalidTerms', code: 'wallet-cap-below-one-unit', message: 'the wallet cap (units offered × wallet cap bps / 10000, rounded down) must be at least one unit' });
   }
   // SIM:780-781: Stage 1's validateReleaseSchedule (non-empty, ≤ 24 tranches, bps in range, offsets non-negative and
