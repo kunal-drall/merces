@@ -51,7 +51,7 @@ export const registryOps: TranslatorTable = {
   create_series: (ctx, c) => {
     // FX income and tier-1 routers are S5 and the tier-1 milestone: the canonical terms cannot carry them yet
     if (c.fxPairId) throw new RunnerError(`create_series ${c.series}: series with FX income are not modelled before S5`);
-    if (c.router) throw new RunnerError(`create_series ${c.series}: tier-1 router series are not modelled in S1`);
+    if (c.router) throw new RunnerError(`create_series ${c.series}: tier-1 router series are not modelled yet (S5)`);
     if (ctx.book.series[c.series]) throw new RunnerError(`create_series ${c.series}: the vector creates this series twice`);
     const t = c.terms;
     const p = ctx.vector.parameters;

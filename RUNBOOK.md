@@ -102,13 +102,15 @@ pnpm typecheck
 DATABASE_URL=postgres://postgres@localhost:5432/merces pnpm vitest run          # unit + DB suites
 MERCES_TEST_DB=1 pnpm vitest run --project canary                               # the privacy canary
 CONFORMANCE_CHAIN=simulator pnpm vitest run --project conformance               # also simulator:monad
-pnpm stage1:vectors --personality solana,monad                                  # the 10 S1 targets on our simulator
+pnpm stage1:vectors --personality solana,monad                                  # 14 targets + 7 prefix gates on our simulator
 pnpm stage1:vectors --backend reference                                         # all 25 on Stage 1's own simulator
+pnpm stage1:vectors --backend lockstep --personality solana                     # both side by side, every step
 pnpm stage1:sync --no-conformance                                               # pin, drift, math, vectors
 ```
 
-`stage1:vectors` must exit 0 with `OK: …, 20/20 at expected status` (the 10 targets on both personalities) and the
-reference backend with `OK: 25/25 PASS`; `stage1:sync` must report the math and vectors steps `OK` (the diff step stays
+`stage1:vectors` must exit 0 with `OK: 36/42 PASS, 42/42 at expected status` (the 14 targets in full and the 7 prefix
+gates to their gate, on both personalities; 03 is PASS-WITH-DIVERGENCES on the five DIV-NRC-1 fields of the
+non-reveal hold, and lockstep accepts 03 parting at #65 as recorded) and the reference backend with `OK: 25/25 PASS`; `stage1:sync` must report the math and vectors steps `OK` (the diff step stays
 `WARN` until the adapters are wired, and conformance needs live deployments). The vector runner verifies every
 embedded report proof with the ports' Groth16 verifier and never persists anything.
 

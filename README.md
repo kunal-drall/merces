@@ -29,7 +29,7 @@ pnpm test:canary                         # H3: income canary and access-tier mat
 pnpm demo:cycle                          # one raise → treasury → 3 quarterly ProofOfIncome reports (Stripe data) → payouts, on Solana and Monad personalities
 pnpm stage1:sync --no-conformance       # the catch-up pipeline against the pinned stage1 submodule (STAGE1_PATH overrides)
 pnpm stage1:vectors --backend reference  # replay Stage 1's 25 parity vectors (reference backend = Stage 1's own simulator)
-pnpm stage1:vectors                      # the S1 target vectors on our simulator, both personalities
+pnpm stage1:vectors                      # the target vectors (and the prefix-gated ones to their gate) on our simulator, both personalities
 pnpm openapi:check                       # routes ⇄ openapi.yaml ⇄ access tiers
 ```
 

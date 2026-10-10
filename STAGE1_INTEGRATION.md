@@ -389,11 +389,14 @@ to the base unit; a mismatch means the simulator is wrong and is fixed.
    Behavioural parity is the vectors step's job.
 5. **vectors** — Stage 1's own vector directory is replayed by the Stage 1 vector runner (`pnpm stage1:vectors`,
    `packages/stage1-sync/src/stage1-vectors`): on the reference backend (Stage 1's own simulator; all 25 must pass,
-   proofs verified, or the runner or the checkout is broken) and on the merces backend (our simulator, the S1 target
-   vectors on both personalities, each at its expected status; the default test suite runs the same gate). Report
+   proofs verified, or the runner or the checkout is broken) and on the merces backend (our simulator, both
+   personalities: the S1 and S2 target vectors in full, and the vectors that need a later milestone up to their prefix
+   gate, each at its expected status; the default test suite runs the same gate). Known divergences are recorded per
+   step and field (`stage1-vectors/divergences.ts`, DIV-NRC-1 for the non-reveal hold in 03): a recorded difference is
+   accepted (PASS-WITH-DIVERGENCES), another value fails, and an entry that no longer occurs fails as stale. Report
    proofs are verified with the ports' `Groth16ReportVerifier`, the verifier the API and the simulated chains run. `VECTOR_PARITY.md` lists the results,
-   the findings with leaf-path diffs, waived steps, runner-atomic reverts, the shims used ("not parity", the calls of
-   expected reverts included) and the op inventory. A single JSON
+   the findings with leaf-path diffs, the known divergences, the prefix gates, waived steps, runner-atomic reverts, the
+   shims used ("not parity", the calls of expected reverts included) and the op inventory. A single JSON
    file of `scenarios` (the earlier Merces format) is replayed through the harness.
 6. **conformance** — the H2 suite against each live chain (`CONFORMANCE_CHAIN=solana|evm:<chain>`).
 7. **verdict** — per chain: ready for `live` only when no step failed and both **diff** and **conformance** are `ok`

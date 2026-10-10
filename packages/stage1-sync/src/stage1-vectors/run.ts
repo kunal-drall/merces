@@ -1,27 +1,40 @@
 import type { ExpectRevertStep, Step } from '@merces/reference';
 import { compareExpect, fxRequestOf, type Diff } from './compare.ts';
 import { describeRaised, RunnerError } from './errors.ts';
-import { waiverFor, type Waiver } from './expected.ts';
+import { splitDivergences, waiverFor, type Divergence, type Waiver } from './expected.ts';
 import { stableConserved, unitsConserved } from './invariants.ts';
 import { callOf, opLabel, type LoadedVector } from './load.ts';
 import { checkRevert } from './revert.ts';
 import type { Applied, Backend, VectorPersonality, World } from './world.ts';
 
-/** How a replay ended (S1 plan §5.6 vocabulary). */
-export type VectorStatus = 'PASS' | 'PASS-WITH-WAIVERS' | 'BLOCKED' | 'FAIL';
+/**
+ * How a replay ended (S1 plan §5.6 vocabulary; S2 adds PASS-WITH-DIVERGENCES: every difference is a recorded entry of
+ * the divergence register, `divergences.ts`).
+ */
+export type VectorStatus = 'PASS' | 'PASS-WITH-WAIVERS' | 'PASS-WITH-DIVERGENCES' | 'BLOCKED' | 'FAIL';
 
-/** One finding at a step. Messages and diffs carry public facts only (names, indices, error names, expect values). */
+/**
+ * One finding at a step. Messages and diffs carry public facts only (names, indices, error names, expect values).
+ * `divergence`: differences equal to recorded entries of the register row `divergence` (accepted, not parity).
+ */
 export interface StepIssue {
   index: number;
   /** the step's op; `expect_revert <call op>` for a revert */
   op: string;
-  kind: 'fail' | 'blocked' | 'n/a';
+  kind: 'fail' | 'blocked' | 'n/a' | 'divergence';
   message: string;
   diffs?: Diff[];
   /** the shim-table row of a blocked or n/a step */
   shimId?: string;
   /** set when the step is waived by the vector's expectation */
   waived?: boolean;
+  /** a `divergence` issue: its register row (`DIV-NRC-1`) */
+  divergence?: string;
+}
+
+/** Is the issue a finding (a failure, or a step not run and not waived)? Waived steps and accepted divergences are not. */
+export function isFinding(i: StepIssue): boolean {
+  return i.kind === 'fail' || ((i.kind === 'blocked' || i.kind === 'n/a') && !i.waived);
 }
 
 /**
@@ -65,6 +78,8 @@ export interface ReplayOptions {
   stopBefore?: string;
   /** steps this backend may leave unrun */
   waivers?: readonly Waiver[];
+  /** known divergences at `expect` steps (`Expected.divergences`): accepted when equal, a failure when moved or stale */
+  divergences?: readonly Divergence[];
   /** stop after this many failing steps (default 25) */
   maxFailures?: number;
 }
@@ -72,7 +87,8 @@ export interface ReplayOptions {
 /** The status a list of issues amounts to. */
 export function statusOf(issues: readonly StepIssue[]): VectorStatus {
   if (issues.some((i) => i.kind === 'fail')) return 'FAIL';
-  if (issues.some((i) => i.kind !== 'fail' && !i.waived)) return 'BLOCKED';
+  if (issues.some(isFinding)) return 'BLOCKED';
+  if (issues.some((i) => i.kind === 'divergence')) return 'PASS-WITH-DIVERGENCES';
   if (issues.some((i) => i.waived)) return 'PASS-WITH-WAIVERS';
   return 'PASS';
 }
@@ -82,7 +98,9 @@ export function statusOf(issues: readonly StepIssue[]): VectorStatus {
  * world's snapshot and checks the unit supply; `expect_revert` runs the revert check; actions run through the world.
  * After every step Σ stablecoin must equal Σ fund. An action that fails, a revert check whose call went through or
  * changed the state, and a broken stablecoin invariant end the replay (the states have diverged); `expect` mismatches
- * do not.
+ * do not. At an `expect`, a difference equal to a recorded divergence entry of the step is accepted (an issue of kind
+ * `divergence`); another value at a recorded path fails, and so does an entry of the step whose difference did not
+ * occur (a stale divergence: the behaviour it records has changed, so the entry must go).
  */
 export async function replayVector(world: World, vector: LoadedVector, opts: ReplayOptions = {}): Promise<VectorRun> {
   const started = Date.now();
@@ -128,7 +146,13 @@ export async function replayVector(world: World, vector: LoadedVector, opts: Rep
       if (step.op === 'expect') {
         const snapshot = world.snapshot(step.series ?? null, fxRequestOf(step as unknown as Record<string, unknown>));
         const diffs = compareExpect(step as unknown as Record<string, unknown>, snapshot);
-        if (diffs.length) fail(index, step, `${diffs.length} expected value(s) differ`, diffs);
+        const { accepted, failed, moved, stale } = splitDivergences(opts.divergences, index, diffs);
+        if (failed.length) fail(index, step, `${failed.length} expected value(s) differ${moved.length ? ` (${moved.length} at a recorded divergence path with another value: ${moved.join(', ')})` : ''}`, failed);
+        for (const id of [...new Set(accepted.map((d) => d.id))]) {
+          const mine = accepted.filter((d) => d.id === id).map(({ id: _id, ...d }) => d);
+          issues.push({ index, op: opLabel(step), kind: 'divergence', divergence: id, message: `known divergence ${id}: ${mine.length} field(s) differ as recorded (accepted, not parity)`, diffs: mine });
+        }
+        for (const e of stale) fail(index, step, `stale divergence ${e.id}: ${e.path} no longer differs (recorded: Stage 1 ${JSON.stringify(e.stage1)}, ours ${JSON.stringify(e.ours)}); remove the entry`);
         if (step.series) {
           const units = unitsConserved(world, step.series);
           if (units) fail(index, step, units);
@@ -174,6 +198,11 @@ export async function replayVector(world: World, vector: LoadedVector, opts: Rep
       if (index + 1 < vector.steps.length) stopped = { index: index + 1, reason: 'diverged' };
       break;
     }
+  }
+  // an entry recorded at a step that ran but is not an `expect` is never checked: a broken expectation, not a pass
+  for (const e of opts.divergences ?? []) {
+    const step = vector.steps[e.step];
+    if (e.step < executed && step && step.op !== 'expect') fail(e.step, step, `divergence entry ${e.id} at #${e.step} (${e.path}) names a step that is not an expect`);
   }
   return {
     id: vector.id,

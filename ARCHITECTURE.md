@@ -98,7 +98,7 @@ ProofOfIncome circuit (Groth16) on the device; only commitments, the payment and
 Stage 1 is the `stage1` git submodule, pinned. `stage1:sync` (`@merces/stage1-sync`) detects the handoff manifest or
 a hand-written map, generates typed clients from IDLs and ABIs, diffs interfaces into `INTERFACE_DRIFT.md`, checks that
 `@merces/math` runs Stage 1's own functions at the pinned commit, replays Stage 1's 25 parity vectors through the Stage
-1 vector runner (on Stage 1's own simulator, and the S1 targets on ours on both personalities, `pnpm stage1:vectors`),
+1 vector runner (on Stage 1's own simulator, and the targets and prefix gates on ours on both personalities, `pnpm stage1:vectors`),
 runs the conformance suite (`@merces/conformance`, written against `ChainPort` only) on each live chain, and prints a
 verdict. It runs on a schedule in CI. See `STAGE1_INTEGRATION.md`.
 

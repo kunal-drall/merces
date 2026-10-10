@@ -11,7 +11,7 @@ import { unsupportedOps } from './unsupported.ts';
 import { windowOps } from './window.ts';
 import type { OpContext, Translation, Translator, TranslatorTable } from './types.ts';
 
-export { NOT_IN_S1 } from './unsupported.ts';
+export { NOT_YET } from './unsupported.ts';
 export type { OpContext, Translation } from './types.ts';
 
 /** Every Stage 1 call op → its translator on the merces backend (S1 plan §5.3). */

@@ -1,4 +1,3 @@
-import { RaiseState } from '@merces/math';
 import { SimError, Simulator, type Call } from '@merces/reference';
 import { nonProtocol, RunnerError, type Raised } from './errors.ts';
 import type { LoadedVector } from './load.ts';
@@ -93,16 +92,15 @@ export class ReferenceWorld implements World {
   }
 
   /**
-   * Series whose multi-step settlement is in flight: a raise between `begin_settlement` and its last `process_bid`, or
-   * a window between `begin_window_settlement` and `process_orders`. The merces backend settles in one step, so its
-   * state is comparable with Stage 1's only outside these stretches (lockstep mode, `oracle.ts`).
+   * Series whose transfer window is in the middle of its multi-step settlement on Stage 1's side: between
+   * `begin_window_settlement` and `process_orders`. The merces backend clears a window in one step (until S5), so its
+   * state is comparable with Stage 1's only outside these stretches (lockstep mode, `oracle.ts`). A raise is never in
+   * flight here: the merces backend runs Stage 1's multi-step settlement since S2, so lockstep compares every step of it.
    */
   inFlight(): string[] {
     const out: string[] = [];
     for (const [name, s] of this.sim.series) {
-      const raise = s.raiseState === RaiseState.Settling || ((s.raiseState === RaiseState.Settled || s.raiseState === RaiseState.Failed) && s.auction.bidsProcessed < s.bids.size);
-      const window = s.window !== null && (s.window.state === 'Settling' || s.window.state === 'NoMatch' || s.window.state === 'Settled');
-      if (raise || window) out.push(name);
+      if (s.window !== null && (s.window.state === 'Settling' || s.window.state === 'NoMatch' || s.window.state === 'Settled')) out.push(name);
     }
     return out;
   }

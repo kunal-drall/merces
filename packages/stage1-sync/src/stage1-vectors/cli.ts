@@ -5,9 +5,10 @@
  *
  * Replays Stage 1's parity vectors (S1 plan §5). The vectors directory defaults to the one the Stage 1 checkout's
  * manifest names (STAGE1_PATH, else the pinned `stage1` submodule). Backends: `merces` (default; our simulator, the
- * S1 targets on both personalities unless `--only`), `reference` (Stage 1's own simulator, every vector) and
- * `lockstep` (both side by side, stopping at the first step after which they disagree). Exit code 0 when every run is
- * at its expected status, 1 when one is not, 2 on a usage or runner error.
+ * targets in full and the prefix-gated vectors to their gate, on both personalities, unless `--only`; `--until`
+ * replaces a gate), `reference` (Stage 1's own simulator, every vector) and `lockstep` (both side by side, stopping at
+ * the first step after which they disagree; a recorded parting is accepted). Exit code 0 when every run is at its
+ * expected status, 1 when one is not, 2 on a usage or runner error.
  */
 import { existsSync } from 'node:fs';
 import { relative } from 'node:path';
@@ -102,7 +103,11 @@ try {
   else console.log(renderSummary([report]));
   if (args.out) console.log(`wrote ${writeParity(args.out, [report], { dir: src.label, ...(src.commit ? { commit: src.commit } : {}) })}`);
   const pass = report.runs.filter((r) => r.status === 'PASS').length;
-  if (!args.json) console.log(`${report.ok ? 'OK' : 'NOT OK'}: ${pass}/${report.runs.length} PASS, ${report.runs.filter((r) => r.atExpected).length}/${report.runs.length} at expected status`);
+  // prefix runs replay to their gate (PREFIX-PASS) and count as PASS when every step up to it passed
+  const prefix = report.runs.filter((r) => r.expected.status === 'PREFIX-PASS').length;
+  const diverging = report.runs.filter((r) => r.status === 'PASS-WITH-DIVERGENCES').length;
+  const notes = [...(prefix ? [`${prefix} prefix run${prefix > 1 ? 's' : ''}`] : []), ...(diverging ? [`${diverging} run${diverging > 1 ? 's' : ''} with accepted divergences`] : [])];
+  if (!args.json) console.log(`${report.ok ? 'OK' : 'NOT OK'}: ${pass}/${report.runs.length} PASS, ${report.runs.filter((r) => r.atExpected).length}/${report.runs.length} at expected status${notes.length ? ` (${notes.join('; ')})` : ''}`);
   code = report.ok ? 0 : 1;
 } catch (e) {
   // runner errors carry public facts only; anything else is reported by class
