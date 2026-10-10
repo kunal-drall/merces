@@ -32,6 +32,11 @@ const GENESIS = Date.UTC(2026, 0, 1) / 1000;
  *    position's units nor units outstanding and adds to the tendered total (amendment M3).
  *  - S3-KP: a curve series' chain notices (S3 WP11, amendment M8): `curve.completed` in place of the mint notice,
  *    `curve.tender-open` at a redemption, and every notice of a curve series names its raise style.
+ *
+ * S3 follow-up cause code:
+ *  - NRC: the non-reveal charge is modelled (was the S2 hold): `NonRevealCharged` writes the bid's charge and refund
+ *    (migration 022), `FeeTaken{nonReveal}` a fee row, `bid.non-reveal-charged` notifies the bidder; series record the
+ *    harness's 100 bps.
  */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
@@ -79,9 +84,10 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const monRow = series.rows.find((r) => r.chain === 'monad')!;
     expect(monRow.series_id).toBe(b.seriesId);
     // cause S2-AD: the raise's own terms (migration 018), as the series recorded them (the harness's 3-day commit and
-    // 1-day reveal; 0 bps while the non-reveal charge is held), and the phase ends openRaise derived from them
+    // 1-day reveal; cause NRC: the harness's own 100 bps non-reveal charge, was 0 under the S2 hold), and the phase ends
+    // openRaise derived from them
     const raiseTerms = await t.pool.query('select commit_duration_seconds::text, reveal_duration_seconds::text, non_reveal_charge_bps, reveal_ends_at - commit_ends_at as reveal_seconds from series order by chain');
-    expect(raiseTerms.rows).toEqual([0, 1].map(() => ({ commit_duration_seconds: '259200', reveal_duration_seconds: '86400', non_reveal_charge_bps: 0, reveal_seconds: '86400' })));
+    expect(raiseTerms.rows).toEqual([0, 1].map(() => ({ commit_duration_seconds: '259200', reveal_duration_seconds: '86400', non_reveal_charge_bps: 100, reveal_seconds: '86400' })));
 
     const periods = await t.pool.query('select period_id, settled, payment_due::text, paid::text from periods where series_id = $1 order by period_id', [a.seriesId]);
     expect(periods.rows.map((r) => [r.period_id, r.settled, r.paid])).toEqual([['2026Q1', true, '0'], ['2026Q2', true, '0'], ['2026Q3', true, USDC(1500).toString()]]);
@@ -529,6 +535,40 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect(await pos()).toEqual({ units: '100', undelivered_units: '0' });
     expect(await money('refund')).toEqual([303, 202, 101, 101].map((n) => USDC(n).toString()));
     expect((await t.pool.query('select count(*)::int as n from bids where series_id = $1 and processed and delivered', [seriesId])).rows[0].n).toBe(5);
+  });
+
+  // cause NRC: the non-reveal charge, modelled as Stage 1 does (migration 022). An unrevealed bid on a settled raise: its
+  // NonRevealCharged writes the bid's charge and what it is owed, its FeeTaken{nonReveal} the fee row, its notice goes to
+  // the bidder; the feed names no amount. Figures as in the simulator's own test (Stage 1's Simulator at 100 bps)
+  it('projects a non-reveal charge: the bid\'s charge and refund, a nonReveal fee row, the bidder\'s notice, no amount in the feed', async () => {
+    const key = 'non-reveal';
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const b4 = h.backers[4]!.address;
+    const bids = [...[12, 11, 10, 10].map((p, backer) => ({ backer, price: USDC(p), qty: 100n })), { backer: 4, price: USDC(9), qty: 100n, reveal: false }];
+    const { seriesId } = await h.runRaise({ terms: { unitsOffered: '400', walletCapBps: 2500, minimumRaise: USDC(3200).toString(), nonRevealChargeBps: 100 }, bids, settle: 'process' });
+    await idx.catchUp();
+    const bid = async () => (await t.pool.query('select processed, delivered, non_reveal_charge::text, pending_refund::text, refunded::text from bids where series_id = $1 and bidder = $2', [seriesId, b4])).rows[0];
+    expect(await bid()).toEqual({ processed: true, delivered: false, non_reveal_charge: USDC(9.09).toString(), pending_refund: USDC(899.91).toString(), refunded: '0' });
+    expect((await t.pool.query('select bidder, non_reveal_charge::text from bids where series_id = $1 and bidder <> $2 order by bid_order', [seriesId, b4])).rows.map((r) => r.non_reveal_charge)).toEqual(['0', '0', '0', '0']);
+    const fees = await t.pool.query('select kind, payer, amount::text from fees_ledger where series_id = $1 order by seq', [seriesId]);
+    expect(fees.rows.filter((r) => r.kind === 'nonReveal')).toEqual([{ kind: 'nonReveal', payer: b4, amount: USDC(9.09).toString() }]);
+    expect(fees.rows.filter((r) => r.kind === 'auction')).toHaveLength(4);
+    const feeMoney = await t.pool.query("select wallet, amount::text, detail from money_events where series_id = $1 and kind = 'fee' and detail->>'kind' = 'nonReveal'", [seriesId]);
+    expect(feeMoney.rows).toEqual([{ wallet: b4, amount: USDC(9.09).toString(), detail: { kind: 'nonReveal' } }]);
+    // the feed says what happened, never how much
+    const act = await t.pool.query("select summary from activity where series_id = $1 and kind = 'NonRevealCharged'", [seriesId]);
+    expect(act.rows).toEqual([{ summary: 'An unrevealed bid was charged the non-reveal charge' }]);
+    expect(/\d/.test(act.rows[0].summary)).toBe(false);
+    // the bidder's own notice (the notifications module renders it without an amount)
+    const notices = (await t.pool.query("select payload from outbox where topic = 'notification' and payload->>'chain' = $1 and payload->>'seriesId' = $2 order by id", [key, seriesId])).rows.map((r) => r.payload as Record<string, unknown>);
+    expect(notices.filter((n) => n.kind === 'bid.non-reveal-charged').map((n) => [n.wallet, (n.payload as { bidder: string }).bidder])).toEqual([[b4, b4]]);
+    // delivered: the rest of the deposit is the bid's refund; the charge stays on the row
+    await h.settle(seriesId, 'deliver');
+    await idx.catchUp();
+    expect(await bid()).toEqual({ processed: true, delivered: true, non_reveal_charge: USDC(9.09).toString(), pending_refund: '0', refunded: USDC(899.91).toString() });
+    const refunds = await t.pool.query("select amount::text from money_events where series_id = $1 and kind = 'refund' and wallet = $2", [seriesId, b4]);
+    expect(refunds.rows).toEqual([{ amount: USDC(899.91).toString() }]);
   });
 
   // cause S3-KP (S3 WP11, amendment M8): a curve's own notices. Its completion is `curve.completed` (the issuer and the

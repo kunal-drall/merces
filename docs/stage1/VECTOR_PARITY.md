@@ -10,7 +10,7 @@ Every `expect` compares the keys it carries, each as a whole value; every `expec
 | --- | --- | --- | --- | --- |
 | 01_happy_path | PASS 67/67 | PASS-WITH-WAIVERS 67/67 | PASS-WITH-WAIVERS 67/67 | PASS-WITH-WAIVERS (#32 NA-1, #34 BLK-1) |
 | 02_failed_auction | PASS 38/38 | PASS 38/38 | PASS 38/38 | PASS |
-| 03_auction_edges | PASS 78/78 | PASS-WITH-DIVERGENCES (5 accepted divergences) 78/78 | PASS-WITH-DIVERGENCES (5 accepted divergences) 78/78 | PASS-WITH-DIVERGENCES (DIV-NRC-1: 5 field(s) at #67, #77; lockstep parts at #65) |
+| 03_auction_edges | PASS 78/78 | PASS 78/78 | PASS 78/78 | PASS |
 | 04_zero_quarters | PASS 81/81 | PASS 81/81 | PASS 81/81 | PASS |
 | 05_cap_hit | PASS 54/54 | PASS-WITH-WAIVERS 54/54 | PASS-WITH-WAIVERS 54/54 | PASS-WITH-WAIVERS (#42 BLK-1) |
 | 06_redemption_terms | PASS 116/116 | PASS 116/116 | PASS 116/116 | PASS |
@@ -36,33 +36,13 @@ Every `expect` compares the keys it carries, each as a whole value; every `expec
 
 ## Findings
 
-None: every replayed step matched, the known divergences below aside.
+None: every replayed step matched.
 
 ## Known divergences (not parity)
 
 Stage 1 behaviour the merces backend knowingly does not mirror (the register, `stage1-vectors/divergences.ts`). Each is recorded per `expect` step and field with Stage 1's value and ours (`expected.ts`): a difference equal to a recorded entry is accepted and the run is PASS-WITH-DIVERGENCES; another value at that field fails, and an entry whose difference no longer occurs fails as stale. In lockstep the backends must part right after the recorded step on exactly the recorded fields; the replay stops there.
 
-### DIV-NRC-1: the non-reveal charge (owner hold)
-
-- What: Stage 1 keeps floor(escrow × nonRevealChargeBps / 10000) of a bid committed and never revealed when the raise settles, and pays it to the fee collector at `process_bid` (SPEC §5.2; REF `processBid`, the unrevealed branch; SIM `processBid`); the bid's refund is the escrow less the charge. On a failed raise nothing is charged. The merces backend records the series' rate but applies 0 bps (`appliedNonRevealChargeBps`), so the bid is refunded in full and the fee collector receives nothing for it.
-- Why: owner hold (S2 amendment M1): the owner asked to be told what Stage 1 does before the charge is modelled. `NON_REVEAL_CHARGE_HELD` (packages/domain/src/params.ts) is the one switch; the engine refuses any non-zero charge while it is on (ASSUMPTIONS.md A-AUC-11).
-- Seen: only vector 03 (S1/b8, escrow 10,100 USDC, charged 101 USDC at 1%): the expects at #67 (feeCollector, auctionEscrow, auction.escrowTotal) and #77 (balances.b8.stable, feeCollector); lockstep parts at #65 (`process_bid b8`). The other unrevealed bids (02 S2/b1, 15 S1/b3) are on failed raises, where Stage 1 charges nothing.
-- Until: after the owner decides
-- Lifting it: set `NON_REVEAL_CHARGE_HELD` to false and add what the charge needs (the `NonRevealCharged` event, a `nonReveal` fee kind, the bids' charge column, accounting and API fields; STAGE1_INTEGRATION.md divergence register); delete the DIV-NRC-1 entries and the lockstep expectation of vector 03 in `expected.ts` and set 03 to PASS (until then the runner fails 03 on five stale entries); regenerate VECTOR_PARITY.md and update A-AUC-11.
-
-| Vector | Step | Field | Stage 1 | Ours |
-| --- | --- | --- | --- | --- |
-| 03_auction_edges | #67 | `auction.escrowTotal` | "55925700000" | "56026700000" |
-| 03_auction_edges | #67 | `auctionEscrow` | "55925700000" | "56026700000" |
-| 03_auction_edges | #67 | `feeCollector` | "428800000" | "327800000" |
-| 03_auction_edges | #77 | `balances.b8.stable` | "29899000000" | "30000000000" |
-| 03_auction_edges | #77 | `feeCollector` | "428800000" | "327800000" |
-| 03_auction_edges (lockstep) | after #65 | `S1.auction.escrowTotal` | "55925700000" | "56026700000" |
-| 03_auction_edges (lockstep) | after #65 | `S1.auctionEscrow` | "55925700000" | "56026700000" |
-| 03_auction_edges (lockstep) | after #65 | `S1.feeCollector` | "428800000" | "327800000" |
-
-- 03_auction_edges on merces/solana: #67 (3 fields), #77 (2 fields), as recorded
-- 03_auction_edges on merces/monad: #67 (3 fields), #77 (2 fields), as recorded
+None: the register is empty. Its only row, DIV-NRC-1 (the non-reveal charge, held in S2), went when the charge was modelled as Stage 1 models it (S3 follow-up NRC); 03 replays in full.
 
 ## Prefix gates
 

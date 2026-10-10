@@ -19,14 +19,25 @@ export function toAuctionState(seriesId: string, x: SimSeries, now: number): Auc
   };
 }
 
-/** A bid as the chain reads it (`BidState`): what it is owed reads "0" once delivered. */
+/**
+ * The non-reveal charge a processed bid paid (Stage 1 `processBid`): an unrevealed bid's escrow less its refund, which
+ * is the charge on a settled raise and 0 on a failed one (refunded in full); 0 for a revealed or unprocessed bid. Stage 1
+ * stores no per-bid charge (the chains emit it, `NonRevealCharged`), so it is read off what the bid is owed, which
+ * processing fixes and delivery keeps.
+ */
+export function nonRevealChargeOf(b: SimBid): bigint {
+  return b.processed && b.revealed === null ? b.deposit - b.pendingRefund : 0n;
+}
+
+/** A bid as the chain reads it (`BidState`): what it is owed reads "0" once delivered; the charge it paid stays. */
 export function toBid(seriesId: string, b: SimBid): BidState {
   const owed = b.processed && !b.delivered;
   return {
     seriesId, bidder: b.bidder, commitment: b.commitment, deposit: s(b.deposit), order: b.order,
     revealed: b.revealed ? { pricePerUnit: s(b.revealed.pricePerUnit), quantity: s(b.revealed.quantity) } : null,
     revealIndex: b.revealed ? b.revealIndex : null, valid: b.revealed ? b.valid : null, talliedRound: b.talliedRound, processed: b.processed,
-    allocatedUnits: s(b.allocation), pendingUnits: s(owed ? b.pendingUnits : 0n), pendingRefund: s(owed ? b.pendingRefund : 0n), delivered: b.delivered,
+    allocatedUnits: s(b.allocation), pendingUnits: s(owed ? b.pendingUnits : 0n), pendingRefund: s(owed ? b.pendingRefund : 0n), nonRevealCharge: s(nonRevealChargeOf(b)),
+    delivered: b.delivered,
   };
 }
 

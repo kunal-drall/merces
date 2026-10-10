@@ -375,7 +375,7 @@ components:
           type:
             - integer
             - "null"
-          description: "the non-reveal charge the series recorded at creation (Stage 1 create_series). Reserved: the charge is an owner hold and is not applied (an unrevealed bid is refunded in full); series created during the hold record 0. Null on a row indexed before S2"
+          description: "the series' own non-reveal charge, frozen at creation (Stage 1 non_reveal_charge_bps; 0–1000 bps): when the raise settles, a bid committed and never revealed pays floor(deposit × nonRevealChargeBps / 10000) to the protocol fee collector and is refunded the rest; a failed raise and a revealed bid are never charged. New series take the operator's setting (the owner's decision); issuers cannot choose it. Series created under the S2 hold record 0. Null on a row indexed before S2"
     SeriesAuction:
       type: object
       description: "A sealed raise's settlement as indexed (public onchain state): the current round and how it ended, and what finalizeSettlement wrote. A failed raise keeps its price and its would-be units and proceeds here, with the reason; the series' issuePrice stays null."
@@ -587,7 +587,7 @@ components:
           enum:
             - chain
             - index
-          description: "where revealed, valid, processed, delivered, allocatedUnits, pendingUnits, pendingRefund and refundable come from: the chain's read of the bid, or the indexed row (when the chain has no read of it; it may lag the chain by an indexer pass)"
+          description: "where revealed, valid, processed, delivered, allocatedUnits, pendingUnits, pendingRefund, refundable and nonRevealCharge come from: the chain's read of the bid, or the indexed row (when the chain has no read of it; it may lag the chain by an indexer pass)"
         revealed:
           type:
             - object
@@ -619,6 +619,9 @@ components:
         refundable:
           $ref: "#/components/schemas/Money"
           description: the same refund as pendingRefund
+        nonRevealCharge:
+          $ref: "#/components/schemas/Money"
+          description: "the non-reveal charge the bid paid when it was processed (Stage 1 process_bid: a bid never revealed, on a settled raise; floor(deposit × the series' nonRevealChargeBps / 10000), to the protocol fee collector); \"0\" for every other bid, before processing and on a failed raise. Kept after delivery"
         refunded:
           oneOf:
             - $ref: "#/components/schemas/Money"
@@ -1233,10 +1236,11 @@ components:
             - auction
             - payout
             - curveTrading
-          description: 1% auction fee on cleared bids, 5% payout fee at pay-in (C5), or Merces' (the partner's) share of a curve's 1% trading fee, collected from the pool by collectCurveProceeds
+            - nonReveal
+          description: 1% auction fee on cleared bids, 5% payout fee at pay-in (C5), Merces' (the partner's) share of a curve's 1% trading fee, collected from the pool by collectCurveProceeds, or the non-reveal charge kept from a bid never revealed when its raise settled (the series' nonRevealChargeBps on the deposit, Stage 1 process_bid)
         payer:
           type: string
-          description: the bidder (auction), the issuer's wallet the fee was taken from at pay-in (payout), or the curve's pool (curveTrading)
+          description: the bidder (auction, nonReveal), the issuer's wallet the fee was taken from at pay-in (payout), or the curve's pool (curveTrading)
         amount:
           $ref: "#/components/schemas/Money"
         blockTime:
@@ -1253,6 +1257,7 @@ components:
         - auction
         - payout
         - curveTrading
+        - nonReveal
         - total
         - count
       properties:
@@ -1269,6 +1274,8 @@ components:
         payout:
           $ref: "#/components/schemas/Money"
         curveTrading:
+          $ref: "#/components/schemas/Money"
+        nonReveal:
           $ref: "#/components/schemas/Money"
         total:
           $ref: "#/components/schemas/Money"
@@ -1331,12 +1338,15 @@ components:
                 - auction
                 - payout
                 - curveTrading
+                - nonReveal
               properties:
                 auction:
                   $ref: "#/components/schemas/Money"
                 payout:
                   $ref: "#/components/schemas/Money"
                 curveTrading:
+                  $ref: "#/components/schemas/Money"
+                nonReveal:
                   $ref: "#/components/schemas/Money"
             bySeries:
               type: array
@@ -1439,6 +1449,11 @@ components:
               type: integer
             payoutFeeBps:
               type: integer
+            nonRevealChargeBps:
+              type:
+                - integer
+                - "null"
+              description: the series' non-reveal charge (null on a row indexed before S2)
         cap:
           type: object
           description: "C6: cap per whole unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per whole unit = Stage 1's C_remaining at the series' unit scale = max(capPerUnit − ceil(paidPerUnitWad / (1e18 / unitScale)), 0). Unit counts are per accounting unit (base lamports on a curve series), per-unit figures per whole unit"
@@ -1519,6 +1534,9 @@ components:
               $ref: "#/components/schemas/Money"
             curveTrading:
               $ref: "#/components/schemas/Money"
+            nonReveal:
+              $ref: "#/components/schemas/Money"
+              description: non-reveal charges kept from bids never revealed when the raise settled
             total:
               $ref: "#/components/schemas/Money"
             vaultFeesTotal:
@@ -5567,10 +5585,10 @@ paths:
                   $ref: "#/components/schemas/Money"
                 quantity:
                   type: string
-      description: "Checks a bid before it is built: the commit phase, the allowlist, one bid per wallet, Stage 1's validity rule (reserve, 1 ≤ quantity ≤ the wallet cap; a bid that breaks it can be committed but is invalid at reveal and refunded in full), the u64 range and the balance; returns the deposit a commit locks (Stage 1 requiredEscrow: price × quantity plus the auction fee on it)."
+      description: "Checks a bid before it is built: the commit phase, the allowlist, one bid per wallet, Stage 1's validity rule (reserve, 1 ≤ quantity ≤ the wallet cap; a bid that breaks it can be committed but is invalid at reveal and refunded in full), the u64 range and the balance; returns the deposit a commit locks (Stage 1 requiredEscrow: price × quantity plus the auction fee on it) and what the bid pays if it is never revealed and the raise settles: the series' non-reveal charge on that deposit (nonRevealChargeBps, nonRevealCharge = floor(deposit × nonRevealChargeBps / 10000), Stage 1 processBid; nothing if the raise fails)."
       responses:
         "200":
-          description: The issues (empty = ok), the deposit, the wallet cap in units, the fee and the phase ends
+          description: The issues (empty = ok), the deposit, the wallet cap in units, the fee, the non-reveal charge (rate and amount on this deposit) and the phase ends
           content:
             application/json:
               schema:

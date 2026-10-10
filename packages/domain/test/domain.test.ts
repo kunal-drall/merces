@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { BN254_FR, CURRENCY_CODES, DEFAULT_PARAMETERS } from '@merces/math';
 import { randomBytes } from 'node:crypto';
 import {
-  CURVE_BUYER_NOTICE, CURVE_NO_CAP, CURVE_TERMS_ZEROS, CURVE_UNAPPROVED_EARN_NOTHING, curveBeforeYouBuy, curveBuyerNotice, curveNoticeFigures, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
+  CURVE_BUYER_NOTICE, CURVE_NO_CAP, CURVE_TERMS_ZEROS, CURVE_UNAPPROVED_EARN_NOTHING, curveBeforeYouBuy, curveBuyerNotice, curveNoticeFigures, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_BOUNDS, NON_REVEAL_CHARGE_SETTING, checkNonRevealCharge, nonRevealChargeSetting, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
   amountBearingEvents, permissionlessCommandSchema,
   ChainError, attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, permissionlessCommandKinds, serviceCommandKinds, serviceCommandSchema, termsCommitment, userCommandKinds, userCommandSchema,
@@ -39,6 +39,12 @@ import {
  *  - S3-CN: the curve census: the permissionless `syncCurveUnits` and `CurveUnitsSynced` (Stage 1 `sync_curve_units`).
  *  - S3-ST: curve staking and tender: the holder's `stakeUnits`, `unstakeUnits` and `tenderUnits{fromStake, fromWallet}`,
  *    `UnitsStaked` and `UnitsUnstaked` (units only), `RedemptionClaimed.fromStake` (a curve tender's; ours).
+ *
+ * S3 follow-up cause code:
+ *  - NRC: the non-reveal charge is modelled as Stage 1's code does (was: the S2 owner hold, S2-NRC): a per-series term
+ *    bounded 0–1,000 bps on every series (Stage 1 bounds the rate it records on a curve too), no built-in rate (the
+ *    owner's setting `MERCES_NON_REVEAL_CHARGE_BPS`), `NonRevealCharged{seriesId, bidder, charge}` and the `nonReveal`
+ *    fee kind.
  */
 /** Stage 1's generated config as the stand-in pool reads it: 1% fee, 20% Meteora, 0% creator, X = 1,000 USDC, 99% migration fee. */
 const STAND_IN_FIGURES = { tradingFeeBps: 100, tradingFeeSplitBps: { protocol: 2_000, partner: 8_000, creator: 0 }, target: 1_000_000_000n, migrationFeePercentage: 99 };
@@ -270,19 +276,33 @@ describe('protocol defaults', () => {
     expect([DEFAULTS.commitDurationSeconds, DEFAULTS.revealDurationSeconds]).toEqual([604_800, 172_800]);
   });
 
-  // cause S2-NRC (S2 amendment M1): the owner holds the non-reveal charge; new series record 0 and settlement applies 0
-  it('hold the non-reveal charge: new series record 0 bps and 0 bps applies whatever a series records', () => {
-    expect(NON_REVEAL_CHARGE_HELD).toBe(true);
-    expect(DEFAULTS.nonRevealChargeBps).toBe(0);
-    expect(DEFAULT_PARAMETERS.nonRevealChargeBps).toBe(100); // what Stage 1 would default to
-    for (const bps of [0, 100, 1000]) expect(appliedNonRevealChargeBps(bps)).toBe(0);
+  // cause NRC (was S2-NRC: the hold recorded 0 bps for every new series and applied 0 whatever a series recorded): there is
+  // no built-in rate; the owner's setting is read, checked against Stage 1's bounds and refused when malformed
+  it('the non-reveal charge has no built-in rate: the owner\'s setting, within Stage 1\'s bounds, or null while unset', () => {
+    expect('nonRevealChargeBps' in DEFAULTS).toBe(false);
+    expect(NON_REVEAL_CHARGE_SETTING).toBe('MERCES_NON_REVEAL_CHARGE_BPS');
+    expect(NON_REVEAL_CHARGE_BOUNDS).toEqual({ min: 0, max: 1000 }); // Stage 1 PARAMETER_BOUNDS.nonRevealChargeBps
+    for (const env of [{}, { MERCES_NON_REVEAL_CHARGE_BPS: '' }, { MERCES_NON_REVEAL_CHARGE_BPS: '  ' }]) expect(nonRevealChargeSetting(env)).toBeNull();
+    expect([nonRevealChargeSetting({ MERCES_NON_REVEAL_CHARGE_BPS: '0' }), nonRevealChargeSetting({ MERCES_NON_REVEAL_CHARGE_BPS: ' 100 ' }), nonRevealChargeSetting({ MERCES_NON_REVEAL_CHARGE_BPS: '1000' })]).toEqual([0, 100, 1000]);
+    // out of bounds or not a whole number of bps: refused at startup, naming the setting and the bounds, never the value
+    for (const bad of ['1001', '-1', '1.5', '1e2', 'abc', '99999']) {
+      expect(() => nonRevealChargeSetting({ MERCES_NON_REVEAL_CHARGE_BPS: bad }), bad).toThrow('MERCES_NON_REVEAL_CHARGE_BPS must be a whole number of bps between 0 and 1000');
+      try {
+        nonRevealChargeSetting({ MERCES_NON_REVEAL_CHARGE_BPS: bad });
+      } catch (e) {
+        expect((e as Error).message, bad).not.toContain(bad);
+      }
+    }
+    expect(checkNonRevealCharge(250)).toBe(250);
+    for (const bad of [-1, 1001, 0.5, Number.NaN]) expect(() => checkNonRevealCharge(bad)).toThrow(/between 0 and 1000/);
+    expect(DEFAULT_PARAMETERS.nonRevealChargeBps).toBe(100); // Stage 1's protocol default (its chains' set_defaults); not ours
   });
 });
 
 describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)', () => {
   const sealed: BoundedTerms = {
     capMultipleWad: (25n * 10n ** 17n).toString(), hurdleWad: (8n * 10n ** 16n).toString(), payoutMultipleK: 5, lockupSeconds: DEFAULTS.lockupSeconds, walletCapBps: 1000, auctionFeeBps: 100, payoutFeeBps: 500,
-    nonRevealChargeBps: DEFAULTS.nonRevealChargeBps, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds,
+    nonRevealChargeBps: 100, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds,
     dueDays: 30, graceDays: 15, formalNoticeDays: 90, unitsOffered: '500', reservePrice: '8000000', minimumRaise: '4000000000', releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], raiseStyle: 'sealed',
     stablecoin: 'USDC',
   };
@@ -294,6 +314,11 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
     expect(fields({ ...sealed, revealDurationSeconds: 7 * 86_400 + 1, commitDurationSeconds: 3599, nonRevealChargeBps: 1001, payoutFeeBps: 2001 })).toEqual([
       ['payoutFeeBps', 'ParameterOutOfBounds'], ['nonRevealChargeBps', 'ParameterOutOfBounds'], ['commitDurationSeconds', 'ParameterOutOfBounds'], ['revealDurationSeconds', 'ParameterOutOfBounds'],
     ]);
+    // cause NRC: a draft checked before the owner set the rate carries none, and that one bound is not checked (the terms
+    // service builds no sealed series until the rate is set)
+    const { nonRevealChargeBps: _unset, ...draft } = sealed;
+    expect(seriesTermsViolations(draft)).toEqual([]);
+    expect(fields({ ...draft, payoutFeeBps: 2001 })).toEqual([['payoutFeeBps', 'ParameterOutOfBounds']]);
   });
   // cause S3-CT (was: the raise's terms unchecked on a curve series, the lockup and wallet cap bounded as on a sealed one)
   it('a curve series takes Stage 1\'s zeros for the lockup, the wallet cap and the raise durations (CurveTermsNotZero), one per field', () => {
@@ -306,8 +331,11 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
     // Stage 1's own refusals (curve_mode.rs:630-643): lockup 1, wallet cap 1,000 bps
     expect(fields({ ...curve, lockupSeconds: 1 })).toEqual([['lockupSeconds', 'CurveTermsNotZero']]);
     expect(fields({ ...curve, walletCapBps: 1000 })).toEqual([['walletCapBps', 'CurveTermsNotZero']]);
-    // their bounds are not checked (Stage 1 bounds its defaults there, lib.rs:517-540), nor the held non-reveal charge
-    expect(fields({ ...curve, nonRevealChargeBps: 5000 })).toEqual([]);
+    // their bounds are not checked (Stage 1 bounds its defaults there, lib.rs:517-540)
+    // cause NRC (was: the held non-reveal charge unchecked on a curve): the rate a curve records is bounded too (Stage 1
+    // records its protocol default there and bounds it, lib.rs:550 and :562), though a curve has no bids to charge
+    expect(fields({ ...curve, nonRevealChargeBps: 5000 })).toEqual([['nonRevealChargeBps', 'ParameterOutOfBounds']]);
+    expect(fields({ ...curve, nonRevealChargeBps: 1000 })).toEqual([]);
     // the other bounds still hold
     expect(fields({ ...curve, auctionFeeBps: 1001 })).toEqual([['auctionFeeBps', 'ParameterOutOfBounds']]);
   });

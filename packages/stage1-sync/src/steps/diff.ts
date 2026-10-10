@@ -129,7 +129,7 @@ export const STAGE1_ALIASES: { events: Record<string, string[]>; commands: Recor
     flagFxFallback: 'no flag command: the FX deviation flag is emitted by the snapshot and the attestor fallback rate travels with submit_report',
   },
   synthesis: {
-    FeeTaken: 'also synthesised per processed winner from UnitsAllocated.fee (kind auction) and from CurveProceedsCollected.trading_fee (kind curveTrading); NonRevealCharged is dropped while the owner holds the non-reveal charge (the EVM emits it with 0 for every unrevealed bid, Solana only above 0), and lifting the hold synthesises FeeTaken{kind: nonReveal} from its charge',
+    FeeTaken: 'also synthesised per processed winner from UnitsAllocated.fee (kind auction), from CurveProceedsCollected.trading_fee (kind curveTrading) and from NonRevealCharged.charge (kind nonReveal, payer the bidder); the EVM emits NonRevealCharged with 0 for every unrevealed bid of a settled raise and Solana only above 0, so the EVM adapter drops a charge of 0',
   },
 };
 

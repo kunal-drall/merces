@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { finalizeSettlement, requiredEscrow, tallyBids, beginSettlement, type RevealedBid } from '@merces/math';
+import { finalizeSettlement, processBid, requiredEscrow, tallyBids, beginSettlement, type RevealedBid } from '@merces/math';
 import {
-  DEFAULTS, auctionRulesOf, commandGroups, nextSettlementStep, parseDomainEvent, permissionlessCommandKinds, permissionlessCommandSchema, processingOrder, proposalFor,
+  auctionRulesOf, commandGroups, nextSettlementStep, parseDomainEvent, permissionlessCommandKinds, permissionlessCommandSchema, processingOrder, proposalFor,
   serviceCommandSchema, settlementOutcome, settlementStage, userCommandSchema,
   type ChainLimits, type SettlementAuctionView, type SettlementBidView, type SettlementView,
 } from '../src/index.ts';
@@ -9,20 +9,23 @@ import {
 /*
  * S2 cause codes:
  *  - S2-MS: multi-step settlement (Stage 1's commands, events and the planner);
- *  - S2-NRC: the non-reveal charge hold (0 bps applies whatever a series records);
  *  - S2-RH: registerHolder.
  *
  * S3 cause codes:
  *  - S3-BR: `burnRetired{holder}` (Stage 1 `burn_retired`) joins the permissionless group.
  *  - S3-CV: a curve's `completeCurve` and `collectCurveProceeds` (Stage 1 `complete_curve`, `collect_curve_proceeds`) join it too.
  *  - S3-CN: and its census `syncCurveUnits` (Stage 1 `sync_curve_units`).
+ *
+ * S3 follow-up cause code:
+ *  - NRC: the non-reveal charge is modelled as Stage 1's code does (was S2-NRC, the owner hold: 0 bps applied whatever a
+ *    series recorded): the rules carry the series' own rate, and `NonRevealCharged` and `FeeTaken{nonReveal}` exist.
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const SOLANA: ChainLimits = { tallyPageMax: 24, maxBidsPerAuction: null };
 const MONAD: ChainLimits = { tallyPageMax: 200, maxBidsPerAuction: 4096 };
 const SID = 'solana:series1';
-/** the harness's default auction terms: 500 units, reserve 8, minimum raise 4,000, cap 20%, fee 1% */
-const TERMS = { unitsOffered: '500', reservePrice: '8000000', minimumRaise: '4000000000', walletCapBps: 2000, auctionFeeBps: 100, nonRevealChargeBps: 0 };
+/** the harness's default auction terms: 500 units, reserve 8, minimum raise 4,000, cap 20%, fee 1%, non-reveal charge 1% */
+const TERMS = { unitsOffered: '500', reservePrice: '8000000', minimumRaise: '4000000000', walletCapBps: 2000, auctionFeeBps: 100, nonRevealChargeBps: 100 };
 
 /** A bid; `price` null = unrevealed. Revealed bids reveal in commit order unless `revealIndex` says otherwise. */
 function bid(i: number, price: bigint | null, qty = 100n, over: Partial<SettlementBidView> = {}): SettlementBidView {
@@ -91,22 +94,35 @@ describe('permissionless commands and the settlement events (cause S2-MS)', () =
     for (const [type, payload] of Object.entries(payloads)) expect(parseDomainEvent({ ...env, type, payload }).payload).toEqual(payload);
     expect(() => parseDomainEvent({ ...env, type: 'SettlementRejected', payload: { ...payloads.SettlementRejected, reason: 'Other' } })).toThrow();
     expect(() => parseDomainEvent({ ...env, type: 'AuctionFailed', payload: { seriesId: SID, reason: 'below-minimum-raise' } })).toThrow();
-    // the charge is held: no event records one (S2 amendment M1)
-    expect(() => parseDomainEvent({ ...env, type: 'NonRevealCharged', payload: { seriesId: SID, bidder: 'b0', charge: '0' } })).toThrow();
+    // cause NRC (was: the charge held, so no event recorded one): Stage 1's NonRevealCharged and its fee kind
+    const charged = { seriesId: SID, bidder: 'b0', charge: '10100000' };
+    expect(parseDomainEvent({ ...env, type: 'NonRevealCharged', payload: charged }).payload).toEqual(charged);
+    expect(() => parseDomainEvent({ ...env, type: 'NonRevealCharged', payload: { seriesId: SID, bidder: 'b0' } })).toThrow();
+    const fee = { seriesId: SID, kind: 'nonReveal', amount: '10100000', payer: 'b0' };
+    expect(parseDomainEvent({ ...env, type: 'FeeTaken', payload: fee }).payload).toEqual(fee);
   });
 });
 
 describe('Stage 1\'s rules for a series', () => {
   it('auctionRulesOf reads the canonical terms (strings) and the simulator\'s (bigints) alike', () => {
     const fromStrings = auctionRulesOf(TERMS);
-    const fromBigints = auctionRulesOf({ unitsOffered: 500n, reservePrice: 8_000_000n, minimumRaise: 4_000_000_000n, walletCapBps: 2000n, auctionFeeBps: 100n, nonRevealChargeBps: 0 });
+    const fromBigints = auctionRulesOf({ unitsOffered: 500n, reservePrice: 8_000_000n, minimumRaise: 4_000_000_000n, walletCapBps: 2000n, auctionFeeBps: 100n, nonRevealChargeBps: 100n });
     expect(fromBigints).toEqual(fromStrings);
-    expect(fromStrings).toEqual({ unitsOffered: 500n, reservePrice: 8_000_000n, minRaise: 4_000_000_000n, walletCapBps: 2000, auctionFeeBps: 100, nonRevealChargeBps: 0 });
+    expect(fromStrings).toEqual({ unitsOffered: 500n, reservePrice: 8_000_000n, minRaise: 4_000_000_000n, walletCapBps: 2000, auctionFeeBps: 100, nonRevealChargeBps: 100 });
   });
 
-  // cause S2-NRC: the hold applies 0 bps whatever the series recorded, so Stage 1's processBid charges nothing
-  it('applies the non-reveal charge hold', () => {
-    for (const bps of [DEFAULTS.nonRevealChargeBps, 100, 1000]) expect(auctionRulesOf({ ...TERMS, nonRevealChargeBps: bps }).nonRevealChargeBps).toBe(0);
+  // cause NRC (was S2-NRC: the hold applied 0 bps whatever the series recorded): the series' own rate reaches Stage 1's
+  // processBid, which charges an unrevealed bid on a settled raise and nothing on a failed one or on a revealed bid
+  it('carries the series\' own non-reveal charge into Stage 1\'s processBid', () => {
+    for (const bps of [0, 100, 1000]) expect(auctionRulesOf({ ...TERMS, nonRevealChargeBps: bps }).nonRevealChargeBps).toBe(bps);
+    const rules = auctionRulesOf(TERMS);
+    const escrow = USDC(1_010);
+    const settled = { failed: false, clearingPrice: USDC(9), R: 0n, qAt: 100n };
+    const unrevealed = { escrow, revealed: false, valid: false, price: 0n, quantity: 0n };
+    expect(processBid(unrevealed, settled, rules)).toEqual({ alloc: 0n, cost: 0n, fee: 0n, pendingRefund: USDC(999.9), charge: USDC(10.1) });
+    expect(processBid(unrevealed, { ...settled, failed: true }, rules)).toEqual({ alloc: 0n, cost: 0n, fee: 0n, pendingRefund: escrow, charge: 0n });
+    // a revealed invalid bid is refunded in full on a settled raise
+    expect(processBid({ escrow, revealed: true, valid: false, price: USDC(1), quantity: 100n }, settled, rules)).toEqual({ alloc: 0n, cost: 0n, fee: 0n, pendingRefund: escrow, charge: 0n });
   });
 
   it('proposalFor: Stage 1\'s honest proposal; no valid bid proposes (0, 0, 0)', () => {

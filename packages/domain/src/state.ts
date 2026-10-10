@@ -213,6 +213,12 @@ export interface BidState {
   /** units and refund owed to the bidder until delivered ("0" once delivered) */
   pendingUnits: Units;
   pendingRefund: Money;
+  /**
+   * The non-reveal charge kept from the deposit when the bid was processed (Stage 1 `process_bid`: an unrevealed bid on
+   * a settled raise, `floor(deposit × nonRevealChargeBps / 10000)`, paid to the fee collector); "0" for every other bid
+   * and before processing. Kept after delivery.
+   */
+  nonRevealCharge: Money;
   delivered: boolean;
 }
 

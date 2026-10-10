@@ -5,7 +5,6 @@ import {
 import type { PermissionlessCommand, TxResult } from './commands.ts';
 import type { RaiseStateName } from './events.ts';
 import type { Money, Units } from './money.ts';
-import { appliedNonRevealChargeBps } from './params.ts';
 import { ChainError, type ChainPort } from './port.ts';
 import type { ChainLimits } from './state.ts';
 
@@ -27,14 +26,14 @@ export interface AuctionTermsInput {
   minimumRaise: bigint | string;
   walletCapBps: bigint | number;
   auctionFeeBps: bigint | number;
-  /** as the series recorded it; the rules carry `appliedNonRevealChargeBps` of it (0 while the charge is held) */
-  nonRevealChargeBps: number;
+  /** the series' own non-reveal charge, as it recorded it at creation (Stage 1 `non_reveal_charge_bps`) */
+  nonRevealChargeBps: bigint | number;
 }
 
 /**
- * Stage 1's `AuctionRules` for a series (SIM `auctionRules`). The non-reveal charge is the owner hold's
- * `appliedNonRevealChargeBps` (params.ts): 0 while `NON_REVEAL_CHARGE_HELD`, so Stage 1's own `processBid` refunds an
- * unrevealed bid in full. This is the only place the applied rate is chosen.
+ * Stage 1's `AuctionRules` for a series (SIM `auctionRules`, SIM:917-926): the series' own terms, the non-reveal charge
+ * included, so Stage 1's `processBid` keeps `floor(escrow × nonRevealChargeBps / 10000)` of an unrevealed bid on a
+ * settled raise (REF auction.ts:141-146) and nothing on a failed one.
  */
 export function auctionRulesOf(terms: AuctionTermsInput): AuctionRules {
   return {
@@ -43,7 +42,7 @@ export function auctionRulesOf(terms: AuctionTermsInput): AuctionRules {
     minRaise: BigInt(terms.minimumRaise),
     walletCapBps: Number(terms.walletCapBps),
     auctionFeeBps: Number(terms.auctionFeeBps),
-    nonRevealChargeBps: appliedNonRevealChargeBps(terms.nonRevealChargeBps),
+    nonRevealChargeBps: Number(terms.nonRevealChargeBps),
   };
 }
 

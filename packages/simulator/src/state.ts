@@ -41,7 +41,7 @@ export interface SimTerms {
   hurdleWad: bigint;
   payoutMultipleK: bigint;
   walletCapBps: bigint;
-  /** recorded as created; settlement applies `appliedNonRevealChargeBps` of it (0 while the charge is held) */
+  /** the series' own non-reveal charge, frozen at creation; `processBid` applies it to an unrevealed bid on a settled raise */
   nonRevealChargeBps: number;
   /** `openRaise` sets the commit end to now + this, and the reveal end to the commit end + `revealDurationSeconds` */
   commitDurationSeconds: number;
@@ -74,7 +74,10 @@ export interface SimBid {
   processed: boolean;
   /** units allocated when processed (Stage 1 `allocation`) */
   allocation: bigint;
-  /** units and stablecoin owed to the bidder from processing; `deliverBid` pays them (kept after delivery, as Stage 1 does) */
+  /**
+   * units and stablecoin owed to the bidder from processing; `deliverBid` pays them (kept after delivery, as Stage 1
+   * does). An unrevealed bid's refund is its escrow less the non-reveal charge (`nonRevealChargeOf`, reads/auction.ts).
+   */
   pendingUnits: bigint;
   pendingRefund: bigint;
   delivered: boolean;

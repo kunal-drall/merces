@@ -280,6 +280,8 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
       chainNotice('auction.mint-finalized', { unitsSold: '500', proceeds: CANARY }, { outcome: 'settled' }),
       chainNotice('bid.delivered', { bidder: b0, units: '100', refund: CANARY }, { wallet: b0 }),
       chainNotice('bid.delivered', { bidder: b1, units: '100', refund: CANARY }, { wallet: b1 }),
+      // cause NRC: an unrevealed bid charged when the raise settled (NonRevealCharged), to its bidder only
+      chainNotice('bid.non-reveal-charged', { bidder: b0, charge: CANARY }, { wallet: b0 }),
       { kind: 'auction.settlement-stuck', seriesId, outcome: 'ProposalRejected' },
       { kind: 'bid.delivery-stuck', seriesId, wallet: b0 },
     ];
@@ -287,8 +289,9 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     expect(await dispatch()).toMatchObject({ dispatched: payloads.length });
     const kinds = new Set(payloads.map((p) => p.kind));
     const mine = async (accountId: string) => (await inbox(accountId)).filter((n) => kinds.has(n.kind));
-    // the bidder: the failed raise (its deposit comes back), its own delivery and its delayed one
-    expect((await mine('acct-holder')).map((n) => n.kind).sort()).toEqual(['auction.failed', 'bid.delivered', 'bid.delivery-stuck']);
+    // the bidder: the failed raise (its deposit comes back), its own delivery and its delayed one, and its charge
+    expect((await mine('acct-holder')).map((n) => n.kind).sort()).toEqual(['auction.failed', 'bid.delivered', 'bid.delivery-stuck', 'bid.non-reveal-charged']);
+    expect((await mine('acct-holder')).find((n) => n.kind === 'bid.non-reveal-charged')).toMatchObject({ subject: 'Unrevealed bid charged' });
     // the issuer: its raise's outcome and a rejected proposal; never a bidder's delivery, nor the operator alert
     expect((await mine('acct-issuer')).map((n) => n.kind).sort()).toEqual(['auction.failed', 'auction.mint-finalized', 'auction.settlement-rejected']);
     // the admins: the rejected proposal and both stuck kinds

@@ -11,6 +11,10 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  * moved here): the issuer's open and cancel builders, the delivery builder (`build-deliver`, was `build-refund`), the
  * next-step builder any wallet can relay to settle a raise itself, the typed auction read while Settling, the final
  * `/me/bids` shape, the series row's settlement fields and the arena's Settling series.
+ *
+ * S3 follow-up cause code:
+ *  - NRC: the non-reveal charge is modelled: the series row carries the harness's 100 bps (was 0 under the S2 hold), and
+ *    every bid carries `nonRevealCharge` (what a bid never revealed paid when the raise settled; "0" otherwise).
  */
 describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -161,7 +165,7 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
     const row = (await rig.get(`/series/${seriesId}`)).json();
     expect(row).toMatchObject({
       phase: 'Settled', mintFinalized: true, issuePrice: USDC(9).toString(), unitsSold: '500',
-      terms: { commitDurationSeconds: 3 * 86_400, revealDurationSeconds: 86_400, nonRevealChargeBps: 0 },
+      terms: { commitDurationSeconds: 3 * 86_400, revealDurationSeconds: 86_400, nonRevealChargeBps: 100 }, // cause NRC
       auction: { round: 1, roundRejected: false, rejectionReason: null, clearingPrice: USDC(9).toString(), unitsSold: '500', proceeds: USDC(4500).toString(), failureReason: null },
     });
     expect(row.auction.finalizedAt).toBe((await h.sim.getAuction(seriesId))!.finalizedAt);
@@ -179,7 +183,7 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
     const mine = before.find((b) => b.seriesId === seriesId)!;
     expect(mine).toEqual({
       seriesId, chain: 'monad', bidder: b0.address, phase: 'Settled', deposit: USDC(1212).toString(), source: 'chain', revealed: { pricePerUnit: USDC(12).toString(), quantity: '100' }, valid: true,
-      processed: true, delivered: false, allocatedUnits: '100', pendingUnits: '100', pendingRefund: USDC(303).toString(), refundable: USDC(303).toString(), refunded: '0',
+      processed: true, delivered: false, allocatedUnits: '100', pendingUnits: '100', pendingRefund: USDC(303).toString(), refundable: USDC(303).toString(), nonRevealCharge: '0', refunded: '0',
     });
     expect((await rig.post(`/series/${seriesId}/bids/build-deliver`, { bidder: b0.address })).statusCode).toBe(401);
     // another bidder's bid needs a signer of the caller's own; a wallet not the caller's is 403
@@ -275,6 +279,35 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
     }
     await h.settle(seriesId, 'deliver');
     await rig.sync();
-    expect(await mine()).toMatchObject({ source: 'chain', processed: true, delivered: true, pendingRefund: '0', refunded: USDC(101).toString() });
+    expect(await mine()).toMatchObject({ source: 'chain', processed: true, delivered: true, pendingRefund: '0', nonRevealCharge: '0', refunded: USDC(101).toString() });
+  });
+
+  // cause NRC: a bid never revealed on a settled raise pays the series' charge (Stage 1 process_bid); /me/bids shows it,
+  // from the chain's read and from the indexed row alike (NonRevealCharged keeps the row whole), and keeps it after
+  // delivery
+  it('/me/bids shows the non-reveal charge an unrevealed bid paid, from the chain and from the index alike', async () => {
+    const h = rig.mon;
+    const b4 = h.backers[4]!;
+    const tok = walletTok(h, b4, 'non-reveal-b4');
+    const bids = [...[12, 11, 10, 10].map((p, backer) => ({ backer, price: USDC(p), qty: 100n })), { backer: 4, price: USDC(9), qty: 100n, reveal: false }];
+    const { seriesId } = await h.runRaise({ terms: { unitsOffered: '400', walletCapBps: 2500, minimumRaise: USDC(3200).toString(), nonRevealChargeBps: 100 }, bids, settle: 'process' });
+    await rig.sync();
+    const mine = async () => ((await rig.get('/me/bids', tok)).json().bids as Record<string, unknown>[]).find((b) => b.seriesId === seriesId)!;
+    const fromChain = await mine();
+    // b4's 909 USDC deposit: 1% (9.09) to the fee collector, 899.91 owed until delivered
+    expect(fromChain).toMatchObject({
+      source: 'chain', phase: 'Settled', deposit: USDC(909).toString(), revealed: null, valid: null, processed: true, delivered: false, allocatedUnits: '0',
+      pendingUnits: '0', pendingRefund: USDC(899.91).toString(), refundable: USDC(899.91).toString(), nonRevealCharge: USDC(9.09).toString(), refunded: '0',
+    });
+    const realGetBid = h.sim.getBid.bind(h.sim);
+    h.sim.getBid = async () => null; // the chain has no such bid read
+    try {
+      expect(await mine()).toEqual({ ...fromChain, source: 'index' });
+    } finally {
+      h.sim.getBid = realGetBid;
+    }
+    await h.settle(seriesId, 'deliver');
+    await rig.sync();
+    expect(await mine()).toMatchObject({ source: 'chain', delivered: true, pendingRefund: '0', nonRevealCharge: USDC(9.09).toString(), refunded: USDC(899.91).toString() });
   });
 });

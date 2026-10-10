@@ -3,7 +3,7 @@
 How Stage 2 works without Stage 1 today, how it catches Stage 1 the moment it appears, and what happens then.
 This file is updated at each catch-up with what matched, what changed and what is still open.
 
-## Status (2026-10-10): Stage 1 @1bfc66b pinned, S1, S2 and S3 done
+## Status (2026-10-10): Stage 1 @1bfc66b pinned, S1, S2 and S3 done; the non-reveal charge modelled (NRC)
 
 Stage 1 is the `stage1` git submodule, pinned at `1bfc66b` (branch `claude/sweet-goodall-b7acm3`, SPEC v1.1.2; its
 tree is identical to `5eafd41`, the commit the handoff named). Its TypeScript packages (`@merces/sdk`,
@@ -15,10 +15,11 @@ The owner approved section B of the drift review below: **Stage 1 wins for oncha
 part: Stage 1's math (imported, not rewritten), Stage 1's report proof format, and a Stage 1 vector runner that replays
 Stage 1's own parity vectors against our simulator. S2 applied the sealed-bid raise: Stage 1's multi-step settlement
 (B.1), the raise's own terms (B.8, partly) and `register_holder` (B.3, partly), with the non-reveal charge held at 0 by
-the owner. S3 applied Stage 1's claim family (B.3) and brought curve mode's staking forward as a first-class flow at the
-owner's direction (B.11, all of it but the live adapter and Meteora's venue): Stage 1's curve lifecycle, census,
-staking and tender, in base lamports, with no wallet cap. "S1 results", "S2 results" and "S3 results" say what
-changed; "Owner decisions and questions" says what was decided and what is still open.
+the owner until the S3 follow-up NRC modelled it as Stage 1's code does (the rate is the owner's setting). S3 applied
+Stage 1's claim family (B.3) and brought curve mode's staking forward as a first-class flow at the owner's direction
+(B.11, all of it but the live adapter and Meteora's venue): Stage 1's curve lifecycle, census, staking and tender, in
+base lamports, with no wallet cap. "S1 results", "S2 results", "S3 results" and "S3 follow-up: the non-reveal charge
+(NRC)" say what changed; "Owner decisions and questions" says what was decided and what is still open.
 
 **What the handoff was missing** (unchanged at 1bfc66b). Stage 1 ships no `handoff/manifest.json`, so
 `stage1.map.json` at this repository's root describes it by hand (A-SYNC-2). Missing (also listed in the map's
@@ -37,14 +38,14 @@ Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitigno
 (`MATH_PARITY.md`, `VECTOR_PARITY.md`; regenerate with `pnpm stage1:sync --no-conformance`, which writes them to
 `packages/stage1-sync/out`).
 
-| D6 step | Result at @1bfc66b (after S3) |
+| D6 step | Result at @1bfc66b (after S3 and NRC) |
 | --- | --- |
 | 1. `stage1:sync` | runs end to end with `--no-conformance` |
 | detect | ok: `stage1.map.json` (hand-written) over the pinned submodule |
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
-| diff | drift: **Solana** 3 canonical items without a counterpart, 220 field mismatches, 65 extra Stage 1 items; **Monad testnet** 1 / 207 / 85 (`INTERFACE_DRIFT.md`; after S2: 4 / 249 / 79 and 2 / 210 / 89; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range). S3: the claim family (`claimPayout` = `claim`, `claimTail`, `claimFinal`, `burnRetired`, `PayoutClaimed.burnedUnits`, `TailClaimed`, `FinalClaimed`) matches Stage 1 exactly on both chains (WP1, WP3: 4 / 247 / 75 and 2 / 208 / 85); the curve's buy command and mint event are gone (a curve trade is `curveSwap`, a Meteora DBC `swap2`, which has no Merces counterpart by design) and `completeCurve`, `collectCurveProceeds`, `CurveActivated` and `CurveProceedsCollected` match Stage 1 by name, `issuePrice` and `settledAt` reading Stage 1's `clearing_price` and `settlement_ts` (WP8: 3 / 219 / 72 and 1 / 206 / 85); the census, `syncCurveUnits` and `CurveUnitsSynced`, matches `sync_curve_units` by name and field (WP9: 3 / 219 / 70); staking, `stakeUnits`, `unstakeUnits`, `tenderUnits{fromStake, fromWallet}`, `UnitsStaked` and `UnitsUnstaked`, matches `stake_units`, `unstake_units`, `tender_units`, `UnitsStaked` and `UnitsUnstaked` by name and field, and the one new mismatch on each chain is ours, `RedemptionClaimed.fromStake` (a curve tender's staked part, which the Solana adapter derives from the tender's arguments) (WP10: 3 / 220 / 65 and 1 / 207 / 85; unchanged by WP11-WP13). The rest is left to the adapters' mappers (D6.2) and the rest of section B (S4, S5) |
+| diff | drift: **Solana** 3 canonical items without a counterpart, 220 field mismatches, 64 extra Stage 1 items; **Monad testnet** 1 / 207 / 84 (`INTERFACE_DRIFT.md`; after S3: 3 / 220 / 65 and 1 / 207 / 85; after S2: 4 / 249 / 79 and 2 / 210 / 89; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range). S3: the claim family (`claimPayout` = `claim`, `claimTail`, `claimFinal`, `burnRetired`, `PayoutClaimed.burnedUnits`, `TailClaimed`, `FinalClaimed`) matches Stage 1 exactly on both chains (WP1, WP3: 4 / 247 / 75 and 2 / 208 / 85); the curve's buy command and mint event are gone (a curve trade is `curveSwap`, a Meteora DBC `swap2`, which has no Merces counterpart by design) and `completeCurve`, `collectCurveProceeds`, `CurveActivated` and `CurveProceedsCollected` match Stage 1 by name, `issuePrice` and `settledAt` reading Stage 1's `clearing_price` and `settlement_ts` (WP8: 3 / 219 / 72 and 1 / 206 / 85); the census, `syncCurveUnits` and `CurveUnitsSynced`, matches `sync_curve_units` by name and field (WP9: 3 / 219 / 70); staking, `stakeUnits`, `unstakeUnits`, `tenderUnits{fromStake, fromWallet}`, `UnitsStaked` and `UnitsUnstaked`, matches `stake_units`, `unstake_units`, `tender_units`, `UnitsStaked` and `UnitsUnstaked` by name and field, and the one new mismatch on each chain is ours, `RedemptionClaimed.fromStake` (a curve tender's staked part, which the Solana adapter derives from the tender's arguments) (WP10: 3 / 220 / 65 and 1 / 207 / 85; unchanged by WP11-WP13). NRC: the canonical `NonRevealCharged{seriesId, bidder, charge}` matches Stage 1's `NonRevealCharged` by name and field on both chains (3 / 220 / 64 and 1 / 207 / 84). The rest is left to the adapters' mappers (D6.2) and the rest of section B (S4, S5) |
 | math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window cap and the FX family (both S5; S3 WP7: a curve raise has no cap). S3 WP5: beside them, 16 names ported from Stage 1's Rust (merces-common: the unit scale, the vault, tail and redemption at a scale, curve mode's arithmetic), because Stage 1's TypeScript has no `unit_scale`; at scale 1 each calls Stage 1's own function, and the step checks their merces-common items at the pin ("45/45 re-exports are Stage 1's own objects; 16 ported (curve, A-MATH-3)"). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2, A-MATH-3) |
-| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 36/42 PASS, 42/42 at expected status`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A), 03 PASS-WITH-DIVERGENCES (DIV-NRC-1, the non-reveal hold); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, and parts on 03 at #65 exactly as recorded. 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. Our eleven S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) pass on Stage 1's simulator, on ours and in lockstep, 55/55 runs. No shim stands in for a claim or a burn any more; the shims left are the S4 and S5 ones (registrations, our bid commitment, report and attestor signatures, `pay`, pauses, windows). Curve mode has no Stage 1 vector (its reference simulator has no curve code): its parity is relational, every figure pinned to Stage 1's LiteSVM curve tests (`curve_mode.rs`), merces-common's unit tests and properties and the curve fixtures (`curve_config.json`, `curve_reports.json`, replayed with their own Groth16 proofs). Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
+| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)`, on both personalities: the 14 targets in full (S1's ten and S2's 02, 03, 15, 17): 02, 03, 04, 06, 07, 09, 11, 15, 17, 19, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A); 03 PASS in full since NRC (was PASS-WITH-DIVERGENCES on DIV-NRC-1, the S2 non-reveal hold; the divergence register is empty); the 7 vectors that need a later milestone, up to their prefix gate (08 #33, 10 #35, 14 #61, 16 #40, 20 #70, 21 #40, 22 #75: PREFIX-PASS); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, 03 in full (b8's charge at #65 agrees since NRC; it parted there as recorded under the hold). 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. Our eleven S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) pass on Stage 1's simulator, on ours and in lockstep, 55/55 runs. No shim stands in for a claim or a burn any more; the shims left are the S4 and S5 ones (registrations, our bid commitment, report and attestor signatures, `pay`, pauses, windows). Curve mode has no Stage 1 vector (its reference simulator has no curve code): its parity is relational, every figure pinned to Stage 1's LiteSVM curve tests (`curve_mode.rs`), merces-common's unit tests and properties and the curve fixtures (`curve_config.json`, `curve_reports.json`, replayed with their own Groth16 proofs). Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
 | conformance | **blocked**: no devnet or testnet deployment |
 | verdict | both chains NOT ready (diff drift; conformance not run) |
 
@@ -139,9 +140,10 @@ B.1 (auction settlement), the raise's part of B.8 and `register_holder` from B.3
   (greedy clearing, deposit, fee) is deleted; the interim `walletCapUnits` (at least one unit) stays only for the
   transfer window until S5 (A-MATH-1; the curve's went in S3 WP7: no cap).
 - **Raise terms (WP2).** `commitDurationSeconds`, `revealDurationSeconds` and `nonRevealChargeBps` are series terms,
-  bounded as Stage 1's `create_series` bounds them on a sealed raise (A-TERMS-4); `openRaise{seriesId}` checks Stage 1's
-  order (NotIssuer, RaiseNotDraft, ContractHashMissing, NotAllowlisted, NewRaisesPaused) and derives the phase ends from
-  the terms (A-AUC-5). Migration 018.
+  bounded as Stage 1's `create_series` bounds them on a sealed raise (A-TERMS-4; since NRC the non-reveal charge is
+  bounded on every series and applied, A-AUC-11); `openRaise{seriesId}` checks Stage 1's order (NotIssuer,
+  RaiseNotDraft, ContractHashMissing, NotAllowlisted, NewRaisesPaused) and derives the phase ends from the terms
+  (A-AUC-5). Migration 018.
 - **Vocabulary (WP3, WP8).** Stage 1's names: the permissionless commands `beginSettlement`, `tallyBids{maxBids?}`,
   `finalizeSettlement`, `processBid`, `deliverBid` and `registerHolder` (the keepers submit them; any wallet may build
   them) and the events `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`,
@@ -154,11 +156,12 @@ B.1 (auction settlement), the raise's part of B.8 and `register_holder` from B.3
 - **Engine (WP4a).** The simulator stores Stage 1's `Auction` and `Bid` records and runs `open_raise`, `commit_bid`,
   `reveal_bid`, `begin_settlement`, paged `tally_bids`, `finalize_settlement`, `process_bid`, `deliver_bid`,
   `cancel_raise` and `register_holder` with Stage 1's checks in Stage 1's order and Stage 1's error names. Validity is
-  fixed at reveal (an over-cap bid is invalid and refunded in full, A-AUC-4); a failed raise keeps its would-be price and
-  results; money moves bid by bid at processing (`FeeTaken{auction}` and `TreasuryFunded` per winner); MintNotFinalized
-  gates every path Stage 1 gates; a winner holds and accrues from processing (A-AUC-8) and the redemption and final
-  claims deliver a pending bid first; a bidder removed from the allowlist stays valid (A-REV-2 withdrawn); the
-  non-reveal hold applies 0 bps and refuses any charge (A-AUC-11). State version 3 (`sim:reset`).
+  fixed at reveal (an over-cap bid is invalid and refunded in full, A-AUC-4); a failed raise keeps its would-be price
+  and results; money moves bid by bid at processing (`FeeTaken{auction}` and `TreasuryFunded` per winner);
+  MintNotFinalized gates every path Stage 1 gates; a winner holds and accrues from processing (A-AUC-8) and the
+  redemption and final claims deliver a pending bid first; a bidder removed from the allowlist stays valid (A-REV-2
+  withdrawn); the non-reveal hold applied 0 bps and refused any charge (lifted by NRC: the series' own rate applies,
+  A-AUC-11). State version 3 (`sim:reset`).
 - **Callers (WP4b, WP6, WP7).** Every caller runs the steps. Indexer (migration 019): the auction record, settlement
   rounds, each bid's validity, processing and delivery, undelivered units, holder registrations kept apart from
   positions (A-REV-10), the keepers' delivery table. Services: precheck and preview on Stage 1's math,
@@ -170,9 +173,10 @@ B.1 (auction settlement), the raise's part of B.8 and `register_holder` from B.3
   the issuer's `raise/build-open` and `raise/build-cancel`, typed auction reads; 161 operations.
 - **Vector runner (WP5).** 02, 03, 15 and 17 are targets. SH-AUC-1 and SH-AUC-3…6 are gone (only SH-AUC-2, our bid
   commitment, stays until S4), and the auction, holder and balance views come from the engine. A known divergence is a
-  first-class entry (`stage1-vectors/divergences.ts`): DIV-NRC-1 accepts exactly the five fields of 03 the hold changes,
-  fails on any other value there, and fails as stale once the hold lifts. Prefix gates keep the auction prefix of 08,
-  10, 14, 16, 20, 21 and 22 green; lockstep compares mid-settlement.
+  first-class entry (`stage1-vectors/divergences.ts`): DIV-NRC-1 accepted exactly the five fields of 03 the hold
+  changed, failed on any other value there, and would fail as stale once the hold lifted (NRC removed it with the hold:
+  03 is PASS and the register is empty; the mechanism is tested on a test-only divergence). Prefix gates keep the
+  auction prefix of 08, 10, 14, 16, 20, 21 and 22 green; lockstep compares mid-settlement.
 - **Tests.** Every moved pin names its S2 cause code (S2-G, -AD, -CR, -E, -VR, -MS, -PR, -FP, -DA, -MF, -PU, -NRC, -RH,
   -V3, and the runner's -NY and -LS); moved figures were recomputed with Stage 1's own simulator.
 - **Privacy.** Settlement rounds and results and each bid's processing and delivery are public onchain, and none is
@@ -306,6 +310,66 @@ outside curve mode.
 | `MERCES_ALLOW_SIM_RESET=1 pnpm --filter @merces/simulator sim:reset` on dev | exits 0: no persisted simulator chain under the "sim" prefix, nothing to reset (it ran after WP6 and WP8 too) |
 | `docs/stage1/VECTOR_PARITY.md` | no SH-CLM-* or SH-BRN-1 row |
 
+### S3 follow-up: the non-reveal charge (NRC)
+
+At the owner's direction of 2026-10-10 the non-reveal charge is modelled exactly as Stage 1's code does, as a per-series
+setting, and the rate is the owner's ("Decided (S3 follow-up NRC)"). What Stage 1 does, in all three stacks at 1bfc66b:
+
+| | Reference (TypeScript) | Solana | EVM |
+| --- | --- | --- | --- |
+| The charge | `math/auction.ts:143-146` `processBid`: an unrevealed bid on a settled raise, `charge = mulDiv(escrow, nonRevealChargeBps, 10000)`, refund the rest | `raise.rs:1016-1019` `process_bid` calls merces-common `auction.rs:118-126` `non_reveal_split` (`floor(escrow × bps / 10000)`, refund the rest) | `MercesAuction.sol:319-324` `processBid`: `charge = escrow.bpsOf(nonRevealChargeBps)`, `_recordRefund(escrow - charge)` |
+| Who receives it | the fee collector: `sim/simulator.ts:998` (out of the escrow) and `:1001` (`feeCollector += fee + charge`) | the fee collector: `raise.rs:1059-1069` transfers `fee + charge` to the fee collector's account, checked against `config.fee_collector` at `:1004-1009` | the fee collector: `MercesAuction.sol:325`, `safeTransfer(registry().feeCollector(), charge)` |
+| When | at `process_bid`; the rest of the escrow is the bid's refund, paid at `deliver_bid` (`simulator.ts:1014-1028`) | at `process_bid`; the refund at `deliver_bid` (`raise.rs:1238` on) | at `processBid`; the refund at `deliverBid` (`MercesAuction.sol:400-415`) |
+| A failed raise | no charge, a full refund (`auction.ts:142`) | no charge, a full refund (`raise.rs:1014-1015`) | no charge, a full refund (`MercesAuction.sol:317-318`) |
+| A revealed bid | never charged (invalid or losing: a full refund, `auction.ts:152`) | never charged (`raise.rs:1020-1021`) | never charged (`MercesAuction.sol:326-329`) |
+| The event | none (its log line `BidProcessed … charge=`) | `NonRevealCharged{series, bidder, charge}` only when above 0 (`raise.rs:1070-1076`) | `NonRevealCharged(series, bidder, charge)` for every unrevealed bid, 0 included (`MercesAuction.sol:323`) |
+| The rate | the series' terms (`simulator.ts:924`), bounded 0–1,000 bps at creation (`:768`, sdk `PARAMETER_BOUNDS`) | copied from the protocol defaults at creation (`merces_registry` lib.rs:550), bounded (params.rs:102-105, lib.rs:562) | copied from the protocol defaults at creation (`MercesRegistry.sol:597`), bounded by `setDefaults` (`:741`) |
+
+What changed, by area:
+
+- **Domain.** `NON_REVEAL_CHARGE_HELD`, `appliedNonRevealChargeBps` and `DEFAULTS.nonRevealChargeBps` are gone;
+  `auctionRulesOf` gives Stage 1's `processBid` the series' own rate. `NON_REVEAL_CHARGE_SETTING` and
+  `nonRevealChargeSetting` read the owner's setting (whole bps within the bounds, else a startup error naming the setting
+  and the bounds). The canonical `NonRevealCharged{seriesId, bidder, charge}` (Stage 1's name and fields; 54 events) and
+  the `nonReveal` fee kind; `BidState.nonRevealCharge`. The rate is bounded on every series (a curve's too, as Stage 1
+  bounds the default it records there).
+- **Simulator.** `applyBidOutcome` takes the charge out of the escrow, credits the fee collector and emits
+  `NonRevealCharged` and `FeeTaken{nonReveal}` when it is above 0; the engine's guard is gone. A bid's charge is read off
+  what processing left it owed (Stage 1 stores none per bid), so state version 4 is unchanged and no reset is needed.
+  The harness's series record an explicit 100 bps; `runRaise` can leave a bid unrevealed.
+- **Services and API.** The terms service fills the owner's rate into every new series (`nonRevealChargeOf`): 409 for
+  a sealed raise while the setting is unset, 0 for a curve then; issuers cannot set it. Accounting: the `nonReveal` kind
+  in the ledger, `byKind`, `bySeries`, the statement's `fees` and `feeRates.nonRevealChargeBps`; reconciliation covers
+  it (the fee collector's balance). `/me/bids` `nonRevealCharge`; the bid precheck returns the rate and the charge on the
+  deposit. Notices: `bid.non-reveal-charged` to the bidder and a warning in the reveal reminder, no amount. OpenAPI and
+  the client regenerated (170 operations).
+- **Indexer.** Migration 022 (`bids.non_reveal_charge`); `NonRevealCharged` writes the bid's charge and what it is
+  owed; `FeeTaken{nonReveal}` writes the fee row; the feed line names no amount.
+- **Vector runner.** DIV-NRC-1 and 03's lockstep parting are deleted; 03 is PASS in full on both personalities and in
+  lockstep; the register is empty and the report says so; the divergence mechanism is tested on a test-only divergence
+  (03 with the merces backend at 0 bps). `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)`.
+- **Tests.** Moved pins name cause NRC. The simulator pins the charge to the fee collector on a settled raise (b4's
+  9.09 USDC of a 909 USDC deposit at 100 bps; the fee collector 49.09, Stage 1's own simulator's figure) and none on a
+  failed raise or at 0 bps.
+
+**The NRC gate**, all green at the "S3 follow-up NRC" commit:
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | exits 0 |
+| `DATABASE_URL=… pnpm vitest run` | 70 files, 571 tests passed |
+| `MERCES_TEST_DB=1 pnpm vitest run --project canary` | 2 files, 3 tests passed |
+| `CONFORMANCE_CHAIN=simulator` / `simulator:monad` `pnpm vitest run --project conformance` | 20 and 11 tests passed |
+| `pnpm stage1:vectors --personality solana,monad` | exits 0: `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)`; 03 PASS 78/78 on both |
+| `pnpm stage1:vectors --backend reference` | exits 0: `OK: 25/25 PASS, 25/25 at expected status` |
+| `pnpm stage1:vectors --backend lockstep --personality solana,monad` | exits 0: `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)`; 03 PASS 78/78, no parting |
+| `pnpm stage1:vectors --scenarios` | exits 0: `OK: 22/22 PASS, 22/22 at expected status` |
+| `pnpm stage1:sync --no-conformance` | math and vectors `OK` ("0 run(s) with accepted divergences"), diff `WARN` (3 / 220 / 64 and 1 / 207 / 84), conformance skipped; `INTERFACE_DRIFT.md` and `docs/stage1/VECTOR_PARITY.md` regenerated |
+| `pnpm docs:events` | `DOMAIN_EVENTS.md` and the schema regenerated (`NonRevealCharged`, the `nonReveal` kind) |
+| `pnpm openapi:client && pnpm openapi:check` | `openapi.yaml matches 170 operations` |
+| `pnpm demo:cycle` | exits 0: `DEMO OK` on both personalities |
+| `grep -rnE "NON_REVEAL_CHARGE_HELD\|appliedNonRevealChargeBps\|DEFAULTS\.nonRevealChargeBps" packages --include=*.ts \| grep -v generated` | empty (DIV-NRC-1 is named only in comments and the report's history line) |
+
 ### Adapter notes for the auction (S5)
 
 What the live adapters normalise so the canonical settlement reads the same on both chains (from Stage 1's programs and
@@ -319,15 +383,20 @@ contracts at 1bfc66b):
 - **R.** Solana stores no `R` on the auction: when the raise is Settled the adapter reads the accepted proposal's
   `r_claim`.
 - **Dropped events.** The EVM's `BidProcessed` (a bid processed without allocation) and `MintAuthorityRevoked` have no
-  canonical event; `RaiseMintFinalized` marks every bid processed. The EVM emits `NonRevealCharged` with 0 for every
-  unrevealed bid: while the owner holds the charge the adapter drops it (Solana emits it only above 0, which the hold
-  rules out).
+  canonical event; `RaiseMintFinalized` marks every bid processed. The EVM emits `NonRevealCharged` for every
+  unrevealed bid of a settled raise, 0 included (MercesAuction.sol:323); Solana only above 0 (raise.rs:1070). The
+  canonical `NonRevealCharged` follows Solana: the EVM adapter drops a charge of 0 and maps the rest (NRC).
 - **DeliverFirst.** Solana's `claim_redemption` and `claim_final`, and `claim_tail` while the holder still holds units
   (it redeems them first through the same body, `claims.rs:378-381` → `:300-311`), revert with DeliverFirst while the
   holder has undelivered units; the canonical model delivers inline, as the EVM and Stage 1's reference do, so the
   Solana adapter prepends `deliver_bid` to those transactions.
 - **Synthesised events.** `TreasuryFunded` on Solana and `FeeTaken{auction}` on both chains come from each
-  `UnitsAllocated` (its `cost` and `fee`); `AuctionFailed.unitsSold` and `reason` from `RaiseFailed` (section A).
+  `UnitsAllocated` (its `cost` and `fee`); `FeeTaken{nonReveal, payer: bidder}` from each `NonRevealCharged` above 0
+  (NRC); `AuctionFailed.unitsSold` and `reason` from `RaiseFailed` (section A).
+- **The non-reveal rate on a live chain (NRC).** Stage 1's registries copy the rate into each series from the protocol
+  defaults the admin sets (`set_defaults`; Solana `merces_registry` lib.rs:550, EVM `MercesRegistry.sol:597`), not from
+  the creating transaction. The adapters read each series' recorded rate back into `SeriesTerms.nonRevealChargeBps`,
+  and the operator keeps `MERCES_NON_REVEAL_CHARGE_BPS` equal to the chain's default (RUNBOOK).
 - **Deployment and fees.** The Solana fee collector's token account must exist before the first `process_bid`; the
   keepers pay a winner's Holder PDA rent at `process_bid` and the bidder's token accounts at `deliver_bid`, and set a
   compute-unit limit on `process_bid` (A-AUC-10).
@@ -371,7 +440,8 @@ Decided (S1 review):
   math. Order: math and the report proof format first (vectors 04, 06, 07, 09, 11, 19, 23, 25), then auctions,
   claims, signatures, the rest.
 - **Non-reveal charge: not modelled.** Settlement keeps refunding unrevealed bids in full. Vector 03 (b8, charged on a
-  settled raise) waits for the owner; no S1 target has a non-revealer.
+  settled raise) waits for the owner; no S1 target has a non-revealer. (Superseded: modelled since NRC, "Decided (S3
+  follow-up NRC)".)
 - **Formal notice mirrors Stage 1** (period end + 90 days): applied in S1.
 - **Window fee:** a series parameter, value undecided; not in S1 (S5).
 - **Tier-1 public terms:** accepted, with an explicit issuer consent step; not in S1 (tier-1 milestone).
@@ -390,15 +460,13 @@ Decided (S2):
   settled raise, Stage 1 keeps `floor(escrow × nonRevealChargeBps / 10000)` of a bid committed and never revealed (100
   bps by default) and pays it to the fee collector; a failed raise charges nothing. S2 keeps the series term (for
   `create_series` parity), applies 0 bps, refuses a non-zero charge in the engine, and adds no event, fee kind, column,
-  accounting row or API field for it (A-AUC-11). Vector 03 shows the five fields this changes (DIV-NRC-1).
+  accounting row or API field for it (A-AUC-11). Vector 03 shows the five fields this changes (DIV-NRC-1). (Lifted by
+  NRC, below.)
 
-Open, with the default S2 uses meanwhile:
+Open, with the default S2 uses meanwhile (the non-reveal hold and its 0 bps, open here until NRC, are decided: "Decided
+(S3 follow-up NRC)"):
 
-1. **Non-reveal charge: still on hold.** S2 creates every new series with 0 bps (`DEFAULTS.nonRevealChargeBps`), live
-   chains included. What lifting it adds is in the divergence register below and in A-AUC-11.
-2. **Series created during the hold keep 0 bps.** Their charters are frozen, so lifting the hold changes new series
-   only; a live series created meanwhile never charges a non-revealer.
-3. **Stage 1's two internal inconsistencies (D7)** are resolved toward SPEC and both chains and should be reported to
+1. **Stage 1's two internal inconsistencies (D7)** are resolved toward SPEC and both chains and should be reported to
    Stage 1: its TS reference settles a round that would sell 0 units (SPEC and both chains fail it), and its simulator's
    `RaiseMintFinalized` on a failed raise carries the would-be units and proceeds (both chains emit 0 and 0) (A-AUC-7).
 
@@ -411,7 +479,7 @@ Decided (S3):
   reads, notices, keepers: WP10-WP12). No wallet cap for curve raises, and "no cap" stated everywhere (WP7). The buyer
   notice is confirmed: it says the issuer "stops paying", never "defaults", that there is no deadline, and that if the
   curve never fills the issuer receives nothing (WP8, WP12; A-CURVE-8). Stage 1 wins, and its functions are imported.
-  The non-reveal charge stays on hold (not modelled).
+  The non-reveal charge stays on hold (not modelled; lifted by the owner's NRC direction, below).
 - **The segregated curve port (S3 decision 2, A-MATH-3): approved by the owner (2026-10-10).** Stage 1's TypeScript has
   no `unit_scale` (its `vaultReceiveGross`, `tailReceive`, `redemptionQuote` and `isCapped` take whole units only) and
   no curve code, so `@merces/math` ports 16 names from merces-common @1bfc66b (`vault.rs:48-170`,
@@ -457,6 +525,20 @@ Decided (S3):
   earn nothing and cannot tender." (with the wallet's own `earns: false` banner when it is not approved), and
   `build-swap` refuses a buy (422, value-free) unless it carries `acknowledged: true` for that statement list's version.
 
+Decided (S3 follow-up NRC):
+
+- **The non-reveal charge is modelled exactly as Stage 1's code does, as a per-series setting (owner direction,
+  2026-10-10: "Model the non-reveal charge exactly as Stage 1's code does, as a per-series setting, so vector 03 passes
+  in full. The rate stays my decision.").** The S2 hold is gone (`NON_REVEAL_CHARGE_HELD`, `appliedNonRevealChargeBps`
+  and the engine's guard): Stage 1's `processBid` runs with the series' own `nonRevealChargeBps`, the charge goes to the
+  protocol fee collector at `processBid` and the rest of the escrow is refunded at `deliverBid`; a failed raise charges
+  nothing (A-AUC-11). DIV-NRC-1 is deleted and 03 is PASS in full.
+- **The rate is the owner's: there is no built-in default.** New series built through the terms service take the
+  deployment setting `MERCES_NON_REVEAL_CHARGE_BPS` (whole bps within Stage 1's bounds, checked at startup); while it is
+  unset no sealed series is built (409, naming the setting, never a value) and a curve series records 0; issuers cannot
+  set it. Series created under the S2 hold recorded 0 and keep it (frozen charters). The value itself is open: the
+  owner sets it (RUNBOOK).
+
 Open since S3, with the default S3 uses meanwhile:
 
 1. **The curve buy builder warns, it does not refuse (S3 decision 3, A-CURVE-2).** Onchain anyone can buy on a curve
@@ -483,9 +565,9 @@ Open since S3, with the default S3 uses meanwhile:
    payouts, counted against the cap. Stage 1 allows it and leaves it as policy (`CURVE_MODE.md` §4: refusing the
    issuer at `register_holder`, or subtracting its account at `sync_curve_units`, are one-line switches); mirrored,
    nothing treats the issuer apart.
-7. **The non-reveal charge on a curve series (plan question 8).** Stage 1's Solana registry takes its protocol default
-   there (it has no such argument); ours keeps the held series term and checks its bounds on a sealed raise only (the
-   last row of the divergence register).
+7. **The non-reveal charge on a curve series (plan question 8).** Settled by NRC: Stage 1's Solana registry records
+   its protocol default on a curve series too and bounds it (lib.rs:550, :562); ours records the owner's setting (0
+   while it is unset) and bounds it on every series. A curve has no bids, so the rate is never applied.
 
 Asked of Stage 1 (S3), beside the two S2 inconsistencies above and the reference `claim_tail` finding in the register:
 
@@ -510,11 +592,13 @@ Open since S1, with the same defaults:
    no server-side copy (PRIVACY.md). A series' first report in mid-year supplies its own prior, which only the
    attestation binds (Stage 1 A25).
 
-### Divergence register (Stage 1 behaviour knowingly not mirrored after S3)
+### Divergence register (Stage 1 behaviour knowingly not mirrored after S3 and NRC)
+
+The non-reveal charge's row ("owner hold: not modelled", DIV-NRC-1 in the vector runner) is gone: NRC models the charge
+as Stage 1's code does, and vector 03 passes in full on both personalities and in lockstep.
 
 | Divergence | Milestone |
 | --- | --- |
-| **Non-reveal charge (owner hold): not modelled.** Stage 1 keeps `floor(escrow × nonRevealChargeBps / 10000)` of an unrevealed bid's escrow on a settled raise for the fee collector. Ours: `nonRevealChargeBps` is a series term (bounded 0–1,000 bps on a sealed raise); new series record 0, live series included, and keep it (frozen charters); 0 applies whatever a series records (`NON_REVEAL_CHARGE_HELD`, `appliedNonRevealChargeBps`), so an unrevealed bid is refunded in full, and the engine refuses a non-zero charge. The vectors see it as DIV-NRC-1 in 03 only: #67 `feeCollector`, `auctionEscrow`, `auction.escrowTotal` and #77 `balances.b8.stable`, `feeCollector` (b8's 101 USDC); lockstep parts at #65. **Lifting the hold adds:** `NON_REVEAL_CHARGE_HELD = false` (new series default to Stage 1's 100 bps; series created during the hold keep 0); the engine credits Stage 1's charge to the fee collector; the canonical event `NonRevealCharged{seriesId, bidder, charge}` and `FeeTaken{kind: 'nonReveal'}` (`feeKindSchema` gains `nonReveal`); the indexer's `bids.non_reveal_charge` column (an unrevealed bid's indexed pending refund, set at `RaiseMintFinalized`, then nets it) and `BidState.nonRevealCharge`; the fee ledger, reconciliation and accounting `byKind`/`bySeries` rows; the API and OpenAPI fields (accounting `byKind.nonReveal`, the bid's charge, the rate in the bid precheck); notices that name it; the adapters stop dropping `NonRevealCharged`; the vector runner's DIV-NRC-1 entries and 03's lockstep parting go (03 becomes PASS); the docs (A-AUC-11) | after the owner decides |
 | Stage 1 internal, resolved toward SPEC and both chains (D7, A-AUC-7): a round that would sell 0 units fails the raise (MinRaise), where Stage 1's TS reference (`auction.ts` `finalizeSettlement`) settles it; a failed raise's `RaiseMintFinalized` carries 0 and 0, where Stage 1's simulator emits the would-be units and proceeds; a failed raise's time is `AuctionState.finalizedAt` and `SeriesState.settledAt` stays null. No vector exercises the first. S3: Stage 1's reference `claim_tail` runs the redemption body before its NoRedeemedUnits check, so for a holder whose units are all held for a window ask its simulator pays the holder's pending payout and then raises without restoring it (its own `checkRevert` would flag the state change; the chains revert the transaction, and so does ours; no vector reaches it) | reported to Stage 1 |
 | Adapter normalisations of the auction (see "Adapter notes for the auction"; the claims' and curve mode's are their own rows below): the EVM's `tallyBids` index range; Solana's cumulative `escrow_total`; Solana's `R` read from `r_claim`; the EVM's `BidProcessed` and `MintAuthorityRevoked` dropped; the EVM's `NonRevealCharged(0)` dropped; Solana's DeliverFirst on the redemption and final claims and on a tail claim over a remaining balance (the canonical model delivers inline, as the EVM and Stage 1's reference do) | S5 (adapters) |
 | The EVM's 4,096-bid limit per auction (`TooManyBids`) is not enforced by the simulator's monad personality; `ChainInfo.limits.maxBidsPerAuction` reports it | S5 (adapters) |
@@ -537,7 +621,7 @@ Open since S1, with the same defaults:
 | True-up, the FX accumulator (trading-day coverage) and the `tier4Enabled` flag (B.6, B.9) | S5 |
 | ed25519 signatures with co-signers, attestation v1 as canonical JSON, no revocation grace (B.4) | S4 |
 | `register_issuer` by the issuer (Stage 1: admin-only, B.7) | S5 |
-| The window durations and the window fee are not series terms, so `createSeries` cannot bound them on a sealed raise (Stage 1: ParameterOutOfBounds) nor require Stage 1's 0 on a curve series (CurveTermsNotZero); every other canonical term follows Stage 1's `create_series` rules (A-TERMS-4): since S3 WP7 a curve series takes Stage 1's zeros for the lockup, the wallet cap and the raise durations, a positive threshold and USDC, in the Solana registry's order. The non-reveal charge, an owner hold, stays a series term unchecked on a curve series, where Stage 1's Solana registry takes its protocol default (it has no such argument) | S5 |
+| The window durations and the window fee are not series terms, so `createSeries` cannot bound them on a sealed raise (Stage 1: ParameterOutOfBounds) nor require Stage 1's 0 on a curve series (CurveTermsNotZero); every other canonical term follows Stage 1's `create_series` rules (A-TERMS-4): since S3 WP7 a curve series takes Stage 1's zeros for the lockup, the wallet cap and the raise durations, a positive threshold and USDC, in the Solana registry's order. The non-reveal charge is a series term bounded on every series (NRC), as Stage 1 bounds the rate it records, a curve's included | S5 |
 
 ### Blockers
 
@@ -609,13 +693,15 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    winner removed from the allowlist after committing still receives units. Ours (before S2): one-step settlement, fill
    by price then commit order, cap applied at allocation, refunds pulled by the bidder, de-allowlisted winners excluded.
    **S1:** not applied (S2). The vector runner shims it (SH-AUC-1…6) and checks our one-step settlement against Stage
-   1's tally of the same bids. The non-reveal charge is an owner hold and is not modelled.
+   1's tally of the same bids. The non-reveal charge is an owner hold and is not modelled (until NRC).
    **S2:** applied (WP1–WP8, "S2 results"): Stage 1's steps with Stage 1's names, check orders and error names; the math
    is Stage 1's (`@merces/math`); a page of `tallyBids` is at most the chain's `tallyPageMax`; a bid's validity is fixed
    at reveal; one bid per wallet; a winner removed from the allowlist is delivered; refunds and units are pushed by
    `deliverBid` (the keepers deliver every bid, any wallet may deliver one); a winner holds from processing. Two Stage 1
    inconsistencies are resolved toward SPEC and the chains (D7, A-AUC-7). The vector runner shims only our bid
    commitment (SH-AUC-2, S4). The non-reveal charge stays an owner hold (0 bps, A-AUC-11; DIV-NRC-1 in 03).
+   **NRC (S3 follow-up):** the 1% non-reveal charge (H1) applied as Stage 1's code applies it, the rate per series and
+   the owner's (A-AUC-11); 03 PASS in full.
 2. *Transfer window.* The same multi-step shape (`begin_window_settlement`, `tally_orders`, `finalize_window`,
    `process_order`, `deliver_order`, take-back steps) keyed by period, two-branch clearing with first-come fills at the
    margin, a 100 bps window fee, ask units held in escrow, a terminal series forced to NoMatch (S3). Stage 1 emits
@@ -700,6 +786,8 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    sealed raise; `openRaise` takes the series only, checks Stage 1's order and derives the phase ends from the terms
    (A-AUC-5). The charge itself stays an owner hold: new series record 0 (A-AUC-11). The window durations and fee, the
    FX pair and curve series with cap 0 are S5.
+   **NRC:** the non-reveal bps is bounded on every series and applied; new series take the owner's setting
+   (`MERCES_NON_REVEAL_CHARGE_BPS`, no default), as Stage 1's chains copy the admin's protocol default (A-AUC-11).
    **S3 (WP7):** curve series with cap 0: `walletCapBps` may be 0, and a curve series takes Stage 1's zeros for the
    lockup, the wallet cap and the raise durations (CurveTermsNotZero), a positive threshold (CurveThresholdZero) and
    USDC (CurveQuoteMintMismatch), in the Solana registry's order; the EVM refuses curve mode first
@@ -841,12 +929,13 @@ to the base unit; a mismatch means the simulator is wrong and is fixed.
    proofs verified, or the runner or the checkout is broken) and on the merces backend (our simulator, both
    personalities: the S1 and S2 target vectors in full, and the vectors that need a later milestone up to their prefix
    gate, each at its expected status; the default test suite runs the same gate). Known divergences are recorded per
-   step and field (`stage1-vectors/divergences.ts`, DIV-NRC-1 for the non-reveal hold in 03): a recorded difference is
-   accepted (PASS-WITH-DIVERGENCES), another value fails, and an entry that no longer occurs fails as stale. Report
-   proofs are verified with the ports' `Groth16ReportVerifier`, the verifier the API and the simulated chains run. `VECTOR_PARITY.md` lists the results,
-   the findings with leaf-path diffs, the known divergences, the prefix gates, waived steps, runner-atomic reverts, the
-   shims used ("not parity", the calls of expected reverts included) and the op inventory. A single JSON
-   file of `scenarios` (the earlier Merces format) is replayed through the harness.
+   step and field (`stage1-vectors/divergences.ts`; empty since NRC, which removed DIV-NRC-1, the non-reveal hold in
+   03): a recorded difference is accepted (PASS-WITH-DIVERGENCES), another value fails, and an entry that no longer
+   occurs fails as stale. Report proofs are verified with the ports' `Groth16ReportVerifier`, the verifier the API and
+   the simulated chains run. `VECTOR_PARITY.md` lists the results, the findings with leaf-path diffs, the known
+   divergences, the prefix gates, waived steps, runner-atomic reverts, the shims used ("not parity", the calls of
+   expected reverts included) and the op inventory. A single JSON file of `scenarios` (the earlier Merces format) is
+   replayed through the harness.
 6. **conformance** — the H2 suite against each live chain (`CONFORMANCE_CHAIN=solana|evm:<chain>`).
 7. **verdict** — per chain: ready for `live` only when no step failed and both **diff** and **conformance** are `ok`
    (drift left to resolve, or conformance skipped or not run, is a blocker); otherwise the blockers.

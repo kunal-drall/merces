@@ -25,14 +25,17 @@ export interface TermsViolation {
   message: string;
 }
 
-/** The terms the rules read. */
+/**
+ * The terms the rules read. The non-reveal charge may be absent: the terms service checks a draft before the owner has
+ * set the rate (`NON_REVEAL_CHARGE_SETTING`), and it builds no sealed series until then; a series always carries it.
+ */
 export type BoundedTerms = Pick<
   SeriesTerms,
   | 'capMultipleWad' | 'hurdleWad' | 'payoutMultipleK' | 'lockupSeconds' | 'walletCapBps' | 'auctionFeeBps' | 'payoutFeeBps'
-  | 'nonRevealChargeBps' | 'commitDurationSeconds' | 'revealDurationSeconds'
+  | 'commitDurationSeconds' | 'revealDurationSeconds'
   | 'dueDays' | 'graceDays' | 'formalNoticeDays' | 'unitsOffered' | 'reservePrice' | 'minimumRaise' | 'releaseSchedule' | 'raiseStyle'
   | 'stablecoin'
->;
+> & Partial<Pick<SeriesTerms, 'nonRevealChargeBps'>>;
 
 type Unit = 'wad' | 'bps' | 'seconds' | 'days' | 'count';
 
@@ -43,8 +46,8 @@ type Unit = 'wad' | 'bps' | 'seconds' | 'days' | 'count';
  *
  * `sealedOnly`: bounded on a sealed raise only. A curve series records 0 for the lockup, the wallet cap and the raise
  * durations (`CURVE_ZERO_TERMS`, CurveTermsNotZero), and Stage 1 bounds the protocol defaults in their place
- * (lib.rs:517-540), which are within the bounds; the non-reveal charge is an owner hold (not modelled) and stays
- * unchecked on a curve series, which has no auction to charge.
+ * (lib.rs:517-540), which are within the bounds. The non-reveal charge is bounded on every series: Stage 1 bounds the
+ * rate it records on a curve too (the protocol default, lib.rs:550), though a curve has no bids to charge.
  */
 const BOUNDED: readonly { field: keyof BoundedTerms; param: keyof Parameters; label: string; unit: Unit; sealedOnly?: true }[] = [
   { field: 'capMultipleWad', param: 'capMultipleWad', label: 'cap multiple', unit: 'wad' },
@@ -55,7 +58,7 @@ const BOUNDED: readonly { field: keyof BoundedTerms; param: keyof Parameters; la
   { field: 'auctionFeeBps', param: 'auctionFeeBps', label: 'auction fee', unit: 'bps' },
   { field: 'payoutFeeBps', param: 'payoutFeeBps', label: 'payout fee', unit: 'bps' },
   // Stage 1's windowFeeBps comes here (S5)
-  { field: 'nonRevealChargeBps', param: 'nonRevealChargeBps', label: 'non-reveal charge', unit: 'bps', sealedOnly: true },
+  { field: 'nonRevealChargeBps', param: 'nonRevealChargeBps', label: 'non-reveal charge', unit: 'bps' },
   { field: 'commitDurationSeconds', param: 'commitDuration', label: 'commit duration', unit: 'seconds', sealedOnly: true },
   { field: 'revealDurationSeconds', param: 'revealDuration', label: 'reveal duration', unit: 'seconds', sealedOnly: true },
   // Stage 1's windowCommitDuration and windowRevealDuration come here (S5)
@@ -80,13 +83,18 @@ const SCHEDULE_RULES: Record<string, { code: string; message: string }> = {
   bps_sum_not_10000: { code: 'bps-sum', message: 'release schedule must sum to 10000 bps' },
 };
 
-/** Each bounded parameter within PARAMETER_BOUNDS (SIM:759-777; registry lib.rs:517-561), `sealedOnly` ones on a sealed raise. */
+/**
+ * Each bounded parameter within PARAMETER_BOUNDS (SIM:759-777; registry lib.rs:517-561), `sealedOnly` ones on a sealed
+ * raise; an absent non-reveal charge is not checked (`BoundedTerms`).
+ */
 function boundViolations(t: BoundedTerms, curve: boolean): TermsViolation[] {
   const out: TermsViolation[] = [];
   for (const { field, param, label, unit, sealedOnly } of BOUNDED) {
     if (sealedOnly && curve) continue;
+    const raw = t[field];
+    if (raw === undefined) continue;
     const b = PARAMETER_BOUNDS[param];
-    const v = BigInt(t[field] as string | number);
+    const v = BigInt(raw as string | number);
     if (v < b.min || v > b.max) out.push({ field, stage1: 'ParameterOutOfBounds', code: 'out-of-bounds', message: boundMessage(label, unit, b.min, b.max) });
   }
   return out;

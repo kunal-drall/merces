@@ -63,8 +63,9 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
    * The caller's bids (S2). Each bid's settlement fields come from one source, never a mix, so a response cannot
    * contradict itself while the indexer catches up: the chain's read of the bid (`source: 'chain'`: `revealed`,
    * `valid`, `processed`, `delivered`, `allocatedUnits` and what a processed, undelivered bid is still owed,
-   * `pendingUnits` / `pendingRefund`, with `refundable` the same refund), or, when the chain has no read of the bid, the
-   * indexed row as a whole (`source: 'index'`). `refunded`, the refund delivered, is carried only by the delivery
+   * `pendingUnits` / `pendingRefund`, with `refundable` the same refund, and `nonRevealCharge`, what an unrevealed bid
+   * paid when the raise settled), or, when the chain has no read of the bid, the indexed row as a whole
+   * (`source: 'index'`). `refunded`, the refund delivered, is carried only by the delivery
    * event (Solana zeroes the bid's pending refund at delivery), so it is indexed: "0" while the bid is undelivered,
    * then the indexed refund once the indexer has projected the delivery, and null in between (the chain shows the bid
    * delivered and the indexer has not caught up yet).
@@ -85,16 +86,16 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
           bids.push({
             ...base, source: 'chain', revealed: live.revealed, valid: live.valid, processed: live.processed, delivered: live.delivered, allocatedUnits: live.allocatedUnits,
             pendingUnits: owed ? live.pendingUnits : '0', pendingRefund: owed ? live.pendingRefund : '0', refundable: owed ? live.pendingRefund : '0',
-            refunded: !live.delivered ? '0' : x.delivered ? x.refunded : null,
+            nonRevealCharge: live.nonRevealCharge, refunded: !live.delivered ? '0' : x.delivered ? x.refunded : null,
           });
         } else {
-          // the indexed row as a whole (UnitsAllocated, BidDelivered and RaiseMintFinalized keep it consistent)
+          // the indexed row as a whole (UnitsAllocated, NonRevealCharged, BidDelivered and RaiseMintFinalized keep it consistent)
           const owed = x.processed && !x.delivered;
           bids.push({
             ...base, source: 'index', revealed: x.revealed_price === null ? null : { pricePerUnit: x.revealed_price, quantity: x.revealed_quantity }, valid: x.valid ?? null,
             processed: x.processed, delivered: x.delivered, allocatedUnits: x.allocated_units,
             pendingUnits: owed ? x.pending_units : '0', pendingRefund: owed ? x.pending_refund : '0', refundable: owed ? x.pending_refund : '0',
-            refunded: x.refunded,
+            nonRevealCharge: x.non_reveal_charge, refunded: x.refunded,
           });
         }
       }

@@ -15,8 +15,8 @@ import { splitTranches } from './treasury.ts';
 /**
  * Stage 1's multi-step settlement of a sealed-bid raise (SPEC v1.1 §5.2; Stage 1 simulator SIM:928-1028, REF
  * auction.ts:55-158) and `register_holder` (SIM:618-623). All arithmetic is Stage 1's (`@merces/math`), the rules come
- * from `auctionRulesOf` (the non-reveal charge hold applies there) and the one D7 rule from `settlementOutcome`
- * (`@merces/domain`). This module only checks the call order, stores the results, moves balances and emits events.
+ * from `auctionRulesOf` (the series' own terms, its non-reveal charge included) and the one D7 rule from
+ * `settlementOutcome` (`@merces/domain`). This module only checks the call order, stores the results, moves balances and emits events.
  *
  *   beginSettlement → tallyBids (pages) → finalizeSettlement → processBid (every bid) → deliverBid (every bid)
  *
@@ -147,8 +147,8 @@ export function finalizeSettlement(e: EngineCore, cmd: Cmd<'finalizeSettlement'>
 // ------------------------------------------------------------------ process
 /**
  * `process_bid` (SIM:986-1012): RaiseNotSettled unless Settled or Failed, BidNotFound, AlreadyProcessed. Stage 1's
- * `processBid` decides the bid's allocation, cost, fee and refund (the rules through `auctionRulesOf`, so the
- * non-reveal charge is 0 while held); `applyBidOutcome` records it. The last bid finalises the mint.
+ * `processBid` decides the bid's allocation, cost, fee, non-reveal charge and refund (the rules through
+ * `auctionRulesOf`: the series' own rate); `applyBidOutcome` records it. The last bid finalises the mint.
  */
 export function processBid(e: EngineCore, cmd: Cmd<'processBid'>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
@@ -168,27 +168,30 @@ export function processBid(e: EngineCore, cmd: Cmd<'processBid'>, emit: Emit): v
 
 /**
  * Record Stage 1's outcome for a bid (SIM:994-1011): the bid's allocation and what it is owed; the escrow gives up the
- * cost and fee, the treasury takes the cost, the fee collector the fee. A winner's units are minted to the auction
- * escrow for it: they join its position at once (its accrual weight counts undelivered units, SPEC §6.3) and it is
- * registered as a holder; `HolderRegistered` (first time), `UnitsAllocated`, `FeeTaken{auction}` (fee > 0) and
- * `TreasuryFunded{cost}`. A loser, an invalid or unrevealed bid, and every bid of a failed raise is processed without
- * an event. The last bid finalises the mint.
- *
- * Owner hold (S2 amendment M1): the non-reveal charge is not modelled. `auctionRulesOf` applies 0 bps while
- * `NON_REVEAL_CHARGE_HELD`, so Stage 1's `processBid` returns no charge; one that is not 0 is refused here
- * (ChainSpecific, value-free) rather than credited anywhere. Lifting the hold adds the charge (A-AUC-11).
+ * cost, the fee and the non-reveal charge, the treasury takes the cost, the fee collector the fee and the charge. A
+ * winner's units are minted to the auction escrow for it: they join its position at once (its accrual weight counts
+ * undelivered units, SPEC §6.3) and it is registered as a holder; `HolderRegistered` (first time), `UnitsAllocated`,
+ * `FeeTaken{auction}` (fee > 0) and `TreasuryFunded{cost}`. An unrevealed bid on a settled raise is charged
+ * `floor(escrow × nonRevealChargeBps / 10000)` (Stage 1 `processBid`): `NonRevealCharged` and `FeeTaken{nonReveal}` when
+ * the charge is above 0 (Solana raise.rs:1070-1076; the EVM emits `NonRevealCharged` for 0 too, which its adapter
+ * drops). A loser, an invalid bid, an uncharged unrevealed bid and every bid of a failed raise is processed without an
+ * event. The last bid finalises the mint.
  */
 export function applyBidOutcome(e: EngineCore, s: SimSeries, b: SimBid, o: BidOutcome, emit: Emit): void {
-  if (o.charge !== 0n) throw new ChainError('ChainSpecific', 'a non-reveal charge is not applied while the owner hold is on', { hold: 'NON_REVEAL_CHARGE_HELD' });
   const a = s.auction;
   const { seriesId } = s;
   b.processed = true;
   b.allocation = o.alloc;
   b.pendingUnits = o.alloc;
   b.pendingRefund = o.pendingRefund;
-  a.escrowTotal -= o.cost + o.fee; // the refund stays in the escrow until delivery
+  a.escrowTotal -= o.cost + o.fee + o.charge; // the refund stays in the escrow until delivery (SIM:998)
   s.treasuryTotal += o.cost;
-  if (o.fee > 0n) e.credit(e.state.feeCollector, s.terms.stablecoinMint, o.fee);
+  // the fee collector takes the winner's fee and the non-reveal charge (SIM:1001); a bid has one or the other
+  if (o.fee + o.charge > 0n) e.credit(e.state.feeCollector, s.terms.stablecoinMint, o.fee + o.charge);
+  if (o.charge > 0n) {
+    emit('NonRevealCharged', { seriesId, bidder: b.bidder, charge: str(o.charge) });
+    emit('FeeTaken', { seriesId, kind: 'nonReveal', amount: str(o.charge), payer: b.bidder });
+  }
   if (o.alloc > 0n) {
     a.escrowUnits += o.alloc;
     a.unitsMinted += o.alloc;

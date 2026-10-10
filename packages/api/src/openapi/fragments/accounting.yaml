@@ -18,14 +18,14 @@ components:
         seq: { type: integer }
         seriesId: { type: string }
         stablecoin: { type: [string, 'null'], enum: [USDC, USDG, null] }
-        kind: { type: string, enum: [auction, payout, curveTrading], description: "1% auction fee on cleared bids, 5% payout fee at pay-in (C5), or Merces' (the partner's) share of a curve's 1% trading fee, collected from the pool by collectCurveProceeds" }
-        payer: { type: string, description: "the bidder (auction), the issuer's wallet the fee was taken from at pay-in (payout), or the curve's pool (curveTrading)" }
+        kind: { type: string, enum: [auction, payout, curveTrading, nonReveal], description: "1% auction fee on cleared bids, 5% payout fee at pay-in (C5), Merces' (the partner's) share of a curve's 1% trading fee, collected from the pool by collectCurveProceeds, or the non-reveal charge kept from a bid never revealed when its raise settled (the series' nonRevealChargeBps on the deposit, Stage 1 process_bid)" }
+        payer: { type: string, description: "the bidder (auction, nonReveal), the issuer's wallet the fee was taken from at pay-in (payout), or the curve's pool (curveTrading)" }
         amount: { $ref: '#/components/schemas/Money' }
         blockTime: { type: integer, description: unix seconds }
         txId: { type: string }
     AccountingFeeSeriesTotal:
       type: object
-      required: [seriesId, chain, stablecoin, auction, payout, curveTrading, total, count]
+      required: [seriesId, chain, stablecoin, auction, payout, curveTrading, nonReveal, total, count]
       properties:
         seriesId: { type: string }
         chain: { type: string }
@@ -33,6 +33,7 @@ components:
         auction: { $ref: '#/components/schemas/Money' }
         payout: { $ref: '#/components/schemas/Money' }
         curveTrading: { $ref: '#/components/schemas/Money' }
+        nonReveal: { $ref: '#/components/schemas/Money' }
         total: { $ref: '#/components/schemas/Money' }
         count: { type: integer }
     AccountingFeesReport:
@@ -58,11 +59,12 @@ components:
             count: { type: integer }
             byKind:
               type: object
-              required: [auction, payout, curveTrading]
+              required: [auction, payout, curveTrading, nonReveal]
               properties:
                 auction: { $ref: '#/components/schemas/Money' }
                 payout: { $ref: '#/components/schemas/Money' }
                 curveTrading: { $ref: '#/components/schemas/Money' }
+                nonReveal: { $ref: '#/components/schemas/Money' }
             bySeries: { type: array, items: { $ref: '#/components/schemas/AccountingFeeSeriesTotal' } }
     AccountingPeriodLine:
       type: object
@@ -91,7 +93,7 @@ components:
         settledAt: { type: [integer, 'null'] }
         feeRates:
           type: object
-          properties: { auctionFeeBps: { type: integer }, payoutFeeBps: { type: integer } }
+          properties: { auctionFeeBps: { type: integer }, payoutFeeBps: { type: integer }, nonRevealChargeBps: { type: [integer, 'null'], description: "the series' non-reveal charge (null on a row indexed before S2)" } }
         cap:
           type: object
           description: "C6: cap per whole unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per whole unit = Stage 1's C_remaining at the series' unit scale = max(capPerUnit − ceil(paidPerUnitWad / (1e18 / unitScale)), 0). Unit counts are per accounting unit (base lamports on a curve series), per-unit figures per whole unit"
@@ -122,6 +124,7 @@ components:
             auction: { $ref: '#/components/schemas/Money' }
             payout: { $ref: '#/components/schemas/Money' }
             curveTrading: { $ref: '#/components/schemas/Money' }
+            nonReveal: { $ref: '#/components/schemas/Money', description: non-reveal charges kept from bids never revealed when the raise settled }
             total: { $ref: '#/components/schemas/Money' }
             vaultFeesTotal: { $ref: '#/components/schemas/Money', description: payout fees as accumulated on the series row (should equal fees.payout) }
         payouts:

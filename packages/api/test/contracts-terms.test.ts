@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { createLogger, logCapture } from '@merces/core';
+import { AppError, createLogger, logCapture } from '@merces/core';
 import { dbTestsEnabled, type Pool } from '@merces/db';
-import { ContractService, TermsService, applicationCreateSchema, assembleSchema, lockupOf, tier3OpenSchema, tier3SignSchema, type ServiceContext } from '@merces/services';
+import { ContractService, NON_REVEAL_CHARGE_UNSET, TermsService, applicationCreateSchema, assembleSchema, lockupOf, publicTermsSchema, tier3OpenSchema, tier3SignSchema, type ServiceContext } from '@merces/services';
 import { DEFAULTS, seriesTermsViolations } from '@merces/domain';
 import { BN254_FR, CURRENCY_CODES, INDEXING_RULES, termsCommitmentField } from '@merces/math';
 import { buildSpec } from '../src/openapi/build.ts';
@@ -221,6 +221,24 @@ describe.skipIf(!dbTestsEnabled())('contract templates, contract signing and dra
     await svc.setTerms('draft-sealed', issuer, { ...curve, raiseStyle: 'sealed', minimumRaise: '4000000000' }, { threshold: '65000000000', shareRate: '0.10', indexingRule: 'cpi-annual' });
     await rig.t.pool.query("update series_drafts set state = 'contract_signed', contract_hash = $2 where draft_id = $1", ['draft-sealed', '0x' + 'cd'.repeat(32)]);
     expect((await svc.buildCreateSeries('draft-sealed', issuer)).terms).toMatchObject({ lockupSeconds: DEFAULTS.lockupSeconds, walletCapBps: DEFAULTS.walletCapBps, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds });
+    // cause NRC: both record the owner's non-reveal charge (the rig sets 100 bps), as Stage 1's chains copy the protocol
+    // default into every series, a curve's included (lib.rs:550); the issuer's draft has no say in it
+    expect([built.terms.nonRevealChargeBps, (await svc.buildCreateSeries('draft-sealed', issuer)).terms.nonRevealChargeBps]).toEqual([100, 100]);
+    expect('nonRevealChargeBps' in publicTermsSchema.shape).toBe(false);
+    // unset: a sealed raise is refused (409, naming the setting); a curve, which has no bids to charge, records 0; a draft
+    // is still checked on every other rule
+    const owner = rig.ctx.nonRevealChargeBps;
+    rig.ctx.nonRevealChargeBps = null;
+    try {
+      const refused = await svc.buildCreateSeries('draft-sealed', issuer).then(() => null, (e: unknown) => e as AppError);
+      expect([refused?.status, refused?.detail]).toEqual([409, { setting: 'MERCES_NON_REVEAL_CHARGE_BPS' }]);
+      expect(refused?.message).toBe(NON_REVEAL_CHARGE_UNSET);
+      expect((await svc.buildCreateSeries('draft-curve', issuer)).terms.nonRevealChargeBps).toBe(0);
+      expect(await issues({})).toEqual([]);
+      expect((await svc.validate('solana', { ...curve, raiseStyle: 'sealed', minimumRaise: '4000000000' }, null, 2026)).issues).toEqual([]);
+    } finally {
+      rig.ctx.nonRevealChargeBps = owner;
+    }
   });
 
   // S1 review: a share rate with more than 18 places made wadFromDecimal throw a RangeError carrying the value, which

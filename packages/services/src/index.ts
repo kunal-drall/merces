@@ -1,4 +1,5 @@
 import type { AppContext } from '@merces/api';
+import { checkNonRevealCharge, nonRevealChargeSetting } from '@merces/domain';
 import { LocalKms, MockESign, MockIdentityCheck, MockZkTls, reportProofSystemFromEnv, reportProofVerifier, resolveSecret, simulatorOnly, vaultFromEnv, type ESignPort, type IdentityCheckPort, type KmsPort, type ProofVerifierPort, type VaultCrypto, type ZkTlsPort } from '@merces/ports';
 import { HttpReportVerifierClient, ReportVerifier, type ReportVerifierPort } from '@merces/report-verifier';
 import type { ServiceContext } from './context.ts';
@@ -44,6 +45,11 @@ export interface ProviderOverrides {
   verifier?: ReportVerifierPort;
   reportVerifierUrl?: string;
   signInDomain?: string;
+  /**
+   * The non-reveal charge for new series (bps, checked against Stage 1's bounds), or null for unset; when absent, the
+   * owner's setting `MERCES_NON_REVEAL_CHARGE_BPS` is read. Tests pass it explicitly.
+   */
+  nonRevealChargeBps?: number | null;
 }
 
 /** Compose the ServiceContext over the gateway's AppContext. Providers default to mocks / local dev signer. */
@@ -63,6 +69,8 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   // In mock mode the verifier runs in-process with the same local key the standalone service derives (dev seed); live mode talks to the isolated service.
   ctx.verifier = over.verifier ?? (base.devMode ? new ReportVerifier(ctx.zktls, ctx.kms, process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1') : new HttpReportVerifierClient(ctx.reportVerifierUrl));
   ctx.signInDomain = over.signInDomain ?? process.env.MERCES_SIGNIN_DOMAIN ?? 'merces.local';
+  // the owner's decision, never a built-in rate: a malformed or out-of-bounds setting stops the process here
+  ctx.nonRevealChargeBps = over.nonRevealChargeBps !== undefined ? (over.nonRevealChargeBps === null ? null : checkNonRevealCharge(over.nonRevealChargeBps)) : nonRevealChargeSetting(process.env);
   ctx.wallClock = () => Math.floor(Date.now() / 1000);
   ctx.newId = newId;
   return ctx;

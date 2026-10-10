@@ -150,8 +150,13 @@ export const TEMPLATES: Record<string, Template> = {
       : { subject: 'Raise minting final', body: `Every bid on ${series(d)} has been processed and the raise's units are minted. Reports, payments and treasury releases are now open. Status: Settled.` },
   'auction.settlement-stuck': (d) => ({ subject: 'Settlement needs attention', body: `The keepers cannot move the settlement of ${series(d)} on${typeof d.outcome === 'string' && /^[A-Za-z]+$/.test(d.outcome) ? ` (${d.outcome})` : ''}. Anyone may still send the next settlement step. Status: stuck.` }),
   'bid.delivered': (d) => ({ subject: 'Bid delivered', body: `Your bid on ${series(d)} has been delivered: any units it won and any refund are in your wallet. Status: delivered.` }),
+  // Stage 1 `process_bid` on an unrevealed bid of a settled raise (NonRevealCharged): no amount, rate or price
+  'bid.non-reveal-charged': (d) => ({
+    subject: 'Unrevealed bid charged',
+    body: `Your bid on ${series(d)} was not revealed, so the series' non-reveal charge was taken from its deposit when the raise settled and paid to the protocol fee collector. The rest of the deposit is returned when the bid is delivered. Status: processed.`,
+  }),
   'bid.delivery-stuck': (d) => ({ subject: 'Bid delivery delayed', body: `The delivery of a bid on ${series(d)} has been failing for more than a day; the keepers keep retrying. The bidder can also send the delivery from the app. Units the bid won count for payouts in the meantime. Status: delivery-delayed.` }),
-  'bid.reveal-reminder': (d) => ({ subject: 'Reveal your bid', body: `Reveal your bid on ${series(d)} before ${fmtDate(d.revealEndsAt)}.` }),
+  'bid.reveal-reminder': (d) => ({ subject: 'Reveal your bid', body: `Reveal your bid on ${series(d)} before ${fmtDate(d.revealEndsAt)}. If the raise settles, a bid that was not revealed is charged the series' non-reveal charge on its deposit.` }),
   // The reporting reminders follow Stage 1's inclusive bounds: `dueAt` is the last OnTime instant and `graceEndsAt` the
   // last InGrace one. The keeper reminds only the earliest unpaid period (the one Stage 1's `deriveStatus` counts from),
   // sending 'report-due' once its `dueAt` has passed and 'grace-end' once its `graceEndsAt` has passed. The status a

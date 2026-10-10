@@ -1,30 +1,49 @@
-import { DEFAULT_PARAMETERS, wadFromDecimal } from '@merces/math';
+import { DEFAULT_PARAMETERS, PARAMETER_BOUNDS, wadFromDecimal } from '@merces/math';
 
 /**
- * OWNER HOLD (S2 amendment M1): the non-reveal charge is not modelled. Stage 1 keeps `floor(escrow × bps / 10000)` of an
- * unrevealed bid's escrow when the raise settles (SPEC §5.2, `processBid`; 1% by default). The owner asked to be told
- * what Stage 1 does before it is modelled, so while this is `true`:
- *  - new series record 0 bps (`DEFAULTS.nonRevealChargeBps`), live series included: a charter is frozen at creation, so
- *    a live series created during the hold keeps 0 after the hold is lifted (lifting changes new series only);
- *  - settlement applies 0 bps whatever a series records (`appliedNonRevealChargeBps`), so an unrevealed bid is refunded
- *    in full;
- *  - nothing else exists for the charge: no event, fee kind, column, accounting row or API field.
- * Lifting the hold is a separate change (STAGE1_INTEGRATION.md divergence register, ASSUMPTIONS.md A-AUC-11).
+ * The non-reveal charge (SPEC §5.2), modelled as Stage 1's code does: a per-series term, `SeriesTerms.nonRevealChargeBps`,
+ * frozen at creation and bounded to Stage 1's `PARAMETER_BOUNDS.nonRevealChargeBps` (0–1,000 bps). When a sealed raise
+ * settles, Stage 1's `processBid` keeps `floor(escrow × bps / 10000)` of a bid that was committed and never revealed and
+ * pays it to the protocol fee collector at `process_bid`; the rest of the escrow is the bid's refund, paid at
+ * `deliver_bid`. A failed raise refunds every bid in full, and a revealed bid (valid or not) is never charged.
  *
- * Declared above `DEFAULTS`, which reads it at module initialisation.
+ * There is no built-in rate. Stage 1's chains copy the rate into each series from the protocol defaults the admin sets
+ * (`set_defaults`; Solana `merces_registry` lib.rs:550, EVM `MercesRegistry.sol:597`), and issuers cannot choose it.
+ * Ours: new series built through the terms service take the owner's deployment setting `MERCES_NON_REVEAL_CHARGE_BPS`
+ * (`nonRevealChargeSetting`); while it is unset, no sealed series is built (409). Tests, the harness and the vector
+ * runner pass explicit values.
  */
-export const NON_REVEAL_CHARGE_HELD = true;
+export const NON_REVEAL_CHARGE_SETTING = 'MERCES_NON_REVEAL_CHARGE_BPS';
 
-/** The non-reveal charge the engine applies for a series recording `termsBps`: 0 while the charge is held. */
-export function appliedNonRevealChargeBps(termsBps: number): number {
-  return NON_REVEAL_CHARGE_HELD ? 0 : termsBps;
+/** Stage 1's bounds on the non-reveal charge, in bps (`PARAMETER_BOUNDS.nonRevealChargeBps`). */
+export const NON_REVEAL_CHARGE_BOUNDS = { min: Number(PARAMETER_BOUNDS.nonRevealChargeBps.min), max: Number(PARAMETER_BOUNDS.nonRevealChargeBps.max) } as const;
+
+/**
+ * The owner's non-reveal charge for new series, from `MERCES_NON_REVEAL_CHARGE_BPS`: an integer number of bps within
+ * Stage 1's bounds, or null while the setting is unset (absent or blank). Any other value throws at startup; the message
+ * names the setting and the bounds, never the value given.
+ */
+export function nonRevealChargeSetting(env: Readonly<Record<string, string | undefined>>): number | null {
+  const raw = env[NON_REVEAL_CHARGE_SETTING]?.trim();
+  if (raw === undefined || raw === '') return null;
+  if (!/^\d+$/.test(raw)) throw new Error(`${NON_REVEAL_CHARGE_SETTING} must be a whole number of bps between ${NON_REVEAL_CHARGE_BOUNDS.min} and ${NON_REVEAL_CHARGE_BOUNDS.max} (Stage 1's bounds)`);
+  return checkNonRevealCharge(Number(raw));
+}
+
+/** A non-reveal charge within Stage 1's bounds, returned as given; anything else throws (value-free). */
+export function checkNonRevealCharge(bps: number): number {
+  if (!Number.isInteger(bps) || bps < NON_REVEAL_CHARGE_BOUNDS.min || bps > NON_REVEAL_CHARGE_BOUNDS.max) {
+    throw new Error(`${NON_REVEAL_CHARGE_SETTING} must be a whole number of bps between ${NON_REVEAL_CHARGE_BOUNDS.min} and ${NON_REVEAL_CHARGE_BOUNDS.max} (Stage 1's bounds)`);
+  }
+  return bps;
 }
 
 /**
  * Protocol defaults (B8). Every default is a parameter, never a constant baked into logic (B11):
  * series carry their own copy of each value at creation. Where Stage 1 fixes a default (`DEFAULT_PARAMETERS`,
  * SPEC §1.6), it is taken from Stage 1 rather than restated. The bounds are Stage 1's `PARAMETER_BOUNDS`, applied by
- * `seriesTermsViolations` (terms-rules.ts).
+ * `seriesTermsViolations` (terms-rules.ts). The non-reveal charge has no default here: it is the owner's setting
+ * (`NON_REVEAL_CHARGE_SETTING`).
  */
 export const DEFAULTS = {
   capMultipleWad: wadFromDecimal('2.5'),
@@ -35,11 +54,6 @@ export const DEFAULTS = {
   auctionFeeBps: 100,
   payoutFeeBps: 500,
   walletCapBps: 1_000,
-  /**
-   * 0 while the non-reveal charge is held (`NON_REVEAL_CHARGE_HELD`; Stage 1's default is 100 bps). Every series created
-   * during the hold records 0, live series included, and keeps it: charters are frozen.
-   */
-  nonRevealChargeBps: NON_REVEAL_CHARGE_HELD ? 0 : DEFAULT_PARAMETERS.nonRevealChargeBps,
   /** The sealed-bid raise's commit and reveal phases (Stage 1 `commit_duration` 7 days, `reveal_duration` 2 days). */
   commitDurationSeconds: Number(DEFAULT_PARAMETERS.commitDuration),
   revealDurationSeconds: Number(DEFAULT_PARAMETERS.revealDuration),

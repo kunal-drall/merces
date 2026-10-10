@@ -42,7 +42,7 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
   const verifier = new ReportVerifier(zktls, kms, 'report-verifier-test');
   const spki = await kms.spkiHex('report-verifier-test');
   for (const h of [sol, mon]) await h.exec(h.admin, { kind: 'registerVerifierKey', keyId: 'report-verifier-test', publicKey: spki, active: true });
-  const ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: SECRET, devMode: true }), { esign, identity, zktls, kms, verifier, reportVerifierUrl: 'http://verifier.test', proofVerifier: reportProofVerifier({ acceptMock: true, groth16 }) });
+  const ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: SECRET, devMode: true }), { esign, identity, zktls, kms, verifier, reportVerifierUrl: 'http://verifier.test', proofVerifier: reportProofVerifier({ acceptMock: true, groth16 }), nonRevealChargeBps: 100 });
   const app = await buildApp(ctx, [...serviceRoutes, ...(opts.extraRoutes ?? [])]);
   await app.ready();
   const token = (s: Partial<Session> & { wallets?: Session['wallets'] }) =>

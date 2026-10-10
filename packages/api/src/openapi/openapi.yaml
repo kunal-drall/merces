@@ -106,7 +106,7 @@ components:
         reportingCurrency: { type: string }
         commitDurationSeconds: { type: [integer, 'null'], description: "the sealed raise's commit phase (Stage 1 commit_duration; 1 hour–30 days): openRaise sets the commit end to now + this. 0 on a curve-mode series (no auction). Null on a row indexed before S2" }
         revealDurationSeconds: { type: [integer, 'null'], description: "the sealed raise's reveal phase (Stage 1 reveal_duration; 1 hour–7 days), after the commit end. 0 on a curve-mode series. Null on a row indexed before S2" }
-        nonRevealChargeBps: { type: [integer, 'null'], description: "the non-reveal charge the series recorded at creation (Stage 1 create_series). Reserved: the charge is an owner hold and is not applied (an unrevealed bid is refunded in full); series created during the hold record 0. Null on a row indexed before S2" }
+        nonRevealChargeBps: { type: [integer, 'null'], description: "the series' own non-reveal charge, frozen at creation (Stage 1 non_reveal_charge_bps; 0–1000 bps): when the raise settles, a bid committed and never revealed pays floor(deposit × nonRevealChargeBps / 10000) to the protocol fee collector and is refunded the rest; a failed raise and a revealed bid are never charged. New series take the operator's setting (the owner's decision); issuers cannot choose it. Series created under the S2 hold record 0. Null on a row indexed before S2" }
     SeriesAuction:
       type: object
       description: "A sealed raise's settlement as indexed (public onchain state): the current round and how it ended, and what finalizeSettlement wrote. A failed raise keeps its price and its would-be units and proceeds here, with the reason; the series' issuePrice stays null."
@@ -181,7 +181,7 @@ components:
         bidder: { type: string }
         phase: { type: string, description: "the series' phase, as indexed" }
         deposit: { $ref: '#/components/schemas/Money', description: the escrow the commit locked }
-        source: { type: string, enum: [chain, index], description: "where revealed, valid, processed, delivered, allocatedUnits, pendingUnits, pendingRefund and refundable come from: the chain's read of the bid, or the indexed row (when the chain has no read of it; it may lag the chain by an indexer pass)" }
+        source: { type: string, enum: [chain, index], description: "where revealed, valid, processed, delivered, allocatedUnits, pendingUnits, pendingRefund, refundable and nonRevealCharge come from: the chain's read of the bid, or the indexed row (when the chain has no read of it; it may lag the chain by an indexer pass)" }
         revealed: { type: [object, 'null'], properties: { pricePerUnit: { $ref: '#/components/schemas/Money' }, quantity: { type: string } }, description: null until revealed }
         valid: { type: [boolean, 'null'], description: "fixed at reveal (Stage 1 isBidValid: reserve, 1 ≤ quantity ≤ the wallet cap, escrow ≥ the required escrow); an invalid bid is refunded in full. Null until revealed" }
         processed: { type: boolean }
@@ -190,6 +190,7 @@ components:
         pendingUnits: { type: string, description: 'units a processed bid is owed until delivered; "0" otherwise' }
         pendingRefund: { $ref: '#/components/schemas/Money', description: 'the refund a processed bid is owed until delivered (Stage 1 pendingRefund); "0" otherwise' }
         refundable: { $ref: '#/components/schemas/Money', description: 'the same refund as pendingRefund' }
+        nonRevealCharge: { $ref: '#/components/schemas/Money', description: 'the non-reveal charge the bid paid when it was processed (Stage 1 process_bid: a bid never revealed, on a settled raise; floor(deposit × the series'' nonRevealChargeBps / 10000), to the protocol fee collector); "0" for every other bid, before processing and on a failed raise. Kept after delivery' }
         refunded: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }], description: 'the refund delivered, as indexed (only the delivery event carries it): "0" while the bid is undelivered; null while the chain shows the bid delivered and the indexer has not projected the delivery yet (an indexer pass)' }
     SettlementStep:
       type: object
@@ -1090,8 +1091,8 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [bidder, pricePerUnit, quantity], properties: { bidder: { type: string }, pricePerUnit: { $ref: '#/components/schemas/Money' }, quantity: { type: string } } } } } }
-      description: "Checks a bid before it is built: the commit phase, the allowlist, one bid per wallet, Stage 1's validity rule (reserve, 1 ≤ quantity ≤ the wallet cap; a bid that breaks it can be committed but is invalid at reveal and refunded in full), the u64 range and the balance; returns the deposit a commit locks (Stage 1 requiredEscrow: price × quantity plus the auction fee on it)."
-      responses: { '200': { description: 'The issues (empty = ok), the deposit, the wallet cap in units, the fee and the phase ends', content: { application/json: { schema: { type: object } } } }, '409': { description: 'A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } } }
+      description: "Checks a bid before it is built: the commit phase, the allowlist, one bid per wallet, Stage 1's validity rule (reserve, 1 ≤ quantity ≤ the wallet cap; a bid that breaks it can be committed but is invalid at reveal and refunded in full), the u64 range and the balance; returns the deposit a commit locks (Stage 1 requiredEscrow: price × quantity plus the auction fee on it) and what the bid pays if it is never revealed and the raise settles: the series' non-reveal charge on that deposit (nonRevealChargeBps, nonRevealCharge = floor(deposit × nonRevealChargeBps / 10000), Stage 1 processBid; nothing if the raise fails)."
+      responses: { '200': { description: 'The issues (empty = ok), the deposit, the wallet cap in units, the fee, the non-reveal charge (rate and amount on this deposit) and the phase ends', content: { application/json: { schema: { type: object } } } }, '409': { description: 'A curve-mode series runs no sealed-bid raise (detail.stage1 NotSealedBid)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } } }
   /series/{seriesId}/bids/commitment:
     post:
       operationId: computeBidCommitment

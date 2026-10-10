@@ -5,7 +5,6 @@ import {
 } from '@merces/domain';
 import { U64_MAX, requiredEscrow, toPid } from '@merces/math';
 import { SimHarness, SimWallet, SimulatorChain, defaultTerms, type Personality } from '../src/index.ts';
-import { applyBidOutcome } from '../src/engine/settlement.ts';
 import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './helpers.ts';
 import { seedAuction, seedBid, seriesOf } from './kit.ts';
 
@@ -21,13 +20,16 @@ import { seedAuction, seedBid, seriesOf } from './kit.ts';
  *  - S2-PU: per-bid money movement (`UnitsAllocated`, `FeeTaken`, `TreasuryFunded` per processed winner);
  *  - S2-PR: push delivery (`deliverBid`);
  *  - S2-DA: a bidder removed from the allowlist stays valid and is delivered;
- *  - S2-NRC: the non-reveal charge hold (0 bps applies; a charge is never credited);
  *  - S2-RH: `registerHolder` and `HolderRegistered`.
  *
  * S3 cause codes:
  *  - S3-BR: `burnRetired` joins the permissionless group (its own cases are in claims.test.ts);
  *  - S3-FN: the final claim is `claimFinal` (was `claimPayout`, which no longer pays the final pool).
  *  - S3-CN: a curve's census `syncCurveUnits` joins the permissionless group (its own cases are in census.test.ts).
+ *
+ * S3 follow-up cause code:
+ *  - NRC: the non-reveal charge is modelled as Stage 1's code does (was S2-NRC, the owner hold: 0 bps applied and a
+ *    charge was refused): an unrevealed bid on a settled raise pays the series' rate to the fee collector at processBid.
  */
 
 interface Bid { w: SimWallet; price: bigint; qty: bigint; reveal?: boolean; deposit?: bigint }
@@ -451,35 +453,62 @@ describe('the mint gate, delivery and holders', () => {
     expect(await h.sim.getBid(seriesId, b1.address)).toMatchObject({ delivered: true });
   });
 
-  // cause S2-NRC (amendment M1): the charge is held; Stage 1's processBid gets 0 bps, and a charge is never credited
-  it('an unrevealed bid on a settled raise is refunded in full, whatever the series recorded; an injected charge is refused', async () => {
+  // cause NRC (was S2-NRC: the hold applied 0 bps, refunded b4 in full and refused an injected charge): the non-reveal
+  // charge is modelled as Stage 1's code does. Figures recomputed with Stage 1's own Simulator at the series' 100 bps:
+  // b4's charge 1% of 909 = 9.09 (refund 899.91), the fee collector 40 + 9.09 = 49.09
+  it('an unrevealed bid on a settled raise pays the series\' charge to the fee collector at processBid; the rest comes back at delivery', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    const bids = [...harnessBids(h).slice(0, 4), { w: h.backers[4]!, price: USDC(9), qty: 100n, reveal: false }];
+    const b4 = h.backers[4]!;
+    const bids = [...harnessBids(h).slice(0, 4), { w: b4, price: USDC(9), qty: 100n, reveal: false }];
     // 400 units, cap 25% = 100: the four revealed bids clear at 10 and take all 400
     const { seriesId } = await raise(h, bids, { nonRevealChargeBps: 100, unitsOffered: '400', walletCapBps: 2500, minimumRaise: USDC(3200).toString() });
     expect((await h.sim.getSeries(seriesId))!.terms.nonRevealChargeBps).toBe(100);
-    await h.settle(seriesId, 'deliver');
+    const processed = await h.settle(seriesId, 'process');
     expect((await h.sim.getSeries(seriesId))!.phase).toBe('Settled');
-    // cause S2-PR: the bid read drops the deprecated `refunded` (S2 WP7); the full refund shows in the balance
-    expect(await h.sim.getBid(seriesId, h.backers[4]!.address)).toMatchObject({ revealed: null, processed: true, delivered: true, pendingRefund: '0' });
-    expect(await balance(h, h.backers[4]!.address)).toBe(1_000_000_000_000n);
-    // the fee collector holds the auction fees only (4 × 1% of 10 × 100)
-    expect(await balance(h, h.sim.state.feeCollector)).toBe(USDC(40));
-    // Stage 1's simulator at the 100 bps the series recorded charges b4 1% of 909 (refund 899.91; fee collector 49.09):
-    // that charge, should Stage 1's processBid ever return it, is refused, value-free, and moves nothing
-    const s = seriesOf(h.sim, seriesId);
-    const b = { ...s.bids.get(h.backers[4]!.address)!, processed: false, delivered: false };
-    let caught: unknown;
-    try {
-      applyBidOutcome(h.sim.engine, s, b, { alloc: 0n, cost: 0n, fee: 0n, pendingRefund: USDC(899.91), charge: USDC(9.09) }, () => undefined);
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(ChainError);
-    expect((caught as ChainError).code).toBe('ChainSpecific');
-    expect(/\d/.test((caught as ChainError).message)).toBe(false);
-    expect(b.processed).toBe(false);
-    expect(await balance(h, h.sim.state.feeCollector)).toBe(USDC(40));
+    // Stage 1 process_bid: the charge leaves the escrow for the fee collector at processing (SIM:998, :1001)
+    const charged = processed.results.find((r) => r.events.some((e) => e.type === 'NonRevealCharged'))!;
+    expect(charged.events.map((e) => [e.type, e.payload])).toEqual([
+      ['NonRevealCharged', { seriesId, bidder: b4.address, charge: USDC(9.09).toString() }],
+      ['FeeTaken', { seriesId, kind: 'nonReveal', amount: USDC(9.09).toString(), payer: b4.address }],
+      ['RaiseMintFinalized', { seriesId, unitsSold: '400', proceeds: USDC(4000).toString() }],
+    ]);
+    expect(await balance(h, h.sim.state.feeCollector)).toBe(USDC(40) + USDC(9.09)); // 4 auction fees of 10, and the charge
+    // the escrow keeps the refunds until delivery: 202 + 101 + 0 + 0 for the winners and b4's 909 less the charge
+    expect((await h.sim.getAuction(seriesId))!.escrowTotal).toBe((USDC(202) + USDC(101) + USDC(899.91)).toString());
+    expect(await h.sim.getBid(seriesId, b4.address)).toMatchObject({ revealed: null, processed: true, delivered: false, pendingRefund: USDC(899.91).toString(), nonRevealCharge: USDC(9.09).toString() });
+    // a revealed bid is never charged
+    expect((await h.sim.listBids(seriesId)).filter((b) => b.bidder !== b4.address).map((b) => b.nonRevealCharge)).toEqual(['0', '0', '0', '0']);
+    const delivered = await h.settle(seriesId, 'deliver');
+    expect(delivered.results.flatMap((r) => r.events).find((e) => e.type === 'BidDelivered' && (e.payload as { bidder: string }).bidder === b4.address)!.payload).toEqual({ seriesId, bidder: b4.address, units: '0', refund: USDC(899.91).toString() });
+    expect(await h.sim.getBid(seriesId, b4.address)).toMatchObject({ processed: true, delivered: true, pendingRefund: '0', nonRevealCharge: USDC(9.09).toString() });
+    expect(await balance(h, b4.address)).toBe(1_000_000_000_000n - USDC(9.09));
+    expect(await balance(h, h.sim.state.feeCollector)).toBe(USDC(49.09));
+    expect((await h.sim.getAuction(seriesId))!.escrowTotal).toBe('0');
+  });
+
+  // cause NRC: Stage 1 charges nothing on a failed raise (REF auction.ts:142; Solana raise.rs:1014-1015; EVM
+  // MercesAuction.sol:317-318) and emits nothing at 0 bps (Solana raise.rs:1070)
+  it('a failed raise refunds an unrevealed bid in full, and a 0 bps series charges nothing and emits no charge', async () => {
+    const h = await SimHarness.create('solana', { genesis: GENESIS });
+    const b4 = h.backers[4]!;
+    // one revealed bid of 100 units at 12 against a 4,000 USDC minimum raise: MinRaise; b4 never reveals
+    const failed = await raise(h, [harnessBids(h)[0]!, { w: b4, price: USDC(9), qty: 100n, reveal: false }], { nonRevealChargeBps: 1000 });
+    const run = await h.settle(failed.seriesId, 'deliver');
+    expect((await h.sim.getSeries(failed.seriesId))!.phase).toBe('Failed');
+    const events = run.results.flatMap((r) => r.events);
+    expect(events.some((e) => e.type === 'NonRevealCharged' || e.type === 'FeeTaken')).toBe(false);
+    expect(await h.sim.getBid(failed.seriesId, b4.address)).toMatchObject({ revealed: null, processed: true, delivered: true, nonRevealCharge: '0' });
+    expect(await balance(h, b4.address)).toBe(1_000_000_000_000n);
+    expect(await balance(h, h.sim.state.feeCollector)).toBe(0n);
+    // a settled raise at 0 bps: Stage 1's charge is 0, so no NonRevealCharged (Solana's rule; the EVM adapter drops its 0)
+    const h0 = await SimHarness.create('solana', { genesis: GENESIS });
+    const zero = await raise(h0, [...harnessBids(h0).slice(0, 4), { w: h0.backers[4]!, price: USDC(9), qty: 100n, reveal: false }], { nonRevealChargeBps: 0, unitsOffered: '400', walletCapBps: 2500, minimumRaise: USDC(3200).toString() });
+    const settled = await h0.settle(zero.seriesId, 'deliver');
+    expect((await h0.sim.getSeries(zero.seriesId))!.phase).toBe('Settled');
+    expect(settled.results.flatMap((r) => r.events).filter((e) => e.type === 'NonRevealCharged' || (e.type === 'FeeTaken' && (e.payload as { kind: string }).kind === 'nonReveal'))).toEqual([]);
+    expect(await h0.sim.getBid(zero.seriesId, h0.backers[4]!.address)).toMatchObject({ delivered: true, nonRevealCharge: '0' });
+    expect(await balance(h0, h0.backers[4]!.address)).toBe(1_000_000_000_000n);
+    expect(await balance(h0, h0.sim.state.feeCollector)).toBe(USDC(40));
   });
 });
 

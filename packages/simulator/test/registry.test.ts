@@ -21,6 +21,9 @@ import { seriesOf } from './kit.ts';
  *  - S3-CT: a curve series takes Stage 1's curve terms (registry create_series, lib.rs:462-572): lockup, wallet cap and
  *    raise durations 0 (CurveTermsNotZero), a positive threshold (CurveThresholdZero), USDC (CurveQuoteMintMismatch);
  *    the EVM refuses curve mode first (CurveModeUnsupported, MercesRegistry.sol:481).
+ *
+ * S3 follow-up cause code:
+ *  - NRC: the non-reveal charge is modelled (was the S2 hold): it is bounded on a curve series too.
  */
 
 const HOUR = 3_600;
@@ -106,13 +109,15 @@ describe('createSeries on Stage 1 create_series rules (S2-CR)', () => {
       expect([e.code, e.detail]).toEqual(['InvalidTerms', { stage1: 'CurveTermsNotZero' }]);
       expect(e.message).toMatch(/must be 0 on a curve series$/);
     }
-    // the sealed bounds on them are not checked (Stage 1 bounds its defaults there), nor the held non-reveal charge
-    const charged = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, nonRevealChargeBps: 1001 }).terms });
-    expect(types(charged.events)).toEqual(['SeriesCreated', 'CurveActivated', 'RaiseOpened']);
+    // the sealed bounds on them are not checked (Stage 1 bounds its defaults there)
+    // cause NRC (was: the held non-reveal charge unchecked on a curve): the rate a curve records is bounded like the other
+    // bounded terms (Stage 1's registry records its protocol default there and bounds it, lib.rs:550 and :562)
+    const charged = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, nonRevealChargeBps: 1001 }).terms }));
+    expect([charged.code, charged.detail, charged.message]).toEqual(['InvalidTerms', { stage1: 'ParameterOutOfBounds' }, 'non-reveal charge must be between 0 and 1000 bps']);
     // the other bounds still hold on a curve series
     const e = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, auctionFeeBps: 1001 }).terms }));
     expect(e.detail).toEqual({ stage1: 'ParameterOutOfBounds' });
-    expect(await h.sim.listSeries()).toHaveLength(2);
+    expect(await h.sim.listSeries()).toHaveLength(1);
   });
 
   it('a curve series needs a threshold and USDC; the sealed-only rules do not apply (cause S3-CT)', async () => {

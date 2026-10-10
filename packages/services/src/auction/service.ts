@@ -105,7 +105,8 @@ export class AuctionService {
    * R18/R17 pre-checks against Stage 1's rules (S2): the commit phase, the allowlist, one bid per wallet, and the bid's
    * validity as Stage 1 fixes it at reveal (`isBidValid`: reserve, 1 ≤ quantity ≤ the auction's wallet cap, escrow ≥
    * `requiredEscrow`). A bid that breaks a validity rule can still be committed, but it is invalid at reveal and refunded
-   * in full. Returns the issues (empty = ok) and the deposit the commit will lock (`requiredEscrow`).
+   * in full. Returns the issues (empty = ok), the deposit the commit will lock (`requiredEscrow`) and what a bid that is
+   * never revealed pays if the raise settles: the series' non-reveal charge on that deposit (Stage 1 `processBid`).
    */
   async precheck(seriesId: string, session: Session, input: z.infer<typeof precheckSchema>): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
@@ -129,7 +130,12 @@ export class AuctionService {
     if (price > U64_MAX || qty > U64_MAX || deposit > U64_MAX) issues.push({ code: 'range', message: 'the price, the quantity and the deposit must each fit in 64 bits' });
     const balance = BigInt(await chain.getBalance(input.bidder, s.terms.stablecoin));
     if (balance < deposit) issues.push({ code: 'balance', message: `deposit ${deposit} exceeds balance ${balance}` });
-    return { ok: issues.length === 0, issues, deposit: deposit.toString(), walletCapUnits: cap.toString(), fee: (deposit - price * qty).toString(), commitEndsAt: auction?.commitEndsAt ?? null, revealEndsAt: auction?.revealEndsAt ?? null };
+    // a bid never revealed pays this when the raise settles (nothing if it fails): Stage 1's own processBid on the deposit
+    const unrevealed = processBid({ escrow: deposit, revealed: false, valid: false, price: 0n, quantity: 0n }, { failed: false, clearingPrice: 0n, R: 0n, qAt: 0n }, rules);
+    return {
+      ok: issues.length === 0, issues, deposit: deposit.toString(), walletCapUnits: cap.toString(), fee: (deposit - price * qty).toString(),
+      nonRevealChargeBps: rules.nonRevealChargeBps, nonRevealCharge: unrevealed.charge.toString(), commitEndsAt: auction?.commitEndsAt ?? null, revealEndsAt: auction?.revealEndsAt ?? null,
+    };
   }
 
   /** Build commitBid from a commitment the client computed (price, quantity and salt never reach the server). */

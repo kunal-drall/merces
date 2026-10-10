@@ -288,8 +288,9 @@ describe('projectDeadlines against Stage 1 countdown, deriveStatus and formalNot
 describe('Stage 1 auction family (SPEC v1.1 §5.1–§5.2; cause S2-G)', () => {
   const usdc = (n: number) => BigInt(n) * 1_000_000n;
   // the harness's default raise (`defaultTerms` and `runRaise` in packages/simulator/src/harness.ts): 500 units, reserve
-  // 8 USDC, minimum raise 4,000, wallet cap 20% (100 units), auction fee 1%, no non-reveal charge (S2 holds it at 0)
-  const rules: AuctionRules = { unitsOffered: 500n, reservePrice: usdc(8), minRaise: usdc(4_000), walletCapBps: 2000, auctionFeeBps: 100, nonRevealChargeBps: 0 };
+  // 8 USDC, minimum raise 4,000, wallet cap 20% (100 units), auction fee 1%, non-reveal charge 1% (the harness's own rate;
+  // cause NRC, was 0 under the S2 hold: a revealed bid, valid or not, never pays it)
+  const rules: AuctionRules = { unitsOffered: 500n, reservePrice: usdc(8), minRaise: usdc(4_000), walletCapBps: 2000, auctionFeeBps: 100, nonRevealChargeBps: 100 };
   const revealed = (price: bigint, quantity: bigint, revealIndex: number): RevealedBid => {
     const escrow = requiredEscrow(price, quantity, rules.auctionFeeBps);
     return { price, quantity, escrow, valid: isBidValid(price, quantity, escrow, rules), revealIndex };

@@ -15,6 +15,11 @@ export interface ServiceContext extends AppContext {
   reportVerifierUrl: string;
   /** domain shown in sign-in messages */
   signInDomain: string;
+  /**
+   * The owner's non-reveal charge for new series, in bps within Stage 1's bounds (`MERCES_NON_REVEAL_CHARGE_BPS`,
+   * `nonRevealChargeSetting`); null while unset, and then no sealed series is built. There is no built-in rate.
+   */
+  nonRevealChargeBps: number | null;
   /** wall-clock seconds; chain time is used for mechanism deadlines */
   wallClock(): number;
   /** id generator */

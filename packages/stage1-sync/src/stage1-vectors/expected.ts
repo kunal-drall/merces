@@ -7,7 +7,8 @@ import type { Applied } from './world.ts';
 /**
  * What each vector is expected to do on the merces backend after S2 (S1 plan §5.6; S2 plan §3, WP5), unchanged in S3:
  * the claim family runs directly since S3 WP2 (`claim_tail`, `claim_final`, `burn_retired`) and moves no status; 22
- * stays gated at #75 by its windows (S5). The reference backend (Stage 1's own simulator) must PASS every vector.
+ * stays gated at #75 by its windows (S5). Since the non-reveal charge is modelled (S3 follow-up NRC), 03 is PASS in full
+ * and no vector carries a divergence. The reference backend (Stage 1's own simulator) must PASS every vector.
  *
  * - PASS / PASS-WITH-WAIVERS: a target replays in full; waivers cover blocked or n/a steps only.
  * - PASS-WITH-DIVERGENCES: a target replays in full, and the only differences are the recorded entries of a row of the
@@ -82,36 +83,13 @@ export const TARGETS_S2 = ['02', '03', '15', '17'] as const;
 /** Every target vector: replayed in full on the merces backend. */
 export const TARGETS: readonly string[] = Object.freeze([...TARGETS_S1, ...TARGETS_S2]);
 
-/**
- * DIV-NRC-1 in vector 03 (S2 plan §3): b8 committed 10,100 USDC and never revealed; Stage 1 charges 1% (101 USDC) at
- * `process_bid b8` (#65), so the fee collector holds 101 USDC more, the auction escrow 101 USDC less until delivery, and
- * b8 gets 101 USDC less back (#75). Values from the vector (Stage 1) and the merces backend under the hold.
- */
-const DIV_NRC_1_03: Divergence[] = [
-  { id: 'DIV-NRC-1', step: 67, path: 'auction.escrowTotal', stage1: '55925700000', ours: '56026700000' },
-  { id: 'DIV-NRC-1', step: 67, path: 'auctionEscrow', stage1: '55925700000', ours: '56026700000' },
-  { id: 'DIV-NRC-1', step: 67, path: 'feeCollector', stage1: '428800000', ours: '327800000' },
-  { id: 'DIV-NRC-1', step: 77, path: 'balances.b8.stable', stage1: '29899000000', ours: '30000000000' },
-  { id: 'DIV-NRC-1', step: 77, path: 'feeCollector', stage1: '428800000', ours: '327800000' },
-];
-
-/** Lockstep compares every step of the settlement since S2: 03 parts right after `process_bid b8` (#65). */
-const DIV_NRC_1_03_LOCKSTEP: LockstepDivergence = {
-  id: 'DIV-NRC-1',
-  divergesAt: 65,
-  diffs: [
-    { path: 'S1.auction.escrowTotal', stage1: '55925700000', ours: '56026700000' },
-    { path: 'S1.auctionEscrow', stage1: '55925700000', ours: '56026700000' },
-    { path: 'S1.feeCollector', stage1: '428800000', ours: '327800000' },
-  ],
-};
-
 const S2_RAISE = ['S2 WP2', 'S2 WP4a', 'S2 WP4b'];
 
 export const EXPECTED: Readonly<Record<string, Expected>> = Object.freeze({
   '01': { status: 'PASS-WITH-WAIVERS', waivers: [{ step: 32, op: 'expect_revert transfer_units', id: 'NA-1' }, { step: 34, op: 'expect_revert retire_if_capped', id: 'BLK-1' }], needs: ['WP3', 'WP4', 'WP5', 'WP6'] },
   '02': { status: 'PASS', needs: S2_RAISE },
-  '03': { status: 'PASS-WITH-DIVERGENCES', divergences: DIV_NRC_1_03, lockstep: DIV_NRC_1_03_LOCKSTEP, needs: S2_RAISE },
+  // PASS in full since the non-reveal charge is modelled (S3 follow-up NRC; was PASS-WITH-DIVERGENCES on DIV-NRC-1)
+  '03': { status: 'PASS', needs: [...S2_RAISE, 'NRC'] },
   '04': { status: 'PASS', needs: ['WP3', 'WP5'] },
   '05': { status: 'PASS-WITH-WAIVERS', waivers: [{ step: 42, op: 'expect_revert retire_if_capped', id: 'BLK-1' }], needs: ['WP3', 'WP4', 'WP5', 'WP6', 'WP7'] },
   '06': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5', 'WP6'] },

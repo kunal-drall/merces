@@ -17,6 +17,7 @@ const CHAIN_NOTICES: Record<string, string> = {
   SettlementRejected: 'auction.settlement-rejected',
   RaiseMintFinalized: 'auction.mint-finalized',
   BidDelivered: 'bid.delivered',
+  NonRevealCharged: 'bid.non-reveal-charged',
   StatusChanged: 'series.StatusChanged',
   FormalNoticeDue: 'series.FormalNoticeDue',
   ReleasesPaused: 'series.ReleasesPaused',
@@ -40,13 +41,13 @@ const CURVE_NOTICES: Record<string, string | null> = {
 
 /**
  * Fields a notice adds beside the event payload, for routing and rendering:
- * - `bid.delivered` goes to the bidder's own account: `wallet` is the event's `bidder`;
+ * - `bid.delivered` and `bid.non-reveal-charged` go to the bidder's own account: `wallet` is the event's `bidder`;
  * - `auction.mint-finalized` names the raise's outcome: a settled raise sells at least one unit and a failed one
  *   finalizes its mint with (0, 0) (S2 D7), so `unitsSold` tells them apart.
  */
 function routing(e: DomainEvent): Record<string, unknown> {
   const p = e.payload as Record<string, unknown>;
-  if (e.type === 'BidDelivered' && typeof p.bidder === 'string') return { wallet: p.bidder };
+  if ((e.type === 'BidDelivered' || e.type === 'NonRevealCharged') && typeof p.bidder === 'string') return { wallet: p.bidder };
   if (e.type === 'RaiseMintFinalized') return { outcome: BigInt(String(p.unitsSold ?? '0')) > 0n ? 'settled' : 'failed' };
   return {};
 }

@@ -15,6 +15,8 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - S2-MS: Stage 1's multi-step settlement, driven by the keepers' `advanceSettlements` (was the one-step
  *    `settleDue`);
  *  - S2-PR: refunds and units are pushed by `deliverBid` (the keepers deliver every bid; the pull refund is retired).
+ * S3 follow-up cause code:
+ *  - NRC: the precheck names the series' non-reveal charge and what it takes from this deposit.
  */
 const HOUR = 3_600;
 const phases = { commitDurationSeconds: HOUR, revealDurationSeconds: HOUR }; // cause S2-AD
@@ -47,6 +49,9 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
     expect(bad.json().issues.map((i: { code: string }) => i.code).sort()).toEqual(['reserve', 'wallet-cap']);
     const ok = await rig.post(`/series/${seriesId}/bids/precheck`, { bidder: backer.address, pricePerUnit: USDC(10).toString(), quantity: '100' }, tok);
     expect(ok.json()).toMatchObject({ ok: true, deposit: USDC(1010).toString(), walletCapUnits: '100', fee: USDC(10).toString() });
+    // cause NRC: what the bid pays if it is never revealed and the raise settles: the series' 1% on the deposit (Stage 1
+    // processBid: floor(1,010 USDC × 100 / 10,000) = 10.10 USDC)
+    expect(ok.json()).toMatchObject({ nonRevealChargeBps: 100, nonRevealCharge: USDC(10.1).toString() });
     // the client computes the commitment and keeps an encrypted backup
     const salt = '0x' + 'ee'.repeat(32);
     const commitment = bidCommitment({ seriesId, bidder: backer.address, pricePerUnit: USDC(10), quantity: 100n, salt });

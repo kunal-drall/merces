@@ -6,8 +6,12 @@ import { makeRig } from './helpers.ts';
 
 /*
  * S2 cause codes:
- *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults for a new series);
- *  - S2-NRC: the non-reveal charge hold (new series record 0 bps).
+ *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults for a new series).
+ *
+ * S3 follow-up cause code:
+ *  - NRC: the non-reveal charge is the owner's setting (was S2-NRC, the hold: new series recorded 0 bps). A new series
+ *    records the operator's rate (the rig sets 100 bps); while it is unset, a sealed raise is refused (409, naming the
+ *    setting) and issuers cannot choose it.
  */
 
 /** Sign in a simulator wallet through the real nonce/verify flow. */
@@ -159,14 +163,20 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     expect(signedHash).toMatch(/^0x[0-9a-f]{64}$/);
     const doc = await rig.get(`/drafts/${draft.draftId}/contract/document`, issuerTok);
     expect(doc.json().body).toContain('SIGNATURE AUDIT TRAIL');
+    // cause NRC: with the owner's setting unset, no sealed series is built: 409, naming the setting, never a value
+    rig.ctx.nonRevealChargeBps = null;
+    const unset = await rig.post(`/drafts/${draft.draftId}/build-create-series`, {}, issuerTok);
+    expect([unset.statusCode, unset.json().detail]).toEqual([409, { setting: 'MERCES_NON_REVEAL_CHARGE_BPS' }]);
+    expect(unset.json().message).toMatch(/^the non-reveal charge for new series is not set: .*MERCES_NON_REVEAL_CHARGE_BPS \(whole bps, 0 to 1000; the owner's decision\)$/);
+    rig.ctx.nonRevealChargeBps = 100;
     const built = await rig.post(`/drafts/${draft.draftId}/build-create-series`, {}, issuerTok);
     expect(built.statusCode).toBe(200);
     const tx = built.json().tx as UnsignedTx;
     expect(tx.command.kind).toBe('createSeries');
     expect((tx.command as { terms: { contractHash: string; termsCommitment: string } }).terms.contractHash).toBe(signedHash);
-    // cause S2-AD / S2-NRC: the raise's own terms are filled in: Stage 1's 7-day commit and 2-day reveal, and 0 bps while
-    // the non-reveal charge is held (the series keeps 0 after the hold is lifted)
-    expect((tx.command as { terms: Record<string, unknown> }).terms).toMatchObject({ commitDurationSeconds: 604_800, revealDurationSeconds: 172_800, nonRevealChargeBps: 0 });
+    // cause S2-AD / NRC: the raise's own terms are filled in: Stage 1's 7-day commit and 2-day reveal, and the owner's
+    // non-reveal charge (the rig's 100 bps; was 0 under the S2 hold)
+    expect((tx.command as { terms: Record<string, unknown> }).terms).toMatchObject({ commitDurationSeconds: 604_800, revealDurationSeconds: 172_800, nonRevealChargeBps: 100 });
     // the issuer must be registered on chain first (registerIssuer), then createSeries
     const reg = await rig.sol.sim.build({ kind: 'registerIssuer' }, issuer.address);
     expect((await rig.post('/tx/send', await issuer.sign(reg), issuerTok)).statusCode).toBe(200);

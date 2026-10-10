@@ -7,10 +7,11 @@ import type { ServiceContext } from '../context.ts';
 
 /**
  * E11 — fees and accounting (R33).
- * Backers pay a 1% auction fee on cleared bids and a 5% fee on every payout; issuers pay nothing; failed auctions
- * charge nothing (C5). The indexer projects every FeeTaken into `fees_ledger` and every money movement into
- * `money_events`; this service reads those tables (never the chain) for the ledger, the per-series statements and
- * the CSV export, and reads the chain only to reconcile the read model against onchain state.
+ * Backers pay a 1% auction fee on cleared bids and a 5% fee on every payout, and a bidder that never reveals pays the
+ * series' non-reveal charge on its deposit when the raise settles (Stage 1 `process_bid`; kind `nonReveal`); issuers pay
+ * nothing; failed auctions charge nothing (C5). The indexer projects every FeeTaken into `fees_ledger` and every money
+ * movement into `money_events`; this service reads those tables (never the chain) for the ledger, the per-series
+ * statements and the CSV export, and reads the chain only to reconcile the read model against onchain state.
  * Money is a decimal string in base units end to end: pg returns numerics as strings, sums are done in SQL or with
  * BigInt, and nothing here is ever Number()ed except timestamps, counts and basis points. Nothing income-bearing
  * exists in these tables; the statement and the export carry amounts, kinds, wallets and period ids only.
@@ -39,8 +40,11 @@ export type ExportQuery = z.infer<typeof exportQuerySchema>;
 
 export const runsQuerySchema = z.object({ limit: limitParam(20, 100) });
 
-/** `auction` (sealed raise), `payout` (each payment into the vault), `curveTrading` (Merces' share of a curve's trading fees) */
-export type FeeKind = 'auction' | 'payout' | 'curveTrading';
+/**
+ * `auction` (sealed raise), `payout` (each payment into the vault), `curveTrading` (Merces' share of a curve's trading
+ * fees), `nonReveal` (the non-reveal charge kept from an unrevealed bid when a sealed raise settles, Stage 1 `process_bid`)
+ */
+export type FeeKind = 'auction' | 'payout' | 'curveTrading' | 'nonReveal';
 
 export interface FeeRow {
   chain: string;
@@ -61,6 +65,7 @@ export interface FeeSeriesTotal {
   auction: string;
   payout: string;
   curveTrading: string;
+  nonReveal: string;
   total: string;
   count: number;
 }
@@ -109,6 +114,8 @@ interface SeriesRow {
   status: string;
   auction_fee_bps: number;
   payout_fee_bps: number;
+  /** the series' non-reveal charge (migration 018); null on a row indexed before S2 */
+  non_reveal_charge_bps: number | null;
   cap_multiple_wad: string;
   issue_price: string | null;
   units_sold: string;
@@ -169,16 +176,17 @@ export class AccountingService {
       [...args, q.limit],
     );
     const byKind = await this.ctx.pool.query<{ kind: FeeKind; total: string; n: string }>(`select f.kind, sum(f.amount) as total, count(*) as n from fees_ledger f ${where} group by f.kind`, args);
-    const bySeries = await this.ctx.pool.query<{ series_id: string; chain: string; stablecoin: string | null; auction: string; payout: string; curve_trading: string; total: string; n: string }>(
+    const bySeries = await this.ctx.pool.query<{ series_id: string; chain: string; stablecoin: string | null; auction: string; payout: string; curve_trading: string; non_reveal: string; total: string; n: string }>(
       `select f.series_id, f.chain, s.stablecoin,
               sum(case when f.kind = 'auction' then f.amount else 0 end) as auction,
               sum(case when f.kind = 'payout' then f.amount else 0 end) as payout,
               sum(case when f.kind = 'curveTrading' then f.amount else 0 end) as curve_trading,
+              sum(case when f.kind = 'nonReveal' then f.amount else 0 end) as non_reveal,
               sum(f.amount) as total, count(*) as n
        from fees_ledger f left join series s on s.series_id = f.series_id ${where} group by f.series_id, f.chain, s.stablecoin order by f.chain, f.series_id`,
       args,
     );
-    const kinds: Record<FeeKind, string> = { auction: '0', payout: '0', curveTrading: '0' };
+    const kinds: Record<FeeKind, string> = { auction: '0', payout: '0', curveTrading: '0', nonReveal: '0' };
     let total = 0n;
     let count = 0;
     for (const k of byKind.rows) {
@@ -191,7 +199,7 @@ export class AccountingService {
       rows: rows.rows.map((r) => ({ chain: r.chain, seq: Number(r.seq), seriesId: r.series_id, stablecoin: r.stablecoin, kind: r.kind, payer: r.payer, amount: r.amount, blockTime: Number(r.block_time), txId: r.tx_id })),
       rowCount: count,
       truncated: rows.rows.length < count,
-      totals: { total: total.toString(), count, byKind: kinds, bySeries: bySeries.rows.map((r) => ({ seriesId: r.series_id, chain: r.chain, stablecoin: r.stablecoin, auction: r.auction, payout: r.payout, curveTrading: r.curve_trading, total: r.total, count: Number(r.n) })) },
+      totals: { total: total.toString(), count, byKind: kinds, bySeries: bySeries.rows.map((r) => ({ seriesId: r.series_id, chain: r.chain, stablecoin: r.stablecoin, auction: r.auction, payout: r.payout, curveTrading: r.curve_trading, nonReveal: r.non_reveal, total: r.total, count: Number(r.n) })) },
     };
   }
 
@@ -229,7 +237,7 @@ export class AccountingService {
       [seriesId],
     );
 
-    const feeByKind: Record<FeeKind, string> = { auction: '0', payout: '0', curveTrading: '0' };
+    const feeByKind: Record<FeeKind, string> = { auction: '0', payout: '0', curveTrading: '0', nonReveal: '0' };
     for (const f of fees.rows) feeByKind[f.kind] = f.total;
     const moneyTotals: Record<string, { count: number; total: string }> = {};
     for (const m of money.rows) moneyTotals[m.kind] = { count: Number(m.n), total: m.total };
@@ -272,7 +280,7 @@ export class AccountingService {
       phase: s.phase,
       status: s.status,
       settledAt: ts(s.settled_at),
-      feeRates: { auctionFeeBps: s.auction_fee_bps, payoutFeeBps: s.payout_fee_bps },
+      feeRates: { auctionFeeBps: s.auction_fee_bps, payoutFeeBps: s.payout_fee_bps, nonRevealChargeBps: s.non_reveal_charge_bps },
       cap: {
         capMultipleWad: s.cap_multiple_wad,
         issuePrice: s.issue_price,
@@ -288,7 +296,10 @@ export class AccountingService {
         progressBps: capPerUnit !== null && capPerUnit > 0n ? Number((paidPerUnitWad * unitScale * 10_000n) / (capPerUnit * WAD)) : null,
       },
       payments: { grossPaidTotal: regular.gross.toString(), netDistributed: regular.net.toString(), feesTaken: regular.fee.toString(), count: regular.count },
-      fees: { auction: feeByKind.auction, payout: feeByKind.payout, curveTrading: feeByKind.curveTrading, total: (BigInt(feeByKind.auction) + BigInt(feeByKind.payout) + BigInt(feeByKind.curveTrading)).toString(), vaultFeesTotal: s.fees_total },
+      fees: {
+        auction: feeByKind.auction, payout: feeByKind.payout, curveTrading: feeByKind.curveTrading, nonReveal: feeByKind.nonReveal,
+        total: Object.values(feeByKind).reduce((t, x) => t + BigInt(x), 0n).toString(), vaultFeesTotal: s.fees_total,
+      },
       payouts: {
         claimed: claimed.toString(), unclaimed: (distributable > claimed ? distributable - claimed : 0n).toString(), count: claimCount,
         byPool: { payout: claimedByPool.payout.toString(), tail: claimedByPool.tail.toString(), final: claimedByPool.final.toString() },

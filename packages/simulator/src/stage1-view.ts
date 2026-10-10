@@ -30,7 +30,7 @@ export function auctionEscrow(s: SimSeries): bigint {
 
 /**
  * A bidder's refund still held by the auction escrow (Stage 1's `pendingRefund` of a processed, undelivered bid),
- * else 0. The engine's own figure: the non-reveal charge hold already applied when the bid was processed.
+ * else 0. The engine's own figure: the non-reveal charge already taken when an unrevealed bid was processed.
  */
 export function pendingRefundOf(s: SimSeries, wallet: string): bigint {
   const b = s.bids.get(wallet);

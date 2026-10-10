@@ -97,6 +97,7 @@ export function renderParity(reports: readonly RunReport[], source: ParitySource
     "Stage 1 behaviour the merces backend knowingly does not mirror (the register, `stage1-vectors/divergences.ts`). Each is recorded per `expect` step and field with Stage 1's value and ours (`expected.ts`): a difference equal to a recorded entry is accepted and the run is PASS-WITH-DIVERGENCES; another value at that field fails, and an entry whose difference no longer occurs fails as stale. In lockstep the backends must part right after the recorded step on exactly the recorded fields; the replay stops there.",
     '',
   );
+  if (!DIVERGENCES.length) lines.push('None: the register is empty. Its only row, DIV-NRC-1 (the non-reveal charge, held in S2), went when the charge was modelled as Stage 1 models it (S3 follow-up NRC); 03 replays in full.', '');
   for (const row of DIVERGENCES) {
     lines.push(`### ${row.id}: ${row.title}`, '', `- What: ${row.what}`, `- Why: ${row.why}`, `- Seen: ${row.seen}`, `- Until: ${row.milestone}`, `- Lifting it: ${row.lift.join(' ')}`, '', '| Vector | Step | Field | Stage 1 | Ours |', '| --- | --- | --- | --- | --- |');
     for (const [id, e] of Object.entries(EXPECTED).sort(([a], [b]) => (a < b ? -1 : 1))) {

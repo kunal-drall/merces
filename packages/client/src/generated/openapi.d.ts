@@ -1262,7 +1262,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Checks a bid before it is built: the commit phase, the allowlist, one bid per wallet, Stage 1's validity rule (reserve, 1 ≤ quantity ≤ the wallet cap; a bid that breaks it can be committed but is invalid at reveal and refunded in full), the u64 range and the balance; returns the deposit a commit locks (Stage 1 requiredEscrow: price × quantity plus the auction fee on it). */
+        /** @description Checks a bid before it is built: the commit phase, the allowlist, one bid per wallet, Stage 1's validity rule (reserve, 1 ≤ quantity ≤ the wallet cap; a bid that breaks it can be committed but is invalid at reveal and refunded in full), the u64 range and the balance; returns the deposit a commit locks (Stage 1 requiredEscrow: price × quantity plus the auction fee on it) and what the bid pays if it is never revealed and the raise settles: the series' non-reveal charge on that deposit (nonRevealChargeBps, nonRevealCharge = floor(deposit × nonRevealChargeBps / 10000), Stage 1 processBid; nothing if the raise fails). */
         post: operations["precheckBid"];
         delete?: never;
         options?: never;
@@ -2743,7 +2743,7 @@ export type components = {
             commitDurationSeconds?: number | null;
             /** @description the sealed raise's reveal phase (Stage 1 reveal_duration; 1 hour–7 days), after the commit end. 0 on a curve-mode series. Null on a row indexed before S2 */
             revealDurationSeconds?: number | null;
-            /** @description the non-reveal charge the series recorded at creation (Stage 1 create_series). Reserved: the charge is an owner hold and is not applied (an unrevealed bid is refunded in full); series created during the hold record 0. Null on a row indexed before S2 */
+            /** @description the series' own non-reveal charge, frozen at creation (Stage 1 non_reveal_charge_bps; 0–1000 bps): when the raise settles, a bid committed and never revealed pays floor(deposit × nonRevealChargeBps / 10000) to the protocol fee collector and is refunded the rest; a failed raise and a revealed bid are never charged. New series take the operator's setting (the owner's decision); issuers cannot choose it. Series created under the S2 hold record 0. Null on a row indexed before S2 */
             nonRevealChargeBps?: number | null;
         };
         /** @description A sealed raise's settlement as indexed (public onchain state): the current round and how it ended, and what finalizeSettlement wrote. A failed raise keeps its price and its would-be units and proceeds here, with the reason; the series' issuePrice stays null. */
@@ -2849,7 +2849,7 @@ export type components = {
             /** @description the escrow the commit locked */
             deposit?: components["schemas"]["Money"];
             /**
-             * @description where revealed, valid, processed, delivered, allocatedUnits, pendingUnits, pendingRefund and refundable come from: the chain's read of the bid, or the indexed row (when the chain has no read of it; it may lag the chain by an indexer pass)
+             * @description where revealed, valid, processed, delivered, allocatedUnits, pendingUnits, pendingRefund, refundable and nonRevealCharge come from: the chain's read of the bid, or the indexed row (when the chain has no read of it; it may lag the chain by an indexer pass)
              * @enum {string}
              */
             source?: "chain" | "index";
@@ -2870,6 +2870,8 @@ export type components = {
             pendingRefund?: components["schemas"]["Money"];
             /** @description the same refund as pendingRefund */
             refundable?: components["schemas"]["Money"];
+            /** @description the non-reveal charge the bid paid when it was processed (Stage 1 process_bid: a bid never revealed, on a settled raise; floor(deposit × the series' nonRevealChargeBps / 10000), to the protocol fee collector); "0" for every other bid, before processing and on a failed raise. Kept after delivery */
+            nonRevealCharge?: components["schemas"]["Money"];
             /** @description the refund delivered, as indexed (only the delivery event carries it): "0" while the bid is undelivered; null while the chain shows the bid delivered and the indexer has not projected the delivery yet (an indexer pass) */
             refunded?: components["schemas"]["Money"] | null;
         };
@@ -3123,11 +3125,11 @@ export type components = {
             /** @enum {string|null} */
             stablecoin: "USDC" | "USDG" | null;
             /**
-             * @description 1% auction fee on cleared bids, 5% payout fee at pay-in (C5), or Merces' (the partner's) share of a curve's 1% trading fee, collected from the pool by collectCurveProceeds
+             * @description 1% auction fee on cleared bids, 5% payout fee at pay-in (C5), Merces' (the partner's) share of a curve's 1% trading fee, collected from the pool by collectCurveProceeds, or the non-reveal charge kept from a bid never revealed when its raise settled (the series' nonRevealChargeBps on the deposit, Stage 1 process_bid)
              * @enum {string}
              */
-            kind: "auction" | "payout" | "curveTrading";
-            /** @description the bidder (auction), the issuer's wallet the fee was taken from at pay-in (payout), or the curve's pool (curveTrading) */
+            kind: "auction" | "payout" | "curveTrading" | "nonReveal";
+            /** @description the bidder (auction, nonReveal), the issuer's wallet the fee was taken from at pay-in (payout), or the curve's pool (curveTrading) */
             payer: string;
             amount: components["schemas"]["Money"];
             /** @description unix seconds */
@@ -3141,6 +3143,7 @@ export type components = {
             auction: components["schemas"]["Money"];
             payout: components["schemas"]["Money"];
             curveTrading: components["schemas"]["Money"];
+            nonReveal: components["schemas"]["Money"];
             total: components["schemas"]["Money"];
             count: number;
         };
@@ -3163,6 +3166,7 @@ export type components = {
                     auction: components["schemas"]["Money"];
                     payout: components["schemas"]["Money"];
                     curveTrading: components["schemas"]["Money"];
+                    nonReveal: components["schemas"]["Money"];
                 };
                 bySeries: components["schemas"]["AccountingFeeSeriesTotal"][];
             };
@@ -3193,6 +3197,8 @@ export type components = {
             feeRates: {
                 auctionFeeBps?: number;
                 payoutFeeBps?: number;
+                /** @description the series' non-reveal charge (null on a row indexed before S2) */
+                nonRevealChargeBps?: number | null;
             };
             /** @description C6: cap per whole unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per whole unit = Stage 1's C_remaining at the series' unit scale = max(capPerUnit − ceil(paidPerUnitWad / (1e18 / unitScale)), 0). Unit counts are per accounting unit (base lamports on a curve series), per-unit figures per whole unit */
             cap: {
@@ -3236,6 +3242,8 @@ export type components = {
                 auction?: components["schemas"]["Money"];
                 payout?: components["schemas"]["Money"];
                 curveTrading?: components["schemas"]["Money"];
+                /** @description non-reveal charges kept from bids never revealed when the raise settled */
+                nonReveal?: components["schemas"]["Money"];
                 total?: components["schemas"]["Money"];
                 /** @description payout fees as accumulated on the series row (should equal fees.payout) */
                 vaultFeesTotal?: components["schemas"]["Money"];
@@ -6255,7 +6263,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The issues (empty = ok), the deposit, the wallet cap in units, the fee and the phase ends */
+            /** @description The issues (empty = ok), the deposit, the wallet cap in units, the fee, the non-reveal charge (rate and amount on this deposit) and the phase ends */
             200: {
                 headers: {
                     [name: string]: unknown;

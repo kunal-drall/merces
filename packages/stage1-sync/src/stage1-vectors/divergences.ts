@@ -27,23 +27,11 @@ export interface DivergenceRow {
   lift: string[];
 }
 
-export const DIVERGENCES: readonly DivergenceRow[] = Object.freeze([
-  {
-    id: 'DIV-NRC-1',
-    title: 'the non-reveal charge (owner hold)',
-    what:
-      "Stage 1 keeps floor(escrow × nonRevealChargeBps / 10000) of a bid committed and never revealed when the raise settles, and pays it to the fee collector at `process_bid` (SPEC §5.2; REF `processBid`, the unrevealed branch; SIM `processBid`); the bid's refund is the escrow less the charge. On a failed raise nothing is charged. The merces backend records the series' rate but applies 0 bps (`appliedNonRevealChargeBps`), so the bid is refunded in full and the fee collector receives nothing for it.",
-    why:
-      "owner hold (S2 amendment M1): the owner asked to be told what Stage 1 does before the charge is modelled. `NON_REVEAL_CHARGE_HELD` (packages/domain/src/params.ts) is the one switch; the engine refuses any non-zero charge while it is on (ASSUMPTIONS.md A-AUC-11).",
-    milestone: 'after the owner decides',
-    seen:
-      "only vector 03 (S1/b8, escrow 10,100 USDC, charged 101 USDC at 1%): the expects at #67 (feeCollector, auctionEscrow, auction.escrowTotal) and #77 (balances.b8.stable, feeCollector); lockstep parts at #65 (`process_bid b8`). The other unrevealed bids (02 S2/b1, 15 S1/b3) are on failed raises, where Stage 1 charges nothing.",
-    lift: [
-      'set `NON_REVEAL_CHARGE_HELD` to false and add what the charge needs (the `NonRevealCharged` event, a `nonReveal` fee kind, the bids\' charge column, accounting and API fields; STAGE1_INTEGRATION.md divergence register);',
-      'delete the DIV-NRC-1 entries and the lockstep expectation of vector 03 in `expected.ts` and set 03 to PASS (until then the runner fails 03 on five stale entries);',
-      'regenerate VECTOR_PARITY.md and update A-AUC-11.',
-    ],
-  },
-]);
+/**
+ * Empty since the non-reveal charge is modelled as Stage 1 models it (S3 follow-up NRC): DIV-NRC-1 (vector 03, the five
+ * fields of b8's 1% charge and its lockstep parting at #65) was the only row, and 03 is PASS in full. The mechanism
+ * stays (tests keep it working on a test-only row), so a future divergence is recorded the same way.
+ */
+export const DIVERGENCES: readonly DivergenceRow[] = Object.freeze([]);
 
 export const DIVERGENCE_BY_ID: ReadonlyMap<string, DivergenceRow> = new Map(DIVERGENCES.map((d) => [d.id, d]));

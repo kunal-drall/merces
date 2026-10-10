@@ -28,7 +28,7 @@ export interface StepIssue {
   shimId?: string;
   /** set when the step is waived by the vector's expectation */
   waived?: boolean;
-  /** a `divergence` issue: its register row (`DIV-NRC-1`) */
+  /** a `divergence` issue: its register row (`divergences.ts`; a test-only id in the tests) */
   divergence?: string;
 }
 

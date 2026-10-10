@@ -37,13 +37,14 @@ import {
   runStage1Vectors,
   shutdown,
   waiverFor,
+  type Divergence,
   type LoadedVector,
+  type LockstepDivergence,
   type RunReport,
   type Shim,
   type SyntheticShims,
   type World,
 } from '../src/stage1-vectors/index.ts';
-import { NON_REVEAL_CHARGE_HELD } from '@merces/domain';
 import { STAGE1_OP_MAP } from '../src/steps/vectors.ts';
 
 const VECTORS = fileURLToPath(new URL('../../../stage1/packages/vectors', import.meta.url));
@@ -67,8 +68,43 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *  - S3-SH: `claim_tail`, `claim_final` and `burn_retired` run directly as `claimTail`, `claimFinal` and `burnRetired`
  *    (shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired); no row of the shim table is runner-atomic any more, so the
  *    runner-atomic mechanism is tested on a synthetic row; 22 stays gated at #75 by its windows (milestone S5).
+ *
+ * S3 follow-up cause code:
+ *  - NRC: the non-reveal charge is modelled as Stage 1 models it: 03 is PASS in full on both personalities and in
+ *    lockstep, and the divergence register is empty (was: DIV-NRC-1, the S2 hold, with five fields of 03 and its lockstep
+ *    parting at #65). The divergence mechanism stays; it is tested on a test-only divergence (`TEST_03`).
  */
 afterAll(shutdown);
+
+/**
+ * A test-only divergence, since the register is empty: vector 03 replayed with its S1 created at 0 bps on the merces
+ * side only (`ZERO_CHARGE`, a synthetic create_series), so b8, which never reveals, is refunded in full and five
+ * `expect` fields differ from Stage 1's at the vector's 1%. The values are Stage 1's own arithmetic: its simulator at
+ * 0 bps reaches exactly them (tested below). They are the former DIV-NRC-1 entries.
+ */
+const TEST_ID = 'DIV-TEST-1';
+const TEST_03: Divergence[] = [
+  { id: TEST_ID, step: 67, path: 'auction.escrowTotal', stage1: '55925700000', ours: '56026700000' },
+  { id: TEST_ID, step: 67, path: 'auctionEscrow', stage1: '55925700000', ours: '56026700000' },
+  { id: TEST_ID, step: 67, path: 'feeCollector', stage1: '428800000', ours: '327800000' },
+  { id: TEST_ID, step: 77, path: 'balances.b8.stable', stage1: '29899000000', ours: '30000000000' },
+  { id: TEST_ID, step: 77, path: 'feeCollector', stage1: '428800000', ours: '327800000' },
+];
+/** Where lockstep parts with `ZERO_CHARGE`: right after `process_bid b8` (#65). */
+const TEST_03_LOCKSTEP: LockstepDivergence = {
+  id: TEST_ID,
+  divergesAt: 65,
+  diffs: [
+    { path: 'S1.auction.escrowTotal', stage1: '55925700000', ours: '56026700000' },
+    { path: 'S1.auctionEscrow', stage1: '55925700000', ours: '56026700000' },
+    { path: 'S1.feeCollector', stage1: '428800000', ours: '327800000' },
+  ],
+};
+/** The merces backend creates every series at 0 bps (the vector's own create_series otherwise). */
+const ZERO_CHARGE: SyntheticShims = {
+  rows: [],
+  translators: { create_series: (ctx, c) => TRANSLATORS.create_series!(ctx, { ...c, terms: { ...c.terms, nonRevealChargeBps: '0' } }) },
+};
 
 describe('stage1 vector runner: reference backend', () => {
   let report: RunReport;
@@ -245,9 +281,10 @@ describe('stage1 vector runner: compare', () => {
 });
 
 describe('stage1 vector runner: expectations and the op map', () => {
-  // cause S2-NY, S2-MS: the targets are S1's and S2's; 03 carries the DIV-NRC-1 entries; the vectors that need a later
-  // milestone are prefix-gated or NOT-YET (was: S1 targets PASS, every other vector NOT-IN-S1)
-  it('targets are never NOT-YET; waivers only on blocked or n/a rows; divergences only in 03; prefix gates carry until; the rest are NOT-YET with a milestone', () => {
+  // cause S2-NY, S2-MS: the targets are S1's and S2's; the vectors that need a later milestone are prefix-gated or
+  // NOT-YET (was: S1 targets PASS, every other vector NOT-IN-S1). Cause NRC: no vector carries a divergence (was: 03's
+  // five DIV-NRC-1 entries and its lockstep parting)
+  it('targets are never NOT-YET; waivers only on blocked or n/a rows; no divergence anywhere; prefix gates carry until; the rest are NOT-YET with a milestone', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(listVectorFiles(VECTORS).map((f) => f.split('/').at(-1)!.slice(0, 2)));
     expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2]);
     expect([...TARGETS_S2]).toEqual(['02', '03', '15', '17']);
@@ -271,32 +308,22 @@ describe('stage1 vector runner: expectations and the op map', () => {
         // the step after the gate is the one `next` names
         expect(e.next!, id).toContain(`#${e.until! + 1} \`${opLabel(v.steps[e.until! + 1]!)}\``);
       } else expect(e.status === 'NOT-YET' && !!e.milestone, id).toBe(true);
-      // divergences only in 03: the five DIV-NRC-1 fields, each at an expect step of the vector, plus its lockstep parting
-      if (id !== '03') expect([e.divergences, e.lockstep], id).toEqual([undefined, undefined]);
-      else {
-        expect(e.status).toBe('PASS-WITH-DIVERGENCES');
-        expect(e.divergences!.map((d) => `${d.id} #${d.step} ${d.path}`)).toEqual([
-          'DIV-NRC-1 #67 auction.escrowTotal',
-          'DIV-NRC-1 #67 auctionEscrow',
-          'DIV-NRC-1 #67 feeCollector',
-          'DIV-NRC-1 #77 balances.b8.stable',
-          'DIV-NRC-1 #77 feeCollector',
-        ]);
-        for (const d of e.divergences!) {
-          const step = v.steps[d.step] as unknown as Record<string, unknown>;
-          expect(step.op).toBe('expect');
-          // the recorded Stage 1 value is the vector's own
-          expect(d.path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], step), d.path).toBe(d.stage1);
-        }
-        expect(e.lockstep).toMatchObject({ id: 'DIV-NRC-1', divergesAt: 65 });
-        expect(opLabel(v.steps[65]!)).toBe('process_bid');
-        expect((v.steps[65] as unknown as { bidder: string }).bidder).toBe('b8');
-      }
+      // no divergence anywhere, and no PASS-WITH-DIVERGENCES status
+      expect([e.divergences, e.lockstep], id).toEqual([undefined, undefined]);
+      expect(e.status, id).not.toBe('PASS-WITH-DIVERGENCES');
     }
-    // every row an expectation names is in the register, and the hold that DIV-NRC-1 records is still on
-    for (const e of Object.values(EXPECTED)) for (const d of [...(e.divergences ?? []), ...(e.lockstep ? [e.lockstep] : [])]) expect(DIVERGENCE_BY_ID.has(d.id), d.id).toBe(true);
-    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-NRC-1']);
-    expect(NON_REVEAL_CHARGE_HELD).toBe(true);
+    // the register is empty: DIV-NRC-1 went with the non-reveal charge modelled, and 03 is PASS
+    expect(DIVERGENCES).toEqual([]);
+    expect(DIVERGENCE_BY_ID.size).toBe(0);
+    expect(EXPECTED['03']).toMatchObject({ status: 'PASS' });
+    // the test-only divergence's Stage 1 values are vector 03's own, each at an expect step; its parting is b8's process_bid
+    const v03 = loadVector(vectorFile('03'));
+    for (const d of TEST_03) {
+      const step = v03.steps[d.step] as unknown as Record<string, unknown>;
+      expect(step.op).toBe('expect');
+      expect(d.path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], step), d.path).toBe(d.stage1);
+    }
+    expect([opLabel(v03.steps[65]!), (v03.steps[65] as unknown as { bidder: string }).bidder]).toEqual(['process_bid', 'b8']);
     // cause S3-SH: the claims 22 waits for run since S3 WP2; only its windows (#76 on) wait, for S5 (was: 'S3 + S5')
     expect(EXPECTED['22']).toMatchObject({ until: 75, milestone: 'S5', reason: 'multi-step windows (#76); its claim steps #88-#110 run once windows land' });
     const v22 = loadVector(vectorFile('22'));
@@ -306,20 +333,20 @@ describe('stage1 vector runner: expectations and the op map', () => {
   });
 
   it('a divergence is accepted only as recorded: another value at its path fails, and an entry that no longer differs is stale', () => {
-    const entries = EXPECTED['03']!.divergences!;
+    const entries = TEST_03;
     const at67 = [
       { path: 'auction.escrowTotal', expected: '55925700000', actual: '56026700000' },
       { path: 'auctionEscrow', expected: '55925700000', actual: '56026700000' },
       { path: 'feeCollector', expected: '428800000', actual: '327800000' },
     ];
-    expect(splitDivergences(entries, 67, at67)).toEqual({ accepted: at67.map((d) => ({ ...d, id: 'DIV-NRC-1' })), failed: [], moved: [], stale: [] });
+    expect(splitDivergences(entries, 67, at67)).toEqual({ accepted: at67.map((d) => ({ ...d, id: TEST_ID })), failed: [], moved: [], stale: [] });
     // ours moved (a charge of 1 USDC, say), and an unrelated field differs too
     const moved = [{ ...at67[0]! }, { ...at67[1]! }, { path: 'feeCollector', expected: '428800000', actual: '328800000' }, { path: 'treasury', expected: '1', actual: '2' }];
     const split = splitDivergences(entries, 67, moved);
     expect(split.accepted.map((d) => d.path)).toEqual(['auction.escrowTotal', 'auctionEscrow']);
     expect(split.failed.map((d) => d.path)).toEqual(['feeCollector', 'treasury']);
     expect(split.moved).toEqual(['feeCollector']);
-    // the hold lifted: the field matches Stage 1, so its entry is stale
+    // the behaviour fixed: the field matches Stage 1, so its entry is stale
     expect(splitDivergences(entries, 67, at67.slice(0, 2)).stale.map((d) => d.path)).toEqual(['feeCollector']);
     // entries of another step are not consulted
     expect(splitDivergences(entries, 77, at67.slice(0, 2))).toMatchObject({ accepted: [], failed: at67.slice(0, 2), moved: [], stale: [{ path: 'balances.b8.stable' }, { path: 'feeCollector' }] });
@@ -421,8 +448,9 @@ describe('stage1 vector runner: merces backend', () => {
       const r = await runStage1Vectors({ vectors: [v], backend: 'merces', until });
       expect(r.runs).toHaveLength(2);
       for (const run of r.runs) {
-        // 01#32 and #34 lie past its prefix; 03's prefix is the whole vector, so its DIV-NRC-1 entries are reached
-        expect(run.issues.filter((i) => i.kind !== 'divergence'), `${run.vector} ${run.world}`).toEqual([]);
+        // 01#32 and #34 lie past its prefix; 03's prefix is the whole vector (cause NRC: b8's charge included, without a
+        // divergence; was: its DIV-NRC-1 entries reached and accepted)
+        expect(run.issues, `${run.vector} ${run.world}`).toEqual([]);
         expect(run.executed, `${run.vector} ${run.world}`).toBe(until + 1);
         expect(run.atExpected, `${run.vector} ${run.world}`).toBe(true);
       }
@@ -431,110 +459,126 @@ describe('stage1 vector runner: merces backend', () => {
 
   // cause S2-LS: lockstep compares every step of the settlement (was: only outside Stage 1's multi-step settlement, so
   // the full snapshots agreed after each raise prefix but were never compared between begin_settlement and the last
-  // process_bid)
-  it('lockstep: the full snapshots of both backends agree after every step of every target, mid-settlement included (03 up to #64)', async () => {
+  // process_bid). Cause NRC: 03 too, in full (was: up to #64, parting at b8's charge)
+  it('lockstep: the full snapshots of both backends agree after every step of every target, mid-settlement included (03 in full)', async () => {
     for (const id of TARGETS) {
       const v = loadVector(vectorFile(id));
-      const r = await runStage1Vectors({ vectors: [v], backend: 'lockstep', personalities: ['monad'], ...(id === '03' ? { until: 64 } : {}) });
+      const r = await runStage1Vectors({ vectors: [v], backend: 'lockstep', personalities: ['monad'] });
       const run = r.runs[0]!;
       expect(run.world).toBe('lockstep/monad');
       expect(run.issues.filter(isFinding), v.name).toEqual([]);
-      expect(run.executed, v.name).toBe(id === '03' ? 65 : v.steps.length);
+      expect(run.executed, v.name).toBe(v.steps.length);
       expect(run.atExpected, v.name).toBe(true);
     }
   }, 120_000);
 
-  it('lockstep: 03 parts right after process_bid b8 (#65) on exactly the DIV-NRC-1 fields, as recorded', async () => {
+  // cause NRC (was: 03 parted after #65 on the DIV-NRC-1 fields, as recorded): b8's charge at process_bid agrees on both
+  // backends, and 03 passes in lockstep on both personalities
+  it('lockstep: 03 agrees through b8\'s charge at process_bid (#65) and passes in full on both personalities', async () => {
     const r = await runStage1Vectors({ dir: VECTORS, backend: 'lockstep', only: ['03'], personalities: ['solana', 'monad'] });
     for (const run of r.runs) {
-      expect(run.status, run.world).toBe('PASS-WITH-DIVERGENCES');
-      expect(run.stopped, run.world).toEqual({ index: 66, reason: 'diverged' });
-      expect(run.issues, run.world).toEqual([
-        {
-          index: 65,
-          op: 'process_bid',
-          kind: 'divergence',
-          divergence: 'DIV-NRC-1',
-          message: 'diverged at #65 as recorded (DIV-NRC-1: 3 field(s); accepted, not parity)',
-          diffs: [
-            { path: 'S1.auction.escrowTotal', expected: '55925700000', actual: '56026700000' },
-            { path: 'S1.auctionEscrow', expected: '55925700000', actual: '56026700000' },
-            { path: 'S1.feeCollector', expected: '428800000', actual: '327800000' },
-          ],
-        },
-      ]);
-      expect(run.atExpected).toBe(true);
+      expect([run.status, run.executed, run.total, run.stopped, run.issues, run.atExpected], run.world).toEqual(['PASS', 78, 78, undefined, [], true]);
     }
-    expect(renderSummary([r])).toContain('03_auction_edges [lockstep/solana] PASS-WITH-DIVERGENCES 66/78, diverged at #65 as recorded (DIV-NRC-1)');
-    // a parting at the recorded step on other values fails; a recorded parting that does not happen is stale
-    const v = loadVector(vectorFile('03'));
-    const recorded = EXPECTED['03']!.lockstep!;
-    const otherValue = await replayLockstep(v, 'solana', { lockstep: { ...recorded, diffs: recorded.diffs.map((d) => (d.path === 'S1.feeCollector' ? { ...d, ours: '327800001' } : d)) } });
-    expect(otherValue.status).toBe('FAIL');
-    expect(otherValue.issues.map((i) => [i.index, i.kind, i.message])).toEqual([[65, 'fail', 'the backends disagree after this step (3 field(s)); not as recorded for DIV-NRC-1 (S1.auction.escrowTotal, S1.auctionEscrow, S1.feeCollector)']]);
-    const elsewhere = await replayLockstep(v, 'solana', { lockstep: { ...recorded, divergesAt: 64 } });
-    expect(elsewhere.status).toBe('FAIL');
-    expect(elsewhere.issues.map((i) => [i.index, i.kind])).toEqual([[65, 'fail'], [64, 'fail']]);
-    expect(elsewhere.issues[1]!.message).toBe('stale divergence DIV-NRC-1: the backends were recorded to part after #64 and did not; remove the entry');
-    const vanished = await replayLockstep(loadVector(vectorFile('02')), 'solana', { lockstep: { ...recorded, divergesAt: 30 } });
-    expect(vanished.executed).toBe(vanished.total);
-    expect(vanished.issues.map((i) => [i.index, i.kind, i.message])).toEqual([[30, 'fail', 'stale divergence DIV-NRC-1: the backends were recorded to part after #30 and did not; remove the entry']]);
-    expect(atExpected(vanished, EXPECTED['03']!)).toBe(false);
+    expect(renderSummary([r])).toContain('03_auction_edges [lockstep/solana] PASS 78/78');
   }, 120_000);
 
-  it('03 on the merces backend: the five DIV-NRC-1 fields are accepted as recorded; a moved value fails, and lifting the hold makes the entries stale', async () => {
+  // the lockstep side of the divergence mechanism, on the test-only divergence (the merces backend creates 03's S1 at 0
+  // bps): a parting exactly as recorded is accepted; another value fails; a recorded parting that does not happen is stale
+  it('lockstep accepts a recorded parting only as recorded (test-only divergence: 03 at 0 bps on the merces side)', async () => {
+    const v = loadVector(vectorFile('03'));
+    const parted = await replayLockstep(v, 'solana', { lockstep: TEST_03_LOCKSTEP, synthetic: ZERO_CHARGE });
+    expect(parted.status).toBe('PASS-WITH-DIVERGENCES');
+    expect(parted.stopped).toEqual({ index: 66, reason: 'diverged' });
+    expect(parted.issues).toEqual([
+      {
+        index: 65,
+        op: 'process_bid',
+        kind: 'divergence',
+        divergence: TEST_ID,
+        message: `diverged at #65 as recorded (${TEST_ID}: 3 field(s); accepted, not parity)`,
+        diffs: [
+          { path: 'S1.auction.escrowTotal', expected: '55925700000', actual: '56026700000' },
+          { path: 'S1.auctionEscrow', expected: '55925700000', actual: '56026700000' },
+          { path: 'S1.feeCollector', expected: '428800000', actual: '327800000' },
+        ],
+      },
+    ]);
+    const expected = { status: 'PASS-WITH-DIVERGENCES' as const, lockstep: TEST_03_LOCKSTEP };
+    expect(atExpected(parted, expected)).toBe(true);
+    const summary = renderSummary([{ backend: 'lockstep', runs: [{ ...parted, expected, atExpected: true }], notRun: [], proofs: { verified: 0, invalid: 0, cacheHits: 0 }, ok: true }]);
+    expect(summary).toContain(`03_auction_edges [lockstep/solana] PASS-WITH-DIVERGENCES 66/78, diverged at #65 as recorded (${TEST_ID})`);
+    // a parting at the recorded step on other values fails; a recorded parting that does not happen is stale
+    const otherValue = await replayLockstep(v, 'solana', { synthetic: ZERO_CHARGE, lockstep: { ...TEST_03_LOCKSTEP, diffs: TEST_03_LOCKSTEP.diffs.map((d) => (d.path === 'S1.feeCollector' ? { ...d, ours: '327800001' } : d)) } });
+    expect(otherValue.status).toBe('FAIL');
+    expect(otherValue.issues.map((i) => [i.index, i.kind, i.message])).toEqual([[65, 'fail', `the backends disagree after this step (3 field(s)); not as recorded for ${TEST_ID} (S1.auction.escrowTotal, S1.auctionEscrow, S1.feeCollector)`]]);
+    const elsewhere = await replayLockstep(v, 'solana', { synthetic: ZERO_CHARGE, lockstep: { ...TEST_03_LOCKSTEP, divergesAt: 64 } });
+    expect(elsewhere.status).toBe('FAIL');
+    expect(elsewhere.issues.map((i) => [i.index, i.kind])).toEqual([[65, 'fail'], [64, 'fail']]);
+    expect(elsewhere.issues[1]!.message).toBe(`stale divergence ${TEST_ID}: the backends were recorded to part after #64 and did not; remove the entry`);
+    // the real 03 (the vector's own 1% on both sides) does not part at all: the recorded parting is stale
+    const vanished = await replayLockstep(v, 'solana', { lockstep: TEST_03_LOCKSTEP });
+    expect(vanished.executed).toBe(vanished.total);
+    expect(vanished.issues.map((i) => [i.index, i.kind, i.message])).toEqual([[65, 'fail', `stale divergence ${TEST_ID}: the backends were recorded to part after #65 and did not; remove the entry`]]);
+    expect(atExpected(vanished, expected)).toBe(false);
+  }, 120_000);
+
+  // cause NRC (was: PASS-WITH-DIVERGENCES on the five DIV-NRC-1 fields): 03 replays in full on the merces backend; the
+  // replay side of the divergence mechanism is checked on the test-only divergence
+  it('03 is PASS in full on the merces backend; a recorded divergence is accepted as recorded, a moved value fails, a vanished one is stale', async () => {
     const r = await runStage1Vectors({ dir: VECTORS, backend: 'merces', only: ['03'] });
-    for (const run of r.runs) {
-      expect(run.status, run.world).toBe('PASS-WITH-DIVERGENCES');
+    for (const run of r.runs) expect([run.status, run.executed, run.total, run.issues, run.atExpected], run.world).toEqual(['PASS', 78, 78, [], true]);
+    const replay = async (vector: LoadedVector, personality: 'solana' | 'monad', synthetic?: SyntheticShims) => {
+      const world = await MercesWorld.create(vector, { personality, ...(synthetic ? { synthetic } : {}) });
+      try {
+        return await replayVector(world, vector, { divergences: TEST_03 });
+      } finally {
+        await world.close();
+      }
+    };
+    const v = loadVector(vectorFile('03'));
+    for (const personality of ['solana', 'monad'] as const) {
+      const run = await replay(v, personality, ZERO_CHARGE);
+      expect(run.status, personality).toBe('PASS-WITH-DIVERGENCES');
       expect(run.executed).toBe(run.total);
       expect(run.issues.map((i) => [i.index, i.kind, i.divergence, i.diffs?.map((d) => d.path)])).toEqual([
-        [67, 'divergence', 'DIV-NRC-1', ['auction.escrowTotal', 'auctionEscrow', 'feeCollector']],
-        [77, 'divergence', 'DIV-NRC-1', ['balances.b8.stable', 'feeCollector']],
+        [67, 'divergence', TEST_ID, ['auction.escrowTotal', 'auctionEscrow', 'feeCollector']],
+        [77, 'divergence', TEST_ID, ['balances.b8.stable', 'feeCollector']],
       ]);
-      expect(run.atExpected).toBe(true);
     }
     // the vector's value at a recorded path changes (as if Stage 1 charged 1 USDC more): that field fails, the rest stay accepted
     const src = raw('03_auction_edges');
     src.steps[67]!.feeCollector = '428800001';
-    const moved = (await runStage1Vectors({ vectors: [fromJson(src, '03_auction_edges')], backend: 'merces', personalities: ['solana'] })).runs[0]!;
+    const moved = await replay(fromJson(src, '03_auction_edges'), 'solana', ZERO_CHARGE);
     expect(moved.status).toBe('FAIL');
-    expect(moved.atExpected).toBe(false);
     expect(moved.issues.map((i) => [i.index, i.kind, i.message])).toEqual([
       [67, 'fail', '1 expected value(s) differ (1 at a recorded divergence path with another value: feeCollector)'],
-      [67, 'divergence', 'known divergence DIV-NRC-1: 2 field(s) differ as recorded (accepted, not parity)'],
-      [77, 'divergence', 'known divergence DIV-NRC-1: 2 field(s) differ as recorded (accepted, not parity)'],
+      [67, 'divergence', `known divergence ${TEST_ID}: 2 field(s) differ as recorded (accepted, not parity)`],
+      [77, 'divergence', `known divergence ${TEST_ID}: 2 field(s) differ as recorded (accepted, not parity)`],
     ]);
-    // the hold lifted, in effect: Stage 1's values equal ours (the vector edited to them), so every entry is stale
-    const lifted = raw('03_auction_edges');
-    const at67 = lifted.steps[67] as { feeCollector: string; auctionEscrow: string; auction: { escrowTotal: string } };
-    const at77 = lifted.steps[77] as { feeCollector: string; balances: Record<string, { stable: string }> };
-    Object.assign(at67, { feeCollector: '327800000', auctionEscrow: '56026700000' });
-    at67.auction.escrowTotal = '56026700000';
-    at77.feeCollector = '327800000';
-    at77.balances.b8!.stable = '30000000000';
-    const stale = (await runStage1Vectors({ vectors: [fromJson(lifted, '03_auction_edges')], backend: 'merces', personalities: ['monad'] })).runs[0]!;
+    // the behaviour fixed, in effect (the real 03, the vector's own 1% on both sides): every recorded entry is stale
+    const stale = await replay(v, 'monad');
     expect(stale.status).toBe('FAIL');
-    expect(stale.atExpected).toBe(false);
     expect(stale.issues.map((i) => [i.index, i.kind, i.message])).toEqual([
-      [67, 'fail', 'stale divergence DIV-NRC-1: auction.escrowTotal no longer differs (recorded: Stage 1 "55925700000", ours "56026700000"); remove the entry'],
-      [67, 'fail', 'stale divergence DIV-NRC-1: auctionEscrow no longer differs (recorded: Stage 1 "55925700000", ours "56026700000"); remove the entry'],
-      [67, 'fail', 'stale divergence DIV-NRC-1: feeCollector no longer differs (recorded: Stage 1 "428800000", ours "327800000"); remove the entry'],
-      [77, 'fail', 'stale divergence DIV-NRC-1: balances.b8.stable no longer differs (recorded: Stage 1 "29899000000", ours "30000000000"); remove the entry'],
-      [77, 'fail', 'stale divergence DIV-NRC-1: feeCollector no longer differs (recorded: Stage 1 "428800000", ours "327800000"); remove the entry'],
+      [67, 'fail', `stale divergence ${TEST_ID}: auction.escrowTotal no longer differs (recorded: Stage 1 "55925700000", ours "56026700000"); remove the entry`],
+      [67, 'fail', `stale divergence ${TEST_ID}: auctionEscrow no longer differs (recorded: Stage 1 "55925700000", ours "56026700000"); remove the entry`],
+      [67, 'fail', `stale divergence ${TEST_ID}: feeCollector no longer differs (recorded: Stage 1 "428800000", ours "327800000"); remove the entry`],
+      [77, 'fail', `stale divergence ${TEST_ID}: balances.b8.stable no longer differs (recorded: Stage 1 "29899000000", ours "30000000000"); remove the entry`],
+      [77, 'fail', `stale divergence ${TEST_ID}: feeCollector no longer differs (recorded: Stage 1 "428800000", ours "327800000"); remove the entry`],
     ]);
   }, 120_000);
 
-  // the recorded "ours" values are Stage 1's own arithmetic with the charge at 0 bps, not figures of our engine alone
-  it("DIV-NRC-1's values are Stage 1's: its own simulator with 03's charge rate at 0 bps differs from the vector on exactly the five entries", async () => {
+  // the test-only divergence's "ours" values are Stage 1's own arithmetic with the charge at 0 bps, not figures of our
+  // engine alone (the former DIV-NRC-1 check)
+  it("the test-only divergence's values are Stage 1's: its own simulator with 03's charge rate at 0 bps differs from the vector on exactly the five entries", async () => {
     const src = raw('03_auction_edges');
     const create = src.steps[15] as { op: string; series: string; terms: Record<string, string> };
     expect([create.op, create.series, create.terms.nonRevealChargeBps]).toEqual(['create_series', 'S1', '100']);
     create.terms.nonRevealChargeBps = '0';
     const run = (await runStage1Vectors({ vectors: [fromJson(src, '03_auction_edges')], backend: 'reference' })).runs[0]!;
     expect(run.executed).toBe(run.total);
-    const diffs = run.issues.flatMap((i) => (i.diffs ?? []).map((d) => ({ id: 'DIV-NRC-1', step: i.index, path: d.path, stage1: d.expected, ours: d.actual })));
+    const diffs = run.issues.flatMap((i) => (i.diffs ?? []).map((d) => ({ id: TEST_ID, step: i.index, path: d.path, stage1: d.expected, ours: d.actual })));
     expect(run.issues.every((i) => i.kind === 'fail' && i.diffs)).toBe(true);
-    expect(diffs).toEqual(EXPECTED['03']!.divergences);
+    expect(diffs).toEqual(TEST_03);
   }, 60_000);
 
   it('prefix gates: a gated vector replays to its gate and is PREFIX-PASS; past the gate it is judged on the prefix; a finding before the gate fails', async () => {
@@ -900,19 +944,20 @@ describe('stage1 vector runner: merces backend', () => {
   let full: RunReport | undefined;
   const fullRun = async (): Promise<RunReport> => (full ??= await runStage1Vectors({ dir: VECTORS, backend: 'merces' }));
 
-  // cause S2-NY: 42 runs, the 14 targets and the 7 prefix gates on both personalities (was: the 10 S1 targets, 20 runs)
-  it('every target and prefix gate is at its expected status on both personalities: 36/42 PASS, 03 with its five DIV-NRC-1 fields', async () => {
+  // cause S2-NY: 42 runs, the 14 targets and the 7 prefix gates on both personalities (was: the 10 S1 targets, 20 runs).
+  // Cause NRC: 38/42 PASS, 03 among them (was 36/42, 03 PASS-WITH-DIVERGENCES on its five DIV-NRC-1 fields)
+  it('every target and prefix gate is at its expected status on both personalities: 38/42 PASS, 03 in full', async () => {
     const report = await fullRun();
     const ids = [...TARGETS, ...Object.keys(PREFIX_GATES)].sort();
     expect(report.runs.map((r) => `${r.id}/${r.world}`)).toEqual(ids.flatMap((id) => [`${id}/merces/solana`, `${id}/merces/monad`]));
     for (const r of report.runs) expect(r.atExpected, `${r.vector} ${r.world}: ${r.status}`).toBe(true);
     expect(report.ok).toBe(true);
-    expect(report.runs.filter((r) => r.status === 'PASS')).toHaveLength(36);
+    expect(report.runs.filter((r) => r.status === 'PASS')).toHaveLength(38);
     const statusOf = (id: string) => [...new Set(report.runs.filter((r) => r.id === id).map((r) => r.status))];
-    for (const id of ['02', '15', '17']) expect(statusOf(id), id).toEqual(['PASS']);
+    for (const id of ['02', '03', '15', '17']) expect(statusOf(id), id).toEqual(['PASS']);
     for (const id of ['01', '05']) expect(statusOf(id), id).toEqual(['PASS-WITH-WAIVERS']);
-    expect(statusOf('03')).toEqual(['PASS-WITH-DIVERGENCES']);
-    for (const r of report.runs.filter((x) => x.id === '03')) expect(r.issues.flatMap((i) => (i.kind === 'divergence' ? i.diffs ?? [] : []))).toHaveLength(5);
+    for (const r of report.runs) expect(r.issues.filter((i) => i.kind === 'divergence'), `${r.vector} ${r.world}`).toEqual([]);
+    for (const r of report.runs.filter((x) => x.id === '03')) expect([r.executed, r.total, r.issues], r.world).toEqual([78, 78, []]);
     for (const [id, until] of Object.entries(PREFIX_GATES)) {
       for (const r of report.runs.filter((x) => x.id === id)) expect([r.status, r.executed, r.stopped], `${id} ${r.world}`).toEqual(['PASS', until + 1, { index: until + 1, reason: 'until' }]);
     }
@@ -939,15 +984,14 @@ describe('stage1 vector runner: merces backend', () => {
     expect(section).toMatch(new RegExp(`\\| SH-AUC-2 \\| \`commit_bid\` \\|[^\\n]*\\| S4 \\| ${committing.join(', ')} \\|`));
     expect(section).not.toMatch(/SH-AUC-[3-6]/);
     expect(section).toMatch(/\| BLK-1 \(BLOCKED\) \| `retire_if_capped` \|/);
-    // the known divergences: the DIV-NRC-1 row, its five entries and its lockstep parting, and where the runs met it
+    // cause NRC: the known divergences section says the register is empty (was: the DIV-NRC-1 row, its five entries, its
+    // lockstep parting and where the runs met it), and 03's row is PASS in full
     const known = md.slice(md.indexOf('## Known divergences (not parity)'), md.indexOf('## Prefix gates'));
-    expect(known).toContain('### DIV-NRC-1: the non-reveal charge (owner hold)');
-    for (const d of EXPECTED['03']!.divergences!) expect(known).toContain(`| 03_auction_edges | #${d.step} | \`${d.path}\` | "${d.stage1 as string}" | "${d.ours as string}" |`);
-    expect(known).toContain('| 03_auction_edges (lockstep) | after #65 | `S1.feeCollector` | "428800000" | "327800000" |');
-    expect(known).toContain('- 03_auction_edges on merces/solana: #67 (3 fields), #77 (2 fields), as recorded');
-    expect(md).toContain('| 03_auction_edges | PASS-WITH-DIVERGENCES (5 accepted divergences) 78/78 | PASS-WITH-DIVERGENCES (5 accepted divergences) 78/78 | PASS-WITH-DIVERGENCES (DIV-NRC-1: 5 field(s) at #67, #77; lockstep parts at #65) |');
-    // the accepted divergences are not findings
-    expect(md.slice(md.indexOf('## Findings'), md.indexOf('## Known divergences'))).toContain('None: every replayed step matched, the known divergences below aside.');
+    expect(known).toContain('None: the register is empty. Its only row, DIV-NRC-1 (the non-reveal charge, held in S2), went when the charge was modelled');
+    expect(known).not.toContain('### ');
+    expect(md).not.toContain('PASS-WITH-DIVERGENCES (');
+    expect(md).toContain('| 03_auction_edges | PASS 78/78 | PASS 78/78 | PASS |');
+    expect(md.slice(md.indexOf('## Findings'), md.indexOf('## Known divergences'))).toContain('None: every replayed step matched.');
     const gates = md.slice(md.indexOf('## Prefix gates'), md.indexOf('## Waived steps'));
     for (const [id, until] of Object.entries(PREFIX_GATES)) expect(gates).toMatch(new RegExp(`\\| ${id}_[a-z0-9_]+ \\| #${until} \\| #${until + 1} `));
     expect(md).toContain('| 08_hardship_pause | PASS 34/64, stopped at #34 (until) | PASS 34/64, stopped at #34 (until) | PREFIX-PASS to #33, then NOT-YET (S5: withdraw_pause_request and end_pause) |');

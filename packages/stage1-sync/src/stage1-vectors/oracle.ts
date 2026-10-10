@@ -3,7 +3,7 @@ import { compareExpect, fxRequestOf, type Diff } from './compare.ts';
 import { RunnerError, describeRaised } from './errors.ts';
 import { waiverFor, type LockstepDivergence, type Waiver } from './expected.ts';
 import { callOf, opLabel, type LoadedVector } from './load.ts';
-import { MercesWorld } from './merces-world.ts';
+import { MercesWorld, type SyntheticShims } from './merces-world.ts';
 import { ReferenceWorld } from './reference-world.ts';
 import { checkRevert } from './revert.ts';
 import { statusOf, type RunnerAtomicStep, type StepIssue, type VectorRun } from './run.ts';
@@ -37,6 +37,8 @@ export interface LockstepOptions {
   waivers?: readonly Waiver[];
   /** where the backends are recorded to part (a row of the divergence register) */
   lockstep?: LockstepDivergence;
+  /** test-only rows and translators for the merces backend (`MercesWorldOptions.synthetic`) */
+  synthetic?: SyntheticShims;
 }
 
 const MAX_DIFFS = 40;
@@ -44,7 +46,7 @@ const MAX_DIFFS = 40;
 export async function replayLockstep(vector: LoadedVector, personality: VectorPersonality, opts: LockstepOptions = {}): Promise<VectorRun> {
   const started = Date.now();
   const ref = await ReferenceWorld.create(vector);
-  const mer = await MercesWorld.create(vector, { personality });
+  const mer = await MercesWorld.create(vector, { personality, ...(opts.synthetic ? { synthetic: opts.synthetic } : {}) });
   const issues: StepIssue[] = [];
   const shims: Record<string, number> = {};
   const runnerAtomic: RunnerAtomicStep[] = [];

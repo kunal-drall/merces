@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { CURVE_TERMS_ZEROS, DEFAULTS, INDEXING_RULE_CODE, currencyCodeOf, normaliseAddress, randomFieldSalt, rateUnits, seriesTermsViolations, termsCommitment, type BoundedTerms, type SeriesTerms, type UnsignedTx } from '@merces/domain';
+import { CURVE_TERMS_ZEROS, DEFAULTS, INDEXING_RULE_CODE, NON_REVEAL_CHARGE_BOUNDS, NON_REVEAL_CHARGE_SETTING, currencyCodeOf, normaliseAddress, randomFieldSalt, rateUnits, seriesTermsViolations, termsCommitment, type BoundedTerms, type SeriesTerms, type UnsignedTx } from '@merces/domain';
 import { U64_MAX, WAD, ratePerUnit, wadFromDecimal, wadToDecimal } from '@merces/math';
 import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -125,21 +125,35 @@ export function lockupOf(pub: Pick<z.infer<typeof publicTermsSchema>, 'lockupSec
 }
 
 /**
- * The terms `buildCreateSeries` fills in rather than the issuer: the fees, the wallet cap and the raise's own terms (its
- * phases and the non-reveal charge, 0 while held: a series' frozen charter keeps 0 after the hold is lifted). A curve
+ * The terms `buildCreateSeries` fills in rather than the issuer: the fees, the wallet cap and the raise's phases. A curve
  * raise records Stage 1's zeros for the wallet cap and the raise durations (`CURVE_TERMS_ZEROS`): it has no auction and
- * no wallet cap at any stage (`CURVE_NO_CAP`).
+ * no wallet cap at any stage (`CURVE_NO_CAP`). The non-reveal charge is the owner's (`nonRevealChargeOf`).
  */
-function filledTerms(raiseStyle: 'sealed' | 'curve'): Pick<SeriesTerms, 'auctionFeeBps' | 'payoutFeeBps' | 'walletCapBps' | 'nonRevealChargeBps' | 'commitDurationSeconds' | 'revealDurationSeconds' | 'dueDays' | 'graceDays' | 'formalNoticeDays'> {
+function filledTerms(raiseStyle: 'sealed' | 'curve'): Pick<SeriesTerms, 'auctionFeeBps' | 'payoutFeeBps' | 'walletCapBps' | 'commitDurationSeconds' | 'revealDurationSeconds' | 'dueDays' | 'graceDays' | 'formalNoticeDays'> {
   const curve = raiseStyle === 'curve';
   return {
     auctionFeeBps: DEFAULTS.auctionFeeBps, payoutFeeBps: DEFAULTS.payoutFeeBps,
     walletCapBps: curve ? CURVE_TERMS_ZEROS.walletCapBps : DEFAULTS.walletCapBps,
-    nonRevealChargeBps: DEFAULTS.nonRevealChargeBps,
     commitDurationSeconds: curve ? CURVE_TERMS_ZEROS.commitDurationSeconds : DEFAULTS.commitDurationSeconds,
     revealDurationSeconds: curve ? CURVE_TERMS_ZEROS.revealDurationSeconds : DEFAULTS.revealDurationSeconds,
     dueDays: DEFAULTS.dueDays, graceDays: DEFAULTS.graceDays, formalNoticeDays: DEFAULTS.formalNoticeDays,
   };
+}
+
+/** The 409 a sealed raise gets while the owner's non-reveal charge is unset: it names the setting, never a value. */
+export const NON_REVEAL_CHARGE_UNSET = `the non-reveal charge for new series is not set: a sealed-bid raise cannot be created until the operator sets ${NON_REVEAL_CHARGE_SETTING} (whole bps, ${NON_REVEAL_CHARGE_BOUNDS.min} to ${NON_REVEAL_CHARGE_BOUNDS.max}; the owner's decision)`;
+
+/**
+ * The non-reveal charge a new series records: the owner's setting (`ServiceContext.nonRevealChargeBps`), as Stage 1's
+ * chains copy the protocol default into every series at creation (Solana `merces_registry` lib.rs:550, EVM
+ * `MercesRegistry.sol:597`); issuers cannot choose it. With the setting unset a sealed raise is refused (409,
+ * `NON_REVEAL_CHARGE_UNSET`), so no sealed series goes live without the owner's decision; a curve raise, which has no
+ * bids to charge, records 0 then.
+ */
+export function nonRevealChargeOf(raiseStyle: 'sealed' | 'curve', setting: number | null): number {
+  if (setting !== null) return setting;
+  if (raiseStyle === 'sealed') throw AppError.conflict(NON_REVEAL_CHARGE_UNSET, { setting: NON_REVEAL_CHARGE_SETTING });
+  return 0;
 }
 
 /** The public-terms field a canonical terms field comes from, where the names differ (the others share the name). */
@@ -170,9 +184,12 @@ export class TermsService {
     // Stage 1's create_series rules on the terms buildCreateSeries will send, with the terms it fills in, so a draft fails
     // here, per field, instead of at createSeries: a sealed raise's bounded parameters, units, reserve, minimum raise, a
     // wallet cap of at least one unit and the release schedule; a curve raise's units, reserve, threshold, zeros
-    // (lockup, wallet cap, raise durations), USDC, schedule and bounds
+    // (lockup, wallet cap, raise durations), USDC, schedule and bounds. The owner's non-reveal charge is within Stage 1's
+    // bounds by construction (checked at startup); while it is unset the draft is checked without it, and the build
+    // refuses a sealed raise (409)
     const onchain: BoundedTerms = {
       ...filledTerms(pub.raiseStyle),
+      ...(this.ctx.nonRevealChargeBps !== null ? { nonRevealChargeBps: this.ctx.nonRevealChargeBps } : {}),
       capMultipleWad: capWad.toString(), hurdleWad: hurdleWad.toString(), payoutMultipleK: pub.payoutMultipleK, lockupSeconds: lockupOf(pub), stablecoin: pub.stablecoin,
       unitsOffered: pub.unitsOffered, reservePrice: pub.reservePrice, minimumRaise: pub.minimumRaise, releaseSchedule: pub.releaseSchedule, raiseStyle: pub.raiseStyle,
     };
@@ -300,9 +317,11 @@ export class TermsService {
     const coin = info.stablecoins[p.stablecoin];
     if (!coin) throw AppError.unprocessable('stablecoin no longer available on chain');
     // the fees, the wallet cap and the raise's own terms are filled in (Stage 1's 7-day commit and 2-day reveal on a
-    // sealed raise; Stage 1's zeros on a curve raise, which has no auction and no wallet cap)
+    // sealed raise; Stage 1's zeros on a curve raise, which has no auction and no wallet cap), and the owner's non-reveal
+    // charge (a sealed raise is refused while it is unset)
     const terms: SeriesTerms = {
       ...filledTerms(p.raiseStyle),
+      nonRevealChargeBps: nonRevealChargeOf(p.raiseStyle, this.ctx.nonRevealChargeBps),
       stablecoin: p.stablecoin, stablecoinMint: coin.mint, unitsOffered: p.unitsOffered, reservePrice: p.reservePrice, minimumRaise: p.minimumRaise, capMultipleWad: p.capMultipleWad, lockupSeconds: lockupOf(p),
       releaseSchedule: p.releaseSchedule, hurdleWad: p.hurdleWad, payoutMultipleK: p.payoutMultipleK,
       contractHash: draft.contract_hash, termsCommitment: draft.terms_commitment, tierFlags: p.tierFlags, reportingCurrency: p.reportingCurrency, raiseStyle: p.raiseStyle,

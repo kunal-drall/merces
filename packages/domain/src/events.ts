@@ -31,9 +31,10 @@ export const tierSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.l
 /**
  * `auction`: a sealed raise's fee on each winner's cost; `payout`: the fee on each payment into the vault;
  * `curveTrading`: Merces' (the partner's) share of a curve's trading fees, collected from the pool by
- * `collectCurveProceeds` (Meteora keeps its own share).
+ * `collectCurveProceeds` (Meteora keeps its own share); `nonReveal`: the non-reveal charge kept from an unrevealed bid's
+ * escrow when a sealed raise settles (Stage 1 `process_bid`, `NonRevealCharged`), paid to the fee collector.
  */
-export const feeKindSchema = z.enum(['auction', 'payout', 'curveTrading']);
+export const feeKindSchema = z.enum(['auction', 'payout', 'curveTrading', 'nonReveal']);
 export const paymentSourceSchema = z.enum(['payIn', 'split', 'redemption', 'tail', 'extinguishment']);
 export const fxBasisSchema = z.enum(['accumulator', 'attestor', 'unity']);
 
@@ -68,10 +69,11 @@ export const seriesTermsSchema = z.object({
    */
   walletCapBps: z.number().int().nonnegative().max(10_000),
   /**
-   * Stage 1's non-reveal charge (SPEC §5.2): the share of an unrevealed bid's escrow kept when the raise settles.
-   * Stage 1 bounds it to 0–1,000 bps at creation for a sealed raise. **Owner hold:** the charge is not modelled; new
-   * series record 0 (`DEFAULTS.nonRevealChargeBps`) and the engine applies 0 whatever a series records
-   * (`NON_REVEAL_CHARGE_HELD`, params.ts).
+   * Stage 1's non-reveal charge (SPEC §5.2), the series' own rate, frozen at creation: when a sealed raise settles,
+   * `processBid` keeps `floor(escrow × bps / 10000)` of a bid committed and never revealed and pays it to the fee
+   * collector (`NonRevealCharged`, `FeeTaken{nonReveal}`); a failed raise charges nothing. Stage 1 bounds it to
+   * 0–1,000 bps at creation. New series built through the terms service take the owner's setting
+   * (`NON_REVEAL_CHARGE_SETTING`, params.ts); issuers cannot choose it. A curve series has no bids to charge.
    */
   nonRevealChargeBps: z.number().int().nonnegative().max(10_000),
   /**
@@ -132,11 +134,20 @@ export const eventPayloads = {
   /**
    * Stage 1 `process_bid` for a winning bid: `units` minted to the auction escrow for the bidder, `cost` to the treasury,
    * `fee` to the fee collector, `refund` owed back to the bidder; units and refund reach the bidder with `BidDelivered`.
-   * A losing, invalid or unrevealed bid, and every bid of a failed raise, is processed without an event.
+   * A losing or invalid bid, and every bid of a failed raise, is processed without an event; an unrevealed bid on a
+   * settled raise emits `NonRevealCharged` when its charge is above 0.
    */
   UnitsAllocated: z.object({ ...seriesScoped, bidder: addressSchema, units: unitsSchema, cost: moneySchema, fee: moneySchema, refund: moneySchema }),
   /** Stage 1 `deliver_bid`: the processed bid's units and refund reach the bidder */
   BidDelivered: z.object({ ...seriesScoped, bidder: addressSchema, units: unitsSchema, refund: moneySchema }),
+  /**
+   * Stage 1 `NonRevealCharged` (`process_bid` of a bid committed and never revealed, on a settled raise): `charge`, the
+   * series' non-reveal charge on the bid's escrow (`floor(escrow × nonRevealChargeBps / 10000)`), went to the fee
+   * collector; the rest of the escrow is the bid's refund, paid by `deliverBid` (`BidDelivered`). Emitted only when the
+   * charge is above 0 (Solana's rule; the EVM's `NonRevealCharged(0)` is dropped by its adapter), followed by
+   * `FeeTaken{nonReveal}`. A failed raise charges nothing and emits neither.
+   */
+  NonRevealCharged: z.object({ ...seriesScoped, bidder: addressSchema, charge: moneySchema }),
   /**
    * Stage 1: the last `process_bid` finalises the mint (`unitsOutstanding = unitsSold`); 0 and 0 for a failed raise. A
    * curve's `completeCurve` emits it with the curve's units sold (base lamports) and proceeds 0, and leaves units
@@ -340,7 +351,7 @@ export function isEvent<T extends EventType>(e: DomainEvent, type: T): e is Doma
  */
 export const amountBearingEvents: ReadonlySet<EventType> = new Set<EventType>([
   'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'SettlementProposed', 'SettlementRejected', 'UnitsAllocated',
-  'BidDelivered', 'RaiseMintFinalized', 'TreasuryFunded', 'FundsReleased', 'SplitReceipt', 'ReportAccepted',
+  'BidDelivered', 'NonRevealCharged', 'RaiseMintFinalized', 'TreasuryFunded', 'FundsReleased', 'SplitReceipt', 'ReportAccepted',
   'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'TailClaimed', 'FinalClaimed', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout',
   'SeriesExtinguished', 'TransferWindowCleared', 'CurveActivated', 'CurveGraduated', 'CurveProceedsCollected',
 ]);

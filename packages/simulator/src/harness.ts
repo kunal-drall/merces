@@ -48,6 +48,9 @@ export function harnessFieldSalt(label: string): bigint {
   return BigInt('0x' + createHash('sha256').update('merces/harness-salt\n' + label).digest('hex')) % BN254_FR;
 }
 
+/** The non-reveal charge the harness's series record (bps): an explicit test value, not a default of the product. */
+export const HARNESS_NON_REVEAL_CHARGE_BPS = 100;
+
 /**
  * Default series terms: 500 units, θ = 60,000 USD, a 10% total share (r = 0.10 / 500 per unit), CPI indexing, tiers
  * 2 and 3 (tier 1 is valid only on a pure tier-1 series: pass `tierFlags` for one). A curve series (`raiseStyle:
@@ -77,7 +80,11 @@ export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & {
     payoutMultipleK: DEFAULTS.payoutMultipleK,
     /** 20% in the harness so five backers can sell out a 500-unit series; the protocol default is 10% (parameter) */
     walletCapBps: 2000,
-    nonRevealChargeBps: DEFAULTS.nonRevealChargeBps,
+    /**
+     * The harness's own non-reveal charge, 1% (Stage 1's vectors and fixtures use 100 bps): there is no built-in rate,
+     * so the harness names one (the services take the owner's setting, `NON_REVEAL_CHARGE_SETTING`)
+     */
+    nonRevealChargeBps: HARNESS_NON_REVEAL_CHARGE_BPS,
     /**
      * A 3-day commit and a 1-day reveal phase in the harness (Stage 1's defaults are 7 and 2 days): every raise settles
      * at the same instant as before S2, so the period and status figures pinned on it hold.
@@ -314,10 +321,11 @@ export class SimHarness {
    * `'none'` leaves the raise Open at its reveal end, `'finalize'` stops once it is Settled or Failed, `'process'` once
    * every bid is processed (the mint is final; refunds and units wait for `deliverBid`), `'deliver'` (the default) once
    * every bid is delivered too. The phase ends are the chain's (`openRaise` derives them from the terms'
-   * durations). `clearingPrice` is the settled price (0 when the raise failed or did not finalize); `failureReason` is
-   * the auction's.
+   * durations). A bid with `reveal: false` is committed and never revealed (it pays the series' non-reveal charge if the
+   * raise settles). `clearingPrice` is the settled price (0 when the raise failed or did not finalize); `failureReason`
+   * is the auction's.
    */
-  async runRaise(opts: { terms?: Partial<SeriesTerms>; privateTerms?: PrivateTerms; bids?: { backer: number; price: bigint; qty: bigint }[]; settle?: 'none' | SettlementGoal } = {}): Promise<{ seriesId: string; terms: SeriesTerms; privateTerms: PrivateTerms; clearingPrice: bigint; failureReason: RaiseFailure | null }> {
+  async runRaise(opts: { terms?: Partial<SeriesTerms>; privateTerms?: PrivateTerms; bids?: { backer: number; price: bigint; qty: bigint; reveal?: boolean }[]; settle?: 'none' | SettlementGoal } = {}): Promise<{ seriesId: string; terms: SeriesTerms; privateTerms: PrivateTerms; clearingPrice: bigint; failureReason: RaiseFailure | null }> {
     const { terms, privateTerms } = defaultTerms(this.sim, { ...(opts.terms ?? {}), privateTerms: opts.privateTerms });
     if (!(await this.sim.getIssuer(this.issuer.address))) await this.exec(this.issuer, { kind: 'registerIssuer' });
     const created = await this.exec(this.issuer, { kind: 'createSeries', terms });
@@ -343,6 +351,7 @@ export class SimHarness {
     }
     await this.sim.setTime(commitEndsAt);
     for (const b of bids) {
+      if (b.reveal === false) continue;
       const w = this.backers[b.backer]!;
       await this.exec(w, { kind: 'revealBid', seriesId, pricePerUnit: b.price.toString(), quantity: b.qty.toString(), salt: salts.get(b.backer)! });
     }

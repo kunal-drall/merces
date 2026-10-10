@@ -13,6 +13,9 @@ type Rig = Awaited<ReturnType<typeof makeRig>>;
  *    broken down in `byPool`.
  *  - S3-CV: the fee ledger and the statement carry the curve trading fee kind (`curveTrading`, Merces' share of a curve's
  *    trading fees, collected by `collectCurveProceeds`); 0 on a sealed-bid series.
+ * S3 follow-up cause code:
+ *  - NRC: the fee ledger and the statement carry the non-reveal charge's fee kind (`nonReveal`, Stage 1 `process_bid` on a
+ *    bid never revealed, on a settled raise); 0 where every bid was revealed. The statement's rates name the series'.
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6)).toString();
 /** the income figure fed to the device-side prover; it must never appear in any accounting response */
@@ -56,9 +59,9 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
     const r = await rig.get('/admin/accounting/fees?chain=solana', adminTok);
     expect(r.statusCode).toBe(200);
     const body = r.json();
-    expect(body.totals.byKind).toEqual({ auction: USDC(45), payout: USDC(75), curveTrading: '0' }); // cause S3-CV: the curve trading fee kind
+    expect(body.totals.byKind).toEqual({ auction: USDC(45), payout: USDC(75), curveTrading: '0', nonReveal: '0' }); // cause S3-CV, NRC: the curve trading and non-reveal fee kinds
     expect(body.totals.total).toBe(USDC(120));
-    expect(body.totals.bySeries).toEqual([{ seriesId, chain: 'solana', stablecoin: 'USDC', auction: USDC(45), payout: USDC(75), curveTrading: '0', total: USDC(120), count: 6 }]);
+    expect(body.totals.bySeries).toEqual([{ seriesId, chain: 'solana', stablecoin: 'USDC', auction: USDC(45), payout: USDC(75), curveTrading: '0', nonReveal: '0', total: USDC(120), count: 6 }]);
     expect(body.rowCount).toBe(6);
     expect(body.truncated).toBe(false);
     const rows = body.rows as { kind: string; payer: string; amount: string; seriesId: string; chain: string; blockTime: number; txId: string }[];
@@ -78,17 +81,17 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
     const bySeries = await rig.get(`/admin/accounting/fees?seriesId=${seriesId}`, adminTok);
     expect(bySeries.json().totals.total).toBe(USDC(120));
     const late = await rig.get(`/admin/accounting/fees?chain=solana&from=${payout.blockTime}`, adminTok);
-    expect(late.json().totals.byKind).toEqual({ auction: '0', payout: USDC(75), curveTrading: '0' });
+    expect(late.json().totals.byKind).toEqual({ auction: '0', payout: USDC(75), curveTrading: '0', nonReveal: '0' });
     expect(late.json().rows.map((x: { kind: string }) => x.kind)).toEqual(['payout']);
     const early = await rig.get(`/admin/accounting/fees?chain=solana&to=${payout.blockTime - 1}`, adminTok);
-    expect(early.json().totals.byKind).toEqual({ auction: USDC(45), payout: '0', curveTrading: '0' });
+    expect(early.json().totals.byKind).toEqual({ auction: USDC(45), payout: '0', curveTrading: '0', nonReveal: '0' });
     // the limit truncates rows, never totals
     const limited = await rig.get('/admin/accounting/fees?limit=2', adminTok);
     expect(limited.json().rows).toHaveLength(2);
     expect(limited.json().truncated).toBe(true);
     expect(limited.json().totals.total).toBe(USDC(120));
     // monad has no fees yet
-    expect((await rig.get('/admin/accounting/fees?chain=monad', adminTok)).json().totals).toEqual({ total: '0', count: 0, byKind: { auction: '0', payout: '0', curveTrading: '0' }, bySeries: [] });
+    expect((await rig.get('/admin/accounting/fees?chain=monad', adminTok)).json().totals).toEqual({ total: '0', count: 0, byKind: { auction: '0', payout: '0', curveTrading: '0', nonReveal: '0' }, bySeries: [] });
     // validation
     expect((await rig.get('/admin/accounting/fees?chain=bitcoin', adminTok)).statusCode).toBe(400);
     expect((await rig.get('/admin/accounting/fees?from=10&to=5', adminTok)).statusCode).toBe(400);
@@ -100,14 +103,14 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
     const r = await rig.get(`/admin/accounting/series/${seriesId}`, adminTok);
     expect(r.statusCode).toBe(200);
     const s = r.json();
-    expect(s).toMatchObject({ seriesId, chain: 'solana', issuer: rig.sol.issuer.address, stablecoin: 'USDC', phase: 'Settled', status: 'OnTime', feeRates: { auctionFeeBps: 100, payoutFeeBps: 500 } });
+    expect(s).toMatchObject({ seriesId, chain: 'solana', issuer: rig.sol.issuer.address, stablecoin: 'USDC', phase: 'Settled', status: 'OnTime', feeRates: { auctionFeeBps: 100, payoutFeeBps: 500, nonRevealChargeBps: 100 } }); // cause NRC: the series' rate
     // C6: cap per unit = 2.5 × 9 USDC = 22.5 USDC; 1,500 USDC over 500 units = 3 USDC paid per unit
     expect(s.cap).toMatchObject({
       issuePrice: USDC(9), perUnit: USDC(22.5), unitsSold: '500', unitsOutstanding: '500', total: USDC(11_250),
       paidPerUnitWad: (3n * 10n ** 24n).toString(), paidPerUnit: USDC(3), remainingPerUnit: USDC(19.5), remainingTotal: USDC(9750), progressBps: 1333,
     });
     expect(s.payments).toEqual({ grossPaidTotal: USDC(1500), netDistributed: USDC(1425), feesTaken: USDC(75), count: 1 });
-    expect(s.fees).toEqual({ auction: USDC(45), payout: USDC(75), curveTrading: '0', total: USDC(120), vaultFeesTotal: USDC(75) }); // cause S3-CV
+    expect(s.fees).toEqual({ auction: USDC(45), payout: USDC(75), curveTrading: '0', nonReveal: '0', total: USDC(120), vaultFeesTotal: USDC(75) }); // cause S3-CV, NRC
     expect(s.payouts).toEqual({ claimed: USDC(285), unclaimed: USDC(1140), count: 1, byPool: { payout: USDC(285), tail: '0', final: '0' } }); // cause S3-CL: byPool
     expect(s.refunds).toEqual({ total: USDC(707), bids: USDC(707), payments: '0' }); // cause S2-PR: every bid's refund is pushed (was backer 0's claim)
     expect(s.treasury).toEqual({ total: USDC(4500), released: '0', balance: USDC(4500), releasesPaused: false });
@@ -239,5 +242,23 @@ describe.skipIf(!dbTestsEnabled())('E11 fees and accounting through the API', ()
     // denied calls leave no trace: no extra reconciliation runs or exports were recorded
     expect(Number((await rig.t.pool.query('select count(*) as n from reconciliation_runs')).rows[0].n)).toBe(3);
     expect(Number((await rig.t.pool.query("select count(*) as n from audit_log where action = 'accounting.export'")).rows[0].n)).toBe(3);
+  });
+
+  // cause NRC: a bid never revealed on a settled raise pays the series' charge to the fee collector (Stage 1 process_bid);
+  // it is a fee row of kind nonReveal from the bidder, in the statement's fees, and the collector's balance reconciles
+  it('a non-reveal charge: a nonReveal fee row from the bidder, in the statement and the fee collector\'s reconciliation', async () => {
+    const bids = [...[12, 11, 10, 10].map((p, backer) => ({ backer, price: BigInt(USDC(p)), qty: 100n })), { backer: 4, price: BigInt(USDC(9)), qty: 100n, reveal: false }];
+    const m = await rig.mon.runRaise({ terms: { unitsOffered: '400', walletCapBps: 2500, minimumRaise: USDC(3200), nonRevealChargeBps: 100 }, bids });
+    await rig.sync();
+    const fees = (await rig.get('/admin/accounting/fees?chain=monad', adminTok)).json();
+    // 4 winners × 1% of 10 × 100, and 1% of b4's 909 deposit (Stage 1's own Simulator: 9.09)
+    expect(fees.totals.byKind).toEqual({ auction: USDC(40), payout: '0', curveTrading: '0', nonReveal: USDC(9.09) });
+    expect(fees.rows.filter((x: { kind: string }) => x.kind === 'nonReveal')).toMatchObject([{ seriesId: m.seriesId, payer: rig.mon.backers[4]!.address, amount: USDC(9.09) }]);
+    const st = (await rig.get(`/admin/accounting/series/${m.seriesId}`, adminTok)).json();
+    expect(st.fees).toEqual({ auction: USDC(40), payout: '0', curveTrading: '0', nonReveal: USDC(9.09), total: USDC(49.09), vaultFeesTotal: '0' });
+    expect(st.refunds).toEqual({ total: USDC(202 + 101 + 899.91), bids: USDC(202 + 101 + 899.91), payments: '0' });
+    const run = (await rig.get('/admin/accounting/reconcile', adminTok)).json();
+    const collector = run.checks.find((c: { check: string; chain: string; stablecoin: string }) => c.check === 'fee-collector-balance' && c.chain === 'monad' && c.stablecoin === 'USDC');
+    expect(collector).toMatchObject({ indexed: USDC(49.09), onchain: USDC(49.09), delta: '0', ok: true });
   });
 });

@@ -86,13 +86,15 @@ fills; a wallet buys and holds any number of units. Every curve read and builder
 draft records no lockup, no wallet cap and no raise phases (Stage 1's zeros; `POST /terms/validate` reports any other
 value per field, code `curve-zero`), a positive minimum raise (the curve's target) and USDC (S3). The auction preview counts every revealed bid, its bidder still allowlisted or not, as
 Stage 1's settlement does (S2).
-`GET /me/bids` shows the chain's figures (the `Bid` schema): `pendingRefund` (also `refundable`) and `pendingUnits` are what
-a processed bid is still owed until it is delivered ("0" otherwise), with the bid's `deposit`, `revealed`, `valid` (fixed at
-reveal: an invalid bid is refunded in full), `processed`, `delivered` and `allocatedUnits`. Each bid's figures come from one
-source, never a mix (`source`): the chain's read of the bid, or the indexed row as a whole when the chain has no read of
-it (it may lag the chain by an indexer pass). `refunded`, the refund delivered, is indexed (only the delivery event
-carries it): "0" while the bid is undelivered, and null while the chain shows the bid delivered and the indexer has not
-projected the delivery yet.
+`GET /me/bids` shows the chain's figures (the `Bid` schema): `pendingRefund` (also `refundable`) and `pendingUnits` are
+what a processed bid is still owed until it is delivered ("0" otherwise), with the bid's `deposit`, `revealed`, `valid`
+(fixed at reveal: an invalid bid is refunded in full), `processed`, `delivered`, `allocatedUnits` and `nonRevealCharge`
+(what a bid never revealed paid when the raise settled; "0" otherwise). The bid precheck returns the series'
+`nonRevealChargeBps` and `nonRevealCharge`, what the deposit would pay if the bid were never revealed and the raise
+settled. Each bid's figures come from one source, never a mix (`source`): the chain's read of the bid, or the indexed
+row as a whole when the chain has no read of it (it may lag the chain by an indexer pass). `refunded`, the refund
+delivered, is indexed (only the delivery event carries it): "0" while the bid is undelivered, and null while the chain
+shows the bid delivered and the indexer has not projected the delivery yet.
 
 **Claims** (S3: Stage 1's claim family). A holder has four claims, each a transaction it signs with its own wallet (no
 one claims for another, A-CLM-3), each with a builder (holder tier, `{holder}` one of your wallets) and each figure apart
@@ -185,16 +187,21 @@ Stage 1's stored `raiseState`, the counts, the current round, its proposal and r
 `tallying`, `awaiting-finalize`, `processing`, `delivering`, `complete`, …), `now` and `phaseEndsAt` (null while
 Settling: steps have no deadline). The series row carries `mintFinalized`, the raise's `terms.commitDurationSeconds` /
 `revealDurationSeconds` and, for a sealed raise, `auction` (round, rejection, clearing price, units sold, proceeds,
-failure reason, `finalizedAt`). `terms.nonRevealChargeBps` is what the series recorded; the charge is an owner hold and
-is not applied (series created during the hold record 0). `GET /arena` lists raises taking bids or settling, and settled
-series.
+failure reason, `finalizedAt`). `terms.nonRevealChargeBps` is the series' own non-reveal charge, frozen at creation
+(Stage 1; 0–1,000 bps): when the raise settles, a bid committed and never revealed pays `floor(deposit ×
+nonRevealChargeBps / 10000)` to the protocol fee collector and is refunded the rest at delivery; a failed raise and a
+revealed bid are never charged. New series take the operator's setting `MERCES_NON_REVEAL_CHARGE_BPS` (the owner's
+decision); issuers cannot choose it, and `POST /drafts/{id}/build-create-series` answers 409 (`detail.setting`) for a
+sealed raise while it is unset. Series created under the S2 hold record 0. `GET /arena` lists raises taking bids or
+settling, and settled series.
 
 **Attestor**: `GET /attestor/queue` → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
 attestations, extinguishment transactions (two signers).
 
 **Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
-(`GET /admin/attestors`) and verifier-key registration (multisig
-transactions), accounting and reconciliation, notification backlog, keeper runs, audit log.
+(`GET /admin/attestors`) and verifier-key registration (multisig transactions), accounting and reconciliation (the fee
+ledger's kinds: `auction`, `payout`, `curveTrading`, and `nonReveal` for the non-reveal charge, paid by the bidder),
+notification backlog, keeper runs, audit log.
 
 ## What the public sees
 

@@ -59,6 +59,23 @@ snarkjs keeps worker threads alive once it has verified or proved. The API, `dev
 them on SIGINT/SIGTERM (`shutdownProofSystem()`), as do `stage1:sync` and `demo:cycle` before they exit; a new CLI that
 proves or verifies must do the same, or it will not exit.
 
+### The non-reveal charge (the owner's setting)
+
+`MERCES_NON_REVEAL_CHARGE_BPS` is the non-reveal charge every new series built through the terms service records, in
+whole basis points within Stage 1's bounds (0 to 1000). When a series' sealed raise settles, a bid committed and never
+revealed pays `floor(deposit × rate / 10000)` to the protocol fee collector at `processBid` and gets the rest back at
+delivery (Stage 1's code); a failed raise charges nothing. The rate is the owner's decision: there is no default.
+
+- **Unset (absent or blank):** the API starts, but `POST /drafts/{id}/build-create-series` answers 409 for a sealed raise
+  (the message names `MERCES_NON_REVEAL_CHARGE_BPS`; `detail.setting` too), so no sealed series goes live without the
+  owner's decision. A curve raise, which has no bids to charge, is built and records 0. Drafts can still be validated.
+- **Malformed or out of bounds** (not a whole number, above 1000): the API, `dev:mock` and the keepers refuse to start,
+  naming the setting and the bounds (never the value given).
+- **Changing it** affects series created afterwards only: each series keeps the rate it recorded (Stage 1's charters are
+  frozen; series created under the S2 hold recorded 0). Issuers cannot choose it. On a live chain (S5) Stage 1's
+  registry copies the admin's protocol default (`set_defaults`) into each series whatever the transaction says, so keep
+  the setting equal to the chain's default; the adapter then reads each series' recorded rate back.
+
 ### Simulator state version 4: reset
 
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final
@@ -115,9 +132,10 @@ pnpm openapi:check                                                              
 pnpm demo:cycle                                                                 # raise to payout on both personalities
 ```
 
-`stage1:vectors` must exit 0 with `OK: 36/42 PASS, 42/42 at expected status` (the 14 targets in full and the 7 prefix
-gates to their gate, on both personalities; 03 is PASS-WITH-DIVERGENCES on the five DIV-NRC-1 fields of the
-non-reveal hold, and lockstep accepts 03 parting at #65 as recorded) and the reference backend with `OK: 25/25 PASS`;
+`stage1:vectors` must exit 0 with `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)` (the 14 targets in full
+and the 7 prefix gates to their gate, on both personalities; 01 and 05 PASS-WITH-WAIVERS; 03 PASS in full since the
+non-reveal charge is modelled, with no accepted divergence, in lockstep too) and the reference backend with
+`OK: 25/25 PASS`;
 `stage1:vectors --scenarios` (the paths of the claim family no vector takes, built on Stage 1 vector prefixes) with
 `OK: 22/22 PASS, 22/22 at expected status` (eleven scenarios, (a)–(k), on both personalities); `stage1:sync` must report the math and vectors steps `OK` (the diff step stays
 `WARN` until the adapters are wired, and conformance needs live deployments). `openapi:check` prints `openapi.yaml matches 170 operations` (after S3) and `demo:cycle` ends with `DEMO OK`. The vector runner verifies every

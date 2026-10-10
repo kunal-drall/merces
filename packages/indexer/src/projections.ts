@@ -27,6 +27,7 @@ function summary(e: DomainEvent): string | null {
     case 'SettlementRejected': return `Settlement round ${p.round} rejected (${p.reason})`;
     case 'UnitsAllocated': return `${p.units} units allocated to a bidder`;
     case 'BidDelivered': return 'A bid was delivered';
+    case 'NonRevealCharged': return 'An unrevealed bid was charged the non-reveal charge';
     case 'RaiseMintFinalized': return 'Raise minting finalised';
     case 'FundsReleased': return `Treasury tranche ${p.trancheIndex} released to the issuer`;
     case 'ReleasesPaused': return `Treasury releases paused (${p.reason})`;
@@ -196,12 +197,19 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       if (BigInt(p.refund) > 0n) await money(client, e, 'refund', p.refund, { wallet: p.bidder });
       break;
     }
+    case 'NonRevealCharged': {
+      // an unrevealed bid on a settled raise, processed (Stage 1 `process_bid`): the charge went to the fee collector (its
+      // FeeTaken{nonReveal} follows and writes the fee row) and the bid is owed the rest of its deposit until delivered
+      const p = e.payload as P<'NonRevealCharged'>;
+      await client.query('update bids set processed = true, non_reveal_charge = $3, pending_refund = deposit - $3 where series_id = $1 and bidder = $2', [p.seriesId, p.bidder, p.charge]);
+      break;
+    }
     case 'RaiseMintFinalized': {
       // the last process_bid: every bid of the series is processed (losers emit nothing), and a settled raise's units
       // become outstanding (Stage 1 sets units_outstanding here, not at settlement). A bid processed without an event (a
-      // loser, an invalid or unrevealed bid, every bid of a failed raise) is owed its deposit in full until delivered
-      // (Stage 1 `processBid` with no allocation: escrow less the non-reveal charge, which is held at 0, A-AUC-11), so
-      // the row stays whole for the reads that fall back to it (/me/bids)
+      // loser, an invalid bid, an unrevealed bid charged 0, every bid of a failed raise) is owed its deposit in full until
+      // delivered (Stage 1 `processBid` with no allocation and no charge), so the row stays whole for the reads that fall
+      // back to it (/me/bids); a charged bid was written by its NonRevealCharged
       // A curve's completion finalises its mint too, but its units outstanding come from its census (Stage 1
       // `complete_curve` takes none), so they stay as they are
       const p = e.payload as P<'RaiseMintFinalized'>;

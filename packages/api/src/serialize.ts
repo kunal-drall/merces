@@ -52,8 +52,8 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
       termsCommitment: r.terms_commitment,
       tierFlags: r.tier_flags,
       reportingCurrency: r.reporting_currency,
-      // the sealed raise's phases (Stage 1 create_series; null on rows indexed before S2) and the non-reveal charge the
-      // series recorded (an owner hold: series created during it record 0, and settlement applies 0 whatever is recorded)
+      // the sealed raise's phases (Stage 1 create_series; null on rows indexed before S2) and the series' own non-reveal
+      // charge, applied when its raise settles (Stage 1 process_bid; series created under the S2 hold record 0)
       commitDurationSeconds: num(r.commit_duration_seconds),
       revealDurationSeconds: num(r.reveal_duration_seconds),
       nonRevealChargeBps: num(r.non_reveal_charge_bps),
