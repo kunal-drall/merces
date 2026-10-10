@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createLogger, logCapture } from '@merces/core';
 import { dbTestsEnabled, type Pool } from '@merces/db';
-import { ContractService, TermsService, applicationCreateSchema, assembleSchema, tier3OpenSchema, tier3SignSchema, type ServiceContext } from '@merces/services';
+import { ContractService, TermsService, applicationCreateSchema, assembleSchema, lockupOf, tier3OpenSchema, tier3SignSchema, type ServiceContext } from '@merces/services';
+import { DEFAULTS, seriesTermsViolations } from '@merces/domain';
 import { BN254_FR, CURRENCY_CODES, INDEXING_RULES, termsCommitmentField } from '@merces/math';
 import { buildSpec } from '../src/openapi/build.ts';
 import type { Session } from '../src/index.ts';
@@ -188,6 +189,38 @@ describe.skipIf(!dbTestsEnabled())('contract templates, contract signing and dra
     await draftRow('draft-bounds', 'draft');
     await expect(svc.setTerms('draft-bounds', issuer, bad, { threshold: '65000000000', shareRate: '0.10', indexingRule: 'cpi-annual' })).rejects.toMatchObject({ status: 422, detail: { issues: expect.arrayContaining([expect.objectContaining({ field: 'hurdle', code: 'out-of-bounds' })]) } });
     expect((await rig.t.pool.query("select state, terms_commitment from series_drafts where draft_id = 'draft-bounds'")).rows[0]).toEqual({ state: 'draft', terms_commitment: null });
+  });
+
+  // cause S3-CT (Stage 1 registry create_series, lib.rs:462-572) and S3-NC: a curve draft is checked with Stage 1's
+  // curve rules, and the createSeries it builds carries Stage 1's zeros: no lockup, no wallet cap, no raise phases
+  it('a curve draft takes Stage 1\'s curve rules; buildCreateSeries sends no lockup, no wallet cap and no raise phases', async () => {
+    const svc = new TermsService(rig.ctx);
+    const curve = { stablecoin: 'USDC' as 'USDC' | 'USDG', unitsOffered: '1000', reservePrice: '5000000', minimumRaise: '2000000000', capMultiple: '2.5', releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], hurdle: '0.05', payoutMultipleK: 2, tierFlags: { tier1: false, tier2: true, tier3: false, tier4: false }, reportingCurrency: 'USD', raiseStyle: 'curve' as const, country: 'US' };
+    // the lockup defaults by raise style: 0 on a curve raise (Stage 1 requires it), Stage 1's 18 months on a sealed one
+    expect(lockupOf(curve)).toBe(0);
+    expect(lockupOf({ raiseStyle: 'sealed' })).toBe(DEFAULTS.lockupSeconds);
+    const issues = async (over: Partial<typeof curve> & { lockupSeconds?: number }) => (await svc.validate('solana', { ...curve, ...over }, null, 2026)).issues.map((i) => [i.field, i.code, i.message]);
+    expect(await issues({})).toEqual([]);
+    expect(await issues({ lockupSeconds: 86_400 })).toEqual([['lockupSeconds', 'curve-zero', 'lockup must be 0 on a curve series']]);
+    expect(await issues({ stablecoin: 'USDG' })).toEqual([['stablecoin', 'curve-quote-usdc', 'a curve raise is quoted in USDC']]);
+    expect(await issues({ minimumRaise: '0' })).toEqual([['minimumRaise', 'positive', 'minimum raise (the curve\'s migration threshold) must be positive']]);
+    // the minimum raise is the curve's target: above reserve × units is fine (a sealed raise refuses it as unreachable)
+    expect(await issues({ minimumRaise: '8000000000' })).toEqual([]);
+    expect((await svc.validate('solana', { ...curve, raiseStyle: 'sealed', minimumRaise: '8000000000' }, null, 2026)).issues.map((i) => i.code)).toEqual(['unreachable']);
+    // the draft, through to the createSeries it builds
+    const wallet = rig.sol.issuer.address;
+    await rig.t.pool.query("insert into series_drafts (draft_id, account_id, chain, issuer, public_terms, state) values ('draft-curve', $1, 'solana', $2, '{}', 'draft')", [issuer.accountId, wallet]);
+    await svc.setTerms('draft-curve', issuer, curve, { threshold: '65000000000', shareRate: '0.10', indexingRule: 'cpi-annual' });
+    expect((await rig.t.pool.query("select public_terms from series_drafts where draft_id = 'draft-curve'")).rows[0].public_terms).toMatchObject({ raiseStyle: 'curve', lockupSeconds: 0 });
+    await rig.t.pool.query("update series_drafts set state = 'contract_signed', contract_hash = $2 where draft_id = $1", ['draft-curve', '0x' + 'cc'.repeat(32)]);
+    const built = await svc.buildCreateSeries('draft-curve', issuer);
+    expect(built.terms).toMatchObject({ raiseStyle: 'curve', stablecoin: 'USDC', lockupSeconds: 0, walletCapBps: 0, commitDurationSeconds: 0, revealDurationSeconds: 0, auctionFeeBps: DEFAULTS.auctionFeeBps, payoutFeeBps: DEFAULTS.payoutFeeBps });
+    expect(seriesTermsViolations(built.terms)).toEqual([]);
+    // a sealed draft keeps the auction's terms
+    await rig.t.pool.query("insert into series_drafts (draft_id, account_id, chain, issuer, public_terms, state) values ('draft-sealed', $1, 'solana', $2, '{}', 'draft')", [issuer.accountId, wallet]);
+    await svc.setTerms('draft-sealed', issuer, { ...curve, raiseStyle: 'sealed', minimumRaise: '4000000000' }, { threshold: '65000000000', shareRate: '0.10', indexingRule: 'cpi-annual' });
+    await rig.t.pool.query("update series_drafts set state = 'contract_signed', contract_hash = $2 where draft_id = $1", ['draft-sealed', '0x' + 'cd'.repeat(32)]);
+    expect((await svc.buildCreateSeries('draft-sealed', issuer)).terms).toMatchObject({ lockupSeconds: DEFAULTS.lockupSeconds, walletCapBps: DEFAULTS.walletCapBps, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds });
   });
 
   // S1 review: a share rate with more than 18 places made wadFromDecimal throw a RangeError carrying the value, which

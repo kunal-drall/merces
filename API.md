@@ -52,8 +52,12 @@ is nothing to claim. "Deliver now": `POST …/bids/build-deliver {bidder, signer
 processed, undelivered bid (`signer` defaults to the bidder and must be one of your wallets; any wallet may deliver any
 bid, and the bidder is always the one paid; 409 `detail.stage1` NotProcessed or AlreadyDelivered) → `GET /me/holdings`,
 `GET /series/{id}/payouts`, claims (below). Curve-mode buys (`POST /series/{id}/curve/build-buy`) need a wallet on that
-chain's allowlist (403 otherwise) and, while the curve is bonding, stay within the wallet cap shown by
-`GET /series/{id}/curve` (`walletCap`; 422 with the remaining allowance otherwise). After graduation no cap applies. The auction preview counts every revealed bid, its bidder still allowlisted or not, as
+chain's allowlist (403 otherwise). **No cap:** a curve raise has no wallet cap at any stage, before or after the curve
+fills; a wallet buys and holds any number of units. Every curve read and builder says so in one statement
+(`walletCap: null`, `noCap: true`, `noCapStatement`, the schema `CurveNoCap`), and so do the series read (`noCap`,
+`noCapStatement`; a curve series' `terms.walletCapBps` is Stage 1's 0, never a cap) and the transfer-window read. A curve
+draft records no lockup, no wallet cap and no raise phases (Stage 1's zeros; `POST /terms/validate` reports any other
+value per field, code `curve-zero`), a positive minimum raise (the curve's target) and USDC (S3). The auction preview counts every revealed bid, its bidder still allowlisted or not, as
 Stage 1's settlement does (S2).
 `GET /me/bids` shows the chain's figures (the `Bid` schema): `pendingRefund` (also `refundable`) and `pendingUnits` are what
 a processed bid is still owed until it is delivered ("0" otherwise), with the bid's `deposit`, `revealed`, `valid` (fixed at

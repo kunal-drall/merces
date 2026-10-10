@@ -90,13 +90,13 @@ components:
         reservePrice: { $ref: '#/components/schemas/Money' }
         minimumRaise: { $ref: '#/components/schemas/Money' }
         capMultipleWad: { $ref: '#/components/schemas/Wad' }
-        lockupSeconds: { type: integer }
+        lockupSeconds: { type: integer, description: 0 on a curve-mode series (Stage 1 requires 0) }
         releaseSchedule: { type: array, items: { $ref: '#/components/schemas/ReleaseTranche' } }
         auctionFeeBps: { type: integer }
         payoutFeeBps: { type: integer }
         hurdleWad: { $ref: '#/components/schemas/Wad' }
         payoutMultipleK: { type: integer }
-        walletCapBps: { type: integer }
+        walletCapBps: { type: integer, description: "the sealed-bid raise's wallet cap in bps of the units offered (a bid above it is invalid at reveal). 0 on a curve-mode series, which has no wallet cap at any stage (the series' noCap): 0 there never means a cap" }
         dueDays: { type: integer }
         graceDays: { type: integer }
         formalNoticeDays: { type: integer }
@@ -104,8 +104,8 @@ components:
         termsCommitment: { type: string }
         tierFlags: { type: object, properties: { tier1: { type: boolean }, tier2: { type: boolean }, tier3: { type: boolean }, tier4: { type: boolean } } }
         reportingCurrency: { type: string }
-        commitDurationSeconds: { type: [integer, 'null'], description: "the sealed raise's commit phase (Stage 1 commit_duration; 1 hour–30 days): openRaise sets the commit end to now + this. Null on a row indexed before S2" }
-        revealDurationSeconds: { type: [integer, 'null'], description: "the sealed raise's reveal phase (Stage 1 reveal_duration; 1 hour–7 days), after the commit end. Null on a row indexed before S2" }
+        commitDurationSeconds: { type: [integer, 'null'], description: "the sealed raise's commit phase (Stage 1 commit_duration; 1 hour–30 days): openRaise sets the commit end to now + this. 0 on a curve-mode series (no auction). Null on a row indexed before S2" }
+        revealDurationSeconds: { type: [integer, 'null'], description: "the sealed raise's reveal phase (Stage 1 reveal_duration; 1 hour–7 days), after the commit end. 0 on a curve-mode series. Null on a row indexed before S2" }
         nonRevealChargeBps: { type: [integer, 'null'], description: "the non-reveal charge the series recorded at creation (Stage 1 create_series). Reserved: the charge is an owner hold and is not applied (an unrevealed bid is refunded in full); series created during the hold record 0. Null on a row indexed before S2" }
     SeriesAuction:
       type: object
@@ -222,6 +222,8 @@ components:
         stablecoin: { type: string, enum: [USDC, USDG] }
         raiseStyle: { type: string, enum: [sealed, curve] }
         unitScale: { type: string, enum: ['1', '1000000'], description: "accounting units per whole unit (Stage 1's unit_scale, fixed by the raise style): 1 for a sealed-bid series, 1000000 for a curve series, whose units are counted in base lamports. unitsSold, unitsOutstanding, position units and paidPerUnitWad are per accounting unit; issuePrice, capPerUnit and redemption prices per whole unit" }
+        noCap: { type: boolean, description: "true on a curve-mode series: it has no wallet cap at any stage, before or after the curve fills (terms.walletCapBps is Stage 1's 0). false on a sealed-bid series, whose auction caps each wallet at terms.walletCapBps" }
+        noCapStatement: { type: [string, 'null'], description: the one no-cap statement on a curve-mode series; null on a sealed-bid series }
         phase: { $ref: '#/components/schemas/RaisePhase' }
         status: { type: string, enum: [OnTime, InGrace, Late, Paused, Retired, Redeemed, Extinguished] }
         terms: { $ref: '#/components/schemas/SeriesTerms' }
@@ -733,6 +735,7 @@ paths:
       x-access: account
       tags: [terms]
       security: [{ session: [] }]
+      description: "Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months."
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, public], properties: { chain: { type: string }, public: { type: object }, private: { type: [object, 'null'] } } } } } }
       responses: { '200': { description: Issues (empty when valid) and derived values, content: { application/json: { schema: { type: object, properties: { issues: { type: array, items: { type: object } }, derived: { type: object } } } } } } }
   /terms/commitment:

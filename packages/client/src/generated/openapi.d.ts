@@ -714,6 +714,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months. */
         post: operations["validateTerms"];
         delete?: never;
         options?: never;
@@ -2613,12 +2614,14 @@ export type components = {
             reservePrice?: components["schemas"]["Money"];
             minimumRaise?: components["schemas"]["Money"];
             capMultipleWad?: components["schemas"]["Wad"];
+            /** @description 0 on a curve-mode series (Stage 1 requires 0) */
             lockupSeconds?: number;
             releaseSchedule?: components["schemas"]["ReleaseTranche"][];
             auctionFeeBps?: number;
             payoutFeeBps?: number;
             hurdleWad?: components["schemas"]["Wad"];
             payoutMultipleK?: number;
+            /** @description the sealed-bid raise's wallet cap in bps of the units offered (a bid above it is invalid at reveal). 0 on a curve-mode series, which has no wallet cap at any stage (the series' noCap): 0 there never means a cap */
             walletCapBps?: number;
             dueDays?: number;
             graceDays?: number;
@@ -2632,9 +2635,9 @@ export type components = {
                 tier4?: boolean;
             };
             reportingCurrency?: string;
-            /** @description the sealed raise's commit phase (Stage 1 commit_duration; 1 hour–30 days): openRaise sets the commit end to now + this. Null on a row indexed before S2 */
+            /** @description the sealed raise's commit phase (Stage 1 commit_duration; 1 hour–30 days): openRaise sets the commit end to now + this. 0 on a curve-mode series (no auction). Null on a row indexed before S2 */
             commitDurationSeconds?: number | null;
-            /** @description the sealed raise's reveal phase (Stage 1 reveal_duration; 1 hour–7 days), after the commit end. Null on a row indexed before S2 */
+            /** @description the sealed raise's reveal phase (Stage 1 reveal_duration; 1 hour–7 days), after the commit end. 0 on a curve-mode series. Null on a row indexed before S2 */
             revealDurationSeconds?: number | null;
             /** @description the non-reveal charge the series recorded at creation (Stage 1 create_series). Reserved: the charge is an owner hold and is not applied (an unrevealed bid is refunded in full); series created during the hold record 0. Null on a row indexed before S2 */
             nonRevealChargeBps?: number | null;
@@ -2798,6 +2801,10 @@ export type components = {
              * @enum {string}
              */
             unitScale?: "1" | "1000000";
+            /** @description true on a curve-mode series: it has no wallet cap at any stage, before or after the curve fills (terms.walletCapBps is Stage 1's 0). false on a sealed-bid series, whose auction caps each wallet at terms.walletCapBps */
+            noCap?: boolean;
+            /** @description the one no-cap statement on a curve-mode series; null on a sealed-bid series */
+            noCapStatement?: string | null;
             phase?: components["schemas"]["RaisePhase"];
             /** @enum {string} */
             status?: "OnTime" | "InGrace" | "Late" | "Paused" | "Retired" | "Redeemed" | "Extinguished";
@@ -3508,16 +3515,18 @@ export type components = {
                 total?: string;
             };
         };
-        /** @description The wallet cap on curve buys. It applies only while the curve is bonding; after graduation units trade freely and no cap applies (A-CURVE-2). */
-        CurveWalletCap: {
-            /** @description the series' wallet cap in basis points of the units offered */
-            bps: number;
-            /** @description the most units one wallet may hold before graduation */
-            units: string;
-            /** @description true while the curve is bonding; false after graduation or once buys are closed */
-            enforced: boolean;
-            /** @description plain-language statement of the rule for this series */
-            note: string;
+        /** @description What every curve read and builder response says about the cap: a curve raise has no wallet cap at any stage, before or after the curve fills (owner direction; Stage 1 stores the curve series' wallet cap as 0 and enforces none). The other fields depend on the operation. */
+        CurveNoCap: {
+            /** @description always null (there is no wallet cap) */
+            walletCap: null;
+            /** @constant */
+            noCap: true;
+            /** @description the one no-cap statement */
+            noCapStatement: string;
+            /** @description the plain-language notice for curve buyers */
+            notice: string;
+        } & {
+            [key: string]: unknown;
         };
         Notification: {
             notificationId: string;
@@ -8137,13 +8146,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Current transfer window */
+            /** @description Current transfer window, phase, flag state and market rules. A curve-mode series has no transfer windows and no cap at any stage: walletCapUnits null, noCap true and noCapStatement (the one no-cap statement) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        /** @description the window's wallet cap in units; null on a curve-mode series */
+                        walletCapUnits?: string | null;
+                        /** @description present and true on a curve-mode series */
+                        noCap?: boolean;
+                        noCapStatement?: string;
+                    };
                 };
             };
             404: components["responses"]["NotFound"];
@@ -8297,16 +8312,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Curve progress, spot price, graduation state, the bonding-phase wallet cap and the plain notice that no cap or allowlist applies after graduation */
+            /** @description Curve progress, spot price, graduation state, no cap (a curve raise has no wallet cap at any stage) and the plain notice */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        walletCap?: components["schemas"]["CurveWalletCap"];
-                        notice?: string;
-                    };
+                    "application/json": components["schemas"]["CurveNoCap"];
                 };
             };
             404: components["responses"]["NotFound"];
@@ -8337,7 +8349,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["CurveNoCap"];
                 };
             };
         };
@@ -8364,16 +8376,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Curve quote */
+            /** @description Curve quote, minimum units out, an unsigned buy transaction and, when paying in USDG, the swap route to sign first; no cap (a wallet buys any amount, whatever it holds) and the notice */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        walletCap?: components["schemas"]["CurveWalletCap"];
-                        notice?: string;
-                    };
+                    "application/json": components["schemas"]["CurveNoCap"];
                 };
             };
             /** @description Not an eligible backer */
@@ -8390,7 +8399,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The buy would take the wallet past the bonding-phase wallet cap (the message gives the holding, the cap and the remaining allowance); not a Solana series; stablecoin unavailable */
+            /** @description Not a Solana series; stablecoin unavailable */
             422: {
                 headers: {
                     [name: string]: unknown;

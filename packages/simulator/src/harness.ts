@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto';
 import {
-  DEFAULTS, attestationMessage, bidCommitment, currencyCodeOf, hex32ToField, incomeCommitment, INDEXING_RULE_CODE, mockProve, reportPublicInputs, runSettlement, termsCommitment,
+  CURVE_TERMS_ZEROS, DEFAULTS, attestationMessage, bidCommitment, currencyCodeOf, hex32ToField, incomeCommitment, INDEXING_RULE_CODE, mockProve, reportPublicInputs, runSettlement, termsCommitment,
   type AdminCommand, type ChainPort, type Command, type IndexingRule, type PermissionlessCommand, type RaiseFailure, type ReportProof, type SeriesTerms, type SettlementGoal, type SettlementRun,
   type Stablecoin, type TxResult, type UserCommand, type VerifierAttestation,
 } from '@merces/domain';
@@ -50,7 +50,9 @@ export function harnessFieldSalt(label: string): bigint {
 
 /**
  * Default series terms: 500 units, θ = 60,000 USD, a 10% total share (r = 0.10 / 500 per unit), CPI indexing, tiers
- * 2 and 3 (tier 1 is valid only on a pure tier-1 series: pass `tierFlags` for one).
+ * 2 and 3 (tier 1 is valid only on a pure tier-1 series: pass `tierFlags` for one). A curve series (`raiseStyle:
+ * 'curve'`) gets Stage 1's zeros for the lockup, the wallet cap and the raise durations (`CURVE_TERMS_ZEROS`;
+ * CurveTermsNotZero otherwise) unless `over` sets them.
  */
 export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & { privateTerms?: PrivateTerms } = {}): { terms: SeriesTerms; privateTerms: PrivateTerms } {
   const { privateTerms: givenPrivate, ...termsOver } = over;
@@ -88,6 +90,8 @@ export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & {
     tierFlags: { tier1: false, tier2: true, tier3: true, tier4: false },
     reportingCurrency: privateTerms.currency,
     raiseStyle: 'sealed',
+    // a curve raise has no lockup, wallet cap or auction (Stage 1 registry lib.rs:465-480)
+    ...(over.raiseStyle === 'curve' ? CURVE_TERMS_ZEROS : {}),
     ...termsOver,
   };
   terms.termsCommitment = over.termsCommitment ?? commitment;

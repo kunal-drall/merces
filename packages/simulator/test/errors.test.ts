@@ -1,8 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ChainError, bidCommitment } from '@merces/domain';
 import { isErrorName } from '@merces/math';
 import { SimHarness, defaultTerms } from '../src/index.ts';
-import { STAGE1_CODE, fail, guardStage1 } from '../src/engine/errors.ts';
+import { STAGE1_CODE, STAGE1_EVM_CODE, STAGE1_SOLANA_CODE, fail, guardStage1 } from '../src/engine/errors.ts';
 import { GENESIS } from './helpers.ts';
 
 /*
@@ -20,6 +21,35 @@ async function rejection(p: Promise<unknown>): Promise<ChainError> {
 describe('Stage 1 error names on simulator errors', () => {
   it('every STAGE1_CODE key is a Stage 1 error name', () => {
     for (const name of Object.keys(STAGE1_CODE)) expect(isErrorName(name), name).toBe(true);
+  });
+
+  // S3 D16 (cause S3-CT): the chain-only names are not in @merces/sdk's ERRORS; each is declared by the pinned chain's
+  // own error list (the Solana programs' error enums, the EVM's MercesErrors.sol)
+  it('every chain-only name is declared by that chain at the pin, and none is in ERRORS', () => {
+    const stage1 = new URL('../../../stage1/', import.meta.url);
+    const read = (path: string) => readFileSync(new URL(path, stage1), 'utf8');
+    const solana = read('solana/programs/merces_protocol/src/error.rs') + read('solana/programs/merces_registry/src/error.rs');
+    const evm = read('evm/src/types/MercesErrors.sol');
+    expect(Object.keys(STAGE1_SOLANA_CODE).length).toBeGreaterThan(0);
+    for (const name of Object.keys(STAGE1_SOLANA_CODE)) {
+      expect(isErrorName(name), name).toBe(false);
+      expect(solana, name).toMatch(new RegExp(`^\\s+${name},\\s*$`, 'm'));
+      expect(Object.keys(STAGE1_CODE), name).not.toContain(name);
+    }
+    for (const name of Object.keys(STAGE1_EVM_CODE)) {
+      expect(isErrorName(name), name).toBe(false);
+      expect(evm, name).toMatch(new RegExp(`^error ${name}\\(`, 'm'));
+      expect([...Object.keys(STAGE1_CODE), ...Object.keys(STAGE1_SOLANA_CODE)], name).not.toContain(name);
+    }
+    // fail() maps a chain-only name like any other
+    const e = (() => {
+      try {
+        fail('CurveTermsNotZero', 'wallet cap must be 0 on a curve series');
+      } catch (x) {
+        return x as ChainError;
+      }
+    })()!;
+    expect([e.code, e.detail]).toEqual(['InvalidTerms', { stage1: 'CurveTermsNotZero' }]);
   });
 
   it('fail() throws the mapped ChainError code with detail.stage1', () => {

@@ -1,18 +1,23 @@
 import { MAX_RELEASE_TRANCHES, PARAMETER_BOUNDS, validateReleaseSchedule, wadToDecimal, walletCapUnitsAtAuction, type Parameters } from '@merces/math';
+import { CURVE_ZERO_TERMS } from './curve.ts';
 import type { SeriesTerms } from './events.ts';
 
 /**
- * Stage 1's `create_series` rules on the terms (SPEC §1.6, §3.2, §5.3; Stage 1 SIM:756-781), in Stage 1's order, over
- * the canonical terms. The simulator's `createSeries` refuses with the first violation; the terms service reports all
- * of them per field, so a draft fails before a transaction is built. The messages name the field and the protocol
- * bound only: never the submitted value.
+ * Stage 1's `create_series` rules on the terms, over the canonical terms, in Stage 1's order: a sealed-bid series by
+ * Stage 1's reference simulator (SPEC §1.6, §3.2, §5.3; SIM:756-781), a curve series by the Solana registry, the only
+ * chain with curve mode (`merces_registry` lib.rs:462-572; SPEC §9). The simulator's `createSeries` refuses with the
+ * first violation; the terms service reports all of them per field, so a draft fails before a transaction is built.
+ * The messages name the field and the protocol bound only: never the submitted value.
  */
-export type TermsRule = 'ParameterOutOfBounds' | 'InvalidTerms' | 'InvalidReleaseSchedule';
+export type TermsRule = 'ParameterOutOfBounds' | 'InvalidTerms' | 'InvalidReleaseSchedule' | CurveTermsRule;
+
+/** The registry's curve-only rules (Solana error names; not in `@merces/sdk`'s `ERRORS`, lib.rs:470-485). */
+export type CurveTermsRule = 'CurveThresholdZero' | 'CurveTermsNotZero' | 'CurveQuoteMintMismatch';
 
 export interface TermsViolation {
   /** the canonical terms field (`SeriesTerms` key) */
   field: keyof SeriesTerms;
-  /** Stage 1's error name for this rule (SPEC §11) */
+  /** Stage 1's error name for this rule (SPEC §11; the registry's for the curve-only rules) */
   stage1: TermsRule;
   /** a stable kebab-case rule id */
   code: string;
@@ -26,6 +31,7 @@ export type BoundedTerms = Pick<
   | 'capMultipleWad' | 'hurdleWad' | 'payoutMultipleK' | 'lockupSeconds' | 'walletCapBps' | 'auctionFeeBps' | 'payoutFeeBps'
   | 'nonRevealChargeBps' | 'commitDurationSeconds' | 'revealDurationSeconds'
   | 'dueDays' | 'graceDays' | 'formalNoticeDays' | 'unitsOffered' | 'reservePrice' | 'minimumRaise' | 'releaseSchedule' | 'raiseStyle'
+  | 'stablecoin'
 >;
 
 type Unit = 'wad' | 'bps' | 'seconds' | 'days' | 'count';
@@ -35,16 +41,17 @@ type Unit = 'wad' | 'bps' | 'seconds' | 'days' | 'count';
  * day counts Stage 1 fixes (min = max) as protocol parameters. The window durations and the window fee are not
  * canonical terms yet (S5), so their bounds are not checked here.
  *
- * `sealedOnly`: the non-reveal charge and the raise durations are bounded for a sealed raise only. Stage 1 requires 0
- * for them on a curve series (SPEC v1.1.2 §9), which the canonical model does not apply before S5, so a curve series
- * carries them unchecked.
+ * `sealedOnly`: bounded on a sealed raise only. A curve series records 0 for the lockup, the wallet cap and the raise
+ * durations (`CURVE_ZERO_TERMS`, CurveTermsNotZero), and Stage 1 bounds the protocol defaults in their place
+ * (lib.rs:517-540), which are within the bounds; the non-reveal charge is an owner hold (not modelled) and stays
+ * unchecked on a curve series, which has no auction to charge.
  */
 const BOUNDED: readonly { field: keyof BoundedTerms; param: keyof Parameters; label: string; unit: Unit; sealedOnly?: true }[] = [
   { field: 'capMultipleWad', param: 'capMultipleWad', label: 'cap multiple', unit: 'wad' },
   { field: 'hurdleWad', param: 'hurdleRateWad', label: 'hurdle rate', unit: 'wad' },
   { field: 'payoutMultipleK', param: 'payoutMultipleK', label: 'payout multiple k', unit: 'count' },
-  { field: 'lockupSeconds', param: 'lockupSeconds', label: 'lockup', unit: 'seconds' },
-  { field: 'walletCapBps', param: 'walletCapBps', label: 'wallet cap', unit: 'bps' },
+  { field: 'lockupSeconds', param: 'lockupSeconds', label: 'lockup', unit: 'seconds', sealedOnly: true },
+  { field: 'walletCapBps', param: 'walletCapBps', label: 'wallet cap', unit: 'bps', sealedOnly: true },
   { field: 'auctionFeeBps', param: 'auctionFeeBps', label: 'auction fee', unit: 'bps' },
   { field: 'payoutFeeBps', param: 'payoutFeeBps', label: 'payout fee', unit: 'bps' },
   // Stage 1's windowFeeBps comes here (S5)
@@ -73,32 +80,70 @@ const SCHEDULE_RULES: Record<string, { code: string; message: string }> = {
   bps_sum_not_10000: { code: 'bps-sum', message: 'release schedule must sum to 10000 bps' },
 };
 
-/** Every Stage 1 `create_series` rule the terms break, in Stage 1's order (empty when they are valid). */
-export function seriesTermsViolations(t: BoundedTerms): TermsViolation[] {
+/** Each bounded parameter within PARAMETER_BOUNDS (SIM:759-777; registry lib.rs:517-561), `sealedOnly` ones on a sealed raise. */
+function boundViolations(t: BoundedTerms, curve: boolean): TermsViolation[] {
   const out: TermsViolation[] = [];
-  // SIM:759-777: each bounded parameter within PARAMETER_BOUNDS (the raise's own on a sealed raise only)
   for (const { field, param, label, unit, sealedOnly } of BOUNDED) {
-    if (sealedOnly && t.raiseStyle !== 'sealed') continue;
+    if (sealedOnly && curve) continue;
     const b = PARAMETER_BOUNDS[param];
     const v = BigInt(t[field] as string | number);
     if (v < b.min || v > b.max) out.push({ field, stage1: 'ParameterOutOfBounds', code: 'out-of-bounds', message: boundMessage(label, unit, b.min, b.max) });
   }
-  // SIM:778: units offered and reserve price at least 1, the minimum raise reachable
+  return out;
+}
+
+/**
+ * Stage 1's `validateReleaseSchedule` (non-empty, ≤ 24 tranches, bps in range, offsets non-negative and non-decreasing,
+ * bps summing to 10000); a rule broken by several tranches is reported once.
+ */
+function scheduleViolations(t: BoundedTerms): TermsViolation[] {
+  const schedule = t.releaseSchedule.map((r) => ({ atOffsetSeconds: BigInt(r.afterSeconds), bps: r.bps }));
+  return [...new Set(validateReleaseSchedule(schedule))].map((rule) => {
+    const r = SCHEDULE_RULES[rule] ?? { code: rule, message: 'release schedule is invalid' };
+    return { field: 'releaseSchedule', stage1: 'InvalidReleaseSchedule', code: r.code, message: r.message };
+  });
+}
+
+/** What each curve zero is called in a message (`CURVE_ZERO_TERMS`, in Stage 1's order). */
+const CURVE_ZERO_LABEL: Record<(typeof CURVE_ZERO_TERMS)[number], string> = {
+  lockupSeconds: 'lockup', walletCapBps: 'wallet cap', commitDurationSeconds: 'commit duration', revealDurationSeconds: 'reveal duration',
+};
+
+/** Every Stage 1 `create_series` rule the terms break, in Stage 1's order (empty when they are valid). */
+export function seriesTermsViolations(t: BoundedTerms): TermsViolation[] {
+  const out: TermsViolation[] = [];
   const units = BigInt(t.unitsOffered);
   const reserve = BigInt(t.reservePrice);
-  if (units < 1n) out.push({ field: 'unitsOffered', stage1: 'InvalidTerms', code: 'positive', message: 'units offered must be positive' });
-  if (reserve < 1n) out.push({ field: 'reservePrice', stage1: 'InvalidTerms', code: 'positive', message: 'reserve price must be positive' });
+  const positive = (field: 'unitsOffered' | 'reservePrice', label: string): TermsViolation => ({ field, stage1: 'InvalidTerms', code: 'positive', message: `${label} must be positive` });
+  if (t.raiseStyle === 'curve') {
+    // the Solana registry's order (lib.rs:462-572): units offered and the start price at least 1 (UnitsOfferedZero,
+    // ReservePriceZero: InvalidTerms in Stage 1's reference names)
+    if (units < 1n) out.push(positive('unitsOffered', 'units offered'));
+    if (reserve < 1n) out.push(positive('reservePrice', 'reserve price'));
+    // the minimum raise is the curve's migration threshold X: at least 1 (CurveThresholdZero); "minimum raise ≤
+    // reserve × units" is a sealed-bid rule (the curve completes at exactly X or never)
+    if (BigInt(t.minimumRaise) < 1n) out.push({ field: 'minimumRaise', stage1: 'CurveThresholdZero', code: 'positive', message: 'minimum raise (the curve\'s migration threshold) must be positive' });
+    // no auction, lockup or wallet cap: those terms are 0 (CurveTermsNotZero), one violation per field
+    for (const field of CURVE_ZERO_TERMS) {
+      if (Number(t[field]) !== 0) out.push({ field, stage1: 'CurveTermsNotZero', code: 'curve-zero', message: `${CURVE_ZERO_LABEL[field]} must be 0 on a curve series` });
+    }
+    // the curve quotes in USDC (the registry's curve quote mint; CurveQuoteMintMismatch)
+    if (t.stablecoin !== 'USDC') out.push({ field: 'stablecoin', stage1: 'CurveQuoteMintMismatch', code: 'curve-quote-usdc', message: 'a curve raise is quoted in USDC' });
+    // the release schedule (InvalidReleaseSchedule), then the bounds on the rest; no wallet-cap rule (lib.rs:564-570)
+    out.push(...scheduleViolations(t), ...boundViolations(t, true));
+    return out;
+  }
+  // Stage 1's reference simulator's order. SIM:759-777: each bounded parameter within PARAMETER_BOUNDS
+  out.push(...boundViolations(t, false));
+  // SIM:778: units offered and reserve price at least 1, the minimum raise reachable
+  if (units < 1n) out.push(positive('unitsOffered', 'units offered'));
+  if (reserve < 1n) out.push(positive('reservePrice', 'reserve price'));
   if (BigInt(t.minimumRaise) > reserve * units) out.push({ field: 'minimumRaise', stage1: 'InvalidTerms', code: 'unreachable', message: 'minimum raise exceeds units × reserve price' });
   // SIM:779: Stage 1's walletCapUnitsAtAuction (floor(units offered × wallet cap bps / 10000)) is at least one unit
   if (units >= 1n && t.walletCapBps >= 0 && walletCapUnitsAtAuction(units, t.walletCapBps) < 1n) {
     out.push({ field: 'unitsOffered', stage1: 'InvalidTerms', code: 'wallet-cap-below-one-unit', message: 'the wallet cap (units offered × wallet cap bps / 10000, rounded down) must be at least one unit' });
   }
-  // SIM:780-781: Stage 1's validateReleaseSchedule (non-empty, ≤ 24 tranches, bps in range, offsets non-negative and
-  // non-decreasing, bps summing to 10000); a rule broken by several tranches is reported once
-  const schedule = t.releaseSchedule.map((r) => ({ atOffsetSeconds: BigInt(r.afterSeconds), bps: r.bps }));
-  for (const rule of new Set(validateReleaseSchedule(schedule))) {
-    const r = SCHEDULE_RULES[rule] ?? { code: rule, message: 'release schedule is invalid' };
-    out.push({ field: 'releaseSchedule', stage1: 'InvalidReleaseSchedule', code: r.code, message: r.message });
-  }
+  // SIM:780-781: the release schedule
+  out.push(...scheduleViolations(t));
   return out;
 }

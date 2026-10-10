@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '@merces/core';
-import { settlementStage } from '@merces/domain';
+import { CURVE_NO_CAP, settlementStage } from '@merces/domain';
 import { defineRoute } from '../app.ts';
 import type { AppContext } from '../context.ts';
 import { reportingRow, seriesRow } from '../serialize.ts';
@@ -81,7 +81,7 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
       if (!r.rows[0]) throw AppError.notFound('series');
       const holders = await ctx.pool.query<{ n: number }>('select count(*)::int as n from positions where series_id = $1 and units > 0', [seriesId]);
       const curve = await ctx.pool.query('select * from curves where series_id = $1', [seriesId]);
-      return { ...seriesRow(r.rows[0]), holderCount: holders.rows[0]!.n, curve: curve.rows[0] ? { quoteStablecoin: curve.rows[0].quote_stablecoin, graduationThreshold: curve.rows[0].graduation_threshold, raised: curve.rows[0].raised, graduated: curve.rows[0].graduated, note: 'Curve-mode units have a live public price and no transfer limits after graduation.' } : null };
+      return { ...seriesRow(r.rows[0]), holderCount: holders.rows[0]!.n, curve: curve.rows[0] ? { quoteStablecoin: curve.rows[0].quote_stablecoin, graduationThreshold: curve.rows[0].graduation_threshold, raised: curve.rows[0].raised, graduated: curve.rows[0].graduated, note: `Curve-mode units have a live public price. ${CURVE_NO_CAP}` } : null };
     },
   });
 

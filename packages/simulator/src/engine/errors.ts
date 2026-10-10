@@ -75,16 +75,40 @@ export const STAGE1_CODE = {
   SettlementNotReady: 'TooEarly',
 } as const satisfies Partial<Record<ErrorName, ChainErrorCode>>;
 
-/** The Stage 1 error names the simulator raises. */
-export type Stage1Error = keyof typeof STAGE1_CODE;
+/**
+ * Stage 1 error names that only the Solana programs raise, so `@merces/sdk`'s `ERRORS` (the chain-neutral list) does
+ * not have them (S3 D16). Each is checked against the pinned `merces_protocol` or `merces_registry` `error.rs` by
+ * `errors.test.ts`. Curve mode is Solana only, so its names live here.
+ */
+export const STAGE1_SOLANA_CODE = {
+  // the registry's curve terms (create_series, lib.rs:470-485; S3 WP7)
+  CurveThresholdZero: 'InvalidTerms',
+  CurveTermsNotZero: 'InvalidTerms',
+  CurveQuoteMintMismatch: 'InvalidTerms',
+} as const satisfies Record<string, ChainErrorCode>;
 
 /**
- * Throw the `ChainError` for Stage 1 error `name`: its code from `STAGE1_CODE`, `detail.stage1 = name`.
- * The message is ours; it must never carry an income figure, salt, opening or document (callers pass public
- * facts only: names, ids, public amounts).
+ * Stage 1 error names that only the EVM contracts raise (not in `ERRORS`), checked against the pinned
+ * `evm/src/types/MercesErrors.sol` by `errors.test.ts`.
+ */
+export const STAGE1_EVM_CODE = {
+  // the EVM registry refuses curve mode right after the issuer check (MercesRegistry.sol:479-481)
+  CurveModeUnsupported: 'NotPermitted',
+} as const satisfies Record<string, ChainErrorCode>;
+
+/** Every Stage 1 error name and its code: the chain-neutral names, then each chain's own. */
+const ALL_CODES: Record<Stage1Error, ChainErrorCode> = { ...STAGE1_CODE, ...STAGE1_SOLANA_CODE, ...STAGE1_EVM_CODE };
+
+/** The Stage 1 error names the simulator raises: `@merces/sdk`'s and the chain-only ones. */
+export type Stage1Error = keyof typeof STAGE1_CODE | keyof typeof STAGE1_SOLANA_CODE | keyof typeof STAGE1_EVM_CODE;
+
+/**
+ * Throw the `ChainError` for Stage 1 error `name`: its code from `STAGE1_CODE` (or a chain's own table),
+ * `detail.stage1 = name`. The message is ours; it must never carry an income figure, salt, opening or document
+ * (callers pass public facts only: names, ids, public amounts).
  */
 export function fail(name: Stage1Error, message: string = name, extra?: Record<string, unknown>): never {
-  throw new ChainError(STAGE1_CODE[name], message, { ...extra, stage1: name });
+  throw new ChainError(ALL_CODES[name], message, { ...extra, stage1: name });
 }
 
 /**

@@ -263,7 +263,7 @@
                   },
                   "walletCapBps": {
                     "type": "integer",
-                    "exclusiveMinimum": 0,
+                    "minimum": 0,
                     "maximum": 10000
                   },
                   "nonRevealChargeBps": {
@@ -4255,7 +4255,7 @@
             },
             "walletCapBps": {
               "type": "integer",
-              "exclusiveMinimum": 0,
+              "minimum": 0,
               "maximum": 10000
             },
             "nonRevealChargeBps": {
@@ -5908,7 +5908,7 @@
             },
             "walletCapBps": {
               "type": "integer",
-              "exclusiveMinimum": 0,
+              "minimum": 0,
               "maximum": 10000
             },
             "nonRevealChargeBps": {

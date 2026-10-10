@@ -156,6 +156,7 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
   const curveIssuer = new SimWallet(sol.sim.family, 'issuer:curve-cam');
   await sol.sim.submit({ kind: 'setAllowlist', wallet: curveIssuer.address, allowed: true }, 'allowlistManager');
   await sol.exec(curveIssuer, { kind: 'registerIssuer' });
+  // the harness gives a curve series Stage 1's zeros (no lockup, no wallet cap, no raise phases; S3 WP7)
   const curveTerms = defaultTerms(sol.sim, { raiseStyle: 'curve', minimumRaise: '2000000000', reservePrice: '5000000' }).terms;
   await sol.exec(curveIssuer, { kind: 'createSeries', terms: curveTerms });
   return { chains: sims, harnesses, issuers: out };

@@ -14,8 +14,8 @@
  * At scale 1 each scale-aware function returns Stage 1's own function's result (it calls it), so sealed-bid series
  * still run only Stage 1's functions; `stage1:sync` lists the family as ported and checks its Rust sources at the pin.
  *
- * The interim Merces math (Part C) survives only under `interim.*`, and since S2 only the window and curve cap
- * (`walletCapUnits`; S5) and the FX family (`quarterAverageRate`, `coverageOk`, `deviationBps`, `withinBand`,
+ * The interim Merces math (Part C) survives only under `interim.*`, and since S2 only the window cap (`walletCapUnits`;
+ * S5; a curve raise has no cap since S3) and the FX family (`quarterAverageRate`, `coverageOk`, `deviationBps`, `withinBand`,
  * `pythToWad`; S5). The sealed-bid auction is Stage 1's family below (S2).
  */
 export * as interim from './interim/index.ts';

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { BN254_FR, CURRENCY_CODES, DEFAULT_PARAMETERS } from '@merces/math';
 import { randomBytes } from 'node:crypto';
 import {
-  DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, seriesTermsViolations, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
+  CURVE_NO_CAP, CURVE_TERMS_ZEROS, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
   amountBearingEvents, permissionlessCommandSchema,
   ChainError, attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, permissionlessCommandKinds, serviceCommandKinds, serviceCommandSchema, termsCommitment, userCommandKinds, userCommandSchema,
@@ -25,6 +25,10 @@ import {
  *  - S3-FN: `claimFinal` and `FinalClaimed{units: weight}` (Stage 1 `claim_final`);
  *  - S3-BR: `burnRetired{holder}` (Stage 1 `burn_retired`), permissionless;
  *  - S3-BU: `PayoutClaimed.burnedUnits`.
+ *  - S3-CT: curve terms are Stage 1's (registry create_series, lib.rs:462-572): lockup, wallet cap and raise durations 0
+ *    (CurveTermsNotZero), a positive threshold (CurveThresholdZero), USDC (CurveQuoteMintMismatch), in the registry's
+ *    order; the sealed-only rules (minimum raise reachable, a wallet cap of one unit) do not apply;
+ *  - S3-NC: "no cap": one statement (`CURVE_NO_CAP`) for every curve read and notice.
  */
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
@@ -236,7 +240,10 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
     capMultipleWad: (25n * 10n ** 17n).toString(), hurdleWad: (8n * 10n ** 16n).toString(), payoutMultipleK: 5, lockupSeconds: DEFAULTS.lockupSeconds, walletCapBps: 1000, auctionFeeBps: 100, payoutFeeBps: 500,
     nonRevealChargeBps: DEFAULTS.nonRevealChargeBps, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds,
     dueDays: 30, graceDays: 15, formalNoticeDays: 90, unitsOffered: '500', reservePrice: '8000000', minimumRaise: '4000000000', releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], raiseStyle: 'sealed',
+    stablecoin: 'USDC',
   };
+  // Stage 1's curve series (curve_mode.rs curve_series_args: 100 units, X = 1,000 USDC): the zeros, any start price
+  const curve: BoundedTerms = { ...sealed, ...CURVE_TERMS_ZEROS, raiseStyle: 'curve', unitsOffered: '100', reservePrice: '1', minimumRaise: '1000000000' };
   const fields = (t: BoundedTerms) => seriesTermsViolations(t).map((v) => [v.field, v.stage1]);
   it('bounds the commit and reveal phases and the non-reveal charge of a sealed raise, in Stage 1 order', () => {
     expect(seriesTermsViolations(sealed)).toEqual([]);
@@ -244,9 +251,55 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
       ['payoutFeeBps', 'ParameterOutOfBounds'], ['nonRevealChargeBps', 'ParameterOutOfBounds'], ['commitDurationSeconds', 'ParameterOutOfBounds'], ['revealDurationSeconds', 'ParameterOutOfBounds'],
     ]);
   });
-  it('leaves them unchecked on a curve series (Stage 1 requires 0 there; S5), and checks the rest', () => {
-    expect(fields({ ...sealed, raiseStyle: 'curve', commitDurationSeconds: 0, revealDurationSeconds: 0, nonRevealChargeBps: 5000 })).toEqual([]);
-    expect(fields({ ...sealed, raiseStyle: 'curve', commitDurationSeconds: 0, auctionFeeBps: 1001 })).toEqual([['auctionFeeBps', 'ParameterOutOfBounds']]);
+  // cause S3-CT (was: the raise's terms unchecked on a curve series, the lockup and wallet cap bounded as on a sealed one)
+  it('a curve series takes Stage 1\'s zeros for the lockup, the wallet cap and the raise durations (CurveTermsNotZero), one per field', () => {
+    expect(seriesTermsViolations(curve)).toEqual([]);
+    expect(CURVE_ZERO_TERMS).toEqual(['lockupSeconds', 'walletCapBps', 'commitDurationSeconds', 'revealDurationSeconds']);
+    // the sealed defaults on a curve series: each zero term is refused, by field and value-free
+    const v = seriesTermsViolations({ ...sealed, raiseStyle: 'curve' });
+    expect(v.map((x) => [x.field, x.stage1, x.code])).toEqual(CURVE_ZERO_TERMS.map((f) => [f, 'CurveTermsNotZero', 'curve-zero']));
+    expect(v.map((x) => x.message)).toEqual(['lockup must be 0 on a curve series', 'wallet cap must be 0 on a curve series', 'commit duration must be 0 on a curve series', 'reveal duration must be 0 on a curve series']);
+    // Stage 1's own refusals (curve_mode.rs:630-643): lockup 1, wallet cap 1,000 bps
+    expect(fields({ ...curve, lockupSeconds: 1 })).toEqual([['lockupSeconds', 'CurveTermsNotZero']]);
+    expect(fields({ ...curve, walletCapBps: 1000 })).toEqual([['walletCapBps', 'CurveTermsNotZero']]);
+    // their bounds are not checked (Stage 1 bounds its defaults there, lib.rs:517-540), nor the held non-reveal charge
+    expect(fields({ ...curve, nonRevealChargeBps: 5000 })).toEqual([]);
+    // the other bounds still hold
+    expect(fields({ ...curve, auctionFeeBps: 1001 })).toEqual([['auctionFeeBps', 'ParameterOutOfBounds']]);
+  });
+
+  it('a curve series needs a threshold and USDC; the sealed-only rules do not apply; the registry\'s order', () => {
+    // a zero threshold (curve_mode.rs:645-649) and a USDG quote (:625-629)
+    expect(fields({ ...curve, minimumRaise: '0' })).toEqual([['minimumRaise', 'CurveThresholdZero']]);
+    expect(fields({ ...curve, stablecoin: 'USDG' })).toEqual([['stablecoin', 'CurveQuoteMintMismatch']]);
+    // the minimum raise is the curve's target X: no "≤ reserve × units" (the start price is informational), and no
+    // wallet cap of one unit (lib.rs:564-570)
+    expect(fields({ ...curve, minimumRaise: '1000000000000', reservePrice: '1', unitsOffered: '1' })).toEqual([]);
+    // the registry's order (lib.rs:462-572): units, reserve, threshold, zeros, quote, schedule, bounds
+    expect(fields({ ...sealed, raiseStyle: 'curve', unitsOffered: '0', reservePrice: '0', minimumRaise: '0', stablecoin: 'USDG', releaseSchedule: [{ afterSeconds: 0, bps: 5000 }], capMultipleWad: '1', lockupSeconds: 0, walletCapBps: 0, commitDurationSeconds: 1 })).toEqual([
+      ['unitsOffered', 'InvalidTerms'], ['reservePrice', 'InvalidTerms'], ['minimumRaise', 'CurveThresholdZero'], ['commitDurationSeconds', 'CurveTermsNotZero'], ['revealDurationSeconds', 'CurveTermsNotZero'],
+      ['stablecoin', 'CurveQuoteMintMismatch'], ['releaseSchedule', 'InvalidReleaseSchedule'], ['capMultipleWad', 'ParameterOutOfBounds'],
+    ]);
+    // a sealed raise is unchanged: Stage 1's reference simulator's order, a reachable minimum raise, a one-unit cap
+    expect(fields({ ...sealed, minimumRaise: String(500n * 8_000_000n + 1n) })).toEqual([['minimumRaise', 'InvalidTerms']]);
+    expect(fields({ ...sealed, unitsOffered: '5', minimumRaise: '1' })).toEqual([['unitsOffered', 'InvalidTerms']]);
+    expect(fields({ ...sealed, walletCapBps: 0 })).toEqual([['walletCapBps', 'ParameterOutOfBounds'], ['unitsOffered', 'InvalidTerms']]);
+  });
+
+  it('the canonical terms accept a wallet cap of 0 (a curve series records it); r is per base lamport on a curve', () => {
+    const terms = { stablecoin: 'USDC', stablecoinMint: 'm', unitsOffered: '100', reservePrice: '1', minimumRaise: '1000000000', capMultipleWad: '2500000000000000000', lockupSeconds: 0, releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], auctionFeeBps: 100, payoutFeeBps: 500, hurdleWad: '0', payoutMultipleK: 5, walletCapBps: 0, nonRevealChargeBps: 0, commitDurationSeconds: 0, revealDurationSeconds: 0, dueDays: 30, graceDays: 15, formalNoticeDays: 90, contractHash: '0x' + 'ab'.repeat(32), termsCommitment: '0x' + 'cd'.repeat(32), tierFlags: { tier1: false, tier2: true, tier3: true, tier4: false }, reportingCurrency: 'USD', raiseStyle: 'curve' };
+    expect(seriesTermsSchema.safeParse(terms).success).toBe(true);
+    expect(seriesTermsSchema.safeParse({ ...terms, walletCapBps: -1 }).success).toBe(false);
+    // B-C2 (registry lib.rs:594-600): units offered × 10^6 on a curve series, the units offered on a sealed one
+    expect(rateUnits({ unitsOffered: '100', raiseStyle: 'curve' })).toBe(100_000_000n);
+    expect(rateUnits({ unitsOffered: '100', raiseStyle: 'sealed' })).toBe(100n);
+  });
+
+  // cause S3-NC: one statement for "no cap", said plainly (owner direction)
+  it('says "no cap" in one statement: no wallet cap at any stage, any number of units, before and after the curve fills', () => {
+    expect(CURVE_NO_CAP).toMatch(/^No cap: /);
+    for (const clause of ['no wallet cap at any stage', 'any number of units', 'before and after the curve fills']) expect(CURVE_NO_CAP).toContain(clause);
+    expect(CURVE_NO_CAP).not.toMatch(/default/i);
   });
 });
 

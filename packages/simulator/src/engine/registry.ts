@@ -25,17 +25,21 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   if (!issuer) throw new ChainError('Unauthorized', 'issuer not registered');
   if (issuer.issuanceStopped) throw new ChainError('NotPermitted', 'issuer stopped issuance');
   const t = cmd.terms;
+  // curve mode is Solana only: the EVM registry refuses it right after the issuer check, before the stablecoin and the
+  // terms (MercesRegistry.sol:479-481, CurveModeUnsupported)
+  if (t.raiseStyle === 'curve' && e.state.config.family !== 'solana') fail('CurveModeUnsupported', 'curve-mode raises exist on Solana only');
   const coin = e.state.config.stablecoins[t.stablecoin];
   if (!coin) throw new ChainError('InvalidTerms', `${t.stablecoin} is not available on ${e.state.config.chain}`);
   if (coin.mint !== t.stablecoinMint) throw new ChainError('InvalidTerms', 'stablecoin mint does not match the chain catalogue');
-  // Stage 1's create_series rules in its order (SIM:756-781): the bounded parameters (ParameterOutOfBounds; the
-  // non-reveal charge and the raise durations on a sealed raise only), units, reserve and minimum raise and the wallet
-  // cap of at least one unit (InvalidTerms), the release schedule (InvalidReleaseSchedule); the messages carry the
-  // field and the bound, never the submitted value
+  // Stage 1's create_series rules in its order. A sealed raise (SIM:756-781): the bounded parameters
+  // (ParameterOutOfBounds), units, reserve and minimum raise and the wallet cap of at least one unit (InvalidTerms), the
+  // release schedule (InvalidReleaseSchedule). A curve raise (the Solana registry, lib.rs:462-572): units and reserve
+  // (InvalidTerms), the threshold (CurveThresholdZero), lockup, wallet cap and raise durations 0 (CurveTermsNotZero),
+  // USDC (CurveQuoteMintMismatch), the schedule, then the bounds on the other terms. The messages carry the field and
+  // the bound, never the submitted value
   const violation = seriesTermsViolations(t)[0];
   if (violation) fail(violation.stage1, violation.message);
   if (/^0x0{64}$/.test(t.contractHash)) throw new ChainError('InvalidTerms', 'contract hash required: a raise needs a signed contract');
-  if (t.raiseStyle === 'curve' && e.state.config.family !== 'solana') throw new ChainError('InvalidTerms', 'curve-mode raises exist on Solana only');
   // New raises paused: Stage 1 refuses open_raise (NewRaisesPaused, SIM:875), never create_series, so a sealed series
   // is still created (openRaise refuses). A curve raise starts at creation here: its creation is the curve's
   // activation, which Stage 1 refuses while paused (Solana registry `mark_curve_activated`).

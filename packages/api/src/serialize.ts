@@ -1,4 +1,4 @@
-import { unitScaleOf } from '@merces/domain';
+import { CURVE_NO_CAP, unitScaleOf } from '@merces/domain';
 
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
@@ -17,7 +17,9 @@ const num = (v: unknown): number | null => (v === null || v === undefined ? null
  * projection (migration 019) and is public onchain state, like the bids it settles.
  *
  * `unitScale` (S3) is derived from the raise style (`unitScaleOf`: 1 sealed, 10^6 base lamports per whole unit for a
- * curve), as Stage 1 fixes `unit_scale` at creation from the style; no column holds it.
+ * curve), as Stage 1 fixes `unit_scale` at creation from the style; no column holds it. So is "no cap" (S3 WP7): a
+ * curve series has no wallet cap at any stage (its `terms.walletCapBps` is Stage 1's 0), so the read says so itself,
+ * `noCap: true` with the one statement (`CURVE_NO_CAP`), rather than leave a 0 to be read as a cap.
  */
 export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -27,6 +29,8 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
     stablecoin: r.stablecoin,
     raiseStyle: r.raise_style,
     unitScale: unitScaleOf(r.raise_style as 'sealed' | 'curve').toString(),
+    noCap: r.raise_style === 'curve',
+    noCapStatement: r.raise_style === 'curve' ? CURVE_NO_CAP : null,
     phase: r.phase,
     status: r.status,
     terms: {

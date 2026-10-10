@@ -48,8 +48,8 @@ money path passes the unit scale to `@merces/math`'s scale-aware family, which i
 personalities differ only in address format and stablecoin catalogue. Time is a controllable clock (`advanceTime`,
 `setTime`) exposed in mock mode through `/dev/advance-time`. The arithmetic is Stage 1's: `@merces/math` re-exports
 `@merces/sdk` and `@merces/reference` (workspace packages built from the pinned `stage1` submodule) by name, plus a
-few helpers Stage 1 has no counterpart for; the interim Merces math survives under `interim.*` only for the window and
-curve cap and the FX family (both S5). The sealed raise's math (escrow, validity, tally, clearing, per-bid processing)
+few helpers Stage 1 has no counterpart for; the interim Merces math survives under `interim.*` only for the window cap and
+the FX family (both S5; a curve raise has no cap at any stage since S3, `CURVE_NO_CAP`). The sealed raise's math (escrow, validity, tally, clearing, per-bid processing)
 is Stage 1's auction family; the engine only checks the call order, stores the results, moves balances and emits
 events. The one non-reveal-charge switch (`NON_REVEAL_CHARGE_HELD`, an owner hold) keeps the charge at 0.
 
@@ -83,7 +83,7 @@ Nothing in the backend signs for a user. Services return `UnsignedTx` objects (`
 | poi | reporting schedule and deadlines, zkTLS sessions, FX basis, offchain proof and attestation verification, report store (commitments and amounts only), submit/payIn builders, tier-1 reconciliation |
 | auction | pre-checks on Stage 1's escrow and validity rules, open/cancel/commit/reveal/deliver builders and the next settlement step for any wallet, encrypted reveal backups, the settlement preview (Stage 1's math), settlement and delivery for the keepers (separate jobs, delivery retries and stuck alerts), reveal reminders |
 | lifecycle | treasury draws and pause, payout claims behind `PayoutClaimBuilder` (private payouts can slot in), redemption quote/builders/tail, retirement, transfer windows (flag-gated) |
-| meteora | curve-mode config generation, graduation monitoring, buy builder with a USDG→USDC swap route through the DEX port |
+| meteora | curve-mode config generation, graduation monitoring, buy builder with a USDG→USDC swap route through the DEX port; no cap at any stage (every response carries `noCap` and the one statement) |
 | threshold | admin-curated median income and inflation table with history; yearly indexing candidates |
 | attestor | attestor queue, hardship review (end-to-end encrypted), tier-3 cases and annual true-up, fallback FX signing, two-attestor extinguishment |
 | accounting | fee ledger, per-series statements, reconciliation of indexed totals against onchain balances, CSV export |

@@ -210,7 +210,7 @@ paths:
       x-access: public
       tags: [lifecycle]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Current transfer window, phase, flag state and market rules, content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+      responses: { '200': { description: 'Current transfer window, phase, flag state and market rules. A curve-mode series has no transfer windows and no cap at any stage: walletCapUnits null, noCap true and noCapStatement (the one no-cap statement)', content: { application/json: { schema: { type: object, properties: { walletCapUnits: { type: [string, 'null'], description: "the window's wallet cap in units; null on a curve-mode series" }, noCap: { type: boolean, description: 'present and true on a curve-mode series' }, noCapStatement: { type: string } } } } } }, '404': { $ref: '#/components/responses/NotFound' } }
   /series/{seriesId}/window/build-commit:
     post:
       operationId: buildWindowCommit

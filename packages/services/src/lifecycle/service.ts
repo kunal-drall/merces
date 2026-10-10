@@ -1,5 +1,5 @@
 import { AppError, audit, getFlag } from '@merces/core';
-import { ChainError, orderCommitment, type ChainPort, type PositionState, type SeriesState, type UnsignedTx } from '@merces/domain';
+import { CURVE_NO_CAP, ChainError, orderCommitment, type ChainPort, type PositionState, type SeriesState, type UnsignedTx } from '@merces/domain';
 import { SeriesStatus, WAD, YEAR, capRemaining, fromPid, interim, isTerminal, periodStart, pidAt, redemptionQuoteScaled, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -276,7 +276,8 @@ export class LifecycleService {
     const w = await chain.getTransferWindow(seriesId);
     const now = await chain.now();
     const enabled = await getFlag(this.ctx.pool, 'transfer_windows');
-    if (s.terms.raiseStyle === 'curve') return { seriesId, enabled: false, lockupEndsAt: s.lockupEndsAt, window: null, phase: 'none', walletCapUnits: null, rules: 'Curve-mode units have no transfer windows: after graduation they trade freely on the DEX pool with no wallet cap and no allowlist (A-CURVE-2).' };
+    // a curve series has no transfer windows and no cap at any stage (A-CURVE-2): no window cap, and the one statement
+    if (s.terms.raiseStyle === 'curve') return { seriesId, enabled: false, lockupEndsAt: s.lockupEndsAt, window: null, phase: 'none', walletCapUnits: null, noCap: true, noCapStatement: CURVE_NO_CAP, rules: `Curve-mode units have no transfer windows: after graduation they trade freely on the DEX pool, with no allowlist. ${CURVE_NO_CAP}` };
     return { seriesId, enabled, lockupEndsAt: s.lockupEndsAt, window: w, phase: !w || w.cleared ? 'none' : now < w.commitEndsAt ? 'commit' : now < w.revealEndsAt ? 'reveal' : 'clear-due', walletCapUnits: interim.walletCapUnits(BigInt(s.unitsOutstanding), BigInt(s.terms.walletCapBps)).toString(), rules: 'Units move only through windows; direct transfers always fail; no lending, AMMs or shorting (C10).' };
   }
   async buildWindowCommit(seriesId: string, session: Session, input: { wallet: string; side: 'buy' | 'sell'; commitment: string; deposit: string; units: string }): Promise<{ tx: UnsignedTx }> {

@@ -56,7 +56,12 @@ export const seriesTermsSchema = z.object({
   payoutFeeBps: z.number().int().nonnegative().max(10_000),
   hurdleWad: wadSchema,
   payoutMultipleK: z.number().int().positive(),
-  walletCapBps: z.number().int().positive().max(10_000),
+  /**
+   * The sealed-bid raise's wallet cap, in bps of the units offered (Stage 1 `wallet_cap_bps`; a bid above
+   * `floor(units × bps / 10000)` is invalid at reveal). A curve series records 0: a curve raise has no wallet cap at any
+   * stage (`CURVE_NO_CAP`; Stage 1 refuses anything else, CurveTermsNotZero).
+   */
+  walletCapBps: z.number().int().nonnegative().max(10_000),
   /**
    * Stage 1's non-reveal charge (SPEC §5.2): the share of an unrevealed bid's escrow kept when the raise settles.
    * Stage 1 bounds it to 0–1,000 bps at creation for a sealed raise. **Owner hold:** the charge is not modelled; new
@@ -67,7 +72,8 @@ export const seriesTermsSchema = z.object({
   /**
    * The commit phase of the sealed-bid raise, in seconds from `openRaise` (Stage 1 `commit_duration`); the reveal phase
    * follows for `revealDurationSeconds` (Stage 1 `reveal_duration`). The chain enforces Stage 1's bounds for a sealed
-   * raise (1 hour–30 days and 1 hour–7 days); curve series carry them unchecked until S5 (Stage 1 requires 0 there).
+   * raise (1 hour–30 days and 1 hour–7 days); a curve series records 0 for both, as for `lockupSeconds` and
+   * `walletCapBps` (Stage 1 CurveTermsNotZero).
    */
   commitDurationSeconds: z.number().int().nonnegative(),
   revealDurationSeconds: z.number().int().nonnegative(),

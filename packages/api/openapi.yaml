@@ -322,6 +322,7 @@ components:
           $ref: "#/components/schemas/Wad"
         lockupSeconds:
           type: integer
+          description: 0 on a curve-mode series (Stage 1 requires 0)
         releaseSchedule:
           type: array
           items:
@@ -336,6 +337,7 @@ components:
           type: integer
         walletCapBps:
           type: integer
+          description: "the sealed-bid raise's wallet cap in bps of the units offered (a bid above it is invalid at reveal). 0 on a curve-mode series, which has no wallet cap at any stage (the series' noCap): 0 there never means a cap"
         dueDays:
           type: integer
         graceDays:
@@ -363,12 +365,12 @@ components:
           type:
             - integer
             - "null"
-          description: "the sealed raise's commit phase (Stage 1 commit_duration; 1 hour–30 days): openRaise sets the commit end to now + this. Null on a row indexed before S2"
+          description: "the sealed raise's commit phase (Stage 1 commit_duration; 1 hour–30 days): openRaise sets the commit end to now + this. 0 on a curve-mode series (no auction). Null on a row indexed before S2"
         revealDurationSeconds:
           type:
             - integer
             - "null"
-          description: the sealed raise's reveal phase (Stage 1 reveal_duration; 1 hour–7 days), after the commit end. Null on a row indexed before S2
+          description: the sealed raise's reveal phase (Stage 1 reveal_duration; 1 hour–7 days), after the commit end. 0 on a curve-mode series. Null on a row indexed before S2
         nonRevealChargeBps:
           type:
             - integer
@@ -689,6 +691,14 @@ components:
             - "1"
             - "1000000"
           description: "accounting units per whole unit (Stage 1's unit_scale, fixed by the raise style): 1 for a sealed-bid series, 1000000 for a curve series, whose units are counted in base lamports. unitsSold, unitsOutstanding, position units and paidPerUnitWad are per accounting unit; issuePrice, capPerUnit and redemption prices per whole unit"
+        noCap:
+          type: boolean
+          description: "true on a curve-mode series: it has no wallet cap at any stage, before or after the curve fills (terms.walletCapBps is Stage 1's 0). false on a sealed-bid series, whose auction caps each wallet at terms.walletCapBps"
+        noCapStatement:
+          type:
+            - string
+            - "null"
+          description: the one no-cap statement on a curve-mode series; null on a sealed-bid series
         phase:
           $ref: "#/components/schemas/RaisePhase"
         status:
@@ -2461,27 +2471,28 @@ components:
               type: integer
             total:
               type: string
-    CurveWalletCap:
+    CurveNoCap:
       type: object
-      description: The wallet cap on curve buys. It applies only while the curve is bonding; after graduation units trade freely and no cap applies (A-CURVE-2).
+      description: "What every curve read and builder response says about the cap: a curve raise has no wallet cap at any stage, before or after the curve fills (owner direction; Stage 1 stores the curve series' wallet cap as 0 and enforces none). The other fields depend on the operation."
       required:
-        - bps
-        - units
-        - enforced
-        - note
+        - walletCap
+        - noCap
+        - noCapStatement
+        - notice
+      additionalProperties: true
       properties:
-        bps:
-          type: integer
-          description: the series' wallet cap in basis points of the units offered
-        units:
-          type: string
-          description: the most units one wallet may hold before graduation
-        enforced:
+        walletCap:
+          type: "null"
+          description: always null (there is no wallet cap)
+        noCap:
           type: boolean
-          description: true while the curve is bonding; false after graduation or once buys are closed
-        note:
+          const: true
+        noCapStatement:
           type: string
-          description: plain-language statement of the rule for this series
+          description: the one no-cap statement
+        notice:
+          type: string
+          description: the plain-language notice for curve buyers
     Notification:
       type: object
       required:
@@ -4011,6 +4022,7 @@ paths:
         - terms
       security:
         - session: []
+      description: Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months.
       requestBody:
         required: true
         content:
@@ -7189,13 +7201,22 @@ paths:
         - $ref: "#/components/parameters/seriesId"
       responses:
         "200":
-          description: Current transfer window
-          phase: null
-          flag state and market rules: null
+          description: "Current transfer window, phase, flag state and market rules. A curve-mode series has no transfer windows and no cap at any stage: walletCapUnits null, noCap true and noCapStatement (the one no-cap statement)"
           content:
             application/json:
               schema:
                 type: object
+                properties:
+                  walletCapUnits:
+                    type:
+                      - string
+                      - "null"
+                    description: the window's wallet cap in units; null on a curve-mode series
+                  noCap:
+                    type: boolean
+                    description: present and true on a curve-mode series
+                  noCapStatement:
+                    type: string
         "404":
           $ref: "#/components/responses/NotFound"
   /series/{seriesId}/window/build-commit:
@@ -7352,16 +7373,11 @@ paths:
         - $ref: "#/components/parameters/seriesId"
       responses:
         "200":
-          description: Curve progress, spot price, graduation state, the bonding-phase wallet cap and the plain notice that no cap or allowlist applies after graduation
+          description: Curve progress, spot price, graduation state, no cap (a curve raise has no wallet cap at any stage) and the plain notice
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  walletCap:
-                    $ref: "#/components/schemas/CurveWalletCap"
-                  notice:
-                    type: string
+                $ref: "#/components/schemas/CurveNoCap"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -7379,10 +7395,11 @@ paths:
       responses:
         "200":
           description: Config generated through the Meteora port (Stage 1's oracle-driven generator) and stored
+          with no cap and the notice: null
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/CurveNoCap"
   /series/{seriesId}/curve/build-buy:
     post:
       operationId: buildCurveBuy
@@ -7416,20 +7433,11 @@ paths:
                   type: integer
       responses:
         "200":
-          description: Curve quote
-          minimum units out: null
-          an unsigned buy transaction and: null
-          when paying in USDG: null
-          the swap route to sign first: null
+          description: Curve quote, minimum units out, an unsigned buy transaction and, when paying in USDG, the swap route to sign first; no cap (a wallet buys any amount, whatever it holds) and the notice
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  walletCap:
-                    $ref: "#/components/schemas/CurveWalletCap"
-                  notice:
-                    type: string
+                $ref: "#/components/schemas/CurveNoCap"
         "403":
           description: Not an eligible backer
           the wallet is not linked to the caller: null
@@ -7437,7 +7445,7 @@ paths:
         "409":
           description: The curve graduated (buy on the DEX pool), or the series or raise is closed
         "422":
-          description: The buy would take the wallet past the bonding-phase wallet cap (the message gives the holding, the cap and the remaining allowance); not a Solana series; stablecoin unavailable
+          description: Not a Solana series; stablecoin unavailable
   /admin/curves/monitor:
     post:
       operationId: monitorCurves

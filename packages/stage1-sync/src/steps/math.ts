@@ -129,7 +129,7 @@ export function checkPorted(root: string, stage1Math: Record<string, unknown>): 
  */
 export const INTERIM_FAMILIES: { family: string; names: string[] }[] = [
   { family: 'FX (S5)', names: ['quarterAverageRate', 'coverageOk', 'deviationBps', 'withinBand', 'pythToWad'] },
-  { family: 'window and curve cap (S5)', names: ['walletCapUnits'] },
+  { family: 'window cap (S5)', names: ['walletCapUnits'] },
 ];
 
 /** Interim families with at least one name still exported, with those names; unknown names land in "unclassified". */
@@ -262,7 +262,7 @@ function writeParity(ctx: StepCtx, r: { pkg: string | null; commit: string | nul
   }
   lines.push(
     '- No function-by-function comparison: the gateway runs Stage 1\'s functions, so comparing them would compare Stage 1 with itself. Behavioural parity is measured by the Stage 1 vector runner (`VECTOR_PARITY.md`). The last comparison of the interim math against Stage 1 (6 of 12 families disagreeing) is in this file\'s git history.',
-    '- The interim (Part C) math survives only under `interim.*`: since S2, only the window and curve cap (S5) and the FX family (S5); the sealed-bid auction runs Stage 1\'s auction family. Any other name there is reported as unclassified.',
+    '- The interim (Part C) math survives only under `interim.*`: since S2, only the window cap (S5; a curve raise has no cap since S3) and the FX family (S5); the sealed-bid auction runs Stage 1\'s auction family. Any other name there is reported as unclassified.',
     '',
   );
   if (r.remaining.length) {

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { setFlag } from '@merces/core';
-import { orderCommitment } from '@merces/domain';
+import { CURVE_NO_CAP, orderCommitment } from '@merces/domain';
 import { KeeperScheduler, transferWindowsJob } from '@merces/keepers';
 import { periodOf } from '@merces/math';
 import { defaultTerms } from '@merces/simulator';
@@ -18,6 +18,7 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - G7: an extinguishment returns only the unvested proceeds (`proceeds − vested(now)`) through the final pool; the
  *    vested tranches stay in the treasury, drawable by the issuer;
  *  - M5: Stage 1 extinguishes a settled raise only (RaiseNotSettled), so an ungraduated curve cannot be extinguished.
+ *  - S3-NC: a curve raise has no wallet cap at any stage (owner; Stage 1 stores 0).
  */
 describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -99,7 +100,7 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     expect(row).toMatchObject({ extinguished_at: null, t: USDC(1500).toString(), r: '0' });
     expect(row.status).not.toBe('Extinguished');
     expect((await rig.get('/admin/accounting/reconcile', adminTok)).json().checks.filter((c: { ok: boolean }) => !c.ok)).toEqual([]);
-    // the curve keeps bonding under its wallet cap
-    expect((await rig.get(`/series/${seriesId}/curve`)).json().walletCap).toMatchObject({ enforced: true });
+    // the curve keeps bonding, with no cap at any stage (cause S3-NC: was "under its wallet cap")
+    expect((await rig.get(`/series/${seriesId}/curve`)).json()).toMatchObject({ walletCap: null, noCap: true, noCapStatement: CURVE_NO_CAP });
   });
 });

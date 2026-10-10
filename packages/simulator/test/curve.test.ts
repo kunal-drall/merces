@@ -5,6 +5,7 @@ import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './hel
 /*
  * S3 cause codes:
  *  - S3-FN: the final-pool share is `claimFinal`'s (`FinalClaimed`, then the burn; was paid by `claimPayout`).
+ *  - S3-NC: a curve raise has no wallet cap at any stage (owner; Stage 1 stores 0): a wallet buys any amount.
  */
 describe('curve mode (solana)', () => {
   async function curveSeries() {
@@ -25,6 +26,19 @@ describe('curve mode (solana)', () => {
     await expectChainError(h.exec(h.backers[0]!, { kind: 'buyCurve', seriesId, amountIn: USDC(100).toString(), minUnitsOut: '0' }), 'NotAllowlisted');
     const ok = await h.exec(h.backers[1]!, { kind: 'buyCurve', seriesId, amountIn: USDC(100).toString(), minUnitsOut: '0' });
     expect(types(ok.events)).toEqual(['UnitsMinted', 'TreasuryFunded']);
+  });
+
+  // cause S3-NC: no cap. The series records a wallet cap of 0 and one wallet buys past what any cap would have allowed
+  // (the old bonding cap was 20% of the units offered in the harness, 200 of 1,000)
+  it('has no wallet cap: one wallet buys any number of units', async () => {
+    const { h, seriesId } = await curveSeries();
+    expect((await h.sim.getSeries(seriesId))!.terms.walletCapBps).toBe(0);
+    const w = h.backers[0]!;
+    for (const amount of [USDC(900), USDC(900)]) {
+      const buy = await h.exec(w, { kind: 'buyCurve', seriesId, amountIn: amount.toString(), minUnitsOut: '0' });
+      expect(types(buy.events)).toEqual(['UnitsMinted', 'TreasuryFunded']);
+    }
+    expect(BigInt((await h.sim.getPosition(seriesId, w.address))!.units)).toBeGreaterThan(200n);
   });
 
   // Stage 1 extinguishes only a settled raise (exit.rs:229-236, SIM:1425): an ungraduated curve has not settled, so it is

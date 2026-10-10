@@ -1,5 +1,5 @@
 import { ChainError, type Command } from '@merces/domain';
-import { WAD, bpsOf, capPerUnit, interim, mulDiv } from '@merces/math';
+import { WAD, bpsOf, capPerUnit, mulDiv } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { position, registerHolder, setUnits } from './holders.ts';
@@ -21,12 +21,8 @@ export function buyCurve(e: EngineCore, signer: string, cmd: Extract<Command, { 
   const spot = c.basePrice + mulDiv(c.basePrice, c.slopeWad * s.unitsOutstanding, WAD);
   const units = amountIn / spot;
   if (units < big(cmd.minUnitsOut) || units === 0n) throw new ChainError('InvalidTerms', 'slippage: fewer units than minUnitsOut');
-  // Bonding phase only: a wallet may hold at most the series' wallet cap of the units offered (C10/R17, A-CURVE-2).
-  // After graduation the units trade freely on the DEX pool and no cap can hold; the issuer accepted that by
-  // choosing a curve raise.
-  const cap = interim.walletCapUnits(s.terms.unitsOffered, s.terms.walletCapBps);
-  const held = s.positions.get(signer)?.units ?? 0n;
-  if (held + units > cap) throw new ChainError('WalletCap', `before graduation a wallet may hold at most ${cap} units; this wallet holds ${held}`);
+  // no cap (owner; S3 WP7): a curve raise has no wallet cap at any stage, as Stage 1 stores 0 and enforces none
+  // (CURVE_NO_CAP); a wallet buys and holds any number of units
   e.debit(signer, s.terms.stablecoinMint, amountIn);
   c.raised += amountIn;
   s.treasuryTotal += amountIn;

@@ -14,6 +14,11 @@ import { seriesOf } from './kit.ts';
  *    charge 0–1,000 bps), on a sealed raise only;
  *  - S2-AD: commit and reveal durations are series terms; `openRaise` derives the phase ends from them;
  *  - S2-E: Stage 1's open_raise error names (`detail.stage1`) and check order.
+ *
+ * S3 cause codes:
+ *  - S3-CT: a curve series takes Stage 1's curve terms (registry create_series, lib.rs:462-572): lockup, wallet cap and
+ *    raise durations 0 (CurveTermsNotZero), a positive threshold (CurveThresholdZero), USDC (CurveQuoteMintMismatch);
+ *    the EVM refuses curve mode first (CurveModeUnsupported, MercesRegistry.sol:481).
  */
 
 const HOUR = 3_600;
@@ -82,17 +87,58 @@ describe('createSeries on Stage 1 create_series rules (S2-CR)', () => {
     expect((await h.sim.getSeries(hi))!.terms).toMatchObject({ commitDurationSeconds: 30 * DAY, revealDurationSeconds: 7 * DAY, nonRevealChargeBps: 1000 });
   });
 
-  it('exempts curve series from those three bounds only (Stage 1 requires 0 there; S5)', async () => {
+  // cause S3-CT (was: the raise's terms unchecked on a curve series, which carried the sealed lockup and wallet cap)
+  it('a curve series takes Stage 1\'s zeros: lockup, wallet cap and raise durations 0, else CurveTermsNotZero', async () => {
     const h = await issuerHarness('solana');
     const curve = { raiseStyle: 'curve' as const, minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' };
-    // Stage 1's curve values (0) and values outside the sealed bounds both pass
-    for (const over of [{ commitDurationSeconds: 0, revealDurationSeconds: 0, nonRevealChargeBps: 0 }, { commitDurationSeconds: 31 * DAY, revealDurationSeconds: 8 * DAY, nonRevealChargeBps: 1001 }]) {
-      const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, ...over }).terms });
-      expect(types(created.events)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
+    // the harness gives a curve series the zeros; the series records them (cap 0: no wallet cap at any stage)
+    const { terms } = defaultTerms(h.sim, curve);
+    expect([terms.lockupSeconds, terms.walletCapBps, terms.commitDurationSeconds, terms.revealDurationSeconds]).toEqual([0, 0, 0, 0]);
+    const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
+    expect(types(created.events)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
+    const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
+    expect((await h.sim.getSeries(seriesId))!.terms).toMatchObject({ lockupSeconds: 0, walletCapBps: 0, commitDurationSeconds: 0, revealDurationSeconds: 0 });
+    // any other value is refused, field by field (Stage 1 curve_mode.rs:630-643: lockup 1, wallet cap 1,000 bps)
+    for (const over of [{ lockupSeconds: 1 }, { walletCapBps: 1000 }, { commitDurationSeconds: DAY }, { revealDurationSeconds: HOUR }]) {
+      const e = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, ...over }).terms }));
+      expect([e.code, e.detail]).toEqual(['InvalidTerms', { stage1: 'CurveTermsNotZero' }]);
+      expect(e.message).toMatch(/must be 0 on a curve series$/);
     }
+    // the sealed bounds on them are not checked (Stage 1 bounds its defaults there), nor the held non-reveal charge
+    const charged = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, nonRevealChargeBps: 1001 }).terms });
+    expect(types(charged.events)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
     // the other bounds still hold on a curve series
     const e = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, auctionFeeBps: 1001 }).terms }));
     expect(e.detail).toEqual({ stage1: 'ParameterOutOfBounds' });
+    expect(await h.sim.listSeries()).toHaveLength(2);
+  });
+
+  it('a curve series needs a threshold and USDC; the sealed-only rules do not apply (cause S3-CT)', async () => {
+    const h = await issuerHarness('solana');
+    const curve = { raiseStyle: 'curve' as const, minimumRaise: USDC(2000).toString(), reservePrice: USDC(5).toString(), unitsOffered: '1000' };
+    // a zero threshold (curve_mode.rs:645-649)
+    const zero = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, minimumRaise: '0' }).terms }));
+    expect([zero.code, zero.detail]).toEqual(['InvalidTerms', { stage1: 'CurveThresholdZero' }]);
+    // a USDG quote (curve_mode.rs:625-629): the curve quotes in USDC
+    const usdg = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, stablecoin: 'USDG' }).terms }));
+    expect([usdg.code, usdg.detail]).toEqual(['InvalidTerms', { stage1: 'CurveQuoteMintMismatch' }]);
+    // the threshold is the curve's target, not bounded by reserve × units, and there is no one-unit cap rule
+    const big = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, unitsOffered: '1', reservePrice: '1', minimumRaise: USDC(1_000_000).toString() }).terms });
+    expect(types(big.events)).toEqual(['SeriesCreated', 'CurveSeriesCreated']);
+    // the registry's order: the threshold before the zeros, the zeros before the quote mint
+    const first = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, minimumRaise: '0', walletCapBps: 1000, stablecoin: 'USDG' }).terms }));
+    expect(first.detail).toEqual({ stage1: 'CurveThresholdZero' });
+    const second = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { ...curve, walletCapBps: 1000, stablecoin: 'USDG' }).terms }));
+    expect(second.detail).toEqual({ stage1: 'CurveTermsNotZero' });
+  });
+
+  it('the EVM refuses a curve series first, whatever its terms (CurveModeUnsupported; cause S3-CT)', async () => {
+    const h = await issuerHarness('monad');
+    for (const terms of [defaultTerms(h.sim, { raiseStyle: 'curve', minimumRaise: USDC(2000).toString() }).terms, { ...defaultTerms(h.sim).terms, raiseStyle: 'curve' as const, stablecoin: 'USDG' as const }]) {
+      const e = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms }));
+      expect([e.code, e.detail]).toEqual(['NotPermitted', { stage1: 'CurveModeUnsupported' }]);
+    }
+    expect(await h.sim.listSeries()).toHaveLength(0);
   });
 });
 

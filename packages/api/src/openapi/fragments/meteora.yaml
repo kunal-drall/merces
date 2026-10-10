@@ -7,7 +7,7 @@ paths:
       x-access: public
       tags: [curve]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: 'Curve progress, spot price, graduation state, the bonding-phase wallet cap and the plain notice that no cap or allowlist applies after graduation', content: { application/json: { schema: { type: object, properties: { walletCap: { $ref: '#/components/schemas/CurveWalletCap' }, notice: { type: string } } } } } }, '404': { $ref: '#/components/responses/NotFound' }, '409': { description: Not a curve-mode series } }
+      responses: { '200': { description: 'Curve progress, spot price, graduation state, no cap (a curve raise has no wallet cap at any stage) and the plain notice', content: { application/json: { schema: { $ref: '#/components/schemas/CurveNoCap' } } } }, '404': { $ref: '#/components/responses/NotFound' }, '409': { description: Not a curve-mode series } }
   /series/{seriesId}/curve/configure:
     post:
       operationId: configureCurve
@@ -15,7 +15,7 @@ paths:
       tags: [curve]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: Config generated through the Meteora port (Stage 1's oracle-driven generator) and stored, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Config generated through the Meteora port (Stage 1's oracle-driven generator) and stored, with no cap and the notice, content: { application/json: { schema: { $ref: '#/components/schemas/CurveNoCap' } } } } }
   /series/{seriesId}/curve/build-buy:
     post:
       operationId: buildCurveBuy
@@ -25,10 +25,10 @@ paths:
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [buyer, amountIn], properties: { buyer: { type: string }, amountIn: { $ref: '#/components/schemas/Money' }, payIn: { type: string, enum: [USDC, USDG] }, slippageBps: { type: integer } } } } } }
       responses:
-        '200': { description: Curve quote, minimum units out, an unsigned buy transaction and, when paying in USDG, the swap route to sign first, content: { application/json: { schema: { type: object, properties: { walletCap: { $ref: '#/components/schemas/CurveWalletCap' }, notice: { type: string } } } } } }
+        '200': { description: 'Curve quote, minimum units out, an unsigned buy transaction and, when paying in USDG, the swap route to sign first; no cap (a wallet buys any amount, whatever it holds) and the notice', content: { application/json: { schema: { $ref: '#/components/schemas/CurveNoCap' } } } }
         '403': { description: Not an eligible backer, the wallet is not linked to the caller, or it is not on the chain's allowlist }
         '409': { description: 'The curve graduated (buy on the DEX pool), or the series or raise is closed' }
-        '422': { description: 'The buy would take the wallet past the bonding-phase wallet cap (the message gives the holding, the cap and the remaining allowance); not a Solana series; stablecoin unavailable' }
+        '422': { description: 'Not a Solana series; stablecoin unavailable' }
   /admin/curves/monitor:
     post:
       operationId: monitorCurves
@@ -38,12 +38,13 @@ paths:
       responses: { '200': { description: Graduation check across curve-mode series; cranks graduation when the threshold is crossed, content: { application/json: { schema: { type: object } } } } }
 components:
   schemas:
-    CurveWalletCap:
+    CurveNoCap:
       type: object
-      description: The wallet cap on curve buys. It applies only while the curve is bonding; after graduation units trade freely and no cap applies (A-CURVE-2).
-      required: [bps, units, enforced, note]
+      description: 'What every curve read and builder response says about the cap: a curve raise has no wallet cap at any stage, before or after the curve fills (owner direction; Stage 1 stores the curve series'' wallet cap as 0 and enforces none). The other fields depend on the operation.'
+      required: [walletCap, noCap, noCapStatement, notice]
+      additionalProperties: true
       properties:
-        bps: { type: integer, description: the series' wallet cap in basis points of the units offered }
-        units: { type: string, description: the most units one wallet may hold before graduation }
-        enforced: { type: boolean, description: true while the curve is bonding; false after graduation or once buys are closed }
-        note: { type: string, description: plain-language statement of the rule for this series }
+        walletCap: { type: 'null', description: 'always null (there is no wallet cap)' }
+        noCap: { type: boolean, const: true }
+        noCapStatement: { type: string, description: the one no-cap statement }
+        notice: { type: string, description: the plain-language notice for curve buyers }

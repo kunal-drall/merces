@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { SimHarness, SimulatorChain, defaultTerms } from '../src/index.ts';
 import { USDC, expectChainError } from './helpers.ts';
 
+/*
+ * S3 cause codes:
+ *  - S3-CT: curve terms on Stage 1's registries; the EVM refuses curve mode first (CurveModeUnsupported, NotPermitted).
+ */
 describe('simulator personalities', () => {
   it('monad has USDC only; solana has USDC and USDG; addresses have the right shape', async () => {
     const sol = SimulatorChain.createSync({ personality: 'solana' });
@@ -14,7 +18,8 @@ describe('simulator personalities', () => {
     const { terms } = defaultTerms(sol, { stablecoin: 'USDG' });
     await h.exec(h.issuer, { kind: 'registerIssuer' });
     await expectChainError(h.exec(h.issuer, { kind: 'createSeries', terms: { ...terms, stablecoinMint: terms.stablecoinMint } }), 'InvalidTerms');
-    await expectChainError(h.exec(h.issuer, { kind: 'createSeries', terms: { ...defaultTerms(h.sim).terms, raiseStyle: 'curve' } }), 'InvalidTerms');
+    // cause S3-CT: the EVM refuses curve mode first, as Stage 1's registry does (CurveModeUnsupported; was InvalidTerms)
+    await expectChainError(h.exec(h.issuer, { kind: 'createSeries', terms: { ...defaultTerms(h.sim).terms, raiseStyle: 'curve' } }), 'NotPermitted');
   });
   it('solana can raise in USDG', async () => {
     const h = await SimHarness.create('solana');

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { DEFAULTS, INDEXING_RULE_CODE, currencyCodeOf, normaliseAddress, randomFieldSalt, seriesTermsViolations, termsCommitment, type BoundedTerms, type SeriesTerms, type UnsignedTx } from '@merces/domain';
+import { CURVE_TERMS_ZEROS, DEFAULTS, INDEXING_RULE_CODE, currencyCodeOf, normaliseAddress, randomFieldSalt, seriesTermsViolations, termsCommitment, type BoundedTerms, type SeriesTerms, type UnsignedTx } from '@merces/domain';
 import { U64_MAX, WAD, ratePerUnit, wadFromDecimal, wadToDecimal } from '@merces/math';
 import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -24,7 +24,11 @@ export const publicTermsSchema = z.object({
   minimumRaise: z.string().regex(/^\d+$/),
   /** decimal, e.g. "2.5"; at most 18 places (WAD) */
   capMultiple: z.string().regex(WAD_DECIMAL, WAD_DECIMAL_MESSAGE).default(wadToDecimal(DEFAULTS.capMultipleWad)),
-  lockupSeconds: z.number().int().nonnegative().default(DEFAULTS.lockupSeconds),
+  /**
+   * Defaults by raise style (`lockupOf`): Stage 1's 18 months on a sealed raise, 0 on a curve raise, which has no
+   * lockup (Stage 1 CurveTermsNotZero: any other value is a field issue).
+   */
+  lockupSeconds: z.number().int().nonnegative().optional(),
   releaseSchedule: z.array(z.object({ afterSeconds: z.number().int().nonnegative(), bps: z.number().int().positive() })).min(1).default([{ afterSeconds: 0, bps: 5000 }, { afterSeconds: 90 * 86_400, bps: 2500 }, { afterSeconds: 180 * 86_400, bps: 2500 }]),
   hurdle: z.string().regex(WAD_DECIMAL, WAD_DECIMAL_MESSAGE).default(wadToDecimal(DEFAULTS.hurdleWad)),
   payoutMultipleK: z.number().int().positive().default(DEFAULTS.payoutMultipleK),
@@ -115,6 +119,29 @@ function shareRateWad(shareRate: string): bigint | null {
   }
 }
 
+/** The lockup a draft records: the issuer's, else the raise style's default (0 on a curve raise, which has none). */
+export function lockupOf(pub: Pick<z.infer<typeof publicTermsSchema>, 'lockupSeconds' | 'raiseStyle'>): number {
+  return pub.lockupSeconds ?? (pub.raiseStyle === 'curve' ? 0 : DEFAULTS.lockupSeconds);
+}
+
+/**
+ * The terms `buildCreateSeries` fills in rather than the issuer: the fees, the wallet cap and the raise's own terms (its
+ * phases and the non-reveal charge, 0 while held: a series' frozen charter keeps 0 after the hold is lifted). A curve
+ * raise records Stage 1's zeros for the wallet cap and the raise durations (`CURVE_TERMS_ZEROS`): it has no auction and
+ * no wallet cap at any stage (`CURVE_NO_CAP`).
+ */
+function filledTerms(raiseStyle: 'sealed' | 'curve'): Pick<SeriesTerms, 'auctionFeeBps' | 'payoutFeeBps' | 'walletCapBps' | 'nonRevealChargeBps' | 'commitDurationSeconds' | 'revealDurationSeconds' | 'dueDays' | 'graceDays' | 'formalNoticeDays'> {
+  const curve = raiseStyle === 'curve';
+  return {
+    auctionFeeBps: DEFAULTS.auctionFeeBps, payoutFeeBps: DEFAULTS.payoutFeeBps,
+    walletCapBps: curve ? CURVE_TERMS_ZEROS.walletCapBps : DEFAULTS.walletCapBps,
+    nonRevealChargeBps: DEFAULTS.nonRevealChargeBps,
+    commitDurationSeconds: curve ? CURVE_TERMS_ZEROS.commitDurationSeconds : DEFAULTS.commitDurationSeconds,
+    revealDurationSeconds: curve ? CURVE_TERMS_ZEROS.revealDurationSeconds : DEFAULTS.revealDurationSeconds,
+    dueDays: DEFAULTS.dueDays, graceDays: DEFAULTS.graceDays, formalNoticeDays: DEFAULTS.formalNoticeDays,
+  };
+}
+
 /** The public-terms field a canonical terms field comes from, where the names differ (the others share the name). */
 const PUBLIC_FIELD: Partial<Record<keyof SeriesTerms, string>> = { capMultipleWad: 'capMultiple', hurdleWad: 'hurdle' };
 
@@ -140,14 +167,13 @@ export class TermsService {
     const capWad = wadFromDecimal(pub.capMultiple);
     const hurdleWad = wadFromDecimal(pub.hurdle);
     const units = BigInt(pub.unitsOffered);
-    // Stage 1's create_series rules (bounded parameters, units, reserve, minimum raise, a wallet cap of at least one unit,
-    // the release schedule) on the terms buildCreateSeries will send, with the fee, wallet-cap, raise-duration and
-    // non-reveal defaults it fills in, so a draft fails here, per field, instead of at createSeries
+    // Stage 1's create_series rules on the terms buildCreateSeries will send, with the terms it fills in, so a draft fails
+    // here, per field, instead of at createSeries: a sealed raise's bounded parameters, units, reserve, minimum raise, a
+    // wallet cap of at least one unit and the release schedule; a curve raise's units, reserve, threshold, zeros
+    // (lockup, wallet cap, raise durations), USDC, schedule and bounds
     const onchain: BoundedTerms = {
-      capMultipleWad: capWad.toString(), hurdleWad: hurdleWad.toString(), payoutMultipleK: pub.payoutMultipleK, lockupSeconds: pub.lockupSeconds, walletCapBps: DEFAULTS.walletCapBps,
-      auctionFeeBps: DEFAULTS.auctionFeeBps, payoutFeeBps: DEFAULTS.payoutFeeBps,
-      nonRevealChargeBps: DEFAULTS.nonRevealChargeBps, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds,
-      dueDays: DEFAULTS.dueDays, graceDays: DEFAULTS.graceDays, formalNoticeDays: DEFAULTS.formalNoticeDays,
+      ...filledTerms(pub.raiseStyle),
+      capMultipleWad: capWad.toString(), hurdleWad: hurdleWad.toString(), payoutMultipleK: pub.payoutMultipleK, lockupSeconds: lockupOf(pub), stablecoin: pub.stablecoin,
       unitsOffered: pub.unitsOffered, reservePrice: pub.reservePrice, minimumRaise: pub.minimumRaise, releaseSchedule: pub.releaseSchedule, raiseStyle: pub.raiseStyle,
     };
     for (const v of seriesTermsViolations(onchain)) issues.push({ field: PUBLIC_FIELD[v.field] ?? v.field, code: v.code, message: v.message });
@@ -222,7 +248,7 @@ export class TermsService {
     const privatePayload = JSON.stringify(vaultTermsPayload({ ...fields, shareRate: priv.shareRate }));
     const ciphertext = this.ctx.vault.encrypt(privatePayload, `terms:${draftId}`);
     // the indexing rule is a public rule name (the commitment hides θ and r, not the rule), so it is kept as metadata for the yearly indexing run (E9)
-    const publicStored = { ...pub, indexingRule: priv.indexingRule, capMultipleWad: derived.capMultipleWad, capMultipleDecimal: pub.capMultiple, hurdleWad: derived.hurdleWad, thresholdFloor: derived.thresholdFloor, floorPlaceholder: derived.floorPlaceholder };
+    const publicStored = { ...pub, lockupSeconds: lockupOf(pub), indexingRule: priv.indexingRule, capMultipleWad: derived.capMultipleWad, capMultipleDecimal: pub.capMultiple, hurdleWad: derived.hurdleWad, thresholdFloor: derived.thresholdFloor, floorPlaceholder: derived.floorPlaceholder };
     // the draft's commitment and the vault ciphertext must change together, or the stored terms stop matching the hash
     await withTransaction(this.ctx.pool, async (c) => {
       await c.query("update series_drafts set public_terms = $2, terms_commitment = $3, state = 'terms_set', updated_at = now() where draft_id = $1", [draftId, JSON.stringify(publicStored), commitment]);
@@ -271,13 +297,13 @@ export class TermsService {
     const p = draft.public_terms as z.infer<typeof publicTermsSchema> & { capMultipleWad: string; hurdleWad: string };
     const coin = info.stablecoins[p.stablecoin];
     if (!coin) throw AppError.unprocessable('stablecoin no longer available on chain');
+    // the fees, the wallet cap and the raise's own terms are filled in (Stage 1's 7-day commit and 2-day reveal on a
+    // sealed raise; Stage 1's zeros on a curve raise, which has no auction and no wallet cap)
     const terms: SeriesTerms = {
-      stablecoin: p.stablecoin, stablecoinMint: coin.mint, unitsOffered: p.unitsOffered, reservePrice: p.reservePrice, minimumRaise: p.minimumRaise, capMultipleWad: p.capMultipleWad, lockupSeconds: p.lockupSeconds,
-      releaseSchedule: p.releaseSchedule, auctionFeeBps: DEFAULTS.auctionFeeBps, payoutFeeBps: DEFAULTS.payoutFeeBps, hurdleWad: p.hurdleWad, payoutMultipleK: p.payoutMultipleK, walletCapBps: DEFAULTS.walletCapBps,
-      // the raise's phases (Stage 1's 7-day commit and 2-day reveal) and the non-reveal charge (0 while held: this
-      // series' frozen charter keeps 0 after the hold is lifted)
-      nonRevealChargeBps: DEFAULTS.nonRevealChargeBps, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds,
-      dueDays: DEFAULTS.dueDays, graceDays: DEFAULTS.graceDays, formalNoticeDays: DEFAULTS.formalNoticeDays, contractHash: draft.contract_hash, termsCommitment: draft.terms_commitment, tierFlags: p.tierFlags, reportingCurrency: p.reportingCurrency, raiseStyle: p.raiseStyle,
+      ...filledTerms(p.raiseStyle),
+      stablecoin: p.stablecoin, stablecoinMint: coin.mint, unitsOffered: p.unitsOffered, reservePrice: p.reservePrice, minimumRaise: p.minimumRaise, capMultipleWad: p.capMultipleWad, lockupSeconds: lockupOf(p),
+      releaseSchedule: p.releaseSchedule, hurdleWad: p.hurdleWad, payoutMultipleK: p.payoutMultipleK,
+      contractHash: draft.contract_hash, termsCommitment: draft.terms_commitment, tierFlags: p.tierFlags, reportingCurrency: p.reportingCurrency, raiseStyle: p.raiseStyle,
     };
     const tx = await chain.build({ kind: 'createSeries', terms }, draft.issuer);
     return { tx, terms };

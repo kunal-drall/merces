@@ -52,6 +52,7 @@ import {
  *    required escrow, validity at reveal, begin/tally/finalize, per-bid processing, honest claims and the clearing
  *    price); the interim auction family is retired (its callers moved to Stage 1's steps), and the interim cap left
  *    under `interim` is the window and curve cap (S5).
+ *  - S3-NC: a curve raise has no cap at any stage (owner; Stage 1 stores 0), so the interim cap is the window cap only.
  *  - S3-M: a segregated family is ported from Stage 1's Rust (merces-common @1bfc66b; A-MATH-3): the unit scale, the
  *    vault, tail and redemption at a scale, and curve mode's arithmetic. They are ours, not Stage 1 objects; at scale 1
  *    the scale-aware ones return Stage 1's own results (`curve.test.ts`).
@@ -113,15 +114,15 @@ describe('@merces/math gateway', () => {
     expect(gateway.walletCapUnitsAtAuction).toBe(ref.walletCapUnitsAtAuction);
     expect(gateway.redemptionQuote).toBe(ref.redemptionQuote);
   });
-  it('`interim` keeps exactly the window and curve cap (S5) and the FX family (S5)', () => {
+  it('`interim` keeps exactly the window cap (S5) and the FX family (S5)', () => {
     // cause S2-G: the interim auction family (clearing, deposit, fee) is retired; the sealed raise runs Stage 1's
     expect(Object.keys(interim).sort()).toEqual([
-      // window and curve cap (S5)
+      // window cap (S5); cause S3-NC: no longer the curve's (a curve raise has no cap)
       'walletCapUnits',
       // FX (S5)
       'quarterAverageRate', 'coverageOk', 'deviationBps', 'withinBand', 'pythToWad',
     ].sort());
-    // the interim cap is not Stage 1's (S5 moves the window and curve to Stage 1's)
+    // the interim cap is not Stage 1's (S5 moves the window to Stage 1's)
     expect(interim.walletCapUnits).not.toBe((ref as unknown as Record<string, unknown>).walletCapUnits);
   });
 });
@@ -386,7 +387,7 @@ describe('time', () => {
   });
 });
 
-describe('the interim window and curve cap (S5)', () => {
+describe('the interim window cap (S5)', () => {
   it('wallet cap is at least one unit', () => {
     expect(interim.walletCapUnits(1_000n, 1_000n)).toBe(100n);
     expect(interim.walletCapUnits(5n, 1_000n)).toBe(1n);

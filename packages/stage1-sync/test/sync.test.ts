@@ -19,6 +19,7 @@ import { locateStage1 } from '@merces/chains';
  *  - S2-G: the interim auction family is retired; the interim cap left is the window and curve cap (S5).
  * S3 cause codes:
  *  - S3-M: the math step lists the curve family ported from merces-common (A-MATH-3) and checks its Rust at the pin.
+ *  - S3-NC: a curve raise has no cap at any stage, so the interim cap family is the window cap (S5) only.
  */
 
 /** A Stage 1 drop with only a manifest (plus extra files written by the caller). */
@@ -202,8 +203,9 @@ describe('stage1:sync', () => {
     expect(r.details).toContain(`ported family: the merces-common items of all ${PORTED.length} names present and unchanged since the port (@1bfc66b)`);
     expect(r.summary).toMatch(/beside 16 ported from its Rust \(A-MATH-3\)/);
     const md = readFileSync(join(outDir, 'MATH_PARITY.md'), 'utf8');
-    // cause S2-G: the interim auction family is gone; the window and curve cap (S5) and the FX family (S5) remain
-    expect(md).toMatch(new RegExp(`^Stage 1 math imported at ${pinned}; interim families remaining: .*window and curve cap \\(S5\\)`, 'm'));
+    // cause S2-G: the interim auction family is gone; the window cap (S5; cause S3-NC: no curve cap) and the FX family
+    // (S5) remain
+    expect(md).toMatch(new RegExp(`^Stage 1 math imported at ${pinned}; interim families remaining: .*window cap \\(S5\\)`, 'm'));
     expect(md).not.toMatch(/auction \(S2\)/);
     expect(md).toContain('## Ported from Stage 1\'s Rust (A-MATH-3)');
     expect(md).toContain('Check at this checkout: **ok**.');
@@ -289,17 +291,18 @@ describe('stage1:sync', () => {
 
   it('math: interim families are reported from what `interim` still exports', () => {
     const all = interimRemaining();
-    // every interim name belongs to a family; the window and curve cap (S5) and FX (S5) families outlive S2
+    // every interim name belongs to a family; the window cap (S5; cause S3-NC: no curve cap) and FX (S5) families
+    // outlive S2
     expect(all.find((f) => f.family === 'unclassified')).toBeUndefined();
     // cause S2-G: since S2 exactly these two families remain, each in full (the auction family is retired)
     expect(all).toEqual(INTERIM_FAMILIES);
-    expect(INTERIM_FAMILIES.map((f) => f.family)).toEqual(['FX (S5)', 'window and curve cap (S5)']);
+    expect(INTERIM_FAMILIES.map((f) => f.family)).toEqual(['FX (S5)', 'window cap (S5)']);
     expect(INTERIM_FAMILIES.flatMap((f) => f.names).filter((n, i, a) => a.indexOf(n) !== i)).toEqual([]);
     expect(Object.keys(interim)).toContain('walletCapUnits');
     // a name outside the families (a retired interim name coming back, a Stage 1 name under `interim`) is unclassified
     expect(interimRemaining(['walletCapUnits', 'pythToWad', 'min', 'requiredEscrow'])).toEqual([
       { family: 'FX (S5)', names: ['pythToWad'] },
-      { family: 'window and curve cap (S5)', names: ['walletCapUnits'] },
+      { family: 'window cap (S5)', names: ['walletCapUnits'] },
       { family: 'unclassified', names: ['min', 'requiredEscrow'] },
     ]);
   });
