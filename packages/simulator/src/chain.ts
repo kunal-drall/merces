@@ -1,9 +1,9 @@
 import {
   ChainError, adminCommandSchema, permissionlessCommandSchema, serviceCommandSchema, userCommandSchema,
-  type AdminCommand, type AuctionState, type BidState, type ChainInfo, type ChainPort, type CurveState, type CurveSwapQuote, type DomainEvent, type HealthReport,
+  type AuctionState, type BuildableCommand, type BidState, type ChainInfo, type ChainPort, type CurveState, type CurveSwapQuote, type DomainEvent, type HealthReport,
   type Groth16ProofJson, type IssuerState, type PeriodState, type PositionState, type QuarterRateState, type RateAccumulatorState, type RedemptionState, type SeriesState,
-  type PermissionlessCommand, type ServiceCommand, type ServiceRole, type SignedTx, type Stablecoin, type TransferWindowState, type TreasuryState, type TxResult, type UnsignedTx,
-  type UserCommand, type VaultState,
+  type ServiceCommand, type ServiceRole, type SignedTx, type Stablecoin, type TransferWindowState, type TreasuryState, type TxResult, type UnsignedTx,
+  type VaultState,
 } from '@merces/domain';
 import { wadToDecimal } from '@merces/math';
 import { DEFAULT_GENESIS, SimClock } from './clock.ts';
@@ -319,14 +319,37 @@ export class SimulatorChain implements ChainPort {
   }
 
   // ---------------------------------------------------------------- writes
-  async build(command: UserCommand | AdminCommand | PermissionlessCommand, signer: string, coSigners: string[] = []): Promise<UnsignedTx> {
-    // a user command, a permissionless one (any wallet may send it) or an admin one; anything else is refused here
-    const parsed = (userCommandSchema.safeParse(command).success
+  async build(command: BuildableCommand | readonly BuildableCommand[], signer: string, coSigners: string[] = []): Promise<UnsignedTx> {
+    const list = Array.isArray(command) ? (command as readonly BuildableCommand[]) : [command as BuildableCommand];
+    const parsed = this.bundle(list);
+    if (parsed.length === 1) {
+      const one = parsed[0]!;
+      return { chain: this.chain, family: this.family, signer, coSigners, command: one, payload: JSON.stringify({ command: one, signer, coSigners }), encoding: 'simulator-json', summary: `${one.kind} on ${this.chain}`, expiresAt: null };
+    }
+    // one transaction of several commands, all or nothing (owner direction of 2026-10-10)
+    return {
+      chain: this.chain, family: this.family, signer, coSigners, command: parsed[0]!, commands: parsed, payload: JSON.stringify({ commands: parsed, signer, coSigners }), encoding: 'simulator-json',
+      summary: `${parsed.map((c) => c.kind).join(' + ')} on ${this.chain} (one transaction)`, expiresAt: null,
+    };
+  }
+  /**
+   * The commands of one transaction, each parsed as a user, permissionless (any wallet may send it) or admin command;
+   * anything else is refused here. Several commands make one all-or-nothing transaction: never empty, never with a
+   * report in it (its Groth16 verdict is established per transaction; NotPermitted), and only on the Solana personality
+   * (the EVM adapter builds one command per transaction: NotImplemented).
+   */
+  private bundle(list: readonly BuildableCommand[]): BuildableCommand[] {
+    if (list.length === 0) throw new ChainError('NotPermitted', 'a transaction needs at least one command');
+    const parsed = list.map((command) => (userCommandSchema.safeParse(command).success
       ? userCommandSchema.parse(command)
       : permissionlessCommandSchema.safeParse(command).success
         ? permissionlessCommandSchema.parse(command)
-        : adminCommandSchema.parse(command)) as UserCommand | AdminCommand | PermissionlessCommand;
-    return { chain: this.chain, family: this.family, signer, coSigners, command: parsed, payload: JSON.stringify({ command: parsed, signer, coSigners }), encoding: 'simulator-json', summary: `${parsed.kind} on ${this.chain}`, expiresAt: null };
+        : adminCommandSchema.parse(command)) as BuildableCommand);
+    if (parsed.length > 1) {
+      if (this.family !== 'solana') throw new ChainError('NotImplemented', 'the EVM adapter builds one command per transaction');
+      if (parsed.some((c) => c.kind === 'submitReport')) throw new ChainError('NotPermitted', 'a report is sent in a transaction of its own');
+    }
+    return parsed;
   }
   async send(signed: SignedTx): Promise<TxResult> {
     const { tx } = signed;
@@ -334,11 +357,17 @@ export class SimulatorChain implements ChainPort {
     for (const who of [tx.signer, ...tx.coSigners]) {
       if (signed.signatures[who] !== `sim:${who}`) throw new ChainError('Unauthorized', `missing or invalid signature for ${who}`);
     }
+    const actor = { kind: 'user' as const, signers: [tx.signer, ...tx.coSigners] };
+    // a transaction of several commands: all of them, in order, or none (one execution, one rollback)
+    if (tx.commands && tx.commands.length > 1) {
+      const cmds = this.bundle(tx.commands as BuildableCommand[]);
+      return this.run(() => this.engine.executeAll(cmds, actor));
+    }
     // Groth16 verification is asynchronous and the engine is not: verify outside the write queue and hand the verdict
     // in. Sound because the engine still checks the public signals against its own state before it uses the verdict.
     const cmd = tx.command;
     const proofVerdict = cmd.kind === 'submitReport' && cmd.proof?.system === 'groth16-bn254' ? await this.verifyReportProof(cmd.proof.proof, cmd.proof.publicInputs) : undefined;
-    return this.run(() => this.engine.execute(cmd, { kind: 'user', signers: [tx.signer, ...tx.coSigners] }, { proofVerdict }));
+    return this.run(() => this.engine.execute(cmd, actor, { proofVerdict }));
   }
   /** The configured verifier's verdict; undefined without a verifier, false when it throws (malformed proof or signals). */
   private async verifyReportProof(proof: Groth16ProofJson, publicInputs: string[]): Promise<boolean | undefined> {

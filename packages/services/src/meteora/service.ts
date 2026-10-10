@@ -1,7 +1,7 @@
 import { AppError, audit } from '@merces/core';
-import { CURVE_BUYER_NOTICE, CURVE_NO_CAP, ChainError, curveBuyerNotice, type CurveState, type UnsignedTx } from '@merces/domain';
+import { CURVE_BUYER_NOTICE, CURVE_NO_CAP, ChainError, curveBeforeYouBuy, curveBuyerNotice, curveNoticeFigures, type CurveBeforeYouBuy, type CurveState, type UnsignedTx } from '@merces/domain';
 import type { DexPort, MeteoraPort } from '@merces/ports';
-import type { Session } from '@merces/api';
+import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 import { censusLockedBy } from '../curve-census.ts';
 import { advanceCurves, type CurveLifecyclePass } from './lifecycle.ts';
@@ -21,14 +21,28 @@ import { advanceCurves, type CurveLifecyclePass } from './lifecycle.ts';
  */
 const NO_CAP = { walletCap: null, noCap: true, noCapStatement: CURVE_NO_CAP } as const;
 
-/** The buyer notice with the curve's own figures (its fee, its target, Meteora's migration fee); the template without a curve. */
+/**
+ * The buyer notice with the curve's own figures, read from the chain (its trading fee and that fee's split among
+ * Merces, Meteora and the issuer, its target, Meteora's migration fee; owner direction of 2026-10-10); the template
+ * without a curve.
+ */
 export function curveNotice(c: CurveState | null): string {
-  return c ? curveBuyerNotice({ tradingFeeBps: c.tradingFeeBps, target: c.migrationQuoteThreshold, migrationFeePercentage: c.migrationFeePercentage }) : CURVE_BUYER_NOTICE;
+  return c ? curveBuyerNotice(curveNoticeFigures(c)) : CURVE_BUYER_NOTICE;
 }
 
 /** What a wallet that is not approved gets from a curve: it can trade, never earn (Stage 1: registration and staking need the allowlist). */
-const NOT_APPROVED =
+export const NOT_APPROVED =
   'This wallet is not approved (allowlisted): it can buy and sell on the curve, but it cannot register or stake, so its units earn nothing from the series, and it cannot tender them at a redemption. Only selling is open to it.';
+
+/** A trade on the curve as the quote and the swap builder take it. */
+export interface CurveSwapInput {
+  wallet: string;
+  side: 'buy' | 'sell';
+  /** buy: stablecoin base units in (USDC, or USDG swapped to USDC first); sell: base lamports in */
+  amountIn: string;
+  payIn: 'USDC' | 'USDG';
+  slippageBps: number;
+}
 
 export class MeteoraService {
   constructor(
@@ -70,57 +84,113 @@ export class MeteoraService {
 
   /**
    * Curve status for anyone: the curve as the chain reads it (`CurveState`: the pool's target and progress, P0, the fill,
-   * the completion and what was collected), the Meteora port's pool when configured, no cap, the buyer notice and the
-   * last recorded lifecycle check (`graduationMonitor`: a check by the keepers or the admin monitor that sent a step or
-   * read a change, with the chain's time).
+   * the completion and what was collected, the trading fee and its split), the Meteora port's pool when configured, no
+   * cap, the buyer notice, the statements a buyer acknowledges before a buy (`beforeYouBuy`) and the last recorded
+   * lifecycle check (`graduationMonitor`: a check by the keepers or the admin monitor that sent a step or read a change,
+   * with the chain's time).
    */
   async status(seriesId: string): Promise<Record<string, unknown>> {
     const { chain } = await this.curveSeries(seriesId);
     const onchain = await chain.getCurve(seriesId);
     const cfg = (await this.ctx.pool.query('select * from curve_configs where series_id = $1', [seriesId])).rows[0];
     const pool = cfg?.pool ? await this.meteora.getPoolState(cfg.pool) : null;
-    return { seriesId, onchain, pool, configured: !!cfg, ...NO_CAP, notice: curveNotice(onchain), graduationMonitor: await this.lastGraduationCheck(seriesId) };
+    return {
+      seriesId, onchain, pool, configured: !!cfg, ...NO_CAP, notice: curveNotice(onchain), beforeYouBuy: onchain ? curveBeforeYouBuy(curveNoticeFigures(onchain)) : null,
+      graduationMonitor: await this.lastGraduationCheck(seriesId),
+    };
   }
 
   /**
-   * Quote and build a buy on the curve (a `curveSwap` buy; a Meteora DBC swap on a live chain). With USDG as the pay-in
-   * currency, returns the swap route first. Any wallet may buy (Stage 1 has no allowlist on the curve and no cap): a
-   * wallet that is not approved gets `earns: false` and a warning, not a refusal (owner question 3's default). 409 once
-   * the curve filled (its units trade on the DEX pool).
+   * A trade's checks and figures, shared by the pre-buy quote and the swap builder. 403 for a wallet not linked to the
+   * caller; 409 once the curve filled (its units trade on the DEX pool), before any swap is quoted or built; a sell pays
+   * out USDC (422 for USDG) and needs the units in the wallet (409, `detail.code` InsufficientFunds). A buy paid in USDG
+   * is quoted through the DEX port first (the swap itself is built only by the builder). Any wallet may trade (Stage 1
+   * has no allowlist on the curve and no cap): `earns` is false for a wallet that is not approved, which gets a
+   * `warning` on a buy (owner question 3's default), never a refusal.
    */
-  async buildBuy(seriesId: string, session: Session, buyer: string, amountIn: string, payIn: 'USDC' | 'USDG', slippageBps: number): Promise<Record<string, unknown>> {
+  private async prepareSwap(seriesId: string, session: Session, input: CurveSwapInput) {
     const { chain, series } = await this.curveSeries(seriesId);
-    if (!session.wallets.some((w) => w.chain === chain.chain && w.address === buyer) && !session.roles.includes('admin')) throw AppError.forbidden('wallet is not linked to your account');
+    if (!session.wallets.some((w) => w.chain === chain.chain && w.address === input.wallet) && !session.roles.includes('admin')) throw AppError.forbidden('wallet is not linked to your account');
     const curve = await chain.getCurve(seriesId);
     // refuse before any swap is built: a USDG buyer would otherwise swap for real and then have the buy revert
     if (!curve || curve.poolComplete) throw AppError.conflict('the curve has filled; its units trade on the DEX pool');
+    if (input.side === 'sell' && input.payIn !== 'USDC') throw AppError.unprocessable('a sell pays out USDC');
+    if (input.side === 'sell') {
+      const held = BigInt((await chain.getPosition(seriesId, input.wallet))?.walletUnits ?? '0');
+      if (held < BigInt(input.amountIn)) throw AppError.conflict('the wallet holds fewer units than that', { code: 'InsufficientFunds', walletUnits: held.toString() });
+    }
     // no cap (owner direction; Stage 1 stores 0): a wallet buys any amount, whatever it already holds
-    const earns = await chain.isAllowlisted(buyer);
+    const earns = await chain.isAllowlisted(input.wallet);
     const info = await chain.info();
     const usdc = info.stablecoins.USDC!.mint;
-    let swap: Record<string, unknown> | null = null;
-    let usdcAmount = amountIn;
-    if (payIn === 'USDG') {
+    let dexQuote: Awaited<ReturnType<DexPort['quote']>> | null = null;
+    let usdcAmount = input.amountIn;
+    if (input.side === 'buy' && input.payIn === 'USDG') {
       const usdg = info.stablecoins.USDG?.mint;
       if (!usdg) throw AppError.unprocessable('USDG not available on this chain');
-      const q = await this.dex.quote({ inputMint: usdg, outputMint: usdc, amount: amountIn, slippageBps, taker: buyer });
-      const built = await this.dex.buildSwap(q.orderId);
-      usdcAmount = q.outAmount;
-      swap = { provider: this.dex.provider, quote: q, transactionBase64: built.transactionBase64, expiresAt: built.expiresAt, note: 'Sign and send this swap first; the curve quotes in USDC.' };
+      dexQuote = await this.dex.quote({ inputMint: usdg, outputMint: usdc, amount: input.amountIn, slippageBps: input.slippageBps, taker: input.wallet });
+      usdcAmount = dexQuote.outAmount;
     }
     let quote;
     try {
-      quote = await chain.quoteCurveSwap(seriesId, 'buy', usdcAmount);
+      quote = await chain.quoteCurveSwap(seriesId, input.side, usdcAmount);
     } catch (e) {
-      if (e instanceof ChainError && (e.code === 'InvalidTerms' || e.code === 'WrongPhase')) throw AppError.conflict(`cannot buy: ${e.message}`);
+      if (e instanceof ChainError && (e.code === 'InvalidTerms' || e.code === 'WrongPhase')) throw AppError.conflict(`cannot ${input.side}: ${e.message}`);
       throw e;
     }
-    const minimumAmountOut = ((BigInt(quote.amountOut) * BigInt(10_000 - slippageBps)) / 10_000n).toString();
-    const tx: UnsignedTx = await chain.build({ kind: 'curveSwap', seriesId, side: 'buy', amountIn: usdcAmount, minimumAmountOut }, buyer);
-    return {
-      seriesId, payIn, amountIn, usdcAmount, quote, minimumAmountOut, swap, tx, earns, warning: earns ? null : NOT_APPROVED,
+    const minimumAmountOut = ((BigInt(quote.amountOut) * BigInt(10_000 - input.slippageBps)) / 10_000n).toString();
+    const beforeYouBuy: CurveBeforeYouBuy | null = input.side === 'buy' ? curveBeforeYouBuy(curveNoticeFigures(curve)) : null;
+    const view = {
+      seriesId, wallet: input.wallet, side: input.side, payIn: input.payIn, amountIn: input.amountIn, usdcAmount: input.side === 'buy' ? usdcAmount : null, quote, minimumAmountOut,
+      earns, warning: input.side === 'buy' && !earns ? NOT_APPROVED : null, beforeYouBuy,
       series: { status: series.status, phase: series.phase }, ...NO_CAP, notice: curveNotice(curve),
     };
+    return { chain, view, dexQuote, usdcAmount, minimumAmountOut, beforeYouBuy };
+  }
+
+  /**
+   * The pre-buy (or pre-sell) quote (owner direction of 2026-10-10): the chain's quote, the minimum out at the slippage,
+   * whether the wallet earns (with the `warning` when it is not approved) and, before a buy, the statements the buyer
+   * acknowledges (`beforeYouBuy`: first "Unapproved wallets earn nothing and cannot tender.", then the buyer notice with
+   * the curve's figures, and their `version`), the notice and no cap. Builds nothing.
+   */
+  async quoteSwap(seriesId: string, session: Session, input: CurveSwapInput): Promise<Record<string, unknown>> {
+    const { view, dexQuote } = await this.prepareSwap(seriesId, session, input);
+    return { ...view, swapQuote: dexQuote ? { provider: this.dex.provider, quote: dexQuote } : null };
+  }
+
+  /**
+   * Build a trade on the curve (a `curveSwap`; a Meteora DBC swap on a live chain), replacing `build-buy`. A buy needs an
+   * eligible backer (the `backer` tier's check, owner question 3: the route is `account` tier for sells) and the
+   * buyer's acknowledgement of the statements the quote returned: `acknowledged: true` with their `beforeYouBuyVersion`,
+   * else 422 `detail.reason` `acknowledgement-required` (value-free) before anything is quoted or built. With USDG as the
+   * pay-in currency a buy returns the swap route to sign first. A sell is open to any linked wallet holding the units
+   * (selling back is the only exit before the curve fills). Any wallet may buy: `earns: false` warns, never refuses.
+   */
+  async buildSwap(seriesId: string, session: Session, input: CurveSwapInput & { acknowledged?: boolean; beforeYouBuyVersion?: string }): Promise<Record<string, unknown>> {
+    const { chain: ch } = await this.curveSeries(seriesId);
+    if (!session.wallets.some((w) => w.chain === ch.chain && w.address === input.wallet) && !session.roles.includes('admin')) throw AppError.forbidden('wallet is not linked to your account');
+    if (input.side === 'buy' && !session.roles.includes('admin') && !((session.roles.includes('backer') || session.roles.includes('issuer')) && (await isEligible(this.ctx, session)))) {
+      throw AppError.forbidden('requires backer');
+    }
+    if (input.side === 'buy') {
+      // the acknowledgement is checked against the statements as they stand now, before any swap is built (a filled
+      // curve takes no trade at all: 409, as the quote says)
+      const curve = await ch.getCurve(seriesId);
+      if (!curve || curve.poolComplete) throw AppError.conflict('the curve has filled; its units trade on the DEX pool');
+      const current = curveBeforeYouBuy(curveNoticeFigures(curve)).version;
+      if (input.acknowledged !== true || input.beforeYouBuyVersion !== current) {
+        throw AppError.unprocessable('acknowledge the statements before you buy (GET /series/{seriesId}/curve/quote returns them): acknowledged true with their version', { reason: 'acknowledgement-required' });
+      }
+    }
+    const { chain, view, dexQuote, usdcAmount, minimumAmountOut } = await this.prepareSwap(seriesId, session, input);
+    let swap: Record<string, unknown> | null = null;
+    if (dexQuote) {
+      const built = await this.dex.buildSwap(dexQuote.orderId);
+      swap = { provider: this.dex.provider, quote: dexQuote, transactionBase64: built.transactionBase64, expiresAt: built.expiresAt, note: 'Sign and send this swap first; the curve quotes in USDC.' };
+    }
+    const tx: UnsignedTx = await chain.build({ kind: 'curveSwap', seriesId, side: input.side, amountIn: usdcAmount, minimumAmountOut }, input.wallet);
+    return { ...view, swap, tx };
   }
 
   /**

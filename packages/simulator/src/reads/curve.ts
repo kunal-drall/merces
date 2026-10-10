@@ -1,7 +1,7 @@
-import type { CurveCensus, CurveState, CurveSwapQuote } from '@merces/domain';
-import type { SimSeries } from '../state.ts';
+import type { CurveCensus, CurveState, CurveSwapQuote, TradingFeeSplitBps } from '@merces/domain';
+import type { SimCurve, SimSeries } from '../state.ts';
 import { str as s, type EngineCore } from '../engine/core.ts';
-import { censusPreview, curveSwapOutcome, poolComplete } from '../engine/curve.ts';
+import { STAND_IN_POOL, censusPreview, curveSwapOutcome, poolComplete } from '../engine/curve.ts';
 
 /**
  * The curve's census (`CurveCensus`): what a census now would count (`syncCurveUnits`'s, and `redeem`'s without the DAMM
@@ -18,6 +18,17 @@ function toCensus(e: EngineCore, x: SimSeries): CurveCensus {
   };
 }
 
+/**
+ * The pool config's split of the trading fee, in bps of the fee (DBC: Meteora's protocol percent first, then the
+ * creator's percent of what is left, the partner the rest): the stand-in's Meteora share is the series' pool setting
+ * (`SimCurve.protocolFeePercent`) and it has no creator share (Stage 1's generator: 0).
+ */
+function tradingFeeSplit(c: SimCurve): TradingFeeSplitBps {
+  const protocol = Number(c.protocolFeePercent) * 100;
+  const creator = Math.floor(((10_000 - protocol) * Number(STAND_IN_POOL.creatorTradingFeePercent)) / 100);
+  return { protocol, partner: 10_000 - protocol - creator, creator };
+}
+
 /** A curve series' curve as the chain reads it (`CurveState`): the stand-in pool, what was collected from it and the census. */
 export function toCurveState(e: EngineCore, seriesId: string, x: SimSeries): CurveState {
   const c = x.curve!;
@@ -29,7 +40,7 @@ export function toCurveState(e: EngineCore, seriesId: string, x: SimSeries): Cur
     migrationQuoteThreshold: s(X), quoteReserve: s(c.quoteReserve), progressBps: progress, finishCurveTimestamp: c.finishTs, poolComplete: poolComplete(c),
     settled: x.phase === 'Settled', issuePrice: s(c.p0), unitsSold: s(c.swapBaseAmount), baseSold: s(c.baseSold), baseSupply: s(c.supply),
     // the stand-in sells at the constant price P0 throughout (S3); Meteora's curve price arrives with its venue (S5)
-    spotPrice: s(c.p0), tradingFeeBps: Number(c.tradingFeeBps), migrationFeePercentage: c.migrationFeePercentage, tradingFeeUncollected: s(c.partnerQuoteFee),
+    spotPrice: s(c.p0), tradingFeeBps: Number(c.tradingFeeBps), tradingFeeSplitBps: tradingFeeSplit(c), migrationFeePercentage: c.migrationFeePercentage, tradingFeeUncollected: s(c.partnerQuoteFee),
     collected: { migrationFee: s(c.collected.migrationFee), surplus: s(c.collected.surplus), tradingFee: s(c.collected.tradingFee), proceeds: s(proceeds) },
     census: toCensus(e, x),
   };

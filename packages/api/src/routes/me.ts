@@ -1,8 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { defineRoute } from '../app.ts';
 import type { AppContext } from '../context.ts';
-import { WAD } from '@merces/math';
-import { ChainError, type BidState, type ChainPort } from '@merces/domain';
+import { ChainError, perWholeUnit, type BidState, type ChainPort } from '@merces/domain';
 
 export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
   defineRoute(app, ctx, {
@@ -15,13 +14,19 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
    * family pays now is read live from the chain and kept apart (S3): `claimable` (`claimPayout`, of which `pending` is
    * the part already settled into the holder's balance), `redemptionClaimable` (`claimRedemption`), `tailClaimable`
    * (`claimTail`) and `finalClaimable` (`claimFinal`).
+   *
+   * Every per-unit figure is per WHOLE unit at the series' unit scale (S3, amendment M4; `unitScale` on each row): a
+   * curve series counts units in base lamports (10^6 to a whole unit) and its `paidPerUnitWad` is per base lamport, so
+   * `grossPaidPerUnit = floor(paidPerUnitWad × unitScale / WAD)` and the cost basis is `issuePrice × units / unitScale`.
+   * A curve row also carries the stake and the units in the wallet (`stakedUnits`, `walletUnits`; the curve position
+   * read, `GET /series/{id}/curve/position`, covers a wallet that has not staked).
    */
   defineRoute(app, ctx, {
     method: 'GET', url: '/me/holdings', access: 'account',
     handler: async (_req, _reply, session) => {
       const wallets = session!.wallets.map((w) => w.address);
       const r = await ctx.pool.query(
-        `select p.series_id, p.wallet, p.units, p.claimed_total, p.redeemed_units, p.burned_units, s.chain, s.status, s.phase, s.issue_price, s.cap_per_unit, s.paid_per_unit_wad, s.stablecoin, s.lockup_ends_at, s.redemption_price
+        `select p.series_id, p.wallet, p.units, p.claimed_total, p.redeemed_units, p.burned_units, s.chain, s.status, s.phase, s.raise_style, s.unit_scale::text, s.issue_price, s.cap_per_unit, s.paid_per_unit_wad, s.stablecoin, s.lockup_ends_at, s.redemption_price
          from positions p join series s on s.series_id = p.series_id where p.wallet = any($1) order by p.first_seq`,
         [wallets],
       );
@@ -29,12 +34,14 @@ export function registerMeRoutes(app: FastifyInstance, ctx: AppContext): void {
       for (const x of r.rows) {
         const chain = ctx.chainFor(x.series_id);
         const live = await chain.getPosition(x.series_id, x.wallet);
+        const unitScale = BigInt(x.unit_scale ?? '1');
         const unitsEver = BigInt(x.units) + BigInt(x.burned_units);
-        const costBasis = x.issue_price ? BigInt(x.issue_price) * unitsEver : 0n;
-        const grossPerUnit = BigInt(x.paid_per_unit_wad) / WAD;
+        const costBasis = x.issue_price ? (BigInt(x.issue_price) * unitsEver) / unitScale : 0n;
+        const grossPerUnit = perWholeUnit(x.paid_per_unit_wad, unitScale);
         const yieldBps = costBasis > 0n ? (BigInt(x.claimed_total) * 10_000n) / costBasis : 0n;
         holdings.push({
-          seriesId: x.series_id, chain: x.chain, wallet: x.wallet, stablecoin: x.stablecoin, phase: x.phase, status: x.status, units: x.units, redeemedUnits: x.redeemed_units, burnedUnits: x.burned_units,
+          seriesId: x.series_id, chain: x.chain, wallet: x.wallet, stablecoin: x.stablecoin, phase: x.phase, status: x.status, raiseStyle: x.raise_style, unitScale: unitScale.toString(),
+          units: x.units, stakedUnits: live?.stakedUnits ?? '0', walletUnits: live?.walletUnits ?? '0', redeemedUnits: x.redeemed_units, burnedUnits: x.burned_units,
           issuePrice: x.issue_price, capPerUnit: x.cap_per_unit, grossPaidPerUnit: grossPerUnit.toString(), claimedTotal: x.claimed_total, claimable: live?.claimable ?? '0', pending: live?.pending ?? '0', redemptionClaimable: live?.redemptionClaimable ?? '0', tailClaimable: live?.tailClaimable ?? '0', finalClaimable: live?.finalClaimable ?? '0',
           realisedYieldBps: Number(yieldBps), lockupEndsAt: x.lockup_ends_at === null ? null : Number(x.lockup_ends_at), redemptionPrice: x.redemption_price,
         });

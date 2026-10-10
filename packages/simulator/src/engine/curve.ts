@@ -39,6 +39,11 @@ export const STAND_IN_POOL = {
   tradingFeeBps: 100n,
   /** Meteora's share of every trading fee (DBC constants.rs:94; PROCEEDS_OPTIONS.md R4) */
   protocolFeePercent: 20n,
+  /**
+   * the creator's (issuer's) share of what Meteora leaves, percent: 0, as Stage 1's config generator sets it
+   * (`creatorTradingFeePercentage: 0`); the partner (Merces) takes the rest. The stand-in models no creator share
+   */
+  creatorTradingFeePercent: 0n,
   /** `migrationFeePercentage` 99 and `creatorMigrationFeePercentage` 0 (the issuer creates the pool: Stage 1 requires 0) */
   migrationFeePercentage: 99,
   creatorMigrationFeePercentage: 0,

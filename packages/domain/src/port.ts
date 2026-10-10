@@ -1,5 +1,5 @@
 import type { DomainEvent } from './events.ts';
-import type { AdminCommand, PermissionlessCommand, ServiceCommand, ServiceRole, SignedTx, TxResult, UnsignedTx, UserCommand } from './commands.ts';
+import type { BuildableCommand, ServiceCommand, ServiceRole, SignedTx, TxResult, UnsignedTx } from './commands.ts';
 import type { Address, ChainFamily, ChainKey, ChainMode, Stablecoin } from './ids.ts';
 import type { Money } from './money.ts';
 import type {
@@ -58,8 +58,15 @@ export interface ChainPort {
   /**
    * Build an unsigned transaction for a user's wallet (or the admin multisig) to sign. Never signs. A permissionless
    * command may be built for any wallet (a bidder delivering its own bid, or anyone when the keepers stall).
+   *
+   * An ordered list of commands builds ONE transaction that executes them all or none (owner direction of 2026-10-10;
+   * `UnsignedTx.commands`): the simulator runs them in one execution with one rollback, and the Solana adapter packs
+   * their instructions into one transaction (S5). A list of one is that command alone; an empty list, or a report
+   * (`submitReport`, verified on its own) inside a list, is refused (NotPermitted). The EVM adapter builds one command
+   * per transaction until a bundle is needed there (curve mode, the bundle's first user, is Solana only): a list of
+   * more than one is NotImplemented on an EVM chain.
    */
-  build(command: UserCommand | AdminCommand | PermissionlessCommand, signer: Address, coSigners?: Address[]): Promise<UnsignedTx>;
+  build(command: BuildableCommand | readonly BuildableCommand[], signer: Address, coSigners?: Address[]): Promise<UnsignedTx>;
   /** Broadcast a user-signed transaction. */
   send(signed: SignedTx): Promise<TxResult>;
   /** Submit a permissionless or service-role transaction signed by the backend's own low-privilege key (`ServiceCommand` covers both). */

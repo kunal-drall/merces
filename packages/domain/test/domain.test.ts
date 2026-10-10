@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { BN254_FR, CURRENCY_CODES, DEFAULT_PARAMETERS } from '@merces/math';
 import { randomBytes } from 'node:crypto';
 import {
-  CURVE_BUYER_NOTICE, CURVE_NO_CAP, CURVE_TERMS_ZEROS, curveBuyerNotice, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
+  CURVE_BUYER_NOTICE, CURVE_NO_CAP, CURVE_TERMS_ZEROS, CURVE_UNAPPROVED_EARN_NOTHING, curveBeforeYouBuy, curveBuyerNotice, curveNoticeFigures, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_HELD, appliedNonRevealChargeBps, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
   amountBearingEvents, permissionlessCommandSchema,
   ChainError, attestationMessage, bidCommitment, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, permissionlessCommandKinds, serviceCommandKinds, serviceCommandSchema, termsCommitment, userCommandKinds, userCommandSchema,
@@ -29,7 +29,10 @@ import {
  *    (CurveTermsNotZero), a positive threshold (CurveThresholdZero), USDC (CurveQuoteMintMismatch), in the registry's
  *    order; the sealed-only rules (minimum raise reachable, a wallet cap of one unit) do not apply;
  *  - S3-NC: "no cap": one statement (`CURVE_NO_CAP`) for every curve read and notice; the buyer notice
- *    (`CURVE_BUYER_NOTICE`, amendments H2 and M1) states every required fact.
+ *    (`CURVE_BUYER_NOTICE`, amendments H2 and M1) states every required fact; since S3 WP12 (owner direction of
+ *    2026-10-10) it renders the trading fee and its split from the curve config (was: "most of it goes to Merces, the
+ *    rest to Meteora"), and the statements before a buy (`curveBeforeYouBuy`) open with "Unapproved wallets earn
+ *    nothing and cannot tender."
  *  - S3-CV: Stage 1's curve lifecycle vocabulary: `curveSwap` (a Meteora DBC swap), the permissionless `completeCurve`
  *    and `collectCurveProceeds`, `CurveActivated`, `CurveGraduated` (Stage 1 RaiseSettled), `CurveProceedsCollected`,
  *    the `curveTrading` fee kind; the toy curve's buy and graduation commands and its mint and creation events are gone.
@@ -37,6 +40,9 @@ import {
  *  - S3-ST: curve staking and tender: the holder's `stakeUnits`, `unstakeUnits` and `tenderUnits{fromStake, fromWallet}`,
  *    `UnitsStaked` and `UnitsUnstaked` (units only), `RedemptionClaimed.fromStake` (a curve tender's; ours).
  */
+/** Stage 1's generated config as the stand-in pool reads it: 1% fee, 20% Meteora, 0% creator, X = 1,000 USDC, 99% migration fee. */
+const STAND_IN_FIGURES = { tradingFeeBps: 100, tradingFeeSplitBps: { protocol: 2_000, partner: 8_000, creator: 0 }, target: 1_000_000_000n, migrationFeePercentage: 99 };
+
 describe('ids', () => {
   it('round-trips series ids and detects address families', () => {
     expect(parseSeriesId(makeSeriesId('solana', 'abc'))).toEqual({ chain: 'solana', address: 'abc' });
@@ -342,7 +348,7 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
 
   // cause S3-NC (amendments H2 and M1, the owner's wording): every clause of the buyer notice, each Stage 1's fact
   it('the buyer notice states every required fact, says "stops paying" and never "default"', () => {
-    const filled = curveBuyerNotice({ tradingFeeBps: 100, target: 1_000_000_000n, migrationFeePercentage: 99 });
+    const filled = curveBuyerNotice(STAND_IN_FIGURES);
     for (const text of [CURVE_BUYER_NOTICE, filled]) {
       const clauses: [string, RegExp][] = [
         // before graduation the money sits in Meteora's pool, not with Merces, and Merces cannot repay it
@@ -351,8 +357,8 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
         ['the only exit', /before graduation the only way out is to sell your units back into the curve/i],
         ['no deadline', /there is no deadline/i],
         ['the issuer receives nothing', /if the curve never fills, the issuer receives nothing/i],
-        // the trading fee: most of it to Merces, the rest to Meteora, never returned, even if the curve never fills
-        ['the fee', /every trade pays a trading fee \((\{fee\}|1)%\): most of it goes to Merces, the rest to Meteora\. It is never returned, even if the curve never fills/i],
+        // the trading fee and its split from the pool's config (owner direction of 2026-10-10), never returned
+        ['the fee', /every trade pays a trading fee \((\{fee\}|1)%\): (\{mercesShare\}|80)% of it goes to Merces, (\{meteoraShare\}|20)% to Meteora and (\{issuerShare\}|0)% to the issuer\. It is never returned, even if the curve never fills/i],
         // no wallet cap: any wallet holds any amount, before and after graduation (the one statement)
         ['no cap', new RegExp(CURVE_NO_CAP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))],
         ['no cap, plainly', /No cap: a curve raise has no wallet cap at any stage\. Any wallet can hold any number of units, before and after the curve fills/],
@@ -369,12 +375,41 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
       for (const [name, re] of clauses) expect(text, name).toMatch(re);
       expect(text).not.toMatch(/default/i);
     }
-    // the curve's own figures: its 1% fee, its 1,000 USDC target, Meteora's 99% migration fee to the treasury
-    expect(filled).toContain('a trading fee (1%)');
+    // the template holds no percentage of its own: every figure is the curve config's (owner direction of 2026-10-10)
+    expect(CURVE_BUYER_NOTICE).not.toMatch(/\d+(\.\d+)?%/);
+    // the curve's own figures: its 1% fee split 80 / 20 / 0, its 1,000 USDC target, Meteora's 99% migration fee
+    expect(filled).toContain('a trading fee (1%): 80% of it goes to Merces, 20% to Meteora and 0% to the issuer.');
     expect(filled).toContain('its full target (1,000 USDC)');
     expect(filled).toContain('the series treasury receives 99% of the target');
-    expect(filled).not.toMatch(/\{(fee|target|migrationFee)\}/);
-    expect(curveBuyerNotice({ tradingFeeBps: 125, target: '1234567890', migrationFeePercentage: 50 })).toMatch(/\(1\.25%\)[\s\S]*1,234\.56789 USDC[\s\S]*receives 50% of the target/);
+    expect(filled).not.toMatch(/\{(fee|mercesShare|meteoraShare|issuerShare|target|migrationFee)\}/);
+  });
+
+  // owner direction of 2026-10-10: the trading fee and its split come from the series' curve config; two configs render
+  // two notices, and a split that does not add up is never stated
+  it('renders the trading fee and its split from the curve config (two configs)', () => {
+    const other = curveBuyerNotice({ tradingFeeBps: 125, tradingFeeSplitBps: { protocol: 2_000, partner: 5_000, creator: 3_000 }, target: '1234567890', migrationFeePercentage: 50 });
+    expect(other).toContain('a trading fee (1.25%): 50% of it goes to Merces, 20% to Meteora and 30% to the issuer.');
+    expect(other).toMatch(/1,234\.56789 USDC[\s\S]*receives 50% of the target/);
+    expect(other).not.toBe(curveBuyerNotice(STAND_IN_FIGURES));
+    expect(curveBuyerNotice({ ...STAND_IN_FIGURES, tradingFeeSplitBps: { protocol: 2_550, partner: 7_450, creator: 0 } })).toContain('74.5% of it goes to Merces, 25.5% to Meteora and 0% to the issuer');
+    expect(() => curveBuyerNotice({ ...STAND_IN_FIGURES, tradingFeeSplitBps: { protocol: 2_000, partner: 7_000, creator: 0 } })).toThrow(RangeError);
+    // the read's figures map straight in
+    expect(curveNoticeFigures({ tradingFeeBps: 100, tradingFeeSplitBps: STAND_IN_FIGURES.tradingFeeSplitBps, migrationQuoteThreshold: '1000000000', migrationFeePercentage: 99 })).toEqual({ ...STAND_IN_FIGURES, target: '1000000000' });
+  });
+
+  // owner direction of 2026-10-10: before the buy action, not only in the notice
+  it('before you buy: "Unapproved wallets earn nothing and cannot tender." first, then the notice; versioned by content', () => {
+    const b = curveBeforeYouBuy(STAND_IN_FIGURES);
+    expect(b.statements[0]).toBe('Unapproved wallets earn nothing and cannot tender.');
+    expect(b.statements[0]).toBe(CURVE_UNAPPROVED_EARN_NOTHING);
+    // every point of the notice follows, with the curve's figures, and nothing else
+    const points = curveBuyerNotice(STAND_IN_FIGURES).split('\n').slice(1).map((l) => l.replace(/^- /, ''));
+    expect(b.statements.slice(1)).toEqual(points);
+    expect(b.version).toMatch(/^byb1-[0-9a-f]{16}$/);
+    // the version follows the statements: same figures, same version; another config, another version
+    expect(curveBeforeYouBuy({ ...STAND_IN_FIGURES }).version).toBe(b.version);
+    expect(curveBeforeYouBuy({ ...STAND_IN_FIGURES, tradingFeeBps: 200 }).version).not.toBe(b.version);
+    expect(b.statements.join(' ')).not.toMatch(/default/i);
   });
 });
 

@@ -27,7 +27,8 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - S3-BU: `PayoutClaimed.burnedUnits`, 0 off a Retired series.
  *  - S3-ST: curve staking (Solana only): a registered, allowlisted holder stakes its base lamports after a census and is
  *    paid on its stake; a buyer that did not register earns nothing; unstake credits pending and moves no stablecoin; an
- *    EVM chain refuses a curve series (CurveModeUnsupported).
+ *    EVM chain refuses a curve series (CurveModeUnsupported). S3 WP12: an ordered command list builds one transaction,
+ *    all or nothing, on Solana ([unstakeUnits, claimPayout]); an EVM chain builds one command per transaction.
  */
 const types = (evs: DomainEvent[]) => evs.map((e) => e.type);
 
@@ -276,6 +277,8 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const terms = e.terms({ ...over, termsCommitment: termsCommitment(privateTerms) });
     if (e.chain.family !== 'solana') {
       await expectChainError(exec(e, e.issuer, { kind: 'createSeries', terms }), 'NotPermitted');
+      // one command per transaction on an EVM chain (no bundles there yet; curve mode, their first user, is Solana only)
+      await expectChainError(e.chain.build([{ kind: 'claimPayout', seriesId }, { kind: 'claimPayout', seriesId }], e.backers[0]!.address), 'NotImplemented');
       return;
     }
     const created = await exec(e, e.issuer, { kind: 'createSeries', terms });
@@ -322,5 +325,16 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     expect(types(un.events)).toEqual(['UnitsUnstaked']);
     expect(await e.chain.getBalance(a.address, 'USDC')).toBe(before);
     expect(await e.chain.getPosition(curveId, a.address)).toMatchObject({ stakedUnits: '0', walletUnits: held.toString() });
+    // one transaction of several commands (owner direction of 2026-10-10): the unstake builder's [unstakeUnits,
+    // claimPayout] runs all or nothing: a refused unstake leaves the stake as it was and pays nothing
+    await exec(e, a, { kind: 'stakeUnits', seriesId: curveId, units: held.toString() });
+    const tooMuch = await e.chain.build([{ kind: 'unstakeUnits', seriesId: curveId, units: (held + 1n).toString() }, { kind: 'claimPayout', seriesId: curveId }], a.address);
+    expect(tooMuch.commands?.map((x) => x.kind)).toEqual(['unstakeUnits', 'claimPayout']);
+    await expectChainError(e.chain.send(await a.sign(tooMuch)), 'InsufficientFunds');
+    expect(await e.chain.getPosition(curveId, a.address)).toMatchObject({ stakedUnits: held.toString(), walletUnits: '0' });
+    const both = await e.chain.send(await a.sign(await e.chain.build([{ kind: 'unstakeUnits', seriesId: curveId, units: held.toString() }, { kind: 'claimPayout', seriesId: curveId }], a.address)));
+    expect(types(both.events)).toEqual(['UnitsUnstaked', 'PayoutClaimed']);
+    expect(new Set(both.events.map((x) => x.txId)).size).toBe(1);
+    expect(await e.chain.getPosition(curveId, a.address)).toMatchObject({ stakedUnits: '0', walletUnits: held.toString(), pending: '0' });
   });
 });

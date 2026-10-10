@@ -94,18 +94,19 @@ components:
           properties: { auctionFeeBps: { type: integer }, payoutFeeBps: { type: integer } }
         cap:
           type: object
-          description: "C6: cap per unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per unit = Stage 1's C_remaining = max(capPerUnit − ceil(paidPerUnitWad / 1e18), 0)"
+          description: "C6: cap per whole unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per whole unit = Stage 1's C_remaining at the series' unit scale = max(capPerUnit − ceil(paidPerUnitWad / (1e18 / unitScale)), 0). Unit counts are per accounting unit (base lamports on a curve series), per-unit figures per whole unit"
           properties:
             capMultipleWad: { $ref: '#/components/schemas/Wad' }
             issuePrice: { type: [string, 'null'] }
-            perUnit: { type: [string, 'null'], description: cap per unit, base units; null before settlement }
-            unitsSold: { type: string }
-            unitsOutstanding: { type: string }
-            total: { type: [string, 'null'], description: perUnit × unitsSold }
-            paidPerUnitWad: { $ref: '#/components/schemas/Wad' }
-            paidPerUnit: { $ref: '#/components/schemas/Money' }
-            remainingPerUnit: { type: [string, 'null'], description: "Stage 1's C_remaining: the paid amount rounded up, never more room than the chain accepts" }
-            remainingTotal: { type: [string, 'null'], description: remainingPerUnit × unitsOutstanding }
+            perUnit: { type: [string, 'null'], description: cap per whole unit, base units; null before settlement }
+            unitScale: { type: string, enum: ['1', '1000000'], description: accounting units per whole unit (1000000 base lamports on a curve series) }
+            unitsSold: { type: string, description: accounting units }
+            unitsOutstanding: { type: string, description: accounting units }
+            total: { type: [string, 'null'], description: perUnit × unitsSold / unitScale }
+            paidPerUnitWad: { $ref: '#/components/schemas/Wad', description: gross paid per accounting unit, WAD-scaled }
+            paidPerUnit: { $ref: '#/components/schemas/Money', description: 'gross paid per whole unit: floor(paidPerUnitWad × unitScale / 1e18)' }
+            remainingPerUnit: { type: [string, 'null'], description: "Stage 1's C_remaining at the unit scale: the paid amount rounded up, never more room than the chain accepts" }
+            remainingTotal: { type: [string, 'null'], description: remainingPerUnit × unitsOutstanding / unitScale }
             progressBps: { type: [integer, 'null'], description: paid / cap in basis points }
         payments:
           type: object

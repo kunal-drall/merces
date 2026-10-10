@@ -271,9 +271,12 @@ Open since S3, with the default S3 uses meanwhile (recorded by the work package 
    vectors, the lockstep and every pin are unchanged; a white-box test rescales a series to 10^6 and gets the same
    money. `SeriesState.unitScale` and the API's series read (derived from the raise style) carry it.
 2. **The curve buy builder warns, it does not refuse (S3 decision 3, A-CURVE-2).** Onchain anyone can buy on a curve
-   (Meteora's DBC has no allowlist), so `build-buy` builds the trade for any linked wallet and tells one that is not
-   approved `earns: false` with a warning (it can trade, never register, stake, tender or earn); the `backer` tier is
-   kept for building buys through Merces (WP8). Owner: refuse instead?
+   (Meteora's DBC has no allowlist), so the buy builder (`build-swap` since S3 WP12, was `build-buy`) builds the trade
+   for any linked wallet and tells one that is not approved `earns: false` with a warning (it can trade, never register,
+   stake, tender or earn); the `backer` tier's check is kept for building buys through Merces (WP8), and a sell is open
+   to any linked wallet. Before the buy action, not only in the notice (owner direction of 2026-10-10): the pre-buy
+   quote returns the statements a buyer acknowledges, first "Unapproved wallets earn nothing and cannot tender.", and
+   `build-swap` builds a buy only with `acknowledged: true` for their current version (WP12). Owner: refuse instead?
 3. **The curve venue is a stand-in at the constant price P0 (S3 decision 5, A-CURVE-1).** The simulator's DBC stand-in
    sells at P0 throughout (exactly X per swap base), so dev:mock prices look flat; no Merces money rule depends on the
    price path (P0, the proceeds and the census follow from X, the swap base and balances). Stage 1's DBC primitives
@@ -546,7 +549,14 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    issuer's assembled report binds the census (H1); `curve.stake-reminders` and `curve.tender-reminders` remind linked
    wallets holding unstaked units by their next step (approve, register, stake or tender); the chain notices
    `curve.completed` and `curve.tender-open`, with `toHolders` covering `curve.*` and a status change on a curve naming
-   the tender (amendment M8); no notice names an amount.
+   the tender (amendment M8); no notice names an amount. WP12: the curve builders and reads (API.md "Curve staking"):
+   `build-swap` replaces `build-buy` (a buy needs the acknowledgement of the statements the pre-buy quote returns,
+   first "Unapproved wallets earn nothing and cannot tender."; a sell is open to any linked wallet), `build-stake`
+   (registration and census steps; no census over an assembled report, H1), `build-unstake` (ONE transaction,
+   `[unstakeUnits, claimPayout]`, all or nothing: `ChainPort.build` takes an ordered command list, owner direction of
+   2026-10-10), `build-tender`, the wallet's curve position read (`stakable`, `stakeBlockedBy`, pending, the tender;
+   amendment M8), the buyer notice's trading fee and split from the pool's config (`CurveState.tradingFeeSplitBps`), and
+   every per-unit read at the series' unit scale (amendment M4); OpenAPI 165 → 170 operations.
 12. *Math.* Replace the six disagreeing families with Stage 1's formulas (or import `@merces/reference`), then
     replay the 25 vectors through a Stage 1 op runner on the simulator with full-state expectations.
    **S1:** applied (WP1, WP9a, WP9b): `@merces/reference` is imported through `@merces/math`, and Stage 1's vectors are

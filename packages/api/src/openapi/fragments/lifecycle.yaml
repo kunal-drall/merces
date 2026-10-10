@@ -65,11 +65,11 @@ components:
             open: { type: boolean, description: 'a tail can still be reported and paid: the next period starts by endsAt and the tail cap is not used up' }
             exhausted: { type: boolean, description: "Stage 1's tailExhausted: the tail cap per unit has been paid in full (NoTailDue)" }
             capPerUnit: { $ref: '#/components/schemas/Money' }
-            paidPerUnitWad: { $ref: '#/components/schemas/Wad', description: tail gross accepted per unit, WAD-scaled }
-            paidPerUnit: { $ref: '#/components/schemas/Money', description: paidPerUnitWad floored to base units }
+            paidPerUnitWad: { $ref: '#/components/schemas/Wad', description: 'tail gross accepted per accounting unit, WAD-scaled (per base lamport on a curve series)' }
+            paidPerUnit: { $ref: '#/components/schemas/Money', description: 'the tail paid per WHOLE unit: floor(paidPerUnitWad × unitScale / 1e18), base units of the stablecoin' }
             refunded: { $ref: '#/components/schemas/Money', description: tail gross refunded to the issuer above the tail cap }
             nextPeriod: { type: [string, 'null'] }
-            payouts: { type: array, items: { type: object, properties: { periodId: { type: string }, total: { type: string }, perUnit: { type: string }, at: { type: integer } } } }
+            payouts: { type: array, items: { type: object, properties: { periodId: { type: string }, total: { type: string }, perUnit: { type: string, description: the tail paid per whole unit (TailPayout.perUnit) }, at: { type: integer } } } }
         claims: { type: object, properties: { count: { type: integer }, total: { type: string } } }
 paths:
   /series/{seriesId}/treasury/build-draw:
@@ -196,7 +196,24 @@ paths:
       x-access: public
       tags: [lifecycle]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: 'Cap progress and burn progress; burnable is false on a curve-mode series, whose units never burn (Stage 1 CurveModeNoBurn)', content: { application/json: { schema: { type: object } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+      responses:
+        '200':
+          description: 'Cap progress and burn progress; burnable is false on a curve-mode series, whose units never burn (Stage 1 CurveModeNoBurn)'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unitScale: { type: string, enum: ['1', '1000000'], description: accounting units per whole unit (1000000 base lamports on a curve series) }
+                  capPerUnit: { type: [string, 'null'], description: the cap per whole unit }
+                  paidPerUnit: { type: string, description: 'gross paid per WHOLE unit: floor(paidPerUnitWad × unitScale / 1e18)' }
+                  capRemaining: { type: [string, 'null'], description: "Stage 1's C_remaining at the unit scale: capPerUnit − ceil(paidPerUnitWad / (1e18 / unitScale)), at least 0" }
+                  capProgressBps: { type: integer, description: paidPerUnit / capPerUnit in basis points }
+                  unitsOutstanding: { type: string }
+                  holdersWithUnits: { type: integer }
+                  burnable: { type: boolean }
+                additionalProperties: true
+        '404': { $ref: '#/components/responses/NotFound' }
   /series/{seriesId}/retirement/crank-burn:
     post:
       operationId: burnRetiredHolders

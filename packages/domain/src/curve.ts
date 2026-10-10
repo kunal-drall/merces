@@ -1,5 +1,8 @@
-import { CURVE_UNIT_SCALE } from '@merces/math';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
+import { CURVE_UNIT_SCALE, WAD } from '@merces/math';
 import type { SeriesTerms } from './events.ts';
+import type { CurveState } from './state.ts';
 
 /**
  * Curve mode in the chain-neutral model (Stage 1 SPEC §9, CURVE_MODE.md).
@@ -47,27 +50,60 @@ export const CURVE_TERMS_ZEROS: { readonly [K in (typeof CURVE_ZERO_TERMS)[numbe
 export const CURVE_NO_CAP =
   'No cap: a curve raise has no wallet cap at any stage. Any wallet can hold any number of units, before and after the curve fills, and there is no limit on how many units a wallet buys or sells.';
 
-/** What `curveBuyerNotice` fills into `CURVE_BUYER_NOTICE`: figures from the curve's own read (`CurveState`). */
+/**
+ * A per-unit WAD figure (`paidPerUnitWad`, a tail's `tailPaidPerUnitWad`: per accounting unit) as base units of the
+ * stablecoin per WHOLE unit, floored: `floor(wad × unitScale / WAD)` (`paidPerUnitWad / WAD` at scale 1; a curve
+ * series' WAD figures are per base lamport, 10^6 to a whole unit). For display; Stage 1's own checks round the paid
+ * amount up (`capRemainingScaled`).
+ */
+export function perWholeUnit(wad: bigint | string, unitScale: bigint | string): bigint {
+  return (BigInt(wad) * BigInt(unitScale)) / WAD;
+}
+
+/** How a curve's trading fee is split, in bps of the fee (summing to 10,000), as the pool's config holds it. */
+export interface TradingFeeSplitBps {
+  /** Meteora's protocol share (DBC `protocol_fee_percent`) */
+  protocol: number;
+  /** the partner's share: Merces' (the config's fee claimer) */
+  partner: number;
+  /** the creator's share: the issuer's (DBC `creator_trading_fee_percentage` of what the protocol leaves; 0 unless configured) */
+  creator: number;
+}
+
+/**
+ * What `curveBuyerNotice` and `curveBeforeYouBuy` fill in: figures from the series' curve config as the chain reads it
+ * (`CurveState`: the DBC pool config in the simulator's stand-in, Meteora's PoolConfig account on a live chain). No
+ * percentage in a notice is written down anywhere else (owner direction of 2026-10-10).
+ */
 export interface CurveNoticeFigures {
   /** the trading fee every trade pays, bps (`CurveState.tradingFeeBps`; 100 = 1%) */
   tradingFeeBps: number;
+  /** its split among Meteora, Merces and the issuer (`CurveState.tradingFeeSplitBps`) */
+  tradingFeeSplitBps: TradingFeeSplitBps;
   /** X, the quote the curve must take in to fill, stablecoin base units with 6 decimals (`CurveState.migrationQuoteThreshold`) */
   target: string | bigint;
   /** Meteora's migration fee, percent of X (`CurveState.migrationFeePercentage`); the partner's share funds the treasury */
   migrationFeePercentage: number;
 }
 
+/** The notice figures of a curve as the chain reads it. */
+export function curveNoticeFigures(c: Pick<CurveState, 'tradingFeeBps' | 'tradingFeeSplitBps' | 'migrationQuoteThreshold' | 'migrationFeePercentage'>): CurveNoticeFigures {
+  return { tradingFeeBps: c.tradingFeeBps, tradingFeeSplitBps: c.tradingFeeSplitBps, target: c.migrationQuoteThreshold, migrationFeePercentage: c.migrationFeePercentage };
+}
+
 /**
- * The buyer notice for a curve raise (owner direction, S3 amendments H2 and M1), with `{fee}`, `{target}` and
- * `{migrationFee}` left for `curveBuyerNotice` to fill. Every fact is Stage 1's (curve mode, SPEC §9; CURVE_MODE.md;
- * PROCEEDS_OPTIONS.md):
+ * The buyer notice for a curve raise (owner direction, S3 amendments H2 and M1, and the owner's direction of
+ * 2026-10-10: the trading fee and its split come from the series' curve config), with `{fee}`, `{mercesShare}`,
+ * `{meteoraShare}`, `{issuerShare}`, `{target}` and `{migrationFee}` left for `curveBuyerNotice` to fill: it holds no
+ * percentage of its own. Every fact is Stage 1's (curve mode, SPEC §9; CURVE_MODE.md; PROCEEDS_OPTIONS.md):
  *  - the buyer pays into Meteora's pool, not to Merces; nobody can take that money out before the curve fills, and
  *    Merces cannot repay it (the DBC quote vault; `collect_curve_proceeds` withdraws only after completion);
  *  - selling back into the curve is the only exit before then; nothing refunds a buyer (no cancel, no failure);
  *  - there is no deadline, and a curve that never fills pays the issuer nothing (the treasury of an uncompleted curve
  *    stays 0);
- *  - every trade pays the trading fee, most of it to Merces (the partner, 80% with no creator share) and the rest to
- *    Meteora, and it is never returned, even when the curve never fills (`claim_trading_fee` at any time);
+ *  - every trade pays the trading fee, split among Merces (the partner), Meteora (the protocol) and the issuer (the
+ *    creator, 0 unless configured) as the pool's config says, and it is never returned, even when the curve never fills
+ *    (`claim_trading_fee` at any time);
  *  - no cap (`CURVE_NO_CAP`);
  *  - only staked units earn, staking needs an approved (allowlisted) and registered wallet, and unstaking is always
  *    open (`stake_units`, `unstake_units`); a wallet never approved and registered cannot stake or tender and receives
@@ -81,7 +117,7 @@ export interface CurveNoticeFigures {
 export const CURVE_BUYER_NOTICE = [
   'Before you buy units of a curve raise.',
   "- You buy from Meteora's bonding curve, not from Merces or the issuer. The price is public and moves as people buy and sell.",
-  '- Every trade pays a trading fee ({fee}%): most of it goes to Merces, the rest to Meteora. It is never returned, even if the curve never fills.',
+  '- Every trade pays a trading fee ({fee}%): {mercesShare}% of it goes to Merces, {meteoraShare}% to Meteora and {issuerShare}% to the issuer. It is never returned, even if the curve never fills.',
   "- Until the curve fills (its graduation), the USDC you pay, less the fee, sits in Meteora's pool, not with Merces, and Merces cannot repay it. Nobody can take it out: not Merces, not the issuer.",
   '- Before graduation the only way out is to sell your units back into the curve, at its price at that moment, less the fee. The raise cannot be cancelled and nobody refunds you.',
   '- There is no deadline. The curve fills only when buyers have paid in its full target ({target} USDC), and it may never fill. If the curve never fills, the issuer receives nothing.',
@@ -107,10 +143,47 @@ function percentOfBps(bps: number): string {
   return frac ? `${whole}.${frac}` : String(whole);
 }
 
-/** `CURVE_BUYER_NOTICE` with the curve's own figures: its trading fee, its target and Meteora's migration fee. */
+/**
+ * `CURVE_BUYER_NOTICE` with the curve's own figures: its trading fee and that fee's split among Merces, Meteora and the
+ * issuer, its target and Meteora's migration fee. A split that does not sum to 10,000 bps of the fee is refused (a
+ * notice never states shares that do not add up).
+ */
 export function curveBuyerNotice(f: CurveNoticeFigures): string {
+  const { protocol, partner, creator } = f.tradingFeeSplitBps;
+  if ([protocol, partner, creator].some((x) => !Number.isInteger(x) || x < 0) || protocol + partner + creator !== 10_000) throw new RangeError('the trading fee split must be whole bps summing to 10,000');
   return CURVE_BUYER_NOTICE
     .replace('{fee}', percentOfBps(f.tradingFeeBps))
+    .replace('{mercesShare}', percentOfBps(partner))
+    .replace('{meteoraShare}', percentOfBps(protocol))
+    .replace('{issuerShare}', percentOfBps(creator))
     .replace('{target}', sixDecimals(BigInt(f.target)))
     .replace('{migrationFee}', String(f.migrationFeePercentage));
+}
+
+/**
+ * The first statement before any buy on a curve (owner direction of 2026-10-10): shown before the buy action, not only
+ * in the notice.
+ */
+export const CURVE_UNAPPROVED_EARN_NOTHING = 'Unapproved wallets earn nothing and cannot tender.';
+
+/** What a buyer acknowledges before a curve buy: the statements, in order, and their version. */
+export interface CurveBeforeYouBuy {
+  /**
+   * `byb1-` and the first 16 hex digits of SHA-256 over the statements (JSON): it changes with any statement, the
+   * curve's figures included, so an acknowledgement covers exactly the statements shown
+   */
+  version: string;
+  /** `CURVE_UNAPPROVED_EARN_NOTHING`, then every point of the buyer notice with the curve's figures */
+  statements: string[];
+}
+
+/**
+ * The statements a buyer acknowledges before a curve buy (owner direction of 2026-10-10): first "Unapproved wallets
+ * earn nothing and cannot tender.", then the buyer notice's points with the curve's own figures. The pre-buy quote
+ * returns them; `build-swap` builds a buy only with `acknowledged: true` for this `version`.
+ */
+export function curveBeforeYouBuy(f: CurveNoticeFigures): CurveBeforeYouBuy {
+  const points = curveBuyerNotice(f).split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2));
+  const statements = [CURVE_UNAPPROVED_EARN_NOTHING, ...points];
+  return { version: `byb1-${bytesToHex(sha256(utf8ToBytes(JSON.stringify(statements)))).slice(0, 16)}`, statements };
 }

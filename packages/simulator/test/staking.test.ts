@@ -290,6 +290,76 @@ describe('curve staking (solana): unstake credits pending (owner decision 1)', (
   });
 });
 
+describe('curve staking (solana): unstake and claim in ONE transaction (owner direction of 2026-10-10)', () => {
+  // cause S3-ST: the chain port builds an ordered command list as one transaction, all or nothing (the simulator runs it
+  // in one execution with one rollback; the Solana adapter packs both instructions). The unstake builder's
+  // `[unstakeUnits, claimPayout]` pays exactly the pending payout the unstake credited
+  it('both happen or neither; the claim pays exactly the pending the unstake credited', async () => {
+    const { h, seriesId, a, b, s, units, usdc, pay } = await launched();
+    for (const w of [a, b]) await h.registerHolder(seriesId, w);
+    await h.syncCurve(seriesId);
+    const bStake = 20n * SCALE;
+    await h.stake(seriesId, b, bStake);
+    await h.sim.setTime(parsePeriod('2026Q1').end + 3_600);
+    await h.syncCurve(seriesId);
+    await pay('2026Q1', USDC(80_000));
+    const owed = settleHolderDelta(s().vault.netAccWad, 0n, bStake);
+    expect(owed > 0n).toBe(true);
+    const bundle = [{ kind: 'unstakeUnits' as const, seriesId, units: (bStake / 2n).toString() }, { kind: 'claimPayout' as const, seriesId }];
+    const tx = await h.sim.build(bundle, b.address);
+    expect(tx).toMatchObject({ command: bundle[0], commands: bundle, summary: 'unstakeUnits + claimPayout on solana (one transaction)' });
+
+    // neither: a bundle whose unstake is refused (more than the stake) leaves the stake, the pending payout, the
+    // stablecoin and the transaction count as they were, and emits nothing
+    const [b0, vault0, tx0, events0] = [await usdc(b.address), s().vaultBalance, h.sim.state.txCount, h.sim.engine.events.length];
+    await expectStage1Error(h.exec(b, [{ kind: 'unstakeUnits', seriesId, units: (bStake + 1n).toString() }, { kind: 'claimPayout', seriesId }]), 'InsufficientStake');
+    // a bundle refused by its second command rolls back its first: a valid unstake, then a claim the chain refuses
+    await expect(h.exec(b, [{ kind: 'unstakeUnits', seriesId, units: '1' }, { kind: 'claimPayout', seriesId: 'solana:missing' }])).rejects.toMatchObject({ code: 'NotFound' });
+    expect(s().positions.get(b.address)!.stakedUnits).toBe(bStake);
+    expect(s().positions.get(b.address)!.pending).toBe(0n);
+    expect(s().stakedTotal).toBe(bStake);
+    expect([await usdc(b.address), s().vaultBalance, h.sim.state.txCount, h.sim.engine.events.length]).toEqual([b0, vault0, tx0, events0]);
+
+    // both: one transaction id, the unstake's event then the claim's, and the claim pays exactly what the unstake
+    // credited into pending (all of the stake's earnings, the half still staked included: the holder is settled whole)
+    const signed = await b.sign(tx);
+    const res = await h.sim.send(signed);
+    expect(types(res.events)).toEqual(['UnitsUnstaked', 'PayoutClaimed']);
+    expect(new Set(res.events.map((e) => e.txId)).size).toBe(1);
+    expect(res.events[1]!.payload).toEqual({ seriesId, holder: b.address, amount: owed.toString(), burnedUnits: '0' });
+    expect((await usdc(b.address)) - b0).toBe(owed);
+    expect(vault0 - s().vaultBalance).toBe(owed);
+    expect(s().positions.get(b.address)!).toMatchObject({ stakedUnits: bStake / 2n, pending: 0n });
+    expect(units(b.address) >= bStake / 2n).toBe(true);
+    expect(h.sim.state.txCount).toBe(tx0 + 1);
+  });
+
+  it('refuses an empty list and a report inside a list; a list of one is that command', async () => {
+    const { h, seriesId, a, report } = await launched();
+    await expect(h.sim.build([], a.address)).rejects.toMatchObject({ code: 'NotPermitted' });
+    // a report's Groth16 verdict is established per transaction: it is sent on its own
+    await h.syncCurve(seriesId);
+    await h.sim.setTime(parsePeriod('2026Q1').end + 3_600);
+    await h.syncCurve(seriesId);
+    const cmd = await report('2026Q1', USDC(80_000));
+    await expect(h.sim.build([cmd, { kind: 'claimPayout', seriesId }], h.issuer.address)).rejects.toMatchObject({ code: 'NotPermitted' });
+    expect((await h.sim.build(cmd, h.issuer.address)).command.kind).toBe('submitReport');
+    const one = await h.sim.build([{ kind: 'claimPayout', seriesId }], a.address);
+    expect(one.commands).toBeUndefined();
+    expect(one.command).toEqual({ kind: 'claimPayout', seriesId });
+  });
+});
+
+describe('one transaction of several commands on an EVM chain', () => {
+  // the EVM adapter builds one command per transaction until a bundle is needed there (curve mode is Solana only)
+  it('is NotImplemented on the monad personality; a single command still builds', async () => {
+    const h = await SimHarness.create('monad', { genesis: GENESIS });
+    const w = h.backers[0]!;
+    await expect(h.sim.build([{ kind: 'claimPayout', seriesId: 'monad:x' }, { kind: 'claimPayout', seriesId: 'monad:y' }], w.address)).rejects.toMatchObject({ code: 'NotImplemented' });
+    expect((await h.sim.build([{ kind: 'claimPayout', seriesId: 'monad:x' }], w.address)).command.kind).toBe('claimPayout');
+  });
+});
+
 describe('curve staking (solana): extinguishment pays stakers (CMT:852-908)', () => {
   // cause S3-ST: CMT `curve_extinguishment_pays_stakers`: the unvested treasury is distributed over the last census and
   // only staked units take their share; an unstake settles it into pending first; a second claim pays nothing more

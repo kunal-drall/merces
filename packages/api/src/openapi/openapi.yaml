@@ -235,7 +235,10 @@ components:
         lockupEndsAt: { type: [integer, 'null'] }
         issuePrice: { type: [string, 'null'] }
         unitsSold: { type: string }
-        unitsOutstanding: { type: string }
+        unitsOutstanding: { type: string, description: 'accounting units; on a curve series the count of the last census (syncCurveUnits, or redeem''s own)' }
+        stakedTotal: { type: string, pattern: '^\d+$', description: 'curve staking: the units staked (base lamports); "0" on a sealed-bid series' }
+        tenderedTotal: { type: string, pattern: '^\d+$', description: 'curve staking: the units tendered at the redemption so far (base lamports); "0" on a sealed-bid series' }
+        unitsSyncedAt: { type: [integer, 'null'], description: when the last census of a curve series was taken; null before the first and on a sealed-bid series }
         capPerUnit: { type: [string, 'null'] }
         paidPerUnitWad: { type: string }
         releasesPaused: { type: boolean }
@@ -309,19 +312,23 @@ components:
         stablecoin: { type: string }
         phase: { type: string }
         status: { type: string }
-        units: { type: string }
+        raiseStyle: { type: string, enum: [sealed, curve] }
+        unitScale: { type: string, enum: ['1', '1000000'], description: 'accounting units per whole unit: unit counts are per accounting unit (base lamports on a curve series), per-unit figures per whole unit' }
+        units: { type: string, description: 'the accrual weight (on a curve series the stake)' }
+        stakedUnits: { type: string, description: 'curve: the units in the stake vault ("0" on a sealed-bid series)' }
+        walletUnits: { type: string, description: 'the units in the wallet (on a curve series they earn nothing until staked)' }
         redeemedUnits: { type: string }
         burnedUnits: { type: string }
         issuePrice: { type: [string, 'null'] }
         capPerUnit: { type: [string, 'null'] }
-        grossPaidPerUnit: { type: string }
+        grossPaidPerUnit: { type: string, description: 'gross paid per WHOLE unit: floor(paidPerUnitWad × unitScale / 1e18)' }
         claimedTotal: { $ref: '#/components/schemas/Money' }
         claimable: { $ref: '#/components/schemas/Money', description: "what claimPayout (Stage 1's claim) pays now: the net payout only; excludes the redemption, the tail and the final pool" }
         pending: { $ref: '#/components/schemas/Money', description: 'the part of claimable already settled into the holder''s balance (Stage 1 pending); the rest accrued since the holder''s vault cursor' }
         redemptionClaimable: { $ref: '#/components/schemas/Money', description: 'what the redemption pays now beside the pending payout (claimRedemption, or the redemption claimTail or claimFinal runs first): the redemption price on the units not yet redeemed plus their tail catch-up; 0 unless the series redeemed' }
         tailClaimable: { $ref: '#/components/schemas/Money', description: "what claimTail pays (Stage 1's claimableTail view): the tail since the holder's tail cursor on its redeemed units or, before it redeems, on the units its redemption would redeem (claimTail redeems first)" }
         finalClaimable: { $ref: '#/components/schemas/Money', description: "the final-pool share claimFinal pays after an extinguishment (claimFinal also pays the net payout, claimable)" }
-        realisedYieldBps: { type: integer }
+        realisedYieldBps: { type: integer, description: 'claimedTotal / cost basis in basis points; the cost basis is issuePrice × (units + burnedUnits) / unitScale' }
         lockupEndsAt: { type: [integer, 'null'] }
         redemptionPrice: { type: [string, 'null'] }
     PositionView:

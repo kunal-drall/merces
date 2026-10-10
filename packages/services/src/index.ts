@@ -25,6 +25,7 @@ export * from './auction/service.ts';
 export * from './lifecycle/service.ts';
 export * from './meteora/service.ts';
 export * from './meteora/lifecycle.ts';
+export * from './meteora/staking.ts';
 export * from './curve-census.ts';
 export * from './threshold/service.ts';
 export * from './attestor/service.ts';

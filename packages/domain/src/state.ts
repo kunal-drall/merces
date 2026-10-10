@@ -1,6 +1,6 @@
 import type { LifecycleStatus, RaiseFailure, RaisePhase, RaiseStateName, SeriesTerms, SettlementRejection } from './events.ts';
 import type { Address, ChainFamily, ChainKey, ChainMode, Stablecoin } from './ids.ts';
-import type { UnitScale } from './curve.ts';
+import type { TradingFeeSplitBps, UnitScale } from './curve.ts';
 import type { Money, Units, Wad } from './money.ts';
 
 /** Read-side state shapes returned by ChainPort. Money as strings; nothing chain-specific. */
@@ -411,8 +411,14 @@ export interface CurveState {
   baseSupply: Units;
   /** the curve's price per whole unit now (the stand-in's is P0 throughout) */
   spotPrice: Money;
-  /** the trading fee every buy and sell pays, in bps (100 = 1%); the partner (Merces) takes most of it, Meteora the rest */
+  /** the trading fee every buy and sell pays, in bps (100 = 1%), as the pool's config sets it */
   tradingFeeBps: number;
+  /**
+   * how the pool's config splits that fee, in bps of the fee (summing to 10,000): Meteora's protocol share, the
+   * partner's (Merces') and the creator's (the issuer's; 0 unless configured). The buyer notice states these figures,
+   * never its own (owner direction of 2026-10-10)
+   */
+  tradingFeeSplitBps: TradingFeeSplitBps;
   /** Meteora's migration fee, percent of X; the partner's share of it funds the series treasury */
   migrationFeePercentage: number;
   /** the partner's trading fees accrued in the pool and not collected yet */

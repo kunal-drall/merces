@@ -1,6 +1,6 @@
 import { AppError, audit, getFlag } from '@merces/core';
-import { CURVE_NO_CAP, ChainError, orderCommitment, type ChainPort, type PositionState, type SeriesState, type UnsignedTx } from '@merces/domain';
-import { SeriesStatus, WAD, YEAR, capRemaining, fromPid, interim, isTerminal, periodStart, pidAt, redemptionQuoteScaled, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
+import { CURVE_NO_CAP, ChainError, orderCommitment, perWholeUnit, type ChainPort, type PositionState, type SeriesState, type UnsignedTx } from '@merces/domain';
+import { SeriesStatus, YEAR, capRemainingScaled, fromPid, interim, isTerminal, periodStart, pidAt, redemptionQuoteScaled, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -260,8 +260,9 @@ export class LifecycleService {
   }
   /**
    * Redemption state and tail tracking (C7) from Stage 1's tail state: the window end, the tail cap per unit, the tail
-   * paid per unit (`paidPerUnitWad`, WAD-scaled; `paidPerUnit` floors it), `exhausted` once the cap is used up, the
-   * excess refunded to the issuer and the tail payouts so far. `open`: a tail can still be reported (the next period
+   * paid per unit (`paidPerUnitWad`, WAD-scaled per accounting unit; `paidPerUnit` floors it per whole unit at the
+   * series' unit scale, S3 amendment M4), `exhausted` once the cap is used up, the excess refunded to the issuer and the
+   * tail payouts so far (`perUnit` per whole unit, as `TailPayout` carries it). `open`: a tail can still be reported (the next period
    * starts by `endsAt`, Stage 1 TailEnded) and paid (not exhausted, Stage 1 NoTailDue).
    */
   async redemption(seriesId: string): Promise<Record<string, unknown>> {
@@ -281,7 +282,7 @@ export class LifecycleService {
       seriesId, status: s.status, redemption: r,
       tail: {
         endsAt: r.tailEndsAt, open: !exhausted && reportable, exhausted: r.tailExhausted, capPerUnit: r.tailCapPerUnit, paidPerUnitWad: r.tailPaidPerUnitWad,
-        paidPerUnit: (BigInt(r.tailPaidPerUnitWad) / WAD).toString(), refunded: r.tailRefunded, nextPeriod: next,
+        paidPerUnit: perWholeUnit(r.tailPaidPerUnitWad, s.unitScale).toString(), refunded: r.tailRefunded, nextPeriod: next,
         payouts: tail.rows.map((x) => ({ periodId: x.period_id, total: x.amount, perUnit: x.per_unit, at: Number(x.block_time) })),
       },
       claims: { count: claims.rows[0]!.n, total: claims.rows[0]!.total },
@@ -289,6 +290,12 @@ export class LifecycleService {
   }
 
   // ---- R14 retirement
+  /**
+   * Retirement progress: the cap per whole unit, what was paid per whole unit (`paidPerUnit`, `paidPerUnitWad` floored
+   * at the series' unit scale: a curve's WAD figure is per base lamport, S3 amendment M4), Stage 1's `C_remaining` at the
+   * unit scale (`capRemainingScaled`: the paid amount rounded up, never more room than the chain accepts) and the
+   * progress toward the cap.
+   */
   async retirement(seriesId: string): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
     const s = await chain.getSeries(seriesId);
@@ -296,9 +303,9 @@ export class LifecycleService {
     const positions = await chain.listPositions(seriesId);
     const unburned = positions.filter((p) => BigInt(p.units) > 0n);
     const cap = s.capPerUnit ? BigInt(s.capPerUnit) : null;
-    const paidPerUnit = BigInt(s.paidPerUnitWad) / WAD;
+    const paidPerUnit = perWholeUnit(s.paidPerUnitWad, s.unitScale);
     return {
-      seriesId, status: s.status, retired: s.status === 'Retired', capPerUnit: s.capPerUnit, paidPerUnit: paidPerUnit.toString(), capRemaining: cap === null ? null : capRemaining(cap, BigInt(s.paidPerUnitWad)).toString(), capProgressBps: cap && cap > 0n ? Number((paidPerUnit * 10_000n) / cap) : 0,
+      seriesId, status: s.status, retired: s.status === 'Retired', unitScale: s.unitScale, capPerUnit: s.capPerUnit, paidPerUnit: paidPerUnit.toString(), capRemaining: cap === null ? null : capRemainingScaled(cap, BigInt(s.paidPerUnitWad), BigInt(s.unitScale)).toString(), capProgressBps: cap && cap > 0n ? Number((paidPerUnit * 10_000n) / cap) : 0,
       unitsOutstanding: s.unitsOutstanding, holdersWithUnits: unburned.length, burnable: s.status === 'Retired' && s.terms.raiseStyle === 'sealed',
       note: s.terms.raiseStyle === 'curve'
         ? 'Curve-mode units are never burned (Stage 1 CurveModeNoBurn): on a Retired curve series holders keep their units and claim what their staked units earned; a redemption burns the units tendered.'

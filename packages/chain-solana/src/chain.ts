@@ -1,7 +1,7 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
-  ChainError, type AdminCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
-  type PermissionlessCommand, type TxResult, type UnsignedTx, type UserCommand,
+  ChainError, type BuildableCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
+  type TxResult, type UnsignedTx,
 } from '@merces/domain';
 import { assertNotMainnet, checkGenesis, type SolanaChainConfig } from './config.ts';
 import { SolanaEventMapper } from './mapping.ts';
@@ -157,7 +157,12 @@ export class SolanaChain implements ChainPort {
     return this.notReady('readEvents(decoder)');
   }
 
-  async build(_command: UserCommand | AdminCommand | PermissionlessCommand, _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
+  /**
+   * S5: one command, or an ordered list packed into ONE transaction of their instructions in order (all or nothing;
+   * owner direction of 2026-10-10: the unstake builder's `[unstakeUnits, claimPayout]`), serialised unsigned
+   * (`solana-base64`) with the signer as fee payer.
+   */
+  async build(_command: BuildableCommand | readonly BuildableCommand[], _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
     return this.notReady('build');
   }
   async send(_signed: SignedTx): Promise<TxResult> {

@@ -2339,7 +2339,24 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/series/{seriesId}/curve/build-buy": {
+    "/series/{seriesId}/curve/quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The pre-buy (or pre-sell) quote for one of the caller's wallets: the chain's quote (CurveSwapQuote), the minimum out at the slippage, whether the wallet earns (earns false with a warning for a wallet that is not approved: it can trade, never earn) and, before a buy, the statements the buyer acknowledges (beforeYouBuy: first 'Unapproved wallets earn nothing and cannot tender.', then the buyer notice with the curve's figures, and their version, which build-swap requires). With payIn USDG, the DEX port's quote for the swap to USDC (swapQuote). Builds nothing. */
+        get: operations["quoteCurveSwap"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve/build-swap": {
         parameters: {
             query?: never;
             header?: never;
@@ -2348,7 +2365,76 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        post: operations["buildCurveBuy"];
+        /** @description A trade on the curve (curveSwap; a Meteora DBC swap on a live chain), replacing build-buy. A buy needs an eligible backer (the backer tier's check) and the acknowledgement of the statements the quote returned (acknowledged true with beforeYouBuyVersion), else 422 detail.reason acknowledgement-required before anything is quoted or built; with payIn USDG it returns the swap route to sign first. A sell is open to any linked wallet holding the units (selling back is the only exit before the curve fills). Any wallet may buy: no allowlist and no cap at any stage; a wallet that is not approved gets earns false and a warning, never a refusal. */
+        post: operations["buildCurveSwap"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve/position": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's curve position (staking is first-class, amendment M8), read live from the chain for each linked wallet on the series' chain, or the one wallet names: its units in the wallet and in the stake vault, whether it earns, its pending payout and claimable, what it can stake now (stakable, with the registration and census steps the stake builder adds) or Stage 1's name for what stops it (stakeBlockedBy), what it can unstake, and its tender at a redemption. A wallet that bought and never registered or staked reads too. Unit counts in base lamports. */
+        get: operations["getCurveWalletPositions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve/build-stake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Stake base lamports from one of the caller's wallets (Stage 1 stake_units): only staked units earn. Ordered unsigned steps to sign in turn: registerHolder when the wallet is not a registered holder, syncCurveUnits when the last census cannot cover the stake and a census now can (never while the issuer has an assembled, unsubmitted report for the next expected period: its proof binds the current census, amendment H1), then stakeUnits. The stake earns from the next payment; unstaking is open at any time. */
+        post: operations["buildCurveStake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve/build-unstake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Unstake base lamports to one of the caller's wallets and claim, in ONE transaction, all or nothing: [unstakeUnits, claimPayout] (UnsignedTx.commands). Stage 1's unstake_units credits what the stake earned into the holder's pending payout and moves no stablecoin; the bundled claimPayout pays exactly that pending payout, so unstaking pays. A holder that unstakes through another tool without claiming keeps the credit as pending (claimable later, never lost). Never refused but for 0 units or more than the stake: no allowlist and no status check. */
+        post: operations["buildCurveUnstake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve/build-tender": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Tender at a curve redemption (Stage 1 tender_units): fromStake staked and fromWallet wallet base lamports burn and the holder is paid floor(P_redeem × units / 10^6) (principal) plus its pending payout (payout). Staked units are reserved; wallet units share what is left of the count taken at redemption (quotaLeft). No allowlist check: a registered holder taken off the allowlist still tenders. */
+        post: operations["buildCurveTender"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2835,7 +2921,14 @@ export type components = {
             lockupEndsAt?: number | null;
             issuePrice?: string | null;
             unitsSold?: string;
+            /** @description accounting units; on a curve series the count of the last census (syncCurveUnits, or redeem's own) */
             unitsOutstanding?: string;
+            /** @description curve staking: the units staked (base lamports); "0" on a sealed-bid series */
+            stakedTotal?: string;
+            /** @description curve staking: the units tendered at the redemption so far (base lamports); "0" on a sealed-bid series */
+            tenderedTotal?: string;
+            /** @description when the last census of a curve series was taken; null before the first and on a sealed-bid series */
+            unitsSyncedAt?: number | null;
             capPerUnit?: string | null;
             paidPerUnitWad?: string;
             releasesPaused?: boolean;
@@ -2917,11 +3010,24 @@ export type components = {
             stablecoin?: string;
             phase?: string;
             status?: string;
+            /** @enum {string} */
+            raiseStyle?: "sealed" | "curve";
+            /**
+             * @description accounting units per whole unit: unit counts are per accounting unit (base lamports on a curve series), per-unit figures per whole unit
+             * @enum {string}
+             */
+            unitScale?: "1" | "1000000";
+            /** @description the accrual weight (on a curve series the stake) */
             units?: string;
+            /** @description curve: the units in the stake vault ("0" on a sealed-bid series) */
+            stakedUnits?: string;
+            /** @description the units in the wallet (on a curve series they earn nothing until staked) */
+            walletUnits?: string;
             redeemedUnits?: string;
             burnedUnits?: string;
             issuePrice?: string | null;
             capPerUnit?: string | null;
+            /** @description gross paid per WHOLE unit: floor(paidPerUnitWad × unitScale / 1e18) */
             grossPaidPerUnit?: string;
             claimedTotal?: components["schemas"]["Money"];
             /** @description what claimPayout (Stage 1's claim) pays now: the net payout only; excludes the redemption, the tail and the final pool */
@@ -2934,6 +3040,7 @@ export type components = {
             tailClaimable?: components["schemas"]["Money"];
             /** @description the final-pool share claimFinal pays after an extinguishment (claimFinal also pays the net payout, claimable) */
             finalClaimable?: components["schemas"]["Money"];
+            /** @description claimedTotal / cost basis in basis points; the cost basis is issuePrice × (units + burnedUnits) / unitScale */
             realisedYieldBps?: number;
             lockupEndsAt?: number | null;
             redemptionPrice?: string | null;
@@ -3087,21 +3194,30 @@ export type components = {
                 auctionFeeBps?: number;
                 payoutFeeBps?: number;
             };
-            /** @description C6: cap per unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per unit = Stage 1's C_remaining = max(capPerUnit − ceil(paidPerUnitWad / 1e18), 0) */
+            /** @description C6: cap per whole unit = floor(m × P0 / 1e18) (Stage 1 capPerUnit, live after an amendment); remaining per whole unit = Stage 1's C_remaining at the series' unit scale = max(capPerUnit − ceil(paidPerUnitWad / (1e18 / unitScale)), 0). Unit counts are per accounting unit (base lamports on a curve series), per-unit figures per whole unit */
             cap: {
                 capMultipleWad?: components["schemas"]["Wad"];
                 issuePrice?: string | null;
-                /** @description cap per unit */
+                /** @description cap per whole unit */
                 perUnit?: string | null;
+                /**
+                 * @description accounting units per whole unit (1000000 base lamports on a curve series)
+                 * @enum {string}
+                 */
+                unitScale?: "1" | "1000000";
+                /** @description accounting units */
                 unitsSold?: string;
+                /** @description accounting units */
                 unitsOutstanding?: string;
-                /** @description perUnit × unitsSold */
+                /** @description perUnit × unitsSold / unitScale */
                 total?: string | null;
+                /** @description gross paid per accounting unit */
                 paidPerUnitWad?: components["schemas"]["Wad"];
+                /** @description gross paid per whole unit: floor(paidPerUnitWad × unitScale / 1e18) */
                 paidPerUnit?: components["schemas"]["Money"];
-                /** @description Stage 1's C_remaining: the paid amount rounded up, never more room than the chain accepts */
+                /** @description Stage 1's C_remaining at the unit scale: the paid amount rounded up, never more room than the chain accepts */
                 remainingPerUnit?: string | null;
-                /** @description remainingPerUnit × unitsOutstanding */
+                /** @description remainingPerUnit × unitsOutstanding / unitScale */
                 remainingTotal?: string | null;
                 /** @description paid / cap in basis points */
                 progressBps?: number | null;
@@ -3436,7 +3552,10 @@ export type components = {
             family?: "solana" | "evm";
             signer?: string;
             coSigners?: string[];
+            /** @description the transaction's command; for a transaction of several commands, the first */
             command?: Record<string, never>;
+            /** @description every command of a transaction built from an ordered list, in order: the chain executes them all or none (one transaction; the curve unstake builder returns [unstakeUnits, claimPayout]). Absent on a transaction of one command */
+            commands?: Record<string, never>[];
             payload?: string;
             encoding?: string;
             summary?: string;
@@ -3528,9 +3647,9 @@ export type components = {
                 /** @description Stage 1's tailExhausted: the tail cap per unit has been paid in full (NoTailDue) */
                 exhausted?: boolean;
                 capPerUnit?: components["schemas"]["Money"];
-                /** @description tail gross accepted per unit */
+                /** @description tail gross accepted per accounting unit, WAD-scaled (per base lamport on a curve series) */
                 paidPerUnitWad?: components["schemas"]["Wad"];
-                /** @description paidPerUnitWad floored to base units */
+                /** @description the tail paid per WHOLE unit: floor(paidPerUnitWad × unitScale / 1e18), base units of the stablecoin */
                 paidPerUnit?: components["schemas"]["Money"];
                 /** @description tail gross refunded to the issuer above the tail cap */
                 refunded?: components["schemas"]["Money"];
@@ -3538,6 +3657,7 @@ export type components = {
                 payouts?: {
                     periodId?: string;
                     total?: string;
+                    /** @description the tail paid per whole unit (TailPayout.perUnit) */
                     perUnit?: string;
                     at?: number;
                 }[];
@@ -3555,7 +3675,7 @@ export type components = {
             noCap: true;
             /** @description the one no-cap statement */
             noCapStatement: string;
-            /** @description the buyer notice (CURVE_BUYER_NOTICE with the curve's own figures): Meteora's pool holds the money until the curve fills, selling back is the only exit before then, no deadline, an issuer receives nothing if the curve never fills, the trading fee (most of it Merces', never returned), no cap, stake to earn, a wallet not approved can only sell, what happens if the issuer stops paying */
+            /** @description the buyer notice (CURVE_BUYER_NOTICE with the curve's own figures, read from the chain): Meteora's pool holds the money until the curve fills, selling back is the only exit before then, no deadline, an issuer receives nothing if the curve never fills, the trading fee and its split among Merces, Meteora and the issuer from the pool's config (never returned), no cap, stake to earn, a wallet not approved can only sell, what happens if the issuer stops paying */
             notice: string;
         } & {
             [key: string]: unknown;
@@ -3566,10 +3686,11 @@ export type components = {
             /** @description the Meteora port's pool state, when the series was configured */
             pool?: Record<string, never> | null;
             configured?: boolean;
+            beforeYouBuy?: components["schemas"]["CurveBeforeYouBuy"] | null;
             /** @description the last recorded lifecycle check (the keepers' curve.lifecycle job or the admin monitor; a check is recorded when it sent a step or its read changed): what it read, the steps it sent and the chain's time (chainTime) */
             graduationMonitor?: Record<string, never> | null;
         };
-        /** @description A curve series' bonding curve as the chain reads it. Base quantities in base lamports (10^6 per whole unit), prices per whole unit. Until S5 the simulator runs a labelled stand-in for Meteora's DBC (venue simulator-stand-in): the constant price P0, Stage 1's config's 1% trading fee, the fill at the target. */
+        /** @description A curve series' bonding curve as the chain reads it. Base quantities in base lamports (10^6 per whole unit), prices per whole unit. Until S5 the simulator runs a labelled stand-in for Meteora's DBC (venue simulator-stand-in): the constant price P0, Stage 1's generated config's trading fee and split, the fill at the target. */
         CurveState: {
             seriesId: string;
             /** @enum {string} */
@@ -3599,7 +3720,14 @@ export type components = {
             /** @description base lamports */
             baseSupply: string;
             spotPrice: components["schemas"]["Money"];
+            /** @description the trading fee every trade pays, as the pool's config sets it (100 = 1%) */
             tradingFeeBps: number;
+            /** @description how the pool's config splits the trading fee, in bps of the fee (summing to 10000): Meteora's protocol share, the partner's (Merces') and the creator's (the issuer's; 0 unless configured). The buyer notice states these figures, never its own */
+            tradingFeeSplitBps: {
+                protocol: number;
+                partner: number;
+                creator: number;
+            };
             migrationFeePercentage: number;
             tradingFeeUncollected: components["schemas"]["Money"];
             collected: {
@@ -3646,6 +3774,96 @@ export type components = {
             surplus?: components["schemas"]["Money"];
             tradingFee?: components["schemas"]["Money"];
             note?: string;
+        };
+        /** @description What a buyer acknowledges before a curve buy (owner direction of 2026-10-10): the statements in order, first 'Unapproved wallets earn nothing and cannot tender.', then every point of the buyer notice with the curve's figures, and their version (byb1- and 16 hex digits of SHA-256 over the statements: any change, a figure included, changes it). build-swap builds a buy only with acknowledged true for the current version */
+        CurveBeforeYouBuy: {
+            version: string;
+            statements: string[];
+        };
+        CurveSwap: components["schemas"]["CurveNoCap"] & {
+            seriesId: string;
+            wallet: string;
+            /** @enum {string} */
+            side: "buy" | "sell";
+            /** @enum {string} */
+            payIn: "USDC" | "USDG";
+            amountIn: components["schemas"]["Money"];
+            /** @description a buy's USDC into the curve (after the DEX swap when paying in USDG); null on a sell */
+            usdcAmount: string | null;
+            /** @description the chain's quote (ChainPort.quoteCurveSwap): buy, amountIn stablecoin in, amountUsed charged (less when the trade fills the curve), fee, amountOut base lamports; sell, amountIn base lamports in, amountOut stablecoin out after the fee */
+            quote: {
+                seriesId?: string;
+                /** @enum {string} */
+                side?: "buy" | "sell";
+                amountIn?: string;
+                amountUsed?: string;
+                amountOut?: string;
+                fee?: string;
+                fillsCurve?: boolean;
+            };
+            /** @description amountOut less the slippage */
+            minimumAmountOut: string;
+            /** @description the wallet is approved (allowlisted): it can register and stake its units to earn. false: it can trade, never earn or tender */
+            earns: boolean;
+            /** @description a buy by a wallet that is not approved: what it gets from the series (nothing; it can only sell) */
+            warning: string | null;
+            /** @description null on a sell */
+            beforeYouBuy: components["schemas"]["CurveBeforeYouBuy"] | null;
+            /** @description GET quote with payIn USDG: the DEX port's quote for the swap to USDC */
+            swapQuote?: Record<string, never> | null;
+            series: {
+                status?: string;
+                phase?: string;
+            };
+        };
+        /** @description A linked wallet's curve position, base lamports (10^6 per whole unit): only staked units earn */
+        CurveWalletPosition: {
+            wallet: string;
+            /** @description on the chain's allowlist now (registration and staking need it; unstake, claims and tender do not) */
+            approved: boolean;
+            /** @description a registered holder of the series */
+            registered: boolean;
+            /** @description units in the wallet; they earn nothing until staked */
+            walletUnits: string;
+            /** @description units in the stake vault for this holder; the only units that earn */
+            stakedUnits: string;
+            earning: boolean;
+            /** @description payouts settled into the holder record and not claimed yet (an unstake through another tool leaves its credit here) */
+            pending: components["schemas"]["Money"];
+            /** @description what claimPayout pays now */
+            claimable: components["schemas"]["Money"];
+            /** @description what the stake builder can stake now, its registration and census steps included: the wallet's units, at most what a census now leaves above the stakes; '0' when stakeBlockedBy names why */
+            stakable: string;
+            /**
+             * @description Stage 1's name for what stops a stake now, the first in stake_units' order (ZeroUnits: no units in the wallet); null when stakable is above 0
+             * @enum {string|null}
+             */
+            stakeBlockedBy: "RaiseNotOpen" | "TerminalStatus" | "ZeroUnits" | "NotAllowlisted" | "StakeExceedsOutstanding" | null;
+            /** @description a census that would let more be staked is held by the issuer's assembled, unsubmitted report (amendment H1) */
+            censusHeldBy: {
+                periodId?: string;
+            } | null;
+            /** @description the steps the stake builder puts before stakeUnits */
+            stakeSteps: ("registerHolder" | "syncCurveUnits")[];
+            /** @description the whole stake; unstaking is never blocked */
+            unstakable: string;
+            /** @description the tender at a redemption; null before the series redeemed */
+            tender: {
+                fromStake?: string;
+                /** @description the wallet units that fit what is left of the quota */
+                fromWallet?: string;
+                quotaLeft?: string;
+                pricePerUnit?: components["schemas"]["Money"];
+                /** @description floor(pricePerUnit × (fromStake + fromWallet) / 10^6); the pending payout comes on top */
+                principal?: components["schemas"]["Money"];
+                /** @enum {string|null} */
+                blockedBy?: "HolderNotRegistered" | null;
+            } | null;
+            /**
+             * @description the wallet's next step, as the keepers' reminders name it
+             * @enum {string|null}
+             */
+            next: "approve-wallet" | "register-and-stake" | "stake" | "register-and-tender" | "tender" | "claim" | null;
         };
         Notification: {
             notificationId: string;
@@ -8260,7 +8478,26 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        /**
+                         * @description accounting units per whole unit (1000000 base lamports on a curve series)
+                         * @enum {string}
+                         */
+                        unitScale?: "1" | "1000000";
+                        /** @description the cap per whole unit */
+                        capPerUnit?: string | null;
+                        /** @description gross paid per WHOLE unit: floor(paidPerUnitWad × unitScale / 1e18) */
+                        paidPerUnit?: string;
+                        /** @description Stage 1's C_remaining at the unit scale: capPerUnit − ceil(paidPerUnitWad / (1e18 / unitScale)), at least 0 */
+                        capRemaining?: string | null;
+                        /** @description paidPerUnit / capPerUnit in basis points */
+                        capProgressBps?: number;
+                        unitsOutstanding?: string;
+                        holdersWithUnits?: number;
+                        burnable?: boolean;
+                    } & {
+                        [key: string]: unknown;
+                    };
                 };
             };
             404: components["responses"]["NotFound"];
@@ -8519,7 +8756,60 @@ export interface operations {
             };
         };
     };
-    buildCurveBuy: {
+    quoteCurveSwap: {
+        parameters: {
+            query: {
+                /** @description one of the caller's wallets */
+                wallet: string;
+                side: "buy" | "sell";
+                /** @description buy: stablecoin base units in (the trading fee included); sell: base lamports in */
+                amountIn: components["schemas"]["Money"];
+                /** @description a buy may pay in USDG through the DEX port; a sell pays out USDC */
+                payIn?: "USDC" | "USDG";
+                slippageBps?: number;
+            };
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The quote */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurveSwap"];
+                };
+            };
+            /** @description The wallet is not linked to the caller */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The curve has filled (its units trade on the DEX pool), the amount trades nothing, or a sell of more units than the wallet holds (detail.code InsufficientFunds); not a curve-mode series */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a Solana series; a sell paid in USDG; stablecoin unavailable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildCurveSwap: {
         parameters: {
             query?: never;
             header?: never;
@@ -8532,39 +8822,307 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    buyer: string;
-                    amountIn: components["schemas"]["Money"];
+                    /** @description one of the caller's wallets; it signs */
+                    wallet: string;
                     /** @enum {string} */
+                    side: "buy" | "sell";
+                    amountIn: components["schemas"]["Money"];
+                    /**
+                     * @default USDC
+                     * @enum {string}
+                     */
                     payIn?: "USDC" | "USDG";
+                    /** @default 50 */
                     slippageBps?: number;
+                    /** @description a buy: true once the buyer has seen the statements the quote returned (beforeYouBuy) */
+                    acknowledged?: boolean;
+                    /** @description a buy: the version of the statements acknowledged (beforeYouBuy.version); it must be the current one */
+                    beforeYouBuyVersion?: string;
                 };
             };
         };
         responses: {
-            /** @description The chain's quote (CurveSwapQuote), the minimum out, an unsigned curveSwap buy and, when paying in USDG, the swap route to sign first; earns (false for a wallet that is not approved: it can trade, never earn) with a warning; no cap (a wallet buys any amount, whatever it holds) and the buyer notice */
+            /** @description The quote and figures as GET quote returns them, the unsigned curveSwap and, when paying in USDG, the swap route to sign first */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CurveNoCap"];
+                    "application/json": components["schemas"]["CurveSwap"] & {
+                        tx: components["schemas"]["UnsignedTx"];
+                        /** @description the DEX swap route (USDG to USDC) to sign and send first; null when paying in USDC or selling */
+                        swap: Record<string, never> | null;
+                    };
                 };
             };
-            /** @description Not an eligible backer */
+            /** @description The wallet is not linked to the caller, or a buy by an account that is not an eligible backer */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The curve has filled (its units trade on the DEX pool), or the amount buys nothing */
+            /** @description The curve has filled (its units trade on the DEX pool), the amount trades nothing, or a sell of more units than the wallet holds (detail.code InsufficientFunds); not a curve-mode series */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Not a Solana series; stablecoin unavailable */
+            /** @description A buy without the acknowledgement of the current statements (detail.reason acknowledgement-required; the message names no figure); not a Solana series; a sell paid in USDG; stablecoin unavailable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getCurveWalletPositions: {
+        parameters: {
+            query?: {
+                /** @description one of the caller's wallets; all of them on the series' chain when absent */
+                wallet?: string;
+            };
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One position per wallet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        seriesId: string;
+                        /** @enum {string} */
+                        unitScale: "1000000";
+                        status: string;
+                        phase: string;
+                        /** @description the series redeemed (tenders are open while the quota lasts) */
+                        redeemed: boolean;
+                        positions: components["schemas"]["CurveWalletPosition"][];
+                    };
+                };
+            };
+            /** @description The wallet is not linked to the caller */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a curve-mode series (detail.stage1 NotCurveMode) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a Solana series */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildCurveStake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description one of the caller's wallets; it signs every step */
+                    wallet: string;
+                    /** @description base lamports */
+                    units: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The steps and the stake after them */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        seriesId: string;
+                        wallet: string;
+                        units: string;
+                        steps: {
+                            /** @enum {string} */
+                            step: "registerHolder" | "syncCurveUnits" | "stakeUnits";
+                            tx: components["schemas"]["UnsignedTx"];
+                        }[];
+                        stakedAfter: string;
+                    };
+                };
+            };
+            /** @description The wallet is not linked to the caller, or it is not on the chain's allowlist (detail.stage1 NotAllowlisted: only an approved wallet registers and stakes; it can still sell) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description In Stage 1's order: the raise is not Open or Settled (detail.stage1 RaiseNotOpen), the series is terminal (TerminalStatus), 0 units (ZeroUnits), the stakes would pass the units outstanding even after a census now, or a census is held by the issuer's assembled report (StakeExceedsOutstanding; detail.reason report-pending; detail.stakable), the wallet holds fewer units (detail.code InsufficientFunds); not a curve-mode series (NotCurveMode) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a Solana series */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildCurveUnstake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description one of the caller's wallets; it signs */
+                    wallet: string;
+                    /** @description base lamports */
+                    units: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The one transaction and what its claim pays at the chain's current state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        seriesId: string;
+                        wallet: string;
+                        units: string;
+                        tx: components["schemas"]["UnsignedTx"];
+                        commands: ("unstakeUnits" | "claimPayout")[];
+                        /** @description what the bundled claimPayout pays at the chain's current state: the pending payout plus what the stake earned since the holder's cursor */
+                        payout: components["schemas"]["Money"];
+                        stakedAfter: string;
+                    };
+                };
+            };
+            /** @description The wallet is not linked to the caller */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 0 units (detail.stage1 ZeroUnits) or more than the stake (InsufficientStake); not a curve-mode series (NotCurveMode) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a Solana series */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildCurveTender: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description one of the caller's wallets; it signs */
+                    wallet: string;
+                    /** @default 0 */
+                    fromStake?: string;
+                    /** @default 0 */
+                    fromWallet?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The tender and what it pays */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        seriesId: string;
+                        wallet: string;
+                        tx: components["schemas"]["UnsignedTx"];
+                        fromStake: string;
+                        fromWallet: string;
+                        units: string;
+                        /** @description the redemption price per whole unit */
+                        pricePerUnit: components["schemas"]["Money"];
+                        /** @description floor(pricePerUnit × units / 10^6) */
+                        principal: components["schemas"]["Money"];
+                        /** @description the pending payout the tender also pays (its own PayoutClaimed) */
+                        payout: components["schemas"]["Money"];
+                        total: components["schemas"]["Money"];
+                        /** @description what is left of the wallet units' quota: units at redemption − tendered − staked */
+                        quotaLeft: string;
+                        quotaLeftAfter: string;
+                    };
+                };
+            };
+            /** @description The wallet is not linked to the caller */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description In Stage 1's order: no redemption yet (detail.stage1 NotRedeemed), 0 units (ZeroUnits), more than the stake (InsufficientStake), the wallet units would pass the quota (TenderQuotaExhausted; detail.quotaLeft), not a registered holder (HolderNotRegistered), the wallet holds fewer units (detail.code InsufficientFunds); not a curve-mode series (NotCurveMode) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a Solana series */
             422: {
                 headers: {
                     [name: string]: unknown;

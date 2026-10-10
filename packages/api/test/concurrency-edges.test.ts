@@ -131,7 +131,7 @@ describe.skipIf(!dbTestsEnabled())('concurrency and past-holder edges', () => {
     await expect(h.exec(h.issuer, { kind: 'cancelRaise', seriesId })).rejects.toMatchObject({ code: 'WrongPhase', detail: { stage1: 'NotSealedBid' } });
     for (const [i, amount] of [400, 350, 300].entries()) await h.curveBuy(seriesId, h.backers[i]!, USDC(amount));
     const tok = await rig.grant({ accountId: 'curve-cancel-b1', wallets: [{ chain: 'solana', address: h.backers[1]!.address }], roles: ['backer'] });
-    const buy = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[1]!.address, amountIn: USDC(10).toString(), payIn: 'USDG' }, tok);
+    const buy = await rig.post(`/series/${seriesId}/curve/build-swap`, { wallet: h.backers[1]!.address, side: 'buy', amountIn: USDC(10).toString(), payIn: 'USDG' }, tok);
     expect(buy.statusCode).toBe(409);
     await expect(h.curveBuy(seriesId, h.backers[1]!, USDC(10))).rejects.toMatchObject({ code: 'WrongPhase' });
   });

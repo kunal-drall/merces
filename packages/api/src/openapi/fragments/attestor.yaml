@@ -42,7 +42,8 @@ components:
         family: { type: string, enum: [solana, evm] }
         signer: { type: string }
         coSigners: { type: array, items: { type: string } }
-        command: { type: object }
+        command: { type: object, description: "the transaction's command; for a transaction of several commands, the first" }
+        commands: { type: array, items: { type: object }, description: 'every command of a transaction built from an ordered list, in order: the chain executes them all or none (one transaction; the curve unstake builder returns [unstakeUnits, claimPayout]). Absent on a transaction of one command' }
         payload: { type: string }
         encoding: { type: string }
         summary: { type: string }

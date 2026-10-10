@@ -56,10 +56,10 @@ reveal end the keepers settle the raise in Stage 1's steps and then push every b
 is nothing to claim. "Deliver now": `POST …/bids/build-deliver {bidder, signer?}` builds Stage 1's `deliver_bid` for a
 processed, undelivered bid (`signer` defaults to the bidder and must be one of your wallets; any wallet may deliver any
 bid, and the bidder is always the one paid; 409 `detail.stage1` NotProcessed or AlreadyDelivered) → `GET /me/holdings`,
-`GET /series/{id}/payouts`, claims (below). Curve-mode buys (`POST /series/{id}/curve/build-buy`) build a `curveSwap`
-buy (a Meteora DBC swap on a live chain; the simulator's stand-in pool until S5) against the chain's quote
-(`ChainPort.quoteCurveSwap`), for any linked wallet: a wallet that is not on the chain's allowlist gets `earns: false`
-and a warning (it can trade, never register, stake or earn), not a 403 (S3 WP8); 409 once the curve filled. A curve
+`GET /series/{id}/payouts`, claims (below). Curve-mode trades (`POST /series/{id}/curve/build-swap {wallet, side,
+amountIn, payIn?, slippageBps?}`, which replaced `build-buy` in S3 WP12) build a `curveSwap` (a Meteora DBC swap on a live
+chain; the simulator's stand-in pool until S5) against the chain's quote (`ChainPort.quoteCurveSwap`) for any linked
+wallet, 409 once the curve filled; the curve flow, staking included, is under **Curve staking** below. A curve
 series is Open from its creation (its activation fixes P0); the keepers' `curve.lifecycle` job completes it once the
 pool filled (`completeCurve`, settling at the pool's finish time) and collects its proceeds (`collectCurveProceeds`: the
 partner migration fee into the treasury once, the partner trading fee to the fee collector at most weekly, kind
@@ -76,7 +76,9 @@ last stored count and its time); the redemption quote on a curve counts `redeem`
 redemption-census`; a count of 0 blocks with NoUnitsOutstanding). Every sealed-bid builder refuses a curve series with 409 `detail.stage1`
 NotSealedBid (open, cancel, commit, reveal, deliver, the settlement step, the preview); the redemption claim builder
 refuses it with CurveUsesTender and the admin burn crank with CurveModeNoBurn. Every curve response carries the buyer
-notice (`CURVE_BUYER_NOTICE` with the curve's figures, A-CURVE-8). **No cap:** a curve raise has no wallet cap at any stage, before or after the curve
+notice (`CURVE_BUYER_NOTICE` with the curve's figures read from the chain: the trading fee and its split among Merces,
+Meteora and the issuer come from the pool's config, `CurveState.tradingFeeSplitBps`, never from the notice itself;
+A-CURVE-8). **No cap:** a curve raise has no wallet cap at any stage, before or after the curve
 fills; a wallet buys and holds any number of units. Every curve read and builder says so in one statement
 (`walletCap: null`, `noCap: true`, `noCapStatement`, the schema `CurveNoCap`), and so do the series read (`noCap`,
 `noCapStatement`; a curve series' `terms.walletCapBps` is Stage 1's 0, never a cap) and the transfer-window read. A curve
@@ -125,13 +127,40 @@ in the position (`GET /series/{id}/position`, the `PositionView` schema, and `/m
   (`stakedUnits`), and `walletUnits` are the base lamports in its wallet, which earn nothing until staked (a wallet that
   bought and never registered reads `registered: false` with its `walletUnits`). A curve position row, and so holder
   access, comes from the first stake or a tender, never from buying or registering. Nothing burns on a claim
-  (`burnsUnits` "0"). The redemption is a tender (`tenderUnits`; its builder arrives with the other curve builders in
-  S3 WP12; `redemptionClaimable` previews what a tender of the stake and the wallet units within the quota pays), so
+  (`burnsUnits` "0"). The redemption is a tender (`tenderUnits`, `POST /series/{id}/curve/build-tender`;
+  `redemptionClaimable` previews what a tender of the stake and the wallet units within the quota pays), so
   the redemption claim builder is 409 CurveUsesTender; the tail builder redeems nothing (`redeemsFirst: null`): it is
   409 NoRedeemedUnits until the holder tendered, and `total` adds the pending payout the transaction also pays; the
   final builder's `amount` = `total` is the pending payout (on a series that did not redeem, the stake's final share is
   in it, so `finalClaimable` is 0 and `claimPayout` pays it too) plus the final share of the tendered units on a series
-  that redeemed. Unstaking credits the stake's earnings to the pending payout and pays nothing; the next claim pays it.
+  that redeemed. Stage 1's unstake credits the stake's earnings to the pending payout and pays nothing; the unstake
+  builder bundles the claim that pays it into the same transaction (below).
+
+**Curve staking** (S3 WP12; Stage 1 curve mode; amendments M4 and M8 and the owner's directions of 2026-10-10). On a
+curve series only staked units earn. Every route here is account tier with `wallet` one of your wallets (it signs): a
+buyer has no position row, so no holder access, until it stakes. Unit counts are base lamports (10^6 to a whole unit);
+prices are per whole unit. Refusals come before the wallet signs, in Stage 1's order, with the Stage 1 name in
+`detail.stage1` (a short wallet: `detail.code` InsufficientFunds).
+
+| Step | Route | What it returns |
+| --- | --- | --- |
+| Quote before a trade | `GET /series/{id}/curve/quote?wallet&side&amountIn&payIn?&slippageBps?` | the chain's quote, `minimumAmountOut`, `earns` (false, with a `warning`, for a wallet that is not approved: it can trade, never earn or tender) and, before a buy, `beforeYouBuy {version, statements}`: first "Unapproved wallets earn nothing and cannot tender.", then the buyer notice's points with the curve's figures; with `payIn` USDG the DEX quote (`swapQuote`) |
+| Buy or sell | `POST /series/{id}/curve/build-swap {wallet, side, amountIn, payIn?, slippageBps?, acknowledged?, beforeYouBuyVersion?}` | the quote's figures and the unsigned `curveSwap` (`tx`), and with USDG the swap route to sign first (`swap`). A buy needs an eligible backer (403) and `acknowledged: true` with the current `beforeYouBuyVersion` (422 `detail.reason` `acknowledgement-required`, value-free, before anything is quoted or built; the version changes with any statement, a figure included). A sell needs neither: any linked wallet sells back the units it holds (USDC out only) |
+| Where a wallet stands | `GET /series/{id}/curve/position?wallet?` | per linked wallet (all of them on the series' chain, or the one named): `approved`, `registered`, `walletUnits`, `stakedUnits`, `earning`, `pending`, `claimable`, `stakable` (what the stake builder can stake now, its steps included) or `stakeBlockedBy` (RaiseNotOpen, TerminalStatus, ZeroUnits, NotAllowlisted, StakeExceedsOutstanding), `censusHeldBy` (the issuer's assembled report holds the census), `stakeSteps`, `unstakable`, `tender` after a redemption (`fromStake`, `fromWallet` within `quotaLeft`, `principal`, `blockedBy` HolderNotRegistered) and `next` (approve-wallet, register-and-stake, stake, register-and-tender, tender, claim) |
+| Stake | `POST /series/{id}/curve/build-stake {wallet, units}` | ordered `steps` to sign in turn: `registerHolder` when the wallet is not registered, `syncCurveUnits` when the last census cannot cover the stake and one now can, then `stakeUnits`; 409 RaiseNotOpen, TerminalStatus, ZeroUnits, 403 NotAllowlisted, 409 StakeExceedsOutstanding (`detail.stakable`; `detail.reason` `report-pending` while the issuer's assembled report holds the census, amendment H1: the builder never adds a census then), InsufficientFunds |
+| Unstake (pays) | `POST /series/{id}/curve/build-unstake {wallet, units}` | ONE transaction, `[unstakeUnits, claimPayout]` (`tx.commands`), all or nothing: the unstake credits what the stake earned into `pending` (Stage 1's code moves no stablecoin) and the claim pays exactly that (`payout` at the current state). Never refused but ZeroUnits or InsufficientStake: no allowlist and no status check. A holder that unstakes through another tool keeps the credit as `pending`, claimable later |
+| Tender | `POST /series/{id}/curve/build-tender {wallet, fromStake?, fromWallet?}` | after a redemption: `principal` = floor(P × units / 10^6), `payout` (the pending payout it also pays), `total`, `quotaLeft` and `quotaLeftAfter` (staked units are reserved; wallet units share what is left); 409 NotRedeemed, ZeroUnits, InsufficientStake, TenderQuotaExhausted, HolderNotRegistered, InsufficientFunds |
+| Census | `POST /series/{id}/curve/build-sync {signer}` | as above |
+
+`ChainPort.build` takes an ordered command list as one all-or-nothing transaction (`UnsignedTx.commands`; the
+simulator runs it in one execution with one rollback, the Solana adapter packs the instructions in S5); an EVM chain
+builds one command per transaction (NotImplemented for a list) until a bundle is needed there. Every per-unit read is
+per whole unit at the series' unit scale (amendment M4): `/me/holdings` rows carry `unitScale` (and a curve row its
+`stakedUnits` and `walletUnits`), `grossPaidPerUnit = floor(paidPerUnitWad × unitScale / 1e18)` and a cost basis of
+`issuePrice × units / unitScale`; the retirement read's `paidPerUnit`, `capRemaining` (Stage 1's C_remaining at the unit
+scale) and `capProgressBps`; the redemption read's tail `paidPerUnit`; the accounting statement's cap figures
+(`unitScale`, `total = perUnit × unitsSold / unitScale`, `remainingTotal`, `progressBps`). The series read carries the
+curve's `stakedTotal`, `tenderedTotal` and `unitsSyncedAt`.
 
 **Registration.** Payouts accrue only to registered holders, from the registration on. A winning bid registers its
 bidder when it is processed (and a window purchase its buyer), so a holder rarely needs to. `POST

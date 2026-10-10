@@ -277,6 +277,9 @@ export const commandGroups = [
 /** The backend's own onchain roles. It never holds user funds (no custody). */
 export type ServiceRole = 'keeper' | 'allowlistManager';
 
+/** What `ChainPort.build` builds for a wallet to sign: a user, permissionless or admin command. */
+export type BuildableCommand = UserCommand | AdminCommand | PermissionlessCommand;
+
 export interface UnsignedTx {
   chain: string;
   family: 'solana' | 'evm';
@@ -284,7 +287,14 @@ export interface UnsignedTx {
   signer: string;
   /** additional required signers (e.g. an attestor on amendTerms/approvePause) */
   coSigners: string[];
+  /** the transaction's command; for a transaction that carries several (`commands`), the first */
   command: Command;
+  /**
+   * Every command of a transaction built from an ordered list (`ChainPort.build` with a list; owner direction of
+   * 2026-10-10), in order: the chain executes them all or none (one transaction, one rollback; the Solana adapter packs
+   * their instructions into one transaction). Absent on a transaction of one command.
+   */
+  commands?: Command[];
   /** chain-specific serialised transaction: base64 Solana message, or EVM {to,data,value,chainId} JSON. Simulator: JSON of the command. */
   payload: string;
   encoding: 'simulator-json' | 'solana-base64' | 'evm-json';

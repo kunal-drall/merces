@@ -42,6 +42,17 @@ export class SimEngine implements EngineCore {
   // ------------------------------------------------------------------ tx plumbing
   /** `ctx` carries what was established outside the engine for this transaction (the Groth16 verdict, ExecContext). */
   execute(cmd: Command, actor: Actor, ctx: ExecContext = {}): TxResult {
+    return this.executeAll([cmd], actor, ctx);
+  }
+
+  /**
+   * One transaction of several commands (`ChainPort.build` with a list; owner direction of 2026-10-10): they run in
+   * order against the state each one leaves, under one transaction id, and either all apply, their events in order, or
+   * the first refusal is thrown and the state is left untouched (one rollback), as a Solana transaction of several
+   * instructions does.
+   */
+  executeAll(cmds: readonly Command[], actor: Actor, ctx: ExecContext = {}): TxResult {
+    if (cmds.length === 0) throw new ChainError('NotPermitted', 'a transaction needs at least one command');
     const backup = structuredClone(this.state);
     const now = this.clock.now();
     const txIndex = this.state.txCount + 1;
@@ -52,7 +63,7 @@ export class SimEngine implements EngineCore {
       emitted.push({ chain: this.state.config.chain, cursor: seq.toString().padStart(12, '0'), seq, blockTime: now, blockRef: String(txIndex), txId, finality: 'finalized', type, payload });
     };
     try {
-      this.dispatch(cmd, actor, now, emit, ctx);
+      for (const cmd of cmds) this.dispatch(cmd, actor, now, emit, ctx);
       this.state.txCount = txIndex;
       this.events.push(...emitted);
       return { txId, blockTime: now, blockRef: String(txIndex), events: emitted };

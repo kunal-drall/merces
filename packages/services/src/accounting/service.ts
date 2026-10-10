@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
-import type { ChainPort } from '@merces/domain';
-import { WAD, capRemaining } from '@merces/math';
+import { perWholeUnit, type ChainPort } from '@merces/domain';
+import { WAD, capRemainingScaled } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -113,6 +113,8 @@ interface SeriesRow {
   issue_price: string | null;
   units_sold: string;
   units_outstanding: string;
+  /** accounting units per whole unit (1, or 10^6 base lamports on a curve series) */
+  unit_scale: string;
   cap_per_unit: string | null;
   paid_per_unit_wad: string;
   gross_paid_total: string;
@@ -244,9 +246,13 @@ export class AccountingService {
     const unitsSold = big(s.units_sold);
     const unitsOutstanding = big(s.units_outstanding);
     const paidPerUnitWad = big(s.paid_per_unit_wad);
-    const paidPerUnit = paidPerUnitWad / WAD;
-    // Stage 1's C_remaining: the paid amount rounded UP, so the statement never shows more room than the chain accepts
-    const remainingPerUnit = capPerUnit === null ? null : capRemaining(capPerUnit, paidPerUnitWad);
+    // per-unit figures are per WHOLE unit and unit counts per accounting unit (S3 amendment M4): a curve series counts
+    // base lamports (10^6 to a whole unit) and its `paidPerUnitWad` is per base lamport
+    const unitScale = big(s.unit_scale ?? '1');
+    const paidPerUnit = perWholeUnit(paidPerUnitWad, unitScale);
+    // Stage 1's C_remaining at the unit scale: the paid amount rounded UP, so the statement never shows more room than
+    // the chain accepts
+    const remainingPerUnit = capPerUnit === null ? null : capRemainingScaled(capPerUnit, paidPerUnitWad, unitScale);
     const returnedToHolders = sum('extinguishment');
     // what holders were given to claim: the regular net, the tail net and the final pool. Stage 1's claim family pays
     // them in separate events (S3): the net payout in PayoutClaimed (with the pending payout and tail catch-up a
@@ -273,12 +279,13 @@ export class AccountingService {
         perUnit: str(capPerUnit),
         unitsSold: s.units_sold,
         unitsOutstanding: s.units_outstanding,
-        total: capPerUnit === null ? null : (capPerUnit * unitsSold).toString(),
+        unitScale: unitScale.toString(),
+        total: capPerUnit === null ? null : ((capPerUnit * unitsSold) / unitScale).toString(),
         paidPerUnitWad: s.paid_per_unit_wad,
         paidPerUnit: paidPerUnit.toString(),
         remainingPerUnit: str(remainingPerUnit),
-        remainingTotal: remainingPerUnit === null ? null : (remainingPerUnit * unitsOutstanding).toString(),
-        progressBps: capPerUnit !== null && capPerUnit > 0n ? Number((paidPerUnitWad * 10_000n) / (capPerUnit * WAD)) : null,
+        remainingTotal: remainingPerUnit === null ? null : ((remainingPerUnit * unitsOutstanding) / unitScale).toString(),
+        progressBps: capPerUnit !== null && capPerUnit > 0n ? Number((paidPerUnitWad * unitScale * 10_000n) / (capPerUnit * WAD)) : null,
       },
       payments: { grossPaidTotal: regular.gross.toString(), netDistributed: regular.net.toString(), feesTaken: regular.fee.toString(), count: regular.count },
       fees: { auction: feeByKind.auction, payout: feeByKind.payout, curveTrading: feeByKind.curveTrading, total: (BigInt(feeByKind.auction) + BigInt(feeByKind.payout) + BigInt(feeByKind.curveTrading)).toString(), vaultFeesTotal: s.fees_total },

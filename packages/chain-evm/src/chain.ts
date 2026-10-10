@@ -1,7 +1,7 @@
 import { createPublicClient, erc20Abi, getAddress, http, type PublicClient } from 'viem';
 import {
-  ChainError, type AdminCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
-  type PermissionlessCommand, type TxResult, type UnsignedTx, type UserCommand,
+  ChainError, type BuildableCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
+  type TxResult, type UnsignedTx,
 } from '@merces/domain';
 import { assertNotMainnet, type EvmChainConfig } from './config.ts';
 import { EvmEventMapper } from './mapping.ts';
@@ -130,7 +130,13 @@ export class EvmChain implements ChainPort {
     if (!this.abis) return this.notReady('readEvents');
     return this.notReady('readEvents(decoder)');
   }
-  async build(_command: UserCommand | AdminCommand | PermissionlessCommand, _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
+  /**
+   * One command per transaction: an EVM transaction calls one contract function, and no bundle is needed on an EVM
+   * chain yet (curve mode, the bundle's first user, is Solana only). A list of more than one is NotImplemented until
+   * one is (a multicall then).
+   */
+  async build(command: BuildableCommand | readonly BuildableCommand[], _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
+    if (Array.isArray(command) && command.length > 1) throw new ChainError('NotImplemented', 'EvmChain.build: one command per transaction (no bundles on an EVM chain yet)');
     return this.notReady('build');
   }
   async send(_signed: SignedTx): Promise<TxResult> {

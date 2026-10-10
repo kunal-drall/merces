@@ -67,6 +67,11 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
     issuePrice: r.issue_price,
     unitsSold: r.units_sold,
     unitsOutstanding: r.units_outstanding,
+    // curve staking as indexed (S3 WP12; base lamports): the stakes, the units tendered at the redemption and the time
+    // of the last census (units outstanding is that census' count); "0", "0" and null on a sealed-bid series
+    stakedTotal: String(r.staked_total ?? '0'),
+    tenderedTotal: String(r.tendered_total ?? '0'),
+    unitsSyncedAt: num(r.units_synced_at),
     capPerUnit: r.cap_per_unit,
     paidPerUnitWad: r.paid_per_unit_wad,
     releasesPaused: r.releases_paused,
