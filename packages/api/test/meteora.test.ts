@@ -13,6 +13,8 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *    a bonding-phase cap of 20% of the units offered, refused by the builder and the chain). Every curve response
  *    carries the buyer notice (`CURVE_BUYER_NOTICE` with the curve's figures; was a short notice promising an allowlist
  *    while bonding).
+ *  - S3-KP: the admin monitor is a manual trigger of the keepers' lifecycle pass (S3 WP11): its answer lists failures by
+ *    code (`errors`), and the last recorded check carries the chain's time.
  *  - S3-CV: Stage 1's curve lifecycle (S3 WP8): the buy builder builds a `curveSwap` against the chain's quote (was
  *    the toy curve's buy against the mock pool), the curve is Open from creation, the monitor completes it and collects its
  *    proceeds (was: the threshold-crossing buy graduated it), the treasury is the partner migration fee, the series
@@ -74,12 +76,13 @@ describe.skipIf(!dbTestsEnabled())('M6 Meteora support (E14)', () => {
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     expect(sent.json().events).toEqual([]);
     expect(h.sim.curveUnitsOf(seriesId, h.backers[0]!.address)).toBe(39_600_000n);
-    // the monitor collects the partner's trading fee at any time (Stage 1 collect_curve_proceeds); nothing to complete yet
+    // the monitor (a manual trigger of the keepers' curve.lifecycle pass, cause S3-KP) collects the partner's trading fee
+    // (Stage 1 collect_curve_proceeds; the first time at once, then at most weekly); nothing to complete yet
     let mon = await rig.post('/admin/curves/monitor', {}, adminTok);
-    expect(mon.json()).toEqual({ checked: 1, completed: [], collected: [seriesId] });
+    expect(mon.json()).toEqual({ checked: 1, completed: [], collected: [seriesId], errors: [] });
     const st1 = await rig.get(`/series/${seriesId}/curve`);
     expect(st1.json().onchain).toMatchObject({ progressBps: 3960, poolComplete: false, tradingFeeUncollected: '0', collected: { tradingFee: USDC(3.2).toString(), migrationFee: '0' } });
-    expect(st1.json().graduationMonitor).toMatchObject({ quoteReserve: USDC(396).toString(), poolComplete: false, settled: false, actions: ['collectCurveProceeds'] });
+    expect(st1.json().graduationMonitor).toMatchObject({ chainTime: await h.sim.now(), quoteReserve: USDC(396).toString(), poolComplete: false, settled: false, actions: ['collectCurveProceeds'] });
     // cause S3-NC: the same wallet buys again, any amount, through the builder and on the chain
     const again = await rig.post(`/series/${seriesId}/curve/build-buy`, { buyer: h.backers[0]!.address, amountIn: USDC(500).toString(), payIn: 'USDC' }, backerTok);
     expect(again.statusCode, again.body).toBe(200);
@@ -101,8 +104,8 @@ describe.skipIf(!dbTestsEnabled())('M6 Meteora support (E14)', () => {
     expect(closed.statusCode).toBe(409);
     // the monitor completes the curve and collects its proceeds (permissionless, as the keeper); a second pass has nothing
     mon = await rig.post('/admin/curves/monitor', {}, adminTok);
-    expect(mon.json()).toEqual({ checked: 1, completed: [seriesId], collected: [seriesId] });
-    expect((await rig.post('/admin/curves/monitor', {}, adminTok)).json()).toEqual({ checked: 1, completed: [], collected: [] });
+    expect(mon.json()).toEqual({ checked: 1, completed: [seriesId], collected: [seriesId], errors: [] });
+    expect((await rig.post('/admin/curves/monitor', {}, adminTok)).json()).toEqual({ checked: 1, completed: [], collected: [], errors: [] });
     await rig.sync();
     const st2 = await rig.get(`/series/${seriesId}/curve`);
     expect(st2.json().onchain).toMatchObject({ poolComplete: true, settled: true, collected: { migrationFee: '990000000', proceeds: '990000000' } });

@@ -2381,6 +2381,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description A manual trigger of the keepers' lifecycle job (curve.lifecycle, every minute): for every curve-mode series, Stage 1's permissionless completeCurve once the pool filled while the raise is Open, then collectCurveProceeds once after it filled (the proceeds) and at most weekly on the chain's clock while the partner's trading fees wait in the pool. A step another sender already took is skipped. */
         post: operations["monitorCurves"];
         delete?: never;
         options?: never;
@@ -3565,7 +3566,7 @@ export type components = {
             /** @description the Meteora port's pool state, when the series was configured */
             pool?: Record<string, never> | null;
             configured?: boolean;
-            /** @description the last monitor check: what it read and the lifecycle steps it sent */
+            /** @description the last recorded lifecycle check (the keepers' curve.lifecycle job or the admin monitor; a check is recorded when it sent a step or its read changed): what it read, the steps it sent and the chain's time (chainTime) */
             graduationMonitor?: Record<string, never> | null;
         };
         /** @description A curve series' bonding curve as the chain reads it. Base quantities in base lamports (10^6 per whole unit), prices per whole unit. Until S5 the simulator runs a labelled stand-in for Meteora's DBC (venue simulator-stand-in): the constant price P0, Stage 1's config's 1% trading fee, the fill at the target. */
@@ -8637,16 +8638,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Checks every curve-mode series and cranks Stage 1's permissionless lifecycle: completeCurve once the pool filled while the raise is Open, then collectCurveProceeds while proceeds or trading fees wait in the pool */
+            /** @description What the pass did; a series or chain that failed is listed with a code (a Stage 1 error name or a ChainError code), never a message */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        checked?: number;
-                        completed?: string[];
-                        collected?: string[];
+                        checked: number;
+                        completed: string[];
+                        collected: string[];
+                        errors: {
+                            /** @description a series or chain */
+                            target: string;
+                            /** @description a code */
+                            error: string;
+                        }[];
                     };
                 };
             };

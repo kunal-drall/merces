@@ -24,6 +24,8 @@ export * from './poi/service.ts';
 export * from './auction/service.ts';
 export * from './lifecycle/service.ts';
 export * from './meteora/service.ts';
+export * from './meteora/lifecycle.ts';
+export * from './curve-census.ts';
 export * from './threshold/service.ts';
 export * from './attestor/service.ts';
 export * from './accounting/service.ts';

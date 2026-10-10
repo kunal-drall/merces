@@ -4,13 +4,15 @@ import type { DexPort, MeteoraPort } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 import { censusLockedBy } from '../curve-census.ts';
+import { advanceCurves, type CurveLifecyclePass } from './lifecycle.ts';
 
 /**
  * E14 — Meteora support (Solana only; R35). Orchestrates curve-mode series on Stage 1's curve lifecycle (S3 WP8): runs
  * Stage 1's oracle-driven config generator through the Meteora port, reads the curve from the chain (the simulator's
- * stand-in pool until S5), builds trades on the curve and the USDG→USDC swap route through the DEX port, and completes
- * the curve and collects its proceeds once it filled (`completeCurve`, `collectCurveProceeds`, permissionless). Every
- * response carries no cap and the buyer notice (`CURVE_BUYER_NOTICE`, with the curve's own figures).
+ * stand-in pool until S5) and builds trades on the curve and the USDG→USDC swap route through the DEX port. The keepers
+ * complete the curve and collect its proceeds (`curve.lifecycle`, `advanceCurves` in ./lifecycle.ts; the admin monitor
+ * triggers the same pass). Every response carries no cap and the buyer notice (`CURVE_BUYER_NOTICE`, with the curve's
+ * own figures).
  */
 
 /**
@@ -69,7 +71,8 @@ export class MeteoraService {
   /**
    * Curve status for anyone: the curve as the chain reads it (`CurveState`: the pool's target and progress, P0, the fill,
    * the completion and what was collected), the Meteora port's pool when configured, no cap, the buyer notice and the
-   * last monitor check.
+   * last recorded lifecycle check (`graduationMonitor`: a check by the keepers or the admin monitor that sent a step or
+   * read a change, with the chain's time).
    */
   async status(seriesId: string): Promise<Record<string, unknown>> {
     const { chain } = await this.curveSeries(seriesId);
@@ -143,47 +146,18 @@ export class MeteoraService {
   }
 
   /**
-   * Keeper/admin: for every curve series, record what the curve reads, then crank Stage 1's permissionless lifecycle:
-   * `completeCurve` once the pool filled while the raise is Open, then `collectCurveProceeds` while proceeds or trading
-   * fees wait in the pool. A step the chain refuses as already done (another sender got there first) is skipped.
+   * The admin monitor: a manual trigger of the keepers' lifecycle job (`curve.lifecycle`, `advanceCurves`): for every
+   * curve series, `completeCurve` once the pool filled while the raise is Open, `collectCurveProceeds` once after it
+   * filled and weekly while trading fees accrue. A step already done by another sender is skipped; failures come back
+   * per series as codes.
    */
-  async monitorGraduation(): Promise<{ checked: number; completed: string[]; collected: string[] }> {
-    const completed: string[] = [];
-    const collected: string[] = [];
-    let checked = 0;
-    for (const chain of this.ctx.chains.chains.values()) {
-      if (chain.family !== 'solana') continue;
-      for (const s of await chain.listSeries()) {
-        if (s.terms.raiseStyle !== 'curve') continue;
-        checked++;
-        const c = await chain.getCurve(s.seriesId);
-        if (!c) continue;
-        const actions: string[] = [];
-        const step = async (kind: 'completeCurve' | 'collectCurveProceeds'): Promise<boolean> => {
-          try {
-            await chain.submit({ kind, seriesId: s.seriesId }, 'keeper');
-            actions.push(kind);
-            return true;
-          } catch (e) {
-            if (e instanceof ChainError && ['WrongPhase', 'TooEarly'].includes(e.code)) return false; // already done
-            throw e;
-          }
-        };
-        if (c.poolComplete && s.phase === 'Open' && (await step('completeCurve'))) completed.push(s.seriesId);
-        const proceedsWaiting = c.poolComplete && c.collected.migrationFee === '0';
-        if ((proceedsWaiting || BigInt(c.tradingFeeUncollected) > 0n) && (await step('collectCurveProceeds'))) collected.push(s.seriesId);
-        await this.ctx.pool.query(
-          'insert into curve_monitor (series_id, checked_at, quote_reserve, pool_complete, settled, pool_progress_bps, actions) values ($1, now(), $2, $3, $4, $5, $6)',
-          [s.seriesId, c.quoteReserve, c.poolComplete, c.settled || actions.includes('completeCurve'), c.progressBps, actions],
-        );
-      }
-    }
-    return { checked, completed, collected };
+  async monitorGraduation(): Promise<CurveLifecyclePass> {
+    return advanceCurves(this.ctx);
   }
 
   private async lastGraduationCheck(seriesId: string): Promise<Record<string, unknown> | null> {
-    const r = await this.ctx.pool.query('select checked_at, quote_reserve::text, pool_complete, settled, pool_progress_bps, actions from curve_monitor where series_id = $1 order by checked_at desc, id desc limit 1', [seriesId]);
+    const r = await this.ctx.pool.query('select checked_at, chain_time, quote_reserve::text, pool_complete, settled, pool_progress_bps, actions from curve_monitor where series_id = $1 order by id desc limit 1', [seriesId]);
     const x = r.rows[0];
-    return x ? { checkedAt: x.checked_at, quoteReserve: x.quote_reserve, poolComplete: x.pool_complete, settled: x.settled, poolProgressBps: x.pool_progress_bps, actions: x.actions } : null;
+    return x ? { checkedAt: x.checked_at, chainTime: x.chain_time === null ? null : Number(x.chain_time), quoteReserve: x.quote_reserve, poolComplete: x.pool_complete, settled: x.settled, poolProgressBps: x.pool_progress_bps, actions: x.actions } : null;
   }
 }

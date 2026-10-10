@@ -539,7 +539,14 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    units and redeems nothing, claimFinal weighs tendered units or the stake and burns nothing), registration only by
    `registerHolder`; the indexer's positions from stakes and tenders (amendment M3), the position read's `stakedUnits`
    and `walletUnits`, the curve branches of the claim builders; Stage 1's curve tests (curve_mode.rs) and its
-   `curve_staking_never_overpays` property pinned relationally; a Solana conformance case (EVM refuses a curve).
+   `curve_staking_never_overpays` property pinned relationally; a Solana conformance case (EVM refuses a curve). WP11:
+   the curve keepers (A-CURVE-5, -7, -9): `curve.lifecycle` completes a filled curve and collects its proceeds once, then
+   the partner's trading fees weekly on the chain's clock (the admin monitor triggers the same pass); `curve.sync` takes
+   the census once after completion and once per period end plus an hour, never on a terminal series and never while the
+   issuer's assembled report binds the census (H1); `curve.stake-reminders` and `curve.tender-reminders` remind linked
+   wallets holding unstaked units by their next step (approve, register, stake or tender); the chain notices
+   `curve.completed` and `curve.tender-open`, with `toHolders` covering `curve.*` and a status change on a curve naming
+   the tender (amendment M8); no notice names an amount.
 12. *Math.* Replace the six disagreeing families with Stage 1's formulas (or import `@merces/reference`), then
     replay the 25 vectors through a Stage 1 op runner on the simulator with full-state expectations.
    **S1:** applied (WP1, WP9a, WP9b): `@merces/reference` is imported through `@merces/math`, and Stage 1's vectors are

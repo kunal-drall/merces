@@ -84,7 +84,7 @@ Nothing in the backend signs for a user. Services return `UnsignedTx` objects (`
 | poi | reporting schedule and deadlines, zkTLS sessions, FX basis, offchain proof and attestation verification, report store (commitments and amounts only), submit/payIn builders, tier-1 reconciliation |
 | auction | pre-checks on Stage 1's escrow and validity rules, open/cancel/commit/reveal/deliver builders and the next settlement step for any wallet, encrypted reveal backups, the settlement preview (Stage 1's math), settlement and delivery for the keepers (separate jobs, delivery retries and stuck alerts), reveal reminders |
 | lifecycle | treasury draws and pause, payout claims behind `PayoutClaimBuilder` (private payouts can slot in), redemption quote/builders/tail, retirement, transfer windows (flag-gated) |
-| meteora | curve-mode config generation; the curve read (the chain's `CurveState`, its census included); a monitor that completes a filled curve and collects its proceeds (Stage 1's permissionless `completeCurve`, `collectCurveProceeds`); the census builder (`syncCurveUnits`, never while the issuer's assembled report waits: `curve-census.ts`, which also makes the report assembly, the submission builder and the tier-3 path census-aware); a buy builder (`curveSwap` on the chain's quote, any wallet, `earns: false` for one not approved) with a USDG→USDC swap route through the DEX port; no cap at any stage (every response carries `noCap` and the one statement) and the buyer notice (`CURVE_BUYER_NOTICE`) |
+| meteora | curve-mode config generation; the curve read (the chain's `CurveState`, its census included); the lifecycle pass that completes a filled curve and collects its proceeds and, weekly, its trading fees (Stage 1's permissionless `completeCurve`, `collectCurveProceeds`; `advanceCurves`, run by the keepers' `curve.lifecycle` and the admin monitor); the census builder (`syncCurveUnits`, never while the issuer's assembled report waits: `curve-census.ts`, which also makes the report assembly, the submission builder and the tier-3 path census-aware); a buy builder (`curveSwap` on the chain's quote, any wallet, `earns: false` for one not approved) with a USDG→USDC swap route through the DEX port; no cap at any stage (every response carries `noCap` and the one statement) and the buyer notice (`CURVE_BUYER_NOTICE`) |
 | threshold | admin-curated median income and inflation table with history; yearly indexing candidates |
 | attestor | attestor queue, hardship review (end-to-end encrypted), tier-3 cases and annual true-up, fallback FX signing, two-attestor extinguishment |
 | accounting | fee ledger, per-series statements, reconciliation of indexed totals against onchain balances, CSV export |
@@ -92,7 +92,9 @@ Nothing in the backend signs for a user. Services return `UnsignedTx` objects (`
 | admin | overview, flags, audit log, attestor/verifier-key registration (multisig transactions), tier-4 audit sampling scaffolding |
 
 Keepers (`@merces/keepers`) run idempotent jobs on intervals and record every run. The rate keeper takes one Pyth
-snapshot per UTC day per pair per chain with a Chainlink cross-check where a feed exists.
+snapshot per UTC day per pair per chain with a Chainlink cross-check where a feed exists. The curve jobs (S3) complete
+and collect filled curves, take the census after completion and after each period end (never over an assembled report),
+and remind linked wallets holding unstaked units to stake and, after a redemption, to tender (RUNBOOK.md).
 
 ## The report verifier
 

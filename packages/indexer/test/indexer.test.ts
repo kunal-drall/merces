@@ -30,6 +30,8 @@ const GENESIS = Date.UTC(2026, 0, 1) / 1000;
  *    units are the stake, the series' stakes move; a curve tender (`RedemptionClaimed.fromStake`) upserts the position
  *    (a wallet-only tender included) and lowers only the staked part; a curve `UnitsBurned` touches neither the
  *    position's units nor units outstanding and adds to the tendered total (amendment M3).
+ *  - S3-KP: a curve series' chain notices (S3 WP11, amendment M8): `curve.completed` in place of the mint notice,
+ *    `curve.tender-open` at a redemption, and every notice of a curve series names its raise style.
  */
 
 describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
@@ -527,6 +529,37 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect(await pos()).toEqual({ units: '100', undelivered_units: '0' });
     expect(await money('refund')).toEqual([303, 202, 101, 101].map((n) => USDC(n).toString()));
     expect((await t.pool.query('select count(*)::int as n from bids where series_id = $1 and processed and delivered', [seriesId])).rows[0].n).toBe(5);
+  });
+
+  // cause S3-KP (S3 WP11, amendment M8): a curve's own notices. Its completion is `curve.completed` (the issuer and the
+  // holders) and stands for the mint notice (no bids were processed); its redemption is `curve.tender-open` (the holders:
+  // redeemed by tender); every notice of a curve series names its raise style, so a status change says what a curve
+  // holder sends. A sealed-bid series' notices are unchanged.
+  it('enqueues a curve\'s notices: curve.completed in place of the mint notice, curve.tender-open at the redemption, each naming the raise style', async () => {
+    const key = 'curve-notices';
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const notices = async (seriesId: string) => (await t.pool.query("select payload from outbox where topic = 'notification' and payload->>'chain' = $1 and payload->>'seriesId' = $2 order by id", [key, seriesId])).rows.map((r) => r.payload as Record<string, unknown>);
+    const { seriesId } = await h.createCurve();
+    await h.fillCurve(seriesId);
+    await idx.catchUp();
+    const done = await notices(seriesId);
+    expect(done.map((n) => [n.kind, n.raiseStyle])).toEqual([['curve.completed', 'curve']]);
+    expect(done[0]).toMatchObject({ seriesId, chain: key, payload: { seriesId, settledAt: (await h.sim.getSeries(seriesId))!.settledAt } });
+    await h.registerHolder(seriesId, h.backers[0]!);
+    await h.syncCurve(seriesId);
+    await h.stake(seriesId, h.backers[0]!, 1_000_000n);
+    await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
+    await idx.catchUp();
+    const redeemed = (await notices(seriesId)).slice(1);
+    expect(redeemed.map((n) => [n.kind, n.raiseStyle])).toEqual([['curve.tender-open', 'curve'], ['series.StatusChanged', 'curve']]);
+    expect(redeemed[1]).toMatchObject({ payload: { to: 'Redeemed' } });
+    // a sealed-bid raise on the same chain: its mint notice and no raise style
+    const sealed = (await h.runRaise()).seriesId;
+    await idx.catchUp();
+    const s = await notices(sealed);
+    expect(s.map((n) => n.kind)).toContain('auction.mint-finalized');
+    expect(s.every((n) => !('raiseStyle' in n) && !String(n.kind).startsWith('curve.'))).toBe(true);
   });
 
   // S2 WP6: the settlement's notices come from its finalized events, like every chain notice

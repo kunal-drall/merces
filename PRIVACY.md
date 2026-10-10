@@ -116,6 +116,7 @@ document file (A-PRIV-4).
 | Audit log (actor, action, target, codes) | `audit_log` (append-only) | plain | admin | never (immutable) |
 | Terms access log | `terms_access_log` | plain | issuer, admin | series end + retention |
 | Notifications (statuses, ids, dates) | `notifications`, `email_outbox` (mock) | plain | owner; admin views are audited | read + retention |
+| Curve keeper records (S3 WP11: each lifecycle check that acted or read a change, with the pool's public reserve and the chain time; the curve reminders sent, by wallet, series, payment round and next step) | `curve_monitor`, `reminders_sent` | plain | public onchain facts; a reminder goes to the account of the one linked wallet it names, never to the issuer, and names no amount, price or count (templates read the whitelisted keys only; the wallet's step is a fixed code); keeper errors carry codes only | — |
 | Outbox payloads | `outbox` | plain (may carry amounts owed to the issuer, and an auction event's public onchain amounts: a delivered refund, proceeds; never income) | admin | after dispatch + 30 days |
 | Logs | process stdout | redacted (income-bearing keys censored at the sink, with Stage 1's openings and private terms: `incomeSalt`, `priorSalt`, `termsSalt`, `priorIncomeYtd`, `theta`, `rWad`, `shareRate`, `ratePerUnitWad`, `opening`, `priorOpening`, `tier3Opening`, `deviceSecret`); error messages carry no values | operators | log retention |
 | Keeper runs, reconciliation runs | `keeper_runs`, `reconciliation_runs` | plain | admin | 90 days |

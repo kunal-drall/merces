@@ -60,10 +60,13 @@ bid, and the bidder is always the one paid; 409 `detail.stage1` NotProcessed or 
 buy (a Meteora DBC swap on a live chain; the simulator's stand-in pool until S5) against the chain's quote
 (`ChainPort.quoteCurveSwap`), for any linked wallet: a wallet that is not on the chain's allowlist gets `earns: false`
 and a warning (it can trade, never register, stake or earn), not a 403 (S3 WP8); 409 once the curve filled. A curve
-series is Open from its creation (its activation fixes P0); the admin monitor (`POST /admin/curves/monitor`) completes
-it once the pool filled (`completeCurve`, settling at the pool's finish time) and collects its proceeds
-(`collectCurveProceeds`: the partner migration fee into the treasury, the partner trading fee to the fee collector,
-kind `curveTrading` in the fee ledger). The census (`syncCurveUnits`, permissionless): `POST
+series is Open from its creation (its activation fixes P0); the keepers' `curve.lifecycle` job completes it once the
+pool filled (`completeCurve`, settling at the pool's finish time) and collects its proceeds (`collectCurveProceeds`: the
+partner migration fee into the treasury once, the partner trading fee to the fee collector at most weekly, kind
+`curveTrading` in the fee ledger); the admin monitor (`POST /admin/curves/monitor`) triggers the same pass and answers
+what it did with any failure as a code (`errors`). The keepers also take the census once after completion and once
+after each period end (S3 WP11), and remind linked wallets holding unstaked units to stake and, after a redemption, to
+tender (no amounts; RUNBOOK.md Keepers). The census (`syncCurveUnits`, permissionless): `POST
 /series/{id}/curve/build-sync {signer}` builds it for one of your wallets, with what it would count now beside the count
 stored last (`census`, `changes`); 409 RaiseNotOpen or TerminalStatus, and 409 `detail.reason` `report-pending` while the
 issuer has assembled the report for the series' next expected period and not submitted it (its proof is over the current

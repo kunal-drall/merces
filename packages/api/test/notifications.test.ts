@@ -313,4 +313,54 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     const scan = await rig.t.pool.query("select count(*)::int as n from (select subject || body || data::text as t from notifications union all select to_address || subject || body from email_outbox) x where t like '%' || $1 || '%'", [CANARY]);
     expect(scan.rows[0].n).toBe(0);
   });
+  // cause S3-KP (S3 WP11, amendment M8): a curve's notices. The chain notices reach the holders (on a curve its stakers)
+  // and, for the completion, the issuer; a keeper's reminder reaches the account of the wallet it names and nobody else;
+  // a status change on a curve says what a curve holder sends; none names an amount
+  it('curve notices: completion to the issuer and the stakers, tender-open to the stakers only, a reminder to its wallet\'s account only, all without amounts', async () => {
+    const [a, b] = h.backers as [SimWallet, SimWallet];
+    const { seriesId: curveId } = await h.createCurve();
+    await h.fillCurve(curveId);
+    await h.registerHolder(curveId, a);
+    await h.syncCurve(curveId);
+    await h.stake(curveId, a, 1_000_000n);
+    await rig.sync();
+    await rig.t.pool.query('update outbox set dispatched_at = now() where dispatched_at is null');
+    // b holds units in its wallet only (it bought and never staked): no position, so only a reminder reaches it
+    await new IdentityService(rig.ctx).seedAccount({ accountId: 'acct-curve-b', wallets: [{ chain: 'solana', address: b.address, family: 'solana' }], roles: ['backer'], eligible: true });
+    const chainNotice = (kind: string, payload: Record<string, unknown>) => ({ kind, seriesId: curveId, chain: 'solana', seq: 950_000 + kind.length, txId: `tx-${kind}`, raiseStyle: 'curve', payload: { seriesId: curveId, ...payload } });
+    const payloads = [
+      chainNotice('curve.completed', { issuePrice: CANARY, unitsSold: CANARY, settledAt: 1_767_225_600 }),
+      chainNotice('curve.tender-open', { pricePerUnit: CANARY, unitsOutstanding: CANARY, deposit: CANARY, tailCapPerUnit: CANARY, tailEndsAt: 1_800_000_000 }),
+      { ...chainNotice('series.StatusChanged', { from: 'OnTime', to: 'Redeemed' }), seq: 950_100 },
+      { kind: 'curve.stake-reminder', seriesId: curveId, chain: 'solana', wallet: b.address, raiseStyle: 'curve', next: 'register-and-stake' },
+      { kind: 'curve.tender-reminder', seriesId: curveId, chain: 'solana', wallet: b.address, raiseStyle: 'curve', next: 'tender' },
+    ];
+    for (const p of payloads) await enqueueOutbox(rig.t.pool, 'notification', p);
+    expect(await dispatch()).toMatchObject({ dispatched: payloads.length, failed: 0 });
+    const kinds = new Set(payloads.map((p) => p.kind));
+    const mine = async (accountId: string) => (await inbox(accountId)).filter((n) => kinds.has(n.kind) && (n.data as { seriesId?: string }).seriesId === curveId);
+    // the issuer: the completion and the status change; not the call to tender, not a wallet's reminder
+    expect((await mine('acct-issuer')).map((n) => n.kind).sort()).toEqual(['curve.completed', 'series.StatusChanged']);
+    // the staker (a: a position row): the completion, the call to tender and the status change
+    expect((await mine('acct-holder')).map((n) => n.kind).sort()).toEqual(['curve.completed', 'curve.tender-open', 'series.StatusChanged']);
+    // the wallet-only holder: its own reminders, nothing else
+    expect((await mine('acct-curve-b')).map((n) => n.kind).sort()).toEqual(['curve.stake-reminder', 'curve.tender-reminder']);
+    const rows = [...(await mine('acct-issuer')), ...(await mine('acct-holder')), ...(await mine('acct-curve-b'))];
+    for (const n of rows) {
+      expect(`${n.subject} ${n.body}`.replaceAll(curveId, '').replaceAll(b.address, '')).not.toMatch(/\d|default/i);
+      expect(JSON.stringify(n.data)).not.toContain(CANARY);
+      expect(Object.keys(n.data).every((k) => ['seriesId', 'chain', 'wallet', 'raiseStyle', 'next', 'from', 'to'].includes(k))).toBe(true);
+    }
+    const body = (kind: string) => rows.find((n) => n.kind === kind)!.body as string;
+    expect(body('curve.completed')).toBe(`The curve for series ${curveId} has filled and the raise is settled. Only staked units earn: an approved wallet registers as a holder of the series and stakes its units, and units left in wallets earn nothing. Status: Settled.`);
+    expect(body('curve.tender-open')).toBe(`series ${curveId} has redeemed. Tender your units with tenderUnits to be paid the redemption price: staked units are reserved for their holders, units in wallets share a quota until it runs out, and only a registered holder can tender. Status: Redeemed.`);
+    expect(body('series.StatusChanged')).toMatch(/to Redeemed\. Holders tender their units with tenderUnits: staked units are reserved for their holders, units in wallets share a quota until it runs out, and only a registered holder can tender\. Each tail payment on tendered units is claimed with claimTail\.$/);
+    expect(body('series.StatusChanged')).not.toContain('claimRedemption');
+    // a curve's extinguishment: staked (or tendered) units share the returned treasury, and nothing burns
+    const changed = (to: string) => TEMPLATES['series.StatusChanged']!(safeData({ kind: 'series.StatusChanged', seriesId: 's', raiseStyle: 'curve', payload: { seriesId: 's', from: 'Late', to } })).body;
+    expect(changed('Extinguished')).toBe('series s changed from Late to Extinguished. Staked units (tendered units, if the series redeemed) share the returned treasury: holders claim it with claimFinal. Units in wallets share nothing, and no units burn.');
+    // a reminder's step is one of its fixed codes; anything else prints no step at all
+    expect(TEMPLATES['curve.stake-reminder']!(safeData({ seriesId: 's', wallet: 'w', next: `stake ${CANARY}` })).body).toBe('Your wallet w holds units of series s that are not staked, so they earn nothing.');
+    expect(TEMPLATES['curve.tender-reminder']!(safeData({ seriesId: 's', wallet: 'w', next: 'toString' })).body).not.toMatch(/toString|function/);
+  });
 });

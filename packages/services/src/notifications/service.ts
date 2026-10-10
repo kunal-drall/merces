@@ -53,6 +53,8 @@ const SAFE_KEYS = [
   'accountId', 'applicationId', 'seriesId', 'periodId', 'chain', 'pair', 'year', 'wallet', 'attestor',
   'dueAt', 'graceEndsAt', 'revealEndsAt', 'until', 'trueUpDueAt', 'outcome', 'from', 'to', 'status', 'outstanding', 'windowId',
   'caseId', 'hardshipId', 'annualId', 'amendmentId', 'draftId',
+  // S3 WP11: a curve series' notices name its raise style, and a curve reminder the wallet's next step (fixed codes)
+  'raiseStyle', 'next',
 ] as const;
 type SafeKey = (typeof SAFE_KEYS)[number];
 export type SafeData = Partial<Record<SafeKey, string | number>>;
@@ -90,15 +92,43 @@ const status = (d: SafeData) => (typeof d.status === 'string' && lifecycleStatus
 /**
  * What a holder sends once a series reaches a status that opens a claim of Stage 1's family (S3): on Redeemed the
  * redemption (`claimRedemption`, or `claimTail`, which redeems first) and each tail payment (`claimTail`); on
- * Extinguished the final claim (`claimFinal`: the payout still owed and the final-pool share, and the units burn). The
- * commands only, never an amount: each holder's figures are in the app.
+ * Extinguished the final claim (`claimFinal`: the payout still owed and the final-pool share, and the units burn). A curve
+ * series (S3 WP10, `raiseStyle: 'curve'`) is redeemed by tender (`tenderUnits`: staked units are reserved for their
+ * holders, units in wallets share a quota), pays the tail on tendered units (`claimTail`) and burns nothing; its returned
+ * treasury is shared by staked units, or by tendered units once it redeemed (`claimFinal`). The commands only, never an
+ * amount: each holder's figures are in the app.
  */
-const claimsFor = (to: SafeData['to']) =>
-  to === 'Redeemed'
-    ? ' Holders claim their redemption with claimRedemption (or claimTail, which redeems first) and each tail payment with claimTail.'
-    : to === 'Extinguished'
-      ? ' Holders claim the payout still owed and their share of the returned treasury with claimFinal; their units burn with it.'
-      : '';
+const claimsFor = (d: SafeData) => {
+  const curve = d.raiseStyle === 'curve';
+  if (d.to === 'Redeemed') {
+    return curve
+      ? ' Holders tender their units with tenderUnits: staked units are reserved for their holders, units in wallets share a quota until it runs out, and only a registered holder can tender. Each tail payment on tendered units is claimed with claimTail.'
+      : ' Holders claim their redemption with claimRedemption (or claimTail, which redeems first) and each tail payment with claimTail.';
+  }
+  if (d.to === 'Extinguished') {
+    return curve
+      ? ' Staked units (tendered units, if the series redeemed) share the returned treasury: holders claim it with claimFinal. Units in wallets share nothing, and no units burn.'
+      : ' Holders claim the payout still owed and their share of the returned treasury with claimFinal; their units burn with it.';
+  }
+  return '';
+};
+
+/**
+ * A curve wallet's next step in a keeper reminder (`next`, a fixed code; anything else renders as no step): its wallet
+ * is not approved (allowlisted), it is approved and not a registered holder yet, or it is registered.
+ */
+const STAKE_STEP: Record<string, string> = {
+  'approve-wallet': 'Staking needs an approved (allowlisted) wallet, and this one is not: until it is approved its units cannot be staked and earn nothing, and it can only sell them.',
+  'register-and-stake': 'Register the wallet as a holder of the series, then stake its units: staked units earn from the next payment, and you can unstake at any time.',
+  stake: 'Stake its units: staked units earn from the next payment, and you can unstake at any time.',
+};
+const TENDER_STEP: Record<string, string> = {
+  'approve-wallet': 'Only a registered holder can tender, and registering needs an approved (allowlisted) wallet, which this one is not: until it is approved it can only sell its units.',
+  'register-and-tender': 'Register the wallet as a holder of the series, then tender its units with tenderUnits.',
+  tender: 'Tender its units with tenderUnits.',
+};
+const step = (steps: Record<string, string>, d: SafeData) => (typeof d.next === 'string' && Object.hasOwn(steps, d.next) ? ` ${steps[d.next]}` : '');
+const wallet = (d: SafeData) => (typeof d.wallet === 'string' ? `Your wallet ${d.wallet}` : 'Your wallet');
 
 export const TEMPLATES: Record<string, Template> = {
   'application.submitted': (d) => ({ subject: 'Application submitted', body: `Application ${d.applicationId} has been submitted and is waiting for review. Status: submitted.` }),
@@ -132,11 +162,24 @@ export const TEMPLATES: Record<string, Template> = {
   'reporting.report-due-soon': (d) => ({ subject: `${owed(d, true)} due soon`, body: `The ${owed(d)} for ${series(d)}${period(d)} is due by ${fmtDate(d.dueAt)}.` }),
   'reporting.report-due': (d) => ({ subject: `${owed(d, true)} due`, body: `The ${owed(d)} for ${series(d)}${period(d)} was due by ${fmtDate(d.dueAt)} and the grace period has started. The grace period ends on ${fmtDate(d.graceEndsAt)}.${status(d)}` }),
   'reporting.grace-end': (d) => ({ subject: 'Grace period ended', body: `The grace period for ${series(d)}${period(d)} ended on ${fmtDate(d.graceEndsAt)}.${status(d)}` }),
-  'series.StatusChanged': (d) => ({ subject: 'Series status changed', body: `${series(d)} changed from ${d.from ?? '?'} to ${d.to ?? '?'}.${claimsFor(d.to)}` }),
+  'series.StatusChanged': (d) => ({ subject: 'Series status changed', body: `${series(d)} changed from ${d.from ?? '?'} to ${d.to ?? '?'}.${claimsFor(d)}` }),
   'series.FormalNoticeDue': (d) => ({ subject: 'Formal notice due', body: `A formal notice is due for ${series(d)}${period(d)}. Status: Late.` }),
   'series.ReleasesPaused': (d) => ({ subject: 'Treasury releases paused', body: `Treasury releases for ${series(d)} are paused. Status: ReleasesPaused.` }),
   'series.ReleasesResumed': (d) => ({ subject: 'Treasury releases resumed', body: `Treasury releases for ${series(d)} have resumed. Status: ReleasesResumed.` }),
   'series.PauseEnded': (d) => ({ subject: 'Pause ended', body: `The approved pause on ${series(d)} has ended. Status: active.` }),
+  // Curve mode (S3 WP11; amendment M8). The chain notices go to the series' holders (its stakers) and, for completion, its
+  // issuer; the keepers' reminders go to the account of one linked wallet that holds units in its wallet (they earn
+  // nothing unstaked), naming its next step. None names an amount, a price or a count.
+  'curve.completed': (d) => ({
+    subject: 'Curve filled: the raise is settled',
+    body: `The curve for ${series(d)} has filled and the raise is settled. Only staked units earn: an approved wallet registers as a holder of the series and stakes its units, and units left in wallets earn nothing. Status: Settled.`,
+  }),
+  'curve.tender-open': (d) => ({
+    subject: 'Redemption open: tender your units',
+    body: `${series(d)} has redeemed. Tender your units with tenderUnits to be paid the redemption price: staked units are reserved for their holders, units in wallets share a quota until it runs out, and only a registered holder can tender. Status: Redeemed.`,
+  }),
+  'curve.stake-reminder': (d) => ({ subject: 'Stake your units to earn', body: `${wallet(d)} holds units of ${series(d)} that are not staked, so they earn nothing.${step(STAKE_STEP, d)}` }),
+  'curve.tender-reminder': (d) => ({ subject: 'Tender your units', body: `${wallet(d)} holds units of ${series(d)}, which has redeemed. Units in wallets share a quota that can run out; staked units are reserved for their holders.${step(TENDER_STEP, d)}` }),
   'fx.fallback-needed': (d) => ({ subject: 'Attestor FX rate needed', body: `An attestor-signed fallback rate is needed for ${d.pair ?? '?'}${period(d)} on ${d.chain ?? '?'}. Status: fallback-needed.` }),
   'fx.deviation': (d) => ({ subject: 'FX cross-check deviation', body: `The ${d.pair ?? '?'} rate on ${d.chain ?? '?'} deviated from its cross-check. Status: flagged.` }),
   'indexing.due': (d) => ({ subject: 'Yearly indexing due', body: `Yearly threshold indexing for ${series(d)} (${d.year ?? '?'}) is due. Status: due.` }),
@@ -149,16 +192,24 @@ function render(kind: string, d: SafeData): { subject: string; body: string } {
   return { subject: `Update: ${kind}`, body: `There is a new update (${kind})${refs ? ` on ${refs}` : ''}. Open Merces for details.` };
 }
 
-/** holders and bidders of the series (a failed raise's notice reaches its bidders, whose deposits come back) */
-const toHolders = (kind: string) => kind === 'payout.available' || kind === 'auction.settled' || kind === 'auction.failed' || kind.startsWith('series.');
+/** A keeper's reminder about one wallet (curve mode): it reaches that wallet's account only, never the issuer or the holders. */
+const walletReminder = (kind: string) => kind === 'curve.stake-reminder' || kind === 'curve.tender-reminder';
+/**
+ * holders and bidders of the series (a failed raise's notice reaches its bidders, whose deposits come back); a curve
+ * series' notices (`curve.*`) reach its holders too (amendment M8: on a curve the position rows are its stakers), except
+ * the reminders about one wallet
+ */
+const toHolders = (kind: string) => kind === 'payout.available' || kind === 'auction.settled' || kind === 'auction.failed' || kind.startsWith('series.') || (kind.startsWith('curve.') && !walletReminder(kind));
 const toAdmins = (kind: string) =>
   kind.startsWith('fx.') || kind.startsWith('indexing.') || kind === 'application.submitted' || kind === 'auction.settlement-rejected' || kind === 'auction.settlement-stuck' || kind === 'bid.delivery-stuck';
 const toAttestors = (kind: string) => kind === 'fx.fallback-needed';
 /**
  * Whether a series notice also reaches the series' issuer (the default). Not: a notice about one bid (`bid.*`, which
- * goes to that bid's wallet, plus the admins for a stuck delivery) and an operator alert (`auction.settlement-stuck`).
+ * goes to that bid's wallet, plus the admins for a stuck delivery), an operator alert (`auction.settlement-stuck`), a
+ * curve's call to its holders to tender (`curve.tender-open`; the issuer's own redemption is told by the status change)
+ * and a reminder about one wallet.
  */
-const toIssuer = (kind: string) => !kind.startsWith('bid.') && kind !== 'auction.settlement-stuck';
+const toIssuer = (kind: string) => !kind.startsWith('bid.') && kind !== 'auction.settlement-stuck' && kind !== 'curve.tender-open' && !walletReminder(kind);
 
 export class NotificationsService {
   readonly channel: NotificationChannel;
