@@ -45,6 +45,7 @@ export const STAGE1_CODE = {
   FxFallbackNotAllowed: 'InvalidTerms',
   InsufficientEscrow: 'InsufficientFunds',
   NoUnitsOutstanding: 'WrongStatus',
+  MintNotFinalized: 'WrongPhase',
 } as const satisfies Partial<Record<ErrorName, ChainErrorCode>>;
 
 /** The Stage 1 error names the simulator raises. */

@@ -1,6 +1,17 @@
-import { interim } from '@merces/math';
+import { ChainError } from '@merces/domain';
+import { settleHolderDelta } from '@merces/math';
 import type { SimPosition, SimSeries } from '../state.ts';
 import { str, type EngineCore, type Emit } from './core.ts';
+import { fail } from './errors.ts';
+
+/**
+ * Holders on Stage 1's payout cursors (SPEC v1.1 §6.1, §6.3; Stage 1 simulator SIM:399-443).
+ *
+ * A registered holder's payout accrues as `floor((vault.netAccWad − lastNetAccWad) × accrualUnits / WAD)`
+ * (`settleHolderDelta`); settling folds it into `pending` and moves the cursor. Payouts accrue to registered holders
+ * only: registration (auction allocation, curve graduation, a window buy fill) sets the cursor to the live
+ * accumulator, so nothing paid before it counts.
+ */
 
 export function position(s: SimSeries, wallet: string): SimPosition {
   let p = s.positions.get(wallet);
@@ -22,32 +33,59 @@ export function registerHolder(s: SimSeries, p: SimPosition): void {
   p.lastTailAccWad = 0n;
   p.lastFinalAccWad = 0n;
 }
-/** Settle accrued payouts into `pending` before a unit change, then re-base the debt. */
-export function settlePosition(s: SimSeries, p: SimPosition): void {
-  p.pending += interim.claimable(p.units, s.accNetWad, p.rewardDebt);
-  p.rewardDebt = interim.rewardDebt(p.units, s.accNetWad);
-}
 /**
- * Stage 1 `settleHolder` (SIM:430-436), the cross-module contract: fold the holder's accrued payout into `pending` and
- * move its cursor. Today it settles the interim accumulator (`settlePosition`); WP5 moves it to `vault.netAccWad` and
- * the `lastNetAccWad` cursor, with HolderNotRegistered for an unregistered holder.
+ * The units a holder's payouts accrue on (Stage 1 `accrual_units`, SPEC §6.1: balance + undelivered auction units +
+ * ask-escrow units). Our raise delivers at settlement and window asks keep their units in `units`, so it is `units`.
  */
-export function settleHolder(_e: EngineCore, s: SimSeries, p: SimPosition): void {
-  settlePosition(s, p);
-}
-export function setUnits(s: SimSeries, p: SimPosition, units: bigint): void {
-  settlePosition(s, p);
-  p.units = units;
-  p.rewardDebt = interim.rewardDebt(units, s.accNetWad);
-}
-/** The units a holder's payouts accrue on. Today every unit, escrowed ones included. */
 export function accrualUnits(_s: SimSeries, p: SimPosition): bigint {
   return p.units;
 }
-export function burn(s: SimSeries, p: SimPosition, reason: 'cap' | 'redemption' | 'extinguishment', emit: Emit): void {
-  const units = p.units;
+/** The payout a registered holder accrued since its last settlement (0 for an unregistered one); moves nothing. */
+function accruedSince(s: SimSeries, p: SimPosition): bigint {
+  return p.registered ? settleHolderDelta(s.vault.netAccWad, p.lastNetAccWad, accrualUnits(s, p)) : 0n;
+}
+/** Fold a registered holder's accrual into `pending` and move its cursor; an unregistered holder accrues nothing. */
+function settleAccrual(s: SimSeries, p: SimPosition): void {
+  if (!p.registered) return;
+  p.pending += accruedSince(s, p);
+  p.lastNetAccWad = s.vault.netAccWad;
+}
+/**
+ * Stage 1 `settleHolder` (SIM:430-436), the cross-module contract: fold the holder's accrued payout into `pending` and
+ * move its cursor. An unregistered holder is refused (HolderNotRegistered).
+ */
+export function settleHolder(_e: EngineCore, s: SimSeries, p: SimPosition): void {
+  if (!p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');
+  settleAccrual(s, p);
+}
+/**
+ * @deprecated the lenient settle (an unregistered holder is skipped) the redemption body uses until WP6 moves it to
+ * `settleHolder`.
+ */
+export function settlePosition(s: SimSeries, p: SimPosition): void {
+  settleAccrual(s, p);
+}
+/** The net payout a holder could claim now: `pending` plus what accrued since its cursor (the read side of a claim). */
+export function claimableNet(s: SimSeries, p: SimPosition): bigint {
+  return p.pending + accruedSince(s, p);
+}
+/** Change a holder's units, settling its accrual first (a registered holder only) so nothing is lost or re-earned. */
+export function setUnits(s: SimSeries, p: SimPosition, units: bigint): void {
+  settleAccrual(s, p);
+  p.units = units;
+}
+/**
+ * Burn `units` of a holder's units (Stage 1 `burn`, SIM:438-443): settle, reduce its units and `unitsOutstanding`,
+ * `UnitsBurned`. Zero is a no-op. The redemption body burns only the units not held for a window ask (WP6).
+ */
+export function burnUnits(s: SimSeries, p: SimPosition, units: bigint, reason: 'cap' | 'redemption' | 'extinguishment', emit: Emit): void {
   if (units === 0n) return;
-  setUnits(s, p, 0n);
+  if (units < 0n || units > p.units) throw new ChainError('ChainSpecific', 'burn exceeds the holder units'); // never happens: callers burn what the holder has
+  setUnits(s, p, p.units - units);
   s.unitsOutstanding -= units;
   emit('UnitsBurned', { seriesId: s.seriesId, holder: p.wallet, units: str(units), reason });
+}
+/** Burn every unit a holder has. */
+export function burn(s: SimSeries, p: SimPosition, reason: 'cap' | 'redemption' | 'extinguishment', emit: Emit): void {
+  burnUnits(s, p, p.units, reason, emit);
 }

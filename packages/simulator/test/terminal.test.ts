@@ -27,6 +27,11 @@ describe('amendments and extinguishment', () => {
     expect(returned).toBe(USDC(4500).toString());
     const pos = (await h.sim.getPosition(seriesId, h.backers[2]!.address))!;
     expect(pos.claimable).toBe(USDC(900).toString());
+    // the burn crank refuses an Extinguished series (Stage 1 burn_retired: TerminalStatus); its units burn on claim
+    await expectStage1Error(h.sim.submit({ kind: 'crankBurn', seriesId, holders: [h.backers[2]!.address] }, 'keeper'), 'TerminalStatus');
+    const claim = await h.exec(h.backers[2]!, { kind: 'claimPayout', seriesId });
+    expect(types(claim.events)).toEqual(['PayoutClaimed', 'UnitsBurned']);
+    expect(claim.events[1]!.payload).toMatchObject({ units: '100', reason: 'extinguishment' });
     // releases are no longer refused for being Extinguished (Stage 1 claim_release): vested tranches stay drawable up to
     // what had vested at the extinguishment. Today's extinguishment still returns the whole treasury, so nothing is
     // left to draw (WP7 returns only the unvested part).

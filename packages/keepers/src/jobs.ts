@@ -124,7 +124,11 @@ export const pauseCrankJob: KeeperJob = {
   },
 };
 
-/** Burns units of Retired/Extinguished series whose holders have not claimed (holders keep their claimable payouts). */
+/**
+ * Burns units of Retired series whose holders have not claimed (holders keep their claimable payouts). An Extinguished
+ * series is never cranked: Stage 1 refuses it (`burn_retired` TerminalStatus), since the holder's units are its weight
+ * in the final pool until it claims.
+ */
 export const burnCrankJob: KeeperJob = {
   name: 'burn.crank',
   intervalSeconds: 3600,
@@ -132,7 +136,7 @@ export const burnCrankJob: KeeperJob = {
     let actions = 0;
     const errors: string[] = [];
     await forEachSettled(ctx, errors, async (chain, s) => {
-      if (s.status !== 'Retired' && s.status !== 'Extinguished') return;
+      if (s.status !== 'Retired') return;
       const holders = (await chain.listPositions(s.seriesId)).filter((p) => BigInt(p.units) > 0n).map((p) => p.wallet);
       if (!holders.length) return;
       try {

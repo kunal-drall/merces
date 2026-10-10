@@ -1,7 +1,8 @@
 import { ChainError, DEFAULTS, type Command } from '@merces/domain';
-import { interim } from '@merces/math';
+import { accumulate, interim } from '@merces/math';
 import type { SimPosition, SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
+import { registerHolder } from './holders.ts';
 import { setStatus } from './status.ts';
 
 // ------------------------------------------------------------------ amendments and extinguishment
@@ -37,11 +38,15 @@ export function extinguish(e: EngineCore, signers: string[], cmd: Extract<Comman
     for (const t of s.tranches) t.drawn = true;
     s.treasuryReleased = s.treasuryTotal;
     if (unreleased > 0n) {
-      // Returned to holders pro rata, no fee, outside the cap (A-C11-6).
-      s.accNetWad = interim.accrueNet(s.accNetWad, unreleased, s.unitsOutstanding);
+      // Returned to holders pro rata, no fee, outside the cap (A-C11-6). Bridge until WP7 moves it to Stage 1's final
+      // pool: it goes through the vault's payout accumulator (Stage 1 `accumulate`), so `claimPayout` pays it on the
+      // holder cursors. Ungraduated curve buyers are registered first (WP7 removes that branch, amendment M5).
+      for (const p of s.positions.values()) if (p.units > 0n) registerHolder(s, p);
+      const acc = accumulate(s.vault.netAccWad, s.vault.carryWad, unreleased, s.unitsOutstanding);
+      s.vault = { ...s.vault, netAccWad: acc.accWad, carryWad: acc.carryWad };
       s.vaultBalance += unreleased;
       returned = unreleased;
-      emit('PaymentReceived', { seriesId: s.seriesId, periodId: null, gross: str(unreleased), fee: '0', net: str(unreleased), source: 'extinguishment', paidPerUnitWad: str(s.paidPerUnitWad) });
+      emit('PaymentReceived', { seriesId: s.seriesId, periodId: null, gross: str(unreleased), fee: '0', net: str(unreleased), source: 'extinguishment', paidPerUnitWad: str(s.vault.paidPerUnitWad) });
     }
   };
   if (s.curve && !s.curve.graduated && s.unitsOutstanding > 0n) {

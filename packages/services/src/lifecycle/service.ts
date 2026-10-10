@@ -146,7 +146,7 @@ export class LifecycleService {
     const paidPerUnit = BigInt(s.paidPerUnitWad) / 10n ** 18n;
     return {
       seriesId, status: s.status, retired: s.status === 'Retired', capPerUnit: s.capPerUnit, paidPerUnit: paidPerUnit.toString(), capProgressBps: cap && cap > 0n ? Number((paidPerUnit * 10_000n) / cap) : 0,
-      unitsOutstanding: s.unitsOutstanding, holdersWithUnits: unburned.length, burnable: s.status === 'Retired' || s.status === 'Extinguished', note: 'Units burn on claim or by the permissionless burn crank; burned holders keep their claimable payouts.',
+      unitsOutstanding: s.unitsOutstanding, holdersWithUnits: unburned.length, burnable: s.status === 'Retired', note: 'Units of a Retired series burn on claim or by the permissionless burn crank; units of an Extinguished series burn on claim only. Burned holders keep their claimable payouts.',
     };
   }
 
@@ -203,7 +203,7 @@ export class LifecycleService {
     const chain = this.ctx.chainFor(seriesId);
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
-    if (s.status !== 'Retired' && s.status !== 'Extinguished') throw AppError.conflict(`units are burnable only when Retired or Extinguished (series is ${s.status}; redeemed units burn on claim)`);
+    if (s.status !== 'Retired') throw AppError.conflict(`units are burned by the crank only on a Retired series (series is ${s.status}; redeemed and extinguished units burn on claim)`);
     const holders = (await chain.listPositions(seriesId)).filter((p) => BigInt(p.units) > 0n).map((p) => p.wallet);
     if (!holders.length) return { burned: 0 };
     await chain.submit({ kind: 'crankBurn', seriesId, holders }, 'keeper');

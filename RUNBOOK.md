@@ -100,7 +100,7 @@ in the transaction that projects the finalized event, not by the keepers.
 | auction.reveal-reminders | 10 min | reminds unrevealed bidders in the last 12 h | bidders may miss reveals |
 | status.crank | 1 h | InGrace/Late transitions, FormalNoticeDue | statuses lag; the chain's view is authoritative |
 | pause.crank | 1 h | ends approved pauses | paused series stay paused until run |
-| burn.crank | 1 h | burns units of Retired/Extinguished series | holders can still claim; burn is cosmetic |
+| burn.crank | 1 h | burns units of Retired series (Stage 1 `burn_retired`; an Extinguished series burns on claim) | holders can still claim; burn is cosmetic |
 | reporting.reminders | 1 h | due-soon / due / grace-end reminders | issuers get no reminders |
 | rate.snapshot | 30 min | one Pyth snapshot per UTC day per pair per chain, Chainlink cross-check | coverage drops → quarters flagged for attestor rates |
 | fx.coverage | 6 h | flags quarters with < 80% coverage, opens attestor requests | reports for non-USD series block |

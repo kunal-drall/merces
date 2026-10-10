@@ -25,4 +25,24 @@ describe('tier 1 split receipts and multi-series issuers', () => {
     expect(second.seriesId).not.toBe(seriesId);
     expect((await h.sim.getIssuer(h.issuer.address))!.seriesIds).toHaveLength(3);
   });
+
+  it('a split receipt above the cap refunds the issuer, not the router, and retires the series', async () => {
+    const h = await SimHarness.create('monad', { genesis: GENESIS });
+    const { seriesId } = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
+    await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId, router: h.router });
+    await h.sim.setTime(parsePeriod('2026Q1').start + 40 * 86_400);
+    const [routerBefore, issuerBefore] = [BigInt(await h.sim.getBalance(h.router, 'USDC')), BigInt(await h.sim.getBalance(h.issuer.address, 'USDC'))];
+    // cap 22.5 × 500 = 11,250: of 12,000 routed, 750 goes back to the issuer (Stage 1 routes the refund to the issuer)
+    const r = await h.sim.postSplitReceipt(h.router, seriesId, USDC(12_000));
+    expect(types(r.events)).toEqual(['PaymentRefunded', 'FeeTaken', 'PaymentReceived', 'StatusChanged', 'SeriesRetired', 'SplitReceipt']);
+    expect(r.events.find((e) => e.type === 'SplitReceipt')!.payload).toMatchObject({ periodId: '2026Q1', amount: USDC(11_250).toString() });
+    expect(r.events.find((e) => e.type === 'FeeTaken')!.payload).toMatchObject({ payer: h.router });
+    expect(BigInt(await h.sim.getBalance(h.router, 'USDC'))).toBe(routerBefore - USDC(12_000));
+    expect(BigInt(await h.sim.getBalance(h.issuer.address, 'USDC'))).toBe(issuerBefore + USDC(750));
+    const s = (await h.sim.getSeries(seriesId))!;
+    expect([s.status, s.refundedToIssuer]).toEqual(['Retired', USDC(750).toString()]);
+    expect(h.sim.stage1View(seriesId).ledger.grossReceived).toBe(USDC(11_250).toString());
+    // a Retired series takes no more split income
+    await expect(h.sim.postSplitReceipt(h.router, seriesId, USDC(1))).rejects.toThrow();
+  });
 });

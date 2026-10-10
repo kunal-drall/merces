@@ -61,7 +61,7 @@ export interface SimPosition {
   units: bigint;
   /** units held back for an open transfer-window sell order; they stay in `units` for payout accounting */
   escrowed: bigint;
-  /** @deprecated WP5 (the claim cursor becomes `lastNetAccWad`) */
+  /** @deprecated WP5 (the claim cursor is `lastNetAccWad`; no longer read or written) */
   rewardDebt: bigint;
   /** payouts settled into a pending balance on unit changes (burn, transfer) */
   pending: bigint;
@@ -225,14 +225,17 @@ export interface SimSeries {
   unitsSold: bigint;
   unitsOutstanding: bigint;
   capPerUnit: bigint | null;
-  /** @deprecated WP5 (`vault.paidPerUnitWad`) */
+  /**
+   * @deprecated WP5 (`vault.paidPerUnitWad`). Kept equal to it by `vaultReceive` only for the version-1 redemption
+   * quote, until WP6 moves the quote to Stage 1's `redemptionQuote`.
+   */
   paidPerUnitWad: bigint;
-  /** @deprecated WP5 (`vault.netAccWad`) */
+  /** @deprecated WP5 (`vault.netAccWad`; no longer read or written) */
   accNetWad: bigint;
   vaultBalance: bigint;
-  /** @deprecated WP5 (`vault.grossReceived`) */
+  /** @deprecated WP5 (`vault.grossReceived`; the API vault totals are `grossPaidTotal`/`feesTotal`). Only the tail (WP6) still adds to it. */
   vaultGrossTotal: bigint;
-  /** @deprecated WP5 (`vault.feeCollected`) */
+  /** @deprecated WP5 (`vault.feeCollected`; see `vaultGrossTotal`) */
   vaultFeesTotal: bigint;
   vaultDistributedNet: bigint;
   treasuryTotal: bigint;
@@ -257,10 +260,12 @@ export interface SimSeries {
   extinguishedAt: number | null;
   /**
    * gross accepted per settlement-year index (0 = first year after settlement), for D_avg
-   * @deprecated WP5 (`vault.yearGross`)
+   * @deprecated WP5 (`vault.yearGross`). Still filled by `vaultReceive` for the version-1 redemption quote until WP6.
    */
   grossByYear: Map<number, bigint>;
+  /** life-to-date gross the vault accepted (regular, split and tail payments; not an extinguishment return): the API vault total */
   grossPaidTotal: bigint;
+  /** life-to-date payout fees (regular, split and tail) */
   feesTotal: bigint;
   transferWindows: SimTransferWindow[];
   curve: SimCurve | null;

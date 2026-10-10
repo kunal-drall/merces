@@ -1,7 +1,7 @@
 import type { AuctionExpect, HolderExpect, LedgerExpect } from '@merces/math';
 import { WAD, nextExpectedPeriod } from '@merces/math';
 import type { SimSeries } from './state.ts';
-import { derivedStatus, ledgerClock, liveCapPerUnit } from './engine/ledger.ts';
+import { derivedStatus, ledgerClock, liveCapPerUnit, mintFinalized } from './engine/ledger.ts';
 
 /**
  * Stage 1's view of one series, built from the simulator state: the shapes of the Stage 1 vector `expect` step
@@ -16,14 +16,8 @@ import { derivedStatus, ledgerClock, liveCapPerUnit } from './engine/ledger.ts';
 const D = (v: bigint | number): string => v.toString();
 const P = (p: number | null): string | null => (p === null ? null : D(p));
 
-/**
- * Stage 1's `mintFinalized`, the one source for the ledger and auction views. Stage 1 sets it after the last
- * `process_bid` of a settled raise, and of a failed one (SIM:978-984); our settlement processes every bid in the same
- * step, so a raise is mint-finalized exactly when it settled or failed. A curve series is when it graduated.
- */
-export function mintFinalized(s: SimSeries): boolean {
-  return s.phase === 'Settled' || s.phase === 'Failed';
-}
+/** Stage 1's `mintFinalized`: defined with the ledger (`engine/ledger.ts`), shared by the engine and these views. */
+export { mintFinalized };
 
 /**
  * Stablecoin held by the auction escrow (Stage 1 `escrowTotal`): every deposit until its bid is settled, then the

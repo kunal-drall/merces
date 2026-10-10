@@ -321,7 +321,7 @@ export class SimulatorChain implements ChainPort {
   describe(): string {
     const st = this.state;
     const lines = [`${this.chain} (${this.personality}) t=${this.clock.now()} series=${st.series.size} events=${this.engine.events.length}`];
-    for (const x of st.series.values()) lines.push(`  ${x.seriesId} ${x.phase}/${x.status} units=${x.unitsOutstanding} paid/unit=${wadToDecimal(x.paidPerUnitWad)} vault=${x.vaultBalance}`);
+    for (const x of st.series.values()) lines.push(`  ${x.seriesId} ${x.phase}/${x.status} units=${x.unitsOutstanding} paid/unit=${wadToDecimal(x.vault.paidPerUnitWad)} vault=${x.vaultBalance}`);
     return lines.join('\n');
   }
 }

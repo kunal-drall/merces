@@ -141,7 +141,8 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     expect(v.balance).toBe(USDC(1425).toString());
     const claim = await exec(e, e.backers[0]!, { kind: 'claimPayout', seriesId });
     expect((claim.events[0]!.payload as { amount: string }).amount).toBe(USDC(285).toString());
-    await expectChainError(exec(e, e.backers[0]!, { kind: 'claimPayout', seriesId }), 'NotFound');
+    // a second claim with nothing accrued is a successful no-op with no events (Stage 1's zero-amount rule)
+    expect((await exec(e, e.backers[0]!, { kind: 'claimPayout', seriesId })).events).toEqual([]);
     expect(BigInt((await e.chain.getVault(seriesId))!.balance)).toBeGreaterThanOrEqual(0n);
   });
 
@@ -166,7 +167,7 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
   it('enforces roles: admin cannot touch a live series; keepers are permissionless; allowlist removal never strands value', async () => {
     const e = env();
     await expectChainError(exec(e, e.admin, { kind: 'drawRelease', seriesId }), 'Unauthorized');
-    await expectChainError(exec(e, e.admin, { kind: 'claimPayout', seriesId }), 'NotFound'); // admin holds nothing; the call itself is open to any holder
+    await expectChainError(exec(e, e.admin, { kind: 'claimPayout', seriesId }), 'NotFound'); // admin holds no registration (Stage 1 HolderNotRegistered); the call itself is open to any holder
     await expectChainError(exec(e, e.backers[0]!, { kind: 'registerAttestor', attestor: e.backers[0]!.address, active: true }), 'Unauthorized');
     await e.chain.submit({ kind: 'setAllowlist', wallet: e.backers[1]!.address, allowed: false }, 'allowlistManager');
     expect(await e.chain.isAllowlisted(e.backers[1]!.address)).toBe(false);
