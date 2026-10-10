@@ -26,7 +26,7 @@ a lender or a broker, and it is **never a custodian**:
 
 | Key | Where | Can | Cannot |
 | --- | --- | --- | --- |
-| Report-verifier ed25519 | KMS port (`LocalKms` for development; cloud KMS in production, Part J.2). Public key registered onchain by the multisig. | Sign attestation v1 `{series, period, prior_income_commitment, income_commitment, tier, liquidity_event}` after verifying a zkTLS proof and the prior opening. The proof's source is checked against the request but is not signed (A-REV-1, B7); the liquidity flag is the one the device declares (owner question 1). S4 moves it to Stage 1's secp256k1 key and `MERCES_REPORT_V1` bytes | Sign anything else; the verifier has no database and no payload logs |
+| Report-verifier ed25519 | KMS port (`LocalKms` for development; cloud KMS in production, Part J.2). Public key registered onchain by the multisig. | Sign attestation v1 `{series, period, prior_income_commitment, income_commitment, tier, liquidity_event}` after verifying a zkTLS proof and the prior opening. The proof's source is checked against the request but is not signed (A-REV-1, B7); the liquidity flag is the one the device declares (owner question 1 open since S1). S4 moves it to Stage 1's secp256k1 key and `MERCES_REPORT_V1` bytes | Sign anything else; the verifier has no database and no payload logs |
 | Keeper fee payer (per chain) | KMS port | Submit permissionless cranks | Any user action |
 | Allowlist manager (per chain) | KMS port | `setAllowlist` | Freeze or seize units, block claims |
 | Session HMAC secret | environment | Sign API session tokens | — |
