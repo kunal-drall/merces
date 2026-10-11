@@ -3877,8 +3877,7 @@
             "properties": {
               "attestor": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 64
+                "pattern": "^0x[0-9a-f]{40}$"
               }
             },
             "required": [
@@ -3941,8 +3940,7 @@
             "properties": {
               "attestor": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 64
+                "pattern": "^0x[0-9a-f]{40}$"
               },
               "revokedAt": {
                 "type": "integer",
@@ -6187,8 +6185,7 @@
       "properties": {
         "attestor": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+          "pattern": "^0x[0-9a-f]{40}$"
         }
       },
       "required": [
@@ -6202,8 +6199,7 @@
       "properties": {
         "attestor": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+          "pattern": "^0x[0-9a-f]{40}$"
         },
         "revokedAt": {
           "type": "integer",
@@ -7994,8 +7990,7 @@
         },
         "attestor": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+          "pattern": "^0x[0-9a-f]{40}$"
         }
       },
       "required": [
@@ -8014,8 +8009,7 @@
         },
         "attestor": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+          "pattern": "^0x[0-9a-f]{40}$"
         }
       },
       "required": [
@@ -8034,13 +8028,11 @@
         },
         "from": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+          "pattern": "^0x[0-9a-f]{40}$"
         },
         "to": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+          "pattern": "^0x[0-9a-f]{40}$"
         }
       },
       "required": [

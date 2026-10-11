@@ -4,7 +4,7 @@ import { dbTestsEnabled } from '@merces/db';
 import { logCapture, createLogger } from '@merces/core';
 import { WAD, parsePeriod, ratePerUnit } from '@merces/math';
 import { DeviceError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, generateE2eKeyPair, openTier3Opening, sealTier3Opening, type DevicePrivateTerms } from '@merces/poi-device';
-import { SimWallet } from '@merces/simulator';
+import { SimSigner, SimWallet } from '@merces/simulator';
 import { E2E_TIER3_OPENING, attestationMessage, parseE2eEnvelope, reportPublicInputs, type UnsignedTx } from '@merces/domain';
 import { makeRig } from '../../api/test/helpers.ts';
 
@@ -21,6 +21,11 @@ import { makeRig } from '../../api/test/helpers.ts';
  * through an unhandled error; tier 3's opening sent hex- or base64-encoded instead of sealed, which was stored (the API
  * now takes a merces-e2e v1 envelope only); and the scan looks for every canary in hex and base64 as well as in
  * decimal, so an encoded leak fails it too.
+ *
+ * S4 cause codes:
+ *  - S4-ID: attestors are keys linked to an account (S4 WP7): the attestor's access is its linked key, and it signs the
+ *    tier-3 text with the key's EIP-191 signature (`personalSign`; until S4 WP9). The new tables (the key links, the
+ *    link challenges) are in the scan like every other.
  */
 const CANARY_INCOME = 7_317_317_317n; // 7,317.317317 in 6-decimal base units
 const CANARY_INCOME_2 = 9_191_919_191n;
@@ -108,7 +113,13 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     await rig.sync();
     const issuerTok = rig.token({ accountId: 'canary-issuer', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
     const att = h.attestors[0]!;
-    const attTok = rig.token({ accountId: 'canary-attestor', wallets: [{ chain: 'solana', address: att.address }], roles: ['attestor'] });
+    const attTok = await rig.attestorToken('canary-attestor', [att]); // cause S4-ID
+    // cause S4-ID: the key-link flow (challenge, the key's EIP-191 proof, the link) runs too: its bodies and rows are scanned
+    const linkKey = SimSigner.attestor('canary-link');
+    const challenge = await post('/me/signer-keys/challenge', { address: linkKey.address }, attTok);
+    expect(challenge.statusCode, challenge.body).toBe(200);
+    const linked = await post('/me/signer-keys', { address: linkKey.address, nonce: challenge.json().nonce, signature: await linkKey.personalSign(challenge.json().message) }, attTok);
+    expect(linked.statusCode, linked.body).toBe(201);
     const privateTerms: DevicePrivateTerms = { threshold: CANARY_THRESHOLD.toString(), shareRate: '0.10', reportingCurrency: 'USD', indexingRule: 'cpi-annual', termsSalt: termsSalt.toString() };
     const chain = new MemoryIncomeChain();
     const deviceSecret = 'canary-device-secret';
@@ -224,7 +235,7 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     expect(fromIssuer).toEqual(opening);
     const c = { seriesId, periodId: '2026Q3', priorIncomeCommitment: q3.assembled.priorIncomeCommitment, incomeCommitment: q3.assembled.incomeCommitment };
     expect(checkTier3Opening(fromIssuer, { ...c, documentedYtd: CANARY_INCOME_Q3 })).toEqual({ ok: true });
-    const signature = await att.signMessage(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
+    const signature = await att.personalSign(attestationMessage({ ...c, tier: 3, liquidityEvent: false })); // cause S4-ID
     const signBody = { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, proof: q3.assembled.proof, attestation: { liquidityEvent: false, signature } };
     expect((await post(`/attestor/tier3/${caseId}/sign`, { ...signBody, opening }, attTok)).statusCode).toBe(400);
     expect((await post(`/attestor/tier3/${caseId}/sign`, signBody, attTok)).statusCode).toBe(200);

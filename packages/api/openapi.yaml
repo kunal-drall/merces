@@ -1257,6 +1257,85 @@ components:
           const: 2
         liquidityEvent:
           type: boolean
+    SignerKeyRecord:
+      type: object
+      description: "A key as a chain's registry holds it (Stage 1's attestor or verifier key record): public onchain data."
+      required:
+        - address
+        - active
+        - revokedAt
+        - graceUntil
+      additionalProperties: false
+      properties:
+        address:
+          type: string
+          pattern: ^0x[0-9a-f]{40}$
+        active:
+          type: boolean
+        revokedAt:
+          type:
+            - integer
+            - "null"
+          description: unix seconds of its forward-only revocation; null for a key never revoked or registered again since
+        graceUntil:
+          type:
+            - integer
+            - "null"
+          description: "revokedAt + 45 days: report and FX signatures of periods that ended by revokedAt stay valid onchain until then"
+    SignerKeyLink:
+      type: object
+      description: An attestor key linked to the caller's account (S4 WP7), with its indexed registration on every chain that has one. Visible to the account and admins only.
+      required:
+        - address
+        - linkedAt
+        - registrations
+      properties:
+        address:
+          type: string
+          pattern: ^0x[0-9a-f]{40}$
+        linkedAt:
+          type: string
+        registrations:
+          type: array
+          items:
+            type: object
+            required:
+              - chain
+              - active
+              - registeredAt
+              - revokedAt
+              - graceUntil
+            properties:
+              chain:
+                type: string
+              active:
+                type: boolean
+              registeredAt:
+                type:
+                  - integer
+                  - "null"
+              revokedAt:
+                type:
+                  - integer
+                  - "null"
+              graceUntil:
+                type:
+                  - integer
+                  - "null"
+    SignerKeyLinkResult:
+      type: object
+      required:
+        - key
+        - created
+        - token
+      properties:
+        key:
+          $ref: "#/components/schemas/SignerKeyLink"
+        created:
+          type: boolean
+        token:
+          type: string
+          description: a refreshed session token (its roles are informational; access is read live)
     ReportVerifierInfo:
       type: object
       description: "The report verifier a device talks to (S4 WP6): its URL, the 20-byte address of its secp256k1 key (the address each chain registers as a verifier key; GET /chains and the chains' registries are public) and the chains it signs for, each with the signing domain it holds (the device can compare it with GET /chains). Public data."
@@ -1924,7 +2003,7 @@ components:
           description: admin account id
         meta:
           type: object
-          description: "registerAttestor and revokeAttestor: {accountId, jurisdiction, kind}"
+          description: "registerAttestor: {accountId (the account the key is linked to), jurisdiction, kind}; rotateAttestor: {accountId}"
         createdAt:
           type: string
           format: date-time
@@ -1958,23 +2037,21 @@ components:
           description: the transaction id the multisig broadcast
     AdminRegisterAttestor:
       type: object
+      description: "Propose an attestor key for Stage 1's registerAttestor (S4 WP7): a secp256k1 key's 20-byte address, the attestor on every chain that registers it, linked by its own EIP-191 proof (POST /me/signer-keys) to the account that will act with it. Revocation and rotation have their own routes."
       required:
         - chain
-        - wallet
-        - accountId
-        - active
+        - attestor
+      additionalProperties: false
       properties:
         chain:
           type: string
-        wallet:
+        attestor:
           type: string
-          description: the attestor's signing wallet on that chain
+          pattern: ^0x[0-9a-fA-F]{40}$
+          description: the attestor key's 20-byte address (any case; stored lowercase). A chain wallet address is no key (400)
         accountId:
           type: string
-          description: the Merces account proposed as attestor; it gains attestor access only once this wallet's registration is onchain and indexed
-        active:
-          type: boolean
-          description: "true builds Stage 1's registerAttestor; false its revokeAttestor (forward-only: report and FX signatures of periods that ended by the revocation stay valid onchain for 45 days; access ends once the revocation is indexed). The registry's rules are checked against the chain first (409)."
+          description: "the Merces account proposed as attestor: the key must be linked to it (422 key-not-linked otherwise); omitted, the account the key is linked to. It gains attestor access only once the key's registration is onchain and indexed"
         jurisdiction:
           type: string
           minLength: 2
@@ -1985,6 +2062,36 @@ components:
           enum:
             - CA
             - CPA
+    AdminRevokeAttestor:
+      type: object
+      description: "Revoke an attestor key with Stage 1's revokeAttestor (forward-only: report and FX signatures of periods that ended by the revocation stay valid onchain for 45 days; offchain access ends once the revocation is indexed). Needs no account link: a revocation grants nothing."
+      required:
+        - chain
+        - attestor
+      additionalProperties: false
+      properties:
+        chain:
+          type: string
+        attestor:
+          type: string
+          pattern: ^0x[0-9a-fA-F]{40}$
+    AdminRotateAttestor:
+      type: object
+      description: Replace attestor key `from` by `to` in one transaction (Stage 1's rotateAttestor on the EVM; Solana's register_attestor(to) and revoke_attestor(from) in one transaction, S5). `to` must be linked to the account `from` is linked to. PAUSE, AMEND, EXTINGUISH and TRUEUP signatures by `from` are dead once it lands and are signed again with `to`.
+      required:
+        - chain
+        - from
+        - to
+      additionalProperties: false
+      properties:
+        chain:
+          type: string
+        from:
+          type: string
+          pattern: ^0x[0-9a-fA-F]{40}$
+        to:
+          type: string
+          pattern: ^0x[0-9a-fA-F]{40}$
     AdminRegisterVerifierKey:
       type: object
       description: "A report verifier key: a secp256k1 key's 20-byte address (S4 WP6), the address of the report verifier's own key (REPORT_VERIFIER_ADDRESS, which the verifier checks at startup). Registering builds Stage 1's registerVerifierKey; revoking (POST /admin/verifier-keys/revoke) its revokeVerifierKey (forward-only: tier-2 attestations of periods that ended by the revocation stay valid onchain for 45 days)."
@@ -3632,6 +3739,59 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ChainCatalogue"
+  /chains/{chain}/signer-keys:
+    get:
+      operationId: listChainSignerKeys
+      x-access: public
+      tags:
+        - public
+        - signing
+      parameters:
+        - name: chain
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: kind
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - attestor
+              - verifier
+      description: "The chain's key registry for one kind of key (Stage 1's attestor and report verifier keys, S4 WP5-WP7), read live from the chain: each key's 20-byte address, whether it is active, its forward-only revocation time and the end of its grace for report and FX signatures. Public onchain data; never the account a key is linked to."
+      responses:
+        "200":
+          description: The keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - chain
+                  - kind
+                  - keys
+                properties:
+                  chain:
+                    type: string
+                  kind:
+                    type: string
+                    enum:
+                      - attestor
+                      - verifier
+                  keys:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SignerKeyRecord"
+        "400":
+          description: kind is missing or not attestor or verifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /issuers:
     get:
       operationId: listIssuers
@@ -4169,6 +4329,7 @@ paths:
                   type: string
                 signature:
                   type: string
+      description: "Sign in with a wallet: the message and nonce from POST /auth/nonce, signed by the wallet. Only a sign-in nonce is accepted (a key-link challenge is refused: 401). A sign-in never links an attestor key, even an EVM wallet at a key's address (POST /me/signer-keys does)."
       responses:
         "200":
           description: Session token
@@ -4224,6 +4385,207 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "409":
           description: Wallet belongs to another account
+  /me/signer-keys/challenge:
+    post:
+      operationId: signerKeyChallenge
+      x-access: account
+      tags:
+        - auth
+      security:
+        - session: []
+      description: "Step one of linking an attestor key to the account (S4 WP7, D4): a one-time EIP-191 text bound to this host, the account, the key (shown EIP-55), the nonce and the issue time, which says it links a key and is not an attestation and moves no funds. Chain-neutral (a key is the attestor on every chain that registers it), valid 10 minutes, for the link route only: sign-in refuses it. Says nothing about the key."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - address
+              properties:
+                address:
+                  type: string
+                  pattern: ^0x[0-9a-fA-F]{40}$
+                  description: the key's 20-byte address (any case)
+      responses:
+        "200":
+          description: The challenge
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - nonce
+                  - message
+                  - expiresAt
+                properties:
+                  nonce:
+                    type: string
+                    pattern: ^[0-9a-f]{32}$
+                  message:
+                    type: string
+                    description: the exact text to sign with personal_sign (EIP-191)
+                  expiresAt:
+                    type: string
+        "400":
+          description: Not a 20-byte address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The session's account does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: The zero address (detail.reason zero-address)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /me/signer-keys:
+    post:
+      operationId: linkSignerKey
+      x-access: account
+      tags:
+        - auth
+      security:
+        - session: []
+      description: "Step two: the key's EIP-191 signature (personal_sign: MetaMask, a hardware wallet, `cast wallet sign`, the Merces attestor tool) of the challenge links the key to the account. Checked with viem's verifyMessage; a simulator (sim:) signature is never accepted, in any mode. The challenge must be a key-link challenge (a sign-in nonce is refused) issued to this account for this key, unexpired and unused, and is spent once. A key belongs to one account. Linking grants nothing by itself: attestor access needs the key registered and indexed on the item's chain (A-M5-2). The link is visible to the account and to admins only."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - address
+                - nonce
+                - signature
+              properties:
+                address:
+                  type: string
+                  pattern: ^0x[0-9a-fA-F]{40}$
+                nonce:
+                  type: string
+                  pattern: ^[0-9a-f]{32}$
+                signature:
+                  type: string
+                  description: 65 bytes r ‖ s ‖ v as 0x hex (EIP-191)
+      responses:
+        "200":
+          description: "The key was already linked to this account: nothing changed (created false)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignerKeyLinkResult"
+        "201":
+          description: "Linked (created true): the key with its registrations and a refreshed session token"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignerKeyLinkResult"
+        "400":
+          description: Malformed body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "The challenge was already used (detail.reason challenge-used: a replay), or the key is linked to another account (detail.reason key-linked-to-another-account)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: No such key-link challenge for this account and key, a sign-in nonce included (detail.reason unknown-challenge); expired (challenge-expired); or not the key's EIP-191 signature of it (bad-signature)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      operationId: listMySignerKeys
+      x-access: account
+      tags:
+        - auth
+      security:
+        - session: []
+      responses:
+        "200":
+          description: The attestor keys linked to the caller's account, each with its indexed registration on every chain that has one
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - keys
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SignerKeyLink"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /me/signer-keys/{address}:
+    delete:
+      operationId: unlinkSignerKey
+      x-access: account
+      tags:
+        - auth
+      security:
+        - session: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^0x[0-9a-fA-F]{40}$
+      description: "Unlink one of the account's keys: the account's attestor access through it ends at once. Refused while work addressed to the key is open."
+      responses:
+        "200":
+          description: Unlinked
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - address
+                  - unlinked
+                properties:
+                  address:
+                    type: string
+                  unlinked:
+                    type: boolean
+                    const: true
+        "400":
+          description: Not a 20-byte address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The key is not linked to this account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: "Work addressed to the key is open (detail.reason open-work, detail.openWork the counts: pending hardship requests, open tier-3 cases and annual attestations, extinguishment requests, attested amendments not landed)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /me/session/refresh:
     post:
       operationId: refreshSession
@@ -5131,12 +5493,15 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required:
-                - attestorWallet
+                - attestor
                 - approve
               properties:
-                attestorWallet:
+                attestor:
                   type: string
+                  pattern: ^0x[0-9a-fA-F]{40}$
+                  description: the attestor key the attestor acts with (a secp256k1 key's 20-byte address, linked to the caller's account; S4 WP7, was attestorWallet). The issuer's amendTerms carries it as co-signer until S4 WP11 (Stage 1's AMEND signature)
                 approve:
                   type: boolean
       responses:
@@ -5146,11 +5511,12 @@ paths:
             application/json:
               schema:
                 type: object
+        "400":
+          description: "Malformed body: an attestor that is not a 20-byte key, or the old attestorWallet field"
         "403":
-          description: The attestor wallet is not linked to the caller on the series' chain
+          description: The attestor key is not linked to the caller's account
         "422":
-          description: Not issuer-favourable
-          or the wallet is not a registered attestor on the series' chain: null
+          description: Not issuer-favourable, or the key is not a registered attestor on the series' chain
   /amendments/{amendmentId}/build:
     post:
       operationId: buildAmendTerms
@@ -6487,10 +6853,10 @@ paths:
         - admin
       security:
         - session: []
-      summary: Attestor proposals beside the indexed onchain registry; only an indexed active registration gives attestor access
+      summary: Attestor key proposals beside the indexed onchain registry, by key; only an indexed active registration of a key linked to an account gives that account attestor access
       responses:
         "200":
-          description: One row per (chain, wallet) proposed or registered
+          description: One row per (chain, key) proposed or registered
           content:
             application/json:
               schema:
@@ -6504,7 +6870,7 @@ paths:
                       type: object
                       required:
                         - chain
-                        - wallet
+                        - attestor
                         - status
                         - onchainActive
                         - registeredAt
@@ -6513,12 +6879,15 @@ paths:
                       properties:
                         chain:
                           type: string
-                        wallet:
+                        attestor:
                           type: string
+                          pattern: ^0x[0-9a-f]{40}$
+                          description: the attestor key's 20-byte address (S4 WP7; was `wallet`)
                         accountId:
                           type:
                             - string
                             - "null"
+                          description: the account the key is linked to now (the one that gets access); admin views only
                         status:
                           type: string
                           enum:
@@ -6547,6 +6916,7 @@ paths:
                           type:
                             - object
                             - "null"
+                          description: "the last proposal for the key on this chain: active (a registration, or the new key of a rotation) or not (a revocation, or the old key of a rotation), the account the key was linked to then, the tx request, who proposed it and when"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -6558,7 +6928,7 @@ paths:
         - admin
       security:
         - session: []
-      summary: Build Stage 1's registerAttestor (active true) or revokeAttestor (active false) for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed and ends when the revocation is, A-M5-2); the registry's rules are checked against the chain first; audited
+      summary: Build Stage 1's registerAttestor of a key linked to the account for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); the registry's rules are checked against the chain first; audited
       parameters:
         - $ref: "#/components/parameters/adminIdempotencyKey"
       requestBody:
@@ -6575,7 +6945,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/AdminTxProposal"
         "400":
-          description: Unknown chain or a wallet of the wrong family
+          description: Unknown chain
+          an address that is not a 20-byte key: null
+          or an unknown field: null
           content:
             application/json:
               schema:
@@ -6591,13 +6963,99 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "409":
-          description: "The registry refuses it on this chain, before anything is built (detail.reason: key-already-active, registering a key that is active; key-not-active, revoking a key that is revoked or was never registered; last-active-key, revoking the chain's last active attestor key: rotate to a new key instead), or the idempotency key was reused with a different body"
+          description: "The registry refuses it on this chain, before anything is built (detail.reason key-already-active: the EVM reverts KeyAlreadyActive, Solana would re-emit), or the idempotency key was reused with a different body"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "422":
-          description: A registration whose wallet is not linked to the named account
+          description: The key is linked to no account, or to another account than the one named (detail.reason key-not-linked)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/attestors/revoke:
+    post:
+      operationId: adminRevokeAttestor
+      x-access: admin
+      tags:
+        - admin
+      security:
+        - session: []
+      summary: Build Stage 1's revokeAttestor for the multisig (forward-only) and open a tx request; access ends once it is indexed; audited
+      parameters:
+        - $ref: "#/components/parameters/adminIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminRevokeAttestor"
+      responses:
+        "201":
+          description: The tracked request and the UnsignedTx for the multisig
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminTxProposal"
+        "400":
+          description: Unknown chain or an address that is not a 20-byte key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: "The key is not active on the chain (detail.reason key-not-active: revoked or never registered; Solana KeyAlreadyRevoked or AccountNotInitialized, EVM KeyNotRegistered), it is the chain's last active attestor key (detail.reason last-active-key: rotate to a new key instead; Solana LastKeyOfKind, EVM LastActiveKey), or the idempotency key was reused with a different body"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/attestors/rotate:
+    post:
+      operationId: adminRotateAttestor
+      x-access: admin
+      tags:
+        - admin
+      security:
+        - session: []
+      summary: Build Stage 1's rotateAttestor{from, to} for the multisig (register to, revoke from, one transaction) and open a tx request; to must be linked to the account from is linked to; audited
+      parameters:
+        - $ref: "#/components/parameters/adminIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminRotateAttestor"
+      responses:
+        "201":
+          description: The tracked request and the UnsignedTx for the multisig
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminTxProposal"
+        "400":
+          description: Unknown chain or an address that is not a 20-byte key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: The new key is already active (detail.reason key-already-active), the key to replace is not active (key-not-active), or the idempotency key was reused with a different body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: from and to are the same key, or to is not linked to the account from is linked to (detail.reason key-not-linked)
           content:
             application/json:
               schema:
@@ -7068,8 +7526,7 @@ paths:
         - session: []
       responses:
         "200":
-          description: The attestor's wallets with their onchain registration flag per chain
-          and open work counts: null
+          description: "The account's linked attestor keys, each on every chain with its indexed registration flag (`keys: [{chain, address, registeredOnchain}]`; S4 WP7: keys, not wallets), and open work counts"
           content:
             application/json:
               schema:
@@ -7084,7 +7541,7 @@ paths:
         - session: []
       responses:
         "200":
-          description: "Open work across both chains for the caller's registered attestor wallets: hardship requests, tier-3 cases and annual attestations, FX fallback requests, amendments awaiting attestation, extinguishment requests (never ciphertext)"
+          description: "Open work across both chains for the caller's linked attestor keys, each on the chains where it is registered and indexed: hardship requests, tier-3 cases and annual attestations, extinguishment requests addressed to such a key there, and the FX fallback requests and amendments awaiting attestation of those chains (never ciphertext)"
           content:
             application/json:
               schema:
@@ -7119,7 +7576,8 @@ paths:
                   description: "requested pause end (unix seconds); advisory, as Stage 1's request_pause carries no end: the attestor approves the actual end within Stage 1's approve_pause bounds"
                 attestor:
                   type: string
-                  description: a registered attestor wallet on the series' chain
+                  pattern: ^0x[0-9a-fA-F]{40}$
+                  description: an attestor key (a secp256k1 key's 20-byte address; S4 WP7) registered and indexed on the series' chain; a chain wallet address is no key (400)
                 ciphertext:
                   $ref: "#/components/schemas/Ciphertext"
                 keyHint:
@@ -7133,12 +7591,14 @@ paths:
             application/json:
               schema:
                 type: object
+        "400":
+          description: "Malformed body: an attestor that is not a 20-byte key"
         "409":
           description: Series not settled
           paused or terminal: null
           or a request is already pending: null
         "422":
-          description: "Plaintext-looking payload, unknown attestor or end date in the past; or no pause could be approved (detail.stage1 TooManyPauses: the series has used its 16 pauses; PauseTooLong: its two years in total are used)"
+          description: "Plaintext-looking payload, an attestor key not registered on the series' chain, or an end date in the past; or no pause could be approved (detail.stage1 TooManyPauses: the series has used its 16 pauses; PauseTooLong: its two years in total are used)"
     get:
       operationId: hardshipStatus
       x-access: holder-or-issuer
@@ -7177,7 +7637,7 @@ paths:
               schema:
                 type: object
         "403":
-          description: Addressed to another attestor
+          description: Addressed to another attestor key, or the caller's key is not linked to its account or not active on the item's chain
   /attestor/hardship/{hardshipId}/decide:
     post:
       operationId: decideHardship
@@ -7216,13 +7676,13 @@ paths:
       description: "An approval is checked with Stage 1's approve_pause rules (pauseApprovalError) on the chain's pause record before anything is recorded: the end in the future, no running pause, at most 365 days, at most 730 days across the series' pauses, at most 16 pauses. A refusal names Stage 1's rule in detail.stage1 (never a date) and leaves the request pending, so the attestor can decide again with an end the chain accepts, or reject it."
       responses:
         "200":
-          description: "Approved: the record and the unsigned approvePause transaction for the attestor. Rejected: the record with its decision code and tx null"
+          description: "Approved: the record and the unsigned approvePause transaction for the attestor key's address (transitional until S4 WP10: Stage 1's PAUSE signature relayed by the keeper). Rejected: the record with its decision code and tx null"
           content:
             application/json:
               schema:
                 type: object
         "403":
-          description: Not the chosen attestor
+          description: Not the account holding the chosen attestor key, or the key is not active on its chain
         "409":
           description: Already decided; the issuer has not sent requestPause onchain (detail.stage1 PauseNotRequested); or a pause is running (AlreadyPaused)
         "422":
@@ -7256,6 +7716,8 @@ paths:
                   type: integer
                 attestor:
                   type: string
+                  pattern: ^0x[0-9a-fA-F]{40}$
+                  description: an attestor key registered on the series' chain (20-byte address)
                 documentsCiphertext:
                   $ref: "#/components/schemas/Ciphertext"
                 keyHint:
@@ -7271,9 +7733,9 @@ paths:
                 type: object
         "409":
           description: Year not ended
-          tier 3 disabled or already opened: null
+          tier 3 disabled or already opened (a withdrawn attestation does not hold its year): null
         "422":
-          description: Plaintext-looking payload or unknown attestor
+          description: Plaintext-looking payload or an attestor key not registered on the series' chain
   /series/{seriesId}/tier3/{periodId}:
     post:
       operationId: openTier3Case
@@ -7309,6 +7771,8 @@ paths:
               properties:
                 attestor:
                   type: string
+                  pattern: ^0x[0-9a-fA-F]{40}$
+                  description: an attestor key registered on the series' chain (20-byte address)
                 documentsCiphertext:
                   $ref: "#/components/schemas/Ciphertext"
                 openingCiphertext:
@@ -7369,7 +7833,7 @@ paths:
               schema:
                 type: object
         "403":
-          description: Addressed to another attestor
+          description: Addressed to another attestor key, or the caller's key is not linked to its account or not active on the item's chain
   /attestor/tier3/annual/{annualId}/sign:
     post:
       operationId: signTier3Annual
@@ -7407,7 +7871,7 @@ paths:
               schema:
                 type: object
         "403":
-          description: Not the chosen attestor
+          description: Not the account holding the chosen attestor key, or the key is not active on its chain
         "409":
           description: Already signed
   /attestor/tier3/{caseId}:
@@ -7432,7 +7896,7 @@ paths:
               schema:
                 type: object
         "403":
-          description: Addressed to another attestor
+          description: Addressed to another attestor key, or the caller's key is not linked to its account or not active on the item's chain
   /attestor/tier3/{caseId}/prefill-spec:
     get:
       operationId: tier3PrefillSpec
@@ -7472,7 +7936,7 @@ paths:
           in: header
           schema:
             type: string
-      description: The attestor's device checked the decrypted opening against the documents (the commitments open to it, and its year-to-date figure is max(documented, prior)). The body carries commitments, the issuer's proof and the attestation only, never a figure, a salt or an opening (unknown fields are refused). The API checks the proof is over the series' live terms commitment, units and the prior the chain expects, that it verifies, and that the signature is the chosen attestor wallet's over attestation v1 with tier 3.
+      description: "The attestor's device checked the decrypted opening against the documents (the commitments open to it, and its year-to-date figure is max(documented, prior)). The body carries commitments, the issuer's proof and the attestation only, never a figure, a salt or an opening (unknown fields are refused). The API checks the proof is over the series' live terms commitment, units and the prior the chain expects, that it verifies, and that the signature is the chosen attestor key's EIP-191 signature over attestation v1 with tier 3 (transitional until S4 WP9 moves tier 3 to Stage 1's REPORT signature; a simulator sim: signature never counts)."
       requestBody:
         required: true
         content:
@@ -7503,7 +7967,7 @@ paths:
                       type: boolean
                     signature:
                       type: string
-                      description: "the attestor wallet's signature over \"merces/attestation/v1\\n\" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}"
+                      description: "the attestor key's EIP-191 personal_sign (65 bytes, 0x hex) of \"merces/attestation/v1\\n\" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}"
       responses:
         "200":
           description: The case marked signed with the attested payment (the proof's public input 5); the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer
@@ -7514,7 +7978,7 @@ paths:
         "400":
           description: Malformed or unknown fields
         "403":
-          description: Not the chosen attestor
+          description: Not the account holding the chosen attestor key, or the key is not active on the case's chain
         "409":
           description: "Already signed; on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced) or a proof over another count than the census (detail.reason census-changed: the issuer proves again)"
         "422":
@@ -7529,8 +7993,7 @@ paths:
         - session: []
       responses:
         "200":
-          description: Open FX fallback requests (opened by the rate keeper
-          C9) on the caller's chains: null
+          description: Open FX fallback requests (opened by the rate keeper, C9) on the chains where one of the caller's linked keys is registered; a request re-opened by migration 025 carries decisionCode superseded-s4 until a key signs it
           content:
             application/json:
               schema:
@@ -7561,34 +8024,38 @@ paths:
               type: object
               required:
                 - rateWad
-                - attestorWallet
+                - attestor
                 - sourceNote
                 - signature
               properties:
                 rateWad:
                   $ref: "#/components/schemas/Wad"
-                attestorWallet:
+                attestor:
                   type: string
+                  pattern: ^0x[0-9a-fA-F]{40}$
+                  description: the attestor key (20-byte address; S4 WP7, was attestorWallet), linked to the caller's account and registered on the request's chain
                 sourceNote:
                   type: string
                   description: a code such as ecb-reference-rate
                 signature:
                   type: string
-                  description: "the wallet's signature over fxAttestationMessage({pair, periodId, rateWad}), made on the attestor's device (sim: signatures in mock mode)"
+                  description: "the key's EIP-191 personal_sign (65 bytes, 0x hex) of fxAttestationMessage({pair, periodId, rateWad}), made on the attestor's device (transitional until S4 WP9: Stage 1's per-series FX signature; a sim: signature never counts)"
       responses:
         "200":
           description: The request marked signed with the rate
-          attestor and signature: null
+          attestor key and signature: null
           content:
             application/json:
               schema:
                 type: object
+        "400":
+          description: "Malformed body: an attestor that is not a 20-byte key, the old attestorWallet field, or a free-text source note"
         "403":
-          description: Wallet not linked to the account
+          description: Key not linked to the account
         "409":
           description: Not open
         "422":
-          description: Signature does not verify or wallet not a registered attestor
+          description: Signature does not verify or the key is not a registered attestor on the chain
   /series/{seriesId}/reporting/fx-fallback/{periodId}:
     get:
       operationId: fxFallbackForSeries
@@ -7643,7 +8110,8 @@ paths:
                   maxItems: 2
                   items:
                     type: string
-                  description: two distinct registered attestors; both sign
+                    pattern: ^0x[0-9a-fA-F]{40}$
+                  description: two distinct attestor keys registered on the series' chain (20-byte addresses); both sign (transitional co-signing until S4 WP12)
                 evidenceCiphertext:
                   $ref: "#/components/schemas/Ciphertext"
                 keyHint:
@@ -7661,8 +8129,10 @@ paths:
                 properties:
                   tx:
                     $ref: "#/components/schemas/UnsignedTx"
+        "400":
+          description: "Malformed body: an attestor that is not a 20-byte key"
         "403":
-          description: Neither attestor is linked to the account
+          description: Neither attestor key is linked to the caller's account and registered on the series' chain
         "409":
           description: Already extinguished, or the raise has not settled (an open raise or an ungraduated curve cannot be extinguished)
         "422":
@@ -7689,7 +8159,7 @@ paths:
               schema:
                 type: object
         "403":
-          description: Names other attestors
+          description: Names other attestor keys, or the caller's key is not linked or not active on the series' chain
   /series/{seriesId}/treasury/build-draw:
     post:
       operationId: buildTreasuryDraw

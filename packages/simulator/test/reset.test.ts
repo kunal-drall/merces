@@ -13,7 +13,8 @@ import { GENESIS } from './helpers.ts';
  *  - S3-V4: simulator state version 4.
  *
  * S4 cause codes:
- *  - S4-V5: simulator state version 5 (S4 WP5: Stage 1's key registry).
+ *  - S4-V5: simulator state version 5 (S4 WP5: Stage 1's key registry);
+ *  - S4-ID: the indexed attestor registry holds 20-byte keys only (S4 WP7, migration 025).
  */
 describe('sim:reset guard', () => {
   it('runs only with MERCES_ALLOW_SIM_RESET=1', () => {
@@ -46,7 +47,7 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
     const sid = `${chain}:series-a`;
     await pool.query("insert into events (chain, cursor, seq, block_time, block_ref, tx_id, type, series_id, payload) values ($1, '000000000001', 1, 1, '1', 'tx', 'SeriesCreated', $2, '{}')", [chain, sid]);
     await pool.query('insert into indexer_cursors (chain, cursor, last_seq) values ($1, $2, 1)', [chain, '000000000001']);
-    await pool.query("insert into attestors (chain, attestor, active) values ($1, 'att', true)", [chain]);
+    await pool.query("insert into attestors (chain, attestor, active) values ($1, $2, true)", [chain, '0x' + 'a7'.repeat(20)]); // cause S4-ID: attestors are 20-byte keys (migration 025)
     await pool.query(
       "insert into reports (report_id, series_id, period_id, account_id, tier, source, payment_stable, income_commitment, terms_commitment, fx_basis, fx_avg_wad, proof) values ($1, $2, '2026Q1', 'acct-1', 2, 'stripe', 0, '0x00', '0x00', 'unity', 1, '{}')",
       [`rep-${chain}`, sid],
@@ -72,6 +73,8 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
       await seedOffchain(key);
     }
     await pool.query("insert into outbox (topic, payload) values ('notification', $1)", [JSON.stringify({ kind: 'application.submitted', accountId: 'acct-1' })]);
+    // cause S4-ID: an attestor key link names no chain: a people record, kept
+    await pool.query("insert into account_signer_keys (address, account_id) values ($1, 'acct-1')", ['0x' + 'a7'.repeat(20)]);
 
     const dry = await resetSimulatorChains(pool, { prefix, chains: ['solana'], dryRun: true });
     expect(dry.deleted.find((d) => d.table === 'sim_state')?.rows).toBe(1);
@@ -103,6 +106,7 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
     expect(await count("reports where series_id like 'solana:%'")).toBe(0);
     // people and paper not tied to a series stay
     expect(await count('accounts')).toBe(1);
+    expect(await count('account_signer_keys')).toBe(1); // cause S4-ID
     expect(await count("series_drafts where chain = 'solana' and series_id is null")).toBe(1);
     expect(await count("outbox where payload->>'kind' = 'application.submitted'")).toBe(1);
     expect(await count("notifications where data->>'seriesId' like 'monad:%'")).toBe(1);

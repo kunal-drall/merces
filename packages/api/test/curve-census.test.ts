@@ -18,6 +18,10 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *
  * S3 cause codes:
  *  - S3-CN: the curve census (syncCurveUnits, the CurveUnitsNotSynced gate, redeem's own census).
+ *
+ * S4 cause codes:
+ *  - S4-ID: attestors are keys linked to an account (S4 WP7): access is the account's linked key (`rig.attestorToken`),
+ *    and the tier-3 text is the key's EIP-191 signature (`personalSign`; until S4 WP9).
  */
 
 /** Stand-in for the client's end-to-end encryption of documents (opaque bytes; the server never decrypts). */
@@ -44,7 +48,7 @@ describe.skipIf(!dbTestsEnabled())('curve census around reports (S3 WP9, amendme
     await h.fillCurve(seriesId);
     issuerTok = rig.token({ accountId: 'iss-curve', wallets: [{ chain: h.sim.chain, address: h.issuer.address }], roles: ['issuer'] });
     anyoneTok = rig.token({ accountId: 'acct-any', wallets: [{ chain: h.sim.chain, address: h.backers[3]!.address }] });
-    attTok = rig.token({ accountId: 'att-curve', wallets: [{ chain: h.sim.chain, address: h.attestors[0]!.address }], roles: ['attestor'] });
+    attTok = await rig.attestorToken('att-curve', [h.attestors[0]!]); // cause S4-ID: attestor access is the account's linked key
     await rig.sync();
   });
   afterAll(async () => {
@@ -153,7 +157,7 @@ describe.skipIf(!dbTestsEnabled())('curve census around reports (S3 WP9, amendme
     const proved = await device('2026Q2', USDC(75_000), 3);
     const sign = async (proof = proved.command.proof) => {
       const c = { seriesId, periodId: '2026Q2', priorIncomeCommitment: proved.command.priorIncomeCommitment, incomeCommitment: proved.command.incomeCommitment };
-      const signature = await att.signMessage(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
+      const signature = await att.personalSign(attestationMessage({ ...c, tier: 3, liquidityEvent: false })); // cause S4-ID: the key's EIP-191 signature
       return rig.post(`/attestor/tier3/${caseId}/sign`, { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, proof, attestation: { liquidityEvent: false, signature } }, attTok);
     };
     await h.sim.curveHook(seriesId, { kind: 'dammTrade', wallet: h.backers[3]!.address, units: 50_000n });

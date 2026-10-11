@@ -230,9 +230,11 @@ export const adminCommands = {
    * SIM:535-536): the admin registers (or re-activates) an attestor key; `revokedAt` returns to 0. A zero address is
    * refused (`ZeroAttestorAddress` on Solana, `ZeroAddress` on the EVM). Registering a key that is already active
    * re-emits `AttestorRegistered` on Solana and changes nothing, and reverts `KeyAlreadyActive` on the EVM: each
-   * simulator personality behaves as its chain does (S4 D9). Emits `AttestorRegistered`.
+   * simulator personality behaves as its chain does (S4 D9). The attestor is a secp256k1 key's 20-byte address on every
+   * chain (S4 D4, WP7): it is linked to an account by an EIP-191 proof of control, never by a chain wallet. Emits
+   * `AttestorRegistered`.
    */
-  registerAttestor: z.object({ kind: z.literal('registerAttestor'), attestor: addressSchema }),
+  registerAttestor: z.object({ kind: z.literal('registerAttestor'), attestor: signerAddressSchema }),
   /**
    * Stage 1 `revoke_attestor` / `revokeAttestor` (lib.rs:238-260; MercesRegistry.sol:291-295, :331-345; SIM:538-539):
    * forward-only revocation (SPEC §1.4): the key stops being active and `revokedAt` = now. Report and FX signatures of a
@@ -242,14 +244,14 @@ export const adminCommands = {
    * (`LastKeyOfKind` on Solana, `LastActiveKey` on the EVM). Stage 1's reference simulator has no last-key rule; both
    * chains do, and ours follows them (DIV-S1I-2). Emits `AttestorRevoked`.
    */
-  revokeAttestor: z.object({ kind: z.literal('revokeAttestor'), attestor: addressSchema }),
+  revokeAttestor: z.object({ kind: z.literal('revokeAttestor'), attestor: signerAddressSchema }),
   /**
    * Replace one attestor key with another in one transaction: register `to`, then revoke `from` (EVM `rotateAttestor`,
    * MercesRegistry.sol:297-300; Solana has no rotate instruction, so its adapter sends `register_attestor(to)` and
    * `revoke_attestor(from)` as two instructions of one transaction, S5). Either both apply or neither: a refused revoke
    * undoes the registration. Each step keeps its chain's rules (the EVM refuses a `to` that is already active).
    */
-  rotateAttestor: z.object({ kind: z.literal('rotateAttestor'), from: addressSchema, to: addressSchema }),
+  rotateAttestor: z.object({ kind: z.literal('rotateAttestor'), from: signerAddressSchema, to: signerAddressSchema }),
   /**
    * Stage 1 `register_verifier_key` / `registerVerifierKey` (merces_registry lib.rs:262-279; MercesRegistry.sol:302-304,
    * :315-329; SIM:541-542): the admin registers (or re-activates) a report verifier key, a secp256k1 key's 20-byte

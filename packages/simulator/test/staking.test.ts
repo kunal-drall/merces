@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ChainError, type DomainEvent } from '@merces/domain';
 import { WAD, bpsOf, mulDiv, parsePeriod, scaledAmount, scaledCapWad, settleHolderDelta } from '@merces/math';
-import { SimHarness, SimWallet, serialiseState, type PrivateTerms } from '../src/index.ts';
+import { SimHarness, SimWallet, serialiseState, type PrivateTerms, type SimAttestor } from '../src/index.ts';
 import { balKey } from '../src/engine/core.ts';
 import { GENESIS, USDC, expectStage1Error, types } from './helpers.ts';
 import { seriesOf } from './kit.ts';
@@ -20,6 +20,10 @@ import { seriesOf } from './kit.ts';
  * S3 cause codes:
  *  - S3-ST: staking, tender and stake-weighted claims (only staked units earn; unstake credits pending; tender by stake
  *    and by wallet within the quota; claimTail and claimFinal by tendered units or stake; no burns but tenders).
+ *
+ * S4 cause codes:
+ *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address on both
+ *    personalities (transitionally a co-signing wallet at the key's address).
  */
 
 const SCALE = 1_000_000n;
@@ -60,7 +64,7 @@ async function launched() {
 
 const amountOf = (evs: DomainEvent[], type: string): bigint => BigInt((evs.find((e) => e.type === type)!.payload as { amount: string }).amount);
 const extinguish = (h: SimHarness, seriesId: string) => {
-  const [k1, k2] = h.attestors as [SimWallet, SimWallet];
+  const [k1, k2] = h.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
   return h.exec(k1, { kind: 'extinguish', seriesId, attestors: [k1.address, k2.address] }, [k2]);
 };
 

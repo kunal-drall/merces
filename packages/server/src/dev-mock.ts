@@ -9,7 +9,7 @@ import { Indexer } from '@merces/indexer';
 import { KeeperScheduler, standardJobs } from '@merces/keepers';
 import { MockChainlink, MockPyth, reportProofSystemFromEnv, shutdownProofSystem } from '@merces/ports';
 import { seedCohort } from '@merces/scenarios';
-import { SimWallet, SimulatorChain, simAdminWallet } from '@merces/simulator';
+import { SimSigner, SimWallet, SimulatorChain, simAdminWallet } from '@merces/simulator';
 import { PILOT_COHORT } from '@merces/fixtures';
 import { buildApp, makeContext } from '@merces/api';
 import { IdentityService, createServiceContext, notificationsOutboxHandler, serviceRoutes } from '@merces/services';
@@ -52,8 +52,21 @@ for (const i of PILOT_COHORT) {
 for (const n of [1, 2, 3, 4, 5]) {
   await ids.seedAccount({ accountId: `acct-backer-${n}`, wallets: [{ chain: 'solana', address: new SimWallet('solana', `backer-${n}`).address, family: 'solana' }, { chain: 'monad', address: new SimWallet('evm', `backer-${n}`).address, family: 'evm' }], roles: ['backer'], eligible: true });
 }
+// The dev attestors (S4 WP7, D4): published secp256k1 test keys (seeds `merces-dev-attestor:<n>`, not for production),
+// registered on both simulators by their 20-byte addresses and linked to acct-attestor-<n>, so Stage 3 can act as an
+// attestor. The account signs in on monad with the key itself (an EVM wallet at the key's address); the link is what
+// grants attestor access, read live with the registry. Simulator only: seedSignerKeys refuses a process with a live
+// chain (A-REV-9), and every chain of dev:mock is the simulator.
 for (const n of [1, 2]) {
-  await ids.seedAccount({ accountId: `acct-attestor-${n}`, wallets: [{ chain: 'solana', address: new SimWallet('solana', `attestor-${n}`).address, family: 'solana' }, { chain: 'monad', address: new SimWallet('evm', `attestor-${n}`).address, family: 'evm' }], roles: ['attestor'], eligible: false });
+  const key = new SimSigner(`merces-dev-attestor:${n}`);
+  for (const sim of [solana, monad]) {
+    if (!(await sim.getSignerKey('attestor', key.address))?.active) {
+      const admin = simAdminWallet(sim.family);
+      await sim.send(await admin.sign(await sim.build({ kind: 'registerAttestor', attestor: key.address }, admin.address)));
+    }
+  }
+  await ids.seedAccount({ accountId: `acct-attestor-${n}`, wallets: [{ chain: 'monad', address: key.address, family: 'evm' }], roles: [], eligible: false });
+  await ids.seedSignerKeys(`acct-attestor-${n}`, [key.address]);
 }
 await ids.seedAccount({ accountId: 'acct-admin', wallets: [{ chain: 'solana', address: simAdminWallet('solana').address, family: 'solana' }, { chain: 'monad', address: simAdminWallet('evm').address, family: 'evm' }], roles: ['admin'], eligible: false });
 const app = await buildApp(ctx, serviceRoutes);

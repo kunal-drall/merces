@@ -809,7 +809,8 @@ as Stage 1's code does, and vector 03 passes in full on both personalities and i
 keys follow Stage 1's registry (register, forward-only revoke with the 45-day grace, rotate, the last-key rule), so the
 signature row no longer lists "no revocation grace" for them. Since S4 WP6 the report verifier's keys follow the same
 registry and a tier-2 report carries Stage 1's REPORT signature (secp256k1, recovered onchain), so the row lists the
-co-signing attestors only.
+co-signing attestors only. Since S4 WP7 the attestors are 20-byte keys as on both chains; what still differs is that
+they co-sign at the key's address instead of signing Stage 1's messages (S4 WP9-WP13).
 
 | Divergence | Milestone |
 | --- | --- |
@@ -1022,6 +1023,15 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    follow in S4 WP6 (above, item 4): the same registry, a tier-2 attestation of a period that ended by the revocation
    valid until `revokedAt` + 45 days (Stage 1's `reportKeyValid`, which the reference models, so S4a-S4c run in
    lockstep), migration 024 (`verifier_keys`).
+   **S4 WP7:** attestors are keys (S4 D4; A-M5-2 revised): a secp256k1 key's 20-byte address is the attestor on every
+   chain, as Stage 1's registries hold it (`AttestorKey` PDA by address on Solana, `KeyInfo` by address on the EVM), and
+   the registry's commands and events name 20-byte keys only. An account links a key by the key's own EIP-191 proof of a
+   one-time challenge (`account_signer_keys`, migration 025), never by a chain wallet or a sign-in; offchain access is per
+   key and per chain, read live. The admin proposes, revokes (`/admin/attestors/revoke`) and rotates
+   (`/admin/attestors/rotate`, the new key linked to the same account) keys; each chain's registry is public
+   (`GET /chains/{chain}/signer-keys`). Until S4 WP9-WP13 the flows that still co-sign (tier 3, the FX fallback,
+   `approvePause`, `amendTerms`, `extinguish`) sign at the key's address in the simulator, and the tier-3 and FX texts
+   are the key's EIP-191 signatures: transitional, removed flow by flow.
 7. *Actors and admin.* `register_issuer` is **admin-only** on both chains (ours is the issuer's own command); there is
    no admin router registration; timelock-only powers need `TimelockController.schedule`/`execute`; the admin
    surface adds `set_flags` (`new_raises_paused`, `windows_enabled`, `tier4_enabled`), `set_fx_pair`, `set_defaults`,

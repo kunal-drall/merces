@@ -2,8 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { addressFamily, normaliseAddress, type ChainFamily } from '@merces/domain';
-import { signInMessage, verifyWalletSignature } from '@merces/ports';
+import { addressFamily, keyGraceUntil, normaliseAddress, type ChainFamily } from '@merces/domain';
+import { signInMessage, signerKeyLinkMessage, simulatorOnly, verifyKeyPersonalSignature, verifyWalletSignature } from '@merces/ports';
 import { issueSession, type Role, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -26,6 +26,20 @@ export const applicationCreateSchema = z.object({
   notes: z.string().max(4000).optional(),
 });
 
+/** An attestor key: a secp256k1 key's 20-byte address, any case; the canonical form is lowercase (S4 D4). */
+export const signerKeyAddressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((a) => a.toLowerCase());
+export const signerKeyChallengeSchema = z.object({ address: signerKeyAddressSchema }).strict();
+/** The proof: the challenge's nonce and the key's EIP-191 signature of the challenge text (65 bytes, 0x hex). */
+export const signerKeyLinkSchema = z.object({ address: signerKeyAddressSchema, nonce: z.string().regex(/^[0-9a-f]{32}$/), signature: z.string().min(1).max(512) }).strict();
+
+/** How long a sign-in nonce or a key-link challenge stays valid. */
+const NONCE_TTL_MS = 10 * 60_000;
+
+/** A key-link refusal: 422 with `detail.reason`. None says which account a key is linked to. */
+function linkRefusal(reason: 'unknown-challenge' | 'challenge-expired' | 'bad-signature' | 'zero-address', message: string): AppError {
+  return AppError.unprocessable(message, { reason });
+}
+
 export class IdentityService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -38,8 +52,8 @@ export class IdentityService {
     if (addressFamily(addr) !== family) throw AppError.badRequest(`address is not a ${family} address`);
     const nonce = randomBytes(16).toString('hex');
     const issuedAt = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 10 * 60_000);
-    await this.ctx.pool.query('insert into auth_nonces (nonce, chain, address, expires_at) values ($1,$2,$3,$4)', [nonce, chain, addr, expiresAt]);
+    const expiresAt = new Date(Date.now() + NONCE_TTL_MS);
+    await this.ctx.pool.query("insert into auth_nonces (nonce, chain, address, expires_at, purpose) values ($1,$2,$3,$4,'sign-in')", [nonce, chain, addr, expiresAt]);
     return { nonce, message: signInMessage({ domain: this.ctx.signInDomain, chain, address: addr, nonce, issuedAt }), expiresAt: expiresAt.toISOString() };
   }
 
@@ -51,13 +65,17 @@ export class IdentityService {
     const addr = normaliseAddress(params.address, family);
     const nonce = /Nonce: ([0-9a-f]{32})/.exec(params.message)?.[1];
     if (!nonce) throw AppError.badRequest('message has no nonce');
-    const n = await this.ctx.pool.query<{ chain: string; address: string; expires_at: Date; used_at: Date | null }>('select chain, address, expires_at, used_at from auth_nonces where nonce = $1', [nonce]);
+    const n = await this.ctx.pool.query<{ chain: string | null; address: string; purpose: string; expires_at: Date; used_at: Date | null }>('select chain, address, purpose, expires_at, used_at from auth_nonces where nonce = $1', [nonce]);
     const row = n.rows[0];
-    if (!row || row.chain !== params.chain || row.address !== addr) throw AppError.unauthorized('unknown nonce');
+    // a sign-in (and a wallet link, which is a sign-in into the session's account) takes a sign-in nonce only: a key-link
+    // challenge is never a sign-in, whatever it says (S4 WP7, amendment fix 2)
+    if (!row || row.purpose !== 'sign-in' || row.chain !== params.chain || row.address !== addr) throw AppError.unauthorized('unknown nonce');
     if (row.used_at || row.expires_at.getTime() < Date.now()) throw AppError.unauthorized('nonce expired or used');
     const ok = await verifyWalletSignature({ family, address: addr, message: params.message, signature: params.signature, allowSimulator: this.ctx.devMode });
     if (!ok) throw AppError.unauthorized('bad signature');
-    await this.ctx.pool.query('update auth_nonces set used_at = now() where nonce = $1', [nonce]);
+    // spent once: of two concurrent uses, one wins
+    const spent = await this.ctx.pool.query("update auth_nonces set used_at = now() where nonce = $1 and used_at is null and purpose = 'sign-in'", [nonce]);
+    if (!spent.rowCount) throw AppError.unauthorized('nonce expired or used');
 
     let created = false;
     let accountId: string;
@@ -83,10 +101,107 @@ export class IdentityService {
     if (!acc.rows[0]) throw AppError.notFound('account');
     const wallets = await this.ctx.pool.query<{ chain: string; address: string }>('select chain, address from account_wallets where account_id = $1 order by linked_at', [accountId]);
     const elig = await this.ctx.pool.query('select 1 from eligibility where account_id = $1 and revoked_at is null limit 1', [accountId]);
-    // 'attestor' follows the indexed onchain registry of the account's wallets (A-M5-2), not a stored grant
-    const att = await this.ctx.pool.query('select 1 from attestors t join account_wallets w on w.chain = t.chain and w.address = t.attestor where w.account_id = $1 and t.active limit 1', [accountId]);
+    // 'attestor' follows the indexed onchain registry of the account's linked keys (A-M5-2, S4 WP7), not a stored grant
+    // and not a chain wallet: some key linked to the account is active in `attestors` on some chain. Informational in
+    // the token: attestor access is read live on every request (access.ts)
+    const att = await this.ctx.pool.query('select 1 from attestors t join account_signer_keys k on k.address = t.attestor where k.account_id = $1 and t.active limit 1', [accountId]);
     const roles = [...acc.rows[0].roles.filter((r) => r !== 'attestor'), ...(att.rowCount ? (['attestor'] as Role[]) : [])];
     return { accountId, wallets: wallets.rows, roles, eligible: !!elig.rowCount, exp: Math.floor(Date.now() / 1000) + 24 * 3600, iat: Math.floor(Date.now() / 1000) };
+  }
+
+  // ---- attestor keys (S4 WP7, D4; A-M5-2)
+
+  /**
+   * A one-time challenge for linking attestor key `address` to the session's account: the EIP-191 text the key signs
+   * (`signerKeyLinkMessage`, bound to this host, the account, the key, the nonce and the issue time) and the nonce. It is
+   * chain-neutral (a key is the attestor on every chain) and serves the link route only: sign-in refuses it. Says
+   * nothing about the key (whether it is linked anywhere, registered or not).
+   */
+  async signerKeyChallenge(session: Session, address: string): Promise<{ nonce: string; message: string; expiresAt: string }> {
+    if (/^0x0{40}$/.test(address)) throw linkRefusal('zero-address', 'the zero address is no key');
+    if (!(await this.ctx.pool.query('select 1 from accounts where account_id = $1', [session.accountId])).rowCount) throw AppError.notFound('account');
+    const nonce = randomBytes(16).toString('hex');
+    // millisecond precision both ways, so the text rebuilt from the stored issue time is the text handed out
+    const issuedAt = new Date();
+    const expiresAt = new Date(issuedAt.getTime() + NONCE_TTL_MS);
+    await this.ctx.pool.query("insert into auth_nonces (nonce, chain, address, issued_at, expires_at, purpose, account_id) values ($1, null, $2, $3, $4, 'link-signer-key', $5)", [nonce, address, issuedAt, expiresAt, session.accountId]);
+    return { nonce, message: signerKeyLinkMessage({ domain: this.ctx.signInDomain, accountId: session.accountId, address, nonce, issuedAt: issuedAt.toISOString() }), expiresAt: expiresAt.toISOString() };
+  }
+
+  /**
+   * Link attestor key `address` to the session's account with the key's EIP-191 signature of a challenge from
+   * `signerKeyChallenge`, checked with viem (`verifyKeyPersonalSignature`; a simulator `sim:` signature is never accepted, in
+   * any mode). The challenge must be a key-link challenge (a sign-in nonce is refused), issued to this account for this
+   * key, unexpired and unused; it is spent once. A key belongs to one account: a key linked to another account is a 409
+   * (the caller has just proven control of the key). Linking grants nothing by itself: attestor access needs the key
+   * active and indexed on the item's chain (A-M5-2). Linking a key already linked to this account changes nothing.
+   */
+  async linkSignerKey(session: Session, input: z.infer<typeof signerKeyLinkSchema>): Promise<{ key: Record<string, unknown>; created: boolean; token: string }> {
+    const n = await this.ctx.pool.query<{ address: string; purpose: string; account_id: string | null; issued_at: Date; expires_at: Date; used_at: Date | null }>('select address, purpose, account_id, issued_at, expires_at, used_at from auth_nonces where nonce = $1', [input.nonce]);
+    const row = n.rows[0];
+    if (!row || row.purpose !== 'link-signer-key' || row.account_id !== session.accountId || row.address !== input.address) throw linkRefusal('unknown-challenge', 'no key-link challenge with this nonce was issued to this account for this key');
+    if (row.used_at) throw AppError.conflict('this challenge was already used; ask for a new one', { reason: 'challenge-used' });
+    if (row.expires_at.getTime() < Date.now()) throw linkRefusal('challenge-expired', 'the challenge has expired; ask for a new one');
+    const message = signerKeyLinkMessage({ domain: this.ctx.signInDomain, accountId: session.accountId, address: input.address, nonce: input.nonce, issuedAt: row.issued_at.toISOString() });
+    if (!(await verifyKeyPersonalSignature({ address: input.address, message, signature: input.signature }))) throw linkRefusal('bad-signature', 'the signature is not this key\'s EIP-191 signature of the challenge');
+    const spent = await this.ctx.pool.query("update auth_nonces set used_at = now() where nonce = $1 and used_at is null and purpose = 'link-signer-key'", [input.nonce]);
+    if (!spent.rowCount) throw AppError.conflict('this challenge was already used; ask for a new one', { reason: 'challenge-used' });
+    const inserted = await this.ctx.pool.query('insert into account_signer_keys (address, account_id) values ($1, $2) on conflict (address) do nothing', [input.address, session.accountId]);
+    const owner = await this.ctx.pool.query<{ account_id: string }>('select account_id from account_signer_keys where address = $1', [input.address]);
+    if (owner.rows[0]?.account_id !== session.accountId) throw AppError.conflict('this key is linked to another account', { reason: 'key-linked-to-another-account' });
+    const created = !!inserted.rowCount;
+    if (created) await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'account', action: 'signer-key.link', target: input.address, detail: {} });
+    const key = (await this.signerKeys(session.accountId)).find((k) => k.address === input.address)!;
+    return { key, created, token: issueSession(this.ctx.sessionSecret, await this.sessionFor(session.accountId)) };
+  }
+
+  /**
+   * The attestor keys linked to an account, each with its indexed registration on every chain that has one (active, the
+   * registration and revocation times, the grace end): what the account and admins see, never anyone else.
+   */
+  async signerKeys(accountId: string): Promise<{ address: string; linkedAt: Date; registrations: Record<string, unknown>[] }[]> {
+    const keys = await this.ctx.pool.query<{ address: string; linked_at: Date }>('select address, linked_at from account_signer_keys where account_id = $1 order by linked_at, address', [accountId]);
+    const regs = await this.ctx.pool.query<{ attestor: string; chain: string; active: boolean; registered_at: string | null; revoked_at: string | null }>('select attestor, chain, active, registered_at, revoked_at from attestors where attestor = any($1) order by chain', [keys.rows.map((k) => k.address)]);
+    const num = (x: string | null) => (x === null ? null : Number(x));
+    return keys.rows.map((k) => ({
+      address: k.address, linkedAt: k.linked_at,
+      registrations: regs.rows.filter((r) => r.attestor === k.address).map((r) => ({ chain: r.chain, active: r.active, registeredAt: num(r.registered_at), revokedAt: num(r.revoked_at), graceUntil: keyGraceUntil(num(r.revoked_at)) })),
+    }));
+  }
+
+  /**
+   * Unlink one of the account's keys. Refused (409 `open-work`) while work addressed to the key is open: a pending
+   * hardship request, an open tier-3 case or annual attestation, an extinguishment request naming it, an amendment it
+   * attested that has not landed. Unlinking ends the account's attestor access through this key at once.
+   */
+  async unlinkSignerKey(session: Session, address: string): Promise<{ address: string; unlinked: true }> {
+    const linked = await this.ctx.pool.query('select 1 from account_signer_keys where address = $1 and account_id = $2', [address, session.accountId]);
+    if (!linked.rowCount) throw AppError.notFound('linked key');
+    const open = await this.ctx.pool.query<{ hardship: number; tier3: number; annual: number; extinguishments: number; amendments: number }>(
+      `select (select count(*)::int from hardship_requests where attestor = $1 and state = 'pending') as hardship,
+              (select count(*)::int from tier3_cases where attestor = $1 and state = 'open') as tier3,
+              (select count(*)::int from tier3_annual where attestor = $1 and state = 'open') as annual,
+              (select count(*)::int from extinguishment_requests where $1 = any(attestors) and state = 'built') as extinguishments,
+              (select count(*)::int from terms_amendments where attestor = $1 and state in ('attested', 'submitted')) as amendments`,
+      [address],
+    );
+    const counts = open.rows[0]!;
+    if (Object.values(counts).some((c) => c > 0)) throw AppError.conflict('work addressed to this key is still open: finish or hand it over first', { reason: 'open-work', openWork: counts });
+    await this.ctx.pool.query('delete from account_signer_keys where address = $1 and account_id = $2', [address, session.accountId]);
+    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'account', action: 'signer-key.unlink', target: address, detail: {} });
+    return { address, unlinked: true };
+  }
+
+  /**
+   * dev:mock and tests: link published simulator test keys to an account without the proof (the key's holder is the
+   * test itself). Refused when any chain of the process is live (A-REV-9: published keys are simulator-only).
+   */
+  async seedSignerKeys(accountId: string, addresses: string[]): Promise<void> {
+    if (!simulatorOnly(this.ctx.chains)) throw new Error('seedSignerKeys is refused: this process has a live chain, and a seeded key is a published test key (A-REV-9)');
+    for (const a of addresses) {
+      if (!/^0x[0-9a-f]{40}$/.test(a)) throw new Error(`seedSignerKeys: ${a} is not a 20-byte lowercase key address`);
+      await this.ctx.pool.query('insert into account_signer_keys (address, account_id) values ($1, $2) on conflict (address) do nothing', [a, accountId]);
+    }
   }
 
   // ---- applications

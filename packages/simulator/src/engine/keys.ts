@@ -30,11 +30,10 @@ import { fail } from './errors.ts';
  * transaction does.
  */
 
-/** A key address made of zero bytes: Stage 1's zero-address refusal (`addr != [0u8; 20]`; `key == address(0)`). */
+/** The 20-byte zero address: Stage 1's zero-address refusal (`addr != [0u8; 20]`; `key == address(0)`). */
 export function isZeroKeyAddress(address: string): boolean {
-  // the 20-byte zero address, and the 32-byte zero pubkey a Solana wallet address would be (until S4 WP7 every
-  // attestor address is a 20-byte key)
-  return /^0x0{40}$/i.test(address) || address === '1'.repeat(32);
+  // every key address is a 20-byte secp256k1 address on both personalities (attestor keys since S4 WP7)
+  return /^0x0{40}$/i.test(address);
 }
 
 /** The registry of one kind of key. */

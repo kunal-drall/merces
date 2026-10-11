@@ -19,6 +19,12 @@ async function withFreshSchema(fn: (schema: string) => Promise<void>): Promise<v
   }
 }
 
+/*
+ * S4 cause codes (each migration test on a database seeded before it):
+ *  - S4-REG: 023, Stage 1's attestor key registry; S4-T2: 024, the report verifier's keys by address;
+ *  - S4-ID: 025, attestors are keys linked to accounts (the key links, chain-neutral link challenges with a purpose, the
+ *    registry and the proposals keys-only, and the superseded-s4 closures of work addressed to non-keys).
+ */
 describe.skipIf(!dbTestsEnabled())('migrate', () => {
   it('serialises concurrent processes: three migrate() calls on a fresh schema all succeed, each file applied once', async () => {
     await withFreshSchema(async (schema) => {
@@ -153,6 +159,154 @@ describe.skipIf(!dbTestsEnabled())('migrate', () => {
         for (const bad of ['0x' + 'AB'.repeat(20), '0x' + 'ab'.repeat(19), 'k']) {
           await expect(pool.query("insert into verifier_keys (chain, address, active) values ('monad', $1, true)", [bad])).rejects.toThrow(/verifier_keys_address_check/);
         }
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+  // S4 WP7 (cause S4-ID; amendment fix 2): migration 025 on a database seeded at 024. Attestors become 20-byte keys:
+  // the key links, the chain-neutral link challenge, the registry and the proposals keep keys only, and every open item
+  // addressed to an attestor that is not a key is closed once with decision_code superseded-s4 in a state its table's
+  // check allows (or re-opened, an FX request), while items addressed to keys and items already on a chain are kept.
+  it('025_signer_keys on a database seeded at 024: key links, link challenges, keys-only registry and the superseded-s4 closures', async () => {
+    await withFreshSchema(async (schema) => {
+      const pool = createPool(databaseUrl(), schema);
+      try {
+        const dir = mkdtempSync(join(tmpdir(), 'merces-mig025-'));
+        for (const f of files.filter((x) => x < '025')) copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+        await migrate(pool, dir);
+        const KEY = '0x' + 'ab'.repeat(20);
+        const KEY2 = '0x' + 'cd'.repeat(20);
+        const WALLET = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+        const q = (sql: string, params: unknown[] = []) => pool.query(sql, params);
+        await q("insert into accounts (account_id) values ('acct-a'), ('acct-b')");
+        await q("insert into auth_nonces (nonce, chain, address, expires_at) values ('n-old', 'solana', $1, now() + interval '1 hour')", [WALLET]);
+        await q("insert into attestors (chain, attestor, active) values ('solana', $1, true), ('solana', $2, true), ('monad', $3, true)", [WALLET, KEY, KEY2]);
+        await q("insert into attestor_proposals (chain, wallet, account_id, active, proposed_by) values ('solana', $1, 'acct-a', true, 'adm'), ('monad', $2, 'acct-b', true, 'adm')", [WALLET, KEY2]);
+        const req = (id: string, command: Record<string, unknown>) =>
+          q("insert into admin_tx_requests (request_id, kind, chain, command, state, created_by) values ($1, $2, 'solana', $3, 'proposed', 'adm')", [id, command.kind, JSON.stringify(command)]);
+        await req('rq-wallet', { kind: 'registerAttestor', attestor: WALLET });
+        await req('rq-key', { kind: 'registerAttestor', attestor: KEY });
+        await req('rq-rot', { kind: 'rotateAttestor', from: KEY, to: WALLET });
+        await req('rq-vk', { kind: 'registerVerifierKey', key: KEY });
+        // work addressed to the wallet attestor and to a key, open and decided
+        const hard = (id: string, attestor: string, state: string) =>
+          q("insert into hardship_requests (hardship_id, series_id, chain, issuer, account_id, attestor, requested_until, ciphertext, state) values ($1, 'solana:s1', 'solana', 'iss', 'acct-i', $2, 1, 'c', $3)", [id, attestor, state]);
+        await hard('h-wallet', WALLET, 'pending');
+        await hard('h-key', KEY, 'pending');
+        await hard('h-done', WALLET, 'approved');
+        const t3 = (id: string, period: string, attestor: string, state: string) =>
+          q("insert into tier3_cases (case_id, series_id, chain, period_id, issuer, account_id, attestor, documents_ciphertext, estimate_payment_stable, state) values ($1, 'solana:s1', 'solana', $2, 'iss', 'acct-i', $3, 'c', 0, $4)", [id, period, attestor, state]);
+        await t3('c-open', '2026Q1', WALLET, 'open');
+        await t3('c-signed-unused', '2026Q2', WALLET, 'signed');
+        await t3('c-signed-used', '2026Q3', WALLET, 'signed');
+        await t3('c-key', '2026Q4', KEY, 'open');
+        const rep = (id: string, period: string, state: string, cols: { attestor?: string; attestorRate?: unknown; pair?: string; fxBasis?: string } = {}) =>
+          q(
+            "insert into reports (report_id, series_id, period_id, account_id, tier, source, state, payment_stable, income_commitment, terms_commitment, fx_basis, fx_avg_wad, pair, proof, attestor, attestor_rate) values ($1, 'solana:s1', $2, 'acct-i', 3, 'attestor', $3, 0, '0x01', '0x02', $4, 1, $5, '{}', $6, $7)",
+            [id, period, state, cols.fxBasis ?? 'unity', cols.pair ?? null, cols.attestor ?? null, cols.attestorRate === undefined ? null : JSON.stringify(cols.attestorRate)],
+          );
+        await rep('r-used', '2026Q3', 'accepted', { attestor: WALLET });
+        await rep('r-unsent', '2026Q2', 'assembled', { attestor: WALLET });
+        await rep('r-rate', '2026Q2', 'rejected', { attestorRate: { attestor: WALLET, rateWad: '1' }, pair: 'GBP/USD', fxBasis: 'attestor' });
+        await rep('r-keyed', '2026Q4', 'assembled', { attestor: KEY });
+        await rep('r-fx-sent', '2026Q1', 'paid', { attestorRate: { attestor: WALLET, rateWad: '1' }, pair: 'EUR/USD', fxBasis: 'attestor' });
+        const annual = (id: string, year: number, attestor: string, state: string) =>
+          q("insert into tier3_annual (annual_id, series_id, chain, year, issuer, account_id, attestor, documents_ciphertext, state) values ($1, 'solana:s1', 'solana', $2, 'iss', 'acct-i', $3, 'c', $4)", [id, year, attestor, state]);
+        await annual('a-open', 2026, WALLET, 'open');
+        await annual('a-signed', 2027, WALLET, 'signed');
+        const fx = (id: string, pair: string, period: string, state: string, attestor: string | null) =>
+          q("insert into fx_fallback_requests (request_id, chain, pair, period_id, reason, state, attestor, rate_wad, signature) values ($1, 'solana', $2, $3, 'coverage', $4, $5, $6, $7)", [id, pair, period, state, attestor, attestor ? '1' : null, attestor ? 'sim:x' : null]);
+        await fx('fx-signed-unused', 'GBP/USD', '2026Q2', 'signed', WALLET);
+        await fx('fx-signed-used', 'EUR/USD', '2026Q1', 'signed', WALLET);
+        await fx('fx-open', 'CAD/USD', '2026Q2', 'open', null);
+        await fx('fx-key', 'SGD/USD', '2026Q2', 'signed', KEY);
+        const ext = (id: string, attestors: string[], state: string) =>
+          q("insert into extinguishment_requests (request_id, series_id, chain, attestors, requested_by, evidence_ciphertext, state) values ($1, 'solana:s1', 'solana', $2, 'acct-a', 'c', $3)", [id, attestors, state]);
+        await ext('e-wallet', [KEY, WALLET], 'built');
+        await ext('e-keys', [KEY, KEY2], 'built');
+        await ext('e-sent', [WALLET, KEY], 'sent');
+        // the indexed series carries the commitment of the amendment that landed
+        await q(
+          `insert into series (series_id, chain, issuer, stablecoin, stablecoin_mint, raise_style, units_offered, reserve_price, minimum_raise, cap_multiple_wad, lockup_seconds, release_schedule,
+                               auction_fee_bps, payout_fee_bps, hurdle_wad, payout_multiple_k, wallet_cap_bps, due_days, grace_days, formal_notice_days, contract_hash, terms_commitment, tier_flags, reporting_currency, created_at)
+           values ('solana:s1', 'solana', 'iss', 'USDC', 'mint', 'sealed', 1, 1, 1, 1, 0, '[]', 0, 0, 0, 1, 0, 30, 15, 30, '0x00', '0xapplied', '{}', 'USD', 0)`,
+        );
+        const amend = (id: string, state: string, attestor: string | null, commitment: string) =>
+          q("insert into terms_amendments (amendment_id, series_id, draft_id, kind, new_commitment, new_cap_multiple_wad, ciphertext, version, state, attestor, rationale_code) values ($1, 'solana:s1', 'd', 'cap-decrease', $2, 1, 'c', 2, $3, $4, 'r')", [id, commitment, state, attestor]);
+        await amend('m-proposed', 'proposed', null, '0xnew1');
+        await amend('m-attested', 'attested', WALLET, '0xnew2');
+        await amend('m-submitted', 'submitted', WALLET, '0xnew3');
+        await amend('m-landed', 'submitted', WALLET, '0xapplied');
+        await amend('m-key', 'attested', KEY, '0xnew4');
+
+        copyFileSync(join(MIGRATIONS_DIR, '025_signer_keys.sql'), join(dir, '025_signer_keys.sql'));
+        expect(await migrate(pool, dir)).toEqual(['025_signer_keys.sql']);
+        const rows = async (sql: string) => (await q(sql)).rows;
+
+        // the key links: one account per key, 20-byte lowercase addresses only
+        await q("insert into account_signer_keys (address, account_id) values ($1, 'acct-a')", [KEY]);
+        await expect(q("insert into account_signer_keys (address, account_id) values ($1, 'acct-b')", [KEY])).rejects.toThrow(/account_signer_keys_pkey/);
+        for (const bad of [WALLET, '0x' + 'AB'.repeat(20), '0x' + 'ab'.repeat(19)]) await expect(q("insert into account_signer_keys (address, account_id) values ($1, 'acct-b')", [bad])).rejects.toThrow(/account_signer_keys_address_check/);
+        await expect(q("insert into account_signer_keys (address, account_id) values ($1, 'nobody')", [KEY2])).rejects.toThrow(/account_signer_keys_account_id_fkey/);
+        // auth nonces: the old row is a sign-in nonce; a link challenge names no chain but an account; nothing else passes
+        expect(await rows("select nonce, purpose, chain from auth_nonces")).toEqual([{ nonce: 'n-old', purpose: 'sign-in', chain: 'solana' }]);
+        await q("insert into auth_nonces (nonce, chain, address, expires_at, purpose, account_id) values ('n-link', null, $1, now(), 'link-signer-key', 'acct-a')", [KEY]);
+        for (const [chain, purpose, account] of [[null, 'sign-in', null], ['solana', 'link-signer-key', 'acct-a'], [null, 'link-signer-key', null], [null, 'other', 'acct-a']] as const) {
+          await expect(q("insert into auth_nonces (nonce, chain, address, expires_at, purpose, account_id) values ($1, $2, $3, now(), $4, $5)", [`n-${Math.random()}`, chain, KEY, purpose, account])).rejects.toThrow(/auth_nonces_purpose_check/);
+        }
+        // the registry and the proposals hold keys only
+        expect(await rows('select chain, attestor from attestors order by chain, attestor')).toEqual([{ chain: 'monad', attestor: KEY2 }, { chain: 'solana', attestor: KEY }]);
+        await expect(q("insert into attestors (chain, attestor, active) values ('solana', $1, true)", [WALLET])).rejects.toThrow(/attestors_attestor_check/);
+        expect(await rows('select chain, address, account_id from attestor_proposals')).toEqual([{ chain: 'monad', address: KEY2, account_id: 'acct-b' }]);
+        await expect(q("insert into attestor_proposals (chain, address, account_id, active, proposed_by) values ('solana', $1, 'acct-a', true, 'adm')", [WALLET])).rejects.toThrow(/attestor_proposals_address_check/);
+        expect((await rows('select request_id from admin_tx_requests order by request_id')).map((r) => r.request_id)).toEqual(['rq-key', 'rq-vk']);
+        // the closures: each table's own allowed state, decision_code superseded-s4, items addressed to keys untouched
+        expect(await rows('select hardship_id, state, decision_code from hardship_requests order by hardship_id')).toEqual([
+          { hardship_id: 'h-done', state: 'approved', decision_code: null },
+          { hardship_id: 'h-key', state: 'pending', decision_code: null },
+          { hardship_id: 'h-wallet', state: 'rejected', decision_code: 'superseded-s4' },
+        ]);
+        expect(await rows('select case_id, state, decision_code from tier3_cases order by case_id')).toEqual([
+          { case_id: 'c-key', state: 'open', decision_code: null },
+          { case_id: 'c-open', state: 'withdrawn', decision_code: 'superseded-s4' },
+          { case_id: 'c-signed-unused', state: 'withdrawn', decision_code: 'superseded-s4' },
+          { case_id: 'c-signed-used', state: 'signed', decision_code: null },
+        ]);
+        expect(await rows('select annual_id, state, decision_code from tier3_annual order by annual_id')).toEqual([
+          { annual_id: 'a-open', state: 'withdrawn', decision_code: 'superseded-s4' },
+          { annual_id: 'a-signed', state: 'signed', decision_code: null },
+        ]);
+        // a withdrawn annual attestation no longer holds its year; a live one still does
+        await annual('a-again', 2026, KEY, 'open');
+        await expect(annual('a-dup', 2026, KEY, 'open')).rejects.toThrow(/tier3_annual_live/);
+        expect(await rows('select request_id, state, attestor, signature, decision_code from fx_fallback_requests order by request_id')).toEqual([
+          { request_id: 'fx-key', state: 'signed', attestor: KEY, signature: 'sim:x', decision_code: null },
+          { request_id: 'fx-open', state: 'open', attestor: null, signature: null, decision_code: null },
+          { request_id: 'fx-signed-unused', state: 'open', attestor: null, signature: null, decision_code: 'superseded-s4' },
+          { request_id: 'fx-signed-used', state: 'signed', attestor: WALLET, signature: 'sim:x', decision_code: null },
+        ]);
+        expect(await rows('select request_id, state, decision_code from extinguishment_requests order by request_id')).toEqual([
+          { request_id: 'e-keys', state: 'built', decision_code: null },
+          { request_id: 'e-sent', state: 'sent', decision_code: null },
+          { request_id: 'e-wallet', state: 'withdrawn', decision_code: 'superseded-s4' },
+        ]);
+        expect(await rows('select amendment_id, state, decision_code from terms_amendments order by amendment_id')).toEqual([
+          { amendment_id: 'm-attested', state: 'rejected', decision_code: 'superseded-s4' },
+          { amendment_id: 'm-key', state: 'attested', decision_code: null },
+          { amendment_id: 'm-landed', state: 'submitted', decision_code: null },
+          { amendment_id: 'm-proposed', state: 'proposed', decision_code: null },
+          { amendment_id: 'm-submitted', state: 'rejected', decision_code: 'superseded-s4' },
+        ]);
+        expect(await rows('select report_id, state from reports order by report_id')).toEqual([
+          { report_id: 'r-fx-sent', state: 'paid' },
+          { report_id: 'r-keyed', state: 'assembled' },
+          { report_id: 'r-rate', state: 'superseded' },
+          { report_id: 'r-unsent', state: 'superseded' },
+          { report_id: 'r-used', state: 'accepted' },
+        ]);
+        // migrating again changes nothing (each row is closed once)
+        expect(await migrate(pool, dir)).toEqual([]);
       } finally {
         await pool.end();
       }

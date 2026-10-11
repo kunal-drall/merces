@@ -9,7 +9,8 @@ import type { AppContext } from '../context.ts';
  *  backer    — any signed-in account that passed eligibility review (disclosure of terms needs this)
  *  holder    — an account holding (or having held) units of the series in the path (a bid alone does not count)
  *  issuer    — the issuer of the series in the path (or, for issuer-scoped routes without a series, any issuer role)
- *  attestor  — a wallet registered (and indexed) as an active attestor onchain; a proposal alone is not enough
+ *  attestor  — a key linked to the account (EIP-191 proof) that is registered and indexed as an active attestor
+ *              onchain; a proposal alone is not enough
  *  admin     — admin role
  *  account   — any signed-in account (used for /me and application routes)
  */
@@ -30,23 +31,21 @@ export async function isEligible(ctx: Pick<AppContext, 'pool'>, s: Pick<Session,
 }
 
 /**
- * Attestor access is the indexed onchain registry, read live on every request (A-M5-2): one of the session's wallets
- * must be registered and active in `attestors`. A proposal alone grants nothing, and an indexed deactivation ends
- * access at once, whatever role an older session token carries.
+ * Attestor access is per key and per chain, read live on every request (A-M5-2, S4 WP7): a secp256k1 key linked to
+ * the session's account (`account_signer_keys`, by the key's own EIP-191 proof) must be registered and active in
+ * `attestors` (on `onChain`, when given). The token's wallets and roles never decide it: a proposal alone grants
+ * nothing, an indexed revocation ends access at once, and so does unlinking the key, whatever an older token carries.
  */
-export async function isRegisteredAttestor(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'wallets'>, onChain?: string): Promise<boolean> {
-  const wallets = s.wallets.filter((w) => !onChain || w.chain === onChain);
-  if (!wallets.length) return false;
-  const r = await ctx.pool.query('select 1 from attestors where active and (chain, attestor) in (select c, w from unnest($1::text[], $2::text[]) as t(c, w)) limit 1', [wallets.map((w) => w.chain), wallets.map((w) => w.address)]);
+export async function isRegisteredAttestor(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'accountId'>, onChain?: string): Promise<boolean> {
+  const r = await ctx.pool.query('select 1 from account_signer_keys k join attestors t on t.attestor = k.address where k.account_id = $1 and t.active and ($2::text is null or t.chain = $2) limit 1', [s.accountId, onChain ?? null]);
   return !!r.rowCount;
 }
 
-/** One of the session's wallets has an active proposal that the indexer has not seen registered yet. */
-async function attestorPending(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'wallets'>): Promise<boolean> {
-  if (!s.wallets.length) return false;
+/** A key linked to the session's account has an active proposal that the indexer has not seen registered yet. */
+async function attestorPending(ctx: Pick<AppContext, 'pool'>, s: Pick<Session, 'accountId'>): Promise<boolean> {
   const r = await ctx.pool.query(
-    'select 1 from attestor_proposals p where p.active and (p.chain, p.wallet) in (select c, w from unnest($1::text[], $2::text[]) as t(c, w)) and not exists (select 1 from attestors t where t.chain = p.chain and t.attestor = p.wallet) limit 1',
-    [s.wallets.map((w) => w.chain), s.wallets.map((w) => w.address)],
+    'select 1 from attestor_proposals p join account_signer_keys k on k.address = p.address where k.account_id = $1 and p.active and not exists (select 1 from attestors t where t.chain = p.chain and t.attestor = p.address) limit 1',
+    [s.accountId],
   );
   return !!r.rowCount;
 }
@@ -80,7 +79,7 @@ export async function requireTier(ctx: AppContext, req: FastifyRequest, _reply: 
       break;
     case 'attestor':
       if (has('admin') || (await isRegisteredAttestor(ctx, s))) return s;
-      if (await attestorPending(ctx, s)) throw AppError.forbidden('attestor registration is pending: access starts once the multisig has registered your wallet onchain and it is indexed');
+      if (await attestorPending(ctx, s)) throw AppError.forbidden('attestor registration is pending: access starts once the multisig has registered your key onchain and it is indexed');
       break;
     case 'backer':
       if (has('admin') || ((has('backer') || has('issuer')) && (await isEligible(ctx, s)))) return s;
@@ -95,7 +94,7 @@ export async function requireTier(ctx: AppContext, req: FastifyRequest, _reply: 
       if (has('admin') || (await isHolderOf()) || (await isIssuerOf())) return s;
       break;
     case 'issuer-or-attestor':
-      // for a series, only an attestor registered on that series' chain counts (another chain's registration never stands in)
+      // for a series, only a linked key registered on that series' chain counts (another chain's registration never stands in)
       if (has('admin') || (await isIssuerOf()) || (await isRegisteredAttestor(ctx, s, seriesId ? seriesId.slice(0, seriesId.indexOf(':')) : undefined))) return s;
       break;
   }

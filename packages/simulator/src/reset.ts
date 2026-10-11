@@ -13,8 +13,8 @@ import type { Pool } from 'pg';
  * Series ids are deterministic (`<chain>:<address>`, derived from the issuer and a counter), so a row left behind
  * would re-attach to a new series with the same id.
  *
- * People and paper records that are not tied to a series are kept (accounts, wallets, applications, eligibility,
- * contract sessions, drafts that never created a series). The chain's own registrations lived in the simulator
+ * People and paper records that are not tied to a series are kept (accounts, wallets, attestor key links,
+ * applications, eligibility, contract sessions, drafts that never created a series). The chain's own registrations lived in the simulator
  * state and are gone: the allowlist, attestors, verifier keys and issuers must be re-applied.
  *
  * Refuses a chain that has no persisted simulator state under the prefix (a live chain's projections share the chain
@@ -30,7 +30,7 @@ export const SIM_RESET_CHAIN_TABLES = [
 /** What has to be redone on each reset chain, printed by the CLI. */
 export const SIM_RESET_REAPPLY = [
   'allowlist entries (setAllowlist for every approved wallet)',
-  'attestor keys (registerAttestor; revoked keys and their revocation times are gone too)',
+  'attestor keys (registerAttestor of each key\'s 20-byte address; revoked keys and their revocation times are gone too; the accounts keep their key links, account_signer_keys, so access returns once a key is registered and indexed again)',
   'report-verifier keys (registerVerifierKey of the verifier\'s 20-byte address; revoked keys and their revocation times are gone too)',
   'issuer registrations (registerIssuer)',
 ] as const;

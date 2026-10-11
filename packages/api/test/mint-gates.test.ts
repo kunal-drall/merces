@@ -7,6 +7,10 @@ import { makeRig } from './helpers.ts';
  * S2 cause codes:
  *  - S2-MF: Stage 1's mint gate: a settled raise is not mint-finalized until its last bid is processed (MintNotFinalized);
  *    the services that front a gated path refuse before it, and reconciliation leaves a raise in flight alone.
+ *
+ * S4 cause codes:
+ *  - S4-ID: attestors are keys linked to an account (S4 WP7): attestor access is the account's linked key, read live
+ *    (`rig.attestorToken`), never a token's wallets.
  */
 
 /** Stand-in for the client's end-to-end encryption (as attestor.test.ts): AES-256-GCM under a throwaway key. */
@@ -36,7 +40,7 @@ describe.skipIf(!dbTestsEnabled())('S2 mint gates in the services (extinguishmen
     await rig.sync();
     expect(await h.sim.getSeries(seriesId)).toMatchObject({ phase: 'Settled', mintFinalized: false });
     const issuerTok = rig.token({ accountId: 'gate-issuer', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
-    const attTok = rig.token({ accountId: 'gate-att', wallets: [{ chain: 'solana', address: h.attestors[0]!.address }], roles: ['attestor'] });
+    const attTok = await rig.attestorToken('gate-att', [h.attestors[0]!]); // cause S4-ID: attestor access is the account's linked key
     const adminTok = rig.token({ accountId: 'gate-admin', wallets: [], roles: ['admin'] });
     const extinguish = () => rig.post('/attestor/extinguish', { seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address], evidenceCiphertext: e2e('evidence') }, attTok);
     const quote = () => rig.get(`/series/${seriesId}/redemption/quote`, issuerTok);

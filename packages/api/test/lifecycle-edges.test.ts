@@ -11,7 +11,9 @@ import { makeRig } from './helpers.ts';
 /*
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
- *    the builders take no series, window or side, and the salt is 32 bytes.
+ *    the builders take no series, window or side, and the salt is 32 bytes;
+ *  - S4-ID: attestors are keys linked to an account (S4 WP7): attestor access is the account's linked key, read live
+ *    (`rig.attestorToken`), never a token's wallets.
  */
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -98,7 +100,7 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     // treasury returned to the curve buyers)
     await expect(h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!])).rejects.toMatchObject({ code: 'WrongPhase', detail: { stage1: 'RaiseNotSettled' } });
     // and the attestor service does not build the doomed transaction
-    const attTok = rig.token({ accountId: 'edge-att', wallets: [{ chain: 'solana', address: h.attestors[0]!.address }], roles: ['attestor'] });
+    const attTok = await rig.attestorToken('edge-att', [h.attestors[0]!]); // cause S4-ID: attestor access is the account's linked key
     const evidence = Buffer.from(randomBytes(48)).toString('base64');
     const req = await rig.post('/attestor/extinguish', { seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address], evidenceCiphertext: evidence }, attTok);
     expect(req.statusCode, req.body).toBe(409);

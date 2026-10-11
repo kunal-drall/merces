@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { termsCommitment, type SignedTx, type UnsignedTx } from '@merces/domain';
-import { SimWallet } from '@merces/simulator';
+import { SimSigner, SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
 /*
@@ -12,6 +12,10 @@ import { makeRig } from './helpers.ts';
  *  - NRC: the non-reveal charge is the owner's setting (was S2-NRC, the hold: new series recorded 0 bps). A new series
  *    records the operator's rate (the rig sets 100 bps); while it is unset, a sealed raise is refused (409, naming the
  *    setting) and issuers cannot choose it.
+ *
+ * S4 cause codes:
+ *  - S4-ID: attestors are keys linked to an account (S4 WP7): an amendment is attested with `attestor` (a key linked to
+ *    the caller's account and active and indexed on the series' chain; was `attestorWallet`, a wallet of the session).
  */
 
 /** Sign in a simulator wallet through the real nonce/verify flow. */
@@ -209,7 +213,7 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
 
     // inflation amendment: propose → attestor attests favourability → build with co-signer → send → apply
     const attestor = rig.sol.attestors[0]!;
-    const attTok = rig.token({ accountId: 'att-1', roles: ['attestor'], wallets: [{ chain: 'solana', address: attestor.address }] });
+    const attTok = await rig.attestorToken('att-1', [attestor]); // cause S4-ID: the key is linked to the account
     const prop = await rig.post(`/series/${seriesId}/amendments/inflation`, { year: 2026 }, issuerTok, { 'idempotency-key': 'k-amend' });
     expect(prop.statusCode).toBe(200);
     expect(prop.json().inflationBps).toBe(300);
@@ -221,22 +225,31 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     expect((await rig.post(`/series/${seriesId}/amendments/inflation`, { year: 2027 }, issuerTok, { 'idempotency-key': 'k-amend' })).statusCode).toBe(409);
     expect((await rig.get(`/series/${seriesId}/amendments`, issuerTok)).json().amendments.map((a: { amendmentId: string }) => a.amendmentId)).toEqual([amendmentId]);
     expect((await rig.post(`/amendments/${amendmentId}/build`, {}, issuerTok)).statusCode).toBe(409);
-    // only a wallet of the caller's, on the series' chain, that the chain has registered as an attestor may attest
-    const monAtt = rig.mon.attestors[0]!;
-    const wrongChain = rig.token({ accountId: 'att-2', roles: ['attestor'], wallets: [{ chain: 'monad', address: monAtt.address }] });
-    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: monAtt.address, approve: true }, wrongChain)).statusCode).toBe(403);
-    const unreg = new SimWallet('solana', 'attestor-unregistered');
-    const unregTok = rig.token({ accountId: 'att-3', roles: ['attestor'], wallets: [{ chain: 'solana', address: unreg.address }] });
-    // an unregistered wallet never reaches the attestor routes, whatever role its token claims (A-M5-2)
-    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: unreg.address, approve: true }, unregTok)).statusCode).toBe(403);
-    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: attestor.address, approve: true }, unregTok)).statusCode).toBe(403);
-    // a registered attestor naming a wallet the chain has not registered is refused by the service
-    const twoWallets = rig.token({ accountId: 'att-4', roles: ['attestor'], wallets: [{ chain: 'solana', address: attestor.address }, { chain: 'solana', address: unreg.address }] });
-    const refused = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: unreg.address, approve: true }, twoWallets);
+    // cause S4-ID: only a key linked to the caller's account that the series' chain has registered (and the indexer shows)
+    // may attest. A key registered on monad only is refused for a solana series (the tier passes on monad)
+    const monOnly = SimSigner.attestor('pp-monad-only');
+    await rig.mon.exec(rig.mon.admin, { kind: 'registerAttestor', attestor: monOnly.address });
+    const second = SimSigner.attestor('pp-second');
+    await rig.sol.exec(rig.sol.admin, { kind: 'registerAttestor', attestor: second.address });
+    await rig.sync();
+    const wrongChain = await rig.attestorToken('att-2', [monOnly]);
+    const onMonad = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: monOnly.address, approve: true }, wrongChain);
+    expect([onMonad.statusCode, onMonad.json().message]).toEqual([422, `${monOnly.address} is not a registered attestor key on solana`]);
+    const unreg = SimSigner.attestor('attestor-unregistered');
+    const unregTok = await rig.attestorToken('att-3', [unreg]);
+    // an unregistered key never reaches the attestor routes, whatever role its token claims (A-M5-2)
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: unreg.address, approve: true }, unregTok)).statusCode).toBe(403);
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: attestor.address, approve: true }, unregTok)).statusCode).toBe(403);
+    // a registered attestor naming a linked key the chain has not registered is refused by the service, and naming a
+    // registered key linked to another account is forbidden
+    const unreg2 = SimSigner.attestor('attestor-unregistered-2');
+    const twoKeys = await rig.attestorToken('att-4', [second, unreg2]);
+    const refused = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: unreg2.address, approve: true }, twoKeys);
     expect(refused.statusCode).toBe(422);
     expect(refused.json().message).toContain('not a registered attestor');
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: attestor.address, approve: true }, twoKeys)).statusCode).toBe(403);
     expect((await rig.get(`/series/${seriesId}/amendments`, issuerTok)).json().amendments[0].state).toBe('proposed');
-    const att = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestorWallet: attestor.address, approve: true }, attTok);
+    const att = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: attestor.address, approve: true }, attTok);
     expect(att.json()).toMatchObject({ state: 'attested', favourable: true });
     const b2 = await rig.post(`/amendments/${amendmentId}/build`, {}, issuerTok);
     const atx = b2.json().tx as UnsignedTx;

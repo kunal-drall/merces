@@ -253,15 +253,16 @@ export class NotificationsService {
       }
     }
     if (typeof payload.wallet === 'string') add((await this.ctx.pool.query<{ account_id: string }>('select account_id from account_wallets where address = $1 and ($2::text is null or chain = $2)', [payload.wallet, chain])).rows);
-    // a notice addressed to an attestor wallet reaches its account only while that wallet is an active, indexed
-    // attestor (A-M5-2): a deactivated or not-yet-indexed wallet gets no inbox row or email
+    // a notice addressed to an attestor key reaches the account the key is linked to only while that key is an active,
+    // indexed attestor on the notice's chain (A-M5-2, S4 WP7): a revoked, not-yet-indexed or unlinked key gets no inbox
+    // row or email
     if (typeof payload.attestor === 'string')
-      add((await this.ctx.pool.query<{ account_id: string }>('select distinct w.account_id from attestors t join account_wallets w on w.chain = t.chain and w.address = t.attestor where t.active and t.attestor = $1 and ($2::text is null or t.chain = $2)', [payload.attestor, chain])).rows);
+      add((await this.ctx.pool.query<{ account_id: string }>('select distinct k.account_id from attestors t join account_signer_keys k on k.address = t.attestor where t.active and t.attestor = $1 and ($2::text is null or t.chain = $2)', [payload.attestor, chain])).rows);
     if (toAdmins(kind)) add((await this.ctx.pool.query<{ account_id: string }>("select account_id from accounts where roles @> '{admin}'")).rows);
-    // attestor work goes to accounts holding a wallet that is an active, indexed attestor on that chain (A-M5-2),
-    // never to a stored role: a proposed or deactivated attestor gets no attestor notices
+    // attestor work goes to accounts holding a linked key that is an active, indexed attestor on that chain (A-M5-2,
+    // S4 WP7), never to a stored role or a chain wallet: a proposed, revoked or unlinked key gets no attestor notices
     if (toAttestors(kind))
-      add((await this.ctx.pool.query<{ account_id: string }>('select distinct w.account_id from attestors t join account_wallets w on w.chain = t.chain and w.address = t.attestor where t.active and ($1::text is null or t.chain = $1)', [chain])).rows);
+      add((await this.ctx.pool.query<{ account_id: string }>('select distinct k.account_id from attestors t join account_signer_keys k on k.address = t.attestor where t.active and ($1::text is null or t.chain = $1)', [chain])).rows);
     return [...out].sort();
   }
 

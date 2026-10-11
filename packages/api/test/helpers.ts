@@ -14,7 +14,11 @@ export const SECRET = 'test-secret';
  * S4 cause codes:
  *  - S4-KMS: a local KMS key id names its algorithm explicitly (S4 WP3);
  *  - S4-T2: the verifier keys are secp256k1, registered by address, and the in-process verifier's chain table is each
- *    simulator's own signing domain (S4 WP6, amendment D10).
+ *    simulator's own signing domain (S4 WP6, amendment D10);
+ *  - S4-ID: attestors are keys linked to an account (S4 WP7): attestor access is read live from the account's linked
+ *    keys (`account_signer_keys`) and the indexed registry, never from a token's wallets or roles; `linkKeys` and
+ *    `attestorToken` link published simulator test keys directly (the link route's EIP-191 proof is tested in
+ *    signer-keys.test.ts).
  */
 
 /** Test rig: one schema, two simulator harnesses, an indexer and the app with every route registered. */
@@ -55,6 +59,24 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
   await app.ready();
   const token = (s: Partial<Session> & { wallets?: Session['wallets'] }) =>
     issueSession(SECRET, { accountId: s.accountId ?? 'acct', wallets: s.wallets ?? [], roles: s.roles ?? [], eligible: s.eligible ?? true, exp: Math.floor(Date.now() / 1000) + 3600 });
+  /**
+   * cause S4-ID: link attestor keys (published simulator test keys, 20-byte addresses) to `accountId`, creating the
+   * account if needed. A key belongs to one account: linking one already linked elsewhere is a test bug and throws.
+   */
+  const linkKeys = async (accountId: string, keys: (string | { address: string })[]): Promise<void> => {
+    await t.pool.query('insert into accounts (account_id) values ($1) on conflict (account_id) do nothing', [accountId]);
+    for (const k of keys) {
+      const address = typeof k === 'string' ? k : k.address;
+      await t.pool.query('insert into account_signer_keys (address, account_id) values ($1, $2) on conflict (address) do nothing', [address, accountId]);
+      const owner = (await t.pool.query<{ account_id: string }>('select account_id from account_signer_keys where address = $1', [address])).rows[0]?.account_id;
+      if (owner !== accountId) throw new Error(`test rig: key ${address} is linked to ${owner}, not ${accountId}`);
+    }
+  };
+  /** cause S4-ID: link `keys` to `accountId` and return its token (the role in a token is informational only). */
+  const attestorToken = async (accountId: string, keys: (string | { address: string })[], s: Partial<Session> = {}): Promise<string> => {
+    await linkKeys(accountId, keys);
+    return token({ accountId, roles: ['attestor'], ...s });
+  };
   /** Eligibility is checked live against the `eligibility` table, so a backer-tier token also needs a row: this seeds one and returns the token. */
   const grant = async (s: Partial<Session> & { wallets: Session['wallets'] }, kind: 'backer' | 'issuer' = 'backer') => {
     for (const w of s.wallets) await t.pool.query('insert into eligibility (chain, wallet, account_id, kind, allowlist_synced_at) values ($1,$2,$3,$4, now()) on conflict (chain, wallet) do update set revoked_at = null', [w.chain, w.address, s.accountId ?? 'acct', kind]);
@@ -64,7 +86,7 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
   const post = (url: string, body: unknown, tok?: string, extra: Record<string, string> = {}) => app.inject({ method: 'POST', url, payload: body as Record<string, unknown>, headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), ...extra } });
   const put = (url: string, body: unknown, tok?: string) => app.inject({ method: 'PUT', url, payload: body as Record<string, unknown>, headers: tok ? { authorization: `Bearer ${tok}` } : {} });
   return {
-    t, sol, mon, ctx, app, indexer, token, grant, get, post, put, esign, identity, zktls, verifier, kms,
+    t, sol, mon, ctx, app, indexer, token, grant, linkKeys, attestorToken, get, post, put, del: (url: string, tok?: string) => app.inject({ method: 'DELETE', url, headers: tok ? { authorization: `Bearer ${tok}` } : {} }), esign, identity, zktls, verifier, kms,
     harness: (p: Personality) => (p === 'solana' ? sol : mon),
     async sync() {
       await indexer.catchUp();

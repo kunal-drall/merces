@@ -15,6 +15,9 @@ import { censusFreshFor, curveRegularReport, reportUnits, requireCensusFor, requ
  * submitReport / payIn transactions for the issuer to sign. It tracks deadlines (C8).
  */
 
+/** An attestor key: a secp256k1 key's 20-byte address, any case; the canonical form is lowercase (S4 D4, WP7). */
+const attestorKeySchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((a) => a.toLowerCase());
+
 export const assembleSchema = z.object({
   /** optional: the device's assembled report names its series; it must be the series in the path */
   seriesId: z.string().optional(),
@@ -32,10 +35,10 @@ export const assembleSchema = z.object({
    * chain's signing domain and the series key; null for other tiers.
    */
   attestation: attestationSchema.nullable().default(null),
-  /** attestor-signed fallback rate when the accumulator is flagged */
-  attestorRate: z.object({ attestor: z.string(), rateWad: z.string().regex(/^\d+$/) }).nullable().default(null),
-  /** tier 3: the attestor who will co-sign */
-  attestor: z.string().nullable().default(null),
+  /** attestor-signed fallback rate when the accumulator is flagged (the attestor is a key's 20-byte address, S4 WP7) */
+  attestorRate: z.object({ attestor: attestorKeySchema, rateWad: z.string().regex(/^\d+$/) }).nullable().default(null),
+  /** tier 3: the attestor key that will co-sign (a 20-byte address, S4 WP7; Stage 1's REPORT signature from S4 WP9) */
+  attestor: attestorKeySchema.nullable().default(null),
   liquidityEvent: z.boolean().default(false),
   // strict: a stray field (a witness, a year-to-date figure, a salt) is refused, never silently dropped or stored
 }).strict();

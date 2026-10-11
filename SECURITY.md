@@ -27,6 +27,7 @@ a lender or a broker, and it is **never a custodian**:
 | Key | Where | Can | Cannot |
 | --- | --- | --- | --- |
 | Report-verifier secp256k1 (S4 WP6, D10) | KMS port, algorithm configured (`LocalKms` for development; a cloud KMS in production once the owner chooses AWS or GCP, S4 owner question 1; until then the standalone verifier refuses any other provider). Its 20-byte address is registered onchain as a verifier key by the multisig (`registerVerifierKey`), and pinned in the verifier's configuration (`REPORT_VERIFIER_ADDRESS`): the verifier refuses to start when the KMS key's address differs. | Sign Stage 1's `MERCES_REPORT_V1` with tier 2 (the series' chain's signing domain from the verifier's own table `MERCES_VERIFIER_CHAINS`, the series key, period, prior and income commitments, liquidity flag) after verifying a zkTLS proof and the prior opening. It builds every digest itself from typed fields: no route signs a digest a caller supplies. Every domain of its table is checked against the signing allow-list at startup and again before each signature (never mainnet; local ids only in development). Development (`MERCES_VERIFIER_DEV=true`: the published dev seed, no address pin) is the simulator only: the verifier refuses to start when its table holds any chain but a local id (Solana localnet 104, EVM 31337), a testnet included, and a dev verifier refuses a non-local domain at every signature. The proof's source is checked against the request but is not signed (A-REV-1, B7); the liquidity flag is the one the device declares (owner question 1 open since S1) | Sign anything else; sign for a chain off its table or a mainnet; the verifier has no database and no payload logs |
+| Attestor keys (S4 WP7, D2, D4) | never in the backend: each attestor's own device (the Merces attestor tool, a hardware wallet). The backend stores the key's 20-byte address and its link to an account (`account_signer_keys`), never key material; dev and test attestor keys are published simulator keys (seeds `sim-attestor:*`, `merces-dev-attestor:*`), linked only while every chain is the simulator | Prove control of the key (EIP-191 link challenge) and, through S4 WP9-WP13, sign Stage 1's attestor messages on the device | Be held, used or rebuilt by the server, an admin or the keeper; act on a chain that has not registered it |
 | Keeper fee payer (per chain) | KMS port | Submit permissionless cranks | Any user action |
 | Allowlist manager (per chain) | KMS port | `setAllowlist` | Freeze or seize units, block claims |
 | Session HMAC secret | environment | Sign API session tokens | — |
@@ -40,6 +41,13 @@ Secrets never enter the repository: `.env.example` lists names only; development
 - Sign-in is a wallet signature over a domain-bound, nonce-bound message (Solana ed25519; EVM EIP-191); nonces
   expire in ten minutes and are single-use. One account can link both wallet families; a wallet cannot belong to two
   accounts. Simulator signatures are accepted only in mock mode.
+- Attestor keys are linked separately (S4 WP7, D4): a one-time challenge (`POST /me/signer-keys/challenge`) bound to the
+  host, the account, the key and a nonce, signed with the key itself (EIP-191, checked with viem; a simulator signature
+  is never accepted, in any mode), spent once (`POST /me/signer-keys`). Every nonce names its purpose: sign-in accepts
+  only a sign-in nonce, the key link only a key-link challenge issued to that account for that key (amendment fix 2), so
+  a signed link challenge can never sign anyone in, and a sign-in (even with an EVM wallet at a key's address) never
+  links a key. A key belongs to one account. A link proof's EIP-191 digest (pre-image 0x19…) can never equal a Stage 1
+  `MERCES_*` digest, so it is never an attestation. Linking grants nothing by itself.
 - Every route declares an access tier (`public | account | backer | holder | issuer | attestor | admin | …`) that is
   enforced before the handler runs and written into `openapi.yaml` as `x-access`. The contract check fails CI when a
   route and the spec disagree; the H3 matrix test calls every operation anonymously, as a backer, as an ineligible
@@ -51,9 +59,10 @@ Secrets never enter the repository: `.env.example` lists names only; development
   different body is a 409.
   Stored replays are redacted: a response that carried decrypted vault material (application notes) is persisted
   with that field nulled, so the idempotency table never duplicates vault plaintext.
-- The `attestor` tier is the indexed onchain registry, read live: a wallet of the session must be registered and
-  active in `attestors`. Proposing an attestor grants nothing; an indexed deactivation ends access at once (A-M5-2).
-  Each case, document or decision also requires the addressed wallet itself to be active and indexed on its chain.
+- The `attestor` tier is the indexed onchain registry, read live per key (S4 WP7): a key linked to the session's account
+  must be registered and active in `attestors`; the token's wallets and roles never decide it. Proposing a key grants
+  nothing; an indexed revocation or unlinking the key ends access at once (A-M5-2). Each case, document or decision
+  also requires the addressed key itself to be linked to the account and active and indexed on the item's chain.
   Since S4 WP5 a deactivation is Stage 1's forward-only revocation (A-SIG-4): the chain still accepts the revoked key's
   report (tier 3) and FX signatures for periods that ended by its revocation until 45 days after it (Stage 1's design,
   so no revocation manufactures lateness), and never its pause, amendment or extinguishment signatures. A compromised

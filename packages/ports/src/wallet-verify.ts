@@ -1,6 +1,7 @@
 import { createHash, createPublicKey, verify as edVerify } from 'node:crypto';
 import bs58 from 'bs58';
 import { verifyMessage } from 'viem';
+import { toChecksumAddress } from '@merces/math';
 import type { ChainFamily } from '@merces/domain';
 import { ed25519RawToSpki } from './kms.ts';
 
@@ -35,4 +36,34 @@ export async function verifyWalletSignature(params: { family: ChainFamily; addre
 /** The sign-in message a wallet signs. Human-readable, domain-bound, nonce-bound. */
 export function signInMessage(params: { domain: string; chain: string; address: string; nonce: string; issuedAt: string }): string {
   return [`${params.domain} wants you to sign in with your ${params.chain} wallet.`, '', `Address: ${params.address}`, `Nonce: ${params.nonce}`, `Issued at: ${params.issuedAt}`, '', 'Signing is free and does not send a transaction.'].join('\n');
+}
+
+/**
+ * The text an attestor key signs to prove it is the account's (S4 WP7, D4; `POST /me/signer-keys/challenge`): an
+ * EIP-191 `personal_sign` text bound to the host, the account, the key, a one-time nonce and the issue time. It says
+ * what it does: it links a key and nothing else. Its EIP-191 digest starts with 0x19, so it can never be a Stage 1
+ * `MERCES_*` message digest: a link proof is never an attestation. The key is shown in EIP-55 form (display only).
+ */
+export function signerKeyLinkMessage(params: { domain: string; accountId: string; address: string; nonce: string; issuedAt: string }): string {
+  return [
+    `${params.domain} asks you to link an attestor key to your account.`,
+    '',
+    `Account: ${params.accountId}`,
+    `Key: ${toChecksumAddress(params.address)}`,
+    `Nonce: ${params.nonce}`,
+    `Issued at: ${params.issuedAt}`,
+    '',
+    'This links an attestor key to your account. It is not an attestation and it moves no funds.',
+  ].join('\n');
+}
+
+/**
+ * An EIP-191 `personal_sign` of `message` by the secp256k1 key whose 20-byte address is `address` (S4 WP7): a 65-byte
+ * `0x` hex signature checked with viem's `verifyMessage` (it recovers the address). A simulator signature (`sim:`) is
+ * never one, in any mode. It is how an attestor key proves control when it is linked to an account (the link
+ * challenge), and, transitionally until S4 WP9, how it signs the tier-3 attestation text and the FX fallback text.
+ */
+export async function verifyKeyPersonalSignature(params: { address: string; message: string; signature: string }): Promise<boolean> {
+  if (!/^0x[0-9a-fA-F]{130}$/.test(params.signature) || !/^0x[0-9a-f]{40}$/.test(params.address)) return false;
+  return verifyWalletSignature({ family: 'evm', address: params.address, message: params.message, signature: params.signature, allowSimulator: false });
 }

@@ -4,12 +4,18 @@ import { dispatchOutbox, enqueueOutbox } from '@merces/core';
 import { IdentityService } from '@merces/services';
 import { TEMPLATES, notificationsOutboxHandler, safeData } from '@merces/services/src/notifications/service.ts';
 import type { SimHarness } from '@merces/simulator';
-import { SimWallet } from '@merces/simulator';
+import { SimSigner, SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
 /** The canary value the privacy suite scans for (docs/SERVICES.md): it must never reach an inbox row or an email. */
 const CANARY = '7317317317';
 const DAY = 86_400;
+
+/*
+ * S4 cause codes:
+ *  - S4-ID: attestors are keys linked to an account (S4 WP7): attestor notices reach the account a key is linked to
+ *    while the key is active and indexed on the notice's chain, never an account through a chain wallet.
+ */
 
 describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, preferences, admin visibility', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -47,14 +53,20 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     await identity.seedAccount({ accountId: 'acct-issuer', wallets: [{ chain: 'solana', address: h.issuer.address, family: 'solana' }], roles: ['issuer'], eligible: true, kind: 'issuer' });
     await identity.seedAccount({ accountId: 'acct-holder', wallets: [{ chain: 'solana', address: h.backers[0]!.address, family: 'solana' }], roles: ['backer'], eligible: true });
     await identity.seedAccount({ accountId: 'acct-admin', wallets: [], roles: ['admin'], eligible: false });
-    // no stored attestor role: attestor notices follow the indexed onchain registry of the account's wallets
-    await identity.seedAccount({ accountId: 'acct-att', wallets: [{ chain: 'solana', address: h.attestors[0]!.address, family: 'solana' }], roles: [], eligible: false });
-    // a stored role with a wallet the chain never registered (an old proposal-time grant) gets nothing
+    // no stored attestor role: attestor notices follow the indexed onchain registry of the account's linked keys (cause
+    // S4-ID: was its wallets)
+    await identity.seedAccount({ accountId: 'acct-att', wallets: [], roles: [], eligible: false });
+    await identity.seedSignerKeys('acct-att', [h.attestors[0]!.address]);
+    // a stored role with a key the chain never registered (an old proposal-time grant) gets nothing
     await identity.seedAccount({ accountId: 'acct-ghost-att', wallets: [{ chain: 'solana', address: new SimWallet('solana', 'ghost-attestor').address, family: 'solana' }], roles: ['attestor'], eligible: false });
+    await identity.seedSignerKeys('acct-ghost-att', [SimSigner.attestor('ghost-attestor').address]);
+    // cause S4-ID: an account holding the attestor key's address as a chain wallet (signed in with it), the key not
+    // linked to it, gets no attestor notice either: a sign-in never links a key
+    await identity.seedAccount({ accountId: 'acct-wallet-att', wallets: [{ chain: 'monad', address: h.attestors[1]!.address, family: 'evm' }], roles: ['attestor'], eligible: false });
     issuerTok = rig.token({ accountId: 'acct-issuer', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
     holderTok = rig.token({ accountId: 'acct-holder', wallets: [{ chain: 'solana', address: h.backers[0]!.address }], roles: ['backer'] });
     adminTok = rig.token({ accountId: 'acct-admin', wallets: [], roles: ['admin'] });
-    attTok = rig.token({ accountId: 'acct-att', wallets: [{ chain: 'solana', address: h.attestors[0]!.address }], roles: ['attestor'] });
+    attTok = rig.token({ accountId: 'acct-att', wallets: [], roles: ['attestor'] }); // cause S4-ID
     const now = await h.sim.now();
     dueAt = now + 30 * DAY;
     graceEndsAt = dueAt + 15 * DAY;
@@ -130,6 +142,7 @@ describe.skipIf(!dbTestsEnabled())('E12 notifications: outbox handler, inbox, pr
     // admins: the review item and fx; attestors: fx.fallback-needed and the hardship naming their wallet
     expect((await inbox('acct-admin')).map((n) => n.kind).sort()).toEqual(['application.submitted', 'fx.fallback-needed']);
     expect((await inbox('acct-ghost-att')).map((n) => n.kind)).not.toContain('fx.fallback-needed');
+    expect(await inbox('acct-wallet-att')).toEqual([]); // cause S4-ID
     const att = await inbox('acct-att');
     expect(att.map((n) => n.kind).sort()).toEqual(['fx.fallback-needed', 'hardship.requested']);
     const fx = att.find((n) => n.kind === 'fx.fallback-needed')!;

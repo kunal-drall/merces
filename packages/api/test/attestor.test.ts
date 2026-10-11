@@ -5,7 +5,7 @@ import { E2E_TIER3_OPENING, ZERO_INCOME_COMMITMENT, attestationMessage, fxAttest
 import { WAD, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { assembleOnDevice, checkTier3Opening, generateE2eKeyPair, openTier3Opening, sealE2e, sealTier3Opening } from '@merces/poi-device';
 import { assertOpaqueCiphertext, assertTier3OpeningEnvelope } from '@merces/services';
-import type { SimHarness } from '@merces/simulator';
+import { SimSigner, type SimHarness } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -18,7 +18,11 @@ const DAY = 86_400;
  *  - P: Stage 1's hardship pauses: `request_pause` carries no end, so the requested `until` is advisory; the attestor's
  *    `approve_pause` sets the end within Stage 1's bounds (`pauseApprovalError`: in the future, ≤ 1 year, ≤ 2 years in
  *    total, ≤ 16 pauses); `approve_pause` is a status sync point (SIM:1284-1297);
- *  - G7: an extinguishment returns only the unvested proceeds.
+ *  - G7: an extinguishment returns only the unvested proceeds;
+ *  - S4-ID: attestors are keys (S4 WP7): a secp256k1 key's 20-byte address, the same on both chains, linked to an
+ *    account by its own proof (`rig.attestorToken`); access is per key and chain, read live; work is addressed to a key
+ *    (a chain wallet address is no key: 400); the tier-3 and FX texts are the key's EIP-191 signatures (`personalSign`;
+ *    a `sim:` signature never counts); `/attestor/me` lists the keys.
  */
 
 /** The canary value the privacy suite scans the database and logs for (docs/SERVICES.md). */
@@ -60,8 +64,9 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     seriesId = raise.seriesId;
     await rig.sync();
     issuerTok = rig.token({ accountId: 'iss-1', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
-    attTok = rig.token({ accountId: 'att-0', wallets: [{ chain: 'solana', address: h.attestors[0]!.address }], roles: ['attestor'] });
-    att1Tok = rig.token({ accountId: 'att-1', wallets: [{ chain: 'solana', address: h.attestors[1]!.address }], roles: ['attestor'] });
+    // cause S4-ID: attestor access is the account's linked keys (the tokens carry no attestor wallet)
+    attTok = await rig.attestorToken('att-0', [h.attestors[0]!]);
+    att1Tok = await rig.attestorToken('att-1', [h.attestors[1]!]);
     holderTok = rig.token({ accountId: 'b0', wallets: [{ chain: 'solana', address: h.backers[0]!.address }], roles: ['backer'] });
     strangerTok = rig.token({ accountId: 'x', wallets: [{ chain: 'solana', address: 'nobody' }], roles: ['backer'] });
   });
@@ -86,11 +91,18 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
 
     const me = await rig.get('/attestor/me', attTok);
     expect(me.statusCode).toBe(200);
-    expect(me.json().wallets).toEqual([{ chain: 'solana', address: h.attestors[0]!.address, registeredOnchain: true }]);
+    // cause S4-ID: the account's linked key, on each chain with its registration there (both rig chains register it)
+    expect(me.json().keys).toEqual([{ chain: 'monad', address: h.attestors[0]!.address, registeredOnchain: true }, { chain: 'solana', address: h.attestors[0]!.address, registeredOnchain: true }]);
+    expect(me.json().wallets).toBeUndefined();
     expect(me.json().openWork).toEqual({ hardship: 0, tier3: 0, tier3Annual: 0, fxRequests: 0, amendments: 0, extinguishments: 0 });
     // a token claiming the attestor role for a wallet the chain has not registered gets no attestor routes at all
     const unregistered = rig.token({ accountId: 'att-x', wallets: [{ chain: 'solana', address: h.backers[4]!.address }], roles: ['attestor'] });
     expect((await rig.get('/attestor/me', unregistered)).statusCode).toBe(403);
+    // cause S4-ID: nor does a token naming a registered key among its wallets, when the key is not linked to the account
+    const notLinked = rig.token({ accountId: 'att-y', wallets: [{ chain: 'solana', address: h.attestors[0]!.address }], roles: ['attestor'] });
+    expect((await rig.get('/attestor/me', notLinked)).statusCode).toBe(403);
+    // nor a linked key the chains never registered
+    expect((await rig.get('/attestor/me', await rig.attestorToken('att-z', [SimSigner.attestor('never-registered')]))).statusCode).toBe(403);
     const q = await rig.get('/attestor/queue', attTok);
     expect(q.statusCode).toBe(200);
     expect(q.json()).toEqual({ hardship: [], tier3: [], tier3Annual: [], fxRequests: [], amendments: [], extinguishments: [] });
@@ -105,8 +117,9 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     // plaintext documents are refused
     expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: sealedStub(), documentsCiphertext: JSON.stringify({ documents: ['1040'], grossReceipts: CANARY }), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
     expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: att.address, openingCiphertext: sealedStub(), documentsCiphertext: Buffer.from(JSON.stringify({ grossReceipts: CANARY, note: 'x' })).toString('base64'), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
-    // unknown attestor
-    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: h.backers[0]!.address, openingCiphertext: sealedStub(), documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    // unknown attestor: a key no chain registered (422); a chain wallet address is no key (cause S4-ID: 400)
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: SimSigner.attestor('never-registered').address, openingCiphertext: sealedStub(), documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(422);
+    expect((await rig.post(`/series/${seriesId}/tier3/${periodId}`, { attestor: h.backers[0]!.address, openingCiphertext: sealedStub(), documentsCiphertext: e2e(DOCS_PLAIN), estimatePaymentStable: '1' }, issuerTok)).statusCode).toBe(400);
     // the issuer's device proves the quarter (Stage 1 Groth16); the opening goes to the attestor end to end encrypted (M7)
     const dev = await assembleOnDevice({ seriesId, periodId, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', privateTerms: { threshold: raise.privateTerms.theta.toString(), ratePerUnitWad: raise.privateTerms.rWad.toString(), reportingCurrency: 'USD', indexingRule: raise.privateTerms.indexingRule, termsSalt: raise.privateTerms.termsSalt.toString() }, prior: null, incomeYtdNow: USDC(80_000), fxAvgWad: WAD, tier: 3, source: 'attestor', deviceSecret: 'issuer-device-secret' }, null);
     expect(dev.assembled.paymentStable).toBe(USDC(2000).toString());
@@ -156,9 +169,13 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     // 2026Q1 is the series' first report and a year start: the prior the attestor signs over is ZERO (cause R)
     expect(c.priorIncomeCommitment).toBe(ZERO_INCOME_COMMITMENT);
     expect(checkTier3Opening(opening, { ...c, documentedYtd: USDC(80_000) })).toEqual({ ok: true });
-    const signature = await att.signMessage(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
+    // cause S4-ID: the key's EIP-191 signature of the attestation text (until S4 WP9); a simulator signature never counts
+    const signature = await att.personalSign(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
     const signBody = { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, proof: dev.assembled.proof, attestation: { liquidityEvent: false, signature } };
     expect((await rig.post(`/attestor/tier3/${caseId}/sign`, signBody, att1Tok)).statusCode).toBe(403);
+    const simSig = await att.signMessage(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
+    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, attestation: { liquidityEvent: false, signature: simSig } }, attTok)).statusCode).toBe(422);
+    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, attestation: { liquidityEvent: false, signature: await h.attestors[1]!.personalSign(attestationMessage({ ...c, tier: 3, liquidityEvent: false })) } }, attTok)).statusCode).toBe(422); // another key's
     // the sign body carries commitments, the proof and the attestation only: an opening field is refused (strict)
     expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, incomeYtd: opening.incomeYtd }, attTok)).statusCode).toBe(400);
     expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, attestation: { liquidityEvent: true, signature } }, attTok)).statusCode).toBe(422); // signed another flag
@@ -225,28 +242,41 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     await rig.t.pool.query('insert into fx_fallback_requests (request_id, chain, pair, period_id, reason) values ($1,$2,$3,$4,$5)', ['fxreq_test1', 'solana', 'EUR/USD', q.id, 'coverage']);
     // a monad request is not on a solana-only attestor's list
     await rig.t.pool.query('insert into fx_fallback_requests (request_id, chain, pair, period_id, reason) values ($1,$2,$3,$4,$5)', ['fxreq_test2', 'monad', 'EUR/USD', q.id, 'coverage']);
-    const list = await rig.get('/attestor/fx-requests', att1Tok);
+    // cause S4-ID: a key is the attestor on every chain that registered it; one registered on solana only sees solana's
+    // requests, one registered on monad only monad's, and the harness keys (registered on both) both
+    const solOnly = SimSigner.attestor('fx-solana-only');
+    const monOnly = SimSigner.attestor('fx-monad-only');
+    await h.exec(h.admin, { kind: 'registerAttestor', attestor: solOnly.address });
+    await rig.mon.exec(rig.mon.admin, { kind: 'registerAttestor', attestor: monOnly.address });
+    await rig.sync();
+    const solTok = await rig.attestorToken('att-sol-only', [solOnly]);
+    const list = await rig.get('/attestor/fx-requests', solTok);
     expect(list.json().requests.map((r: { requestId: string }) => r.requestId)).toEqual(['fxreq_test1']);
-    expect((await rig.get('/attestor/queue', att1Tok)).json().fxRequests.map((r: { requestId: string }) => r.requestId)).toEqual(['fxreq_test1']);
-    const monadAtt = rig.token({ accountId: 'att-m', wallets: [{ chain: 'monad', address: rig.mon.attestors[0]!.address }], roles: ['attestor'] });
+    expect((await rig.get('/attestor/queue', solTok)).json().fxRequests.map((r: { requestId: string }) => r.requestId)).toEqual(['fxreq_test1']);
+    const monadAtt = await rig.attestorToken('att-m', [monOnly]);
     expect((await rig.get('/attestor/fx-requests', monadAtt)).json().requests.map((r: { requestId: string }) => r.requestId)).toEqual(['fxreq_test2']);
+    expect((await rig.get('/attestor/fx-requests', att1Tok)).json().requests.map((r: { requestId: string }) => r.requestId)).toEqual(['fxreq_test1', 'fxreq_test2']);
     // before any signature the issuer sees the open request and no rate
     expect((await rig.get(`/series/${eur.seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ pair: 'EUR/USD', basis: 'attestor', state: 'open', attestorRate: null });
     expect((await rig.get(`/series/${seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ basis: 'unity', attestorRate: null });
 
     const rateWad = wadFromDecimal('1.08').toString();
     const message = fxAttestationMessage({ pair: 'EUR/USD', periodId: q.id, rateWad });
-    const signature = await att.signMessage(message);
-    // a wallet not linked to the session, a bad signature and a free-text source note are refused
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestorWallet: h.attestors[0]!.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(403);
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestorWallet: att.address, sourceNote: 'ecb-reference-rate', signature: 'sim:deadbeef' }, att1Tok)).statusCode).toBe(422);
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad: '1090000000000000000', attestorWallet: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(422);
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestorWallet: att.address, sourceNote: 'ECB said 1.08 today', signature }, att1Tok)).statusCode).toBe(400);
-    const signed = await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestorWallet: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok, { 'idempotency-key': 'fx-1' });
+    // cause S4-ID: the key's EIP-191 signature of the FX text (until S4 WP9), named by `attestor` (was `attestorWallet`)
+    const signature = await att.personalSign(message);
+    // a key not linked to the session, a simulator or another key's signature, a bad rate and a free-text source note are refused
+    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: h.attestors[0]!.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(403);
+    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature: 'sim:deadbeef' }, att1Tok)).statusCode).toBe(422);
+    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature: await att.signMessage(message) }, att1Tok)).statusCode).toBe(422);
+    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature: await h.attestors[0]!.personalSign(message) }, att1Tok)).statusCode).toBe(422);
+    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad: '1090000000000000000', attestor: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(422);
+    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ECB said 1.08 today', signature }, att1Tok)).statusCode).toBe(400);
+    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestorWallet: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(400);
+    const signed = await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok, { 'idempotency-key': 'fx-1' });
     expect(signed.statusCode, JSON.stringify(signed.json())).toBe(200);
-    expect(signed.json()).toMatchObject({ state: 'signed', attestor: att.address, rateWad, sourceNote: 'ecb-reference-rate', signature });
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestorWallet: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(409);
-    expect((await rig.get('/attestor/fx-requests', att1Tok)).json().requests).toEqual([]);
+    expect(signed.json()).toMatchObject({ state: 'signed', attestor: att.address, rateWad, sourceNote: 'ecb-reference-rate', signature, decisionCode: null });
+    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(409);
+    expect((await rig.get('/attestor/fx-requests', solTok)).json().requests).toEqual([]);
     const forIssuer = await rig.get(`/series/${eur.seriesId}/reporting/fx-fallback/${q.id}`, issuerTok);
     expect(forIssuer.json()).toMatchObject({ pair: 'EUR/USD', state: 'signed', attestorRate: { attestor: att.address, rateWad } });
     const audit = await rig.t.pool.query("select detail from audit_log where action = 'fx.sign' and target = 'fxreq_test1'");
@@ -267,7 +297,8 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     }
     expect((await rig.t.pool.query('select count(*)::int as n from hardship_requests')).rows[0].n).toBe(0);
     expect((await rig.post(`/series/${seriesId}/hardship`, { until: now - 1, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(422);
-    expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: h.backers[1]!.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(422);
+    expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: SimSigner.attestor('never-registered').address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(422);
+    expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: h.backers[1]!.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(400); // cause S4-ID: a wallet is no key
 
     const ciphertext = e2e(HARDSHIP_PLAIN);
     const req = await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext, keyHint: 'attestor-1 x25519 key v1' }, issuerTok, { 'idempotency-key': 'hard-1' });
@@ -361,10 +392,14 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     const evidence = e2e(`death certificate ${CANARY}`);
     expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a1.address], evidenceCiphertext: evidence }, attTok)).statusCode).toBe(422);
-    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, h.backers[0]!.address], evidenceCiphertext: evidence }, attTok)).statusCode).toBe(422);
+    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, SimSigner.attestor('never-registered').address], evidenceCiphertext: evidence }, attTok)).statusCode).toBe(422);
+    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, h.backers[0]!.address], evidenceCiphertext: evidence }, attTok)).statusCode).toBe(400); // cause S4-ID: a wallet is no key
     expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: 'death certificate attached as plaintext here' }, attTok)).statusCode).toBe(422);
-    // the caller must be one of the two attestors
-    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: evidence }, rig.token({ accountId: 'att-m', wallets: [{ chain: 'monad', address: rig.mon.attestors[0]!.address }], roles: ['attestor'] }))).statusCode).toBe(403);
+    // the caller must hold one of the two attestor keys (cause S4-ID: another registered key's account is refused)
+    const third = SimSigner.attestor('ext-third');
+    await h.exec(h.admin, { kind: 'registerAttestor', attestor: third.address });
+    await rig.sync();
+    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: evidence }, await rig.attestorToken('att-third', [third]))).statusCode).toBe(403);
     const req = await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: evidence, keyHint: 'attestors shared key v1' }, attTok, { 'idempotency-key': 'ext-1' });
     expect(req.statusCode, JSON.stringify(req.json())).toBe(201);
     const requestId = req.json().requestId as string;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ChainError, KEY_GRACE_SECONDS, type UserCommand } from '@merces/domain';
 import { parsePeriod, wadFromDecimal } from '@merces/math';
-import { SimHarness, SimSigner, SimWallet, serialiseState } from '../src/index.ts';
+import { SimAttestor, SimHarness, SimSigner, SimWallet, serialiseState } from '../src/index.ts';
 import { GENESIS, USDC, expectChainError, types } from './helpers.ts';
 
 /*
@@ -11,7 +11,9 @@ import { GENESIS, USDC, expectChainError, types } from './helpers.ts';
  *    the last-key rule (merces_registry lib.rs:218-302; MercesRegistry.sol:287-345; SIM:332-338, :535-546);
  *  - S4-ERR: each personality raises its own chain's names, with one chain-neutral code per case;
  *  - S4-T2: verifier keys are 20-byte addresses with the attestor keys' rules, and a tier-2 report is Stage 1's REPORT
- *    signature by one, with the same grace.
+ *    signature by one, with the same grace;
+ *  - S4-ID: attestors are 20-byte keys on both personalities too (S4 WP7): the harness's are `SimAttestor`s
+ *    (`SimSigner.attestor`), and a wallet address of another form is no key (the command's schema refuses it).
  */
 
 type Report = Extract<UserCommand, { kind: 'submitReport' }>;
@@ -44,14 +46,16 @@ describe('the attestor key registry, per personality (S4-REG, S4-ERR)', () => {
 
     it(`${personality}: register, revoke with revokedAt, re-register clears it; every refusal by its chain's name and in its chain's order`, async () => {
       const h = await SimHarness.create(personality, { genesis: GENESIS });
-      const [a1, a2] = h.attestors as [SimWallet, SimWallet];
-      const fresh = new SimWallet(h.sim.family, 'attestor-3');
+      const [a1, a2] = h.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
+      const fresh = SimSigner.attestor('attestor-3'); // cause S4-ID: attestors are 20-byte keys on both personalities
       // the harness registered two keys; the read is Stage 1's key record
       expect(await h.sim.listSignerKeys('attestor')).toEqual([a1.address, a2.address].sort().map((address) => ({ kind: 'attestor', address, active: true, revokedAt: null, graceUntil: null })));
       expect(await h.sim.getSignerKey('attestor', fresh.address)).toBeNull();
 
-      // the zero address, both encodings a key address could take
-      for (const zero of ['0x' + '0'.repeat(40), '1'.repeat(32)]) await refused(h, h.exec(h.admin, { kind: 'registerAttestor', attestor: zero }), name('zero'), code('zero'));
+      // the zero address (cause S4-ID: a key address is 20 bytes on both personalities; a wallet address of another form
+      // is no key, and the command's schema refuses it before the chain sees it)
+      await refused(h, h.exec(h.admin, { kind: 'registerAttestor', attestor: '0x' + '0'.repeat(40) }), name('zero'), code('zero'));
+      for (const notAKey of ['1'.repeat(32), new SimWallet('solana', 'attestor-wallet').address, '0x' + 'AB'.repeat(20)]) await expect(h.exec(h.admin, { kind: 'registerAttestor', attestor: notAKey })).rejects.toThrow(/Invalid string/);
       // only the admin registers, revokes or rotates
       for (const cmd of [{ kind: 'registerAttestor', attestor: fresh.address }, { kind: 'revokeAttestor', attestor: a1.address }, { kind: 'rotateAttestor', from: a1.address, to: fresh.address }] as const) {
         await expectChainError(h.exec(h.issuer, cmd), 'Unauthorized');
@@ -92,9 +96,9 @@ describe('the attestor key registry, per personality (S4-REG, S4-ERR)', () => {
 
     it(`${personality}: rotate registers the new key, then revokes the old one, in one transaction; a refused revoke undoes the registration`, async () => {
       const h = await SimHarness.create(personality, { genesis: GENESIS });
-      const [a1, a2] = h.attestors as [SimWallet, SimWallet];
-      const n1 = new SimWallet(h.sim.family, 'attestor-new-1');
-      const n2 = new SimWallet(h.sim.family, 'attestor-new-2');
+      const [a1, a2] = h.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
+      const n1 = SimSigner.attestor('attestor-new-1'); // cause S4-ID: attestors are 20-byte keys on both personalities
+      const n2 = SimSigner.attestor('attestor-new-2');
       const r = await h.exec(h.admin, { kind: 'rotateAttestor', from: a1.address, to: n1.address });
       expect(r.events.map((e) => [e.type, e.payload])).toEqual([['AttestorRegistered', { attestor: n1.address }], ['AttestorRevoked', { attestor: a1.address, revokedAt: await h.sim.now() }]]);
       expect(r.events.map((e) => e.txId)).toEqual([r.txId, r.txId]);
@@ -103,7 +107,7 @@ describe('the attestor key registry, per personality (S4-REG, S4-ERR)', () => {
       await refused(h, h.exec(h.admin, { kind: 'rotateAttestor', from: a1.address, to: n2.address }), name('revokeRevoked'), code('revokeRevoked'));
       expect(await h.sim.getSignerKey('attestor', n2.address)).toBeNull();
       // a key never registered as the old one
-      await refused(h, h.exec(h.admin, { kind: 'rotateAttestor', from: n2.address, to: new SimWallet(h.sim.family, 'x').address }), name('revokeUnknown'), code('revokeUnknown'));
+      await refused(h, h.exec(h.admin, { kind: 'rotateAttestor', from: n2.address, to: SimSigner.attestor('x').address }), name('revokeUnknown'), code('revokeUnknown'));
       // rotating to a key that is already active: the EVM's registration refuses it; Solana's is a no-op and the revoke runs
       if (personality === 'monad') await refused(h, h.exec(h.admin, { kind: 'rotateAttestor', from: a2.address, to: n1.address }), 'KeyAlreadyActive', 'Duplicate');
       else {
@@ -246,7 +250,7 @@ describe('revocation grace on the co-signed paths (S4-REG; Stage 1 SPEC §1.4, S
 
   it('pause approval, amendment and extinguishment need an active key: no grace', async () => {
     const { h, seriesId, terms } = await settled();
-    const [a1, a2] = h.attestors as [SimWallet, SimWallet];
+    const [a1, a2] = h.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
     const now = await h.sim.now();
     await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 30 * DAY });
     await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a1.address });

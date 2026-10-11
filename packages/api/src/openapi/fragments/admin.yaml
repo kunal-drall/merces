@@ -45,7 +45,7 @@ components:
         state: { type: string, enum: [proposed, sent, confirmed] }
         txId: { type: [string, 'null'] }
         createdBy: { type: string, description: admin account id }
-        meta: { type: object, description: "registerAttestor and revokeAttestor: {accountId, jurisdiction, kind}" }
+        meta: { type: object, description: "registerAttestor: {accountId (the account the key is linked to), jurisdiction, kind}; rotateAttestor: {accountId}" }
         createdAt: { type: string, format: date-time }
         sentAt: { type: [string, 'null'], format: date-time }
         confirmedAt: { type: [string, 'null'], format: date-time }
@@ -61,14 +61,32 @@ components:
       properties: { txId: { type: string, description: the transaction id the multisig broadcast } }
     AdminRegisterAttestor:
       type: object
-      required: [chain, wallet, accountId, active]
+      description: "Propose an attestor key for Stage 1's registerAttestor (S4 WP7): a secp256k1 key's 20-byte address, the attestor on every chain that registers it, linked by its own EIP-191 proof (POST /me/signer-keys) to the account that will act with it. Revocation and rotation have their own routes."
+      required: [chain, attestor]
+      additionalProperties: false
       properties:
         chain: { type: string }
-        wallet: { type: string, description: the attestor's signing wallet on that chain }
-        accountId: { type: string, description: the Merces account proposed as attestor; it gains attestor access only once this wallet's registration is onchain and indexed }
-        active: { type: boolean, description: "true builds Stage 1's registerAttestor; false its revokeAttestor (forward-only: report and FX signatures of periods that ended by the revocation stay valid onchain for 45 days; access ends once the revocation is indexed). The registry's rules are checked against the chain first (409)." }
+        attestor: { type: string, pattern: '^0x[0-9a-fA-F]{40}$', description: "the attestor key's 20-byte address (any case; stored lowercase). A chain wallet address is no key (400)" }
+        accountId: { type: string, description: "the Merces account proposed as attestor: the key must be linked to it (422 key-not-linked otherwise); omitted, the account the key is linked to. It gains attestor access only once the key's registration is onchain and indexed" }
         jurisdiction: { type: string, minLength: 2, maxLength: 2, description: ISO 3166-1 alpha-2 }
         kind: { type: string, enum: [CA, CPA] }
+    AdminRevokeAttestor:
+      type: object
+      description: "Revoke an attestor key with Stage 1's revokeAttestor (forward-only: report and FX signatures of periods that ended by the revocation stay valid onchain for 45 days; offchain access ends once the revocation is indexed). Needs no account link: a revocation grants nothing."
+      required: [chain, attestor]
+      additionalProperties: false
+      properties:
+        chain: { type: string }
+        attestor: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+    AdminRotateAttestor:
+      type: object
+      description: "Replace attestor key `from` by `to` in one transaction (Stage 1's rotateAttestor on the EVM; Solana's register_attestor(to) and revoke_attestor(from) in one transaction, S5). `to` must be linked to the account `from` is linked to. PAUSE, AMEND, EXTINGUISH and TRUEUP signatures by `from` are dead once it lands and are signed again with `to`."
+      required: [chain, from, to]
+      additionalProperties: false
+      properties:
+        chain: { type: string }
+        from: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+        to: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
     AdminRegisterVerifierKey:
       type: object
       description: "A report verifier key: a secp256k1 key's 20-byte address (S4 WP6), the address of the report verifier's own key (REPORT_VERIFIER_ADDRESS, which the verifier checks at startup). Registering builds Stage 1's registerVerifierKey; revoking (POST /admin/verifier-keys/revoke) its revokeVerifierKey (forward-only: tier-2 attestations of periods that ended by the revocation stay valid onchain for 45 days)."
@@ -254,10 +272,10 @@ paths:
       x-access: admin
       tags: [admin]
       security: [{ session: [] }]
-      summary: Attestor proposals beside the indexed onchain registry; only an indexed active registration gives attestor access
+      summary: Attestor key proposals beside the indexed onchain registry, by key; only an indexed active registration of a key linked to an account gives that account attestor access
       responses:
         '200':
-          description: One row per (chain, wallet) proposed or registered
+          description: One row per (chain, key) proposed or registered
           content:
             application/json:
               schema:
@@ -268,17 +286,17 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [chain, wallet, status, onchainActive, registeredAt, revokedAt, graceUntil]
+                      required: [chain, attestor, status, onchainActive, registeredAt, revokedAt, graceUntil]
                       properties:
                         chain: { type: string }
-                        wallet: { type: string }
-                        accountId: { type: [string, 'null'] }
+                        attestor: { type: string, pattern: '^0x[0-9a-f]{40}$', description: "the attestor key's 20-byte address (S4 WP7; was `wallet`)" }
+                        accountId: { type: [string, 'null'], description: 'the account the key is linked to now (the one that gets access); admin views only' }
                         status: { type: string, enum: [registered, pending-onchain, deactivation-pending, inactive] }
                         onchainActive: { type: boolean }
                         registeredAt: { type: [integer, 'null'], description: unix seconds the key last became active (indexed AttestorRegistered); null before it was indexed or for rows indexed before S4 }
                         revokedAt: { type: [integer, 'null'], description: unix seconds of its forward-only revocation (indexed AttestorRevoked); null while active }
                         graceUntil: { type: [integer, 'null'], description: "revokedAt + 45 days: until then report and FX signatures of periods that ended by revokedAt stay valid onchain (Stage 1's grace); attestor access ended at revokedAt" }
-                        proposal: { type: [object, 'null'] }
+                        proposal: { type: [object, 'null'], description: 'the last proposal for the key on this chain: active (a registration, or the new key of a rotation) or not (a revocation, or the old key of a rotation), the account the key was linked to then, the tx request, who proposed it and when' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
@@ -286,17 +304,48 @@ paths:
       x-access: admin
       tags: [admin]
       security: [{ session: [] }]
-      summary: Build Stage 1's registerAttestor (active true) or revokeAttestor (active false) for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed and ends when the revocation is, A-M5-2); the registry's rules are checked against the chain first; audited
+      summary: Build Stage 1's registerAttestor of a key linked to the account for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); the registry's rules are checked against the chain first; audited
       parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRegisterAttestor' } } } }
       responses:
         '201': { description: The tracked request and the UnsignedTx for the multisig, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxProposal' } } } }
-        '400': { description: Unknown chain or a wallet of the wrong family, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '400': { description: Unknown chain, an address that is not a 20-byte key, or an unknown field, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: The account does not exist, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '409': { description: "The registry refuses it on this chain, before anything is built (detail.reason: key-already-active, registering a key that is active; key-not-active, revoking a key that is revoked or was never registered; last-active-key, revoking the chain's last active attestor key: rotate to a new key instead), or the idempotency key was reused with a different body", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '422': { description: A registration whose wallet is not linked to the named account, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: "The registry refuses it on this chain, before anything is built (detail.reason key-already-active: the EVM reverts KeyAlreadyActive, Solana would re-emit), or the idempotency key was reused with a different body", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: 'The key is linked to no account, or to another account than the one named (detail.reason key-not-linked)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /admin/attestors/revoke:
+    post:
+      operationId: adminRevokeAttestor
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: "Build Stage 1's revokeAttestor for the multisig (forward-only) and open a tx request; access ends once it is indexed; audited"
+      parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRevokeAttestor' } } } }
+      responses:
+        '201': { description: The tracked request and the UnsignedTx for the multisig, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxProposal' } } } }
+        '400': { description: Unknown chain or an address that is not a 20-byte key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: "The key is not active on the chain (detail.reason key-not-active: revoked or never registered; Solana KeyAlreadyRevoked or AccountNotInitialized, EVM KeyNotRegistered), it is the chain's last active attestor key (detail.reason last-active-key: rotate to a new key instead; Solana LastKeyOfKind, EVM LastActiveKey), or the idempotency key was reused with a different body", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /admin/attestors/rotate:
+    post:
+      operationId: adminRotateAttestor
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: "Build Stage 1's rotateAttestor{from, to} for the multisig (register to, revoke from, one transaction) and open a tx request; to must be linked to the account from is linked to; audited"
+      parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRotateAttestor' } } } }
+      responses:
+        '201': { description: The tracked request and the UnsignedTx for the multisig, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxProposal' } } } }
+        '400': { description: Unknown chain or an address that is not a 20-byte key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 'The new key is already active (detail.reason key-already-active), the key to replace is not active (key-not-active), or the idempotency key was reused with a different body', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: 'from and to are the same key, or to is not linked to the account from is linked to (detail.reason key-not-linked)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /admin/tx-requests:
     get:
       operationId: adminListTxRequests

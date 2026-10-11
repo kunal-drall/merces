@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { defineRoute, type AppContext } from '@merces/api';
 import { withIdempotency } from '@merces/core';
 import { svc } from '../context.ts';
-import { IdentityService, applicationCreateSchema } from './service.ts';
+import { IdentityService, applicationCreateSchema, signerKeyAddressSchema, signerKeyChallengeSchema, signerKeyLinkSchema } from './service.ts';
 
 /** Stored idempotency replays carry no decrypted application notes (they stay in the vault only). */
 const withoutNotes = (r: Record<string, unknown>): Record<string, unknown> => ('notes' in r ? { ...r, notes: null } : r);
@@ -35,6 +35,19 @@ export function registerIdentityRoutes(app: FastifyInstance, base: AppContext): 
     const { issueSession } = await import('@merces/api');
     return { token: issueSession(ctx.sessionSecret, fresh), account: { accountId: fresh.accountId, wallets: fresh.wallets, roles: fresh.roles, eligible: fresh.eligible } };
   } });
+
+  // attestor keys (S4 WP7, D4): a key is linked to the account by its own EIP-191 proof, never by a chain wallet
+  defineRoute(app, ctx, { method: 'POST', url: '/me/signer-keys/challenge', access: 'account', handler: async (req, _reply, session) => s.signerKeyChallenge(session!, signerKeyChallengeSchema.parse(req.body).address) });
+  defineRoute(app, ctx, {
+    method: 'POST', url: '/me/signer-keys', access: 'account',
+    handler: async (req, reply, session) => {
+      const r = await s.linkSignerKey(session!, signerKeyLinkSchema.parse(req.body));
+      reply.status(r.created ? 201 : 200);
+      return r;
+    },
+  });
+  defineRoute(app, ctx, { method: 'GET', url: '/me/signer-keys', access: 'account', handler: async (_req, _reply, session) => ({ keys: await s.signerKeys(session!.accountId) }) });
+  defineRoute(app, ctx, { method: 'DELETE', url: '/me/signer-keys/:address', access: 'account', handler: async (req, _reply, session) => s.unlinkSignerKey(session!, signerKeyAddressSchema.parse((req.params as { address: string }).address)) });
 
   defineRoute(app, ctx, {
     method: 'POST', url: '/applications', access: 'account',

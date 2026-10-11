@@ -55,14 +55,14 @@ paths:
       x-access: attestor
       tags: [attestor]
       security: [{ session: [] }]
-      responses: { '200': { description: The attestor's wallets with their onchain registration flag per chain, and open work counts, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: "The account's linked attestor keys, each on every chain with its indexed registration flag (`keys: [{chain, address, registeredOnchain}]`; S4 WP7: keys, not wallets), and open work counts", content: { application/json: { schema: { type: object } } } } }
   /attestor/queue:
     get:
       operationId: attestorQueue
       x-access: attestor
       tags: [attestor]
       security: [{ session: [] }]
-      responses: { '200': { description: 'Open work across both chains for the caller''s registered attestor wallets: hardship requests, tier-3 cases and annual attestations, FX fallback requests, amendments awaiting attestation, extinguishment requests (never ciphertext)', content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: 'Open work across both chains for the caller''s linked attestor keys, each on the chains where it is registered and indexed: hardship requests, tier-3 cases and annual attestations, extinguishment requests addressed to such a key there, and the FX fallback requests and amendments awaiting attestation of those chains (never ciphertext)', content: { application/json: { schema: { type: object } } } } }
   /series/{seriesId}/hardship:
     post:
       operationId: requestHardship
@@ -70,8 +70,8 @@ paths:
       tags: [hardship]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: Idempotency-Key, in: header, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [until, attestor, ciphertext], properties: { until: { type: integer, description: "requested pause end (unix seconds); advisory, as Stage 1's request_pause carries no end: the attestor approves the actual end within Stage 1's approve_pause bounds" }, attestor: { type: string, description: a registered attestor wallet on the series' chain }, ciphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] } } } } } }
-      responses: { '201': { description: The hardship record (no ciphertext) and the unsigned requestPause transaction for the issuer, content: { application/json: { schema: { type: object } } } }, '409': { description: Series not settled, paused or terminal, or a request is already pending }, '422': { description: "Plaintext-looking payload, unknown attestor or end date in the past; or no pause could be approved (detail.stage1 TooManyPauses: the series has used its 16 pauses; PauseTooLong: its two years in total are used)" } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [until, attestor, ciphertext], properties: { until: { type: integer, description: "requested pause end (unix seconds); advisory, as Stage 1's request_pause carries no end: the attestor approves the actual end within Stage 1's approve_pause bounds" }, attestor: { type: string, pattern: '^0x[0-9a-fA-F]{40}$', description: "an attestor key (a secp256k1 key's 20-byte address; S4 WP7) registered and indexed on the series' chain; a chain wallet address is no key (400)" }, ciphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] } } } } } }
+      responses: { '201': { description: The hardship record (no ciphertext) and the unsigned requestPause transaction for the issuer, content: { application/json: { schema: { type: object } } } }, '409': { description: Series not settled, paused or terminal, or a request is already pending }, '400': { description: 'Malformed body: an attestor that is not a 20-byte key' }, '422': { description: "Plaintext-looking payload, an attestor key not registered on the series' chain, or an end date in the past; or no pause could be approved (detail.stage1 TooManyPauses: the series has used its 16 pauses; PauseTooLong: its two years in total are used)" } }
     get:
       operationId: hardshipStatus
       x-access: holder-or-issuer
@@ -86,7 +86,7 @@ paths:
       tags: [hardship]
       security: [{ session: [] }]
       parameters: [{ name: hardshipId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: "The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state: `pause` (the deprecated single-pause view) and `pauses` (Stage 1's record: pauses approved, seconds paused in total, a pending request, the running pause), which the approval bounds are checked against", content: { application/json: { schema: { type: object } } } }, '403': { description: Addressed to another attestor } }
+      responses: { '200': { description: "The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state: `pause` (the deprecated single-pause view) and `pauses` (Stage 1's record: pauses approved, seconds paused in total, a pending request, the running pause), which the approval bounds are checked against", content: { application/json: { schema: { type: object } } } }, '403': { description: "Addressed to another attestor key, or the caller's key is not linked to its account or not active on the item's chain" } }
   /attestor/hardship/{hardshipId}/decide:
     post:
       operationId: decideHardship
@@ -96,7 +96,7 @@ paths:
       parameters: [{ name: hardshipId, in: path, required: true, schema: { type: string } }, { name: Idempotency-Key, in: header, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [approve], properties: { approve: { type: boolean }, until: { type: integer, description: approved end; defaults to the requested end and may not exceed it }, decisionCode: { type: string, description: rejection code (never free text) } } } } } }
       description: "An approval is checked with Stage 1's approve_pause rules (pauseApprovalError) on the chain's pause record before anything is recorded: the end in the future, no running pause, at most 365 days, at most 730 days across the series' pauses, at most 16 pauses. A refusal names Stage 1's rule in detail.stage1 (never a date) and leaves the request pending, so the attestor can decide again with an end the chain accepts, or reject it."
-      responses: { '200': { description: 'Approved: the record and the unsigned approvePause transaction for the attestor. Rejected: the record with its decision code and tx null', content: { application/json: { schema: { type: object } } } }, '403': { description: Not the chosen attestor }, '409': { description: "Already decided; the issuer has not sent requestPause onchain (detail.stage1 PauseNotRequested); or a pause is running (AlreadyPaused)" }, '422': { description: "Approved end after the requested end, or refused by Stage 1's bounds (detail.stage1 InvalidPauseEnd, PauseTooLong or TooManyPauses); the request stays pending" } }
+      responses: { '200': { description: 'Approved: the record and the unsigned approvePause transaction for the attestor key''s address (transitional until S4 WP10: Stage 1''s PAUSE signature relayed by the keeper). Rejected: the record with its decision code and tx null', content: { application/json: { schema: { type: object } } } }, '403': { description: 'Not the account holding the chosen attestor key, or the key is not active on its chain' }, '409': { description: "Already decided; the issuer has not sent requestPause onchain (detail.stage1 PauseNotRequested); or a pause is running (AlreadyPaused)" }, '422': { description: "Approved end after the requested end, or refused by Stage 1's bounds (detail.stage1 InvalidPauseEnd, PauseTooLong or TooManyPauses); the request stays pending" } }
   /series/{seriesId}/tier3/annual:
     post:
       operationId: openTier3Annual
@@ -104,8 +104,8 @@ paths:
       tags: [tier3]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: Idempotency-Key, in: header, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [year, attestor, documentsCiphertext], properties: { year: { type: integer }, attestor: { type: string }, documentsCiphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] } } } } } }
-      responses: { '201': { description: The annual attestation (state open), content: { application/json: { schema: { type: object } } } }, '409': { description: Year not ended, tier 3 disabled or already opened }, '422': { description: Plaintext-looking payload or unknown attestor } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [year, attestor, documentsCiphertext], properties: { year: { type: integer }, attestor: { type: string, pattern: '^0x[0-9a-fA-F]{40}$', description: "an attestor key registered on the series' chain (20-byte address)" }, documentsCiphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] } } } } } }
+      responses: { '201': { description: The annual attestation (state open), content: { application/json: { schema: { type: object } } } }, '409': { description: Year not ended, tier 3 disabled or already opened (a withdrawn attestation does not hold its year) }, '422': { description: Plaintext-looking payload or an attestor key not registered on the series' chain } }
   /series/{seriesId}/tier3/{periodId}:
     post:
       operationId: openTier3Case
@@ -114,7 +114,7 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: periodId, in: path, required: true, schema: { type: string } }, { name: Idempotency-Key, in: header, schema: { type: string } }]
       description: 'The issuer''s device proves the quarter; the documents and the income opening (merces/tier3-opening/v1: year-to-date figure and salt, and the prior''s) reach the attestor end to end encrypted. Both are opaque here. The opening must be a merces-e2e v1 envelope sealed for the attestor''s X25519 key with purpose merces/tier3-opening/v1 (64 to 4,096 payload bytes; @merces/poi-device sealTier3Opening); anything else is refused.'
-      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [attestor, documentsCiphertext, openingCiphertext, estimatePaymentStable], properties: { attestor: { type: string }, documentsCiphertext: { $ref: '#/components/schemas/Ciphertext' }, openingCiphertext: { $ref: '#/components/schemas/E2eEnvelope' }, keyHint: { type: [string, 'null'] }, estimatePaymentStable: { $ref: '#/components/schemas/Money' } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [attestor, documentsCiphertext, openingCiphertext, estimatePaymentStable], properties: { attestor: { type: string, pattern: '^0x[0-9a-fA-F]{40}$', description: "an attestor key registered on the series' chain (20-byte address)" }, documentsCiphertext: { $ref: '#/components/schemas/Ciphertext' }, openingCiphertext: { $ref: '#/components/schemas/E2eEnvelope' }, keyHint: { type: [string, 'null'] }, estimatePaymentStable: { $ref: '#/components/schemas/Money' } } } } } }
       responses: { '201': { description: The case (state open; no ciphertext), content: { application/json: { schema: { type: object } } } }, '409': { description: 'Period not ended, tier 3 disabled, a case already open/signed, or on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step)' }, '422': { description: 'Plaintext-looking documents, an opening that is not a merces-e2e v1 envelope, or an unknown attestor' } }
   /series/{seriesId}/tier3:
     get:
@@ -131,7 +131,7 @@ paths:
       tags: [tier3]
       security: [{ session: [] }]
       parameters: [{ name: annualId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: The annual attestation with its ciphertext (chosen attestor or admin), content: { application/json: { schema: { type: object } } } }, '403': { description: Addressed to another attestor } }
+      responses: { '200': { description: The annual attestation with its ciphertext (chosen attestor or admin), content: { application/json: { schema: { type: object } } } }, '403': { description: "Addressed to another attestor key, or the caller's key is not linked to its account or not active on the item's chain" } }
   /attestor/tier3/annual/{annualId}/sign:
     post:
       operationId: signTier3Annual
@@ -140,7 +140,7 @@ paths:
       security: [{ session: [] }]
       parameters: [{ name: annualId, in: path, required: true, schema: { type: string } }, { name: Idempotency-Key, in: header, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [totalPaymentStable], properties: { totalPaymentStable: { $ref: '#/components/schemas/Money' } } } } } }
-      responses: { '200': { description: 'The true-up as amounts only: estimated (sum of the year''s accepted quarterly payments), overpayment credited to the next period, or underpayment due within 60 days with no accrual', content: { application/json: { schema: { type: object } } } }, '403': { description: Not the chosen attestor }, '409': { description: Already signed } }
+      responses: { '200': { description: 'The true-up as amounts only: estimated (sum of the year''s accepted quarterly payments), overpayment credited to the next period, or underpayment due within 60 days with no accrual', content: { application/json: { schema: { type: object } } } }, '403': { description: 'Not the account holding the chosen attestor key, or the key is not active on its chain' }, '409': { description: Already signed } }
   /attestor/tier3/{caseId}:
     get:
       operationId: getTier3Case
@@ -148,7 +148,7 @@ paths:
       tags: [tier3]
       security: [{ session: [] }]
       parameters: [{ name: caseId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: The case with its documents ciphertext and metadata (chosen attestor or admin), content: { application/json: { schema: { type: object } } } }, '403': { description: Addressed to another attestor } }
+      responses: { '200': { description: The case with its documents ciphertext and metadata (chosen attestor or admin), content: { application/json: { schema: { type: object } } } }, '403': { description: "Addressed to another attestor key, or the caller's key is not linked to its account or not active on the item's chain" } }
   /attestor/tier3/{caseId}/prefill-spec:
     get:
       operationId: tier3PrefillSpec
@@ -164,7 +164,7 @@ paths:
       tags: [tier3]
       security: [{ session: [] }]
       parameters: [{ name: caseId, in: path, required: true, schema: { type: string } }, { name: Idempotency-Key, in: header, schema: { type: string } }]
-      description: 'The attestor''s device checked the decrypted opening against the documents (the commitments open to it, and its year-to-date figure is max(documented, prior)). The body carries commitments, the issuer''s proof and the attestation only, never a figure, a salt or an opening (unknown fields are refused). The API checks the proof is over the series'' live terms commitment, units and the prior the chain expects, that it verifies, and that the signature is the chosen attestor wallet''s over attestation v1 with tier 3.'
+      description: 'The attestor''s device checked the decrypted opening against the documents (the commitments open to it, and its year-to-date figure is max(documented, prior)). The body carries commitments, the issuer''s proof and the attestation only, never a figure, a salt or an opening (unknown fields are refused). The API checks the proof is over the series'' live terms commitment, units and the prior the chain expects, that it verifies, and that the signature is the chosen attestor key''s EIP-191 signature over attestation v1 with tier 3 (transitional until S4 WP9 moves tier 3 to Stage 1''s REPORT signature; a simulator sim: signature never counts).'
       requestBody:
         required: true
         content:
@@ -183,15 +183,15 @@ paths:
                   required: [liquidityEvent, signature]
                   properties:
                     liquidityEvent: { type: boolean }
-                    signature: { type: string, description: 'the attestor wallet''s signature over "merces/attestation/v1\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}' }
-      responses: { '200': { description: 'The case marked signed with the attested payment (the proof''s public input 5); the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer', content: { application/json: { schema: { type: object } } } }, '400': { description: Malformed or unknown fields }, '403': { description: Not the chosen attestor }, '409': { description: 'Already signed; on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced) or a proof over another count than the census (detail.reason census-changed: the issuer proves again)' }, '422': { description: 'Proof not over this series or not verifying, prior not the expected one, or signature not the attestor''s' } }
+                    signature: { type: string, description: 'the attestor key''s EIP-191 personal_sign (65 bytes, 0x hex) of "merces/attestation/v1\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}' }
+      responses: { '200': { description: 'The case marked signed with the attested payment (the proof''s public input 5); the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer', content: { application/json: { schema: { type: object } } } }, '400': { description: Malformed or unknown fields }, '403': { description: 'Not the account holding the chosen attestor key, or the key is not active on the case''s chain' }, '409': { description: 'Already signed; on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced) or a proof over another count than the census (detail.reason census-changed: the issuer proves again)' }, '422': { description: 'Proof not over this series or not verifying, prior not the expected one, or signature not the attestor''s' } }
   /attestor/fx-requests:
     get:
       operationId: listFxRequests
       x-access: attestor
       tags: [attestor]
       security: [{ session: [] }]
-      responses: { '200': { description: Open FX fallback requests (opened by the rate keeper, C9) on the caller's chains, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: "Open FX fallback requests (opened by the rate keeper, C9) on the chains where one of the caller's linked keys is registered; a request re-opened by migration 025 carries decisionCode superseded-s4 until a key signs it", content: { application/json: { schema: { type: object } } } } }
   /attestor/fx-requests/{requestId}/sign:
     post:
       operationId: signFxRequest
@@ -199,8 +199,8 @@ paths:
       tags: [attestor]
       security: [{ session: [] }]
       parameters: [{ name: requestId, in: path, required: true, schema: { type: string } }, { name: Idempotency-Key, in: header, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [rateWad, attestorWallet, sourceNote, signature], properties: { rateWad: { $ref: '#/components/schemas/Wad' }, attestorWallet: { type: string }, sourceNote: { type: string, description: a code such as ecb-reference-rate }, signature: { type: string, description: 'the wallet''s signature over fxAttestationMessage({pair, periodId, rateWad}), made on the attestor''s device (sim: signatures in mock mode)' } } } } } }
-      responses: { '200': { description: The request marked signed with the rate, attestor and signature, content: { application/json: { schema: { type: object } } } }, '403': { description: Wallet not linked to the account }, '409': { description: Not open }, '422': { description: Signature does not verify or wallet not a registered attestor } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [rateWad, attestor, sourceNote, signature], properties: { rateWad: { $ref: '#/components/schemas/Wad' }, attestor: { type: string, pattern: '^0x[0-9a-fA-F]{40}$', description: "the attestor key (20-byte address; S4 WP7, was attestorWallet), linked to the caller's account and registered on the request's chain" }, sourceNote: { type: string, description: a code such as ecb-reference-rate }, signature: { type: string, description: 'the key''s EIP-191 personal_sign (65 bytes, 0x hex) of fxAttestationMessage({pair, periodId, rateWad}), made on the attestor''s device (transitional until S4 WP9: Stage 1''s per-series FX signature; a sim: signature never counts)' } } } } } }
+      responses: { '200': { description: The request marked signed with the rate, attestor key and signature, content: { application/json: { schema: { type: object } } } }, '400': { description: 'Malformed body: an attestor that is not a 20-byte key, the old attestorWallet field, or a free-text source note' }, '403': { description: Key not linked to the account }, '409': { description: Not open }, '422': { description: Signature does not verify or the key is not a registered attestor on the chain } }
   /series/{seriesId}/reporting/fx-fallback/{periodId}:
     get:
       operationId: fxFallbackForSeries
@@ -216,8 +216,8 @@ paths:
       tags: [attestor]
       security: [{ session: [] }]
       parameters: [{ name: Idempotency-Key, in: header, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [seriesId, attestors, evidenceCiphertext], properties: { seriesId: { type: string }, attestors: { type: array, minItems: 2, maxItems: 2, items: { type: string }, description: two distinct registered attestors; both sign }, evidenceCiphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] } } } } } }
-      responses: { '201': { description: The request and the unsigned extinguish transaction (signer = first attestor, co-signer = second), content: { application/json: { schema: { type: object, properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }, '403': { description: Neither attestor is linked to the account }, '409': { description: 'Already extinguished, or the raise has not settled (an open raise or an ungraduated curve cannot be extinguished)' }, '422': { description: Attestors not distinct or not registered; plaintext-looking evidence } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [seriesId, attestors, evidenceCiphertext], properties: { seriesId: { type: string }, attestors: { type: array, minItems: 2, maxItems: 2, items: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }, description: "two distinct attestor keys registered on the series' chain (20-byte addresses); both sign (transitional co-signing until S4 WP12)" }, evidenceCiphertext: { $ref: '#/components/schemas/Ciphertext' }, keyHint: { type: [string, 'null'] } } } } } }
+      responses: { '201': { description: The request and the unsigned extinguish transaction (signer = first attestor, co-signer = second), content: { application/json: { schema: { type: object, properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }, '400': { description: 'Malformed body: an attestor that is not a 20-byte key' }, '403': { description: "Neither attestor key is linked to the caller's account and registered on the series' chain" }, '409': { description: 'Already extinguished, or the raise has not settled (an open raise or an ungraduated curve cannot be extinguished)' }, '422': { description: Attestors not distinct or not registered; plaintext-looking evidence } }
   /attestor/extinguish/{requestId}:
     get:
       operationId: getExtinguishment
@@ -225,4 +225,4 @@ paths:
       tags: [attestor]
       security: [{ session: [] }]
       parameters: [{ name: requestId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: The request with its evidence ciphertext (named attestors or admin) and the series' onchain status, content: { application/json: { schema: { type: object } } } }, '403': { description: Names other attestors } }
+      responses: { '200': { description: The request with its evidence ciphertext (named attestors or admin) and the series' onchain status, content: { application/json: { schema: { type: object } } } }, '403': { description: "Names other attestor keys, or the caller's key is not linked or not active on the series' chain" } }

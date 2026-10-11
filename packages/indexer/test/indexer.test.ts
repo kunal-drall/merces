@@ -1,14 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { WAD, capPerUnit, parsePeriod, requiredEscrow } from '@merces/math';
-import { PgSimPersistence, SimHarness, SimSigner, SimWallet, SimulatorChain, defaultTerms } from '@merces/simulator';
+import { PgSimPersistence, SimHarness, SimSigner, SimWallet, SimulatorChain, defaultTerms, type SimAttestor } from '@merces/simulator';
 import { ZERO_INCOME_COMMITMENT, bidCommitment, runSettlement, type ChainPort, type DomainEvent, type EventPayload, type EventType } from '@merces/domain';
 import { Indexer, project } from '../src/index.ts';
 
 /*
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
- *    the builders take no series, window or side, and the salt is 32 bytes.
+ *    the builders take no series, window or side, and the salt is 32 bytes;
+ *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address on both
+ *    personalities (transitionally a co-signing wallet at the key's address).
  * S4 cause codes on new checks:
  *  - S4-REG: Stage 1's key registry (S4 WP5, migration 023): `AttestorRegistered` and `AttestorRevoked` with their times,
  *    guarded by `updated_seq`; not in the public feed;
@@ -153,7 +155,7 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const key = 'monad-keys-test';
     const h = await SimHarness.create('monad', { genesis: GENESIS, sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
     const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
-    const [a1, a2] = h.attestors as [SimWallet, SimWallet];
+    const [a1, a2] = h.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
     const row = async (a: string) => (await t.pool.query('select active, registered_at::int as registered_at, revoked_at::int as revoked_at, updated_seq::int as updated_seq from attestors where chain = $1 and attestor = $2', [key, a])).rows[0];
     await idx.catchUp();
     const registeredAt = (await row(a2.address)).registered_at;

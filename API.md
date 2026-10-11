@@ -21,11 +21,25 @@ explains how to use the API; the spec is the source of truth for shapes.
   was requested over and is dead once that nonce moves (409 `stale-nonce` where a signature is accepted).
 - **Sessions**: `POST /auth/nonce` → sign the message with the wallet → `POST /auth/verify` → `Authorization: Bearer
   <token>`. One account links a Solana and an EVM wallet (`POST /me/wallets/link`). Roles and eligibility are inside the
-  token; refresh with `POST /me/session/refresh` after review decisions.
+  token; refresh with `POST /me/session/refresh` after review decisions. Only a sign-in nonce signs in (a key-link
+  challenge is refused, 401).
+- **Attestor keys** (S4 WP7): an attestor is a secp256k1 key, its 20-byte address the attestor on every chain that
+  registers it. An account links a key with the key's own EIP-191 proof: `POST /me/signer-keys/challenge {address}`
+  returns a one-time text bound to the host, the account, the key and a nonce, saying it links a key and is not an
+  attestation and moves no funds; `personal_sign` it with the key (the Merces attestor tool, MetaMask, a hardware wallet
+  or `cast wallet sign`) and `POST /me/signer-keys {address, nonce, signature}` (a simulator `sim:` signature is never
+  accepted; 409 `challenge-used` for a replay, `key-linked-to-another-account`; 422 `unknown-challenge` for a sign-in
+  nonce or another account's challenge, `challenge-expired`, `bad-signature`). `GET /me/signer-keys` lists the account's
+  keys with their registrations; `DELETE /me/signer-keys/{address}` unlinks one (409 `open-work` while work addressed to
+  it is open). A sign-in never links a key, even with an EVM wallet at the key's address. Links are visible to the
+  account and admins only; each chain's key registry is public: `GET /chains/{chain}/signer-keys?kind=attestor|verifier`
+  (address, `active`, `revokedAt`, `graceUntil`).
 - **Access tiers** (`x-access` on every operation): `public`, `account` (signed in), `backer` (passed eligibility),
-  `holder` (holds or held units of that series), `issuer` (the series' issuer), `attestor` (a wallet registered
-  onchain and indexed; a proposal alone gets 403 "pending"), `admin`, and the
-  combinations `holder-or-issuer`, `issuer-or-attestor`.
+  `holder` (holds or held units of that series), `issuer` (the series' issuer), `attestor` (a key linked to the account
+  that is registered onchain and indexed; a proposal alone gets 403 "pending"; read live on every request, so an indexed
+  revocation or an unlink ends it at once, whatever the token says), `admin`, and the combinations `holder-or-issuer`,
+  `issuer-or-attestor` (for a series, only a key registered on that series' chain counts). Work is addressed to a key,
+  and every read or decision on an item checks that key on the item's chain.
 - **Writes** accept an `Idempotency-Key` header, scoped to your account; the same key with the same body replays the
   stored response, a different body is a 409, and a repeat while the first request is still running is a 409 (retry later).
 - **Transactions**: the backend never signs for a user. Builders return `{ tx: UnsignedTx }` (`chain`, `family`, `signer`,
@@ -214,15 +228,21 @@ decision); issuers cannot choose it, and `POST /drafts/{id}/build-create-series`
 sealed raise while it is unset. Series created under the S2 hold record 0. `GET /arena` lists raises taking bids or
 settling, and settled series.
 
-**Attestor**: `GET /attestor/queue` → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
-attestations, extinguishment transactions (two signers).
+**Attestor**: link a key (above) and have the admin propose it → `GET /attestor/queue` (work addressed to your keys on
+the chains where they are registered) → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
+attestations (`{attestor, approve}`, naming your key), extinguishment transactions (two signers). Until S4 WP9-WP13 the
+tier-3 and FX texts are the key's EIP-191 signatures and approvePause, amendTerms and extinguish are still co-signed at
+the key's address (`POST /tx/send` accepts a signer that is a key linked to your account); from then on each is Stage 1's
+own signature by the key.
 
 **Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
 (`GET /admin/attestors`, with each key's registration and revocation times and its grace end) and the attestor key
-registry (`POST /admin/attestors`: `active: true` builds Stage 1's `registerAttestor`, `active: false` its forward-only
-`revokeAttestor`, for the multisig; the chain's registry is checked first and a key already active, a revoke of a key
-that is not active, or of the chain's last active attestor key, answers 409 with `detail.reason` `key-already-active`,
-`key-not-active` or `last-active-key`, nothing built), the report verifier's keys by 20-byte address (S4 WP6: `POST
+registry by key (S4 WP7: `POST /admin/attestors` `{chain, attestor, accountId?}` builds Stage 1's `registerAttestor` of a
+key linked to the account, 422 `key-not-linked` otherwise; `POST /admin/attestors/revoke` `{chain, attestor}` its
+forward-only `revokeAttestor`; `POST /admin/attestors/rotate` `{chain, from, to}` the one-transaction `rotateAttestor`,
+`to` linked to the account `from` is linked to; all for the multisig; the chain's registry is checked first and a key
+already active, a revoke of a key that is not active, or of the chain's last active attestor key, answers 409 with
+`detail.reason` `key-already-active`, `key-not-active` or `last-active-key`, nothing built), the report verifier's keys by 20-byte address (S4 WP6: `POST
 /admin/verifier-keys` `{chain, address}` builds `registerVerifierKey`, `POST /admin/verifier-keys/revoke` the forward-only
 `revokeVerifierKey`, `POST /admin/verifier-keys/rotate` `{chain, from, to}` the one-transaction `rotateVerifierKey`, with
 the same 409 reasons; `GET /admin/verifier-keys` reads each chain's key records beside the verifier's own address),

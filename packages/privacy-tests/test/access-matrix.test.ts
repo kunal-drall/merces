@@ -14,7 +14,10 @@ import { makeRig } from '../../api/test/helpers.ts';
  * S4 cause codes:
  *  - S4-CTX: the public read of Stage 1's signing context (`GET /series/{seriesId}/signing`: the domain, the series key
  *    and the nonces) names "signing" in its path; it is listed by method and path, and checked to be a public GET whose
- *    response carries no signature.
+ *    response carries no signature;
+ *  - S4-ID: the attestor key routes (S4 WP7: the public registry read and the account's key links) name "signer" in
+ *    their paths; they are listed by method, path and tier, and the link takes the key's own proof (the server signs
+ *    nothing and holds no key).
  */
 describe.skipIf(!dbTestsEnabled())('access-tier matrix (H3)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -77,7 +80,19 @@ describe.skipIf(!dbTestsEnabled())('access-tier matrix (H3)', () => {
     const schemas = (spec as { components: { schemas: Record<string, { properties?: Record<string, unknown> }> } }).components.schemas;
     expect(JSON.stringify((spec as { paths: Record<string, unknown> }).paths['/series/{seriesId}/signing'])).toContain('#/components/schemas/SeriesSigningContext');
     expect(Object.keys(schemas.SeriesSigningContext!.properties!).sort()).toEqual(['chain', 'domain', 'nonces', 'seriesId', 'seriesKey']);
-    const ops = all.filter((o) => /sign/i.test(o.path) && !/esign|contract|signed|sign-in|session/i.test(o.path) && !contextReads.has(`${o.method} ${o.path}`));
+    // cause S4-ID: the attestor key routes sign nothing either (S4 WP7): the public registry read returns public onchain
+    // values, and the link routes take the key's own EIP-191 proof from the account (the server only verifies it; it
+    // never holds or asks for a key)
+    const keyRoutes = new Map([
+      ['GET /chains/{chain}/signer-keys', 'public'],
+      ['POST /me/signer-keys/challenge', 'account'],
+      ['POST /me/signer-keys', 'account'],
+      ['GET /me/signer-keys', 'account'],
+      ['DELETE /me/signer-keys/{address}', 'account'],
+    ]);
+    for (const [k, access] of keyRoutes) expect(all.find((o) => `${o.method} ${o.path}` === k), k).toMatchObject({ access });
+    expect(JSON.stringify((spec as { paths: Record<string, Record<string, unknown>> }).paths['/me/signer-keys']!.post)).toMatch(/"required":\["address","nonce","signature"\]/);
+    const ops = all.filter((o) => /sign/i.test(o.path) && !/esign|contract|signed|sign-in|session/i.test(o.path) && !contextReads.has(`${o.method} ${o.path}`) && !keyRoutes.has(`${o.method} ${o.path}`));
     expect(ops.map((o) => o.path).filter((p) => !p.endsWith('/sign'))).toEqual([]);
   });
 });

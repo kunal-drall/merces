@@ -96,7 +96,27 @@ chains after deploying the WP6 build**. Migration 024 adds the read model's `ver
 `VerifierKeyRegistered` / `VerifierKeyRevoked`, as `attestors`), removes the stored multisig requests for an ed25519
 verifier key (no chain can carry them; the audit log keeps their proposal) and supersedes the reports assembled with the
 retired ed25519 attestation that were never submitted (assemble them again; one built from such a row answers 409
-`attestation-superseded`). Before version 5:
+`attestation-superseded`).
+
+S4 WP7 keeps version 5, but attestors become 20-byte keys on both personalities (A-M5-2 revised): a simulator chain saved
+before WP7 holds attestors registered under Solana wallet addresses, which no command or event can name any more, so
+**reset the simulated chains after deploying the WP7 build** (then re-register the attestor keys; dev:mock registers and
+links its dev attestor keys itself). Migration 025:
+- adds `account_signer_keys` (an attestor key linked to an account by its own EIP-191 proof; kept by a reset: it names no
+  chain), gives `auth_nonces` a `purpose` (`sign-in`, `link-signer-key`; existing rows are sign-in nonces) and an
+  `account_id`, and makes its `chain` nullable (a link challenge is chain-neutral);
+- keeps keys only: rows of `attestors` and `attestor_proposals` (its `wallet` column is renamed `address`) whose attestor
+  is not a 20-byte key are removed, as are the multisig requests naming one (the audit log keeps their proposals);
+- closes once, with `decision_code = 'superseded-s4'` and a state each table's check allows, the open work addressed to
+  an attestor that is not a key: a pending hardship request → `rejected`; an open tier-3 case, or a signed one whose
+  quarter no report has reached the chain with → `withdrawn`; an open annual attestation → `withdrawn` (a new state; a
+  withdrawn one no longer holds its year); a built extinguishment request naming one → `withdrawn` (a new state); an
+  attested amendment, or a built one that has not landed → `rejected`; an FX fallback request signed by one whose rate no
+  report has reached the chain with is opened again (`decision_code` superseded-s4 until a key signs it), since closing
+  it would hold its pair and period for good; reports assembled with such a co-signer and not submitted → `superseded`.
+  The issuer opens each again, addressed to a registered key; items already on a chain keep their records.
+
+Before version 5:
 
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final
 pool (version 2, S1), the raise's own terms and Stage 1's multi-step auction settlement (version 3, S2), it carries each
@@ -212,13 +232,19 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   quarter attested again by the new key (from a fresh zkTLS proof of that quarter), or, where the chain accepts any
   prior (a series' first report outside Q1, A25), reports from the ZERO prior (the least favourable to it); and check
   the reports the chain accepted under the revoked key in its grace window, as for attestor keys.
-- Attestor keys (S4 WP5, A-SIG-4): the multisig registers, revokes and rotates them on each chain (Stage 1's
-  registry). `POST /admin/attestors` with `active: true` builds `registerAttestor`, with `active: false` the
-  forward-only `revokeAttestor`; the admin service reads the chain's registry first and refuses with 409 (nothing
-  built) a key that is already active (`key-already-active`), a revoke of a key that is not active (`key-not-active`)
-  and a revoke of the chain's last active attestor key (`last-active-key`: both chains refuse it). To replace a key,
-  register the new one first (or send `rotateAttestor{from, to}` from the multisig: register then revoke in one
-  transaction), then revoke the old one. Attestor access ends as soon as the revocation is indexed; report (tier 3) and
+- Attestor keys (S4 WP5, A-SIG-4; by key since S4 WP7): an attestor is a secp256k1 key held on the attestor's own
+  device (never by the backend), its 20-byte address the attestor on every chain that registers it. Onboarding: the
+  attestor links the key to their account (`POST /me/signer-keys/challenge`, sign the text with the key, `POST
+  /me/signer-keys`), then an admin proposes it per chain (`POST /admin/attestors {chain, attestor, accountId?}`: 422
+  `key-not-linked` until the account has linked it) and the multisig signs `registerAttestor`; access starts once it is
+  indexed. Revocation: `POST /admin/attestors/revoke {chain, attestor}` builds the forward-only `revokeAttestor` (no link
+  needed). The admin service reads the chain's registry first and refuses with 409 (nothing built) a key that is already
+  active (`key-already-active`), a revoke of a key that is not active (`key-not-active`) and a revoke of the chain's last
+  active attestor key (`last-active-key`: both chains refuse it). Rotation (a new device, a suspected key): the attestor
+  makes a new key on the device and links it to the same account; `POST /admin/attestors/rotate {chain, from, to}` builds
+  `rotateAttestor` (register `to`, revoke `from`, one transaction), for each chain the old key is registered on; PAUSE,
+  AMEND, EXTINGUISH and TRUEUP signatures the old key made are dead once it lands and are signed again with the new key.
+  An attestor unlinks a key with `DELETE /me/signer-keys/{address}` (409 `open-work` while work addressed to it is open). Attestor access ends as soon as the revocation is indexed; report (tier 3) and
   FX signatures the old key made for periods that ended by its revocation stay valid onchain until `revokedAt` + 45
   days (`GET /admin/attestors` shows `revokedAt` and `graceUntil`), so a compromised key's in-flight signatures stay
   usable for that long: check the reports accepted under a revoked key in that window. Pause approvals, amendments and

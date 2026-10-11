@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { parsePeriod, settleHolderDelta } from '@merces/math';
-import type { PrivateTerms, SimHarness, SimWallet } from '@merces/simulator';
+import type { PrivateTerms, SimAttestor, SimHarness, SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -14,6 +14,10 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *
  * S3 cause codes:
  *  - S3-ST: staking, tender and stake-weighted claims.
+ *
+ * S4 cause codes:
+ *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address (transitionally
+ *    a co-signing wallet at the key's address).
  */
 describe.skipIf(!dbTestsEnabled())('claim builders on a curve series (S3 WP10)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -94,7 +98,7 @@ describe.skipIf(!dbTestsEnabled())('claim builders on a curve series (S3 WP10)',
     // b registers and tenders wallet units only: the tender creates its position (amendment M3)
     await h.registerHolder(seriesId, b);
     await h.tender(seriesId, b, 0n, 1_000_000n);
-    const [k1, k2] = h.attestors as [SimWallet, SimWallet];
+    const [k1, k2] = h.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
     await h.exec(k1, { kind: 'extinguish', seriesId, attestors: [k1.address, k2.address] }, [k2]);
     await rig.sync();
     const p = (await h.sim.getPosition(seriesId, a.address))!;

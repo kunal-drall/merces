@@ -14,8 +14,9 @@ Retention periods are an open question (Part J.9). Until Kunal sets them, nothin
 ## Legend
 
 Readers: **owner** (the account the data belongs to), **issuer** (of the series), **holder** (of the series),
-**backer** (eligible), **attestor** (the chosen attestor, and only while its wallet is registered onchain and indexed;
-a proposed attestor reads nothing), **admin**, **public**, **nobody** (ciphertext the server cannot
+**backer** (eligible), **attestor** (the account holding the chosen attestor key, a secp256k1 key linked to it by the
+key's own EIP-191 proof, and only while that key is registered onchain and indexed on the item's chain; a proposed
+attestor reads nothing; S4 WP7), **admin**, **public**, **nobody** (ciphertext the server cannot
 decrypt). Storage: **plain**, **vault** (AES-256-GCM under the server's vault key), **e2e** (encrypted on the client for a
 specific attestor; the server never holds the key), **hash** (a commitment or digest), **none** (never stored).
 An **e2e** row lists who can decrypt it. Admins can also fetch e2e ciphertext through the attestor routes (to route or
@@ -87,7 +88,8 @@ document file (A-PRIV-4).
 | Persona | `applications.persona` | plain | owner, admin | — |
 | Readiness report | `applications.readiness` | plain | owner, admin | — |
 | Decision reason | `applications.decision_reason_code`, `audit_log` | codes only | admin (owner sees the code) | — |
-| Sign-in nonces | `auth_nonces` | plain | nobody (consumed) | 10 minutes (expiry); purge weekly |
+| Attestor key links (S4 WP7) | `account_signer_keys` (a key's 20-byte address, the account, when linked); `audit_log` (`signer-key.link` / `.unlink`) | plain | owner, admin (`GET /admin/attestors`); never public, never in a notification, the activity feed or another account's view. The key's address and its registration are public onchain (`GET /chains/{chain}/signer-keys` shows no account) | unlink (409 while work addressed to the key is open) / account deletion |
+| Sign-in nonces and key-link challenges | `auth_nonces` (`purpose` sign-in or link-signer-key; a link challenge names the account and the key and no chain) | plain | nobody (consumed) | 10 minutes (expiry); purge weekly |
 | Session token | client only (HMAC) | none | — | 24 h expiry |
 
 ## Contracts and terms

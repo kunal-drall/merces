@@ -1,4 +1,4 @@
-import { ChainError, type ChainPort, type SeriesTerms, type SignedTx, type UnsignedTx, type WalletSigner } from '@merces/domain';
+import { ChainError, type ChainPort, type DigestSigner, type SeriesTerms, type SignedTx, type UnsignedTx, type WalletSigner } from '@merces/domain';
 import { SimHarness, SimWallet, SimulatorChain, defaultTerms, simAdminWallet, type Personality, type PrivateTerms } from '@merces/simulator';
 import { createChains, locateStage1 } from '@merces/chains';
 
@@ -12,7 +12,12 @@ export interface ConformanceEnv {
   chain: ChainPort;
   issuer: WalletSigner & { coSign?(signed: SignedTx): Promise<SignedTx> };
   backers: (WalletSigner & { coSign?(signed: SignedTx): Promise<SignedTx> })[];
-  attestors: (WalletSigner & { coSign?(signed: SignedTx): Promise<SignedTx> })[];
+  /**
+   * The attestors: secp256k1 keys the chain registered by their 20-byte addresses (S4 WP7), each a `DigestSigner`.
+   * Transitional until S4 WP13: the flows that still take an attestor as a co-signer sign as a wallet at the key's
+   * address (`WalletSigner`); a live env provides keys whose wallet the chain recognises for those flows.
+   */
+  attestors: (WalletSigner & DigestSigner & { coSign?(signed: SignedTx): Promise<SignedTx> })[];
   admin: WalletSigner;
   /** the report verifier key the chain has registered (a secp256k1 key's 20-byte address; S4 WP6) */
   verifierAddress: string;

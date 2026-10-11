@@ -1,15 +1,18 @@
 import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
-import { E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, attestationMessage, expectedPrior, fxAttestationMessage, hex32ToField, noPauseApprovable, normaliseAddress, parseE2eEnvelope, pauseApprovalRefusal, readsAsText, reportProofSchema, type ChainPort, type PauseApprovalRule, type SeriesState, type UnsignedTx } from '@merces/domain';
+import { E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, attestationMessage, expectedPrior, fxAttestationMessage, hex32ToField, noPauseApprovable, parseE2eEnvelope, pauseApprovalRefusal, readsAsText, reportProofSchema, type ChainPort, type PauseApprovalRule, type SeriesState, type UnsignedTx } from '@merces/domain';
 import { parsePeriod, periodFrom, toPid } from '@merces/math';
-import { verifyWalletSignature } from '@merces/ports';
+import { verifyKeyPersonalSignature } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 import { curveRegularReport, reportUnits, requireCensusFor, requireCensusUnchanged } from '../curve-census.ts';
 
 /**
  * E10 — attestor service (R10, R16, R26, C8.5–6, C11.6).
- * Attestors are accounts with the `attestor` role whose wallets the chain has registered (`getSignerKey('attestor', …)`, indexed in `attestors`).
+ * An attestor is a secp256k1 key, its 20-byte address on every chain (S4 D4, WP7), linked to an account by the key's
+ * own EIP-191 proof (`account_signer_keys`). An account acts as attestor on a chain through a linked key that the chain
+ * has registered (`getSignerKey('attestor', …)`) and the indexer shows active there (`attestors`), read live on every
+ * request (A-M5-2). Work is addressed to a key; nobody else's key or chain stands in for it.
  * This service tracks the work that needs an attestor's signature and builds the transactions they sign:
  *  - hardship pauses: the issuer's reason and evidence reach the chosen attestor as END-TO-END ciphertext the
  *    server stores opaque and never decrypts; holders only ever see statuses and dates;
@@ -29,7 +32,10 @@ const keyHint = z.string().max(200).nullable().default(null);
 /** request bodies are capped at 2 MB by the gateway */
 const ciphertext = z.string().min(1).max(1_900_000);
 
-export const hardshipRequestSchema = z.object({ until: z.number().int().positive(), attestor: z.string().min(1).max(64), ciphertext, keyHint });
+/** An attestor key: a secp256k1 key's 20-byte address, any case; the canonical form is lowercase (S4 D4, WP7). */
+const attestorKey = z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'an attestor key: a secp256k1 key\'s 20-byte address (0x + 40 hex)').transform((a) => a.toLowerCase());
+
+export const hardshipRequestSchema = z.object({ until: z.number().int().positive(), attestor: attestorKey, ciphertext, keyHint });
 export const hardshipDecideSchema = z.object({ approve: z.boolean(), until: z.number().int().positive().optional(), decisionCode: code.optional() });
 const hex32 = z.string().regex(/^0x[0-9a-f]{64}$/);
 /**
@@ -39,19 +45,23 @@ const hex32 = z.string().regex(/^0x[0-9a-f]{64}$/);
  * one is refused). The attestor's signature carries the commitments, the proof and the attestation only: never a
  * figure, a salt or an opening.
  */
-export const tier3OpenSchema = z.object({ attestor: z.string().min(1).max(64), documentsCiphertext: ciphertext, openingCiphertext: ciphertext, keyHint, estimatePaymentStable: money }).strict();
+export const tier3OpenSchema = z.object({ attestor: attestorKey, documentsCiphertext: ciphertext, openingCiphertext: ciphertext, keyHint, estimatePaymentStable: money }).strict();
 export const tier3SignSchema = z.object({
   priorIncomeCommitment: hex32,
   incomeCommitment: hex32,
   /** the issuer's proof (Stage 1 Groth16; the payment is its public input 5) */
   proof: reportProofSchema,
-  /** the attestor wallet's signature over attestation v1 with tier 3 (`attestationMessage`) */
+  /**
+   * the attestor key's EIP-191 signature over the attestation v1 text with tier 3 (`attestationMessage`), transitional
+   * until S4 WP9 moves tier 3 to Stage 1's REPORT signature
+   */
   attestation: z.object({ liquidityEvent: z.boolean(), signature: z.string().min(1).max(4096) }).strict(),
 }).strict();
-export const tier3AnnualOpenSchema = z.object({ year: z.number().int().min(2026).max(2100), attestor: z.string().min(1).max(64), documentsCiphertext: ciphertext, keyHint });
+export const tier3AnnualOpenSchema = z.object({ year: z.number().int().min(2026).max(2100), attestor: attestorKey, documentsCiphertext: ciphertext, keyHint });
 export const tier3AnnualSignSchema = z.object({ totalPaymentStable: money });
-export const fxSignSchema = z.object({ rateWad: z.string().regex(/^\d+$/), attestorWallet: z.string().min(1).max(64), sourceNote: code, signature: z.string().min(1).max(4096) });
-export const extinguishSchema = z.object({ seriesId: z.string().regex(/^[a-z0-9-]+:[A-Za-z0-9]+$/), attestors: z.array(z.string().min(1).max(64)).length(2), evidenceCiphertext: ciphertext, keyHint });
+/** `signature`: the attestor key's EIP-191 signature over the FX text (`fxAttestationMessage`), transitional until S4 WP9 */
+export const fxSignSchema = z.object({ rateWad: z.string().regex(/^\d+$/), attestor: attestorKey, sourceNote: code, signature: z.string().min(1).max(4096) });
+export const extinguishSchema = z.object({ seriesId: z.string().regex(/^[a-z0-9-]+:[A-Za-z0-9]+$/), attestors: z.array(attestorKey).length(2), evidenceCiphertext: ciphertext, keyHint });
 
 /**
  * A Stage 1 pause-approval refusal as an API error: Stage 1's name in `detail.stage1` and a message naming the rule and
@@ -127,9 +137,11 @@ export function assertTier3OpeningEnvelope(value: string): void {
 const num = (x: unknown): number | null => (x === null || x === undefined ? null : Number(x));
 const str = (x: unknown): string | null => (x === null || x === undefined ? null : String(x));
 
-interface WalletRef {
+/** One linked key on one chain: whether the indexer shows it active there. */
+interface KeyRef {
   chain: string;
   address: string;
+  registeredOnchain: boolean;
 }
 
 export class AttestorService {
@@ -152,9 +164,9 @@ export class AttestorService {
   }
 
   /**
-   * The indexed onchain registry decides who is an attestor (A-M5-2): a wallet counts only while its registration is
-   * indexed and active on that chain. Work can only be addressed to such a wallet, and every read or decision on an
-   * item checks the addressed wallet itself, so another chain's registration never stands in for it.
+   * The indexed onchain registry decides who is an attestor (A-M5-2): a key counts only while its registration is
+   * indexed and active on that chain. Work can only be addressed to such a key, and every read or decision on an item
+   * checks the addressed key itself on the item's chain, so another chain's registration never stands in for it.
    */
   private async activeIndexed(chain: string, address: string): Promise<boolean> {
     const r = await this.ctx.pool.query('select 1 from attestors where chain = $1 and attestor = $2 and active', [chain, address]);
@@ -162,48 +174,55 @@ export class AttestorService {
   }
 
   private async requireRegisteredAttestor(chain: ChainPort, attestor: string): Promise<void> {
-    if (!(await this.activeIndexed(chain.chain, attestor))) throw AppError.unprocessable(`${attestor} is not a registered attestor on ${chain.chain}`);
+    if (!(await this.activeIndexed(chain.chain, attestor))) throw AppError.unprocessable(`${attestor} is not a registered attestor key on ${chain.chain}`);
   }
 
-  /** The session holds this wallet and the wallet is an active, indexed attestor on that chain. */
+  /** Key `address` is linked to the session's account (its own EIP-191 proof; read live, never from the token). */
+  private async linked(session: Session, address: string): Promise<boolean> {
+    const r = await this.ctx.pool.query('select 1 from account_signer_keys where address = $1 and account_id = $2', [address, session.accountId]);
+    return !!r.rowCount;
+  }
+
+  /** The session's account holds key `address` and the key is an active, indexed attestor on `chain` (A-M5-2). */
   private async actsAs(session: Session, chain: string, address: string): Promise<boolean> {
-    return this.holdsWallet(session, chain, address) && (await this.activeIndexed(chain, address));
+    return (await this.linked(session, address)) && (await this.activeIndexed(chain, address));
   }
 
-  /** The session's wallets that the chain has registered as attestors. */
-  private async registeredWallets(session: Session): Promise<(WalletRef & { registeredOnchain: boolean })[]> {
-    const out: (WalletRef & { registeredOnchain: boolean })[] = [];
-    for (const w of session.wallets) {
-      const chain = this.ctx.chains.chains.get(w.chain);
-      const registeredOnchain = chain ? await this.activeIndexed(w.chain, w.address) : false;
-      out.push({ chain: w.chain, address: w.address, registeredOnchain });
-    }
-    return out;
+  /** Every key linked to the session's account, on every chain of this deployment, with its indexed registration there. */
+  private async registeredKeys(session: Session): Promise<KeyRef[]> {
+    const r = await this.ctx.pool.query<{ address: string; chain: string; active: boolean | null }>(
+      'select k.address, c.chain, t.active from account_signer_keys k cross join unnest($2::text[]) as c(chain) left join attestors t on t.chain = c.chain and t.attestor = k.address where k.account_id = $1 order by k.address, c.chain',
+      [session.accountId, [...this.ctx.chains.chains.keys()]],
+    );
+    return r.rows.map((x) => ({ chain: x.chain, address: x.address, registeredOnchain: x.active === true }));
   }
 
-  /** Work filters: a registered attestor sees work addressed to their wallets (or any attestor on their chains); an admin sees all. */
-  private async scope(session: Session): Promise<{ addresses: string[] | null; chains: string[] | null; wallets: (WalletRef & { registeredOnchain: boolean })[] }> {
-    const wallets = await this.registeredWallets(session);
-    if (session.roles.includes('admin')) return { addresses: null, chains: null, wallets };
-    const regs = wallets.filter((w) => w.registeredOnchain);
-    return { addresses: regs.map((w) => w.address), chains: [...new Set(regs.map((w) => w.chain))], wallets };
-  }
-
-  private holdsWallet(session: Session, chain: string, address: string): boolean {
-    return session.wallets.some((w) => w.chain === chain && w.address === address);
+  /**
+   * Work filters: a registered attestor sees work addressed to one of their keys on a chain where that key is active
+   * (`pairs`), and the unaddressed work (FX requests, amendments) of those chains; an admin sees all.
+   */
+  private async scope(session: Session): Promise<{ pairs: { chains: string[]; addresses: string[] } | null; chains: string[] | null; keys: KeyRef[] }> {
+    const keys = await this.registeredKeys(session);
+    if (session.roles.includes('admin')) return { pairs: null, chains: null, keys };
+    const regs = keys.filter((k) => k.registeredOnchain);
+    return { pairs: { chains: regs.map((k) => k.chain), addresses: regs.map((k) => k.address) }, chains: [...new Set(regs.map((k) => k.chain))], keys };
   }
 
   // ------------------------------------------------------------------ queue and profile
 
   async queue(session: Session): Promise<Record<string, unknown>> {
-    const { addresses, chains } = await this.scope(session);
+    const { pairs, chains } = await this.scope(session);
     const p = this.ctx.pool;
-    const hardship = await p.query('select hardship_id, series_id, chain, attestor, requested_until, created_at from hardship_requests where state = $2 and ($1::text[] is null or attestor = any($1::text[])) order by created_at', [addresses, 'pending']);
-    const tier3 = await p.query('select case_id, series_id, chain, period_id, attestor, estimate_payment_stable, created_at from tier3_cases where state = $2 and ($1::text[] is null or attestor = any($1::text[])) order by created_at', [addresses, 'open']);
-    const annual = await p.query('select annual_id, series_id, chain, year, attestor, created_at from tier3_annual where state = $2 and ($1::text[] is null or attestor = any($1::text[])) order by created_at', [addresses, 'open']);
+    // (chain, key) pairs where the key is linked and active: $1 chains, $2 keys (null for an admin: everything)
+    const inPairs = (chainCol: string, keyCol: string) => `($1::text[] is null or (${chainCol}, ${keyCol}) in (select c, k from unnest($1::text[], $2::text[]) as t(c, k)))`;
+    const pc = pairs?.chains ?? null;
+    const pk = pairs?.addresses ?? null;
+    const hardship = await p.query(`select hardship_id, series_id, chain, attestor, requested_until, created_at from hardship_requests where state = $3 and ${inPairs('chain', 'attestor')} order by created_at`, [pc, pk, 'pending']);
+    const tier3 = await p.query(`select case_id, series_id, chain, period_id, attestor, estimate_payment_stable, created_at from tier3_cases where state = $3 and ${inPairs('chain', 'attestor')} order by created_at`, [pc, pk, 'open']);
+    const annual = await p.query(`select annual_id, series_id, chain, year, attestor, created_at from tier3_annual where state = $3 and ${inPairs('chain', 'attestor')} order by created_at`, [pc, pk, 'open']);
     const fx = await p.query('select request_id, chain, pair, period_id, reason, created_at from fx_fallback_requests where state = $2 and ($1::text[] is null or chain = any($1::text[])) order by created_at', [chains, 'open']);
     const amendments = await p.query('select a.amendment_id, a.series_id, s.chain, a.kind, a.version, a.rationale_code, a.created_at from terms_amendments a join series s on s.series_id = a.series_id where a.state = $2 and ($1::text[] is null or s.chain = any($1::text[])) order by a.created_at', [chains, 'proposed']);
-    const ext = await p.query('select request_id, series_id, chain, attestors, created_at from extinguishment_requests where state = $2 and ($1::text[] is null or attestors && $1::text[]) order by created_at', [addresses, 'built']);
+    const ext = await p.query(`select request_id, series_id, chain, attestors, created_at from extinguishment_requests e where state = $3 and ($1::text[] is null or exists (select 1 from unnest(e.attestors) as x(a) where ${inPairs('e.chain', 'x.a')})) order by created_at`, [pc, pk, 'built']);
     return {
       hardship: hardship.rows.map((r) => ({ hardshipId: r.hardship_id, seriesId: r.series_id, chain: r.chain, attestor: r.attestor, requestedUntil: Number(r.requested_until), createdAt: r.created_at })),
       tier3: tier3.rows.map((r) => ({ caseId: r.case_id, seriesId: r.series_id, chain: r.chain, periodId: r.period_id, attestor: r.attestor, estimatePaymentStable: r.estimate_payment_stable, createdAt: r.created_at })),
@@ -214,11 +233,12 @@ export class AttestorService {
     };
   }
 
+  /** The account's linked keys with their registration flag on each chain, and the open work counts. */
   async me(session: Session): Promise<Record<string, unknown>> {
-    const { wallets } = await this.scope(session);
+    const { keys } = await this.scope(session);
     const q = await this.queue(session);
     const count = (k: string) => (q[k] as unknown[]).length;
-    return { accountId: session.accountId, roles: session.roles, wallets, openWork: { hardship: count('hardship'), tier3: count('tier3'), tier3Annual: count('tier3Annual'), fxRequests: count('fxRequests'), amendments: count('amendments'), extinguishments: count('extinguishments') } };
+    return { accountId: session.accountId, roles: session.roles, keys, openWork: { hardship: count('hardship'), tier3: count('tier3'), tier3Annual: count('tier3Annual'), fxRequests: count('fxRequests'), amendments: count('amendments'), extinguishments: count('extinguishments') } };
   }
 
   // ------------------------------------------------------------------ hardship (R16, C8)
@@ -242,7 +262,7 @@ export class AttestorService {
   async requestHardship(seriesId: string, session: Session, input: z.infer<typeof hardshipRequestSchema>): Promise<Record<string, unknown> & { tx: UnsignedTx }> {
     const { chain, series } = await this.seriesForIssuer(seriesId, session);
     assertOpaqueCiphertext(input.ciphertext, 'ciphertext');
-    const attestor = normaliseAddress(input.attestor, chain.family);
+    const attestor = input.attestor;
     await this.requireRegisteredAttestor(chain, attestor);
     const now = await chain.now();
     if (input.until <= now) throw AppError.unprocessable('the pause end must be in the future');
@@ -268,7 +288,7 @@ export class AttestorService {
   /** Attestor (the chosen one, or an admin): the ciphertext and the series' onchain pause state. */
   async getHardship(id: string, session: Session): Promise<Record<string, unknown>> {
     const h = await this.hardshipRow(id);
-    if (!(await this.actsAs(session, String(h.chain), String(h.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this request was addressed to another attestor, or your registration for that wallet is not active');
+    if (!(await this.actsAs(session, String(h.chain), String(h.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this request was addressed to another attestor key, or that key is not linked to your account or not active on its chain');
     const series = await this.ctx.chains.get(String(h.chain)).getSeries(String(h.series_id));
     return { ...this.hardshipView(h, true), seriesStatus: series?.status ?? null, pause: series?.pause ?? null, pauses: series?.pauses ?? null };
   }
@@ -279,7 +299,7 @@ export class AttestorService {
    */
   async decideHardship(id: string, session: Session, input: z.infer<typeof hardshipDecideSchema>): Promise<Record<string, unknown> & { tx: UnsignedTx | null }> {
     const h = await this.hardshipRow(id);
-    if (!(await this.actsAs(session, String(h.chain), String(h.attestor)))) throw AppError.forbidden('only the chosen attestor, while registered, can decide this request');
+    if (!(await this.actsAs(session, String(h.chain), String(h.attestor)))) throw AppError.forbidden('only the account holding the chosen attestor key, while the key is registered, can decide this request');
     if (h.state !== 'pending') throw AppError.conflict(`hardship request is ${h.state}`);
     const chain = this.ctx.chains.get(String(h.chain));
     const seriesId = String(h.series_id);
@@ -305,7 +325,9 @@ export class AttestorService {
     if (!series.pauses.requested) throw new AppError(409, 'Conflict', 'the issuer has not sent requestPause onchain yet', { stage1: 'PauseNotRequested' });
     const refusal = pauseApprovalRefusal(series.pauses, now, until);
     if (refusal) throw pauseRefusal(refusal);
-    // build before recording the decision: if the build fails the request stays pending and can be decided again
+    // build before recording the decision: if the build fails the request stays pending and can be decided again.
+    // Transitional until S4 WP10: approvePause is still sent by the attestor key's address (the simulator's wallet at
+    // that address signs it); WP10 makes it Stage 1's PAUSE signature, relayed by the keeper
     const tx = await chain.build({ kind: 'approvePause', seriesId, until }, String(h.attestor));
     const upd = await this.ctx.pool.query("update hardship_requests set state = 'approved', approved_until = $2, decision_code = 'approved', decided_by = $3, decided_at = now() where hardship_id = $1 and state = 'pending'", [id, until, session.accountId]);
     if (!upd.rowCount) throw AppError.conflict('hardship request was decided concurrently');
@@ -337,14 +359,14 @@ export class AttestorService {
 
   private caseView(c: Record<string, unknown>, withCiphertext: boolean): Record<string, unknown> {
     return {
-      caseId: c.case_id, seriesId: c.series_id, chain: c.chain, periodId: c.period_id, attestor: c.attestor, state: c.state, estimatePaymentStable: str(c.estimate_payment_stable), attestedPaymentStable: str(c.attested_payment_stable),
+      caseId: c.case_id, seriesId: c.series_id, chain: c.chain, periodId: c.period_id, attestor: c.attestor, state: c.state, decisionCode: c.decision_code ?? null, estimatePaymentStable: str(c.estimate_payment_stable), attestedPaymentStable: str(c.attested_payment_stable),
       priorIncomeCommitment: c.prior_income_commitment ?? null, incomeCommitment: c.income_commitment ?? null, liquidityEvent: c.liquidity_event, keyHint: c.key_hint ?? null, createdAt: c.created_at, signedAt: c.signed_at ?? null,
       ...(withCiphertext ? { documentsCiphertext: c.documents_ciphertext, openingCiphertext: c.opening_ciphertext ?? null } : {}),
     };
   }
 
   private async requireCaseAttestor(session: Session, c: Record<string, unknown>): Promise<void> {
-    if (!(await this.actsAs(session, String(c.chain), String(c.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this case was addressed to another attestor, or your registration for that wallet is not active');
+    if (!(await this.actsAs(session, String(c.chain), String(c.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this case was addressed to another attestor key, or that key is not linked to your account or not active on its chain');
   }
 
   /**
@@ -361,7 +383,7 @@ export class AttestorService {
     requireCensusFor(series, periodId);
     assertOpaqueCiphertext(input.documentsCiphertext, 'documentsCiphertext');
     assertTier3OpeningEnvelope(input.openingCiphertext);
-    const attestor = normaliseAddress(input.attestor, chain.family);
+    const attestor = input.attestor;
     await this.requireRegisteredAttestor(chain, attestor);
     const dup = await this.ctx.pool.query("select case_id, state from tier3_cases where series_id = $1 and period_id = $2 and state in ('open','signed')", [seriesId, periodId]);
     if (dup.rows[0]) throw AppError.conflict(`a tier-3 case for ${periodId} is already ${dup.rows[0].state} (${dup.rows[0].case_id})`);
@@ -426,7 +448,7 @@ export class AttestorService {
         'the issuer\'s Groth16 proof verifies (GET /prover/artifacts) over [termsCommitment, units outstanding, FX average, priorIncomeCommitment, incomeCommitment, payment]; the payment is its public input 5',
       ],
       liquidityEvent: 'true when the documents show a sale of the business or equity (C3)',
-      sign: 'sign attestation v1 for tier 3 with your registered wallet: "merces/attestation/v1\\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}',
+      sign: 'sign attestation v1 for tier 3 with your registered attestor key, EIP-191 personal_sign (until S4 WP9): "merces/attestation/v1\\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}',
       next: `POST /attestor/tier3/${id}/sign with { priorIncomeCommitment, incomeCommitment, proof, attestation: { liquidityEvent, signature } }`,
     };
   }
@@ -434,13 +456,14 @@ export class AttestorService {
   /**
    * Attestor: sign the quarter's commitments and the issuer's proof; the issuer then assembles the tier-3 report (E5)
    * with this attestor as co-signer. Checked here: the proof is over the series' live terms commitment, its units and
-   * the prior the chain expects, and verifies; the signature is the chosen attestor wallet's over attestation v1. On a
+   * the prior the chain expects, and verifies; the signature is the chosen attestor key's EIP-191 signature over
+   * attestation v1 (transitional until S4 WP9: Stage 1's REPORT signature; a simulator `sim:` signature never counts). On a
    * curve series the units are the census (S3 WP9): 409 CurveUnitsNotSynced while it predates the period's end (sync
    * first), 409 `census-changed` for a proof over another count (the issuer proves again; nothing is signed).
    */
   async signTier3Case(id: string, session: Session, input: z.infer<typeof tier3SignSchema>): Promise<Record<string, unknown>> {
     const c = await this.caseRow(id);
-    if (!(await this.actsAs(session, String(c.chain), String(c.attestor)))) throw AppError.forbidden('only the chosen attestor, while registered, can sign this case');
+    if (!(await this.actsAs(session, String(c.chain), String(c.attestor)))) throw AppError.forbidden('only the account holding the chosen attestor key, while the key is registered, can sign this case');
     if (c.state !== 'open') throw AppError.conflict(`tier-3 case is ${c.state}`);
     const chain = this.ctx.chains.get(String(c.chain));
     const series = await chain.getSeries(String(c.series_id));
@@ -464,8 +487,8 @@ export class AttestorService {
     if (!this.ctx.proofVerifier.systems.includes(input.proof.system)) throw AppError.unprocessable(`proof system ${input.proof.system} is not accepted`);
     if (!(await this.ctx.proofVerifier.verify(input.proof.proof, signals))) throw AppError.unprocessable('proof does not verify');
     const message = new TextDecoder().decode(attestationMessage({ seriesId: String(c.series_id), periodId, priorIncomeCommitment: input.priorIncomeCommitment, incomeCommitment: input.incomeCommitment, tier: 3, liquidityEvent: input.attestation.liquidityEvent }));
-    const ok = await verifyWalletSignature({ family: chain.family, address: String(c.attestor), message, signature: input.attestation.signature, allowSimulator: this.ctx.devMode || chain.mode === 'mock' });
-    if (!ok) throw AppError.unprocessable('signature does not verify over the tier-3 attestation for this case\'s attestor wallet');
+    const ok = await verifyKeyPersonalSignature({ address: String(c.attestor), message, signature: input.attestation.signature });
+    if (!ok) throw AppError.unprocessable('signature does not verify: it must be this case\'s attestor key\'s EIP-191 signature over the tier-3 attestation');
     const paymentStable = signals[5]!;
     const attestation = { attestor: String(c.attestor), liquidityEvent: input.attestation.liquidityEvent, signature: input.attestation.signature };
     const upd = await this.ctx.pool.query(
@@ -494,7 +517,7 @@ export class AttestorService {
 
   private annualView(a: Record<string, unknown>, withCiphertext: boolean): Record<string, unknown> {
     return {
-      annualId: a.annual_id, seriesId: a.series_id, chain: a.chain, year: a.year, attestor: a.attestor, state: a.state, totalPaymentStable: str(a.total_payment_stable), estimatedPaymentStable: str(a.estimated_payment_stable),
+      annualId: a.annual_id, seriesId: a.series_id, chain: a.chain, year: a.year, attestor: a.attestor, state: a.state, decisionCode: a.decision_code ?? null, totalPaymentStable: str(a.total_payment_stable), estimatedPaymentStable: str(a.estimated_payment_stable),
       overpayment: str(a.overpayment), underpayment: str(a.underpayment), trueUpDueAt: num(a.trueup_due_at), creditPeriodId: a.credit_period_id ?? null, keyHint: a.key_hint ?? null, createdAt: a.created_at, signedAt: a.signed_at ?? null,
       ...(withCiphertext ? { documentsCiphertext: a.documents_ciphertext } : {}),
     };
@@ -507,9 +530,10 @@ export class AttestorService {
     const now = await chain.now();
     if (periodFrom(input.year, 4).end > now) throw AppError.conflict(`${input.year} has not ended`);
     assertOpaqueCiphertext(input.documentsCiphertext, 'documentsCiphertext');
-    const attestor = normaliseAddress(input.attestor, chain.family);
+    const attestor = input.attestor;
     await this.requireRegisteredAttestor(chain, attestor);
-    const dup = await this.ctx.pool.query('select annual_id from tier3_annual where series_id = $1 and year = $2', [seriesId, input.year]);
+    // one live attestation a year: a withdrawn one (superseded-s4, migration 025) no longer holds it
+    const dup = await this.ctx.pool.query("select annual_id from tier3_annual where series_id = $1 and year = $2 and state <> 'withdrawn'", [seriesId, input.year]);
     if (dup.rows[0]) throw AppError.conflict(`an annual attestation for ${input.year} already exists (${dup.rows[0].annual_id})`);
     const id = this.ctx.newId('t3a');
     await this.ctx.pool.query(
@@ -522,7 +546,7 @@ export class AttestorService {
 
   async getAnnual(id: string, session: Session): Promise<Record<string, unknown>> {
     const a = await this.annualRow(id);
-    if (!(await this.actsAs(session, String(a.chain), String(a.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this attestation was addressed to another attestor, or your registration for that wallet is not active');
+    if (!(await this.actsAs(session, String(a.chain), String(a.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this attestation was addressed to another attestor key, or that key is not linked to your account or not active on its chain');
     return this.annualView(a, true);
   }
 
@@ -533,7 +557,7 @@ export class AttestorService {
    */
   async signAnnual(id: string, session: Session, input: z.infer<typeof tier3AnnualSignSchema>): Promise<Record<string, unknown>> {
     const a = await this.annualRow(id);
-    if (!(await this.actsAs(session, String(a.chain), String(a.attestor)))) throw AppError.forbidden('only the chosen attestor, while registered, can sign this attestation');
+    if (!(await this.actsAs(session, String(a.chain), String(a.attestor)))) throw AppError.forbidden('only the account holding the chosen attestor key, while the key is registered, can sign this attestation');
     if (a.state !== 'open') throw AppError.conflict(`annual attestation is ${a.state}`);
     const seriesId = String(a.series_id);
     const year = Number(a.year);
@@ -557,7 +581,7 @@ export class AttestorService {
   // ------------------------------------------------------------------ FX fallback (C9)
 
   private fxView(r: Record<string, unknown>): Record<string, unknown> {
-    return { requestId: r.request_id, chain: r.chain, pair: r.pair, periodId: r.period_id, reason: r.reason, state: r.state, attestor: r.attestor ?? null, rateWad: str(r.rate_wad), signature: r.signature ?? null, sourceNote: r.source_note ?? null, createdAt: r.created_at, signedAt: r.signed_at ?? null };
+    return { requestId: r.request_id, chain: r.chain, pair: r.pair, periodId: r.period_id, reason: r.reason, state: r.state, decisionCode: r.decision_code ?? null, attestor: r.attestor ?? null, rateWad: str(r.rate_wad), signature: r.signature ?? null, sourceNote: r.source_note ?? null, createdAt: r.created_at, signedAt: r.signed_at ?? null };
   }
 
   async listFxRequests(session: Session): Promise<Record<string, unknown>[]> {
@@ -566,22 +590,27 @@ export class AttestorService {
     return r.rows.map((x) => this.fxView(x));
   }
 
-  /** The attestor signed fxAttestationMessage({pair, periodId, rateWad}) on their device; the service verifies and stores the rate. */
+  /**
+   * The attestor signed fxAttestationMessage({pair, periodId, rateWad}) on their device with a key linked to their
+   * account and registered on the request's chain, EIP-191 (transitional until S4 WP9 moves the FX fallback to Stage
+   * 1's per-series FX signature; a simulator `sim:` signature never counts); the service verifies and stores the rate.
+   */
   async signFxRequest(id: string, session: Session, input: z.infer<typeof fxSignSchema>): Promise<Record<string, unknown>> {
     const r = await this.ctx.pool.query('select * from fx_fallback_requests where request_id = $1', [id]);
     const req = r.rows[0];
     if (!req) throw AppError.notFound('fx fallback request');
     if (req.state !== 'open') throw AppError.conflict(`fx fallback request is ${req.state}`);
     const chain = this.ctx.chains.get(req.chain);
-    const wallet = normaliseAddress(input.attestorWallet, chain.family);
-    if (!this.holdsWallet(session, req.chain, wallet)) throw AppError.forbidden('attestor wallet must be linked to your account');
-    await this.requireRegisteredAttestor(chain, wallet);
+    const key = input.attestor;
+    if (!(await this.linked(session, key))) throw AppError.forbidden('the attestor key must be linked to your account');
+    await this.requireRegisteredAttestor(chain, key);
     if (BigInt(input.rateWad) <= 0n) throw AppError.unprocessable('rateWad must be positive');
     const message = new TextDecoder().decode(fxAttestationMessage({ pair: req.pair, periodId: req.period_id, rateWad: input.rateWad }));
-    const ok = await verifyWalletSignature({ family: chain.family, address: wallet, message, signature: input.signature, allowSimulator: this.ctx.devMode || chain.mode === 'mock' });
-    if (!ok) throw AppError.unprocessable('signature does not verify over the FX attestation message for this wallet');
-    await this.ctx.pool.query("update fx_fallback_requests set state = 'signed', attestor = $2, rate_wad = $3, signature = $4, source_note = $5, signed_at = now() where request_id = $1", [id, wallet, input.rateWad, input.signature, input.sourceNote]);
-    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'fx.sign', target: id, detail: { chain: req.chain, pair: req.pair, periodId: req.period_id, rateWad: input.rateWad, sourceNote: input.sourceNote, attestor: wallet } });
+    const ok = await verifyKeyPersonalSignature({ address: key, message, signature: input.signature });
+    if (!ok) throw AppError.unprocessable('signature does not verify: it must be this key\'s EIP-191 signature over the FX attestation message');
+    const upd = await this.ctx.pool.query("update fx_fallback_requests set state = 'signed', attestor = $2, rate_wad = $3, signature = $4, source_note = $5, decision_code = null, signed_at = now() where request_id = $1 and state = 'open'", [id, key, input.rateWad, input.signature, input.sourceNote]);
+    if (!upd.rowCount) throw AppError.conflict('fx fallback request was signed concurrently');
+    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'fx.sign', target: id, detail: { chain: req.chain, pair: req.pair, periodId: req.period_id, rateWad: input.rateWad, sourceNote: input.sourceNote, attestor: key } });
     await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'fx.fallback-signed', chain: req.chain, pair: req.pair, periodId: req.period_id });
     return this.fxView((await this.ctx.pool.query('select * from fx_fallback_requests where request_id = $1', [id])).rows[0]);
   }
@@ -605,10 +634,14 @@ export class AttestorService {
   // ------------------------------------------------------------------ extinguishment (C11.6)
 
   private extView(e: Record<string, unknown>, withCiphertext: boolean): Record<string, unknown> {
-    return { requestId: e.request_id, seriesId: e.series_id, chain: e.chain, attestors: e.attestors, state: e.state, keyHint: e.key_hint ?? null, requestedBy: e.requested_by, createdAt: e.created_at, ...(withCiphertext ? { evidenceCiphertext: e.evidence_ciphertext } : {}) };
+    return { requestId: e.request_id, seriesId: e.series_id, chain: e.chain, attestors: e.attestors, state: e.state, decisionCode: e.decision_code ?? null, keyHint: e.key_hint ?? null, requestedBy: e.requested_by, createdAt: e.created_at, ...(withCiphertext ? { evidenceCiphertext: e.evidence_ciphertext } : {}) };
   }
 
-  /** Attestor: build the extinguish transaction with both attestors as signers (the first signs, the second co-signs). */
+  /**
+   * Attestor: build the extinguish transaction with both attestor keys as signers (the first signs, the second
+   * co-signs; transitional until S4 WP12 makes it two Stage 1 EXTINGUISH signatures relayed by the keeper). One of the
+   * two keys must be linked to the caller's account and active on the series' chain.
+   */
   async requestExtinguishment(session: Session, input: z.infer<typeof extinguishSchema>): Promise<Record<string, unknown> & { tx: UnsignedTx }> {
     const chain = this.chainOf(input.seriesId);
     const series = await chain.getSeries(input.seriesId);
@@ -618,11 +651,11 @@ export class AttestorService {
     // Stage 1 refuses it until the raise's last bid is processed (MintNotFinalized, S2)
     if (!series.mintFinalized) throw AppError.conflict('the raise is still processing its bids (MintNotFinalized): it cannot be extinguished yet');
     if (series.status === 'Extinguished') throw AppError.conflict('series is already extinguished');
-    const [a1, a2] = input.attestors.map((a) => normaliseAddress(a, chain.family)) as [string, string];
+    const [a1, a2] = input.attestors as [string, string];
     if (a1 === a2) throw AppError.unprocessable('two distinct attestors are required');
     await this.requireRegisteredAttestor(chain, a1);
     await this.requireRegisteredAttestor(chain, a2);
-    if (!(await this.actsAs(session, chain.chain, a1)) && !(await this.actsAs(session, chain.chain, a2)) && !session.roles.includes('admin')) throw AppError.forbidden('one of the attestors must be a registered wallet linked to your account');
+    if (!(await this.actsAs(session, chain.chain, a1)) && !(await this.actsAs(session, chain.chain, a2)) && !session.roles.includes('admin')) throw AppError.forbidden('one of the two attestor keys must be linked to your account and registered on the series\' chain');
     assertOpaqueCiphertext(input.evidenceCiphertext, 'evidenceCiphertext');
     const id = this.ctx.newId('ext');
     await this.ctx.pool.query('insert into extinguishment_requests (request_id, series_id, chain, attestors, requested_by, evidence_ciphertext, key_hint) values ($1,$2,$3,$4,$5,$6,$7)', [id, input.seriesId, chain.chain, [a1, a2], session.accountId, input.evidenceCiphertext, input.keyHint]);
@@ -639,7 +672,7 @@ export class AttestorService {
     const attestors = e.attestors as string[];
     let named = false;
     for (const a of attestors) if (await this.actsAs(session, e.chain, a)) named = true;
-    if (!named && !session.roles.includes('admin')) throw AppError.forbidden('this request names other attestors, or your registration is not active');
+    if (!named && !session.roles.includes('admin')) throw AppError.forbidden('this request names other attestor keys, or your key is not linked or not active on its chain');
     const series = await this.ctx.chains.get(e.chain).getSeries(e.series_id);
     if (series?.status === 'Extinguished' && e.state === 'built') {
       await this.ctx.pool.query("update extinguishment_requests set state = 'sent' where request_id = $1", [id]);

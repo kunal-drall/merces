@@ -10,7 +10,9 @@ import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv
  *  - S4-REG: Stage 1's key registry (S4 WP5): `registerAttestor{attestor}` (the boolean `active` is gone; a revocation is
  *    `revokeAttestor`);
  *  - S4-T2: a tier-2 report carries the verifier key's Stage 1 REPORT signature `{signer, signature}` (65 bytes; S4 WP6;
- *    was an ed25519 attestation v1 by key id).
+ *    was an ed25519 attestation v1 by key id);
+ *  - S4-ID: an attestor is a secp256k1 key's 20-byte address on every chain (S4 WP7): a registry command names a key,
+ *    never a chain wallet; the env's attestors are keys the chain registered, each able to sign a digest.
  * S4 cause codes on new checks:
  *  - S4-CTX: the signing context (S4 D6, D7): a chain's signing domain is null or one a signer may sign for (local ids on
  *    a mock chain only, never a mainnet); a new series reads its Stage 1 series key and four nonces at 0.
@@ -242,7 +244,13 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     // admin holds no registration (Stage 1 HolderNotRegistered; cause C: still NotFound, unlike a registered holder's zero
     // claim); the call itself is open to any holder
     await expectChainError(exec(e, e.admin, { kind: 'claimPayout', seriesId }), 'NotFound');
-    await expectChainError(exec(e, e.backers[0]!, { kind: 'registerAttestor', attestor: e.backers[0]!.address }), 'Unauthorized'); // cause S4-REG: Stage 1's registerAttestor{attestor} (was {…, active})
+    await expectChainError(exec(e, e.backers[0]!, { kind: 'registerAttestor', attestor: '0x' + '5a'.repeat(20) }), 'Unauthorized'); // cause S4-REG: Stage 1's registerAttestor{attestor} (was {…, active}); cause S4-ID: a key's 20-byte address (was the backer's wallet)
+    // cause S4-ID: the env's attestors are 20-byte keys the chain has registered and active
+    for (const a of e.attestors) {
+      expect(a.address).toMatch(/^0x[0-9a-f]{40}$/);
+      expect(await e.chain.getSignerKey('attestor', a.address)).toMatchObject({ kind: 'attestor', address: a.address, active: true, revokedAt: null });
+      expect(typeof a.signDigest).toBe('function');
+    }
     await e.chain.submit({ kind: 'setAllowlist', wallet: e.backers[1]!.address, allowed: false }, 'allowlistManager');
     expect(await e.chain.isAllowlisted(e.backers[1]!.address)).toBe(false);
     const claim = await exec(e, e.backers[1]!, { kind: 'claimPayout', seriesId });

@@ -419,6 +419,41 @@ components:
         incomeCommitment: { $ref: '#/components/schemas/Hash32' }
         tier: { type: integer, const: 2 }
         liquidityEvent: { type: boolean }
+    SignerKeyRecord:
+      type: object
+      description: "A key as a chain's registry holds it (Stage 1's attestor or verifier key record): public onchain data."
+      required: [address, active, revokedAt, graceUntil]
+      additionalProperties: false
+      properties:
+        address: { type: string, pattern: '^0x[0-9a-f]{40}$' }
+        active: { type: boolean }
+        revokedAt: { type: [integer, 'null'], description: unix seconds of its forward-only revocation; null for a key never revoked or registered again since }
+        graceUntil: { type: [integer, 'null'], description: 'revokedAt + 45 days: report and FX signatures of periods that ended by revokedAt stay valid onchain until then' }
+    SignerKeyLink:
+      type: object
+      description: "An attestor key linked to the caller's account (S4 WP7), with its indexed registration on every chain that has one. Visible to the account and admins only."
+      required: [address, linkedAt, registrations]
+      properties:
+        address: { type: string, pattern: '^0x[0-9a-f]{40}$' }
+        linkedAt: { type: string }
+        registrations:
+          type: array
+          items:
+            type: object
+            required: [chain, active, registeredAt, revokedAt, graceUntil]
+            properties:
+              chain: { type: string }
+              active: { type: boolean }
+              registeredAt: { type: [integer, 'null'] }
+              revokedAt: { type: [integer, 'null'] }
+              graceUntil: { type: [integer, 'null'] }
+    SignerKeyLinkResult:
+      type: object
+      required: [key, created, token]
+      properties:
+        key: { $ref: '#/components/schemas/SignerKeyLink' }
+        created: { type: boolean }
+        token: { type: string, description: a refreshed session token (its roles are informational; access is read live) }
     ReportVerifierInfo:
       type: object
       description: "The report verifier a device talks to (S4 WP6): its URL, the 20-byte address of its secp256k1 key (the address each chain registers as a verifier key; GET /chains and the chains' registries are public) and the chains it signs for, each with the signing domain it holds (the device can compare it with GET /chains). Public data."
@@ -444,6 +479,29 @@ paths:
       x-access: public
       tags: [public]
       responses: { '200': { description: Chain catalogue, content: { application/json: { schema: { $ref: '#/components/schemas/ChainCatalogue' } } } } }
+  /chains/{chain}/signer-keys:
+    get:
+      operationId: listChainSignerKeys
+      x-access: public
+      tags: [public, signing]
+      parameters:
+        - { name: chain, in: path, required: true, schema: { type: string } }
+        - { name: kind, in: query, required: true, schema: { type: string, enum: [attestor, verifier] } }
+      description: "The chain's key registry for one kind of key (Stage 1's attestor and report verifier keys, S4 WP5-WP7), read live from the chain: each key's 20-byte address, whether it is active, its forward-only revocation time and the end of its grace for report and FX signatures. Public onchain data; never the account a key is linked to."
+      responses:
+        '200':
+          description: The keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chain, kind, keys]
+                properties:
+                  chain: { type: string }
+                  kind: { type: string, enum: [attestor, verifier] }
+                  keys: { type: array, items: { $ref: '#/components/schemas/SignerKeyRecord' } }
+        '400': { description: 'kind is missing or not attestor or verifier', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
   /issuers:
     get:
       operationId: listIssuers
@@ -621,6 +679,7 @@ paths:
       x-access: public
       tags: [auth]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, address, message, signature], properties: { chain: { type: string }, address: { type: string }, message: { type: string }, signature: { type: string } } } } } }
+      description: "Sign in with a wallet: the message and nonce from POST /auth/nonce, signed by the wallet. Only a sign-in nonce is accepted (a key-link challenge is refused: 401). A sign-in never links an attestor key, even an EVM wallet at a key's address (POST /me/signer-keys does)."
       responses: { '200': { description: Session token, content: { application/json: { schema: { type: object, properties: { token: { type: string }, account: { type: object }, created: { type: boolean } } } } } }, '401': { $ref: '#/components/responses/Unauthorized' } }
   /me/wallets/link:
     post:
@@ -630,6 +689,57 @@ paths:
       security: [{ session: [] }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, address, message, signature], properties: { chain: { type: string }, address: { type: string }, message: { type: string }, signature: { type: string } } } } } }
       responses: { '200': { description: Updated session token, content: { application/json: { schema: { type: object } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '409': { description: Wallet belongs to another account } }
+  /me/signer-keys/challenge:
+    post:
+      operationId: signerKeyChallenge
+      x-access: account
+      tags: [auth]
+      security: [{ session: [] }]
+      description: "Step one of linking an attestor key to the account (S4 WP7, D4): a one-time EIP-191 text bound to this host, the account, the key (shown EIP-55), the nonce and the issue time, which says it links a key and is not an attestation and moves no funds. Chain-neutral (a key is the attestor on every chain that registers it), valid 10 minutes, for the link route only: sign-in refuses it. Says nothing about the key."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [address], properties: { address: { type: string, pattern: '^0x[0-9a-fA-F]{40}$', description: "the key's 20-byte address (any case)" } } } } } }
+      responses:
+        '200': { description: The challenge, content: { application/json: { schema: { type: object, required: [nonce, message, expiresAt], properties: { nonce: { type: string, pattern: '^[0-9a-f]{32}$' }, message: { type: string, description: the exact text to sign with personal_sign (EIP-191) }, expiresAt: { type: string } } } } } }
+        '400': { description: Not a 20-byte address, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The session's account does not exist, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: 'The zero address (detail.reason zero-address)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /me/signer-keys:
+    post:
+      operationId: linkSignerKey
+      x-access: account
+      tags: [auth]
+      security: [{ session: [] }]
+      description: "Step two: the key's EIP-191 signature (personal_sign: MetaMask, a hardware wallet, `cast wallet sign`, the Merces attestor tool) of the challenge links the key to the account. Checked with viem's verifyMessage; a simulator (sim:) signature is never accepted, in any mode. The challenge must be a key-link challenge (a sign-in nonce is refused) issued to this account for this key, unexpired and unused, and is spent once. A key belongs to one account. Linking grants nothing by itself: attestor access needs the key registered and indexed on the item's chain (A-M5-2). The link is visible to the account and to admins only."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [address, nonce, signature], properties: { address: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }, nonce: { type: string, pattern: '^[0-9a-f]{32}$' }, signature: { type: string, description: 65 bytes r ‖ s ‖ v as 0x hex (EIP-191) } } } } } }
+      responses:
+        '200': { description: 'The key was already linked to this account: nothing changed (created false)', content: { application/json: { schema: { $ref: '#/components/schemas/SignerKeyLinkResult' } } } }
+        '201': { description: 'Linked (created true): the key with its registrations and a refreshed session token', content: { application/json: { schema: { $ref: '#/components/schemas/SignerKeyLinkResult' } } } }
+        '400': { description: Malformed body, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: 'The challenge was already used (detail.reason challenge-used: a replay), or the key is linked to another account (detail.reason key-linked-to-another-account)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: 'No such key-link challenge for this account and key, a sign-in nonce included (detail.reason unknown-challenge); expired (challenge-expired); or not the key''s EIP-191 signature of it (bad-signature)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    get:
+      operationId: listMySignerKeys
+      x-access: account
+      tags: [auth]
+      security: [{ session: [] }]
+      responses:
+        '200': { description: "The attestor keys linked to the caller's account, each with its indexed registration on every chain that has one", content: { application/json: { schema: { type: object, required: [keys], properties: { keys: { type: array, items: { $ref: '#/components/schemas/SignerKeyLink' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/signer-keys/{address}:
+    delete:
+      operationId: unlinkSignerKey
+      x-access: account
+      tags: [auth]
+      security: [{ session: [] }]
+      parameters: [{ name: address, in: path, required: true, schema: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' } }]
+      description: "Unlink one of the account's keys: the account's attestor access through it ends at once. Refused while work addressed to the key is open."
+      responses:
+        '200': { description: Unlinked, content: { application/json: { schema: { type: object, required: [address, unlinked], properties: { address: { type: string }, unlinked: { type: boolean, const: true } } } } } }
+        '400': { description: Not a 20-byte address, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The key is not linked to this account, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: 'Work addressed to the key is open (detail.reason open-work, detail.openWork the counts: pending hardship requests, open tier-3 cases and annual attestations, extinguishment requests, attested amendments not landed)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /me/session/refresh:
     post:
       operationId: refreshSession
@@ -903,8 +1013,8 @@ paths:
       tags: [attestor]
       security: [{ session: [] }]
       parameters: [{ name: amendmentId, in: path, required: true, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [attestorWallet, approve], properties: { attestorWallet: { type: string }, approve: { type: boolean } } } } } }
-      responses: { '200': { description: Attested or rejected (only issuer-favourable changes can be attested), content: { application/json: { schema: { type: object } } } }, '403': { description: The attestor wallet is not linked to the caller on the series' chain }, '422': { description: Not issuer-favourable, or the wallet is not a registered attestor on the series' chain } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [attestor, approve], properties: { attestor: { type: string, pattern: '^0x[0-9a-fA-F]{40}$', description: "the attestor key the attestor acts with (a secp256k1 key's 20-byte address, linked to the caller's account; S4 WP7, was attestorWallet). The issuer's amendTerms carries it as co-signer until S4 WP11 (Stage 1's AMEND signature)" }, approve: { type: boolean } } } } } }
+      responses: { '200': { description: Attested or rejected (only issuer-favourable changes can be attested), content: { application/json: { schema: { type: object } } } }, '400': { description: 'Malformed body: an attestor that is not a 20-byte key, or the old attestorWallet field' }, '403': { description: "The attestor key is not linked to the caller's account" }, '422': { description: "Not issuer-favourable, or the key is not a registered attestor on the series' chain" } }
   /amendments/{amendmentId}/build:
     post:
       operationId: buildAmendTerms

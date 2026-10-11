@@ -6,7 +6,7 @@ import {
 } from '@merces/domain';
 import { BN254_FR, U64_MAX, WAD, paymentStable, quarterIndex, ratePerUnit, requiredEscrow, toPid, wadFromDecimal, yearOf } from '@merces/math';
 import { SimulatorChain } from './chain.ts';
-import { SimSigner, SimWallet, simAdminWallet } from './wallets.ts';
+import { SimAttestor, SimSigner, SimWallet, simAdminWallet } from './wallets.ts';
 import type { Personality } from './addresses.ts';
 
 /**
@@ -191,7 +191,11 @@ export class SimHarness {
   readonly admin: SimWallet;
   readonly issuer: SimWallet;
   readonly backers: SimWallet[];
-  readonly attestors: SimWallet[];
+  /**
+   * the attestors: published secp256k1 test keys (seeds `sim-attestor:attestor-1/2`), registered by their 20-byte
+   * addresses on both personalities (S4 WP7); each co-signs, until S4 WP13, through a wallet at its key's address
+   */
+  readonly attestors: SimAttestor[];
   /** the report verifier's key (a published secp256k1 test key, seed `sim-verifier:verifier-1`; S4 WP6) */
   readonly verifier: SimSigner;
   readonly router: string;
@@ -200,7 +204,7 @@ export class SimHarness {
     this.admin = simAdminWallet(sim.family);
     this.issuer = new SimWallet(sim.family, 'issuer-1');
     this.backers = ['backer-1', 'backer-2', 'backer-3', 'backer-4', 'backer-5'].map((l) => new SimWallet(sim.family, l));
-    this.attestors = ['attestor-1', 'attestor-2'].map((l) => new SimWallet(sim.family, l));
+    this.attestors = ['attestor-1', 'attestor-2'].map((l) => new SimAttestor(sim.family, l));
     this.verifier = SimSigner.verifier();
     this.router = sim.address('router:split-1');
   }

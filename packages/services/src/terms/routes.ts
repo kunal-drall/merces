@@ -76,8 +76,9 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
   defineRoute(app, ctx, {
     method: 'POST', url: '/attestor/amendments/:amendmentId/attest', access: 'attestor',
     handler: async (req, _reply, session) => {
-      const b = z.object({ attestorWallet: z.string(), approve: z.boolean() }).parse(req.body);
-      return s.attestAmendment((req.params as { amendmentId: string }).amendmentId, session!, b.attestorWallet, b.approve);
+      // the attestor key the attestor acts with (S4 WP7): a secp256k1 key's 20-byte address, any case
+      const b = z.object({ attestor: z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((x) => x.toLowerCase()), approve: z.boolean() }).strict().parse(req.body);
+      return s.attestAmendment((req.params as { amendmentId: string }).amendmentId, session!, b.attestor, b.approve);
     },
   });
   defineRoute(app, ctx, { method: 'POST', url: '/amendments/:amendmentId/build', access: 'issuer', handler: async (req, _reply, session) => s.buildAmendTerms((req.params as { amendmentId: string }).amendmentId, session!) });
@@ -92,7 +93,11 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
     handler: async (req, _reply, session) => {
       const signed = req.body as SignedTx;
       if (!signed?.tx?.chain || !signed.signatures) throw AppError.badRequest('signed transaction required');
-      if (!session!.wallets.some((w) => w.address === signed.tx.signer) && !session!.roles.includes('admin')) throw AppError.forbidden('signer is not one of your wallets');
+      // the signer is one of the account's wallets, or (transitional until S4 WP13, while approvePause and extinguish are
+      // still sent by an attestor key's address) an attestor key linked to the account, read live
+      const own = session!.wallets.some((w) => w.address === signed.tx.signer)
+        || (typeof signed.tx.signer === 'string' && !!(await ctx.pool.query('select 1 from account_signer_keys where address = $1 and account_id = $2', [signed.tx.signer, session!.accountId])).rowCount);
+      if (!own && !session!.roles.includes('admin')) throw AppError.forbidden('signer is not one of your wallets or linked keys');
       if (!ctx.chains.chains.has(signed.tx.chain)) throw AppError.badRequest(`unknown chain ${signed.tx.chain}`);
       const res = await ctx.chains.get(signed.tx.chain).send(signed);
       return { txId: res.txId, blockTime: res.blockTime, events: res.events.map((e) => ({ type: e.type, seq: e.seq, payload: e.payload })) };

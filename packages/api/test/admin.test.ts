@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { KEY_GRACE_SECONDS, type UnsignedTx } from '@merces/domain';
-import { SimWallet } from '@merces/simulator';
+import { SimSigner, SimWallet, type SimAttestor } from '@merces/simulator';
 import { IdentityService } from '@merces/services';
 import { makeRig } from './helpers.ts';
 
@@ -12,7 +12,10 @@ import { makeRig } from './helpers.ts';
  *  - S4-T2: the report verifier's keys are secp256k1 20-byte addresses (S4 WP6): `POST /admin/verifier-keys`
  *    `{chain, address}` builds `registerVerifierKey{key}` (was `{keyId, publicKeySpkiHex, active}`), with revoke and
  *    rotate routes and the same pre-checks; `GET /admin/verifier-keys` reads the chain's key records and the verifier's
- *    own address.
+ *    own address;
+ *  - S4-ID: attestors are keys (S4 WP7): `POST /admin/attestors` `{chain, attestor, accountId?}` proposes a key linked to
+ *    the account (was `{chain, wallet, accountId, active}`), with `/admin/attestors/revoke` and `/rotate` beside it;
+ *    access follows the account's linked keys (`rig.attestorToken`), and `GET /admin/attestors` lists keys.
  */
 
 /**
@@ -30,7 +33,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     rig = await makeRig();
     adminTok = rig.token({ accountId: 'admin-1', roles: ['admin'], wallets: [{ chain: 'solana', address: rig.sol.admin.address }] });
     userTok = rig.token({ accountId: 'user-1', roles: ['backer', 'issuer'], wallets: [{ chain: 'solana', address: rig.sol.issuer.address }] });
-    attestorTok = rig.token({ accountId: 'att-existing', roles: ['attestor'], wallets: [{ chain: 'solana', address: rig.sol.attestors[0]!.address }] });
+    attestorTok = await rig.attestorToken('att-existing', [rig.sol.attestors[0]!]); // cause S4-ID
   });
   afterAll(async () => {
     await rig.close();
@@ -44,16 +47,20 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     return sent.json().txId as string;
   }
 
-  it('registers an attestor: build for the multisig → sign → send → mark sent → confirmed; attestor access starts only once the registration is indexed', async () => {
-    const w = new SimWallet('solana', 'attestor-new');
-    await new IdentityService(rig.ctx).seedAccount({ accountId: 'att-new', wallets: [{ chain: 'solana', address: w.address, family: 'solana' }], roles: ['backer'], eligible: false });
+  it('registers an attestor key: build for the multisig → sign → send → mark sent → confirmed; attestor access starts only once the registration is indexed (cause S4-ID)', async () => {
+    // cause S4-ID: the attestor is a key linked to the account by its own proof (the link route is tested in
+    // signer-keys.test.ts), not a chain wallet
+    const w = SimSigner.attestor('attestor-new');
+    await new IdentityService(rig.ctx).seedAccount({ accountId: 'att-new', wallets: [], roles: ['backer'], eligible: false });
+    await rig.linkKeys('att-new', [w]);
     expect(await rig.sol.sim.getSignerKey('attestor', w.address)).toBeNull(); // cause S4-REG (was listAttestors)
 
-    // unknown account → 404; wrong-family wallet → 400
-    expect((await rig.post('/admin/attestors', { chain: 'solana', wallet: w.address, accountId: 'nobody', active: true }, adminTok)).statusCode).toBe(404);
-    expect((await rig.post('/admin/attestors', { chain: 'solana', wallet: new SimWallet('evm', 'x').address, accountId: 'att-new', active: true }, adminTok)).statusCode).toBe(400);
+    // unknown account → 404; a wallet address that is no key, or the old body, → 400
+    expect((await rig.post('/admin/attestors', { chain: 'solana', attestor: w.address, accountId: 'nobody' }, adminTok)).statusCode).toBe(404);
+    expect((await rig.post('/admin/attestors', { chain: 'solana', attestor: new SimWallet('solana', 'x').address, accountId: 'att-new' }, adminTok)).statusCode).toBe(400);
+    expect((await rig.post('/admin/attestors', { chain: 'solana', wallet: w.address, accountId: 'att-new', active: true }, adminTok)).statusCode).toBe(400);
 
-    const body = { chain: 'solana', wallet: w.address, accountId: 'att-new', active: true, jurisdiction: 'GB', kind: 'CA' };
+    const body = { chain: 'solana', attestor: w.address, accountId: 'att-new', jurisdiction: 'GB', kind: 'CA' };
     const created = await rig.post('/admin/attestors', body, adminTok, { 'idempotency-key': 'att-1' });
     expect(created.statusCode).toBe(201);
     const { request, tx } = created.json() as { request: Record<string, unknown>; tx: UnsignedTx };
@@ -63,21 +70,21 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect(request.meta).toEqual({ accountId: 'att-new', jurisdiction: 'GB', kind: 'CA' });
     expect(tx.command).toEqual({ kind: 'registerAttestor', attestor: w.address }); // cause S4-REG (was {…, active: true})
     expect(tx.signer).toBe((await rig.sol.sim.info()).admin);
-    // idempotent replay returns the same request
+    // idempotent replay returns the same request; the same key with another body is refused
     const replay = await rig.post('/admin/attestors', body, adminTok, { 'idempotency-key': 'att-1' });
     expect(replay.statusCode).toBe(201);
     expect(replay.json().request.requestId).toBe(request.requestId);
-    expect((await rig.post('/admin/attestors', { ...body, active: false }, adminTok, { 'idempotency-key': 'att-1' })).statusCode).toBe(409);
+    expect((await rig.post('/admin/attestors', { ...body, jurisdiction: 'FR' }, adminTok, { 'idempotency-key': 'att-1' })).statusCode).toBe(409);
 
     // a proposal grants nothing (A-M5-2): no stored role, no attestor routes, a clear 'pending' answer
     const roles = await rig.t.pool.query<{ roles: string[] }>('select roles from accounts where account_id = $1', ['att-new']);
     expect(roles.rows[0]!.roles).not.toContain('attestor');
-    const attTok = rig.token({ accountId: 'att-new', wallets: [{ chain: 'solana', address: w.address }], roles: ['attestor'] }); // even a token claiming the role
+    const attTok = rig.token({ accountId: 'att-new', wallets: [], roles: ['attestor'] }); // even a token claiming the role
     const pending = await rig.get('/attestor/queue', attTok);
     expect(pending.statusCode).toBe(403);
     expect(pending.json().message).toMatch(/pending/);
-    const listed = (await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { wallet: string }) => a.wallet === w.address);
-    expect(listed).toMatchObject({ chain: 'solana', accountId: 'att-new', status: 'pending-onchain', onchainActive: false });
+    const listed = (await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { attestor: string }) => a.attestor === w.address);
+    expect(listed).toMatchObject({ chain: 'solana', accountId: 'att-new', status: 'pending-onchain', onchainActive: false, proposal: { active: true, accountId: 'att-new' } });
 
     // nothing happened on the chain yet: marking sent with a tx the chain does not reflect leaves the request `sent`
     const bogus = await rig.post(`/admin/tx-requests/${request.requestId}/sent`, { txId: 'not-yet' }, adminTok);
@@ -97,7 +104,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(403);
     await rig.sync();
     expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(200);
-    expect((await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { wallet: string }) => a.wallet === w.address).status).toBe('registered');
+    expect((await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { attestor: string }) => a.attestor === w.address).status).toBe('registered');
     expect((await new IdentityService(rig.ctx).sessionFor('att-new')).roles).toContain('attestor');
     // a different tx id after confirmation is refused
     expect((await rig.post(`/admin/tx-requests/${request.requestId}/sent`, { txId: 'other' }, adminTok)).statusCode).toBe(409);
@@ -120,12 +127,12 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     const dup = await rig.post('/admin/attestors', body, adminTok);
     expect([dup.statusCode, dup.json().detail]).toEqual([409, { reason: 'key-already-active' }]);
 
-    // deactivation is Stage 1's forward-only revocation (cause S4-REG: revokeAttestor; was registerAttestor{active:
-    // false}): proposing it changes nothing until it is onchain and indexed; then access ends at once
-    const off = await rig.post('/admin/attestors', { ...body, active: false }, adminTok);
+    // revocation is Stage 1's forward-only revokeAttestor (cause S4-ID: its own route, was {active: false}): proposing
+    // it changes nothing until it is onchain and indexed; then access ends at once
+    const off = await rig.post('/admin/attestors/revoke', { chain: 'solana', attestor: w.address }, adminTok);
     expect(off.statusCode).toBe(201);
     expect([off.json().request.kind, off.json().tx.command]).toEqual(['revokeAttestor', { kind: 'revokeAttestor', attestor: w.address }]);
-    expect((await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { wallet: string }) => a.wallet === w.address).status).toBe('deactivation-pending');
+    expect((await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { attestor: string }) => a.attestor === w.address).status).toBe('deactivation-pending');
     expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(200);
     const offTx = await relay(off.json().tx as UnsignedTx);
     const revokedAt = (await rig.sol.sim.getSignerKey('attestor', w.address))!.revokedAt!;
@@ -135,24 +142,62 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(403);
     expect((await new IdentityService(rig.ctx).sessionFor('att-new')).roles).not.toContain('attestor');
     // the indexed registry keeps when the key became active and when it was revoked, and the grace end that follows
-    const row = (await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { wallet: string }) => a.wallet === w.address);
+    const row = (await rig.get('/admin/attestors', adminTok)).json().attestors.find((a: { attestor: string }) => a.attestor === w.address);
     expect(row).toMatchObject({ status: 'inactive', onchainActive: false, revokedAt, graceUntil: revokedAt + KEY_GRACE_SECONDS });
     expect(typeof row.registeredAt).toBe('number');
     expect((await rig.get(`/admin/audit-log?actor=admin-1&target=solana:${w.address}`, adminTok)).json().entries.map((e: { action: string }) => e.action)).toEqual(['attestor.revoke', 'attestor.register']);
     // a key that is not active cannot be revoked again (KeyAlreadyRevoked / KeyNotRegistered onchain): 409, nothing built
-    const again = await rig.post('/admin/attestors', { ...body, active: false }, adminTok);
+    const again = await rig.post('/admin/attestors/revoke', { chain: 'solana', attestor: w.address }, adminTok);
     expect([again.statusCode, again.json().detail]).toEqual([409, { reason: 'key-not-active' }]);
-    const unknown = await rig.post('/admin/attestors', { ...body, wallet: new SimWallet('solana', 'never-registered').address, active: false }, adminTok);
+    const unknown = await rig.post('/admin/attestors/revoke', { chain: 'solana', attestor: SimSigner.attestor('never-registered').address }, adminTok);
     expect([unknown.statusCode, unknown.json().detail]).toEqual([409, { reason: 'key-not-active' }]);
+  });
+
+  it('rotates an attestor key to a new key of the same account in one transaction; access moves with it (cause S4-ID)', async () => {
+    const [r1, r2, elsewhere] = ['rot-1', 'rot-2', 'rot-elsewhere'].map((l) => SimSigner.attestor(l)) as [SimSigner, SimSigner, SimSigner];
+    await rig.sol.exec(rig.sol.admin, { kind: 'registerAttestor', attestor: r1.address });
+    await rig.sync();
+    const attTok = await rig.attestorToken('att-rot', [r1]);
+    expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(200);
+    // the new key must be linked to the account holding the old one
+    const rotate = (to: string, from = r1.address) => rig.post('/admin/attestors/rotate', { chain: 'solana', from, to }, adminTok);
+    expect([(await rotate(r2.address)).statusCode, (await rotate(r2.address)).json().detail]).toEqual([422, { reason: 'key-not-linked' }]);
+    await rig.linkKeys('att-other-rot', [elsewhere]);
+    expect((await rotate(elsewhere.address)).json().detail).toEqual({ reason: 'key-not-linked' });
+    await rig.linkKeys('att-rot', [r2]);
+    // the same key; a new key already active; an old key not active: refused before anything is built
+    expect((await rotate(r1.address)).statusCode).toBe(422);
+    expect((await rig.post('/admin/attestors/rotate', { chain: 'solana', from: r2.address, to: r1.address }, adminTok)).json().detail).toEqual({ reason: 'key-already-active' });
+    await rig.linkKeys('att-rot', [SimSigner.attestor('rot-3')]);
+    expect((await rig.post('/admin/attestors/rotate', { chain: 'solana', from: r2.address, to: SimSigner.attestor('rot-3').address }, adminTok)).json().detail).toEqual({ reason: 'key-not-active' });
+
+    const rot = await rotate(r2.address.toUpperCase().replace('0X', '0x'));
+    expect([rot.statusCode, rot.json().request.kind, rot.json().tx.command, rot.json().request.meta]).toEqual([201, 'rotateAttestor', { kind: 'rotateAttestor', from: r1.address, to: r2.address }, { accountId: 'att-rot' }]);
+    const listed = (await rig.get('/admin/attestors', adminTok)).json().attestors;
+    expect(listed.find((a: { attestor: string }) => a.attestor === r1.address)).toMatchObject({ status: 'deactivation-pending', accountId: 'att-rot' });
+    expect(listed.find((a: { attestor: string }) => a.attestor === r2.address)).toMatchObject({ status: 'pending-onchain', accountId: 'att-rot' });
+    const txId = await relay(rot.json().tx as UnsignedTx);
+    expect((await rig.post(`/admin/tx-requests/${rot.json().request.requestId}/sent`, { txId }, adminTok)).json().state).toBe('confirmed');
+    await rig.sync();
+    expect(await rig.sol.sim.getSignerKey('attestor', r1.address)).toMatchObject({ active: false });
+    expect(await rig.sol.sim.getSignerKey('attestor', r2.address)).toMatchObject({ active: true, revokedAt: null });
+    // the account keeps its access through the new key; the old key no longer counts
+    expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(200);
+    expect((await rig.get('/attestor/me', attTok)).json().keys.filter((k: { chain: string; registeredOnchain: boolean }) => k.chain === 'solana')).toEqual([
+      { chain: 'solana', address: r1.address, registeredOnchain: false },
+      { chain: 'solana', address: r2.address, registeredOnchain: true },
+      { chain: 'solana', address: SimSigner.attestor('rot-3').address, registeredOnchain: false },
+    ].sort((a, b) => (a.address < b.address ? -1 : 1)));
+    expect((await rig.get(`/admin/audit-log?actor=admin-1&target=solana:${r1.address}`, adminTok)).json().entries.map((e: { action: string; detail: { to: string } }) => [e.action, e.detail.to])).toEqual([['attestor.rotate', r2.address]]);
   });
 
   it('the last active attestor key of a chain cannot be revoked: 409 last-active-key, rotate instead (cause S4-REG)', async () => {
     const m = rig.mon;
-    const [a1, a2] = m.attestors as [SimWallet, SimWallet];
-    await new IdentityService(rig.ctx).seedAccount({ accountId: 'att-mon-last', wallets: [{ chain: 'monad', address: a1.address, family: 'evm' }], roles: ['backer'], eligible: false });
+    const [a1, a2] = m.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
     await m.exec(m.admin, { kind: 'revokeAttestor', attestor: a2.address }); // a1 is the chain's last active key
     try {
-      const last = await rig.post('/admin/attestors', { chain: 'monad', wallet: a1.address, accountId: 'att-mon-last', active: false }, adminTok);
+      // cause S4-ID: the revocation route takes the key alone (a revocation needs no link)
+      const last = await rig.post('/admin/attestors/revoke', { chain: 'monad', attestor: a1.address }, adminTok);
       expect([last.statusCode, last.json().detail]).toEqual([409, { reason: 'last-active-key' }]);
       expect(last.json().message).toMatch(/rotate/);
       expect((await rig.t.pool.query("select 1 from admin_tx_requests where chain = 'monad' and kind = 'revokeAttestor'")).rowCount).toBe(0);
@@ -358,7 +403,9 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
       ['GET', '/admin/flags', undefined],
       ['PUT', '/admin/flags/tier4', { enabled: true }],
       ['GET', '/admin/audit-log', undefined],
-      ['POST', '/admin/attestors', { chain: 'solana', wallet: rig.sol.attestors[1]!.address, accountId: 'user-1', active: true }],
+      ['POST', '/admin/attestors', { chain: 'solana', attestor: rig.sol.attestors[1]!.address, accountId: 'user-1' }], // cause S4-ID
+      ['POST', '/admin/attestors/revoke', { chain: 'solana', attestor: rig.sol.attestors[1]!.address }],
+      ['POST', '/admin/attestors/rotate', { chain: 'solana', from: rig.sol.attestors[1]!.address, to: '0x' + '22'.repeat(20) }],
       ['GET', '/admin/tx-requests', undefined],
       ['POST', '/admin/tx-requests/x/sent', { txId: 'x' }],
       ['POST', '/admin/verifier-keys', { chain: 'solana', address: '0x' + '11'.repeat(20) }],

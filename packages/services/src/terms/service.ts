@@ -385,29 +385,35 @@ export class TermsService {
   }
 
   async listAmendments(seriesId: string): Promise<Record<string, unknown>[]> {
-    const r = await this.ctx.pool.query('select amendment_id, kind, new_commitment, new_cap_multiple_wad, version, state, attestor, rationale_code, created_at, applied_at from terms_amendments where series_id = $1 order by created_at', [seriesId]);
-    return r.rows.map((x) => ({ amendmentId: x.amendment_id, kind: x.kind, newCommitment: x.new_commitment, newCapMultipleWad: x.new_cap_multiple_wad, version: x.version, state: x.state, attestor: x.attestor, rationaleCode: x.rationale_code, createdAt: x.created_at, appliedAt: x.applied_at }));
+    const r = await this.ctx.pool.query('select amendment_id, kind, new_commitment, new_cap_multiple_wad, version, state, decision_code, attestor, rationale_code, created_at, applied_at from terms_amendments where series_id = $1 order by created_at', [seriesId]);
+    return r.rows.map((x) => ({ amendmentId: x.amendment_id, kind: x.kind, newCommitment: x.new_commitment, newCapMultipleWad: x.new_cap_multiple_wad, version: x.version, state: x.state, decisionCode: x.decision_code ?? null, attestor: x.attestor, rationaleCode: x.rationale_code, createdAt: x.created_at, appliedAt: x.applied_at }));
   }
 
-  /** Attestor review: the attestor reads old and new private terms and attests favourability (θ non-decreasing, r non-increasing, cap non-increasing). */
-  async attestAmendment(amendmentId: string, attestor: Session, attestorWallet: string, approve: boolean): Promise<Record<string, unknown>> {
+  /**
+   * Attestor review: the attestor reads old and new private terms and attests favourability (θ non-decreasing, r
+   * non-increasing, cap non-increasing), naming the attestor key it acts with (S4 WP7: a key linked to the account and
+   * active and indexed on the series' chain). The issuer's amendTerms then carries that key as co-signer, transitionally
+   * until S4 WP11 makes it Stage 1's AMEND signature.
+   */
+  async attestAmendment(amendmentId: string, attestor: Session, attestorKey: string, approve: boolean): Promise<Record<string, unknown>> {
     const r = await this.ctx.pool.query('select a.*, v.ciphertext as old_ciphertext, v.draft_id as vdraft, d.chain from terms_amendments a join terms_vault v on v.series_id = a.series_id join series_drafts d on d.draft_id = a.draft_id where a.amendment_id = $1', [amendmentId]);
     const a = r.rows[0];
     if (!a) throw AppError.notFound('amendment');
     if (a.state !== 'proposed') throw AppError.conflict(`amendment is ${a.state}`);
-    // A-M5-2: an attestor acts only with a wallet of theirs on the series' chain whose registration is onchain AND
-    // indexed (the same registry every attestor path uses); the admin role does not stand in for it
-    const port = this.ctx.chains.chains.get(a.chain);
-    if (!port) throw AppError.unprocessable(`unknown chain ${a.chain}`);
-    const wallet = normaliseAddress(attestorWallet, port.family);
-    if (!attestor.wallets.some((w) => w.chain === a.chain && w.address === wallet)) throw AppError.forbidden(`attestor wallet must be linked to your account on ${a.chain}`);
-    const indexed = await this.ctx.pool.query('select 1 from attestors where chain = $1 and attestor = $2 and active', [a.chain, wallet]);
-    if (!indexed.rowCount) throw AppError.unprocessable(`${wallet} is not a registered attestor on ${a.chain}`);
+    // A-M5-2 (S4 WP7): an attestor acts only with a key linked to their account (its own EIP-191 proof, read live) whose
+    // registration on the series' chain is onchain AND indexed (the same registry every attestor path uses); the admin
+    // role does not stand in for it
+    if (!this.ctx.chains.chains.get(a.chain)) throw AppError.unprocessable(`unknown chain ${a.chain}`);
+    const key = attestorKey;
+    const linked = await this.ctx.pool.query('select 1 from account_signer_keys where address = $1 and account_id = $2', [key, attestor.accountId]);
+    if (!linked.rowCount) throw AppError.forbidden('the attestor key must be linked to your account');
+    const indexed = await this.ctx.pool.query('select 1 from attestors where chain = $1 and attestor = $2 and active', [a.chain, key]);
+    if (!indexed.rowCount) throw AppError.unprocessable(`${key} is not a registered attestor key on ${a.chain}`);
     const oldT = JSON.parse(this.ctx.vault.decrypt(a.old_ciphertext, `terms:${a.vdraft}`)) as Record<string, string>;
     const newT = JSON.parse(this.ctx.vault.decrypt(a.ciphertext, `terms:${a.draft_id}`)) as Record<string, string>;
     const favourable = BigInt(newT.threshold!) >= BigInt(oldT.threshold!) && BigInt(newT.ratePerUnitWad!) <= BigInt(oldT.ratePerUnitWad!);
     if (approve && !favourable) throw AppError.unprocessable('amendment is not issuer-favourable; refusing to attest');
-    const upd = await this.ctx.pool.query("update terms_amendments set state = $2, attestor = $3 where amendment_id = $1 and state = 'proposed'", [amendmentId, approve ? 'attested' : 'rejected', wallet]);
+    const upd = await this.ctx.pool.query("update terms_amendments set state = $2, attestor = $3 where amendment_id = $1 and state = 'proposed'", [amendmentId, approve ? 'attested' : 'rejected', key]);
     if (!upd.rowCount) throw AppError.conflict('amendment was decided concurrently');
     await audit(this.ctx.pool, { actor: attestor.accountId, actorRole: 'attestor', action: approve ? 'amendment.attest' : 'amendment.reject', target: amendmentId, detail: { favourable } });
     return { amendmentId, state: approve ? 'attested' : 'rejected', favourable };

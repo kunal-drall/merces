@@ -259,13 +259,13 @@ export const eventPayloads = {
   UnitsTransferred: z.object({ ...seriesScoped, from: addressSchema, to: addressSchema, units: unitsSchema, windowId: z.number().int() }),
   AllowlistUpdated: z.object({ wallet: addressSchema, allowed: z.boolean() }),
   /** Stage 1's `AttestorRegistered{addr}` (registry events; MercesRegistry.sol:321): the key is active, `revokedAt` 0. */
-  AttestorRegistered: z.object({ attestor: addressSchema }),
+  AttestorRegistered: z.object({ attestor: signerAddressSchema }),
   /**
    * Stage 1's `AttestorRevoked{addr, revoked_at}` (MercesRegistry.sol:340): the key is revoked at `revokedAt` (unix
    * seconds, the block time). Report and FX signatures of periods that ended by then stay valid until
    * `revokedAt + KEY_GRACE_SECONDS`.
    */
-  AttestorRevoked: z.object({ attestor: addressSchema, revokedAt: z.number().int() }),
+  AttestorRevoked: z.object({ attestor: signerAddressSchema, revokedAt: z.number().int() }),
   /**
    * Stage 1's `VerifierKeyRegistered` (EVM `verifierKey`, IMercesRegistry.sol:37, emitted at MercesRegistry.sol:327;
    * Solana `addr`, lib.rs:276): the report verifier key (a secp256k1 key's 20-byte address) is active, `revokedAt` 0.

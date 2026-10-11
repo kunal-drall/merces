@@ -36,6 +36,21 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
   });
 
   defineRoute(app, ctx, {
+    method: 'GET', url: '/chains/:chain/signer-keys', access: 'public',
+    handler: async (req) => {
+      const { chain: key } = req.params as { chain: string };
+      const { kind } = z.object({ kind: z.enum(['attestor', 'verifier']) }).parse(req.query);
+      const chain = ctx.chains.chains.get(key);
+      if (!chain) throw AppError.notFound('chain');
+      // the chain's key registry (S4 WP5-WP7), read live: each key's 20-byte address, whether it is active, its
+      // forward-only revocation time and the end of its grace for report and FX signatures. Public onchain data; never
+      // the account a key is linked to
+      const keys = await chain.listSignerKeys(kind);
+      return { chain: chain.chain, kind, keys: keys.map((k) => ({ address: k.address, active: k.active, revokedAt: k.revokedAt, graceUntil: k.graceUntil })) };
+    },
+  });
+
+  defineRoute(app, ctx, {
     method: 'GET', url: '/issuers', access: 'public',
     handler: async (req) => {
       const q = listQuery.parse(req.query);
