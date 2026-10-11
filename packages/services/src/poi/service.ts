@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AppError, enqueueOutbox, getFlag } from '@merces/core';
 import { attestationSchema, expectedPrior, fieldToHex32, fxDigest, keyUsable, recoverSigner, reportDigest, reportPublicInputs, reportProofSchema, routerIncomeCommitment, type Attestation, type ChainPort, type SeriesState, type SignerKind, type UnsignedTx, type UserCommand } from '@merces/domain';
 import { WAD, fromPid, parsePeriod, periodsBetween, projectDeadlines, statusParamsOf, toPid, yearOf } from '@merces/math';
-import { SOURCE_DEFINITIONS, type IncomeSourceKind } from '@merces/ports';
+import { SyntheticIncomeZkTls, SYNTHETIC_INCOME_NOTICE, assertSyntheticIncomeNetwork, SOURCE_DEFINITIONS, type IncomeSourceKind } from '@merces/ports';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 import { censusFreshFor, curveRegularReport, reportUnits, requireCensusFor, requireCensusUnchanged } from '../curve-census.ts';
@@ -89,10 +89,15 @@ export class ProofOfIncomeService {
     const { series } = await this.seriesForIssuer(seriesId, session);
     if (!series.terms.tierFlags.tier2) throw AppError.conflict('tier 2 is not enabled for this series');
     const period = parsePeriod(periodId);
+    if (this.ctx.zktls instanceof SyntheticIncomeZkTls) {
+      const info = await this.ctx.chainFor(seriesId).info();
+      if (!info.signing) throw AppError.forbidden('Synthetic income requires a verified testnet domain.');
+      assertSyntheticIncomeNetwork(info.signing);
+    }
     const def = SOURCE_DEFINITIONS[source];
     const r = await this.ctx.zktls.createSession({ source, seriesId, periodId, coversUntil: period.end, year: period.year });
     await this.ctx.pool.query('insert into zktls_sessions (session_id, series_id, period_id, account_id, source, provider, request_url) values ($1,$2,$3,$4,$5,$6,$7) on conflict (session_id) do nothing', [r.sessionId, seriesId, periodId, session.accountId, source, this.ctx.zktls.provider, r.requestUrl]);
-    return { ...r, provider: this.ctx.zktls.provider, source: def.name, verifier: { url: this.ctx.reportVerifierUrl, note: 'Send the zkTLS proof and your income salt directly to the report verifier; the API never receives income.' } };
+    return { ...r, ...(this.ctx.zktls instanceof SyntheticIncomeZkTls ? {testOnly:true,notice:SYNTHETIC_INCOME_NOTICE} : {}), provider: this.ctx.zktls.provider, source: def.name, verifier: { url: this.ctx.reportVerifierUrl, note: 'Send the zkTLS proof and your income salt directly to the report verifier; the API never receives income.' } };
   }
 
   /**
@@ -101,7 +106,7 @@ export class ProofOfIncomeService {
    */
   async verifierInfo(): Promise<Record<string, unknown>> {
     const keys = await this.ctx.verifier.publicKey();
-    return { url: this.ctx.reportVerifierUrl, address: keys.address, chains: keys.chains.map((c) => ({ chain: c.chain, domain: c.domain })) };
+    return { url: this.ctx.reportVerifierUrl, address: keys.address, ...(keys.syntheticIncome ? {syntheticIncome:keys.syntheticIncome} : {}), chains: keys.chains.map((c) => ({ chain: c.chain, domain: c.domain })) };
   }
 
   /** Resolve the FX basis for a series/period (C9): unity, the accumulator average, or an attestor rate when flagged. */

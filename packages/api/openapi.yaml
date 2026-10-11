@@ -1412,6 +1412,17 @@ components:
             - string
             - "null"
           description: when the stored status last changed
+    SyntheticIncomeInfo:
+      type: object
+      required:
+        - testOnly
+        - notice
+      properties:
+        testOnly:
+          type: boolean
+          const: true
+        notice:
+          type: string
     ReportVerifierInfo:
       type: object
       description: "The report verifier a device talks to (S4 WP6): its URL, the 20-byte address of its secp256k1 key (the address each chain registers as a verifier key; GET /chains and the chains' registries are public) and the chains it signs for, each with the signing domain it holds (the device can compare it with GET /chains). Public data."
@@ -1425,6 +1436,8 @@ components:
         address:
           type: string
           pattern: ^0x[0-9a-f]{40}$
+        syntheticIncome:
+          $ref: "#/components/schemas/SyntheticIncomeInfo"
         chains:
           type: array
           items:

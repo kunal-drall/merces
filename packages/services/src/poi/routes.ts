@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { defineRoute, type AppContext } from '@merces/api';
 import { withIdempotency } from '@merces/core';
-import { SOURCE_DEFINITIONS, proverArtifactFile, stage1ProverArtifacts } from '@merces/ports';
+import { SyntheticIncomeZkTls, SYNTHETIC_INCOME_NOTICE, SOURCE_DEFINITIONS, proverArtifactFile, stage1ProverArtifacts } from '@merces/ports';
 import { svc } from '../context.ts';
 import { ProofOfIncomeService, assembleSchema } from './service.ts';
 
@@ -26,7 +26,7 @@ export function registerPoiRoutes(app: FastifyInstance, base: AppContext): void 
       },
     });
   }
-  defineRoute(app, ctx, { method: 'GET', url: '/income-sources', access: 'public', handler: async () => ({ sources: Object.values(SOURCE_DEFINITIONS).map((d) => ({ kind: d.kind, name: d.name, provider: ctx.zktls.provider, reclaimProviderId: d.reclaimProviderId, figureUnit: d.figureUnit, defaultCurrency: d.defaultCurrency, notes: d.notes })) }) });
+  defineRoute(app, ctx, { method: 'GET', url: '/income-sources', access: 'public', handler: async () => ({ sources: Object.values(SOURCE_DEFINITIONS).filter(d => !(ctx.zktls instanceof SyntheticIncomeZkTls) || d.kind === 'stripe').map((d) => ({ ...(ctx.zktls instanceof SyntheticIncomeZkTls ? {testOnly:true,notice:SYNTHETIC_INCOME_NOTICE} : {}), kind: d.kind, name: ctx.zktls instanceof SyntheticIncomeZkTls ? 'Stripe (synthetic test data)' : d.name, provider: ctx.zktls.provider, reclaimProviderId: ctx.zktls instanceof SyntheticIncomeZkTls ? null : d.reclaimProviderId, figureUnit: ctx.zktls instanceof SyntheticIncomeZkTls ? 'base6' : d.figureUnit, defaultCurrency: d.defaultCurrency, notes: d.notes })) }) });
   defineRoute(app, ctx, { method: 'GET', url: '/reporting/verifier', access: 'public', handler: async () => s.verifierInfo() });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/reporting/schedule', access: 'issuer', handler: async (req, _r, session) => s.schedule(sid(req), session!) });
   defineRoute(app, ctx, {

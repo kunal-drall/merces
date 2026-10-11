@@ -2,7 +2,7 @@ import { registerFormsRoutes } from './forms/routes.ts';
 import { registerRouterRoutes } from './router/routes.ts';
 import type { AppContext } from '@merces/api';
 import { checkNonRevealCharge, nonRevealChargeSetting } from '@merces/domain';
-import { LocalKms, MockESign, MockIdentityCheck, MockZkTls, reportProofSystemFromEnv, reportProofVerifier, resolveSecret, simulatorOnly, vaultFromEnv, type ESignPort, type IdentityCheckPort, type KmsPort, type ProofVerifierPort, type VaultCrypto, type ZkTlsPort } from '@merces/ports';
+import { incomeProviderFromEnv, LocalKms, MockESign, MockIdentityCheck, MockZkTls, reportProofSystemFromEnv, reportProofVerifier, resolveSecret, simulatorOnly, vaultFromEnv, type ESignPort, type IdentityCheckPort, type KmsPort, type ProofVerifierPort, type VaultCrypto, type ZkTlsPort } from '@merces/ports';
 import { HttpReportVerifierClient, ReportVerifier, verifierChainsFromPorts, type ReportVerifierPort } from '@merces/report-verifier';
 import type { ServiceContext } from './context.ts';
 import { newId } from './ids.ts';
@@ -68,7 +68,7 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   ctx.identity = over.identity ?? new MockIdentityCheck();
   ctx.esign = over.esign ?? new MockESign();
   ctx.testESign = over.testESign ?? process.env.MERCES_TEST_ESIGN === 'true';
-  ctx.zktls = over.zktls ?? new MockZkTls();
+  ctx.zktls = over.zktls ?? incomeProviderFromEnv(process.env, { simulatorOnly: simOnly });
   if (!simOnly && ctx.zktls instanceof MockZkTls) throw new Error('mock zkTLS is simulator-only: configure a real zkTLS provider before live reporting (Part J.3)');
   // Stage 1 Groth16 by default; mock proofs too only in a simulator-only process with MERCES_PROOF_SYSTEM=mock (H3;
   // the chain registry logs the warning and refuses the setting next to a live chain)

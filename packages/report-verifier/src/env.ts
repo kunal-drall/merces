@@ -1,5 +1,5 @@
 import { isLocalSigningDomain } from '@merces/domain';
-import { resolveSecret } from '@merces/ports';
+import { assertSyntheticIncomeNetwork, resolveSecret } from '@merces/ports';
 import { VerifierConfigError, previousAddressesFromEnv, verifierChainsFromEnv, type ReportVerifierConfig, type VerifierChain } from './verifier.ts';
 
 /** The local KMS's published development seed: the simulator only, never a live network. */
@@ -40,8 +40,12 @@ export function verifierSetupFromEnv(env: NodeJS.ProcessEnv): VerifierEnvSetup {
   const address = env.REPORT_VERIFIER_ADDRESS?.trim() || null;
   if (!address && !simulatorOnly) throw new VerifierConfigError('REPORT_VERIFIER_ADDRESS is not set: the verifier starts only with the address of the key registered onchain (S4 D10)');
   const provider = env.MERCES_ZKTLS_PROVIDER ?? 'mock';
-  if (provider !== 'mock') throw new VerifierConfigError('the configured zkTLS provider is not wired yet (Part J.3)');
-  if (live.length > 0) throw new VerifierConfigError('mock zkTLS is simulator-only: a real zkTLS provider is required before live reporting (Part J.3)');
+  if (provider === 'synthetic' && env.MERCES_TEST_INCOME === 'true') {
+    for (const chain of chains) assertSyntheticIncomeNetwork(chain.domain);
+  } else {
+    if (provider !== 'mock') throw new VerifierConfigError('the configured zkTLS provider is not wired yet (Part J.3); synthetic requires MERCES_TEST_INCOME=true');
+    if (live.length > 0) throw new VerifierConfigError('mock zkTLS is simulator-only: a real zkTLS provider is required before live reporting (Part J.3)');
+  }
   return {
     seed,
     config: {

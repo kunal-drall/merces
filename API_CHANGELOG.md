@@ -6,6 +6,13 @@ The frontend builds against this API. **Every push lists every changed or remove
 count; `API.md` is the narrative; `packages/client/src/generated/openapi.d.ts` is regenerated with `pnpm openapi:client`.
 Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
+## 2026-10-11 — explicit synthetic income demo (219 operations)
+
+- `ReportVerifierInfo` adds optional `syntheticIncome: { testOnly: true, notice }`.
+- `/income-sources` and issuer zkTLS-session responses mark the synthetic Stripe demo with `testOnly` and `notice`; only Stripe is listed in this mode and its real Reclaim provider ID is omitted.
+- The isolated verifier adds `POST /synthetic/fixture` only in the explicitly enabled demo. Fixed completed-quarter data travels directly to the device, never through the API. Its `/keys` response carries the same test label.
+- `MERCES_ZKTLS_PROVIDER=synthetic` plus `MERCES_TEST_INCOME=true` enables this user-requested demo only on Solana devnet and Monad testnet. Arbitrary mock zkTLS and mock Groth16 proofs remain forbidden on live networks. Real provider verification remains unimplemented.
+
 ## 2026-10-11 — explicit test-only contract signing (219 operations)
 
 - Added issuer `POST /drafts/{draftId}/contract/test-sign`, requiring `{ testOnly: true }`.

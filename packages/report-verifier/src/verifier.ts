@@ -4,7 +4,7 @@ import {
   reportDigest, seriesKeyOf, signerAddressSchema, signingDomain, signingDomainSchema, type ChainKey, type ChainPort, type ReportAttestationRecord, type SigningDomain,
 } from '@merces/domain';
 import { fromPid, parsePeriod, quarterIndex, toPid } from '@merces/math';
-import type { KmsPort, ZkTlsPort, ZkTlsProof } from '@merces/ports';
+import { assertSyntheticIncomeNetwork, SyntheticIncomeZkTls, SYNTHETIC_INCOME_NOTICE, type KmsPort, type ZkTlsPort, type ZkTlsProof } from '@merces/ports';
 
 const decimal = z.string().regex(/^\d{1,78}$/);
 const hex32 = z.string().regex(/^0x[0-9a-f]{64}$/);
@@ -86,6 +86,7 @@ export interface VerifierKeyInfo {
   publicKeyHex: string;
   chains: VerifierChain[];
   previous: PreviousVerifierAddress[];
+  syntheticIncome?: {testOnly: true; notice: string};
 }
 
 export interface ReportVerifierPort {
@@ -256,6 +257,7 @@ export class ReportVerifier implements ReportVerifierPort {
       if (!signingDomainSchema.safeParse(entry.domain).success) throw new VerifierConfigError(`the chain table's domain for ${entry.chain} is malformed`);
       try {
         this.assertNetwork(entry.domain);
+        if (this.zktls instanceof SyntheticIncomeZkTls) assertSyntheticIncomeNetwork(entry.domain);
       } catch (e) {
         // the allow-list's own message: a mainnet named by its id, or a network not on the list (no secret in it)
         throw new VerifierConfigError(`chain ${entry.chain}: ${e instanceof SigningError ? e.message : 'the signing domain is refused'}`);
@@ -288,7 +290,7 @@ export class ReportVerifier implements ReportVerifierPort {
 
   async publicKey(): Promise<VerifierKeyInfo> {
     const r = await this.ready();
-    return { address: r.address, publicKeyHex: r.publicKeyHex, chains: [...r.chains.entries()].map(([chain, domain]) => ({ chain, domain: { ...domain } })), previous: r.previous.map((p) => ({ ...p })) };
+    return { address: r.address, publicKeyHex: r.publicKeyHex, chains: [...r.chains.entries()].map(([chain, domain]) => ({ chain, domain: { ...domain } })), previous: r.previous.map((p) => ({ ...p })), ...(this.zktls instanceof SyntheticIncomeZkTls ? {syntheticIncome:{testOnly:true as const,notice:SYNTHETIC_INCOME_NOTICE}} : {}) };
   }
 
   async attest(req: AttestRequest): Promise<AttestResult | AttestFailure> {
@@ -316,6 +318,7 @@ export class ReportVerifier implements ReportVerifierPort {
     if (expected !== req.incomeCommitment) return fail('commitment-mismatch');
     // the signed message names no source: the provider is checked here and stays offchain (B7)
     const fields = { periodId: req.periodId, priorIncomeCommitment: req.priorIncomeCommitment, incomeCommitment: req.incomeCommitment, tier: 2 as const, liquidityEvent: req.liquidityEvent ?? false };
+    if (this.zktls instanceof SyntheticIncomeZkTls) assertSyntheticIncomeNetwork(context.domain);
     this.assertNetwork(context.domain); // never mainnet (nor a live network for a dev key), checked again at the signature
     const { digest } = reportDigest({ domain: context.domain.domain, seriesKey: context.seriesKey }, fields);
     const signature = await this.kms.signDigest(this.config.keyId, digest);

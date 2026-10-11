@@ -44,6 +44,14 @@ same list) and checks the RPC serves that id. A refused config or
 RPC stops the process under `live`; under `auto` the chain falls back to the simulator and the refusal is the logged
 reason. A new testnet is added to the allow-list in code, never through configuration.
 
+### Synthetic income demonstration (owner-authorized, 11 October 2026)
+
+For the disposable testnet deployment, set `MERCES_ZKTLS_PROVIDER=synthetic` and `MERCES_TEST_INCOME=true` in both the API and isolated verifier. Keep `MERCES_PROOF_SYSTEM=groth16`. This simulates Stripe and Reclaim using exactly two fictional USD charges ($100 and $250) per completed quarter; it does not contact either service or establish verified real income. The app displays the test notice before proving and loads the fixture directly from the isolated verifier.
+
+The verifier requires a fresh local Keychain-backed seed, its matching `REPORT_VERIFIER_ADDRESS`, and a pinned `MERCES_VERIFIER_CHAINS` table. Only Solana devnet (103) and Monad testnet (10143) are accepted. The published development seed, mainnet, other testnets, arbitrary mock proofs and future quarters remain refused. Do not set `MERCES_VERIFIER_DEV=true` for this deployment. Calendar deadlines and lockups are unchanged.
+
+`REPORT_VERIFIER_HOST` defaults to loopback. Set `MERCES_VERIFIER_ALLOWED_ORIGINS` to the exact local app origin (comma-separated for multiple approved origins); no wildcard or credential-bearing browser requests are used. The synthetic fixture endpoint accepts only series and period, never an arbitrary income amount. Logs contain outcomes only. To disable this demo, stop the services and remove both opt-ins; the ordinary mock provider then refuses live startup. Real Reclaim integration remains separate unfinished work.
+
 ### Report proofs (Stage 1 Groth16)
 
 Reports carry Stage 1's ProofOfIncome proof (Groth16 over BN254, `stage1/circuits`). The issuer's device proves
