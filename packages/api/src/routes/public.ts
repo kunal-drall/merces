@@ -61,13 +61,13 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
     handler: async (req) => {
       const q = listQuery.parse(req.query);
       const r = await ctx.pool.query(
-        `select i.chain, i.issuer, i.registered_at, i.issuance_stopped, count(s.series_id)::int as series_count,
+        `select i.chain, i.issuer, i.registered_at, i.active, i.issuance_stopped, count(s.series_id)::int as series_count,
                 coalesce(sum(case when s.phase = 'Settled' then 1 else 0 end), 0)::int as live_series
          from issuers i left join series s on s.chain = i.chain and s.issuer = i.issuer
-         where ($1::text is null or i.chain = $1) group by i.chain, i.issuer, i.registered_at, i.issuance_stopped order by i.registered_at desc limit $2 offset $3`,
+         where ($1::text is null or i.chain = $1) group by i.chain, i.issuer, i.registered_at, i.active, i.issuance_stopped order by i.registered_at desc limit $2 offset $3`,
         [q.chain ?? null, q.limit, q.offset],
       );
-      return { issuers: r.rows.map((x) => ({ issuerId: `${x.chain}:${x.issuer}`, chain: x.chain, address: x.issuer, registeredAt: Number(x.registered_at), issuanceStopped: x.issuance_stopped, seriesCount: x.series_count, liveSeries: x.live_series })) };
+      return { issuers: r.rows.map((x) => ({ issuerId: `${x.chain}:${x.issuer}`, chain: x.chain, address: x.issuer, registeredAt: Number(x.registered_at), active: x.active, issuanceStopped: x.issuance_stopped, seriesCount: x.series_count, liveSeries: x.live_series })) };
     },
   });
 
@@ -82,7 +82,7 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
       const row = r.rows[0];
       if (!row) throw AppError.notFound('issuer');
       const series = await ctx.pool.query('select * from series where chain = $1 and issuer = $2 order by created_at', [chain, address]);
-      return { issuerId, chain, address, registeredAt: Number(row.registered_at), issuanceStopped: row.issuance_stopped, series: series.rows.map(seriesRow) };
+      return { issuerId, chain, address, registeredAt: Number(row.registered_at), active: row.active, issuanceStopped: row.issuance_stopped, series: series.rows.map(seriesRow) };
     },
   });
 

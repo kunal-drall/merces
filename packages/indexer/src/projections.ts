@@ -86,7 +86,17 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
   switch (e.type) {
     case 'IssuerRegistered': {
       const p = e.payload as P<'IssuerRegistered'>;
-      await client.query('insert into issuers (chain, issuer, registered_at) values ($1,$2,$3) on conflict do nothing', [e.chain, p.issuer, e.blockTime]);
+      await client.query('insert into issuers (chain, issuer, registered_at) values ($1,$2,$3) on conflict (chain,issuer) do update set active=true', [e.chain, p.issuer, e.blockTime]);
+      break;
+    }
+    case 'IssuerDeactivated': {
+      const p=e.payload as P<'IssuerDeactivated'>;
+      await client.query('update issuers set active=false where chain=$1 and issuer=$2',[e.chain,p.issuer]);
+      break;
+    }
+    case 'ContractHashSet': {
+      const p=e.payload as P<'ContractHashSet'>;
+      await client.query('update series set contract_hash=$2 where series_id=$1',[p.seriesId,p.contractHash]);
       break;
     }
     case 'IssuanceResumed': {

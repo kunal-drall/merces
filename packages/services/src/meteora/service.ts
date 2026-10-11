@@ -59,9 +59,10 @@ export class MeteoraService {
     const info = await chain.info();
     const usdc = info.stablecoins.USDC?.mint;
     if (!usdc) throw AppError.unprocessable('USDC not available on this chain');
-    const cfg = await this.meteora.generateConfig({ seriesId, quoteMint: usdc, migrationQuoteThreshold: series.terms.minimumRaise, initialPricePerUnit: series.terms.reservePrice, totalSupplyUnits: series.terms.unitsOffered });
-    const badge = await this.meteora.tokenBadgeRequired(usdc);
-    const pool = (await this.meteora.getPoolState(`pool_${cfg.configKey}`)) ? `pool_${cfg.configKey}` : null;
+    if(chain.mode==='live'&&!curve)throw AppError.conflict('create the Meteora config and pool on the issuer device using Stage 1, then configure its address for this series', {reason:'curve-pool-required'});
+    const cfg = chain.mode==='live' ? {configKey:curve!.dbcConfig,params:{quoteMint:usdc,migrationQuoteThreshold:curve!.migrationQuoteThreshold,totalSupplyUnits:series.terms.unitsOffered},generatedBy:'onchain-validated'} : await this.meteora.generateConfig({ seriesId, quoteMint: usdc, migrationQuoteThreshold: series.terms.minimumRaise, initialPricePerUnit: series.terms.reservePrice, totalSupplyUnits: series.terms.unitsOffered });
+    const badge = chain.mode==='live'?false:await this.meteora.tokenBadgeRequired(usdc);
+    const pool = chain.mode==='live'?curve!.dbcPool:(await this.meteora.getPoolState(`pool_${cfg.configKey}`)) ? `pool_${cfg.configKey}` : null;
     await this.ctx.pool.query('insert into curve_configs (series_id, config_key, pool, params, generated_by, quote_mint, token_badge_required) values ($1,$2,$3,$4,$5,$6,$7) on conflict (series_id) do nothing', [seriesId, cfg.configKey, pool, JSON.stringify(cfg.params), cfg.generatedBy, usdc, badge]);
     await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'issuer', action: 'curve.configure', target: seriesId, detail: { configKey: cfg.configKey, generatedBy: cfg.generatedBy } });
     return this.view((await this.ctx.pool.query('select * from curve_configs where series_id = $1', [seriesId])).rows[0], curve);
@@ -82,7 +83,7 @@ export class MeteoraService {
     const { chain } = await this.curveSeries(seriesId);
     const onchain = await chain.getCurve(seriesId);
     const cfg = (await this.ctx.pool.query('select * from curve_configs where series_id = $1', [seriesId])).rows[0];
-    const pool = cfg?.pool ? await this.meteora.getPoolState(cfg.pool) : null;
+    const pool = chain.mode==='live' ? (onchain?{pool:onchain.dbcPool,configKey:onchain.dbcConfig,quoteRaised:onchain.quoteReserve,unitsSold:onchain.baseSold,spotPrice:onchain.spotPrice,progressBps:onchain.progressBps,graduated:onchain.poolComplete}:null) : cfg?.pool ? await this.meteora.getPoolState(cfg.pool) : null;
     return {
       seriesId, onchain, pool, configured: !!cfg, ...NO_CAP, notice: curveNotice(onchain), beforeYouBuy: onchain ? curveBeforeYouBuy(curveNoticeFigures(onchain)) : null,
       graduationMonitor: await this.lastGraduationCheck(seriesId),
@@ -115,6 +116,7 @@ export class MeteoraService {
     let dexQuote: Awaited<ReturnType<DexPort['quote']>> | null = null;
     let usdcAmount = input.amountIn;
     if (input.side === 'buy' && input.payIn === 'USDG') {
+      if(chain.mode==='live'&&this.dex.provider==='mock')throw AppError.unprocessable('a testnet DEX route is not configured; pay in USDC',{reason:'dex-provider-unavailable'});
       const usdg = info.stablecoins.USDG?.mint;
       if (!usdg) throw AppError.unprocessable('USDG not available on this chain');
       dexQuote = await this.dex.quote({ inputMint: usdg, outputMint: usdc, amount: input.amountIn, slippageBps: input.slippageBps, taker: input.wallet });

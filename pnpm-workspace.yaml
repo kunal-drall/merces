@@ -5,3 +5,4 @@ packages:
   - "stage1/packages/sdk"
   - "stage1/packages/reference"
   - "stage1/circuits"
+  - "stage1/solana/meteora"

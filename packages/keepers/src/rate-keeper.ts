@@ -2,7 +2,7 @@ import { enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import { wallet32Of, type Command } from '@merces/domain';
 import { DEFAULT_PARAMETERS, deviates, invertRate, utcDayIndex } from '@merces/math';
-import { parsedToWad, type ChainlinkPort, type PythPort } from '@merces/ports';
+import { parsedToWad, pythUpdateHex, type ChainlinkPort, type PythPort } from '@merces/ports';
 import type { KeeperJob } from './jobs.ts';
 
 /** A closed FX market is routine, unlike a missing feed or a failed submission. */
@@ -41,7 +41,7 @@ export function rateKeeperJob(opts: RateKeeperOptions): KeeperJob {
               if (!parsed) throw new Error(`Hermes returned no price for ${row.pyth_feed_id}`);
               if (BigInt(now - parsed.price.publish_time) > DEFAULT_PARAMETERS.fxMaxStalenessSeconds) throw new MarketClosed(`stale price (published ${now - parsed.price.publish_time}s ago; FX market closed?)`);
               const { rateWad } = parsedToWad(parsed, row.inverted);
-              const command: Extract<Command, { kind: 'snapshotFx' }> = { kind: 'snapshotFx', pairId: pair, price: parsed.price.price, conf: parsed.price.conf, expo: parsed.price.expo, publishTime: String(parsed.price.publish_time), updates: upd.binary.data };
+              const command: Extract<Command, { kind: 'snapshotFx' }> = { kind: 'snapshotFx', pairId: pair, price: parsed.price.price, conf: parsed.price.conf, expo: parsed.price.expo, publishTime: String(parsed.price.publish_time), updates: pythUpdateHex(upd.binary) };
               let crossRate: bigint | null = null;
               if (crossId) {
                 const cross = lookup(crossId);

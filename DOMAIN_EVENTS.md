@@ -33,6 +33,15 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `crosscheck`: string \| null
 - `effectivePeriod`: period id (YYYYQn)
 
+### IssuerDeactivated
+
+- `issuer`: string
+
+### ContractHashSet
+
+- `seriesId`: string
+- `contractHash`: hex32
+
 ### IssuerRegistered
 
 - `issuer`: string
@@ -334,8 +343,8 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 - `pair`: string
 - `rateWad`: decimal string (base units / WAD / units)
-- `confWad`: decimal string (base units / WAD / units)
-- `publishTime`: integer
+- `confWad`: decimal string (base units / WAD / units) \| null
+- `publishTime`: integer \| null
 - `dayIndex`: integer
 - `sumWad`: decimal string (base units / WAD / units)
 - `count`: integer
@@ -515,6 +524,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### User commands
 
+- **setContractHash**: `seriesId`: string; `contractHash`: hex32
 - **routeIncome**: `seriesId`: string; `amount`: decimal string (base units / WAD / units)
 - **createSeries**: `terms`: object { routerTerms: object { theta: decimal string (base units / WAD / units), rWad: decimal string (base units / WAD / units), currencyCode: integer, indexingRule: integer, termsSalt: decimal string (base units / WAD / units) }, fxPairId: hex32 \| null, stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }; `seriesAddressHint?`: string
 - **openRaise**: `seriesId`: string
@@ -583,6 +593,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### Admin commands (multisig)
 
+- **deactivateIssuer**: `wallet`: string
 - **setFlags**: `newRaisesPaused?`: boolean; `windowsEnabled?`: boolean; `tier4Enabled?`: boolean
 - **setFxPair**: `feedId`: hex32; `inverted`: boolean; `crosscheck`: string \| null
 - **registerIssuer**: `wallet`: string

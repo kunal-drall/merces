@@ -16,3 +16,6 @@ export * from './e2e-envelope.ts';
 export { isPublishedTestKey } from './published-keys.ts';
 
 export * from './window.ts';
+export * from './stage1-errors.ts';
+export * from './release-history.ts';
+export * from './finalized-events.ts';

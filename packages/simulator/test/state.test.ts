@@ -34,7 +34,7 @@ const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json',
  *  - S3-UL: a curve series keeps base lamports (unit scale 10^6) from its creation.
  *  - S3-CV: a curve's completion settles at the pool's finish time and registers nobody (Stage 1 complete_curve).
  */
-describe('simulator state version 9', () => { // cause S4-V5 (was version 4)
+describe('simulator state version 10', () => { // cause S4-V5 (was version 4)
   it('round-trips the Stage 1 vault, tail and final states and bigint pauses through serialisation and structuredClone', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
     const { seriesId } = await h.runRaise();
@@ -63,7 +63,7 @@ describe('simulator state version 9', () => { // cause S4-V5 (was version 4)
     expect(s.tail.tailExhausted).toBe(true);
     expect(s.final.finalUnits).toBe(500n);
     expect([s.unitScale, s.stakedTotal, s.tenderedTotal, s.unitsSyncedAt, s.positions.get(h.backers[0]!.address)!.stakedUnits]).toEqual([1_000_000n, 7n, 3n, now, 7n]);
-    expect(back.version).toBe(9); // cause S4-V5 (was 4; S3-V4: was 3)
+    expect(back.version).toBe(10); // cause S4-V5 (was 4; S3-V4: was 3)
     expect(structuredClone(h.sim.state)).toEqual(h.sim.state);
   });
 
@@ -77,12 +77,12 @@ describe('simulator state version 9', () => { // cause S4-V5 (was version 4)
     expect(() => deserialiseState(JSON.stringify(v1))).toThrow(SimStateVersionError);
     expect(() => deserialiseState(JSON.stringify({ ...v5, version: 1 }))).toThrow(/version 1 is not supported.*sim:reset/);
     // cause S2-V3: a version-2 state (S1) is refused too
-    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 2 }))).toThrow(/version 2 is not supported \(this build needs version 9\).*sim:reset/); // cause S4-V5 (was version 4; S3-V4: was 3)
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 2 }))).toThrow(/version 2 is not supported \(this build needs version 10\).*sim:reset/); // cause S4-V5 (was version 4; S3-V4: was 3)
     // cause S3-V4: a version-3 state (S2) is refused too
-    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 3 }))).toThrow(/version 3 is not supported \(this build needs version 9\).*sim:reset/); // cause S4-V5 (was version 4)
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 3 }))).toThrow(/version 3 is not supported \(this build needs version 10\).*sim:reset/); // cause S4-V5 (was version 4)
     // cause S4-V5: a version-4 state (S3, attestors as booleans) is refused too
     expect(() => deserialiseState(JSON.stringify({ ...v5, version: 5 }))).toThrow(SimStateVersionError);
-    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 4 }))).toThrow(/version 4 is not supported \(this build needs version 9\).*sim:reset/);
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 4 }))).toThrow(/version 4 is not supported \(this build needs version 10\).*sim:reset/);
     expect(() => deserialiseState(JSON.stringify(v5))).not.toThrow();
   });
 

@@ -28,6 +28,8 @@ function keyAddressOf(ctx: OpContext, name: string): string {
 }
 
 export const registryOps: TranslatorTable = {
+  deactivate_issuer: (ctx,c) => direct(async()=>{await ctx.send(ctx.actors.wallet('admin'),{kind:'deactivateIssuer',wallet:ctx.actors.wallet(c.wallet).address});}),
+  set_contract_hash: (ctx,c) => direct(async()=>{await ctx.send(ctx.actors.wallet(c.actor),{kind:'setContractHash',seriesId:ctx.seriesBook(c.series).seriesId,contractHash:hex32(c.contractHash,'contract hash')});}),
   resume_issuance: (ctx,c) => direct(async()=> { await ctx.send(ctx.actors.wallet(c.actor),{kind:'resumeIssuance'}); }),
   stop_issuance: (ctx,c) => direct(async()=> { await ctx.send(ctx.actors.wallet(c.actor),{kind:'stopIssuance'}); }),
   set_release_pause: (ctx,c) => direct(async()=> { await ctx.send(ctx.actors.wallet(c.actor),{kind:'pauseReleases',seriesId:ctx.seriesBook(c.series).seriesId,paused:c.paused}); }),

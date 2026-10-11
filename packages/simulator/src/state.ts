@@ -25,7 +25,7 @@ import type { PersonalityConfig } from './addresses.ts';
  * States of another version are never upgraded in place.
  */
 // S5: immutable transfer-window terms. Older snapshots cannot supply the series' committed values.
-export const SIM_STATE_VERSION = 9;
+export const SIM_STATE_VERSION = 10;
 
 /** A persisted simulator state from another layout (version 1 before S1, 2 before S2, 3 before S3, 4 before S4): never upgraded in place, reset it. */
 export class SimStateVersionError extends Error {
@@ -460,6 +460,7 @@ export interface SimSeries {
 export interface SimIssuer {
   issuer: string;
   registeredAt: number;
+  active: boolean;
   issuanceStopped: boolean;
   seriesIds: string[];
 }

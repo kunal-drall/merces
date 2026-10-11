@@ -17,7 +17,7 @@ const chains = await createChains(chainsConfigFromEnv(process.env, { pool, simul
 const devMode = [...chains.chains.values()].every((c) => c.mode === 'mock');
 const sessionSecret = resolveSecret(process.env, 'MERCES_SESSION_SECRET', { simulatorOnly: simulatorOnly(chains), devDefault: 'dev-session-secret-not-for-production' });
 const ctx = createServiceContext(makeContext({ pool, chains, log, sessionSecret, devMode }));
-const pyth = (process.env.MERCES_PRICE_FEED_PROVIDER ?? 'mock') === 'pyth' ? new HermesPyth(process.env.PYTH_HERMES_URL) : new MockPyth();
+const pyth = (process.env.MERCES_PRICE_FEED_PROVIDER ?? 'mock') === 'pyth' ? new HermesPyth(process.env.PYTH_HERMES_URL,fetch,process.env.PYTH_API_KEY) : new MockPyth();
 const jobs = standardJobs({ pyth, chainlink: new MockChainlink(), outbox: notificationsOutboxHandler(ctx) });
 log.info({ jobs: jobs.map((j) => j.name), devMode }, 'keepers started');
 await new KeeperScheduler(ctx, jobs).start();

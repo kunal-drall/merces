@@ -245,3 +245,24 @@ describe('S5 issuer registration and window terms', () => {
     expect((await h.sim.getSeries(seriesId))!.terms).toMatchObject({ windowCommitDuration: 3600, windowRevealDuration: 604800, windowFeeBps: 1000 });
   });
 });
+
+describe.each(['solana','monad'] as const)('registry completion on %s',personality=>{
+ it('deactivation blocks new series, and reactivation preserves an issuer issuance stop',async()=>{
+  const h=await issuerHarness(personality);await create(h);
+  await h.exec(h.issuer,{kind:'stopIssuance'});
+  await h.exec(h.admin,{kind:'deactivateIssuer',wallet:h.issuer.address});
+  expect(await h.sim.getIssuer(h.issuer.address)).toMatchObject({active:false,issuanceStopped:true});
+  expect((await rejection(create(h))).detail?.stage1).toBe('IssuerInactive');
+  await h.exec(h.admin,{kind:'registerIssuer',wallet:h.issuer.address});
+  expect(await h.sim.getIssuer(h.issuer.address)).toMatchObject({active:true,issuanceStopped:true});
+  expect((await rejection(create(h))).detail?.stage1).toBe('IssuanceStopped');
+  await h.exec(h.issuer,{kind:'resumeIssuance'});expect(await create(h)).toContain(':');
+ });
+ it('only the issuer can set a nonzero contract hash while the series is Draft',async()=>{
+  const h=await issuerHarness(personality),seriesId=await create(h),contractHash='0x'+'ab'.repeat(32);
+  expect((await rejection(h.exec(h.admin,{kind:'setContractHash',seriesId,contractHash}))).detail?.stage1).toBe('NotIssuer');
+  expect((await rejection(h.exec(h.issuer,{kind:'setContractHash',seriesId,contractHash:'0x'+'00'.repeat(32)}))).detail?.stage1).toBe('ContractHashMissing');
+  const result=await h.exec(h.issuer,{kind:'setContractHash',seriesId,contractHash});expect(result.events.map((e)=>e.type)).toEqual(['ContractHashSet']);expect((await h.sim.getSeries(seriesId))?.terms.contractHash).toBe(contractHash);
+  await h.exec(h.issuer,{kind:'openRaise',seriesId});expect((await rejection(h.exec(h.issuer,{kind:'setContractHash',seriesId,contractHash}))).detail?.stage1).toBe('RaiseNotDraft');
+ });
+});

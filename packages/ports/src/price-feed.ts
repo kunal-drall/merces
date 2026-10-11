@@ -14,6 +14,19 @@ export interface PythPriceUpdate {
   parsed: PythParsedPrice[];
 }
 
+/** Domain snapshot commands carry hex bytes; Hermes may return either encoding. */
+export function pythUpdateHex(binary:PythPriceUpdate['binary']):string[]{
+  return binary.data.map((data)=>{
+    if(binary.encoding==='hex'){
+      const value=data.replace(/^0x/,'');
+      if(!/^(?:[0-9a-f]{2})+$/i.test(value))throw new Error('invalid Pyth update encoding');
+      return `0x${value.toLowerCase()}`;
+    }
+    if(binary.encoding!=='base64'||! /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)||!data)throw new Error('invalid Pyth update encoding');
+    return `0x${Buffer.from(data,'base64').toString('hex')}`;
+  });
+}
+
 export interface PythPort {
   readonly provider: 'pyth-hermes' | 'mock';
   getLatestPriceUpdates(ids: string[]): Promise<PythPriceUpdate>;
@@ -88,18 +101,20 @@ export class MockChainlink implements ChainlinkPort {
 /** Hermes adapter: the exact routes are named so going live is configuration. Not exercised without network access. */
 export class HermesPyth implements PythPort {
   readonly provider = 'pyth-hermes' as const;
-  constructor(private readonly baseUrl = 'https://hermes.pyth.network', private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(private readonly baseUrl = 'https://pyth.dourolabs.app/hermes', private readonly fetchImpl: typeof fetch = fetch, private readonly apiKey?:string) {}
+  private url(path:string):URL{return new URL(path,`${this.baseUrl.replace(/\/$/,'')}/`);}
+  private async request(url:URL):Promise<Response>{try{return await this.fetchImpl(url,{headers:this.apiKey?{Authorization:`Bearer ${this.apiKey}`}:{},signal:AbortSignal.timeout(15000)});}catch{throw new Error('Hermes request failed');}}
   async getLatestPriceUpdates(ids: string[]): Promise<PythPriceUpdate> {
-    const u = new URL('/v2/updates/price/latest', this.baseUrl);
+    const u = this.url('v2/updates/price/latest');
     for (const id of ids) u.searchParams.append('ids[]', id);
     u.searchParams.set('encoding', 'base64');
     u.searchParams.set('parsed', 'true');
-    const res = await this.fetchImpl(u);
+    const res = await this.request(u);
     if (!res.ok) throw new Error(`hermes ${res.status}`);
     return (await res.json()) as PythPriceUpdate;
   }
   async resolveFxFeedIds(symbols: string[]): Promise<Record<string, string | null>> {
-    const res = await this.fetchImpl(new URL('/v2/price_feeds?asset_type=fx', this.baseUrl));
+    const res = await this.request(this.url('v2/price_feeds?asset_type=fx'));
     if (!res.ok) throw new Error(`hermes ${res.status}`);
     const feeds = (await res.json()) as { id: string; attributes: { symbol: string } }[];
     return Object.fromEntries(symbols.map((s) => [s, feeds.find((f) => f.attributes.symbol === s)?.id ? '0x' + feeds.find((f) => f.attributes.symbol === s)!.id.replace(/^0x/, '') : null]));

@@ -1,6 +1,11 @@
-import { EVM_TESTNET_CHAIN_IDS } from '@merces/domain';
+import { type WalletSigner, type ServiceRole, EVM_TESTNET_CHAIN_IDS } from '@merces/domain';
 
 export interface EvmChainConfig {
+  /** Reporting currency for each configured FX pair; the private commitment does not disclose it. */
+  fxCurrencies?:Record<string,string>;
+  /** Low-privilege service wallet signers only; issuer and attestor keys never enter this adapter. */
+  serviceSigners?:Partial<Record<ServiceRole,WalletSigner>>;
+
   /** chain key used in ids, e.g. "monad" */
   chain: string;
   /** human name, e.g. "monad-testnet" */

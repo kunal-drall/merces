@@ -88,6 +88,36 @@ components:
         encoding: { type: string }
         summary: { type: string }
         expiresAt: { type: [integer, 'null'] }
+        approvals:
+          type: array
+          description: Sign and confirm exact ERC-20 approvals in order, then rebuild the main transaction. A nonzero existing allowance may require approval of zero first.
+          items:
+            type: object
+            required: [token, spender, amount, payload, encoding]
+            properties:
+              token: { type: string }
+              spender: { type: string }
+              amount: { type: string }
+              payload: { type: string }
+              encoding: { type: string, const: evm-json }
+        preparations:
+          type: array
+          description: Confirm each protocol prerequisite, then rebuild the main transaction. These prerequisites do not perform the requested main action.
+          items:
+            type: object
+            required: [summary, payload, encoding]
+            properties:
+              summary: { type: string }
+              payload: { type: string }
+              encoding: { type: string, enum: [evm-json, solana-base64] }
+        afterCreate:
+          type: object
+          description: EVM creation cannot accept a contract hash. After confirmation, obtain the series id from SeriesCreated and call the signed draft's build-contract-hash route before opening the raise.
+          required: [kind, contractHash]
+          properties:
+            kind: { type: string, const: setContractHash }
+            contractHash: { type: string }
+
 paths:
   /attestor/tier3/{caseId}/withdraw:
     post:

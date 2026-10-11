@@ -1,4 +1,11 @@
+import type {WalletSigner,ServiceRole} from '@merces/domain';
 export interface SolanaChainConfig {
+  /** Pre-created, issuer-owned Stage 1 compatible DBC pools awaiting activation. */
+  curvePools?:Record<string,string>;
+  fxCurrencies?:Record<string,string>;
+  /** Verified Pyth PriceUpdateV2 accounts by feed id. A price pusher maintains both primary and cross-check feeds. */
+  priceUpdateAccounts?:Record<string,string>;
+  serviceSigners?:Partial<Record<ServiceRole,WalletSigner>>;
   /** chain key used in ids; "solana" */
   chain: string;
   cluster: 'devnet' | 'testnet' | 'localnet';

@@ -333,7 +333,9 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
       return;
     }
     const created = await exec(e, e.issuer, { kind: 'createSeries', terms });
-    expect(types(created.events)).toEqual(['SeriesCreated', 'CurveActivated', 'RaiseOpened']);
+    // S5: Stage 1 registry creates the draft, set_contract_hash binds the document, then activate_curve opens it.
+    // The simulator binds the hash directly in its create fixture. All live events remain visible.
+    expect(types(created.events)).toEqual(e.chain.mode === 'live' ? ['SeriesCreated', 'ContractHashSet', 'CurveActivated', 'RaiseOpened'] : ['SeriesCreated', 'CurveActivated', 'RaiseOpened']);
     const curveId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     const [a, b, c] = e.backers as [typeof e.backers[0], typeof e.backers[0], typeof e.backers[0]];
     for (const [w, amount] of [[a, 400], [b, 350], [c, 300]] as const) {

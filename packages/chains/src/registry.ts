@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import type { ChainPort } from '@merces/domain';
-import { EVM_KNOWN, EvmChain, type EvmChainConfig } from '@merces/chain-evm';
-import { SOLANA_KNOWN, SolanaChain, normalizeCluster, type SolanaChainConfig } from '@merces/chain-solana';
+import { EVM_KNOWN, EvmChain, evmServiceWallet, type EvmChainConfig } from '@merces/chain-evm';
+import { SOLANA_KNOWN, SolanaChain, solanaServiceWallet, normalizeCluster, type SolanaChainConfig } from '@merces/chain-solana';
 import { Groth16ReportVerifier, MOCK_PROOFS_WARNING, reportProofSystemFromEnv, type ReportProofSystem } from '@merces/ports';
 import { PgSimPersistence, SimulatorChain } from '@merces/simulator';
 import { locateStage1, stage1Path, type Stage1Location } from './manifest.ts';
@@ -11,6 +11,11 @@ export type ModeSetting = 'mock' | 'live' | 'auto';
 export interface ChainsConfig {
   solana: { mode: ModeSetting; rpcUrl?: string };
   evm: { mode: ModeSetting; chainKey: string; chainId?: number; rpcUrl?: string };
+  live?: {
+    solana?:Pick<SolanaChainConfig,'keeperPublicKey'|'allowlistManagerPublicKey'|'fxCurrencies'|'priceUpdateAccounts'|'curvePools'>;
+    evm?:Pick<EvmChainConfig,'keeperAddress'|'allowlistManagerAddress'|'fxCurrencies'>;
+    keys?:{solanaKeeperSeedHex?:string;solanaAllowlistSeedHex?:string;evmKeeperPrivateKey?:string;evmAllowlistPrivateKey?:string};
+  };
   stage1Path?: string;
   /** when set, simulators persist to Postgres under keys sim:<chain> */
   pool?: Pool;
@@ -158,7 +163,15 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
     cfg.solana.mode,
     () => {
       const c = solanaConfigFrom(stage1, { rpcUrl: cfg.solana.rpcUrl, generatedDir: cfg.generatedDir });
-      return c ? new SolanaChain(c) : null;
+      if(!c)return null;Object.assign(c,cfg.live?.solana);
+      const keys=cfg.live?.keys;
+      for(const [role,key] of [['keeper',keys?.solanaKeeperSeedHex],['allowlistManager',keys?.solanaAllowlistSeedHex]] as const)if(key){
+        if(!/^(0x)?[0-9a-f]{64}$/i.test(key))throw new Error('Solana service seed must be 32-byte hex');
+        const signer=solanaServiceWallet(c,Buffer.from(key.replace(/^0x/,''),'hex')),expected=role==='keeper'?c.keeperPublicKey:c.allowlistManagerPublicKey;
+        if(signer.address!==expected)throw new Error('Solana service signer differs from its pinned public key');
+        c.serviceSigners??={};c.serviceSigners[role]=signer;
+      }
+      return new SolanaChain(c);
     },
     (acceptMockProofs) => SimulatorChain.create({ personality: 'solana', chainKey: 'solana', persistence: persistence('solana'), reportProofVerifier, acceptMockProofs }),
   );
@@ -167,7 +180,15 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
     cfg.evm.mode,
     () => {
       const c = evmConfigFrom(stage1, cfg.evm.chainKey, { rpcUrl: cfg.evm.rpcUrl, chainId: cfg.evm.chainId, generatedDir: cfg.generatedDir });
-      return c ? new EvmChain(c) : null;
+      if(!c)return null;Object.assign(c,cfg.live?.evm);
+      const keys=cfg.live?.keys;
+      for(const [role,key] of [['keeper',keys?.evmKeeperPrivateKey],['allowlistManager',keys?.evmAllowlistPrivateKey]] as const)if(key){
+        if(!/^0x[0-9a-f]{64}$/i.test(key))throw new Error('EVM service key must be 0x-prefixed 32-byte hex');
+        const signer=evmServiceWallet(c,key as `0x${string}`),expected=role==='keeper'?c.keeperAddress:c.allowlistManagerAddress;
+        if(signer.address.toLowerCase()!==expected?.toLowerCase())throw new Error('EVM service signer differs from its pinned address');
+        c.serviceSigners??={};c.serviceSigners[role]=signer;
+      }
+      return new EvmChain(c);
     },
     (acceptMockProofs) => SimulatorChain.create({ personality: 'monad', chainKey: cfg.evm.chainKey, persistence: persistence(cfg.evm.chainKey), reportProofVerifier, acceptMockProofs }),
   );
@@ -201,9 +222,15 @@ export async function createChains(cfg: ChainsConfig): Promise<ChainRegistry> {
 
 export function chainsConfigFromEnv(env: NodeJS.ProcessEnv = process.env, extra: Partial<ChainsConfig> = {}): ChainsConfig {
   const mode = (v: string | undefined): ModeSetting => (v === 'mock' || v === 'live' || v === 'auto' ? v : 'auto');
+  const mapping=(name:string):Record<string,string>|undefined=>{
+    if(!env[name])return undefined;let value:unknown;try{value=JSON.parse(env[name]!);}catch{throw new Error(`${name} must be a JSON string map`);}
+    if(!value||typeof value!=='object'||Array.isArray(value)||Object.values(value).some((v)=>typeof v!=='string'))throw new Error(`${name} must be a JSON string map`);
+    return value as Record<string,string>;
+  };
   return {
     solana: { mode: mode(env.MERCES_CHAIN_SOLANA_MODE), rpcUrl: env.SOLANA_RPC_URL },
     evm: { mode: mode(env.MERCES_CHAIN_EVM_MODE), chainKey: env.EVM_CHAIN_KEY ?? 'monad', chainId: env.EVM_CHAIN_ID ? Number(env.EVM_CHAIN_ID) : undefined, rpcUrl: env.EVM_RPC_URL },
+    live:{solana:{keeperPublicKey:env.SOLANA_KEEPER_PUBLIC_KEY??null,allowlistManagerPublicKey:env.SOLANA_ALLOWLIST_PUBLIC_KEY??null,fxCurrencies:mapping('SOLANA_FX_CURRENCIES'),priceUpdateAccounts:mapping('SOLANA_PYTH_PRICE_ACCOUNTS'),curvePools:mapping('SOLANA_CURVE_POOLS')},evm:{keeperAddress:env.EVM_KEEPER_ADDRESS??null,allowlistManagerAddress:env.EVM_ALLOWLIST_ADDRESS??null,fxCurrencies:mapping('EVM_FX_CURRENCIES')},keys:{solanaKeeperSeedHex:env.SOLANA_KEEPER_SEED_HEX,solanaAllowlistSeedHex:env.SOLANA_ALLOWLIST_SEED_HEX,evmKeeperPrivateKey:env.EVM_KEEPER_PRIVATE_KEY,evmAllowlistPrivateKey:env.EVM_ALLOWLIST_PRIVATE_KEY}},
     stage1Path: env.STAGE1_PATH,
     persistKeyPrefix: env.MERCES_SIM_KEY,
     // validated against the decided chains in createChains (mock needs a simulator-only process)

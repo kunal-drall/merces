@@ -738,7 +738,7 @@ describe('stage1 vector runner: merces backend', () => {
 
   // review finding "Waivers match any shim-less BLOCKED op at a waived step index": 01#34 turned into an op outside S1
   // (no shim row) was waived by BLK-1, so the vector came out PASS-WITH-WAIVERS (ok) on both the runner and lockstep
-  it('old waiver indices cannot hide an unexpected revert or an unsupported command', async () => {
+  it('old waiver indices cannot hide unexpected reverts, including newly supported commands', async () => {
     const src = raw('01_happy_path');
     src.steps[34] = { t: src.steps[34]!.t, op: 'retire_if_capped', series: 'S1' };
     const run = (await runStage1Vectors({ vectors: [fromJson(src, '01_happy_path')], backend: 'merces', personalities: ['solana'], until: 36 })).runs[0]!;
@@ -748,7 +748,9 @@ describe('stage1 vector runner: merces backend', () => {
     const unsupported = raw('01_happy_path');
     unsupported.steps[34] = { t: unsupported.steps[34]!.t, op: 'set_contract_hash', actor: 'issuer', series: 'S1', contractHash: '0x' + '12'.repeat(32) };
     const blocked = (await runStage1Vectors({ vectors: [fromJson(unsupported, '01_happy_path')], backend: 'merces', personalities: ['solana'], until: 36 })).runs[0]!;
-    expect(blocked.status).toBe('BLOCKED');
+    // S5-REG: registry set_contract_hash requires Draft (stage1/solana/programs/merces_registry/src/lib.rs).
+    // It now has a translator; this settled-series call must fail the phase guard, without a waiver.
+    expect(blocked.status).toBe('FAIL');
     expect(blocked.atExpected).toBe(false);
     expect(blocked.issues.find((i) => i.index === 34)?.waived).toBeUndefined();
   }, 120_000);

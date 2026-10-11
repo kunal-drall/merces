@@ -8,6 +8,20 @@ Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
 ## Unreleased
 
+Live adapters and registry completion (213 operations):
+- Added admin `POST /admin/issuers/deactivate`, with `{chain,wallet}` and a stored admin transaction request.
+- Added issuer `POST /drafts/{draftId}/build-contract-hash`, with `{seriesId}`, for the signed draft's matching,
+  issuer-owned Draft series. EVM creates first, then binds the contract hash; Solana binds it in the create transaction.
+- `UnsignedTx` adds optional `preparations`, exact token `approvals`, and `afterCreate`. Confirm prerequisites and
+  rebuild before signing the main transaction. Each transaction has exactly one wallet signer; there is no custody.
+- Public issuer reads and `IssuerState` add `active`; deactivation prevents future series without affecting existing ones.
+- Domain events add `ContractHashSet` and `IssuerDeactivated`. `RateSnapshot.confWad` and `.publishTime` can be null:
+  Stage 1's onchain snapshot event does not publish those fields. No inferred provider metadata is stored.
+- Live curve configuration validates a pre-created pool's public terms and treasury authorities; live USDG-to-USDC
+  quote requests refuse the mock DEX. A live `redeem` with `maxPricePerUnit` is refused because Stage 1 has no onchain
+  slippage parameter; the simulator still supports that guard. Live create fees must match the registry defaults.
+- Simulator state is version 10: reset/reseed older snapshots before development startup.
+
 Router flow (211 operations):
 - Added issuer-only `GET /series/{seriesId}/router`: live receiver/held balance, YTD, checkpoints, public terms, credit
   and mint-finalization state. The linked issuer wallet is required; raw income is never indexed.

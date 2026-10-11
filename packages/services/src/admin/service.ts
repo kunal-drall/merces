@@ -169,6 +169,12 @@ export class AdminService {
     return r;
   }
   /** Build an admin command for the multisig and record the request. The backend never signs it. */
+  async deactivateIssuer(chain:string,wallet:string,admin:Session):Promise<{request:AdminTxRequest;tx:UnsignedTx}> {
+    const result=await this.propose(chain,{kind:'deactivateIssuer',wallet},admin);
+    await audit(this.ctx.pool,{actor:admin.accountId,actorRole:'admin',action:'issuer.deactivate-proposed',target:`${chain}:${wallet}`,detail:{requestId:result.request.requestId}});
+    return result;
+  }
+
   private async propose(chain: string, command: AdminCommand, admin: Session, meta: Record<string, unknown> = {}): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
     const port = this.port(chain);
     const info = await port.info();
@@ -413,8 +419,10 @@ export class AdminService {
         return !!(await port.getRateAccumulator('0x' + Buffer.from(fxPairId(cmd.feedId, cmd.inverted)).toString('hex')));
       // the registry as the chain holds it (S4 WP5): a registration shows as an active key, a revocation as a revoked one
       // with its revocation time, a rotation as both
+      case 'deactivateIssuer':
+        return (await port.getIssuer(cmd.wallet))?.active === false;
       case 'registerIssuer':
-        return !!(await port.getIssuer(cmd.wallet));
+        return (await port.getIssuer(cmd.wallet))?.active === true;
       case 'registerAttestor':
         return (await port.getSignerKey('attestor', cmd.attestor))?.active === true;
       case 'revokeAttestor': {

@@ -372,6 +372,16 @@ export class TermsService {
     return { tx, terms };
   }
 
+  /** Anchor the signed draft contract after EVM creation. The series id comes from its confirmed receipt. */
+  async buildContractHash(draftId:string,seriesId:string,session:Session):Promise<{tx:UnsignedTx}> {
+    const d=await this.getDraft(draftId,session);
+    if(d.state!=='contract_signed')throw AppError.conflict('the draft contract must be signed');
+    const chain=this.ctx.chains.get(String(d.chain)),s=await chain.getSeries(seriesId);
+    if(!s || s.issuer!==d.issuer || s.terms.termsCommitment!==d.termsCommitment)throw AppError.conflict('the series does not match this signed draft');
+    if(s.phase!=='Draft')throw AppError.conflict('contract hash can only change before the raise opens');
+    return {tx:await chain.build({kind:'setContractHash',seriesId,contractHash:String(d.contractHash)},s.issuer)};
+  }
+
   /** After the user signed and sent createSeries: link the draft to the series by matching the contract hash and commitment in the read model. */
   async linkCreated(draftId: string, session: Session): Promise<Record<string, unknown>> {
     const d = await this.getDraft(draftId, session);

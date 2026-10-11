@@ -10,8 +10,6 @@ import { blocked, type Translation, type TranslatorTable } from './types.ts';
  *   `withdraw_pause_request` (now in `pauses.ts`).
  */
 export const NOT_YET: Readonly<Partial<Record<CallOp, string>>> = Object.freeze({
-  deactivate_issuer: 'S5',
-  set_contract_hash: 'S5',
 });
 
 function notYet(op: CallOp): Translation {

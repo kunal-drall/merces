@@ -10,7 +10,8 @@ import { newLedger } from './ledger.ts';
 // ------------------------------------------------------------------ issuers and series
 export function registerIssuer(e: EngineCore, signer: string, now: number, emit: Emit): void {
   if (/^(0x0{40}|1{32})$/.test(signer)) fail('ZeroAddress', 'issuer wallet is zero');
-  if (!e.state.issuers.has(signer)) e.state.issuers.set(signer, { issuer: signer, registeredAt: now, issuanceStopped: false, seriesIds: [] });
+  if (!e.state.issuers.has(signer)) e.state.issuers.set(signer, { issuer: signer, registeredAt: now, active: true, issuanceStopped: false, seriesIds: [] });
+  e.state.issuers.get(signer)!.active = true;
   emit('IssuerRegistered', { issuer: signer });
 }
 export function stopIssuance(e: EngineCore, signer: string, emit: Emit, stopped = true): void {
@@ -23,6 +24,7 @@ export function stopIssuance(e: EngineCore, signer: string, emit: Emit, stopped 
 export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'createSeries' }>, now: number, emit: Emit): void {
   const issuer = e.state.issuers.get(signer);
   if (!issuer) throw new ChainError('Unauthorized', 'issuer not registered');
+  if (!issuer.active) fail('IssuerInactive');
   if (issuer.issuanceStopped) fail('IssuanceStopped');
   const t = cmd.terms;
   // curve mode is Solana only: the EVM registry refuses it right after the issuer check, before the stablecoin and the
@@ -133,4 +135,20 @@ export function checkRouterTerms(e: EngineCore,t: Pick<SeriesTerms,'routerTerms'
     if (commitment! !== t.termsCommitment) fail(e.state.config.family === 'solana' ? 'Tier1TermsMismatch' : 'TermsCommitmentMismatch');
   }
 
+}
+
+/** Registry authority blocks only future series (SPEC §3.2). */
+export function deactivateIssuer(e: EngineCore,wallet:string,emit:Emit):void {
+  const issuer=e.state.issuers.get(wallet);
+  if(issuer) issuer.active=false;
+  else if(e.state.config.family==='solana') fail('AccountNotInitialized');
+  emit('IssuerDeactivated',{issuer:wallet});
+}
+export function setContractHash(e:EngineCore,signer:string,cmd:Extract<Command,{kind:'setContractHash'}>,emit:Emit):void {
+  const s=e.series(cmd.seriesId);
+  if(s.issuer!==signer)fail('NotIssuer');
+  if(s.phase!=='Draft')fail('RaiseNotDraft');
+  if(/^0x0+$/.test(cmd.contractHash))fail('ContractHashMissing');
+  s.terms.contractHash=cmd.contractHash;
+  emit('ContractHashSet',{seriesId:s.seriesId,contractHash:cmd.contractHash});
 }

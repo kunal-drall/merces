@@ -14,7 +14,7 @@ import { flagFxFallback, quarterRate, snapshotRate, snapshotFx, setFxPair } from
 import { burnRetired, claimPayout, payIn, postSplitReceipt, retireIfCapped } from './payments.ts';
 import { submitTrueUp, payTrueUp } from './trueup.ts';
 import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
-import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
+import { createSeries, registerIssuer, setAllowlist, stopIssuance, deactivateIssuer, setContractHash } from './registry.ts';
 import { attestorUsable, registerKey, revokeKey, rotateKey } from './keys.ts';
 import { submitReport } from './reports.ts';
 import { stakeUnits, tenderUnits, unstakeUnits } from './stake.ts';
@@ -96,6 +96,8 @@ export class SimEngine implements EngineCore {
       if (actor.kind !== 'user' || actor.signer !== this.state.admin) throw new ChainError('Unauthorized', `${cmd.kind} requires the protocol admin`);
     };
     switch (cmd.kind) {
+      case 'deactivateIssuer': admin(); return deactivateIssuer(this,cmd.wallet,emit);
+      case 'setContractHash': return setContractHash(this,user(),cmd,emit);
       case 'registerIssuer': admin(); return registerIssuer(this, cmd.wallet, now, emit);
       case 'resumeIssuance': return stopIssuance(this,user(),emit,false);
       case 'stopIssuance': return stopIssuance(this, user(), emit);

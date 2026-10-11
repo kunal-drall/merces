@@ -57,6 +57,10 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
   });
   defineRoute(app, ctx, { method: 'GET', url: '/drafts/:draftId/terms/private', access: 'issuer', handler: async (req, _reply, session) => s.disclose({ draftId: (req.params as { draftId: string }).draftId }, session!, 'issuer-draft-review') });
   defineRoute(app, ctx, { method: 'POST', url: '/drafts/:draftId/build-create-series', access: 'issuer', handler: async (req, _reply, session) => s.buildCreateSeries((req.params as { draftId: string }).draftId, session!) });
+  defineRoute(app,ctx,{method:'POST',url:'/drafts/:draftId/build-contract-hash',access:'issuer',handler:async(req,_r,session)=>{
+    const b=z.object({seriesId:z.string().min(1)}).strict().parse(req.body);
+    return s.buildContractHash((req.params as {draftId:string}).draftId,b.seriesId,session!);
+  }});
   defineRoute(app, ctx, { method: 'POST', url: '/drafts/:draftId/link-created', access: 'issuer', handler: async (req, _reply, session) => s.linkCreated((req.params as { draftId: string }).draftId, session!) });
 
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/terms', access: 'backer', handler: async (req, _reply, session) => s.disclose({ seriesId: (req.params as { seriesId: string }).seriesId }, session!, 'backer-disclosure') });

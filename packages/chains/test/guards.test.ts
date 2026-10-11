@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { EvmChain, type EvmChainConfig } from '@merces/chain-evm';
 import { SOLANA_GENESIS, SolanaChain, type SolanaChainConfig } from '@merces/chain-solana';
-import { evmRpc, fakeRpc, solanaRpc } from './fake-rpc.ts';
+import { evmRpc, fakeRpc, solanaRpc,SOL_PROGRAMS } from './fake-rpc.ts';
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -9,7 +9,7 @@ afterEach(async () => {
 });
 
 const solCfg = (over: Partial<SolanaChainConfig> = {}): SolanaChainConfig => ({
-  chain: 'solana', cluster: 'devnet', rpcUrl: 'https://api.devnet.solana.com', programs: { series: '11111111111111111111111111111111' },
+  chain: 'solana', cluster: 'devnet', rpcUrl: 'https://api.devnet.solana.com', programs:SOL_PROGRAMS,
   idlDir: null, generatedDir: null, stablecoins: {}, startSlot: 0, keeperPublicKey: null, allowlistManagerPublicKey: null, ...over,
 });
 const evmCfg = (over: Partial<EvmChainConfig> = {}): EvmChainConfig => ({
@@ -68,4 +68,16 @@ describe('EVM mainnet guard', () => {
     await expect(chain.getBalance('0x' + '11'.repeat(20), 'USDC')).resolves.toBe('0'); // no token configured: no RPC use
     await expect(chain.now()).rejects.toThrow(/refusing/);
   });
+});
+
+describe('complete deployment health',()=>{
+ it('refuses a partial EVM manifest before enabling the adapter',async()=>{
+  const rpc=await fakeRpc(evmRpc(10143));closers.push(rpc.close);
+  const health=await new EvmChain(evmCfg({rpcUrl:rpc.url,contracts:{MercesRegistry:'0x'+'14'.repeat(20)}})).health();
+  expect(health.ok).toBe(false);expect(health.detail).toContain('missing deployment module');
+ });
+ it('uses the normalized Solana cluster for the pinned registry domain',async()=>{
+  const rpc=await fakeRpc(solanaRpc(SOLANA_GENESIS.devnet));closers.push(rpc.close);
+  expect((await new SolanaChain(solCfg({rpcUrl:rpc.url,cluster:'Devnet' as never})).health()).ok).toBe(true);
+ });
 });

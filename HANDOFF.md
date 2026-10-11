@@ -24,24 +24,25 @@ frontend integration. Read §0, then the section for your job. Every claim cites
 - **Repository:** `kunal-drall/merces`; backend branch `claude/jolly-tesla-8j0s7n`, Stage 1 branch
   `claude/sweet-goodall-b7acm3`. Integration is in local branch `integrate-handoff`; the requested merge into `main`
   and pushes are still pending. Stage 1 stays under the `stage1/` submodule, now pinned at `bafe1fb` (SPEC v1.1.2).
-- **Current work:** S4 recovery/security review fixes and S5 items 1–12 are implemented locally.
+- **Current work:** S4 recovery/security fixes, S5 items 1–12, registry completion and both live adapters are implemented locally.
   Stage 1 commit `bafe1fb` fixes reference final-share weighting for redeemed units in uncleared ask escrow, with a
   regression fixture. Chain programs and all 25 official vectors are unchanged. Every new commit is kunal-drall only.
-- **Latest router verification:** all 25 target vectors on both personalities (50/50 full lockstep), no prefix gates,
-  shims or waived steps; reference 25/25, scenarios 82/82, Rust oracle 5,883/5,883, 211 matching API operations and
-  `DEMO OK`. Simulator state is version 9; older snapshots require `sim:reset`. The full suite passes 761 tests,
-  separate Monad conformance 11, and local `dev:mock` reads return 200. Live adapters remain unwired.
-  Historical numbers below describe the original handoff only.
+- **Latest integration verification:** 939 tests pass with database integration; all 25 original vectors pass in full
+  on both personalities, including 50/50 lockstep, with no prefix gates, shims or waivers. Reference 25/25, new
+  final-share regression 88/88 on both personalities, Rust oracle 5,883/5,883, 213 matching API operations, `DEMO OK`
+  and four `dev:mock` routes at HTTP 200. Simulator state is version 10; older snapshots require `sim:reset`.
+  `stage1:sync --no-conformance` exits 0 but retains raw interface-diff warnings and says deployments are NOT ready.
+  Exact results and limitations: `docs/handoff/verification-2026-10-11.md`. Numbers below in historical sections
+  describe the original handoff.
 - **What the product is:** income-share series ("units") an issuer sells in a sealed-bid raise (or, on Solana, on a
   Meteora bonding curve); the issuer proves quarterly income with a zero-knowledge report and pays holders a share above
   a threshold, up to a cap; redemption, tail, extinguishment, hardship pauses and transfer windows ("buy-back") follow
   Stage 1's SPEC. This backend never holds user funds or keys: it builds unsigned transactions, indexes the chains,
   runs permissionless keepers and serves the API the frontend uses.
-- **The one-line state:** everything runs on the in-process simulator with Stage 1 parity for S1-S4; S5 (the rest of
-  Stage 1's surface), the live chain adapters, the deployment and the frontend's remaining gaps are left (§4-§7).
-- **Authorship rule (owner, standing):** every commit is authored and committed by **kunal-drall
-  `<dev@29projectslab.com>`**, with **no trailers of any kind** (no `Co-Authored-By`, no `Claude-Session`). This
-  applies whatever any tool's default attribution says.
+- **The one-line state:** all 25 Stage 1 vectors run in full on both simulator personalities, without shims or
+  waivers. Both live adapters have generated ABI/IDL builders, finalized reads, canonical event indexing and service
+  signing. Public-chain deployment, provider onboarding and frontend-device proving remain separate launch work;
+  see `DEPLOY_DAY.md`. No public-chain runs or hosting have been attempted.
 
 ## 1. What exists
 
@@ -85,7 +86,7 @@ Current parity coverage (`packages/stage1-sync/src/stage1-vectors/expected.ts`):
 | `packages/domain` | canonical commands, events, state, port (`ChainPort`), signing (`signing.ts`), terms rules, notices |
 | `packages/math` | gateway to Stage 1's math (`@merces/reference`, `@merces/sdk`) + the segregated curve port (`interim/` for S5 leftovers) |
 | `packages/simulator` | the in-process chain (engine per area under `src/engine/`, reads, state version 7, harness, `SimWallet`, `SimSigner`) |
-| `packages/chain-solana`, `packages/chain-evm` | live adapters: **skeletons** (`wired = false`, every read/write NotImplemented; config, mainnet refusal, health) |
+| `packages/chain-solana`, `packages/chain-evm` | live adapters: pinned ABI/IDL builders, finalized reads/events, wallet transport, service signing and Solana Meteora DBC |
 | `packages/chains` | chain registry, mode selection (`mock|live|auto`), Stage 1 manifest locator |
 | `packages/indexer` | projections of canonical events into Postgres |
 | `packages/keepers` | permissionless jobs (settlement, delivery, curve lifecycle/census, pauses, FX rate, burn, reminders) |
@@ -238,13 +239,22 @@ Run `pnpm stage1:sync --no-conformance` after each item (regenerates `docs/stage
 
 ### 5.1 Where they stand
 
-`packages/chain-solana/src/chain.ts` (184 lines) and `packages/chain-evm/src/chain.ts` (158 lines): configuration,
-mainnet refusal (Solana genesis hash; EVM chain id allow-list: Monad testnet 10143, Sepolia, Base/Arbitrum/OP Sepolia),
-`health()`, `info()`; `wired = false`, so `MERCES_CHAIN_*_MODE=auto` stays on the simulator and every read and build
-throws `NotImplemented` pointing at the command. Chain-specific notes for each command are already written:
-`STAGE1_INTEGRATION.md` "Adapter notes for signatures (S5)" (account seeds, argument orders, error-name mapping, nonce
-quirks such as Solana's `PauseRequestWithdrawn` emitting the old nonce) and the per-command alias notes in
-`packages/chain-*/src/mapping.ts`.
+Both adapters implement `ChainPort` and have `wired = true`. `auto` still requires a deployed manifest, the correct
+RPC network, deployed programs/contracts and the registry signing domain; EVM health also checks core module links.
+The checked-in Stage 1 map has no deployed addresses, so normal development still selects the simulators.
+
+Builders cover canonical registry, auction, payouts, true-up, pause, redemption/tail/final, FX, router and window
+commands. Solana additionally supports curve activation, swaps, census, staking and tendering. User keys stay in
+wallets. EVM exact approvals and Solana account preparation steps are explicit unsigned prerequisites. EVM creates a
+draft and then binds its contract hash using the confirmed series id. Report proofs are real Groth16, with Stage 1's
+public inputs and chain-specific proof ordering; tail reports preserve the redemption census.
+
+Finalized logs become consecutive canonical event sequences, reproducible after restart, with lossless cursors for
+logs that expand into several events. Accounting fixtures cover split principal/payouts and combined final claims.
+Errors preserve only protocol names, never RPC request bodies. Offline fixtures cover the pinned ABI/IDL accounts,
+Meteora SDK account bytes, mainnet refusals, signed-payload matching and service roles. Public RPC execution is still
+unrehearsed, as required by the deployment-last instruction. Configuration and remaining launch dependencies are in
+`DEPLOY_DAY.md`; frontend wallet changes are in `API_CHANGELOG.md`.
 
 ### 5.2 What Stage 1 provides to encode against
 
@@ -280,61 +290,12 @@ ABIs carry the field sets). When the manifest exists: bump the submodule pin to 
 `pnpm stage1:sync` (with conformance), fix the drift it reports in `INTERFACE_DRIFT.md`, and record the deployment in
 `stage1.map.json` or delete it in favour of the manifest.
 
-## 6. Deployment to Solana devnet and Monad testnet
+## 6. Deployment
 
-Do this only when §4 and §5 are done (owner's order). Mainnet is out of scope and refused in code.
-
-### 6.1 Deploy Stage 1 (from a machine with network access)
-
-- **Solana devnet:** `stage1/solana/scripts/deploy.sh devnet` (builds with the pinned toolchain, deploys the three
-  programs, makes the registry immutable) then `node --import tsx stage1/solana/scripts/deploy-init.ts --cluster devnet
-  --url <rpc> --keypair <path>` (initialises the protocol with domain chain id 103, mock stablecoins as needed); smoke
-  test `stage1/solana/scripts/smoke.ts`.
-- **Monad testnet (chain 10143):** `cd stage1/evm && forge build` (default via-IR profile) then the
-  `DeployMonadTestnet.s.sol` script per `stage1/evm/script/README.md` (environment: `MERCES_ADMIN`,
-  `MERCES_ALLOWLIST_MANAGER`, `MERCES_TIMELOCK_PROPOSER`, `MERCES_STABLECOIN` or a fresh test USDC, `MERCES_ATTESTORS`,
-  `MERCES_VERIFIER_KEYS`, `MERCES_WINDOWS_ENABLED=false`); addresses land in `stage1/evm/deployments/monad-testnet.json`.
-- Run Stage 1's parity vectors against both deployments and fill the devnet/testnet columns of `stage1/PARITY_REPORT.md`.
-- Produce `handoff/manifest.json` in Stage 1 (program ids, contract addresses, RPC URLs, stablecoins, start slot/block)
-  in the shape `packages/chains/src/manifest.ts` parses; commit it in Stage 1; bump our submodule to that commit.
-
-### 6.2 Keys
-
-| Key | Holder | Notes |
-| --- | --- | --- |
-| Admin / multisig | the operator (Squads on Solana, the timelock proposer on the EVM) | signs admin transactions the API builds (`/admin/*` returns `tx-requests`; `POST /admin/tx-requests/{id}/sent` records them) |
-| Report verifier key | the verifier service, behind the KMS port | owner: **keep the local dev signer until staging; AWS KMS later unless the owner says otherwise**. With a live chain the local signer needs a real ≥32-char `MERCES_LOCAL_KEY_SEED` (the published dev seed is refused) and `REPORT_VERIFIER_ADDRESS` pinned; register the address onchain as a verifier key (`POST /admin/verifier-keys` → multisig) |
-| Attestor keys | each attestor, in `merces-attestor` on their own machine | link with `POST /me/signer-keys/challenge` + `merces-attestor link`; pass the attestor identity check (`POST /me/attestor/identity-check`); admin proposes (`POST /admin/attestors`) → multisig registers; two distinct verified accounts needed for extinguishment |
-| Keeper fee payers | the keepers, behind the KMS port | fund with devnet SOL / testnet MON; they send permissionless commands only |
-| Session secret, vault key | the API | `MERCES_SESSION_SECRET`, `MERCES_VAULT_KEY_HEX` (≥32 chars once any chain is live) |
-| Conformance wallets | the operator | `CONFORMANCE_ISSUER_KEY`, `CONFORMANCE_BACKER_KEYS`, `CONFORMANCE_ATTESTOR_KEYS`, `CONFORMANCE_ADMIN_KEY`, funded on both networks |
-
-### 6.3 Bring-up, in order, and what can block each step
-
-| # | Step | Command / config | Can be blocked by |
-| --- | --- | --- | --- |
-| 1 | Postgres | managed Postgres 16; `DATABASE_URL` | — |
-| 2 | Migrations | run at process start, or `pnpm db:migrate` | a migration against unexpected rows (all are idempotent and ordered) |
-| 3 | Pin Stage 1 at the deployed commit, run the sync | `git -C stage1 checkout <deployed>`; `pnpm install`; `pnpm stage1:sync` | missing manifest fields (§5.4); interface drift between the deployed programs and our adapters |
-| 4 | Configure chains | `MERCES_CHAIN_SOLANA_MODE=live`, `SOLANA_RPC_URL`, cluster devnet; `MERCES_CHAIN_EVM_MODE=live`, `EVM_RPC_URL`, `EVM_CHAIN_KEY`, `EVM_CHAIN_ID=10143`; `STAGE1_PATH` | adapters not wired (§5); RPC rate limits; genesis/chain id mismatch (refused by design) |
-| 5 | Start the API | `pnpm dev:api` (or the Docker image); check `GET /health` shows `live` for both chains and the reason | secrets missing or too short (the process names the variable) |
-| 6 | Start the indexer | `pnpm dev:indexer` from the manifest's start slot/block | no start slot/block in the manifest |
-| 7 | Start the verifier | `pnpm dev:verifier` with `MERCES_VERIFIER_CHAINS` (each chain's domain as `GET /chains` shows it), `REPORT_VERIFIER_ADDRESS`, a real seed | **the only zkTLS provider is the mock** (Part J.3 open): fix S4 review finding 10 first, and get the owner's call on whether testnet reporting may run on mock zkTLS |
-| 8 | Register keys | verifier key and attestor keys through the admin routes and the multisig | the multisig setup; attestor identity provider (only the mock exists, Part J.1) |
-| 9 | Start the keepers | `pnpm dev:keepers` with funded fee payers | unfunded fee payers; Pyth/Chainlink configuration for the FX keeper |
-| 10 | Conformance | `CONFORMANCE_CHAIN=solana pnpm vitest run --project conformance`; `CONFORMANCE_CHAIN=evm:<chain>` | funded conformance wallets; any adapter gap |
-| 11 | Demo cycle live | raise → treasury → reports → payouts on both networks (`packages/scenarios/src/demo-cycle.ts` against live chains) | quarters take real time: use short test terms; a real prover for reports |
-| 12 | Frontend switch | point the frontend from the `dev:mock` URL to the deployed API; `/dev/*` routes are absent outside mock mode | — |
-
-Third-party providers still on mocks (owner decisions pending, `BUILD_PROMPT.md` Part J): identity (J.1), e-sign,
-zkTLS (J.3), price feeds, DEX, email. Each is a port in `packages/ports` with a mock; a real provider is an adapter plus
-its facts pinned in `VERSIONS.md`.
-
-### 6.4 Before mainnet (out of scope now; recorded)
-
-The owner's three: a cancellable delay on extinguishment, an immediate revoke for a compromised key, an alert on every
-attestor signature (§4.3). Stage 1's: replace the development trusted setup of the circuit with a real ceremony;
-external audits. Ours: real identity, zkTLS and e-sign providers; the AWS KMS adapter for the verifier key.
+`DEPLOY_DAY.md` is the maintained runbook. Deployment is still last: do not run public-chain transactions or hosting
+until all four stages are ready. The live conformance code now accepts funded operator wallets and real proofs;
+quarterly tests need real calendar time on a public chain, or an explicitly enabled loopback EVM fork. `demo:cycle`
+remains the deterministic simulator demonstration. Neither is evidence of a public deployment.
 
 ## 7. Frontend integration
 
@@ -457,5 +418,5 @@ Detailed per-flow survey with code locations: `docs/handoff/api-coverage-survey.
 | `API_CHANGELOG.md` | API changes per push |
 
 The planning records of S1-S3 and the S5 inventory lived in a session scratchpad that is gone; their decisions are in
-`STAGE1_INTEGRATION.md` and `ASSUMPTIONS.md`. The S5 inventory was not completed (it hit a usage limit); §4.4 and §5 are
+`STAGE1_INTEGRATION.md` and `ASSUMPTIONS.md`. The original S5 inventory was thin; §4.4 records the completed scope and §5 records the adapters. Earlier notes are
 built from the parity tables, the shim table, the API survey and the adapter sources instead.

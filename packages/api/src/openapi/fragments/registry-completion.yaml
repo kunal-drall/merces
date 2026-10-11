@@ -1,0 +1,28 @@
+paths:
+  /admin/issuers/deactivate:
+    post:
+      operationId: deactivateIssuer
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: Propose deactivating an issuer on the registry
+      description: The admin wallet signs the returned transaction. Existing series continue; the inactive issuer cannot create a new series. Registration reactivates it without clearing its issuance stop.
+      parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, wallet], properties: { chain: { type: string }, wallet: { type: string } } } } } }
+      responses:
+        '201': { description: Recorded admin request and unsigned transaction, content: { application/json: { schema: { type: object, properties: { request: { $ref: '#/components/schemas/AdminTxRequest' }, tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Idempotency key reused with another body }
+  /drafts/{draftId}/build-contract-hash:
+    post:
+      operationId: buildContractHash
+      x-access: issuer
+      tags: [drafts]
+      security: [{ session: [] }]
+      summary: Bind the signed draft's contract hash after EVM series creation
+      parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [seriesId], properties: { seriesId: { type: string } } } } } }
+      responses:
+        '200': { description: Issuer transaction for the matching draft series, content: { application/json: { schema: { type: object, properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Contract unsigned, series mismatch, or raise no longer in Draft }

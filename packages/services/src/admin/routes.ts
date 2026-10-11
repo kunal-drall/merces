@@ -32,6 +32,12 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
     reply.code(r.status); return r.response;
   } });
 
+  defineRoute(app,ctx,{method:'POST',url:'/admin/issuers/deactivate',access:'admin',handler:async(req,reply,session)=>{
+    const b=z.object({chain:z.string().min(1),wallet:z.string().min(1)}).strict().parse(req.body);
+    const r=await withIdempotency(ctx.pool,`issuer-deactivate:${session!.accountId}`,idem(req),b,async()=>({status:201,response:await s.deactivateIssuer(b.chain,b.wallet,session!)}));
+    reply.code(r.status);return r.response;
+  }});
+
   defineRoute(app, ctx, { method: 'GET', url: '/admin/overview', access: 'admin', handler: async () => s.overview() });
 
   defineRoute(app, ctx, { method: 'GET', url: '/admin/flags', access: 'admin', handler: async () => ({ flags: await s.flags() }) });

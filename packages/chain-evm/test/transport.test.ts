@@ -1,0 +1,17 @@
+import {describe,expect,it,vi} from 'vitest';
+import {generatePrivateKey,privateKeyToAccount} from 'viem/accounts';
+import {encodeErrorResult,type PublicClient} from 'viem';
+import type {SignedTx,UnsignedTx} from '@merces/domain';
+import {EvmTransport} from '../src/transport.ts';
+import {abiOf,evmError} from '../src/abi.ts';
+import type {EvmChainConfig} from '../src/config.ts';
+const address='0x'+'12'.repeat(20),hash='0x'+'ab'.repeat(32);
+const config:EvmChainConfig={chain:'monad',network:'local',chainId:31337,rpcUrl:'http://localhost:8545',contracts:{MercesRegistry:address},abiDir:null,generatedDir:null,stablecoins:{},startBlock:0,finalityTag:'finalized',keeperAddress:null,allowlistManagerAddress:null};
+async function signed():Promise<SignedTx>{const account=privateKeyToAccount(generatePrivateKey()),p={to:address as `0x${string}`,data:'0x1234' as const,value:7n,chainId:31337};const serialized=await account.signTransaction({...p,gas:21000n,nonce:0,maxFeePerGas:2n,maxPriorityFeePerGas:1n,type:'eip1559'});const tx:UnsignedTx={chain:'monad',family:'evm',signer:account.address.toLowerCase(),command:{kind:'crankStatus',seriesId:'monad:1'},payload:JSON.stringify({...p,value:'7'}),encoding:'evm-json',summary:'test',expiresAt:null};return {tx,signatures:{[tx.signer]:serialized}};}
+function setup(){const client={sendRawTransaction:vi.fn(async()=>hash),waitForTransactionReceipt:vi.fn(async()=>({status:'success',blockNumber:7n,blockHash:hash})),getBlock:vi.fn(async()=>({number:7n,timestamp:1780000000n,hash})),readContract:vi.fn(async()=>0n)},verify=vi.fn(async()=>{}),transport=new EvmTransport(config,client as unknown as PublicClient,verify);return {client,verify,transport};}
+describe('EVM signed transaction boundary',()=>{
+ it('verifies the signer and exact call before broadcast, then pins the finalized receipt block',async()=>{const {transport,client,verify}=setup(),s=await signed();expect(await transport.send(s)).toMatchObject({txId:hash,blockRef:'7',blockTime:1780000000});expect(client.sendRawTransaction).toHaveBeenCalledOnce();expect(verify).toHaveBeenCalled();});
+ it.each(['to','data','value','chainId'])('rejects changed %s before sending',async(field)=>{const {transport,client}=setup(),s=await signed(),p=JSON.parse(s.tx.payload);p[field]=field==='chainId'?1:field==='value'?'8':field==='data'?'0xabcd':'0x'+'13'.repeat(20);await expect(transport.send({...s,tx:{...s.tx,payload:JSON.stringify(p)}})).rejects.toMatchObject({code:'Unauthorized'});expect(client.sendRawTransaction).not.toHaveBeenCalled();});
+ it('rejects another signer and changed finality blocks',async()=>{const {transport,client}=setup(),s=await signed();await expect(transport.send({...s,tx:{...s.tx,signer:address},signatures:{[address]:Object.values(s.signatures)[0]!}})).rejects.toMatchObject({code:'Unauthorized'});client.getBlock.mockResolvedValue({number:7n,timestamp:1780000000n,hash:'0x'+'cd'.repeat(32)});await expect(transport.send(s)).rejects.toThrow('receipt changed');});
+ it('pins every snapshot read to its finalized block number and sanitizes RPC errors',async()=>{const {transport,client}=setup();const snapshot=await transport.snapshot();await snapshot.read('Registry','admin');expect(client.readContract).toHaveBeenCalledWith(expect.objectContaining({blockNumber:7n}));const e=evmError({cause:{data:encodeErrorResult({abi:abiOf('Registry'),errorName:'NotIssuer'}),message:'private=123'}});expect(e.code).toBe('Unauthorized');expect(JSON.stringify(e)).not.toContain('123');});
+});

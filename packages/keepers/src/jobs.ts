@@ -411,7 +411,8 @@ export const fxCoverageJob: KeeperJob = {
             continue;
           }
           const flagged = await ctx.pool.query('select 1 from fx_fallbacks where chain = $1 and pair = $2 and period_id = $3', [chain.chain, pair, per.id]);
-          if (!flagged.rowCount) {
+          if (!flagged.rowCount && chain.mode === 'mock') {
+            // Coverage is derived by Stage 1; there is no live flag-coverage instruction.
             try {
               await chain.submit({ kind: 'flagFxFallback', pair, periodId: per.id, reason: 'coverage' }, 'keeper');
               actions++;

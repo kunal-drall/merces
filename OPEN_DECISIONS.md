@@ -18,3 +18,10 @@
 | Unstake pays | the code wins (unstake credits pending; our builder bundles a claim) | `meteora/staking.ts` | follow Stage 1 if its SPEC wins |
 | Mock zkTLS on testnet | refuse on live chains (S4 review finding 10) | `report-verifier` | an explicit override for testnet |
 | Anything else open | follow Stage 1's code and the default in `ASSUMPTIONS.md` | — | — |
+
+| Live service signing | funded, fresh local operator keys with address pins; per-role nonce queues | chains registry and both live wallet adapters | replace behind WalletSigner when KMS is authorized |
+| Curve pool creation | issuer-device Stage 1 Meteora tooling creates the config/base mint/pool; API validates public pool address | SOLANA_CURVE_POOLS, live Meteora configure | add wallet-native multi-transaction pool creation without sharing private income |
+| Live redemption price guard | refuse maxPricePerUnit: Stage 1 has no such argument | both command builders | needs a Stage 1 contract change to enforce it atomically |
+| Solana USDG hook accounts | resolve verified static/account-based extra accounts; refuse amount-dependent account seeds and extra signers | Solana command builder | quote exact transfer amounts before resolving those nonstandard hooks |
+| Live full-quarter conformance | loopback EVM fork for accelerated lifecycle; public testnets use actual calendar time | conformance waitUntil; DEPLOY_DAY | never change public-chain time or shorten protocol quarters |
+| Production providers | real identity, e-sign and zkTLS provider accounts/custom YTD proof definitions are deployment prerequisites | provider ports and verifier live-mode refusal | connect selected provider accounts and validate their authenticated schemas before launch |

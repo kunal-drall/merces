@@ -7,6 +7,9 @@
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@merces/chains": "workspace:*",
+    "@merces/chain-evm": "workspace:*",
+    "@merces/chain-solana": "workspace:*",
+    "@merces/poi-device": "workspace:*",
     "@merces/domain": "workspace:*",
     "@merces/math": "workspace:*",
     "@merces/simulator": "workspace:*"

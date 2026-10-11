@@ -3083,6 +3083,43 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/admin/issuers/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose deactivating an issuer on the registry
+         * @description The admin wallet signs the returned transaction. Existing series continue; the inactive issuer cannot create a new series. Registration reactivates it without clearing its issuance stop.
+         */
+        post: operations["deactivateIssuer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/drafts/{draftId}/build-contract-hash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bind the signed draft's contract hash after EVM series creation */
+        post: operations["buildContractHash"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/series/{seriesId}/router": {
         parameters: {
             query?: never;
@@ -4408,6 +4445,28 @@ export type components = {
             encoding?: string;
             summary?: string;
             expiresAt?: number | null;
+            /** @description Sign and confirm exact ERC-20 approvals in order, then rebuild the main transaction. A nonzero existing allowance may require approval of zero first. */
+            approvals?: {
+                token: string;
+                spender: string;
+                amount: string;
+                payload: string;
+                /** @constant */
+                encoding: "evm-json";
+            }[];
+            /** @description Confirm each protocol prerequisite, then rebuild the main transaction. These prerequisites do not perform the requested main action. */
+            preparations?: {
+                summary: string;
+                payload: string;
+                /** @enum {string} */
+                encoding: "evm-json" | "solana-base64";
+            }[];
+            /** @description EVM creation cannot accept a contract hash. After confirmation, obtain the series id from SeriesCreated and call the signed draft's build-contract-hash route before opening the raise. */
+            afterCreate?: {
+                /** @constant */
+                kind: "setContractHash";
+                contractHash: string;
+            };
         };
         FxPair: {
             pairId: components["schemas"]["Hash32"];
@@ -12021,6 +12080,84 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Error"];
                 };
+            };
+        };
+    };
+    deactivateIssuer: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["adminIdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    chain: string;
+                    wallet: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Recorded admin request and unsigned transaction */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        request?: components["schemas"]["AdminTxRequest"];
+                        tx?: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description Idempotency key reused with another body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildContractHash: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draftId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    seriesId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Issuer transaction for the matching draft series */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx?: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description Contract unsigned */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

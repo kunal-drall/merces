@@ -39,6 +39,7 @@ export const reportProofSchema = z.discriminatedUnion('system', [
 export type ReportProof = z.infer<typeof reportProofSchema>;
 
 export const userCommands = {
+  setContractHash: z.object({kind:z.literal('setContractHash'),seriesId:seriesIdSchema,contractHash:hash32Schema}),
   routeIncome: z.object({ kind: z.literal('routeIncome'), seriesId: seriesIdSchema, amount: moneySchema }),
   createSeries: z.object({ kind: z.literal('createSeries'), terms: seriesTermsSchema, /** simulator/testing only: fixed address for deterministic ids */ seriesAddressHint: z.string().optional() }),
   /** Stage 1 `open_raise`: the chain sets the commit end to now + `commitDurationSeconds` and the reveal end to the commit end + `revealDurationSeconds` (the series' terms) */
@@ -298,6 +299,7 @@ export const permissionlessCommands = {
 } as const;
 
 export const adminCommands = {
+  deactivateIssuer: z.object({kind:z.literal('deactivateIssuer'),wallet:addressSchema}),
   setFlags: z.object({ kind: z.literal('setFlags'), newRaisesPaused: z.boolean().optional(), windowsEnabled: z.boolean().optional(), tier4Enabled: z.boolean().optional() }),
   setFxPair: z.object({ kind: z.literal('setFxPair'), feedId: hash32Schema, inverted: z.boolean(), crosscheck: addressSchema.nullable() }),
   /** Stage 1 register_issuer: only the protocol admin registers a wallet. Re-registration is idempotent. */
@@ -421,7 +423,14 @@ export interface UnsignedTx {
   summary: string;
   /** unix seconds after which the tx should be rebuilt (blockhash expiry etc.) */
   expiresAt: number | null;
+  /** Sign and confirm these token approvals before the main transaction, then rebuild it. */
+  approvals?: {token:string;spender:string;amount:string;payload:string;encoding:'evm-json'}[];
+  /** Required bounded protocol steps before this transaction (for example window ask-price indexing). */
+  preparations?: {summary:string;payload:string;encoding:'evm-json'|'solana-base64'}[];
+  /** EVM registry creation takes no contract hash: use the confirmed SeriesCreated id in this follow-up builder. */
+  afterCreate?: {kind:'setContractHash';contractHash:string};
 }
+
 
 export interface SignedTx {
   tx: UnsignedTx;

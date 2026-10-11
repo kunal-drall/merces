@@ -80,5 +80,7 @@ export function renderAnchorIdl(moduleName: string, idl: AnchorIdl): string {
   lines.push('export const accounts = {');
   for (const acc of idl.accounts ?? []) lines.push(`  ${acc.name}: { discriminator: ${JSON.stringify((acc as { discriminator?: number[] }).discriminator ?? null)} },`);
   lines.push('} as const;');
+  // Keep the complete binary layouts, PDA seeds and optional-account metadata for live codecs.
+  lines.push(`export const idl: unknown = ${JSON.stringify(idl)};`);
   return lines.join('\n') + '\n';
 }

@@ -9,7 +9,7 @@ import { toRedemption } from './redemption.ts';
 const pid = (p: number | null): string | null => (p === null ? null : periodIdOf(p));
 
 export function toIssuerState(i: SimIssuer): IssuerState {
-  return { issuer: i.issuer, registeredAt: i.registeredAt, issuanceStopped: i.issuanceStopped, seriesIds: [...i.seriesIds] };
+  return { issuer: i.issuer, registeredAt: i.registeredAt, active: i.active, issuanceStopped: i.issuanceStopped, seriesIds: [...i.seriesIds] };
 }
 /**
  * The deprecated single-pause view (`SeriesState.pause`), from the ledger: the pending request's advisory end, and the

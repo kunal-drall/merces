@@ -4,10 +4,23 @@
   "private": true,
   "type": "module",
   "description": "SolanaChain: live ChainPort adapter for Solana devnet (anti-corruption layer over Stage 1's programs).",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
     "@merces/domain": "workspace:*",
     "@solana/web3.js": "1.99.0",
-    "bs58": "6.0.0"
+    "bs58": "6.0.0",
+    "@merces/math": "workspace:*",
+    "@merces/meteora": "workspace:*",
+    "@meteora-ag/dynamic-bonding-curve-sdk": "1.5.13",
+    "@meteora-ag/cp-amm-sdk": "1.5.1",
+    "@solana/spl-token": "0.4.15",
+    "bn.js": "5.2.3",
+    "@merces/circuits": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bn.js": "5.2.0",
+    "@merces/simulator": "workspace:*"
   }
 }

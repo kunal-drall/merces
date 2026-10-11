@@ -54,6 +54,7 @@ export interface HealthReport {
 export interface IssuerState {
   issuer: Address;
   registeredAt: number;
+  active: boolean;
   issuanceStopped: boolean;
   seriesIds: string[];
 }

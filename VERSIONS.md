@@ -130,3 +130,12 @@ named here (`packages/poi-device/test/attestor-tool.test.ts`).
 | Stripe | `GET /v1/balance_transactions`, `GET /v1/payouts`, `GET /v1/balance`; test keys `sk_test_…`; Node SDK `stripe` 23.0.0 | github.com/stripe/openapi (2026-09-30) |
 | Deel | https://api.letsdeel.com — `GET /rest/v2/invoices`, `GET /rest/v2/payments` (bearer/OAuth2); contractor-side earnings endpoint unconfirmed | developer.deel.com (snippet) |
 | DistroKid | no public API found; income must come through a Reclaim HTTP provider over the DistroKid web app or through tier 3 | — (unconfirmed absence) |
+
+
+### Live adapter follow-up (2026-10-11)
+
+The adapters use the workspace lockfile and Stage 1's Meteora SDK 1.5.13, cp-amm SDK 1.5.1 and SPL Token 0.4.15.
+Pyth's upgraded Hermes endpoint is `https://pyth.dourolabs.app/hermes`; the adapter preserves the `/hermes/` prefix
+and sends `PYTH_API_KEY` as a Bearer Authorization header. Sources: [fetch price updates](https://docs.pyth.network/price-feeds/core/fetch-price-updates),
+[upgrade preparation](https://docs.pyth.network/price-feeds/core/upgrade/preparing),
+[Solana push feeds](https://docs.pyth.network/price-feeds/core/push-feeds/solana). Chain deployment has not been rehearsed.

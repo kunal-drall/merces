@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { Groth16ReportVerifier } from '@merces/ports';
 import type { SimulatorChain } from '@merces/simulator';
 import { chainsConfigFromEnv, createChains, evmConfigFrom, locateStage1 } from '../src/index.ts';
-import { evmRpc, fakeRpc } from './fake-rpc.ts';
+import { evmRpc, fakeRpc, EVM_CONTRACTS } from './fake-rpc.ts';
 
 describe('mode selection (D4)', () => {
   it('reports Stage 1 not present and falls back to simulators in auto mode', async () => {
@@ -36,17 +36,18 @@ describe('mode selection (D4)', () => {
     expect(loc?.kind).toBe('map');
     await expect(createChains({ solana: { mode: 'mock' }, evm: { mode: 'live', chainKey: 'monad' }, stage1Path: dir, log: () => undefined })).rejects.toThrow(/mainnet/);
   });
-  it('auto keeps the simulator while a healthy live adapter is not wired to Stage 1 clients; live still selects it', async () => {
+  it('auto selects the wired live adapter only after complete deployment health succeeds', async () => {
     const rpc = await fakeRpc(evmRpc(10143));
     try {
       const dir = mkdtempSync(join(tmpdir(), 'stage1-'));
       mkdirSync(join(dir, 'handoff'));
-      writeFileSync(join(dir, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', evm: [{ chain: 'monad-testnet', chainId: 10143, rpcUrl: rpc.url, contracts: { Series: '0x' + '22'.repeat(20) } }] }));
+      writeFileSync(join(dir, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', evm: [{ chain: 'monad-testnet', chainId: 10143, rpcUrl: rpc.url, contracts: EVM_CONTRACTS }] }));
       const auto = await createChains({ solana: { mode: 'mock' }, evm: { mode: 'auto', chainKey: 'monad' }, stage1Path: dir, log: () => undefined });
       const d = auto.decisions.find((x) => x.chain === 'monad')!;
-      expect(d.chosen).toBe('mock');
-      expect(d.reason).toMatch(/not wired/);
-      expect(auto.get('monad').mode).toBe('mock');
+      // S5: pinned ABI builders/reads/events now implement the port; health verifies registry module links.
+      expect(d.chosen).toBe('live');
+      expect(d.reason).toMatch(/chainId 10143/);
+      expect(auto.get('monad').mode).toBe('live');
       await auto.close();
       const live = await createChains({ solana: { mode: 'mock' }, evm: { mode: 'live', chainKey: 'monad' }, stage1Path: dir, log: () => undefined });
       expect(live.decisions.find((x) => x.chain === 'monad')!.chosen).toBe('live');
@@ -106,7 +107,7 @@ describe('report proofs on simulator chains (critique H3)', () => {
     try {
       const dir = mkdtempSync(join(tmpdir(), 'stage1-'));
       mkdirSync(join(dir, 'handoff'));
-      writeFileSync(join(dir, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', evm: [{ chain: 'monad-testnet', chainId: 10143, rpcUrl: rpc.url, contracts: { Series: '0x' + '22'.repeat(20) } }] }));
+      writeFileSync(join(dir, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', evm: [{ chain: 'monad-testnet', chainId: 10143, rpcUrl: rpc.url, contracts: EVM_CONTRACTS }] }));
       await expect(createChains({ solana: { mode: 'mock' }, evm: { mode: 'live', chainKey: 'monad' }, stage1Path: dir, proofSystem: 'mock', log: () => undefined })).rejects.toThrow(/MERCES_PROOF_SYSTEM=mock is refused/);
     } finally {
       await rpc.close();

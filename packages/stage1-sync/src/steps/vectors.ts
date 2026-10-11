@@ -106,9 +106,9 @@ export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: OpKind; sh
   retire_if_capped: { canonical: 'retireIfCapped', kind: 'direct' },
   register_holder: { canonical: 'registerHolder', kind: 'direct' },
   transfer_units: { canonical: 'transferUnits (hook refuses DirectTransferForbidden)', kind: 'direct' },
-  deactivate_issuer: { canonical: 'none', kind: 'not-yet', milestone: 'S5' },
+  deactivate_issuer: { canonical: 'deactivateIssuer', kind: 'direct' },
   revoke_verifier_key: { canonical: 'revokeVerifierKey (forward-only, the 45-day grace on tier-2 reports, never the last active key)', kind: 'direct' },
-  set_contract_hash: { canonical: 'none', kind: 'not-yet', milestone: 'S5' },
+  set_contract_hash: { canonical: 'setContractHash', kind: 'direct' },
   set_release_pause: { canonical: 'pauseReleases', kind: 'direct' },
 };
 

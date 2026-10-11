@@ -120,6 +120,8 @@ export const eventPayloads = {
   RouterIncomeRouted: z.object({ ...seriesScoped }),
   RouterPeriodClosed: z.object({ ...seriesScoped, periodId: periodIdSchema }),
   FxPairSet: z.object({ pairId: hash32Schema, feedId: hash32Schema, inverted: z.boolean(), crosscheck: addressSchema.nullable(), effectivePeriod: periodIdSchema }),
+  IssuerDeactivated: z.object({issuer:addressSchema}),
+  ContractHashSet: z.object({...seriesScoped,contractHash:hash32Schema}),
   IssuerRegistered: z.object({ issuer: addressSchema }),
   IssuanceResumed: z.object({issuer:addressSchema}),
   IssuanceStopped: z.object({ issuer: addressSchema }),
@@ -303,7 +305,7 @@ export const eventPayloads = {
    * Stage 1's event does not carry it.
    */
   SeriesExtinguished: z.object({ ...seriesScoped, attestors: z.array(signerAddressSchema).length(2), returnedToHolders: moneySchema }),
-  RateSnapshot: z.object({ pair: pairSchema, rateWad: wadSchema, confWad: wadSchema, publishTime: z.number().int(), dayIndex: z.number().int(), sumWad: wadSchema, count: z.number().int() }),
+  RateSnapshot: z.object({ pair: pairSchema, rateWad: wadSchema, confWad: wadSchema.nullable(), publishTime: z.number().int().nullable(), dayIndex: z.number().int(), sumWad: wadSchema, count: z.number().int() }),
   FxFallbackFlagged: z.object({ pair: pairSchema, periodId: periodIdSchema, reason: z.enum(['coverage', 'deviation']) }),
   ProtocolFlagsSet: z.object({ newRaisesPaused: z.boolean(), windowsEnabled: z.boolean(), tier4Enabled: z.boolean() }),
   WindowOrderCommitted: z.object({ ...seriesScoped, windowId: z.number().int(), owner: addressSchema, side: z.enum(['buy', 'sell']), commitment: hash32Schema, escrow: moneySchema }),
