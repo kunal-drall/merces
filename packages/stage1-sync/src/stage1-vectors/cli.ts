@@ -3,6 +3,7 @@
  * pnpm stage1:vectors [--backend merces|reference|lockstep] [--only 01,04] [--personality solana,monad]
  *                     [--until <step index, inclusive>] [--stop-before <op>] [--out <dir>] [--dir <vectors dir>] [--json]
  * pnpm stage1:vectors --scenarios [--backend lockstep|merces|reference] [--only S3a,S3f] [--personality …] [--json]
+ * pnpm stage1:vectors --vector-file <path>[,<path>] [--backend merces|reference|lockstep] [--personality …] [--until <idx>] [--stop-before <op>] [--out <dir>] [--json]
  *
  * Replays Stage 1's parity vectors (S1 plan §5). The vectors directory defaults to the one the Stage 1 checkout's
  * manifest names (STAGE1_PATH, else the pinned `stage1` submodule). Backends: `merces` (default; our simulator, the
@@ -10,19 +11,24 @@
  * replaces a gate), `reference` (Stage 1's own simulator, every vector) and `lockstep` (both side by side, stopping at
  * the first step after which they disagree; a recorded parting is accepted). `--scenarios` replays our own scenarios
  * instead (`scenarios.ts`: the S3 claim and S4 signature sets; default backend `lockstep`), each of which must be at its
- * expected status; a scenario that does not run on the backend (S4d runs on `merces` only) is named and skipped. Exit code 0 when every run
- * is at its expected status, 1 when one is not, 2 on a usage or runner error.
+ * expected status; a scenario that does not run on the backend (S4d runs on `merces` only) is named and skipped.
+ * `--vector-file` replays vector files given by path (Stage 1's format, outside the Stage 1 directory: a vector we
+ * propose to Stage 1, `docs/stage1/defects/vectors`), each expected to PASS in full on the chosen backend (`runVectorFiles`).
+ * Exit code 0 when every run is at its expected status, 1 when one is not, 2 on a usage or runner error.
  */
 import { existsSync } from 'node:fs';
-import { relative } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { locateStage1, stage1Path } from '@merces/chains';
-import { RunnerError, runScenarios, runStage1Vectors, renderSummary, shutdown, writeParity, PERSONALITIES, type BackendChoice, type RunReport, type VectorPersonality } from './index.ts';
+import { RunnerError, runScenarios, runStage1Vectors, runVectorFiles, renderSummary, shutdown, writeParity, PERSONALITIES, type BackendChoice, type RunReport, type VectorPersonality } from './index.ts';
 
-const USAGE = 'usage: stage1:vectors [--backend merces|reference|lockstep] [--only 01,04] [--personality solana,monad] [--until <idx>] [--stop-before <op>] [--out <dir>] [--dir <vectors dir>] [--json]\n       stage1:vectors --scenarios [--backend lockstep|merces|reference] [--only S3a,S3f] [--personality solana,monad] [--dir <vectors dir>] [--json]';
+const USAGE =
+  'usage: stage1:vectors [--backend merces|reference|lockstep] [--only 01,04] [--personality solana,monad] [--until <idx>] [--stop-before <op>] [--out <dir>] [--dir <vectors dir>] [--json]\n       stage1:vectors --scenarios [--backend lockstep|merces|reference] [--only S3a,S3f] [--personality solana,monad] [--dir <vectors dir>] [--json]\n       stage1:vectors --vector-file <path>[,<path>] [--backend merces|reference|lockstep] [--personality solana,monad] [--until <idx>] [--stop-before <op>] [--out <dir>] [--json]';
 
 interface Args {
   backend?: BackendChoice;
   scenarios: boolean;
+  /** vector files given by path (`--vector-file`), replayed instead of the Stage 1 directory */
+  files?: string[];
   only?: string[];
   personalities?: VectorPersonality[];
   until?: number;
@@ -58,6 +64,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case '--only':
         a.only = list(value);
+        break;
+      case '--vector-file':
+        a.files = [...(a.files ?? []), ...list(value)];
         break;
       case '--personality': {
         const ps = list(value);
@@ -98,10 +107,22 @@ function vectorsDir(explicit: string | undefined): { dir: string; label: string;
 let code = 2;
 try {
   const args = parseArgs(process.argv.slice(2));
-  const src = vectorsDir(args.dir);
   let report: RunReport;
   let skipped: string[] = [];
-  if (args.scenarios) {
+  let src: { dir: string; label: string; commit?: string };
+  if (args.files) {
+    // a vector given by path is no Stage 1 vector: no Stage 1 directory, no gate, no `--only`; it must PASS in full
+    if (args.scenarios || args.only || args.dir) throw new RunnerError(`--vector-file takes no --scenarios, --only or --dir\n${USAGE}`);
+    const dirs = [...new Set(args.files.map((f) => dirname(resolve(f))))];
+    src = { dir: dirs.length === 1 ? dirs[0]! : dirs.join(', '), label: dirs.length === 1 ? relative(process.cwd(), dirs[0]!) || '.' : dirs.map((d) => relative(process.cwd(), d) || '.').join(', ') };
+    report = await runVectorFiles(args.files, {
+      ...(args.backend ? { backend: args.backend } : {}),
+      ...(args.personalities ? { personalities: args.personalities } : {}),
+      ...(args.until !== undefined ? { until: args.until } : {}),
+      ...(args.stopBefore ? { stopBefore: args.stopBefore } : {}),
+    });
+  } else if (args.scenarios) {
+    src = vectorsDir(args.dir);
     // a scenario runs whole: no gates, and VECTOR_PARITY.md is the vectors' (pnpm stage1:sync adds the scenarios' section)
     if (args.until !== undefined || args.stopBefore || args.out) throw new RunnerError(`--scenarios takes no --until, --stop-before or --out\n${USAGE}`);
     const r = await runScenarios({ vectorsDir: src.dir, ...(args.backend ? { backend: args.backend } : {}), ...(args.only ? { only: args.only } : {}), ...(args.personalities ? { personalities: args.personalities } : {}) });
@@ -109,6 +130,7 @@ try {
     // a scenario that does not run on this backend (a merces-only one on the reference or in lockstep) is named, not run
     skipped = r.skipped.map((s) => `  skip ${s.vector.name}: runs on ${s.backends.join(', ')} only`);
   } else {
+    src = vectorsDir(args.dir);
     report = await runStage1Vectors({
       dir: src.dir,
       backend: args.backend ?? 'merces',

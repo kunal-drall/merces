@@ -13,9 +13,11 @@
  * Privacy: the runner never persists anything; vectors lose `witness` and `seriesPrivate` at load; reports carry
  * names, indices, error names and public expect values only.
  */
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { RunnerError } from './errors.ts';
 import { EXPECTED_REFERENCE, PREFIX_GATES, TARGETS, expectedFor, type Expected } from './expected.ts';
-import { loadVectors, selects, type LoadedVector } from './load.ts';
+import { loadVector, loadVectors, selects, type LoadedVector } from './load.ts';
 import { proofStats, type ProofStats } from './proofs.ts';
 import { MercesWorld } from './merces-world.ts';
 import { replayLockstep } from './oracle.ts';
@@ -199,6 +201,44 @@ export async function runStage1Vectors(opts: RunOptions): Promise<RunReport> {
     }
   }
   return { backend, runs, notRun, proofs: await proofStats(), ok: runs.every((r) => r.atExpected) };
+}
+
+/** A vector given by path is no Stage 1 vector with a recorded gate or divergence: it must PASS in full on every backend. */
+export const EXPECTED_FILE: Expected = Object.freeze({ status: 'PASS' });
+
+export interface VectorFileOptions {
+  /** default `merces` */
+  backend?: BackendChoice;
+  /** merces and lockstep only; default both */
+  personalities?: readonly VectorPersonality[];
+  /** last step index to replay (inclusive) */
+  until?: number;
+  /** stop before the first step with this op */
+  stopBefore?: string;
+}
+
+/**
+ * Replay vector files given by path (Stage 1's format, `schema 2`, outside the Stage 1 directory): the vectors we
+ * propose to Stage 1 (`docs/stage1/defects/vectors`, e.g. 26, the final share of an open ask's units, DIV-S1I-1). Each
+ * is expected to PASS in full (`EXPECTED_FILE`) on the chosen backend: on the merces backend that shows our engine does
+ * what the vector says (both chains' values); on the reference backend a vector that carries a Stage 1-internal
+ * difference fails exactly where Stage 1's simulator disagrees with its chains. A missing file is a `RunnerError`.
+ */
+export async function runVectorFiles(files: readonly string[], opts: VectorFileOptions = {}): Promise<RunReport> {
+  if (!files.length) throw new RunnerError('no vector files given');
+  const vectors = files.map((f) => {
+    const file = resolve(f);
+    if (!existsSync(file)) throw new RunnerError(`no vector file ${f}`);
+    return loadVector(file);
+  });
+  return runStage1Vectors({
+    vectors,
+    backend: opts.backend ?? 'merces',
+    expected: EXPECTED_FILE,
+    ...(opts.personalities ? { personalities: opts.personalities } : {}),
+    ...(opts.until !== undefined ? { until: opts.until } : {}),
+    ...(opts.stopBefore ? { stopBefore: opts.stopBefore } : {}),
+  });
 }
 
 export interface ScenarioRunOptions {
