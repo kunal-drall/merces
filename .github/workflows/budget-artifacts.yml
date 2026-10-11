@@ -12,6 +12,10 @@ on:
         type: choice
         default: v0
         options: [v0, v2]
+      solana_cdylib_only:
+        description: Build each executable without also exporting a Rust library (LTO experiment)
+        type: boolean
+        default: false
 permissions:
   contents: read
 # Research builds only: no keys, broadcasts, automatic source pin updates or deployment manifests.
@@ -23,6 +27,7 @@ jobs:
     env:
       CARGO_PROFILE_RELEASE_OPT_LEVEL: z
       SOLANA_ARCH: ${{ inputs.solana_arch }}
+      SOLANA_CDYLIB_ONLY: ${{ inputs.solana_cdylib_only }}
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -33,24 +38,22 @@ jobs:
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
       - name: Build smaller SBF candidates without changing protocol source
         id: build
-        working-directory: stage1/solana
         run: |
-          for program in merces_registry merces_hook merces_protocol mock_usdg_hook; do
-            cargo-build-sbf --manifest-path "programs/$program/Cargo.toml" --tools-version v1.52 --arch "$SOLANA_ARCH" --sbf-out-dir target/deploy
-          done
+          python3 scripts/build-solana-candidate.py
       - name: Package only program binaries and public build provenance
         run: |
           mkdir budget-solana
           cp stage1/solana/target/deploy/merces_{registry,hook,protocol}.so budget-solana/
           git rev-parse HEAD > budget-solana/backend-commit.txt
           git -C stage1 rev-parse HEAD > budget-solana/stage1-commit.txt
-          printf 'release opt-level=z; lto=fat configured; codegen-units=1; overflow-checks=true; SBF %s; platform-tools v1.52\n' "$SOLANA_ARCH" > budget-solana/profile.txt
+          printf 'release opt-level=z; lto=fat configured; codegen-units=1; overflow-checks=true; SBF %s; cdylib-only=%s; platform-tools v1.52\n' "$SOLANA_ARCH" "$SOLANA_CDYLIB_ONLY" > budget-solana/profile.txt
+          cp scripts/build-solana-candidate.py budget-solana/
           cd budget-solana
-          sha256sum *.so *.txt > SHA256SUMS
+          sha256sum *.so *.txt *.py > SHA256SUMS
           wc -c *.so
       - uses: actions/upload-artifact@v4
         with:
-          name: budget-solana-${{ inputs.solana_arch }}-${{ github.sha }}
+          name: budget-solana-${{ inputs.solana_arch }}-cdylib-${{ inputs.solana_cdylib_only }}-${{ github.sha }}
           path: budget-solana/
           retention-days: 14
       - name: Run the pinned LiteSVM suite against these exact binaries
