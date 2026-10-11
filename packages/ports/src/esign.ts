@@ -24,6 +24,10 @@ export class MockESign implements ESignPort {
   async status(envelopeId: string): Promise<'sent' | 'signed' | 'declined' | 'expired'> {
     return this.envelopes.get(envelopeId)?.state ?? 'expired';
   }
+  /** Exact prepared documents for a repeated review on the test issuer's device. */
+  documents(envelopeId: string): { name: string; body: string }[] {
+    return this.envelopes.get(envelopeId)?.documents.map(document => ({ ...document })) ?? [];
+  }
   async signedDocument(envelopeId: string): Promise<{ body: string; completedAt: string } | null> {
     const e = this.envelopes.get(envelopeId);
     return e?.state === 'signed' && e.signedBody ? { body: e.signedBody, completedAt: e.completedAt! } : null;

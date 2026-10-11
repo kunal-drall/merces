@@ -69,8 +69,12 @@ export class ContractService {
     if (!draft) throw AppError.notFound('draft');
     if (draft.account_id !== session.accountId) throw AppError.forbidden();
     if (draft.state !== 'terms_set') throw AppError.conflict(`draft is ${draft.state}; set terms first`);
-    const existing = await this.ctx.pool.query("select session_id, state from contract_sessions where draft_id = $1 and state in ('prepared','sent','signed') order by created_at desc limit 1", [draftId]);
-    if (existing.rows[0]) return this.status(draftId, session);
+    const existing = await this.ctx.pool.query("select session_id, state, provider_ref from contract_sessions where draft_id = $1 and state in ('prepared','sent','signed') order by created_at desc limit 1", [draftId]);
+    if (existing.rows[0]) {
+      const status = await this.status(draftId, session);
+      if (status.state !== 'expired') return { ...status, ...(this.ctx.esign instanceof MockESign ? { documents: this.ctx.esign.documents(existing.rows[0].provider_ref) } : {}) };
+      // Mock envelopes live in process memory. A restart expires the old envelope; prepare a new review session.
+    }
     const { heu, charter } = await this.ensureTemplates();
     const tpl = await this.ctx.pool.query<{ template_id: string; body: string }>('select template_id, body from contract_templates where template_id = any($1)', [[heu, charter]]);
     const t = draft.public_terms as Record<string, unknown>;

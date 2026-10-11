@@ -1,0 +1,53 @@
+name: Monad testnet deployment artifacts
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [stage1, '.github/workflows/monad-artifacts.yml']
+permissions:
+  contents: read
+jobs:
+  evm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: foundry-rs/foundry-toolchain@v1
+        with: { version: v1.7.1 }
+      - name: Install and verify pinned Solidity compilers
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, urllib.request
+          base = 'https://binaries.soliditylang.org/linux-amd64/'
+          manifest = json.load(urllib.request.urlopen(base + 'list.json'))
+          for version in ['0.8.17', '0.8.30']:
+              name = manifest['releases'][version]
+              expected = next(b['sha256'] for b in manifest['builds'] if b['path'] == name)
+              data = urllib.request.urlopen(base + name).read()
+              assert '0x' + hashlib.sha256(data).hexdigest() == expected
+              target = pathlib.Path.home() / '.svm' / version / ('solc-' + version)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(data)
+              target.chmod(0o755)
+          PY
+      - name: Build deployment bytecode using the production compiler profile
+        working-directory: stage1/evm
+        env:
+          FOUNDRY_PROFILE: default
+        run: forge build --sizes
+      - name: Package artifacts and source provenance
+        run: |
+          mkdir monad-artifacts
+          git rev-parse HEAD > monad-artifacts/backend-commit.txt
+          git -C stage1 rev-parse HEAD > monad-artifacts/stage1-commit.txt
+          forge --version > monad-artifacts/foundry-version.txt
+          tar -czf monad-artifacts/evm-out.tar.gz -C stage1/evm out
+          cd monad-artifacts
+          sha256sum evm-out.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: monad-bytecode-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: monad-artifacts/

@@ -174,6 +174,9 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     expect(prep.statusCode).toBe(200);
     expect(prep.json().documents.map((d: { name: string }) => d.name)).toEqual(['HEU Contract', 'Autonomy Charter']);
     expect(prep.json().documents[1].body).toContain('Units carry no vote');
+    const reopened = await rig.post(`/drafts/${draft.draftId}/contract/prepare`, {}, issuerTok);
+    expect(reopened.json().sessionId).toBe(prep.json().sessionId);
+    expect(reopened.json().documents).toEqual(prep.json().documents);
     expect((await rig.get(`/drafts/${draft.draftId}/contract`, issuerTok)).json().state).toBe('sent');
     const testSignUrl = `/drafts/${draft.draftId}/contract/test-sign`;
     expect((await rig.post(testSignUrl, { testOnly: true }, issuerTok)).statusCode).toBe(403);
