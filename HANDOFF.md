@@ -168,7 +168,7 @@ pnpm stage1:vectors --personality solana,monad        # OK: 38/42 PASS, 42/42 at
 pnpm stage1:vectors --backend reference               # OK: 25/25 PASS
 pnpm stage1:vectors --backend lockstep --personality solana
 pnpm stage1:vectors --scenarios                       # OK: 30/32 PASS, 32/32 at expected status
-pnpm stage1:vectors --vector-file docs/stage1/defects/vectors/26_final_share_open_ask.json   # PASS 88/88 on both personalities (local commit c82b41a)
+pnpm stage1:vectors --vector-file docs/stage1/defects/vectors/26_final_share_open_ask.json   # PASS 88/88 on both personalities (commit c82b41a)
 pnpm stage1:sync --no-conformance                     # math, curve-port, signatures, vectors OK; diff WARN
 pnpm openapi:client && pnpm openapi:check             # record the operation count in API_CHANGELOG.md
 pnpm docs:events                                      # DOMAIN_EVENTS.md and the schema stay in sync
@@ -359,7 +359,7 @@ external audits. Ours: real identity, zkTLS and e-sign providers; the AWS KMS ad
 
 ### 7.1 Contract and client
 
-- **Spec:** `packages/api/openapi.yaml` (OpenAPI 3.1; 190 operations with the local commits). **Narrative:**
+- **Spec:** `packages/api/openapi.yaml` (OpenAPI 3.1; 190 operations). **Narrative:**
   `API.md` (conventions, every flow, the access matrix). **Typed client:** `packages/client`
   (`src/generated/openapi.d.ts`, regenerated with `pnpm openapi:client`). **Changes per push:** `API_CHANGELOG.md`.
 - **Base URL:** `http://localhost:3000` under `pnpm dev:mock`. CORS allows any origin (`packages/api/src/app.ts`).
