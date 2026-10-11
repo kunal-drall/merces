@@ -1,4 +1,4 @@
-import { DEFAULTS, expectedPrior, hex32ToField, mockVerify, reportDigest, reportPublicInputs, type Command } from '@merces/domain';
+import { DEFAULTS, expectedPrior, fxDigest, hex32ToField, mockVerify, reportDigest, reportPublicInputs, type Command } from '@merces/domain';
 import { WAD, nextExpectedPeriod, periodEnd, periodStart } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { str, u64, type EngineCore, type Emit, type ExecContext } from './core.ts';
@@ -21,13 +21,14 @@ type SubmitReport = Extract<Command, { kind: 'submitReport' }>;
  *     (MintNotFinalized)                                    10. tail: TailEnded, NoTailDue
  *  5. derived status Retired/Extinguished (TerminalStatus)  11. tier (TierNotEnabled)
  *  6. the next expected period (WrongPeriod)                12. FX (FxMismatch, FxFallbackRequired,
- *  7. the period has ended (ReportTooEarly)                     FxFallbackNotAllowed, InvalidAttestorSignature)
- *  8. no open due (PaymentOutstanding)                      13. the prior chain (InvalidProof)
+ *  7. the period has ended (ReportTooEarly)                     FxFallbackNotAllowed; the fallback's FX signature:
+ *  8. no open due (PaymentOutstanding)                          InvalidAttestorSignature)
+ *                                                           13. the prior chain (InvalidProof)
  *                                                           14. the six public signals (InvalidProof)
  *                                                           15. the proof (InvalidProof)
- *                                                           16. source binding: tier 2 the verifier key's
- *                                                               REPORT signature (InvalidVerifierSignature), tier 3
- *                                                               attestor co-signature (InvalidAttestorSignature)
+ *                                                           16. source binding: the REPORT signature, tier 2 by a
+ *                                                               verifier key (InvalidVerifierSignature), tier 3 by an
+ *                                                               attestor key (InvalidAttestorSignature)
  *
  * Step 9a is Solana's curve-mode gate (`require_units_synced_for`, curve.rs:1532-1541, called from income.rs:228-233
  * before the tail block): the census is the proof's public input and the vault's N, so it must be counted after the
@@ -35,8 +36,8 @@ type SubmitReport = Extract<Command, { kind: 'submitReport' }>;
  * no curve mode, so the step sits where Solana runs it, after its due and period checks.
  *
  * Divergences (S1 plan §6): tier 1 is not bound to a router year-to-date checkpoint; split receipts of the period
- * stand in for Stage 1's router credit; tier 3 is the attestor's co-signature until S4 WP9 (tier 2 is Stage 1's REPORT
- * signature since S4 WP6).
+ * stand in for Stage 1's router credit. Tiers 2 and 3 are Stage 1's REPORT signature (S4 WP6, WP9) and the FX fallback
+ * Stage 1's per-series FX signature (S4 WP9); the accumulator itself stays ours until S5.
  * Error messages carry public facts only (period ids, tiers), never a submitted value.
  */
 export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport, now: number, emit: Emit, ctx: ExecContext = {}): void {
@@ -78,7 +79,7 @@ export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport
   if (!enabled) fail('TierNotEnabled', `tier ${cmd.tier} is not enabled for this series`);
   if (cmd.tier === 1 && (f.tier2 || f.tier3 || f.tier4)) fail('TierNotEnabled', 'tier 1 reports only on a pure tier-1 series');
   // 12. FX
-  checkFx(e, s, signers, cmd, fxAvgWad, now);
+  checkFx(e, s, cmd, fxAvgWad, now);
   // 13. the prior chain (SPEC §6.2 step 5)
   const prior = expectedPrior(l, pid, cmd.priorIncomeCommitment);
   if (prior !== cmd.priorIncomeCommitment) fail('InvalidProof', 'prior income commitment does not chain');
@@ -96,16 +97,13 @@ export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport
   } else {
     fail('InvalidProof', 'unknown proof system');
   }
-  // 16. source binding, after the proof
-  // tier 2: Stage 1's REPORT signature by a report verifier key, usable for the period (active, or revoked after the
-  // period ended and within the 45-day grace: SIM:1116 reportKeyValid; income.rs:396-424; MercesIncome.sol:207-228)
-  if (cmd.tier === 2) {
-    const m = reportDigest(signingContextOf(e.state, s.seriesId), { periodId: cmd.periodId, priorIncomeCommitment: cmd.priorIncomeCommitment, incomeCommitment: cmd.incomeCommitment, tier: 2, liquidityEvent: cmd.liquidityEvent });
-    requireSigned(e, 'verifier', m.digest, cmd.attestation, now, { reportPeriod: cmd.periodId });
-  }
-  else if (cmd.tier === 3) {
-    // an active key, or one revoked after the period ended within Stage 1's grace (SPEC §1.4; SIM:332-338 reportKeyValid)
-    if (!cmd.attestor || !signers.includes(cmd.attestor) || !e.attestorUsable(cmd.attestor, now, { reportPeriod: cmd.periodId })) fail('InvalidAttestorSignature', 'tier 3 needs a usable attestor as co-signer');
+  // 16. source binding, after the proof: Stage 1's REPORT signature over the report's own fields, tier 2 by a report
+  // verifier key, tier 3 by an attestor key, usable for the period (active, or revoked after the period ended and within
+  // the 45-day grace: SPEC §1.4; SIM:1115-1118 and :332-338 reportKeyValid; income.rs:396-424; MercesIncome.sol:207-228). Tiers 1 and
+  // 4 ignore any attestation, as both chains do.
+  if (cmd.tier === 2 || cmd.tier === 3) {
+    const m = reportDigest(signingContextOf(e.state, s.seriesId), { periodId: cmd.periodId, priorIncomeCommitment: cmd.priorIncomeCommitment, incomeCommitment: cmd.incomeCommitment, tier: cmd.tier, liquidityEvent: cmd.liquidityEvent });
+    requireSigned(e, cmd.tier === 2 ? 'verifier' : 'attestor', m.digest, cmd.attestation, now, { reportPeriod: cmd.periodId });
   }
 
   // effects (SIM:1131-1148)
@@ -170,26 +168,31 @@ function periodPid(periodId: string): number {
   }
 }
 
-/** FX (SIM:1075-1094 order). The accumulator and attestor-fallback branches are ours until S5 moves FX to Stage 1. */
-function checkFx(e: EngineCore, s: SimSeries, signers: string[], cmd: SubmitReport, fx: bigint, now: number): void {
+/**
+ * FX (SIM:1075-1094 order). The accumulator and its fallback flag are ours until S5 moves FX to Stage 1; the fallback
+ * itself is Stage 1's (S4 WP9): an attestor key's `MERCES_FX_V1` signature over the series key, the period and the
+ * report's own `fxAvgWad` (`fxDigest`), present exactly when the accumulator has no usable average. The key must be an
+ * attestor usable for the period with the report keys' grace: both chains give the FX fallback the 45-day grace
+ * (income.rs:340-356 `require_key(.., Some((period, now)))`; MercesIncome.sol:163-168 `_keyValid`), Stage 1's reference
+ * requires an active key (SIM:1092 `requireActiveAttestor`): DIV-S1I-3, ours follows both chains. A signature for
+ * another series, period, rate or chain recovers to another address: InvalidAttestorSignature.
+ */
+function checkFx(e: EngineCore, s: SimSeries, cmd: SubmitReport, fx: bigint, now: number): void {
   if (s.terms.reportingCurrency === 'USD') {
     // stablecoin income: no pair, the rate is 1
     if (fx !== WAD || cmd.fxBasis === 'accumulator') fail('FxMismatch', 'stablecoin income requires unity FX');
-    if (cmd.fxBasis === 'attestor' || cmd.attestorRate) fail('FxFallbackNotAllowed', 'no FX fallback for stablecoin income');
+    if (cmd.fxBasis === 'attestor' || cmd.fxFallback) fail('FxFallbackNotAllowed', 'no FX fallback for stablecoin income');
     return;
   }
   if (cmd.fxBasis === 'unity' || !cmd.pair || cmd.pair !== `${s.terms.reportingCurrency}/USD`) fail('FxMismatch', 'pair must be <reporting currency>/USD');
   const q = quarterRate(e, cmd.pair, cmd.periodId);
   const available = !!q && q.avgWad !== null && !q.needsFallback;
   if (available) {
-    if (cmd.fxBasis === 'attestor' || cmd.attestorRate) fail('FxFallbackNotAllowed', 'the accumulator rate is available');
+    if (cmd.fxBasis === 'attestor' || cmd.fxFallback) fail('FxFallbackNotAllowed', 'the accumulator rate is available');
     if (fx !== q.avgWad) fail('FxMismatch', 'fxAvg does not match the accumulator');
     return;
   }
-  if (cmd.fxBasis !== 'attestor' || !cmd.attestorRate) fail('FxFallbackRequired', 'the accumulator rate is unavailable or flagged; an attestor rate is required');
-  const a = cmd.attestorRate;
-  // the key may be revoked after the period ended, within Stage 1's grace (both chains: income.rs:340-356, MercesIncome.sol:168;
-  // Stage 1's reference does not, SIM:1092: DIV-S1I-3)
-  if (!signers.includes(a.attestor) || !e.attestorUsable(a.attestor, now, { reportPeriod: cmd.periodId })) fail('InvalidAttestorSignature', 'the FX rate needs a usable attestor as co-signer');
-  if (BigInt(a.rateWad) !== fx || a.pair !== cmd.pair) fail('FxMismatch', 'attestor rate does not match the report');
+  if (cmd.fxBasis !== 'attestor' || !cmd.fxFallback) fail('FxFallbackRequired', 'the accumulator rate is unavailable or flagged; an attestor\'s FX signature is required');
+  const m = fxDigest(signingContextOf(e.state, s.seriesId), { periodId: cmd.periodId, fxRateWad: fx });
+  requireSigned(e, 'attestor', m.digest, cmd.fxFallback, now, { reportPeriod: cmd.periodId });
 }

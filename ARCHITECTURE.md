@@ -22,7 +22,8 @@ there), and `submit(command, role)` for the backend's two low-privilege roles. T
 
 `@merces/domain` defines the vocabulary once: 56 events, 53 commands (schema 0.4.0; S4 WP5 added Stage 1's `revokeAttestor`, `rotateAttestor` and `AttestorRevoked`, S4 WP6 `revokeVerifierKey`, `rotateVerifierKey` and `VerifierKeyRevoked`), the state shapes, the commitments (Stage 1's
 Poseidon terms and income commitments; since S4 its keccak bid and order commitments), Stage 1's signed messages
-(`MERCES_*_V1`, signing.ts; the verifier attestation is its REPORT message since S4 WP6) and Stage 1's six report public
+(`MERCES_*_V1`, signing.ts; the verifier attestation is its REPORT message since S4 WP6, a tier-3 attestation its REPORT
+message with tier 3 and the FX fallback its FX message per series since S4 WP9) and Stage 1's six report public
 inputs. The sealed raise uses Stage 1's names for
 its multi-step settlement (S2): the permissionless commands `beginSettlement`, `tallyBids`, `finalizeSettlement`,
 `processBid`, `deliverBid` and `registerHolder`, which the keepers submit and any wallet may build, and their events.
@@ -115,7 +116,8 @@ opening, salts derived from a device secret), computes the payment with Stage 1'
 ProofOfIncome circuit (Groth16) on the device; only commitments, the payment and the proof leave it. The same package
 holds the attestor's side (S4 WP8, A-SIG-2): `merces-attestor` keeps the attestor's secp256k1 key in a Web3 Secret
 Storage v3 keystore on the attestor's machine, checks each signing request against its own pinned network table,
-rebuilds Stage 1's digest from the typed fields and signs only that; only the signature leaves it.
+rebuilds Stage 1's digest from the typed fields and signs only that; only the signature leaves it. Since S4 WP9 the
+attestor service hands it the tier-3 REPORT and the per-series FX signing requests.
 
 ## Stage 1 catch-up
 

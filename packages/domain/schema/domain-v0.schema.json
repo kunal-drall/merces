@@ -6887,29 +6887,23 @@
             }
           ]
         },
-        "attestorRate": {
+        "fxFallback": {
           "anyOf": [
             {
               "type": "object",
               "properties": {
-                "attestor": {
+                "signer": {
                   "type": "string",
-                  "minLength": 1,
-                  "maxLength": 64
+                  "pattern": "^0x[0-9a-f]{40}$"
                 },
-                "rateWad": {
+                "signature": {
                   "type": "string",
-                  "pattern": "^\\d+$"
-                },
-                "pair": {
-                  "type": "string",
-                  "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+                  "pattern": "^0x[0-9a-f]{130}$"
                 }
               },
               "required": [
-                "attestor",
-                "rateWad",
-                "pair"
+                "signer",
+                "signature"
               ],
               "additionalProperties": false
             },
@@ -7051,18 +7045,6 @@
             }
           ]
         },
-        "attestor": {
-          "anyOf": [
-            {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "liquidityEvent": {
           "type": "boolean"
         }
@@ -7078,10 +7060,9 @@
         "fxBasis",
         "fxAvgWad",
         "pair",
-        "attestorRate",
+        "fxFallback",
         "proof",
         "attestation",
-        "attestor",
         "liquidityEvent"
       ],
       "additionalProperties": false

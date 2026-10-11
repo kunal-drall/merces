@@ -24,7 +24,11 @@ Chain access goes only through `ChainPort` (`packages/domain/src/port.ts`): read
 `UnsignedTx` for a user/multisig to sign, `submit(serviceCommand, 'keeper' | 'allowlistManager')` for the backend's
 own roles. Never sign for users; never hold funds. Admin commands (`registerAttestor`, `revokeAttestor`,
 `rotateAttestor`, `registerVerifierKey`, `revokeVerifierKey`, `rotateVerifierKey`, `pauseNewRaises`, `setFeeCollector`,
-`registerSplitRouter`) are *built* for the admin multisig (`info().admin`).
+`registerSplitRouter`) are *built* for the admin multisig (`info().admin`). A signature flow (S4) never signs either: it
+hands the key holder's device a `SigningRequest` built from the chain's own reads (`signingRequest` over
+`ChainInfo.signing` and `SeriesState.seriesKey`; 409 `signing-domain-unknown` without a domain) and accepts a signature
+only when it recovers to the addressed key over the message the service rebuilds itself (`reportDigest`, `fxDigest`, …;
+`recoverSigner`), never over a digest a caller supplies (`attestor/service.ts`: tier 3 and the FX fallback, S4 WP9).
 
 ## Routes
 ```ts
@@ -61,7 +65,10 @@ await rig.get('/path', tok); await rig.post('/path', body, tok, { 'idempotency-k
 await rig.sol.runRaise(); await rig.sol.reportAndPay(...); await rig.sync();  // index events into the read model
 ```
 `rig.sol.issuer`, `rig.sol.backers[i]`, `rig.sol.attestors[i]`, `rig.sol.admin` are `SimWallet`s (`.address`,
-`.sign(tx)`, `.coSign(signed)`); send a signed tx with `rig.post('/tx/send', signed, tok)`. Run with
+`.sign(tx)`, `.coSign(signed)`); send a signed tx with `rig.post('/tx/send', signed, tok)`. The attestors are keys
+(`SimAttestor`: `.attest(kind, domain, seriesKey, fields)` signs a Stage 1 message); `rig.attestorToken(account, keys)`
+links them, and `rig.signFxFallback(h, pair, periodId, key, rateWad)` signs a period's FX fallback for every covered
+series through the attestor routes. Run with
 `DATABASE_URL=postgres://postgres@localhost:5432/merces pnpm vitest run packages/api/test/<module>.test.ts`.
 Register the module in `packages/services/src/index.ts` (`serviceRoutes`) only when integrating; tests pass the
 registrar through `extraRoutes` so modules can be developed independently.

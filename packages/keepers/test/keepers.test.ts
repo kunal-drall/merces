@@ -21,6 +21,9 @@ const DAY = 86_400;
  *  - S3-BR: `burn.crank` sends one `burnRetired{holder}` per holder still holding units (was one list burn crank, `holders[]`).
  *  - S3-CV: `burn.crank` skips curve series: their units never burn (Stage 1 CurveModeNoBurn).
  *  - S3-ST: curve staking: a curve position's units are its stake (`stakeUnits`).
+ *
+ * S4 cause codes:
+ *  - S4-FX: FX fallback requests stay one per (chain, pair, period); the signatures are per series (S4 WP9, D14).
  */
 
 /** A registry of one chain, for a test that needs its own series ids, reminder ledger or a wrapped port. */
@@ -164,6 +167,10 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     expect(q!.needsFallback).toBe(true);
     const reqs = await t.pool.query("select period_id, reason from fx_fallback_requests where chain = 'monad' and pair = 'EUR/USD' order by period_id");
     expect(reqs.rows.map((x) => x.period_id)).toContain('2026Q4');
+    // cause S4-FX: the keeper opens one request per (chain, pair, period); the signatures are per series and come only
+    // from an attestor's device through the attestor routes (S4 WP9, D14), never from a keeper
+    expect((await t.pool.query("select count(*)::int as n from fx_fallback_requests where chain = 'monad' and pair = 'EUR/USD' and period_id = '2026Q4'")).rows[0].n).toBe(1);
+    expect((await t.pool.query('select count(*)::int as n from fx_fallback_signatures')).rows[0].n).toBe(0);
     expect((await sched.runAll())['fx.coverage']!.actions).toBe(0);
     const seen: string[] = [];
     const ob = new KeeperScheduler(ctx, [outboxJob(async (_t, p) => { seen.push(String(p.kind)); })]);

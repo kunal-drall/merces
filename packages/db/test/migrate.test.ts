@@ -23,7 +23,9 @@ async function withFreshSchema(fn: (schema: string) => Promise<void>): Promise<v
  * S4 cause codes (each migration test on a database seeded before it):
  *  - S4-REG: 023, Stage 1's attestor key registry; S4-T2: 024, the report verifier's keys by address;
  *  - S4-ID: 025, attestors are keys linked to accounts (the key links, chain-neutral link challenges with a purpose, the
- *    registry and the proposals keys-only, and the superseded-s4 closures of work addressed to non-keys).
+ *    registry and the proposals keys-only, and the superseded-s4 closures of work addressed to non-keys);
+ *  - S4-T3 / S4-FX: 026, tier 3 and the FX fallback carry Stage 1's signatures (the per-series FX signatures, the reports'
+ *    fx_fallback, no co-signer column, the cases and requests signed with an EIP-191 text opened again once).
  */
 describe.skipIf(!dbTestsEnabled())('migrate', () => {
   it('serialises concurrent processes: three migrate() calls on a fresh schema all succeed, each file applied once', async () => {
@@ -306,6 +308,96 @@ describe.skipIf(!dbTestsEnabled())('migrate', () => {
           { report_id: 'r-used', state: 'accepted' },
         ]);
         // migrating again changes nothing (each row is closed once)
+        expect(await migrate(pool, dir)).toEqual([]);
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+
+  // S4 WP9 (cause S4-T3, S4-FX): migration 026 on a database seeded at 025. A tier-3 report and the FX fallback carry
+  // Stage 1's signatures: the FX signatures are per series, a report's FX fallback is {signer, signature} and its co-signer
+  // column goes, and what was signed with an EIP-191 text and never reached a chain is opened again once for a key to sign
+  // Stage 1's message (a case, an FX request) or superseded (an unsubmitted report); what reached a chain keeps its record.
+  it('026_report_signatures on a database seeded at 025: per-series FX signatures, the reports\' fx_fallback, the re-opened cases and requests', async () => {
+    await withFreshSchema(async (schema) => {
+      const pool = createPool(databaseUrl(), schema);
+      try {
+        const dir = mkdtempSync(join(tmpdir(), 'merces-mig026-'));
+        for (const f of files.filter((x) => x < '026')) copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+        await migrate(pool, dir);
+        const KEY = '0x' + 'ab'.repeat(20);
+        const q = (sql: string, params: unknown[] = []) => pool.query(sql, params);
+        const rows = async (sql: string) => (await q(sql)).rows;
+        const OLD_T3 = { attestor: KEY, liquidityEvent: false, signature: '0x' + '11'.repeat(65) };
+        const NEW_T3 = { signer: KEY, signature: '0x' + '22'.repeat(65), digest: '0x' + '33'.repeat(32) };
+        const t3 = (id: string, period: string, state: string, attestation: unknown) =>
+          q("insert into tier3_cases (case_id, series_id, chain, period_id, issuer, account_id, attestor, documents_ciphertext, estimate_payment_stable, state, attestation, attested_payment_stable, proof, signed_at) values ($1, 'solana:s1', 'solana', $2, 'iss', 'acct-i', $3, 'c', 0, $4, $5, $6, $7, $8)",
+            [id, period, KEY, state, attestation === null ? null : JSON.stringify(attestation), state === 'signed' ? 5 : null, state === 'signed' ? '{}' : null, state === 'signed' ? new Date() : null]);
+        await t3('c-open', '2026Q1', 'open', null);
+        await t3('c-text-unused', '2026Q2', 'signed', OLD_T3);
+        await t3('c-text-used', '2026Q3', 'signed', OLD_T3);
+        await t3('c-new', '2026Q4', 'signed', NEW_T3);
+        const rep = (id: string, period: string, state: string, tier: number, cols: { attestor?: string; attestorRate?: unknown; attestation?: unknown; pair?: string } = {}) =>
+          q(
+            "insert into reports (report_id, series_id, period_id, account_id, tier, source, state, payment_stable, income_commitment, terms_commitment, fx_basis, fx_avg_wad, pair, proof, attestor, attestor_rate, attestation) values ($1, 'solana:s1', $2, 'acct-i', $3, 'x', $4, 0, '0x01', '0x02', $5, 1, $6, '{}', $7, $8, $9)",
+            [id, period, tier, state, cols.attestorRate ? 'attestor' : 'unity', cols.pair ?? null, cols.attestor ?? null, cols.attestorRate === undefined ? null : JSON.stringify(cols.attestorRate), cols.attestation === undefined ? null : JSON.stringify(cols.attestation)],
+          );
+        await rep('r-t3-used', '2026Q3', 'accepted', 3, { attestor: KEY });
+        await rep('r-t3-unsent', '2026Q2', 'assembled', 3, { attestor: KEY });
+        await rep('r-rate-unsent', '2026Q2', 'rejected', 2, { attestorRate: { attestor: KEY, rateWad: '1' }, pair: 'GBP/USD' });
+        await rep('r-rate-paid', '2026Q1', 'paid', 2, { attestorRate: { attestor: KEY, rateWad: '1' }, pair: 'EUR/USD' });
+        await rep('r-t2', '2026Q4', 'assembled', 2, { attestation: { signer: KEY, signature: '0x' + '44'.repeat(65) } });
+        const fx = (id: string, pair: string, period: string, state: string) =>
+          q("insert into fx_fallback_requests (request_id, chain, pair, period_id, reason, state, attestor, rate_wad, signature, source_note, signed_at) values ($1, 'solana', $2, $3, 'coverage', $4, $5, $6, $7, $8, $9)",
+            [id, pair, period, state, state === 'signed' ? KEY : null, state === 'signed' ? '1' : null, state === 'signed' ? '0x' + '55'.repeat(65) : null, state === 'signed' ? 'ecb' : null, state === 'signed' ? new Date() : null]);
+        await fx('fx-text-unused', 'GBP/USD', '2026Q2', 'signed');
+        await fx('fx-text-used', 'EUR/USD', '2026Q1', 'signed');
+        await fx('fx-open', 'CAD/USD', '2026Q2', 'open');
+
+        copyFileSync(join(MIGRATIONS_DIR, '026_report_signatures.sql'), join(dir, '026_report_signatures.sql'));
+        expect(await migrate(pool, dir)).toEqual(['026_report_signatures.sql']);
+
+        // a case signed with the EIP-191 text, whose quarter reached no chain, is open again for its key; the others keep theirs
+        expect(await rows('select case_id, state, decision_code, attestation, attested_payment_stable, proof, signed_at is null as unsigned from tier3_cases order by case_id')).toEqual([
+          { case_id: 'c-new', state: 'signed', decision_code: null, attestation: NEW_T3, attested_payment_stable: '5', proof: {}, unsigned: false },
+          { case_id: 'c-open', state: 'open', decision_code: null, attestation: null, attested_payment_stable: null, proof: null, unsigned: true },
+          { case_id: 'c-text-unused', state: 'open', decision_code: 'superseded-s4', attestation: null, attested_payment_stable: null, proof: null, unsigned: true },
+          { case_id: 'c-text-used', state: 'signed', decision_code: null, attestation: OLD_T3, attested_payment_stable: '5', proof: {}, unsigned: false },
+        ]);
+        // reports: the co-signer column is gone, attestor_rate is fx_fallback (an old value cleared), unsubmitted co-signed reports superseded
+        const cols = (await rows("select column_name from information_schema.columns where table_schema = current_schema() and table_name = 'reports'")).map((r) => r.column_name);
+        expect(cols).toContain('fx_fallback');
+        expect(cols).not.toContain('attestor');
+        expect(cols).not.toContain('attestor_rate');
+        expect(await rows('select report_id, state, fx_fallback, attestation from reports order by report_id')).toEqual([
+          { report_id: 'r-rate-paid', state: 'paid', fx_fallback: null, attestation: null },
+          { report_id: 'r-rate-unsent', state: 'superseded', fx_fallback: null, attestation: null },
+          { report_id: 'r-t2', state: 'assembled', fx_fallback: null, attestation: { signer: KEY, signature: '0x' + '44'.repeat(65) } },
+          { report_id: 'r-t3-unsent', state: 'superseded', fx_fallback: null, attestation: null },
+          { report_id: 'r-t3-used', state: 'accepted', fx_fallback: null, attestation: null },
+        ]);
+        // FX requests: the text signature column is gone; one signed with it whose rate reached no chain is open again
+        expect((await rows("select column_name from information_schema.columns where table_schema = current_schema() and table_name = 'fx_fallback_requests'")).map((r) => r.column_name)).not.toContain('signature');
+        expect(await rows('select request_id, state, attestor, rate_wad, source_note, decision_code from fx_fallback_requests order by request_id')).toEqual([
+          { request_id: 'fx-open', state: 'open', attestor: null, rate_wad: null, source_note: null, decision_code: null },
+          { request_id: 'fx-text-unused', state: 'open', attestor: null, rate_wad: null, source_note: null, decision_code: 'superseded-s4' },
+          { request_id: 'fx-text-used', state: 'signed', attestor: KEY, rate_wad: '1', source_note: 'ecb', decision_code: null },
+        ]);
+        // the per-series FX signatures: one per (request, series), a 20-byte signer, a 65-byte signature, a 32-byte digest, a positive rate
+        const sig = (series: string, over: Partial<{ request: string; signer: string; rate: string; signature: string; digest: string }> = {}) =>
+          q('insert into fx_fallback_signatures (request_id, chain, series_id, signer, rate_wad, signature, digest) values ($1, $2, $3, $4, $5, $6, $7)',
+            [over.request ?? 'fx-open', 'solana', series, over.signer ?? KEY, over.rate ?? '1080000000000000000', over.signature ?? '0x' + '66'.repeat(65), over.digest ?? '0x' + '77'.repeat(32)]);
+        await sig('solana:s1');
+        await expect(sig('solana:s1')).rejects.toThrow(/fx_fallback_signatures_pkey/);
+        await expect(sig('solana:s2', { request: 'nope' })).rejects.toThrow(/fx_fallback_signatures_request_id_fkey/);
+        await expect(sig('solana:s2', { signer: '0x' + 'AB'.repeat(20) })).rejects.toThrow(/fx_fallback_signatures_signer_check/);
+        await expect(sig('solana:s2', { signature: 'sim:x' })).rejects.toThrow(/fx_fallback_signatures_signature_check/);
+        await expect(sig('solana:s2', { digest: '0x01' })).rejects.toThrow(/fx_fallback_signatures_digest_check/);
+        await expect(sig('solana:s2', { rate: '0' })).rejects.toThrow(/fx_fallback_signatures_rate_wad_check/);
+        await sig('solana:s2');
+        expect(await rows('select series_id from fx_fallback_signatures order by series_id')).toEqual([{ series_id: 'solana:s1' }, { series_id: 'solana:s2' }]);
+        // migrating again changes nothing
         expect(await migrate(pool, dir)).toEqual([]);
       } finally {
         await pool.end();

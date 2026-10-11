@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AppError, enqueueOutbox, getFlag } from '@merces/core';
-import { attestationSchema, expectedPrior, fieldToHex32, keyUsable, recoverSigner, reportDigest, reportPublicInputs, reportProofSchema, type Attestation, type ChainPort, type SeriesState, type UnsignedTx, type UserCommand } from '@merces/domain';
+import { attestationSchema, expectedPrior, fieldToHex32, fxDigest, keyUsable, recoverSigner, reportDigest, reportPublicInputs, reportProofSchema, type Attestation, type ChainPort, type SeriesState, type SignerKind, type UnsignedTx, type UserCommand } from '@merces/domain';
 import { WAD, fromPid, parsePeriod, periodsBetween, projectDeadlines, statusParamsOf, toPid, yearOf } from '@merces/math';
 import { SOURCE_DEFINITIONS, type IncomeSourceKind } from '@merces/ports';
 import type { Session } from '@merces/api';
@@ -10,13 +10,15 @@ import { censusFreshFor, curveRegularReport, reportUnits, requireCensusFor, requ
 /**
  * E5 — ProofOfIncome service (tier 2 quarterly flow; tier 1 reconciliation; tier 3 arrives through E10).
  * The device does the private work (zkTLS session, commitment, proof, attestation from the verifier). This
- * service sees only what goes onchain: commitments, the payment, the proof and the attestation. It resolves
- * the FX basis, verifies the proof and the attestation offchain, stores the report, and builds the
+ * service sees only what goes onchain: commitments, the payment, the proof and the signatures. It resolves
+ * the FX basis, verifies the proof and every signature offchain, stores the report, and builds the
  * submitReport / payIn transactions for the issuer to sign. It tracks deadlines (C8).
+ *
+ * The signatures a report carries are Stage 1's (S4 WP6, WP9): tier 2 the report verifier key's REPORT signature (sent
+ * by the device), tier 3 the attestor key's REPORT signature with tier 3 (stored with the signed tier-3 case, E10), the
+ * FX fallback an attestor key's FX signature for this series (stored per series with the FX request, E10). The service
+ * carries the stored ones itself and checks each against the chain's own reads; nobody co-signs the report.
  */
-
-/** An attestor key: a secp256k1 key's 20-byte address, any case; the canonical form is lowercase (S4 D4, WP7). */
-const attestorKeySchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((a) => a.toLowerCase());
 
 export const assembleSchema = z.object({
   /** optional: the device's assembled report names its series; it must be the series in the path */
@@ -31,14 +33,11 @@ export const assembleSchema = z.object({
   proof: reportProofSchema,
   /**
    * Tier 2: the report verifier key's Stage 1 REPORT signature (`{signer, signature}`; S4 WP6), as the device received it
-   * from the verifier (the `signer` and `signature` of its record). The service recomputes the digest itself from the
-   * chain's signing domain and the series key; null for other tiers.
+   * from the verifier (the `signer` and `signature` of its record). Tier 3: optional; the service carries the attestor's
+   * signature stored with the signed case (S4 WP9), and one sent must be that one. The service recomputes the digest
+   * itself from the chain's signing domain and the series key; null for tiers 1 and 4.
    */
   attestation: attestationSchema.nullable().default(null),
-  /** attestor-signed fallback rate when the accumulator is flagged (the attestor is a key's 20-byte address, S4 WP7) */
-  attestorRate: z.object({ attestor: attestorKeySchema, rateWad: z.string().regex(/^\d+$/) }).nullable().default(null),
-  /** tier 3: the attestor key that will co-sign (a 20-byte address, S4 WP7; Stage 1's REPORT signature from S4 WP9) */
-  attestor: attestorKeySchema.nullable().default(null),
   liquidityEvent: z.boolean().default(false),
   // strict: a stray field (a witness, a year-to-date figure, a salt) is refused, never silently dropped or stored
 }).strict();
@@ -118,21 +117,42 @@ export class ProofOfIncomeService {
   }
 
   /**
-   * Tier 2 (S4 WP6): the chain will accept the attestation only if Stage 1's REPORT message over its signing domain and
-   * the series key, tier 2, recovers to the named signer and that signer is a verifier key usable for the period (active,
-   * or revoked after the period ended and within the 45-day grace). The service checks exactly that, from the chain's own
-   * reads (`ChainInfo.signing`, `SeriesState.seriesKey`, `getSignerKey`), so the issuer never pays for a failing
-   * transaction: 409 `signing-domain-unknown` when the chain has no signing domain yet (a live adapter before S5), 422
-   * otherwise. It never signs anything.
+   * Tiers 2 and 3 (S4 WP6, WP9): the chain will accept the attestation only if Stage 1's REPORT message over its signing
+   * domain and the series key, with the report's tier, recovers to the named signer and that signer is a key of the tier's
+   * kind (the report verifier's for tier 2, an attestor's for tier 3) usable for the period (active, or revoked after the
+   * period ended and within the 45-day grace). The FX fallback likewise: Stage 1's FX message over the series key, the
+   * period and the report's rate, by an attestor key usable with the same grace (both chains; DIV-S1I-3). The service
+   * checks exactly that, from the chain's own reads (`ChainInfo.signing`, `SeriesState.seriesKey`, `getSignerKey`), so the
+   * issuer never pays for a failing transaction: 409 `signing-domain-unknown` when the chain has no signing domain yet (a
+   * live adapter before S5), 422 with Stage 1's error name otherwise. It never signs anything.
    */
-  private async verifyAttestation(chain: ChainPort, series: SeriesState, report: { periodId: string; priorIncomeCommitment: string; incomeCommitment: string; liquidityEvent: boolean }, a: Attestation): Promise<void> {
+  private async verifySigned(chain: ChainPort, kind: SignerKind, digestOf: (ctx: { domain: string; seriesKey: string }) => string, series: SeriesState, periodId: string, a: Attestation, what: { name: string; message: string }): Promise<void> {
     const signing = (await chain.info()).signing;
-    if (!signing) throw new AppError(409, 'Conflict', 'the chain has no signing domain yet: tier-2 reports cannot be checked here', { reason: 'signing-domain-unknown' });
-    const { digest } = reportDigest({ domain: signing.domain, seriesKey: series.seriesKey }, { ...report, tier: 2 });
+    if (!signing) throw new AppError(409, 'Conflict', `the chain has no signing domain yet: the ${what.name} cannot be checked here`, { reason: 'signing-domain-unknown' });
+    const stage1 = kind === 'verifier' ? 'InvalidVerifierSignature' : 'InvalidAttestorSignature';
+    const digest = digestOf({ domain: signing.domain, seriesKey: series.seriesKey });
     const who = recoverSigner(digest, a.signature);
-    if (who === null || who !== a.signer) throw AppError.unprocessable('the attestation is not the report verifier\'s signature over this report on this chain', { stage1: 'InvalidVerifierSignature' });
-    const key = await chain.getSignerKey('verifier', who);
-    if (!key || !keyUsable(key, await chain.now(), { reportPeriod: report.periodId })) throw AppError.unprocessable('the attestation\'s key is not a verifier key usable on this chain for this quarter (not registered, or revoked before the quarter ended or more than 45 days ago)', { stage1: 'InvalidVerifierSignature' });
+    if (who === null || who !== a.signer) throw AppError.unprocessable(`the ${what.name} is not ${what.message} on this chain`, { stage1 });
+    const key = await chain.getSignerKey(kind, who);
+    if (!key || !keyUsable(key, await chain.now(), { reportPeriod: periodId })) throw AppError.unprocessable(`the ${what.name}'s key is not ${kind === 'verifier' ? 'a verifier' : 'an attestor'} key usable on this chain for this quarter (not registered, or revoked before the quarter ended or more than 45 days ago)`, { stage1 });
+  }
+
+  private async verifyAttestation(chain: ChainPort, series: SeriesState, report: { periodId: string; priorIncomeCommitment: string; incomeCommitment: string; liquidityEvent: boolean; tier: 2 | 3 }, a: Attestation): Promise<void> {
+    const what = report.tier === 2 ? { name: 'attestation', message: 'the report verifier\'s signature over this report' } : { name: 'tier-3 attestation', message: 'the attestor\'s signature over this report' };
+    await this.verifySigned(chain, report.tier === 2 ? 'verifier' : 'attestor', (ctx) => reportDigest(ctx, report).digest, series, report.periodId, a, what);
+  }
+
+  /**
+   * The FX fallback for this series and period (S4 WP9, D14): the attestor key's Stage 1 FX signature stored for this
+   * series with the period's signed request, and the rate it signed. Null when none is stored yet.
+   */
+  private async storedFxFallback(chain: ChainPort, seriesId: string, pair: string, periodId: string): Promise<{ fxFallback: Attestation; rateWad: string } | null> {
+    const r = await this.ctx.pool.query(
+      "select s.signer, s.signature, s.rate_wad from fx_fallback_signatures s join fx_fallback_requests f on f.request_id = s.request_id where f.chain = $1 and f.pair = $2 and f.period_id = $3 and f.state = 'signed' and s.series_id = $4",
+      [chain.chain, pair, periodId, seriesId],
+    );
+    const x = r.rows[0];
+    return x ? { fxFallback: { signer: x.signer, signature: x.signature }, rateWad: String(x.rate_wad) } : null;
   }
 
   /**
@@ -192,9 +212,13 @@ export class ProofOfIncomeService {
     if (curveRegularReport(series)) requireCensusUnchanged(series, input.proof.publicInputs[1], 're-prove');
     const fx = await this.resolveFx(seriesId, input.periodId);
     let fxAvgWad: string;
+    let fxFallback: Attestation | null = null;
     if (fx.basis === 'attestor') {
-      if (!input.attestorRate) throw AppError.unprocessable(`FX fallback is in force for ${fx.pair} ${input.periodId} (${fx.reason}); an attestor-signed rate is required`, { fx });
-      fxAvgWad = input.attestorRate.rateWad;
+      // the attestor's FX signature for this series, stored with the period's request (E10, S4 WP9); its rate is the report's
+      const stored = await this.storedFxFallback(chain, seriesId, fx.pair!, input.periodId);
+      if (!stored) throw AppError.unprocessable(`FX fallback is in force for ${fx.pair} ${input.periodId} (${fx.reason}); an attestor's FX signature for this series is required (GET /series/${seriesId}/reporting/fx-fallback/${input.periodId})`, { fx });
+      fxAvgWad = stored.rateWad;
+      fxFallback = stored.fxFallback;
     } else fxAvgWad = fx.fxAvgWad!;
     const units = reportUnits(series);
     // the prior the chain will require (SPEC §6.2 step 5), from the series' reporting ledger
@@ -211,25 +235,31 @@ export class ProofOfIncomeService {
     // Stage 1's Groth16 verifier (mock proofs only in a simulator-only process configured for them, H3)
     if (!this.ctx.proofVerifier.systems.includes(input.proof.system)) throw AppError.unprocessable(`proof system ${input.proof.system} is not accepted (this service verifies ${this.ctx.proofVerifier.systems.join(', ')})`);
     if (!(await this.ctx.proofVerifier.verify(input.proof.proof, input.proof.publicInputs))) throw AppError.unprocessable('proof does not verify');
+    const fields = { periodId: input.periodId, priorIncomeCommitment: prior, incomeCommitment: input.incomeCommitment, liquidityEvent: input.liquidityEvent };
+    let attestation: Attestation | null = null;
     if (input.tier === 2) {
       if (!input.attestation) throw AppError.unprocessable('tier 2 needs a report-verifier attestation');
-      await this.verifyAttestation(chain, series, { periodId: input.periodId, priorIncomeCommitment: prior, incomeCommitment: input.incomeCommitment, liquidityEvent: input.liquidityEvent }, input.attestation);
-    }
-    if (input.tier === 3) {
-      if (!input.attestor) throw AppError.unprocessable('tier 3 needs the attestor who will co-sign');
+      await this.verifyAttestation(chain, series, { ...fields, tier: 2 }, input.attestation);
+      attestation = input.attestation;
+    } else if (input.tier === 3) {
+      // the attestor signed this quarter's case over the same commitments and liquidity flag on their own device (E10, M7):
+      // Stage 1's REPORT signature with tier 3, stored with the case (S4 WP9); the report carries it
+      const signed = await this.ctx.pool.query("select attestation from tier3_cases where series_id = $1 and period_id = $2 and state = 'signed' and income_commitment = $3 and prior_income_commitment = $4 and liquidity_event = $5 order by signed_at desc limit 1", [seriesId, input.periodId, input.incomeCommitment, prior, input.liquidityEvent]);
+      const stored = pickAttestation(signed.rows[0]?.attestation);
+      if (!stored) throw AppError.unprocessable('tier 3 needs the chosen attestor\'s signed case for this quarter over the same commitments and liquidity flag');
+      if (input.attestation && (input.attestation.signer !== stored.signer || input.attestation.signature !== stored.signature)) throw AppError.unprocessable('the attestation is not the one the case\'s attestor signed');
       // the chain's registry decides (S4 D5): an active key, or one revoked after this period ended and still within
-      // Stage 1's 45-day grace, may attest the quarter (forward-only revocation, SPEC §1.4)
-      const key = await chain.getSignerKey('attestor', input.attestor);
-      if (!key || !keyUsable(key, await chain.now(), { reportPeriod: input.periodId })) throw AppError.unprocessable('tier 3 attestor is not usable onchain for this quarter (not registered, or revoked before the quarter ended or more than 45 days ago)');
-      // the attestor signed this quarter's case over the same commitments and liquidity flag (E10, M7)
-      const signed = await this.ctx.pool.query("select 1 from tier3_cases where series_id = $1 and period_id = $2 and state = 'signed' and attestor = $3 and income_commitment = $4 and prior_income_commitment = $5 and liquidity_event = $6", [seriesId, input.periodId, input.attestor, input.incomeCommitment, prior, input.liquidityEvent]);
-      if (!signed.rowCount) throw AppError.unprocessable('tier 3 needs the chosen attestor\'s signed case for this quarter over the same commitments');
+      // Stage 1's grace, may attest the quarter (forward-only revocation, SPEC §1.4)
+      await this.verifyAttestation(chain, series, { ...fields, tier: 3 }, stored);
+      attestation = stored;
     }
+    // tiers 1 and 4 carry no attestation (both chains ignore one): nothing is stored for them
+    if (fxFallback) await this.verifySigned(chain, 'attestor', (ctx) => fxDigest(ctx, { periodId: input.periodId, fxRateWad: fxAvgWad }).digest, series, input.periodId, fxFallback, { name: 'FX fallback', message: 'its attestor\'s signature over this series\' FX message for the period and rate' });
     const reportId = this.ctx.newId('rep');
     await this.ctx.pool.query("update reports set state = 'superseded', updated_at = now() where series_id = $1 and period_id = $2 and state in ('assembled','rejected')", [seriesId, input.periodId]);
     await this.ctx.pool.query(
-      'insert into reports (report_id, series_id, period_id, account_id, tier, source, payment_stable, prior_income_commitment, income_commitment, terms_commitment, fx_basis, fx_avg_wad, pair, proof, attestation, attestor_rate, liquidity_event, verified_offchain, attestor) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,true,$18)',
-      [reportId, seriesId, input.periodId, session.accountId, input.tier, input.source, input.paymentStable, prior, input.incomeCommitment, series.terms.termsCommitment, fx.basis, fxAvgWad, fx.pair, JSON.stringify(input.proof), input.tier === 2 && input.attestation ? JSON.stringify({ signer: input.attestation.signer, signature: input.attestation.signature }) : null, input.attestorRate ? JSON.stringify(input.attestorRate) : null, input.liquidityEvent, input.tier === 3 ? input.attestor : null],
+      'insert into reports (report_id, series_id, period_id, account_id, tier, source, payment_stable, prior_income_commitment, income_commitment, terms_commitment, fx_basis, fx_avg_wad, pair, proof, attestation, fx_fallback, liquidity_event, verified_offchain) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,true)',
+      [reportId, seriesId, input.periodId, session.accountId, input.tier, input.source, input.paymentStable, prior, input.incomeCommitment, series.terms.termsCommitment, fx.basis, fxAvgWad, fx.pair, JSON.stringify(input.proof), attestation ? JSON.stringify({ signer: attestation.signer, signature: attestation.signature }) : null, fxFallback ? JSON.stringify(fxFallback) : null, input.liquidityEvent],
     );
     return { ...(await this.getReport(reportId)), tx: (await this.buildSubmit(reportId, session)).tx };
   }
@@ -239,7 +269,7 @@ export class ProofOfIncomeService {
     const r = await this.ctx.pool.query('select * from reports where report_id = $1', [reportId]);
     const x = r.rows[0];
     if (!x) throw AppError.notFound('report');
-    return { reportId: x.report_id, seriesId: x.series_id, periodId: x.period_id, tier: x.tier, source: opts.showSource ? x.source : undefined, state: x.state, attestor: x.attestor ?? null, paymentStable: x.payment_stable, priorIncomeCommitment: x.prior_income_commitment ?? null, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment, fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, liquidityEvent: x.liquidity_event, verifiedOffchain: x.verified_offchain, submitTx: x.submit_tx, payinTx: x.payin_tx, createdAt: x.created_at };
+    return { reportId: x.report_id, seriesId: x.series_id, periodId: x.period_id, tier: x.tier, source: opts.showSource ? x.source : undefined, state: x.state, attestor: x.tier === 3 ? (pickAttestation(x.attestation)?.signer ?? null) : null, fxFallbackSigner: pickAttestation(x.fx_fallback)?.signer ?? null, paymentStable: x.payment_stable, priorIncomeCommitment: x.prior_income_commitment ?? null, incomeCommitment: x.income_commitment, termsCommitment: x.terms_commitment, fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, liquidityEvent: x.liquidity_event, verifiedOffchain: x.verified_offchain, submitTx: x.submit_tx, payinTx: x.payin_tx, createdAt: x.created_at };
   }
 
   async listReports(seriesId: string, session: Session): Promise<Record<string, unknown>[]> {
@@ -268,13 +298,13 @@ export class ProofOfIncomeService {
     }
     // the prior has its own column; reports stored before it carry it as public input 3 of the proof
     const priorIncomeCommitment: string = x.prior_income_commitment ?? fieldToHex32(BigInt((x.proof as { publicInputs: string[] }).publicInputs[3]!));
+    // the stored signatures go into the command as Stage 1 takes them (S4 WP6, WP9): nobody co-signs, the issuer sends it
     const cmd: Extract<UserCommand, { kind: 'submitReport' }> = {
       kind: 'submitReport', seriesId: x.series_id, periodId: x.period_id, tier: x.tier, paymentStable: x.payment_stable, priorIncomeCommitment, incomeCommitment: x.income_commitment,
-      fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, attestorRate: x.attestor_rate ? { attestor: x.attestor_rate.attestor, rateWad: x.attestor_rate.rateWad, pair: x.pair } : null, proof: x.proof, attestation: x.tier === 2 ? storedAttestation(x.attestation) : null,
-      attestor: x.tier === 3 ? (x.attestor ?? null) : null, liquidityEvent: x.liquidity_event,
+      fxBasis: x.fx_basis, fxAvgWad: x.fx_avg_wad, pair: x.pair, fxFallback: x.fx_basis === 'attestor' ? storedAttestation(x.fx_fallback) : null, proof: x.proof,
+      attestation: x.tier === 2 || x.tier === 3 ? storedAttestation(x.attestation) : null, liquidityEvent: x.liquidity_event,
     };
-    const coSigners = [cmd.attestorRate?.attestor, cmd.attestor].filter((a): a is string => !!a);
-    const tx = await chain.build(cmd, series.issuer, [...new Set(coSigners)]);
+    const tx = await chain.build(cmd, series.issuer);
     return { tx };
   }
 
@@ -347,14 +377,21 @@ export class ProofOfIncomeService {
 }
 
 /**
- * A stored tier-2 attestation as the command carries it: `{signer, signature}` (S4 WP6). A report assembled before S4
- * WP6 holds the ed25519 attestation v1 (a key id), which no chain accepts any more: 409 `attestation-superseded`,
- * re-assemble the report (the device asks the verifier again). Migration 024 marks such reports `superseded`.
+ * A stored signature as the command carries it: `{signer, signature}` (the tier-2 or tier-3 attestation, S4 WP6 and WP9;
+ * the FX fallback, S4 WP9). A report assembled before them holds an ed25519 attestation v1, a co-signer or nothing,
+ * which no chain accepts any more: 409 `attestation-superseded`, assemble the report again (the service carries the
+ * stored signatures). Migrations 024 and 026 mark such reports `superseded`.
  */
 function storedAttestation(a: unknown): Attestation {
   const parsed = attestationSchema.safeParse(a);
-  if (!parsed.success) throw new AppError(409, 'Conflict', 'this report was assembled with a verifier attestation the chains no longer accept: assemble it again', { reason: 'attestation-superseded' });
+  if (!parsed.success) throw new AppError(409, 'Conflict', 'this report was assembled with an attestation or FX fallback the chains no longer accept: assemble it again', { reason: 'attestation-superseded' });
   return parsed.data;
+}
+
+/** `{signer, signature}` of a stored signature record (a tier-3 case's carries its digest too), or null. */
+function pickAttestation(a: unknown): Attestation | null {
+  const x = a as { signer?: unknown; signature?: unknown } | null;
+  return x && typeof x.signer === 'string' && typeof x.signature === 'string' ? { signer: x.signer, signature: x.signature } : null;
 }
 
 function parsePeriodSafe(ts: number) {

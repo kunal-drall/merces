@@ -71,7 +71,7 @@ export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: OpKind; sh
   finalize_settlement: { canonical: 'tallyBids (every page) then finalizeSettlement', kind: 'direct' },
   process_bid: { canonical: 'processBid', kind: 'direct' },
   deliver_bid: { canonical: 'deliverBid', kind: 'direct' },
-  submit_report: { canonical: "submitReport (Groth16 proof; tier 2 the named key's REPORT signature; tier 3 co-signed, FX basis from the runner)", kind: 'shim', shim: 'SH-REP-1' },
+  submit_report: { canonical: "submitReport (Groth16 proof; tiers 2 and 3 the named key's REPORT signature, the FX fallback its FX signature; FX basis from the runner)", kind: 'shim', shim: 'SH-REP-1' },
   pay: { canonical: 'payIn (period and amount supplied by the runner)', kind: 'shim', shim: 'SH-PAY-1' },
   claim: { canonical: 'claimPayout', kind: 'direct' },
   claim_release: { canonical: 'drawRelease', kind: 'direct' },

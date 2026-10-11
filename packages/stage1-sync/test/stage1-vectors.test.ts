@@ -90,7 +90,9 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *  - S4-REG: the register gains DIV-S1I-2 (the last-key rule), shown by our merces-only scenario S4d with no entries;
  *  - S4-T2: the runner signs a tier-2 report's REPORT message with the named vector key (secp256k1, after checking it is
  *    Stage 1's test key for its seed) over the chain's signing domain and the series key (was an ed25519 key derived from
- *    the vector key).
+ *    the vector key);
+ *  - S4-T3: a tier-3 report likewise, with tier 3, and the FX fallback the named key's FX signature (S4 WP9; was the
+ *    attestor's co-signature); SH-REP-1 is narrowed to the FX basis and pair the runner derives (S5).
  */
 afterAll(shutdown);
 
@@ -963,9 +965,12 @@ describe('stage1 vector runner: merces backend', () => {
       expect(NOT_YET, op).not.toHaveProperty(op);
     }
     expect(SHIM_BY_ID.has('SH-REG-3')).toBe(false);
-    // SH-REP-1 stays for tier 3's co-signature (S4 WP9) and the FX basis the runner derives (S5)
-    expect(SHIM_BY_ID.get('SH-REP-1')).toMatchObject({ ops: ['submit_report'], removedIn: 'S4 (tier 3), S5 (FX)' });
-    expect(SHIM_BY_ID.get('SH-REP-1')!.call).toMatch(/tier 3 co-signed by the attestor; fxBasis and pair derived by the runner/);
+    // cause S4-T3: SH-REP-1 stays only for the FX basis and pair the runner derives (S5); tier 3 is the named key's REPORT
+    // signature since S4 WP9 (was: co-signed by the attestor)
+    expect(SHIM_BY_ID.get('SH-REP-1')).toMatchObject({ ops: ['submit_report'], removedIn: 'S5 (FX)' });
+    expect(SHIM_BY_ID.get('SH-REP-1')!.call).toMatch(/tiers 2 and 3 the named key's REPORT signature; the FX fallback the named key's FX signature\}; fxBasis and pair derived by the runner$/);
+    expect(SHIM_BY_ID.get('SH-REP-1')!.call).not.toMatch(/co-sign/);
+    expect(STAGE1_OP_MAP.submit_report!.canonical).not.toMatch(/co-sign/);
   });
 
   it('cause S4-T2: the vector keys sign Stage 1\'s messages: each checked against its seed, its address its own, its signature recovering to it', async () => {

@@ -70,8 +70,8 @@ export class SimSigner implements DigestSigner {
   /**
    * EIP-191 `personal_sign` of `text`: Stage 1's `signDigest` over `keccak256("\x19Ethereum Signed Message:\n" ‖ len ‖
    * text)` (`personalMessageDigest`, viem's `hashMessage`), 65 bytes `r ‖ s ‖ v`. How the key proves control when it is
-   * linked to an account (S4 WP7), and, until S4 WP9, how an attestor signs the tier-3 and FX texts. Its digest's
-   * pre-image starts with 0x19, never a `MERCES_*` message's: it can never be an attestation.
+   * linked to an account (S4 WP7). Its digest's pre-image starts with 0x19, never a `MERCES_*` message's: it can never
+   * be an attestation.
    */
   async personalSign(text: string | Uint8Array): Promise<string> {
     return this.signDigest(personalMessageDigest(text));
@@ -102,9 +102,9 @@ export class SimSigner implements DigestSigner {
  * own EIP-191 proof (`personalSign`). It signs Stage 1 digests (`signDigest`, `attest`).
  *
  * Transitional until S4 WP13: the flows that still take the attestor as a co-signer of a transaction (approvePause,
- * amendTerms, extinguish, a tier-3 report, the FX fallback rate) are signed by a simulator wallet at the key's address
- * (it extends `SimWallet(family, label, key.address)`: a `sim:` co-signature, which only the simulator accepts). Each
- * of those flows moves to the key's own Stage 1 signature (S4 WP9-WP12), and the wallet goes with WP13.
+ * amendTerms, extinguish) are signed by a simulator wallet at the key's address (it extends `SimWallet(family, label,
+ * key.address)`: a `sim:` co-signature, which only the simulator accepts). Each of those flows moves to the key's own
+ * Stage 1 signature (S4 WP10-WP12; a tier-3 report and the FX fallback did in S4 WP9), and the wallet goes with WP13.
  */
 export class SimAttestor extends SimWallet implements DigestSigner {
   readonly key: SimSigner;

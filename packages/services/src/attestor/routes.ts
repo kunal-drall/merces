@@ -4,7 +4,8 @@ import { defineRoute, type AppContext } from '@merces/api';
 import { withIdempotency } from '@merces/core';
 import { svc } from '../context.ts';
 import {
-  AttestorService, extinguishSchema, fxSignSchema, hardshipDecideSchema, hardshipRequestSchema, tier3AnnualOpenSchema, tier3AnnualSignSchema, tier3OpenSchema, tier3SignSchema,
+  AttestorService, extinguishSchema, fxMessagesQuerySchema, fxSignSchema, hardshipDecideSchema, hardshipRequestSchema, tier3AnnualOpenSchema, tier3AnnualSignSchema, tier3MessageQuerySchema, tier3OpenSchema,
+  tier3SignSchema,
 } from './service.ts';
 
 const periodParam = z.string().regex(/^\d{4}Q[1-4]$/);
@@ -73,6 +74,8 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
   });
   defineRoute(app, ctx, { method: 'GET', url: '/attestor/tier3/:caseId', access: 'attestor', handler: async (req, _r, session) => s.getTier3Case(param(req, 'caseId'), session!) });
   defineRoute(app, ctx, { method: 'GET', url: '/attestor/tier3/:caseId/prefill-spec', access: 'attestor', handler: async (req, _r, session) => s.prefillSpec(param(req, 'caseId'), session!) });
+  // the REPORT signing request (tier 3) for the attestor's own device (S4 WP9): the API never signs
+  defineRoute(app, ctx, { method: 'GET', url: '/attestor/tier3/:caseId/message', access: 'attestor', handler: async (req, _r, session) => s.tier3Message(param(req, 'caseId'), session!, tier3MessageQuerySchema.parse(req.query)) });
   defineRoute(app, ctx, {
     method: 'POST', url: '/attestor/tier3/:caseId/sign', access: 'attestor',
     handler: async (req, _r, session) => {
@@ -84,6 +87,8 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
 
   // ---- FX fallback
   defineRoute(app, ctx, { method: 'GET', url: '/attestor/fx-requests', access: 'attestor', handler: async (_req, _r, session) => ({ requests: await s.listFxRequests(session!) }) });
+  // one FX signing request per covered series (S4 WP9, D14), for the attestor's own device
+  defineRoute(app, ctx, { method: 'GET', url: '/attestor/fx-requests/:requestId/messages', access: 'attestor', handler: async (req, _r, session) => s.fxMessages(param(req, 'requestId'), session!, fxMessagesQuerySchema.parse(req.query)) });
   defineRoute(app, ctx, {
     method: 'POST', url: '/attestor/fx-requests/:requestId/sign', access: 'attestor',
     handler: async (req, _r, session) => {

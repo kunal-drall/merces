@@ -6,16 +6,19 @@ import { randomBytes } from 'node:crypto';
 import {
   CURVE_BUYER_NOTICE, CURVE_NO_CAP, CURVE_TERMS_ZEROS, CURVE_UNAPPROVED_EARN_NOTHING, curveBeforeYouBuy, curveBuyerNotice, curveNoticeFigures, CURVE_ZERO_TERMS, DEFAULTS, NON_REVEAL_CHARGE_BOUNDS, NON_REVEAL_CHARGE_SETTING, checkNonRevealCharge, nonRevealChargeSetting, rateUnits, seriesTermsViolations, seriesTermsSchema, type BoundedTerms, E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, INDEXING_RULE_CODE, REPORT_PUBLIC_INPUT_NAMES, ZERO_INCOME_COMMITMENT,
   adminCommandKinds, adminCommandSchema, amountBearingEvents, permissionlessCommandSchema,
-  ChainError, attestationMessage, bidCommitment, orderCommitment, randomSalt, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
+  ChainError, bidCommitment, orderCommitment, randomSalt, canonicalJson, domainJsonSchema, eventTypes, expectedPrior, fieldToHex32, hex32ToField, incomeCommitment, isEvmAddress, isSolanaAddress,
   makeSeriesId, mockProve, mockVerify, parseDomainEvent, parseE2eEnvelope, readsAsText, parseSeriesId, randomFieldSalt, reportPublicInputs, reportProofSchema, routerIncomeCommitment, permissionlessCommandKinds, serviceCommandKinds, serviceCommandSchema, termsCommitment, userCommandKinds, userCommandSchema,
   type IndexingRule,
 } from '../src/index.ts';
+import * as domainModule from '../src/index.ts';
 
 /*
  * S4 cause codes:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    no series, window or side; the salt is 32 bytes; the wallet is the bidder's chain-local address;
- *  - S4-REG: Stage 1's key registry (S4 WP5): register, forward-only revoke and rotate, with their events; schema 0.4.0.
+ *  - S4-REG: Stage 1's key registry (S4 WP5): register, forward-only revoke and rotate, with their events; schema 0.4.0;
+ *  - S4-T3 / S4-FX: a tier-3 report carries an attestor key's REPORT signature in `attestation`, the FX fallback an
+ *    attestor key's per-series FX signature in `fxFallback` (S4 WP9); the EIP-191 texts and the co-signer fields are gone.
  *
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
@@ -196,11 +199,24 @@ describe('hashing', () => {
       expect(refusal(() => orderCommitment({ wallet: bad, pricePerUnit: 10n, quantity: 5n, salt })).message).not.toContain(bad);
     }
   });
-  it('the attestation message keeps its encoding', () => {
-    const msg = new TextDecoder().decode(attestationMessage({ seriesId: 's', periodId: '2026Q1', priorIncomeCommitment: ZERO_INCOME_COMMITMENT, incomeCommitment: '0x' + '01'.repeat(32), tier: 2, liquidityEvent: false }));
-    expect(msg.startsWith('merces/attestation/v1\n')).toBe(true);
-    expect(msg).toContain('"priorIncomeCommitment"');
-    expect(msg).toContain('"liquidityEvent":false');
+  it('tier 3 and the FX fallback are Stage 1 signatures inside submitReport; no attestation text, no co-signer (cause S4-T3, S4-FX)', () => {
+    expect('attestationMessage' in domainModule).toBe(false);
+    expect('fxAttestationMessage' in domainModule).toBe(false);
+    expect('attestorRateSchema' in domainModule).toBe(false);
+    const sig = { signer: '0x' + 'ab'.repeat(20), signature: '0x' + '11'.repeat(65) };
+    const report = {
+      kind: 'submitReport', seriesId: 'sol:abc', periodId: '2026Q1', tier: 3, paymentStable: '1', priorIncomeCommitment: ZERO_INCOME_COMMITMENT, incomeCommitment: '0x' + '01'.repeat(32),
+      fxBasis: 'attestor', fxAvgWad: '1080000000000000000', pair: 'EUR/USD', fxFallback: sig, proof: { system: 'mock', proof: '0x', publicInputs: ['1', '2', '3', '4', '5', '6'] }, attestation: sig, liquidityEvent: false,
+    };
+    const parsed = userCommandSchema.parse(report) as Record<string, unknown>;
+    expect(parsed.attestation).toEqual(sig);
+    expect(parsed.fxFallback).toEqual(sig);
+    expect(parsed).not.toHaveProperty('attestor');
+    expect(parsed).not.toHaveProperty('attestorRate');
+    // the signature is a 65-byte shape and the signer a 20-byte key; anything else is refused by the schema
+    expect(() => userCommandSchema.parse({ ...report, fxFallback: { signer: sig.signer, signature: 'sim:x' } })).toThrow();
+    expect(() => userCommandSchema.parse({ ...report, attestation: { ...sig, rateWad: '1' } })).toThrow();
+    expect(() => userCommandSchema.parse({ ...report, fxFallback: undefined })).toThrow();
   });
   it('mock proofs are a digest over the six public inputs only', () => {
     const pub = ['1', '2', '3', '4', '5', '6'];

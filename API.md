@@ -64,7 +64,11 @@ report verifier (`GET /reporting/verifier`: its URL, the 20-byte address of its 
 for with each signing domain; since S4 WP6 the attestation is Stage 1's REPORT signature, and the report body carries
 its `{signer, signature}` as `attestation`, which the API recovers over the chain's domain and the series key and checks
 against the chain's verifier key record: 422 `detail.stage1` InvalidVerifierSignature, 409 `signing-domain-unknown`
-on a chain without a domain yet), `POST /series/{id}/reports` (returns the `submitReport` tx), `POST
+on a chain without a domain yet), `POST /series/{id}/reports` (returns the `submitReport` tx; since S4 WP9 a tier-3
+report carries the attestor's REPORT signature stored with its signed case and an FX fallback carries the series' own
+FX signature stored with the period's request, both put in by the service: the body names no attestor and no rate, and
+the issuer sends the report alone; `GET …/reporting/fx-fallback/{periodId}` shows the signed rate, `seriesSigned` and
+the series' `fxFallback {signer, signature}`), `POST
 /reports/{id}/build-payin` (the exact remaining due: a late period accrues per day, so a pay-in built on one day of
 lateness is refused onchain after the next day boundary; rebuild it). On a curve series a regular report proves over the
 curve's census (S3 WP9, A-CURVE-5): assembling (and opening or signing a tier-3 case) is 409 `detail.stage1`
@@ -230,10 +234,23 @@ settling, and settled series.
 
 **Attestor**: link a key (above) and have the admin propose it → `GET /attestor/queue` (work addressed to your keys on
 the chains where they are registered) → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
-attestations (`{attestor, approve}`, naming your key), extinguishment transactions (two signers). Until S4 WP9-WP13 the
-tier-3 and FX texts are the key's EIP-191 signatures and approvePause, amendTerms and extinguish are still co-signed at
-the key's address (`POST /tx/send` accepts a signer that is a key linked to your account); from then on each is Stage 1's
-own signature by the key.
+attestations (`{attestor, approve}`, naming your key), extinguishment transactions (two signers). Since S4 WP9 a tier-3
+case and an FX fallback rate are Stage 1's own signatures by your key, made on your device from a signing request
+(`SigningRequest`: the kind, chain, series, series key, domain, the addressed key, the typed fields, the pre-image, the
+digest and what keeps it valid; no display text): `GET /attestor/tier3/{caseId}/message?priorIncomeCommitment&
+incomeCommitment&liquidityEvent` (`MERCES_REPORT_V1` with tier 3, for the commitments you checked against the decrypted
+opening; 422 `detail.expectedPrior` for a prior the chain will not take) → `merces-attestor sign` → `POST
+/attestor/tier3/{caseId}/sign {priorIncomeCommitment, incomeCommitment, liquidityEvent, proof, attestation: {signer,
+signature, digest}}` (the API rebuilds the message from the chain's own reads, recovers the signer: 422 `detail.stage1`
+InvalidAttestorSignature unless it is the case's key, usable on the chain for the quarter); `GET
+/attestor/fx-requests/{requestId}/messages?rateWad[&attestor]` (one `MERCES_FX_V1` request per covered series: the
+chain's non-terminal series reporting in the pair's base currency that report the period; once a rate is signed it is
+the period's rate, 409 `rate-fixed` for another, and later requests add only the series that started reporting since)
+→ `POST /attestor/fx-requests/{requestId}/sign {rateWad, signer, sourceNote, signatures: [{seriesId, signature}]}`
+(every covered series while the request is open, 422 `signatures-missing`; each recovered over its own series' message,
+422 InvalidAttestorSignature with `detail.seriesId`). approvePause, amendTerms and extinguish are still co-signed at the
+key's address until S4 WP10-WP13 (`POST /tx/send` accepts a signer that is a key linked to your account); from then on
+each is Stage 1's own signature by the key.
 
 **Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
 (`GET /admin/attestors`, with each key's registration and revocation times and its grace end) and the attestor key

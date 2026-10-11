@@ -4,7 +4,8 @@ import { E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, ZERO_INCOME_COMMITM
 import { Groth16ReportVerifier, LocalKms, MockZkTls, shutdownProofSystem } from '@merces/ports';
 import { ReportVerifier, verifierChainsFromPorts, type ReportVerifierPort } from '@merces/report-verifier';
 import { SimulatorChain, deriveAddress } from '@merces/simulator';
-import { DeviceError, E2eError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, deriveIncomeSalt, generateE2eKeyPair, openE2e, openTier3Opening, sealE2e, sealTier3Opening, type DeviceReportInput, type DevicePrivateTerms } from '../src/index.ts';
+import * as deviceModule from '../src/index.ts';
+import { DeviceError, E2eError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, deriveIncomeSalt, generateE2eKeyPair, openE2e, openTier3Opening, sealE2e, sealTier3Opening, submitReportCommand, type DeviceReportInput, type DevicePrivateTerms } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 /*
@@ -15,6 +16,9 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - S4-T2: the verifier's key is secp256k1 and it signs Stage 1's REPORT message under the series' chain's domain, from
  *    a chain table that tests derive from the simulator's `ChainInfo.signing` (S4 amendment D10), for a series id with a
  *    series key there; the device keeps the verifier's record and sends `{signer, signature}` with the report.
+ *  - S4-T3: a tier-3 report carries the attestor key's Stage 1 REPORT signature (made on the attestor's device for the
+ *    case), the FX fallback the attestor's per-series FX signature (S4 WP9): `submitReportCommand` takes both, names no
+ *    co-signer, and the EIP-191 tier-3 text is gone.
  */
 const CANARY_YTD = 7_317_317_317n;
 const rWad = ratePerUnit(10n ** 17n, 500n);
@@ -140,6 +144,22 @@ describe('poi-device: Stage 1 Groth16 reports from the device income chain', () 
     expect(checkTier3Opening(o, { ...c, documentedYtd: USDC(90_000) })).toEqual({ ok: false, code: 'not-high-water' });
     expect(checkTier3Opening({ ...o, incomeSalt: '7' }, { ...c, documentedYtd: USDC(80_000) })).toEqual({ ok: false, code: 'commitment-mismatch' });
     expect(checkTier3Opening(o, { ...c, periodId: '2026Q2', documentedYtd: USDC(80_000) })).toEqual({ ok: false, code: 'wrong-context' });
+  });
+
+  it('cause S4-T3: submitReportCommand carries the tier-3 attestation and the FX fallback it is given, and no co-signer', async () => {
+    expect('tier3AttestationText' in deviceModule).toBe(false);
+    const t3 = await assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: USDC(80_000), tier: 3, source: 'attestor', zktlsProof: null }), null, { proofs: 'mock' });
+    const sig = { signer: '0x' + 'ab'.repeat(20), signature: '0x' + '11'.repeat(65) };
+    const fx = { signer: '0x' + 'cd'.repeat(20), signature: '0x' + '22'.repeat(65) };
+    const cmd = submitReportCommand(t3.assembled, { fxBasis: 'attestor', fxAvgWad: WAD.toString(), pair: 'EUR/USD', fxFallback: fx, attestation: sig });
+    expect(cmd).toMatchObject({ kind: 'submitReport', tier: 3, attestation: sig, fxFallback: fx, fxBasis: 'attestor', pair: 'EUR/USD' });
+    expect(cmd).not.toHaveProperty('attestor');
+    expect(cmd).not.toHaveProperty('attestorRate');
+    // tier 2 keeps the verifier's signature the device received; an attestation given beside it is not used
+    const t2 = await assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: USDC(80_000) }), verifier, { proofs: 'mock' });
+    const c2 = submitReportCommand(t2.assembled, { fxBasis: 'unity', fxAvgWad: WAD.toString(), attestation: sig });
+    expect(c2.attestation).toEqual(t2.assembled.attestation);
+    expect(c2.fxFallback).toBeNull();
   });
 
   // S1 review: the API took any base64/hex-looking string as the opening "ciphertext", so a hex encoding of the opening

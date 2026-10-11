@@ -116,6 +116,19 @@ links its dev attestor keys itself). Migration 025:
   it would hold its pair and period for good; reports assembled with such a co-signer and not submitted → `superseded`.
   The issuer opens each again, addressed to a registered key; items already on a chain keep their records.
 
+S4 WP9 changes no simulator state (still version 5; no reset): a tier-3 report and the FX fallback carry the attestor
+key's own Stage 1 signatures (REPORT with tier 3; FX per series) and nobody co-signs a report. Migration 026:
+- adds `fx_fallback_signatures` (request, chain, series, signer, rate, signature, digest; one row per covered series of
+  a request; a simulator reset removes them with their requests);
+- renames `reports.attestor_rate` to `fx_fallback` (`{signer, signature}`) and drops `reports.attestor` (a tier-3
+  report's `attestation` holds the attestor's REPORT signature); a report assembled with a co-signer (tier 3, or an FX
+  rate) and not submitted → `superseded` (the issuer assembles it again; the service carries the stored signatures);
+- opens again, once, with `decision_code = 'superseded-s4'` until the key signs Stage 1's message: a tier-3 case signed
+  with the EIP-191 text whose quarter no report reached the chain with (its documents and opening stay; the attestor
+  signs the case again from `GET /attestor/tier3/{caseId}/message`), and an FX fallback request signed with the
+  EIP-191 text whose rate no report reached the chain with (an attestor signs it again per series); its text signature
+  column goes. Items already on a chain keep their records.
+
 Before version 5:
 
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final
@@ -289,13 +302,17 @@ the attestor's machine, never on a server.
    built for this key) and prints `{address, nonce, signature}`, the body of `POST /me/signer-keys`. An admin then
    proposes the key per chain and the multisig registers it ("Attestor keys" above).
 4. **Sign a work item.** Save the item's signing request (one, or a list such as an FX rate's per-series requests;
-   the S4 WP9-WP13 routes return them) as `request.json` and run `pnpm -s attestor sign request.json`. The tool checks
+   the S4 WP9-WP13 routes return them: since WP9 a tier-3 case's `GET /attestor/tier3/{caseId}/message?…` and an FX
+   request's `GET /attestor/fx-requests/{requestId}/messages?rateWad=…`, whose `requests` list is the file to sign) as
+   `request.json` and run `pnpm -s attestor sign request.json`. The tool checks
    the request against the pinned table (the chain, its domain, the series key), rebuilds Stage 1's pre-image and digest
    from the typed fields and refuses any difference, then shows what you authorise, built from those fields alone (a
    request carries no text of the server's; one that does is refused). Before a PAUSE or an EXTINGUISH it says that the
    signature cannot be recalled: anyone holding it can submit it until it is used or the key is revoked. Once you
    confirm and give the password it signs the digest it rebuilt and prints `{kind, chain, seriesId, signer,
-   signature, digest}` (`--out <file>` writes it 0600); post the signature to the item's route. Limits in S4: the nonce
+   signature, digest}` (`--out <file>` writes it 0600); post the signature to the item's route (a tier-3 case takes
+   `{signer, signature, digest}` as its `attestation`; an FX request takes `{rateWad, signer, sourceNote, signatures:
+   [{seriesId, signature}]}`, one per request in the list). Limits in S4: the nonce
    of a PAUSE, AMEND, EXTINGUISH or TRUEUP request comes from the server and the tool cannot check it against the chain
    yet (S5 reads it from a public RPC), so sign only a request you expect; an unrelayed PAUSE or EXTINGUISH signature
    that leaks is withdrawn only by rotating the key.

@@ -267,7 +267,8 @@ export async function assembleOnDevice(input: DeviceReportInput, verifier: Repor
     if (recovered === null || recovered !== a.signer) throw new DeviceError('verifier-refused', 'mismatch');
     attestation = a;
   }
-  // tier 1 carries no attestation (Stage 1 binds tier 1 to the router's checkpoints); tier 3 is co-signed by the attestor
+  // tier 1 carries no attestation (Stage 1 binds tier 1 to the router's checkpoints); tier 3 carries the attestor's REPORT
+  // signature, made on the attestor's own device for the case (S4 WP9), not this one
   const entry: IncomeChainEntry = { seriesId: input.seriesId, periodId: input.periodId, incomeYtd, incomeSalt, incomeCommitment: ic, attestation };
   return {
     entry,
@@ -300,10 +301,12 @@ async function groth16(publicInputs: string[], inputs: ProveInputs): Promise<Rep
  * The `submitReport` command for an assembled report, for a caller that submits directly (the simulator scenarios);
  * the API builds the same command from the stored report (`POST /reports/:id/build-submit`).
  */
-export function submitReportCommand(a: AssembledReport, extra: { fxBasis: 'unity' | 'accumulator' | 'attestor'; fxAvgWad: string; pair?: string | null; attestorRate?: { attestor: string; rateWad: string; pair: string } | null; attestor?: string | null }): Extract<UserCommand, { kind: 'submitReport' }> {
+export function submitReportCommand(a: AssembledReport, extra: { fxBasis: 'unity' | 'accumulator' | 'attestor'; fxAvgWad: string; pair?: string | null; fxFallback?: Attestation | null; attestation?: Attestation | null }): Extract<UserCommand, { kind: 'submitReport' }> {
   return {
     kind: 'submitReport', seriesId: a.seriesId, periodId: a.periodId, tier: a.tier, paymentStable: a.paymentStable, priorIncomeCommitment: a.priorIncomeCommitment, incomeCommitment: a.incomeCommitment,
-    fxBasis: extra.fxBasis, fxAvgWad: extra.fxAvgWad, pair: extra.pair ?? null, attestorRate: extra.attestorRate ?? null, proof: a.proof, attestation: a.attestation, attestor: a.tier === 3 ? (extra.attestor ?? null) : null, liquidityEvent: a.liquidityEvent,
+    fxBasis: extra.fxBasis, fxAvgWad: extra.fxAvgWad, pair: extra.pair ?? null, fxFallback: extra.fxFallback ?? null, proof: a.proof,
+    // tier 2: the verifier's signature the device received; tier 3: the attestor's REPORT signature (S4 WP9), from the case
+    attestation: a.tier === 3 ? (extra.attestation ?? null) : a.attestation, liquidityEvent: a.liquidityEvent,
   };
 }
 

@@ -5,7 +5,7 @@ import { logCapture, createLogger } from '@merces/core';
 import { WAD, parsePeriod, ratePerUnit } from '@merces/math';
 import { DeviceError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, generateE2eKeyPair, openTier3Opening, sealTier3Opening, type DevicePrivateTerms } from '@merces/poi-device';
 import { SimSigner, SimWallet } from '@merces/simulator';
-import { E2E_TIER3_OPENING, attestationMessage, parseE2eEnvelope, reportPublicInputs, type UnsignedTx } from '@merces/domain';
+import { E2E_TIER3_OPENING, parseE2eEnvelope, reportPublicInputs, type SigningRequest, type UnsignedTx } from '@merces/domain';
 import { makeRig } from '../../api/test/helpers.ts';
 
 /**
@@ -23,9 +23,11 @@ import { makeRig } from '../../api/test/helpers.ts';
  * decimal, so an encoded leak fails it too.
  *
  * S4 cause codes:
- *  - S4-ID: attestors are keys linked to an account (S4 WP7): the attestor's access is its linked key, and it signs the
- *    tier-3 text with the key's EIP-191 signature (`personalSign`; until S4 WP9). The new tables (the key links, the
- *    link challenges) are in the scan like every other.
+ *  - S4-ID: attestors are keys linked to an account (S4 WP7): the attestor's access is its linked key. The new tables
+ *    (the key links, the link challenges) are in the scan like every other;
+ *  - S4-T3: the attestor signs Stage 1's REPORT message with tier 3 from the signing request the API issues (S4 WP9; was
+ *    the key's EIP-191 text): the request and the stored signature carry commitments only, and are scanned too; the
+ *    issuer's report carries the stored signature and the issuer sends it alone.
  */
 const CANARY_INCOME = 7_317_317_317n; // 7,317.317317 in 6-decimal base units
 const CANARY_INCOME_2 = 9_191_919_191n;
@@ -235,13 +237,20 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     expect(fromIssuer).toEqual(opening);
     const c = { seriesId, periodId: '2026Q3', priorIncomeCommitment: q3.assembled.priorIncomeCommitment, incomeCommitment: q3.assembled.incomeCommitment };
     expect(checkTier3Opening(fromIssuer, { ...c, documentedYtd: CANARY_INCOME_Q3 })).toEqual({ ok: true });
-    const signature = await att.personalSign(attestationMessage({ ...c, tier: 3, liquidityEvent: false })); // cause S4-ID
-    const signBody = { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, proof: q3.assembled.proof, attestation: { liquidityEvent: false, signature } };
+    // cause S4-T3: the API's signing request (Stage 1's REPORT message, tier 3: commitments, period, flag) is signed on
+    // the attestor's device; the request, the sign body and the stored case carry no figure, salt or opening
+    const message = await get(`/attestor/tier3/${caseId}/message?priorIncomeCommitment=${c.priorIncomeCommitment}&incomeCommitment=${c.incomeCommitment}&liquidityEvent=false`, attTok);
+    expect(message.statusCode, message.body).toBe(200);
+    const r3 = message.json() as SigningRequest<'REPORT'>;
+    const attestation = await att.attest('REPORT', r3.domain, r3.seriesKey, r3.fields);
+    expect(attestation.digest).toBe(r3.digest);
+    const signBody = { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, liquidityEvent: false, proof: q3.assembled.proof, attestation };
     expect((await post(`/attestor/tier3/${caseId}/sign`, { ...signBody, opening }, attTok)).statusCode).toBe(400);
-    expect((await post(`/attestor/tier3/${caseId}/sign`, signBody, attTok)).statusCode).toBe(200);
-    const rep3 = await post(`/series/${seriesId}/reports`, { ...q3.assembled, attestor: att.address }, issuerTok);
+    const signed3 = await post(`/attestor/tier3/${caseId}/sign`, signBody, attTok);
+    expect(signed3.statusCode, signed3.body).toBe(200);
+    const rep3 = await post(`/series/${seriesId}/reports`, q3.assembled, issuerTok);
     expect(rep3.statusCode, rep3.body).toBe(201);
-    const sent3 = await post('/tx/send', await att.coSign(await h.issuer.sign(rep3.json().tx as UnsignedTx)), issuerTok);
+    const sent3 = await post('/tx/send', await h.issuer.sign(rep3.json().tx as UnsignedTx), issuerTok);
     expect(sent3.statusCode, sent3.body).toBe(200);
     await payIfDue(rep3.json().reportId, sent3.json().events);
 

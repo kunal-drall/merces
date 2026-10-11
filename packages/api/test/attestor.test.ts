@@ -1,9 +1,10 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { E2E_TIER3_OPENING, ZERO_INCOME_COMMITMENT, attestationMessage, fxAttestationMessage, type UnsignedTx } from '@merces/domain';
+import { E2E_TIER3_OPENING, SigningError, ZERO_INCOME_COMMITMENT, fxDigest, recoverSigner, reportDigest, type SigningRequest, type UnsignedTx } from '@merces/domain';
 import { WAD, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
-import { assembleOnDevice, checkTier3Opening, generateE2eKeyPair, openTier3Opening, sealE2e, sealTier3Opening } from '@merces/poi-device';
+import { deriveTestPrivateKey } from '@merces/math/testing';
+import { AttestorKey, assembleOnDevice, checkRequest, checkTier3Opening, describeSigningRequest, generateE2eKeyPair, openTier3Opening, pinNetworks, sealE2e, sealTier3Opening, signRequest } from '@merces/poi-device';
 import { assertOpaqueCiphertext, assertTier3OpeningEnvelope } from '@merces/services';
 import { SimSigner, type SimHarness } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
@@ -21,9 +22,18 @@ const DAY = 86_400;
  *  - G7: an extinguishment returns only the unvested proceeds;
  *  - S4-ID: attestors are keys (S4 WP7): a secp256k1 key's 20-byte address, the same on both chains, linked to an
  *    account by its own proof (`rig.attestorToken`); access is per key and chain, read live; work is addressed to a key
- *    (a chain wallet address is no key: 400); the tier-3 and FX texts are the key's EIP-191 signatures (`personalSign`;
- *    a `sim:` signature never counts); `/attestor/me` lists the keys.
+ *    (a chain wallet address is no key: 400); `/attestor/me` lists the keys;
+ *  - S4-T3: a tier-3 case is signed with Stage 1's REPORT message (tier 3) by the case's attestor key on its own device:
+ *    the API issues the signing request (`GET /attestor/tier3/{caseId}/message`), the attestor tool (S4 WP8) checks it
+ *    against its pinned networks and signs, the API recovers the signer (was the key's EIP-191 text); the issuer's report
+ *    carries the stored signature and nobody co-signs;
+ *  - S4-FX: an FX fallback is Stage 1's FX message signed once per covered series (`GET .../messages`, then
+ *    `POST .../sign {rateWad, signer, sourceNote, signatures}`; was one EIP-191 text per pair); the issuer reads its
+ *    series' signature as `fxFallback`.
  */
+
+/** The attestor's own device key for a harness attestor: the same published test key (its seed), in the tool's keystore type. */
+const deviceKey = (a: { key: { seed: string } }) => AttestorKey.fromPrivateKey(deriveTestPrivateKey(a.key.seed));
 
 /** The canary value the privacy suite scans the database and logs for (docs/SERVICES.md). */
 const CANARY = '7317317317';
@@ -108,7 +118,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(q.json()).toEqual({ hardship: [], tier3: [], tier3Annual: [], fxRequests: [], amendments: [], extinguishments: [] });
   });
 
-  it('tier 3: case → client-side prefill spec → attestor signs → issuer assembles via E5 with the attestor co-signing → annual true-up', async () => {
+  it('tier 3: case → client-side prefill spec → the attestor tool signs the REPORT request fetched from the API → issuer assembles via E5 → annual true-up', async () => {
     const att = h.attestors[0]!;
     const periodId = '2026Q1';
     // the quarter has not ended yet
@@ -162,43 +172,106 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(spec.json().period).toMatchObject({ start: parsePeriod(periodId).start, end: parsePeriod(periodId).end });
     const fields = spec.json().documents.flatMap((d: { fields: { name: string }[] }) => d.fields.map((f) => f.name));
     expect(fields).toEqual(expect.arrayContaining(['grossReceipts', 'w2Wages', 'form1099Totals', 'royalties']));
+    // cause S4-T3: the spec points at the signing request and the attestor tool, never at a text to sign with a wallet
+    expect(spec.json().sign).toMatch(/\/attestor\/tier3\/.+\/message/);
+    expect(spec.json().sign).toMatch(/merces-attestor sign/);
+    expect(JSON.stringify(spec.json())).not.toMatch(/personal_sign|EIP-191|merces\/attestation\/v1/);
 
-    // attestor device: open the envelope with its private key, check the opening against the documents, sign
+    // attestor device: open the envelope with its private key, check the opening against the documents
     expect(openTier3Opening(view.json().openingCiphertext, ATTESTOR_E2E.privateKey)).toEqual(opening);
     const c = { seriesId, periodId, priorIncomeCommitment: dev.assembled.priorIncomeCommitment, incomeCommitment: dev.assembled.incomeCommitment };
     // 2026Q1 is the series' first report and a year start: the prior the attestor signs over is ZERO (cause R)
     expect(c.priorIncomeCommitment).toBe(ZERO_INCOME_COMMITMENT);
     expect(checkTier3Opening(opening, { ...c, documentedYtd: USDC(80_000) })).toEqual({ ok: true });
-    // cause S4-ID: the key's EIP-191 signature of the attestation text (until S4 WP9); a simulator signature never counts
-    const signature = await att.personalSign(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
-    const signBody = { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, proof: dev.assembled.proof, attestation: { liquidityEvent: false, signature } };
+
+    // cause S4-T3, end to end: the API issues Stage 1's REPORT signing request (tier 3) for the case's key, the attestor tool
+    // (S4 WP8) checks it against the device's own pinned network table and signs it; the API never signs
+    const qs = (o: { priorIncomeCommitment: string; incomeCommitment: string; liquidityEvent: boolean | string }) => `priorIncomeCommitment=${o.priorIncomeCommitment}&incomeCommitment=${o.incomeCommitment}&liquidityEvent=${o.liquidityEvent}`;
+    const msgUrl = `/attestor/tier3/${caseId}/message?${qs({ ...c, liquidityEvent: false })}`;
+    expect((await rig.get(msgUrl, att1Tok)).statusCode).toBe(403);
+    expect((await rig.get(msgUrl, issuerTok)).statusCode).toBe(403);
+    expect((await rig.get(`/attestor/tier3/${caseId}/message?${qs({ ...c, liquidityEvent: 'yes' })}`, attTok)).statusCode).toBe(400);
+    expect((await rig.get(`/attestor/tier3/${caseId}/message?priorIncomeCommitment=${c.priorIncomeCommitment}`, attTok)).statusCode).toBe(400);
+    // a prior the chain will not take is nothing to sign
+    expect((await rig.get(`/attestor/tier3/${caseId}/message?${qs({ ...c, priorIncomeCommitment: c.incomeCommitment, liquidityEvent: false })}`, attTok)).json()).toMatchObject({ detail: { expectedPrior: ZERO_INCOME_COMMITMENT } });
+    const msg = await rig.get(msgUrl, attTok);
+    expect(msg.statusCode, msg.body).toBe(200);
+    const signing = (await h.sim.info()).signing!;
+    const seriesKey = (await h.sim.getSeries(seriesId))!.seriesKey;
+    expect(msg.json()).toMatchObject({ kind: 'REPORT', chain: h.sim.chain, seriesId, seriesKey, domain: signing, signer: att.address, fields: { periodId, priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, tier: 3, liquidityEvent: false } });
+    expect(msg.json().digest).toBe(reportDigest({ domain: signing.domain, seriesKey }, { ...c, tier: 3, liquidityEvent: false }).digest);
+    // the request carries no figure, no salt and no display text
+    expect(msg.body).not.toContain(opening.incomeYtd);
+    expect(msg.body).not.toContain(opening.incomeSalt);
+    expect(msg.json()).not.toHaveProperty('display');
+    // the device: its own pinned networks (the simulator's local domain, allowLocal), its own key; it refuses a request
+    // whose typed fields were changed under the digest, and another chain's
+    const request = msg.json() as SigningRequest<'REPORT'>;
+    const device = deviceKey(att);
+    expect(device.address).toBe(att.address);
+    const pinned = pinNetworks({ [h.sim.chain]: signing }, { allowLocal: true });
+    const monadOnly = pinNetworks({ [rig.mon.sim.chain]: (await rig.mon.sim.info()).signing! }, { allowLocal: true });
+    expect(() => signRequest({ ...request, fields: { ...request.fields, liquidityEvent: true } }, device, pinned, { allowLocal: true })).toThrow(SigningError);
+    expect(() => signRequest(request, device, monadOnly, { allowLocal: true })).toThrow(/not in this device's pinned network table/);
+    expect(() => signRequest(request, deviceKey(h.attestors[1]!), pinned, { allowLocal: true })).toThrow(/key/);
+    expect(describeSigningRequest(checkRequest(request, pinned, { allowLocal: true })).join('\n')).toMatch(/^Tier-3 report attestation \(MERCES_REPORT_V1\) for period 2026Q1/);
+    const sig = signRequest(request, device, pinned, { allowLocal: true });
+    expect(sig).toEqual({ signer: att.address, signature: expect.stringMatching(/^0x[0-9a-f]{130}$/), digest: msg.json().digest });
+    expect(recoverSigner(sig.digest, sig.signature)).toBe(att.address);
+    device.wipe();
+    const signBody = { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, liquidityEvent: false, proof: dev.assembled.proof, attestation: sig };
     expect((await rig.post(`/attestor/tier3/${caseId}/sign`, signBody, att1Tok)).statusCode).toBe(403);
-    const simSig = await att.signMessage(attestationMessage({ ...c, tier: 3, liquidityEvent: false }));
-    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, attestation: { liquidityEvent: false, signature: simSig } }, attTok)).statusCode).toBe(422);
-    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, attestation: { liquidityEvent: false, signature: await h.attestors[1]!.personalSign(attestationMessage({ ...c, tier: 3, liquidityEvent: false })) } }, attTok)).statusCode).toBe(422); // another key's
+    // the API recovers the signer over the message it rebuilds from the chain's own reads: another key's signature, another
+    // signer named, a signature over another flag or tier, a digest that is not this message: 422 InvalidAttestorSignature
+    const otherKey = signRequest({ ...request, signer: h.attestors[1]!.address }, deviceKey(h.attestors[1]!), pinned, { allowLocal: true });
+    const refused = async (body: unknown, status = 422) => {
+      const r = await rig.post(`/attestor/tier3/${caseId}/sign`, body, attTok);
+      expect(r.statusCode, r.body).toBe(status);
+      return r.json();
+    };
+    expect((await refused({ ...signBody, attestation: { ...otherKey, signer: att.address } })).detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+    expect((await refused({ ...signBody, attestation: otherKey })).detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+    expect((await refused({ ...signBody, liquidityEvent: true })).message).toMatch(/digest/);
+    expect((await refused({ ...signBody, liquidityEvent: true, attestation: { signer: sig.signer, signature: sig.signature } })).message).toMatch(/does not recover/);
+    const tier2 = await att.attest('REPORT', signing, seriesKey, { ...c, tier: 2, liquidityEvent: false });
+    expect((await refused({ ...signBody, attestation: { signer: tier2.signer, signature: tier2.signature } })).detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+    // a non-canonical signature (v outside {27, 28}) recovers to nobody: 422; a wrong shape is 400
+    await refused({ ...signBody, attestation: { signer: sig.signer, signature: sig.signature.slice(0, -2) + '1d' } });
+    // the old shapes: the EIP-191 text signature {liquidityEvent, signature}, a simulator signature (cause S4-T3: 400)
+    await refused({ ...signBody, attestation: { liquidityEvent: false, signature: sig.signature } }, 400);
+    await refused({ ...signBody, attestation: { signer: sig.signer, signature: await att.signMessage(new Uint8Array([1])) } }, 400);
     // the sign body carries commitments, the proof and the attestation only: an opening field is refused (strict)
-    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, incomeYtd: opening.incomeYtd }, attTok)).statusCode).toBe(400);
-    expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, attestation: { liquidityEvent: true, signature } }, attTok)).statusCode).toBe(422); // signed another flag
+    await refused({ ...signBody, incomeYtd: opening.incomeYtd }, 400);
     expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, incomeCommitment: c.priorIncomeCommitment }, attTok)).statusCode).toBe(422); // proof over other commitments
     const signed = await rig.post(`/attestor/tier3/${caseId}/sign`, signBody, attTok, { 'idempotency-key': 't3-sign-q1' });
     expect(signed.statusCode, JSON.stringify(signed.json())).toBe(200);
-    expect(signed.json()).toMatchObject({ state: 'signed', attestedPaymentStable: USDC(2000).toString(), incomeCommitment: c.incomeCommitment, priorIncomeCommitment: c.priorIncomeCommitment });
+    expect(signed.json()).toMatchObject({ state: 'signed', decisionCode: null, attestedPaymentStable: USDC(2000).toString(), incomeCommitment: c.incomeCommitment, priorIncomeCommitment: c.priorIncomeCommitment, attestation: sig });
     expect((await rig.post(`/attestor/tier3/${caseId}/sign`, signBody, attTok)).statusCode).toBe(409);
+    expect((await rig.get(msgUrl, attTok)).statusCode).toBe(409);
     expect((await rig.get('/attestor/queue', attTok)).json().tier3).toEqual([]);
     const forIssuer = await rig.get(`/series/${seriesId}/tier3`, issuerTok);
-    expect(forIssuer.json().cases[0]).toMatchObject({ caseId, state: 'signed', attestedPaymentStable: USDC(2000).toString() });
+    expect(forIssuer.json().cases[0]).toMatchObject({ caseId, state: 'signed', attestedPaymentStable: USDC(2000).toString(), attestation: sig });
     expect(JSON.stringify(forIssuer.json())).not.toContain(docs.slice(0, 32));
     expect(JSON.stringify(forIssuer.json())).not.toContain(openingCiphertext.slice(0, 32));
 
-    // the issuer assembles the tier-3 report through E5 with the attestor as co-signer, then both sign and the issuer sends
-    const rep = await rig.post(`/series/${seriesId}/reports`, { ...dev.assembled, attestor: att.address }, issuerTok, { 'idempotency-key': 't3-rep-q1' });
+    // the issuer assembles the tier-3 report through E5: the service carries the attestor's stored REPORT signature, and the
+    // issuer sends it alone (cause S4-T3: was the attestor as co-signer; the old `attestor` field is refused, strict)
+    expect((await rig.post(`/series/${seriesId}/reports`, { ...dev.assembled, attestor: att.address }, issuerTok)).statusCode).toBe(400);
+    expect((await rig.post(`/series/${seriesId}/reports`, { ...dev.assembled, attestation: { signer: otherKey.signer, signature: otherKey.signature } }, issuerTok)).statusCode).toBe(422);
+    // cause S4-T3: a key revoked after the quarter ended still attests it within Stage 1's 45-day grace (forward-only
+    // revocation): the service checks the stored signature against the chain's key record with the grace, as the chain
+    // does when the report lands; the key is registered again after the quarter is paid
+    await h.exec(h.admin, { kind: 'revokeAttestor', attestor: att.address });
+    expect(await h.sim.getSignerKey('attestor', att.address)).toMatchObject({ active: false, graceUntil: expect.any(Number) });
+    const rep = await rig.post(`/series/${seriesId}/reports`, dev.assembled, issuerTok, { 'idempotency-key': 't3-rep-q1' });
     expect(rep.statusCode, JSON.stringify(rep.json())).toBe(201);
-    expect(rep.json()).toMatchObject({ tier: 3, verifiedOffchain: true, paymentStable: USDC(2000).toString() });
+    expect(rep.json()).toMatchObject({ tier: 3, verifiedOffchain: true, paymentStable: USDC(2000).toString(), attestor: att.address });
     const reportId = rep.json().reportId as string;
     const tx = rep.json().tx as UnsignedTx;
-    expect(tx.command).toMatchObject({ kind: 'submitReport', tier: 3, attestor: att.address });
-    expect(tx.coSigners).toEqual([att.address]);
-    const sent = await rig.post('/tx/send', await att.coSign(await h.issuer.sign(tx)), issuerTok);
+    expect(tx.command).toMatchObject({ kind: 'submitReport', tier: 3, attestation: { signer: att.address, signature: sig.signature }, fxFallback: null });
+    expect(tx.command).not.toHaveProperty('attestor');
+    expect(tx.coSigners ?? []).toEqual([]);
+    const sent = await rig.post('/tx/send', await h.issuer.sign(tx), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     const accepted = sent.json().events.find((e: { type: string }) => e.type === 'ReportAccepted');
     // 10% × (80,000 − 60,000) = 2,000 due, no accrual at the report (cause R), chained from ZERO
@@ -207,6 +280,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const pay = await rig.post(`/reports/${reportId}/build-payin`, {}, issuerTok);
     expect(pay.json().amount).toBe(USDC(2000).toString());
     expect((await rig.post('/tx/send', await h.issuer.sign(pay.json().tx), issuerTok)).statusCode).toBe(200);
+    await h.exec(h.admin, { kind: 'registerAttestor', attestor: att.address }); // active again for the tests below
     await rig.sync();
 
     // annual true-up: the year must be over
@@ -230,9 +304,12 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(audit.rows.map((r) => r.action)).toEqual(['tier3.sign', 'tier3.annual-sign']);
   });
 
-  it('FX fallback: the keeper opens a request, an attestor signs the rate client-side, the issuer reads it for assembly', async () => {
+  it('FX fallback: the keeper opens a request, an attestor\'s device signs Stage 1\'s FX message per covered series, the issuer reads its own', async () => {
     const att = h.attestors[1]!;
-    const eur = await h.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '55'.repeat(31)) }, terms: { reportingCurrency: 'EUR' } });
+    const eurTerms = (salt: string) => ({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual' as const, termsSalt: BigInt('0x' + salt.repeat(31)) }, terms: { reportingCurrency: 'EUR' } });
+    // two EUR series on the chain, both reporting the quarter: one rate, one signature each (S4 D14)
+    const eur = await h.runRaise(eurTerms('55'));
+    const eur2 = await h.runRaise(eurTerms('56'));
     const q = periodOf(await h.sim.now());
     await h.sim.setTime(q.end + DAY);
     await rig.sync();
@@ -256,31 +333,91 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const monadAtt = await rig.attestorToken('att-m', [monOnly]);
     expect((await rig.get('/attestor/fx-requests', monadAtt)).json().requests.map((r: { requestId: string }) => r.requestId)).toEqual(['fxreq_test2']);
     expect((await rig.get('/attestor/fx-requests', att1Tok)).json().requests.map((r: { requestId: string }) => r.requestId)).toEqual(['fxreq_test1', 'fxreq_test2']);
-    // before any signature the issuer sees the open request and no rate
-    expect((await rig.get(`/series/${eur.seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ pair: 'EUR/USD', basis: 'attestor', state: 'open', attestorRate: null });
-    expect((await rig.get(`/series/${seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ basis: 'unity', attestorRate: null });
+    // before any signature the issuer sees the open request and no rate (cause S4-FX: `fxFallback`, was `attestorRate`)
+    expect((await rig.get(`/series/${eur.seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ pair: 'EUR/USD', basis: 'attestor', state: 'open', rateWad: null, seriesSigned: false, fxFallback: null });
+    expect((await rig.get(`/series/${seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ basis: 'unity', fxFallback: null });
 
+    // cause S4-FX: the signing requests, one per covered series (the USD series is not covered), for the caller's key
     const rateWad = wadFromDecimal('1.08').toString();
-    const message = fxAttestationMessage({ pair: 'EUR/USD', periodId: q.id, rateWad });
-    // cause S4-ID: the key's EIP-191 signature of the FX text (until S4 WP9), named by `attestor` (was `attestorWallet`)
-    const signature = await att.personalSign(message);
-    // a key not linked to the session, a simulator or another key's signature, a bad rate and a free-text source note are refused
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: h.attestors[0]!.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(403);
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature: 'sim:deadbeef' }, att1Tok)).statusCode).toBe(422);
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature: await att.signMessage(message) }, att1Tok)).statusCode).toBe(422);
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature: await h.attestors[0]!.personalSign(message) }, att1Tok)).statusCode).toBe(422);
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad: '1090000000000000000', attestor: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(422);
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ECB said 1.08 today', signature }, att1Tok)).statusCode).toBe(400);
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestorWallet: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(400);
-    const signed = await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok, { 'idempotency-key': 'fx-1' });
+    const signing = (await h.sim.info()).signing!;
+    const keyOf = async (id: string) => (await h.sim.getSeries(id))!.seriesKey;
+    const covered = [eur.seriesId, eur2.seriesId].sort();
+    const msgs = await rig.get(`/attestor/fx-requests/fxreq_test1/messages?rateWad=${rateWad}`, att1Tok);
+    expect(msgs.statusCode, msgs.body).toBe(200);
+    expect(msgs.json()).toMatchObject({ requestId: 'fxreq_test1', pair: 'EUR/USD', periodId: q.id, state: 'open', signer: att.address, rateWad });
+    const requests = msgs.json().requests as { seriesId: string; digest: string; fields: unknown }[];
+    expect(requests.map((r) => r.seriesId)).toEqual(covered);
+    for (const r of requests) {
+      expect(r).toMatchObject({ kind: 'FX', chain: h.sim.chain, domain: signing, signer: att.address, fields: { periodId: q.id, fxRateWad: rateWad } });
+      expect(r.digest).toBe(fxDigest({ domain: signing.domain, seriesKey: await keyOf(r.seriesId) }, { periodId: q.id, fxRateWad: rateWad }).digest);
+    }
+    // the message binds the series key: the two digests differ
+    expect(new Set(requests.map((r) => r.digest)).size).toBe(2);
+    // another account's key, a key not on the request's chain, a zero rate, an unknown field
+    expect((await rig.get(`/attestor/fx-requests/fxreq_test1/messages?rateWad=${rateWad}&attestor=${h.attestors[0]!.address}`, att1Tok)).statusCode).toBe(403);
+    expect((await rig.get(`/attestor/fx-requests/fxreq_test2/messages?rateWad=${rateWad}`, solTok)).statusCode).toBe(403);
+    expect((await rig.get('/attestor/fx-requests/fxreq_test1/messages?rateWad=0', att1Tok)).statusCode).toBe(400);
+    expect((await rig.get(`/attestor/fx-requests/fxreq_test1/messages?rateWad=${rateWad}&pair=EUR/USD`, att1Tok)).statusCode).toBe(400);
+    // the attestor's device checks each request against its pinned networks and signs it
+    const device = deviceKey(att);
+    const pinned = pinNetworks({ [h.sim.chain]: signing }, { allowLocal: true });
+    const sigs = requests.map((r) => ({ seriesId: r.seriesId, ...signRequest(r, device, pinned, { allowLocal: true }) }));
+    const signatures = sigs.map((x) => ({ seriesId: x.seriesId, signature: x.signature }));
+    const body = { rateWad, signer: att.address, sourceNote: 'ecb-reference-rate', signatures };
+    const refused = async (b: unknown, status: number, tok = att1Tok) => {
+      const r = await rig.post('/attestor/fx-requests/fxreq_test1/sign', b, tok);
+      expect(r.statusCode, r.body).toBe(status);
+      return r.json();
+    };
+    // a key not linked to the session; another key's signature; series A's signature for series B (cause S4-FX: one
+    // signature per series); a signature over another rate; a non-canonical one: each 422 InvalidAttestorSignature
+    await refused({ ...body, signer: h.attestors[0]!.address }, 403);
+    const byOther = requests.map((r) => ({ seriesId: r.seriesId, signature: signRequest({ ...r, signer: h.attestors[0]!.address }, deviceKey(h.attestors[0]!), pinned, { allowLocal: true }).signature }));
+    expect((await refused({ ...body, signatures: byOther }, 422)).detail).toMatchObject({ stage1: 'InvalidAttestorSignature' });
+    const swapped = [{ seriesId: signatures[0]!.seriesId, signature: signatures[1]!.signature }, { seriesId: signatures[1]!.seriesId, signature: signatures[0]!.signature }];
+    expect((await refused({ ...body, signatures: swapped }, 422)).detail).toEqual({ stage1: 'InvalidAttestorSignature', seriesId: signatures[0]!.seriesId });
+    expect((await refused({ ...body, rateWad: '1090000000000000000' }, 422)).detail).toMatchObject({ stage1: 'InvalidAttestorSignature' });
+    await refused({ ...body, signatures: [{ ...signatures[0]!, signature: signatures[0]!.signature.slice(0, -2) + '1d' }, signatures[1]!] }, 422);
+    // every covered series must be signed while the request is open; a series it does not cover, or twice, is refused
+    expect((await refused({ ...body, signatures: [signatures[0]!] }, 422)).detail).toEqual({ reason: 'signatures-missing', missing: [signatures[1]!.seriesId] });
+    expect((await refused({ ...body, signatures: [...signatures, { seriesId, signature: signatures[0]!.signature }] }, 422)).detail).toEqual({ reason: 'series-not-covered', seriesId });
+    expect((await refused({ ...body, signatures: [...signatures, signatures[0]!] }, 422)).detail).toMatchObject({ reason: 'duplicate-series' });
+    // the old shape (one EIP-191 text signature, `attestor`), a simulator signature, a free-text source note: 400
+    await refused({ rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature: signatures[0]!.signature }, 400);
+    await refused({ ...body, signatures: [{ seriesId: eur.seriesId, signature: 'sim:deadbeef' }] }, 400);
+    await refused({ ...body, sourceNote: 'ECB said 1.08 today' }, 400);
+    expect((await rig.t.pool.query('select count(*)::int as n from fx_fallback_signatures')).rows[0].n).toBe(0);
+    const signed = await rig.post('/attestor/fx-requests/fxreq_test1/sign', body, att1Tok, { 'idempotency-key': 'fx-1' });
     expect(signed.statusCode, JSON.stringify(signed.json())).toBe(200);
-    expect(signed.json()).toMatchObject({ state: 'signed', attestor: att.address, rateWad, sourceNote: 'ecb-reference-rate', signature, decisionCode: null });
-    expect((await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, attestor: att.address, sourceNote: 'ecb-reference-rate', signature }, att1Tok)).statusCode).toBe(409);
+    expect(signed.json()).toMatchObject({ state: 'signed', attestor: att.address, rateWad, sourceNote: 'ecb-reference-rate', decisionCode: null });
+    expect(signed.json().signatures.map((x: { seriesId: string; signer: string; signature: string; digest: string }) => [x.seriesId, x.signer, x.signature, x.digest])).toEqual(sigs.map((x) => [x.seriesId, att.address, x.signature, x.digest]));
+    // signed: the same body again is a conflict, another rate for the period is refused (409 rate-fixed)
+    await refused(body, 409);
+    expect((await rig.get(`/attestor/fx-requests/fxreq_test1/messages?rateWad=1090000000000000000`, att1Tok)).json().detail).toEqual({ reason: 'rate-fixed', rateWad });
+    expect((await rig.get(`/attestor/fx-requests/fxreq_test1/messages?rateWad=${rateWad}`, att1Tok)).json().requests).toEqual([]);
     expect((await rig.get('/attestor/fx-requests', solTok)).json().requests).toEqual([]);
+    // the issuer reads its own series' signature, as the report will carry it (the poi service carries the stored one)
     const forIssuer = await rig.get(`/series/${eur.seriesId}/reporting/fx-fallback/${q.id}`, issuerTok);
-    expect(forIssuer.json()).toMatchObject({ pair: 'EUR/USD', state: 'signed', attestorRate: { attestor: att.address, rateWad } });
-    const audit = await rig.t.pool.query("select detail from audit_log where action = 'fx.sign' and target = 'fxreq_test1'");
-    expect(audit.rows[0].detail).toMatchObject({ pair: 'EUR/USD', rateWad, sourceNote: 'ecb-reference-rate' });
+    const own = sigs.find((x) => x.seriesId === eur.seriesId)!;
+    expect(forIssuer.json()).toMatchObject({ pair: 'EUR/USD', state: 'signed', rateWad, seriesSigned: true, fxFallback: { signer: att.address, signature: own.signature }, digest: own.digest });
+    expect(recoverSigner(own.digest, own.signature)).toBe(att.address);
+    // a series that starts reporting the period after the rate was signed (here: its signature removed, as if it had been
+    // indexed later) is added at the same rate, by any registered key
+    await rig.t.pool.query('delete from fx_fallback_signatures where series_id = $1', [eur2.seriesId]);
+    expect((await rig.get(`/series/${eur2.seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ state: 'signed', seriesSigned: false, fxFallback: null });
+    const topUp = await rig.get(`/attestor/fx-requests/fxreq_test1/messages?rateWad=${rateWad}`, solTok);
+    expect(topUp.json().requests.map((r: { seriesId: string }) => r.seriesId)).toEqual([eur2.seriesId]);
+    const solDevice = AttestorKey.fromPrivateKey(deriveTestPrivateKey(solOnly.seed));
+    const added = await rig.post('/attestor/fx-requests/fxreq_test1/sign', { rateWad, signer: solOnly.address, sourceNote: 'ecb-reference-rate', signatures: [{ seriesId: eur2.seriesId, signature: signRequest(topUp.json().requests[0], solDevice, pinned, { allowLocal: true }).signature }] }, solTok);
+    expect(added.statusCode, added.body).toBe(200);
+    expect((await rig.get(`/series/${eur2.seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ seriesSigned: true, fxFallback: { signer: solOnly.address } });
+    // the request keeps its first signer and rate
+    expect(added.json()).toMatchObject({ attestor: att.address, rateWad });
+    const audit = await rig.t.pool.query("select detail from audit_log where action = 'fx.sign' and target = 'fxreq_test1' order by id");
+    expect(audit.rows.map((r) => r.detail)).toEqual([
+      expect.objectContaining({ pair: 'EUR/USD', rateWad, sourceNote: 'ecb-reference-rate', attestor: att.address, seriesIds: covered }),
+      expect.objectContaining({ attestor: solOnly.address, seriesIds: [eur2.seriesId] }),
+    ]);
   });
 
   it('hardship: E2E ciphertext only, private review by the chosen attestor, approvePause signed by the attestor, holders see statuses only', async () => {

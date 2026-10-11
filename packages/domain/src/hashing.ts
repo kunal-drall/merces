@@ -16,9 +16,9 @@ import { wallet32Of } from './signing.ts';
  * elements travel as 0x-prefixed 32-byte big-endian lowercase hex, the encoding the chains store. Bid and order
  * commitments are Stage 1's keccak (SPEC §1.3, §5.2, §7; S4 D11): `keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖
  * wallet_32)` through `@merces/math`'s `bidCommitmentBytes` (the SDK's `bidCommitment`); they bind neither the series nor
- * the window, so every bid and order draws a fresh 32-byte salt (`randomSalt`). The report verifier signs Stage 1's
- * `MERCES_REPORT_V1` bytes (S4 WP6, `reportDigest` in signing.ts); the tier-3 attestor's JSON text (`attestationMessage`)
- * stays until S4 WP9 moves tier 3 to the same message.
+ * the window, so every bid and order draws a fresh 32-byte salt (`randomSalt`). Attestations are Stage 1's signed
+ * messages (signing.ts): the report verifier (tier 2) and a tier-3 attestor sign `MERCES_REPORT_V1` (`reportDigest`; S4
+ * WP6, WP9), an attestor's FX fallback rate `MERCES_FX_V1` per series (`fxDigest`; S4 WP9).
  *
  * Errors raised here never carry the offending value: the inputs include income figures, salts and private terms.
  */
@@ -170,25 +170,6 @@ export function reportPublicInputs(p: { termsCommitment: string; unitsOutstandin
     hex32ToField(p.incomeCommitment),
     toU64(p.paymentStable, 'paymentStable'),
   ].map(String);
-}
-
-// ---------------------------------------------------------------- attestations
-
-/**
- * The text a tier-3 attestor's wallet signs (`signMessage`) until S4 WP9: Stage 1's `MERCES_REPORT_V1` field set
- * (series, period, prior and income commitments, tier, liquidity event) without the domain, as canonical JSON. It names
- * no income source: sources never go onchain (B7). The report verifier (tier 2) signs Stage 1's own message since S4
- * WP6 (`reportDigest`, signing.ts); tier 3 moves to it in S4 WP9, and this text goes then.
- */
-export function attestationMessage(input: { seriesId: string; periodId: string; priorIncomeCommitment: string; incomeCommitment: string; tier: number; liquidityEvent: boolean }): Uint8Array {
-  return utf8ToBytes(`merces/attestation/v1\n` + canonicalJson({
-    seriesId: input.seriesId, periodId: input.periodId, priorIncomeCommitment: input.priorIncomeCommitment, incomeCommitment: input.incomeCommitment, tier: input.tier, liquidityEvent: input.liquidityEvent,
-  }));
-}
-
-/** The message an attestor signs when attesting a fallback FX rate. */
-export function fxAttestationMessage(input: { pair: string; periodId: string; rateWad: string }): Uint8Array {
-  return utf8ToBytes(`merces/fx-attestation/v0\n` + canonicalJson(input));
 }
 
 // ---------------------------------------------------------------- the mock proof system

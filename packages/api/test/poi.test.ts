@@ -22,7 +22,10 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  * S4 cause codes:
  *  - S4-T2: tier 2 carries the report verifier key's Stage 1 REPORT signature `{signer, signature}` (S4 WP6); the service
  *    recomputes the digest from the chain's signing domain and the series key, recovers the signer and reads the
- *    chain's verifier key record (422 otherwise); `/reporting/verifier` serves the verifier's address and chains.
+ *    chain's verifier key record (422 otherwise); `/reporting/verifier` serves the verifier's address and chains;
+ *  - S4-FX: the FX fallback is an attestor key's Stage 1 FX signature for the series (S4 WP9), stored through the attestor
+ *    routes; the service carries the stored one into the report (the body has no `attestorRate`) and checks it against
+ *    the chain again; the issuer sends the report alone (no co-signer).
  */
 
 describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with Stripe test data', () => {
@@ -166,7 +169,7 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     });
   });
 
-  it('rejects bad attestations, wrong public inputs, tier 4, and demands an attestor rate when FX is flagged', async () => {
+  it('rejects bad attestations, wrong public inputs, tier 4, and demands an attestor\'s FX signature when FX is flagged', async () => {
     const h = rig.harness('solana');
     const raise = await h.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '55'.repeat(31)) }, terms: { reportingCurrency: 'EUR' } });
     const seriesId = raise.seriesId;
@@ -182,18 +185,22 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     const zktlsProof = rig.zktls.prove({ source: 'deel', seriesId, periodId: q, figure: ytd, currency: 'EUR', coversUntil: parsePeriod(q).end, owner: h.issuer.address });
     const rate = wadFromDecimal('1.08');
     const { assembled } = await assembleOnDevice({ seriesId, periodId: q, termsCommitment: raise.terms.termsCommitment, unitsOutstanding: '500', unitsOffered: '500', privateTerms, prior: null, incomeYtdNow: ytd, fxAvgWad: rate, tier: 2, source: 'deel', zktlsProof, deviceSecret: 'device-secret-eur' }, rig.verifier);
-    // no attestor rate → 422 with the fx detail
+    // no FX signature for this series yet → 422 with the fx detail (cause S4-FX: was "an attestor-signed rate")
     const noRate = await rig.post(`/series/${seriesId}/reports`, assembled, issuerTok);
     expect(noRate.statusCode).toBe(422);
-    expect(noRate.json().message).toContain('attestor-signed rate');
+    expect(noRate.json().message).toContain('an attestor\'s FX signature for this series is required');
+    // cause S4-FX: the body takes no rate or co-signer (strict): the attestor signs through the attestor routes
+    expect((await rig.post(`/series/${seriesId}/reports`, { ...assembled, attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } }, issuerTok)).statusCode).toBe(400);
+    // the attestor key signs Stage 1's FX message for every covered series on its device; the service stores them
+    const fxSigned = await rig.signFxFallback(h, 'EUR/USD', q, h.attestors[1]!, rate.toString());
+    expect((fxSigned.signatures as { seriesId: string }[]).map((x) => x.seriesId)).toContain(seriesId);
     // wrong public inputs (payment tampered)
-    const tampered = { ...assembled, paymentStable: '1', attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } };
+    const tampered = { ...assembled, paymentStable: '1' };
     expect((await rig.post(`/series/${seriesId}/reports`, tampered, issuerTok)).statusCode).toBe(422);
     // cause S4-T2: a forged attestation (65 bytes that recover to no one, or to another key), a malformed one (400), the
     // signature of a key that is not a verifier key, and another report's signature: each 422 InvalidVerifierSignature
-    const rateBody = { attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } };
     const refuse = async (attestation: unknown, status = 422) => {
-      const r = await rig.post(`/series/${seriesId}/reports`, { ...assembled, ...rateBody, attestation }, issuerTok);
+      const r = await rig.post(`/series/${seriesId}/reports`, { ...assembled, attestation }, issuerTok);
       expect(r.statusCode, JSON.stringify(r.json())).toBe(status);
       return r.json();
     };
@@ -223,18 +230,25 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
       const app = await buildApp(ctx, serviceRoutes);
       await app.ready();
       try {
-        const r = await app.inject({ method: 'POST', url: `/series/${seriesId}/reports`, payload: { ...assembled, ...rateBody } as never, headers: { authorization: `Bearer ${issuerTok}` } });
+        const r = await app.inject({ method: 'POST', url: `/series/${seriesId}/reports`, payload: assembled as never, headers: { authorization: `Bearer ${issuerTok}` } });
         expect([r.statusCode, r.json().detail]).toEqual([409, { reason: 'signing-domain-unknown' }]);
       } finally {
         await app.close();
       }
     }
     // tier 4 is off
-    expect((await rig.post(`/series/${seriesId}/reports`, { ...assembled, tier: 4, attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } }, issuerTok)).statusCode).toBe(403);
-    // with the attestor rate: assembled, and the tx carries the attestor as co-signer
-    const ok = await rig.post(`/series/${seriesId}/reports`, { ...assembled, attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } }, issuerTok);
+    expect((await rig.post(`/series/${seriesId}/reports`, { ...assembled, tier: 4 }, issuerTok)).statusCode).toBe(403);
+    // cause S4-FX: the stored FX signature is checked against the chain again: one that no longer recovers to its signer
+    // over this series' FX message (here: altered at rest) is 422 InvalidAttestorSignature, nothing stored
+    const fxRow = (await rig.t.pool.query('select request_id, signature from fx_fallback_signatures where series_id = $1', [seriesId])).rows[0];
+    await rig.t.pool.query('update fx_fallback_signatures set signature = $2 where series_id = $1', [seriesId, '0x' + '11'.repeat(65)]);
+    const forged = await rig.post(`/series/${seriesId}/reports`, assembled, issuerTok);
+    expect([forged.statusCode, forged.json().detail]).toEqual([422, { stage1: 'InvalidAttestorSignature' }]);
+    await rig.t.pool.query('update fx_fallback_signatures set signature = $2 where series_id = $1', [seriesId, fxRow.signature]);
+    // with the stored FX signature: assembled, and the tx carries it as `fxFallback` (cause S4-FX: no co-signer)
+    const ok = await rig.post(`/series/${seriesId}/reports`, assembled, issuerTok);
     expect(ok.statusCode, JSON.stringify(ok.json())).toBe(201);
-    expect(ok.json().fxBasis).toBe('attestor');
+    expect(ok.json()).toMatchObject({ fxBasis: 'attestor', fxAvgWad: rate.toString(), fxFallbackSigner: h.attestors[1]!.address });
     // cause S4-T2: the stored attestation is the command's {signer, signature}; a row still holding the retired ed25519
     // attestation v1 (assembled before S4 WP6) cannot be built: 409 attestation-superseded (assemble it again)
     const stored = (await rig.t.pool.query('select attestation from reports where report_id = $1', [ok.json().reportId])).rows[0].attestation;
@@ -244,9 +258,9 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     expect([legacy.statusCode, legacy.json().detail]).toEqual([409, { reason: 'attestation-superseded' }]);
     await rig.t.pool.query('update reports set attestation = $2 where report_id = $1', [ok.json().reportId, JSON.stringify(stored)]);
     const tx = ok.json().tx as UnsignedTx;
-    expect(tx.coSigners).toEqual([h.attestors[1]!.address]);
-    const signed = await h.attestors[1]!.coSign(await h.issuer.sign(tx));
-    const sent = await rig.post('/tx/send', signed, issuerTok);
+    expect(tx.coSigners ?? []).toEqual([]);
+    expect(tx.command).toMatchObject({ kind: 'submitReport', fxBasis: 'attestor', fxFallback: { signer: h.attestors[1]!.address, signature: fxRow.signature } });
+    const sent = await rig.post('/tx/send', await h.issuer.sign(tx), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     const due = sent.json().events[0].payload.paymentDue;
     expect(due).toBe(((ytd - 50_000_000_000n) * 10n / 100n * rate / 10n ** 18n).toString());

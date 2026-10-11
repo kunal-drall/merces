@@ -1,5 +1,6 @@
 # S4 signatures (Stage 1 SPEC v1.1.2 §1.3-§1.4): the context every MERCES_*_V1 signed message binds, read live from the
-# chain. The signing flows of the later S4 work packages join this fragment.
+# chain, and the signing request the API hands an attestor's device (S4 D2). The signing flows themselves live with their
+# services (tier 3 and the FX fallback in attestor.yaml since S4 WP9).
 tags:
   - { name: signing, description: "Stage 1's signed messages (MERCES_*_V1): the signing domain, the series key and the series' live nonces (S4)" }
 components:
@@ -25,6 +26,31 @@ components:
         seriesKey: { type: string, pattern: '^0x[0-9a-f]{64}$', description: "the series PDA's 32 bytes on Solana; bytes32(uint256(series_id)) on the EVM (the simulator's monad series ids are 20-byte pseudo-addresses, left-padded, until the EVM's counter ids)" }
         domain: { $ref: '#/components/schemas/SigningDomain' }
         nonces: { $ref: '#/components/schemas/SeriesNonces' }
+    SigningRequest:
+      type: object
+      description: "One of Stage 1's MERCES_*_V1 messages for one key to sign on its own device (S4 D2: the backend never holds an attestor key and never signs). The device never trusts it: the Merces attestor tool (merces-attestor sign) requires the chain to be in its own pinned network table with exactly this domain, refuses every mainnet and every network off the signing allow-list, recomputes the series key from the series id, rebuilds the pre-image and the digest from the typed fields with Stage 1's builders, refuses any difference, and signs only the digest it rebuilt. No display text: the device renders what it shows from the typed fields. Public data only: commitments, periods, rates, nonces; never a figure, a salt or an opening."
+      required: [kind, chain, seriesId, seriesKey, domain, signer, fields, preimage, digest, validWhile]
+      additionalProperties: false
+      properties:
+        kind: { type: string, enum: [REPORT, FX, AMEND, PAUSE, EXTINGUISH, TRUEUP], description: "Stage 1's message (MAGIC MERCES_<KIND>_V1)" }
+        chain: { type: string }
+        seriesId: { type: string }
+        seriesKey: { type: string, pattern: '^0x[0-9a-f]{64}$' }
+        domain: { $ref: '#/components/schemas/SigningDomain' }
+        signer: { type: string, pattern: '^0x[0-9a-f]{40}$', description: "the key addressed: a secp256k1 key's 20-byte address" }
+        fields: { type: object, description: "the message's typed fields, integers as decimal strings: REPORT {periodId, priorIncomeCommitment, incomeCommitment, tier (2 the report verifier's, 3 an attestor's), liquidityEvent}; FX {periodId, fxRateWad}; AMEND {amendmentNonce, termsCommitment, capMultipleWad}; PAUSE {pauseNonce, pauseEnd}; EXTINGUISH {extinguishNonce}; TRUEUP {trueupNonce, year, adjustment, attestationTs}" }
+        preimage: { type: string, pattern: '^0x(?:[0-9a-f]{2})+$', description: '"MERCES_<KIND>_V1" ‖ domain ‖ series key ‖ the fields, as Stage 1 encodes them' }
+        digest: { type: string, pattern: '^0x[0-9a-f]{64}$', description: 'keccak256 of the pre-image, the raw digest signed (no EIP-191 prefix)' }
+        validWhile: { type: string, description: 'what keeps a signature usable: REPORT and FX bind no nonce (one per series and period; a key revoked after the period ended keeps it usable for 45 days); AMEND, PAUSE, EXTINGUISH and TRUEUP bind the live nonce and need an active key' }
+    DeviceSignature:
+      type: object
+      description: "What the attestor tool returns for a signing request it checked and signed (`merces-attestor sign`): the key's address, the 65-byte signature r ‖ s ‖ v (low s, v 27 or 28) and the digest it rebuilt. The API rebuilds the digest from the chain's own reads and recovers the signer; a `digest` sent must be the one it rebuilds."
+      required: [signer, signature]
+      additionalProperties: false
+      properties:
+        signer: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+        signature: { type: string, pattern: '^0x[0-9a-fA-F]{130}$' }
+        digest: { type: string, pattern: '^0x[0-9a-f]{64}$' }
 paths:
   /series/{seriesId}/signing:
     get:

@@ -103,6 +103,12 @@ Secrets never enter the repository: `.env.example` lists names only; development
   challenge for that key. What the attestor reads is built from the typed fields alone: a request carries no display
   text of the server's, and a request with any extra field is refused. Before a PAUSE or an EXTINGUISH it states that the
   signature cannot be recalled.
+- The API issues signing requests from the chain's own reads (`ChainInfo.signing`, `SeriesState.seriesKey`) and never
+  signs; it accepts a signature only when it recovers to the addressed key over the message the service rebuilds itself,
+  never over a digest the caller supplies (a digest sent beside a signature must equal the rebuilt one). Since S4 WP9:
+  a tier-3 case's REPORT signature (tier 3, the case's key, usable for the quarter) and an FX rate's FX signatures (one
+  per covered series, each recovered over its own series key; one rate per period once signed). Report and FX
+  signatures carry no nonce and are no bearer authorisation: only the series' issuer can submit a report.
 - **Residual risks** (S4; owner question 3's default is to accept and document them):
   - The tool cannot yet check a nonce against the chain. A compromised API could collect a PAUSE signature over a future
     pause nonce (N + 1), which approves whatever request N + 1 turns out to be, or EXTINGUISH signatures (nonce 0),

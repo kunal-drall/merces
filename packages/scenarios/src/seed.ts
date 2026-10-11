@@ -1,4 +1,4 @@
-import { bidCommitment, randomSalt, termsCommitment, type SeriesTerms } from '@merces/domain';
+import { attestationOf, bidCommitment, randomSalt, termsCommitment, type SeriesTerms } from '@merces/domain';
 import { PILOT_COHORT, stripeFixtureFor, stripeGrossUntil, type SyntheticIssuer } from '@merces/fixtures';
 import { WAD, parsePeriod, periodsBetween, ratePerUnit, requiredEscrow, wadFromDecimal } from '@merces/math';
 import { MemoryIncomeChain, assembleOnDevice, submitReportCommand } from '@merces/poi-device';
@@ -137,12 +137,14 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
         liquidityEvent: s.issuer.handle === 'mesh-mika' && q === 3, deviceSecret: `seed-device:${s.issuer.handle}`,
       }, verifier, { proofs: opts.proofs ?? 'groth16' });
       incomeChain.put(entry);
+      // tier 3: the attestor key's REPORT signature; the FX fallback: an attestor key's FX signature for this series (S4 WP9)
       const command = submitReportCommand(assembled, {
-        fxBasis, fxAvgWad: rate.toString(), pair, attestorRate: fxBasis === 'attestor' ? { attestor: h.attestors[1]!.address, rateWad: rate.toString(), pair: pair! } : null, attestor: tier === 3 ? h.attestors[0]!.address : null,
+        fxBasis, fxAvgWad: rate.toString(), pair,
+        fxFallback: fxBasis === 'attestor' ? attestationOf(await h.attestFx(s.seriesId, periodId, rate, h.attestors[1]!)) : null,
+        attestation: tier === 3 ? attestationOf(await h.attestReport(s.seriesId, { periodId, priorIncomeCommitment: assembled.priorIncomeCommitment, incomeCommitment: assembled.incomeCommitment, liquidityEvent: assembled.liquidityEvent, tier: 3 }, h.attestors[0]!)) : null,
       });
       if (fxBasis === 'attestor') await h.sim.submit({ kind: 'flagFxFallback', pair: pair!, periodId, reason: 'coverage' }, 'keeper').catch(() => undefined);
-      const co = [command.attestor, command.attestorRate?.attestor].filter((a): a is string => !!a).map((a) => h.attestors.find((w) => w.address === a)!);
-      const accepted = await h.exec(s.wallet, command, co);
+      const accepted = await h.exec(s.wallet, command);
       const due = BigInt((accepted.events.find((e) => e.type === 'ReportAccepted')!.payload as { paymentDue: string }).paymentDue);
       if (due > 0n) await h.exec(s.wallet, { kind: 'payIn', seriesId: s.seriesId, periodId, amount: due.toString() });
       log(`${s.issuer.chain}:${s.issuer.handle} ${periodId} due=${due}`);

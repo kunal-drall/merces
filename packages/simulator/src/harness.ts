@@ -152,6 +152,9 @@ async function groth16Prove(w: ReportWitness): Promise<ReportProof> {
   return { system: 'groth16-bn254', proof: { pi_a: p.pi_a, pi_b: p.pi_b, pi_c: p.pi_c, protocol: 'groth16', curve: 'bn128' }, publicInputs: [...publicSignals] };
 }
 
+/** A key that signs Stage 1 messages for the harness: a `SimSigner` (the verifier) or a `SimAttestor`. */
+export type HarnessKey = Pick<SimSigner, 'address' | 'attest'>;
+
 /** What `buildReport` takes: the device-side facts of one quarterly report. */
 export interface BuildReportParams {
   seriesId: string;
@@ -169,12 +172,18 @@ export interface BuildReportParams {
   /** when given, must equal the commitment of `privateTerms` (a circuit equation) */
   termsCommitment?: string;
   fxAvgWad?: bigint;
+  /** defaults to 'attestor' with `fxFallback`, else 'unity' */
   fxBasis?: 'unity' | 'accumulator' | 'attestor';
   pair?: string | null;
-  attestorRate?: { attestor: string; rateWad: bigint; pair: string } | null;
+  /**
+   * The FX fallback (S4 WP9): the attestor key that signs Stage 1's `MERCES_FX_V1` over the chain's signing domain, the
+   * series key, the period and the report's `fxAvgWad` (one signature per series); null or absent: none.
+   */
+  fxFallback?: HarnessKey | null;
   tier?: 1 | 2 | 3;
   source?: string;
-  attestor?: string | null;
+  /** tier 3: the attestor key that signs Stage 1's REPORT message with tier 3 (S4 WP9; default the harness's first attestor) */
+  attestor?: HarnessKey | null;
   liquidityEvent?: boolean;
   incomeSalt?: bigint;
   /** 'mock' (default; the chain must accept mock proofs) or a real Groth16 proof from Stage 1's prover */
@@ -193,7 +202,9 @@ export class SimHarness {
   readonly backers: SimWallet[];
   /**
    * the attestors: published secp256k1 test keys (seeds `sim-attestor:attestor-1/2`), registered by their 20-byte
-   * addresses on both personalities (S4 WP7); each co-signs, until S4 WP13, through a wallet at its key's address
+   * addresses on both personalities (S4 WP7); a tier-3 report and the FX fallback carry their Stage 1 signatures (S4
+   * WP9); the flows that still co-sign (approvePause, amendTerms, extinguish) use a wallet at the key's address until
+   * S4 WP10-WP13
    */
   readonly attestors: SimAttestor[];
   /** the report verifier's key (a published secp256k1 test key, seed `sim-verifier:verifier-1`; S4 WP6) */
@@ -284,29 +295,46 @@ export class SimHarness {
     const liquidityEvent = params.liquidityEvent ?? false;
     // the income source never goes onchain (B7): it is returned beside the command for the offchain record (E5) only
     const source = params.source ?? 'stripe';
-    // tier 2: the report verifier key's Stage 1 REPORT signature over the chain's signing domain and the series key
-    const attestation = tier === 2 ? attestationOf(await this.attestReport(params.seriesId, { periodId: params.periodId, priorIncomeCommitment: witness.priorIncomeCommitment, incomeCommitment: witness.incomeCommitment, liquidityEvent }, params.verifier)) : null;
+    // Stage 1's REPORT signature over the chain's signing domain and the series key: tier 2 by the report verifier's key,
+    // tier 3 by an attestor's (S4 WP6, WP9); tiers 1 and 4 carry none
+    const fields = { periodId: params.periodId, priorIncomeCommitment: witness.priorIncomeCommitment, incomeCommitment: witness.incomeCommitment, liquidityEvent };
+    const attestation = tier === 2
+      ? attestationOf(await this.attestReport(params.seriesId, fields, params.verifier))
+      : tier === 3 ? attestationOf(await this.attestReport(params.seriesId, { ...fields, tier: 3 }, params.attestor ?? this.attestors[0]!)) : null;
+    // the FX fallback: an attestor's per-series FX signature over the report's own rate (S4 WP9)
+    const fxFallback = params.fxFallback ? attestationOf(await this.attestFx(params.seriesId, params.periodId, fx, params.fxFallback)) : null;
     return {
       paymentStable: witness.paymentStable,
       source,
       command: {
         kind: 'submitReport', seriesId: params.seriesId, periodId: params.periodId, tier, paymentStable: witness.paymentStable.toString(),
         priorIncomeCommitment: witness.priorIncomeCommitment, incomeCommitment: witness.incomeCommitment,
-        fxBasis: params.fxBasis ?? 'unity', fxAvgWad: fx.toString(), pair: params.pair ?? null, attestorRate: params.attestorRate ? { attestor: params.attestorRate.attestor, rateWad: params.attestorRate.rateWad.toString(), pair: params.attestorRate.pair } : null,
-        proof, attestation, attestor: params.attestor ?? null, liquidityEvent,
+        fxBasis: params.fxBasis ?? (fxFallback ? 'attestor' : 'unity'), fxAvgWad: fx.toString(), pair: params.pair ?? null, fxFallback,
+        proof, attestation, liquidityEvent,
       },
     };
   }
 
   /**
-   * A tier-2 report attestation as the report verifier signs it (S4 WP6): Stage 1's `MERCES_REPORT_V1` with tier 2
-   * over the chain's signing domain (`ChainInfo.signing`) and the series key (`SeriesState.seriesKey`), by `key`
-   * (default the harness's registered verifier key). Returns the signer, the signature and the digest.
+   * A report attestation (S4 WP6, WP9): Stage 1's `MERCES_REPORT_V1` with `f.tier` (default 2, the report verifier's;
+   * 3, an attestor's) over the chain's signing domain (`ChainInfo.signing`) and the series key (`SeriesState.seriesKey`),
+   * by `key` (default the harness's registered verifier key). Returns the signer, the signature and the digest.
    */
-  async attestReport(seriesId: string, f: { periodId: string; priorIncomeCommitment: string; incomeCommitment: string; liquidityEvent: boolean }, key: SimSigner = this.verifier): Promise<{ signer: string; signature: string; digest: string }> {
+  async attestReport(seriesId: string, f: { periodId: string; priorIncomeCommitment: string; incomeCommitment: string; liquidityEvent: boolean; tier?: 2 | 3 }, key: HarnessKey = this.verifier): Promise<{ signer: string; signature: string; digest: string }> {
     const [info, series] = await Promise.all([this.sim.info(), this.sim.getSeries(seriesId)]);
     if (!info.signing || !series) throw new Error(`harness: no signing context for ${seriesId}`);
-    return key.attest('REPORT', info.signing, series.seriesKey, { ...f, tier: 2 });
+    return key.attest('REPORT', info.signing, series.seriesKey, { ...f, tier: f.tier ?? 2 });
+  }
+
+  /**
+   * An FX fallback signature (S4 WP9, D14): Stage 1's `MERCES_FX_V1` over the chain's signing domain, the series key, the
+   * period and the rate, by attestor key `key` (default the harness's first attestor). One per series: the message binds
+   * the series key.
+   */
+  async attestFx(seriesId: string, periodId: string, fxRateWad: bigint | string, key: HarnessKey = this.attestors[0]!): Promise<{ signer: string; signature: string; digest: string }> {
+    const [info, series] = await Promise.all([this.sim.info(), this.sim.getSeries(seriesId)]);
+    if (!info.signing || !series) throw new Error(`harness: no signing context for ${seriesId}`);
+    return key.attest('FX', info.signing, series.seriesKey, { periodId, fxRateWad: fxRateWad.toString() });
   }
 
   /** The prior opening the chain will expect for period `pid` (SPEC §6.2 step 5; Stage 1 builder `priorFor`). */
@@ -453,8 +481,7 @@ export class SimHarness {
    */
   async reportAndPay(seriesId: string, periodId: string, privateTerms: PrivateTerms, termsCommitment: string, incomeYtdPrev: bigint, incomeYtdNow: bigint, extra: Partial<BuildReportParams> = {}): Promise<{ paymentStable: bigint; due: bigint; paid: bigint; events: TxResult['events'] }> {
     const { command, paymentStable } = await this.buildReport({ seriesId, periodId, privateTerms, termsCommitment, incomeYtdPrev, incomeYtdNow, ...extra });
-    const coSigners = [command.attestor, command.attestorRate?.attestor].filter((a): a is string => !!a).map((a) => this.attestors.find((w) => w.address === a)!);
-    const r1 = await this.exec(this.issuer, command, coSigners);
+    const r1 = await this.exec(this.issuer, command);
     const accepted = r1.events.find((e) => e.type === 'ReportAccepted')!.payload as { paymentDue: string };
     const due = BigInt(accepted.paymentDue);
     let events = r1.events;

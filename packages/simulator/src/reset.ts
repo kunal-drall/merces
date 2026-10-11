@@ -24,7 +24,7 @@ import type { Pool } from 'pg';
 /** Read-model and per-chain tables whose rows carry the chain key in a `chain` column. */
 export const SIM_RESET_CHAIN_TABLES = [
   'indexer_cursors', 'events', 'events_pending', 'issuers', 'series', 'money_events', 'fees_ledger', 'status_history', 'rate_snapshots', 'fx_fallbacks',
-  'allowlist', 'attestors', 'verifier_keys', 'activity', 'attestor_proposals', 'fx_fallback_requests',
+  'allowlist', 'attestors', 'verifier_keys', 'activity', 'attestor_proposals', 'fx_fallback_signatures', 'fx_fallback_requests',
 ] as const;
 
 /** What has to be redone on each reset chain, printed by the CLI. */

@@ -1,4 +1,4 @@
-import { attestationMessage, incomeCommitment } from '@merces/domain';
+import { incomeCommitment } from '@merces/domain';
 
 /**
  * Tier 3 (critique M7): the issuer's device proves the report; the attestor checks the income commitment against the
@@ -42,9 +42,4 @@ export function checkTier3Opening(o: Tier3Opening, c: { seriesId: string; period
   const expected = c.documentedYtd > priorYtd ? c.documentedYtd : priorYtd;
   if (BigInt(o.incomeYtd) !== expected) return { ok: false, code: 'not-high-water' };
   return { ok: true };
-}
-
-/** The text the attestor's wallet signs for a tier-3 case: attestation v1 with tier 3 (`POST /attestor/tier3/:caseId/sign`). */
-export function tier3AttestationText(t: { seriesId: string; periodId: string; priorIncomeCommitment: string; incomeCommitment: string; liquidityEvent: boolean }): string {
-  return new TextDecoder().decode(attestationMessage({ ...t, tier: 3 }));
 }

@@ -13,7 +13,9 @@ import { GENESIS, USDC, expectChainError, types } from './helpers.ts';
  *  - S4-T2: verifier keys are 20-byte addresses with the attestor keys' rules, and a tier-2 report is Stage 1's REPORT
  *    signature by one, with the same grace;
  *  - S4-ID: attestors are 20-byte keys on both personalities too (S4 WP7): the harness's are `SimAttestor`s
- *    (`SimSigner.attestor`), and a wallet address of another form is no key (the command's schema refuses it).
+ *    (`SimSigner.attestor`), and a wallet address of another form is no key (the command's schema refuses it);
+ *  - S4-T3 / S4-FX: a tier-3 report and the FX fallback carry the attestor key's own Stage 1 signature (REPORT tier 3, and
+ *    FX per series; S4 WP9), with the report keys' grace; nobody co-signs.
  */
 
 type Report = Extract<UserCommand, { kind: 'submitReport' }>;
@@ -171,7 +173,7 @@ describe('the report verifier key registry, per personality (S4-T2, S4-REG, S4-E
   }
 });
 
-describe('revocation grace on the co-signed paths (S4-REG; Stage 1 SPEC §1.4, SIM:332-338)', () => {
+describe('revocation grace on the signed paths (S4-REG; Stage 1 SPEC §1.4, SIM:332-338)', () => {
   async function settled(terms: Parameters<SimHarness['runRaise']>[0] = {}) {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const raise = await h.runRaise(terms);
@@ -187,8 +189,9 @@ describe('revocation grace on the co-signed paths (S4-REG; Stage 1 SPEC §1.4, S
       await h.sim.setTime(q1.end + DAY);
       await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a.address });
       await h.sim.setTime(q1.end + DAY + KEY_GRACE_SECONDS); // the last second of the grace
-      const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: a.address });
-      const r = await h.exec(h.issuer, command, [a]);
+      const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: a }); // cause S4-T3
+      expect(command.attestation!.signer).toBe(a.address);
+      const r = await h.exec(h.issuer, command); // cause S4-T3: no co-signer
       expect(types(r.events)).toContain('ReportAccepted');
     }
     // one second past the grace: refused
@@ -198,8 +201,8 @@ describe('revocation grace on the co-signed paths (S4-REG; Stage 1 SPEC §1.4, S
       await h.sim.setTime(q1.end + DAY);
       await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a.address });
       await h.sim.setTime(q1.end + DAY + KEY_GRACE_SECONDS + 1);
-      const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: a.address });
-      await refused(h, h.exec(h.issuer, command, [a]), 'InvalidAttestorSignature', 'InvalidAttestation');
+      const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: a }); // cause S4-T3
+      await refused(h, h.exec(h.issuer, command), 'InvalidAttestorSignature', 'InvalidAttestation');
     }
     // revoked before the period ended: never usable for it (forward-only), even within 45 days
     {
@@ -208,8 +211,8 @@ describe('revocation grace on the co-signed paths (S4-REG; Stage 1 SPEC §1.4, S
       await h.sim.setTime(q1.end - DAY);
       await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a.address });
       await h.sim.setTime(q1.end + DAY);
-      const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: a.address });
-      await refused(h, h.exec(h.issuer, command, [a]), 'InvalidAttestorSignature', 'InvalidAttestation');
+      const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: a }); // cause S4-T3
+      await refused(h, h.exec(h.issuer, command), 'InvalidAttestorSignature', 'InvalidAttestation');
     }
   });
 
@@ -234,17 +237,26 @@ describe('revocation grace on the co-signed paths (S4-REG; Stage 1 SPEC §1.4, S
   });
 
   it('FX fallback: the same grace (both chains; Stage 1\'s reference gives none, DIV-S1I-3)', async () => {
+    // cause S4-FX: the attestor's per-series FX signature (was `attestorRate`, co-signed); inside the grace, at its last
+    // second, one second past it, and revoked before the period ended
     const q1 = parsePeriod('2026Q1');
     const rate = wadFromDecimal('1.08');
-    for (const [revokeAt, sendAt, ok] of [[q1.end + DAY, q1.end + 2 * DAY, true], [q1.end - DAY, q1.end + DAY, false]] as const) {
+    const cases = [[q1.end + DAY, q1.end + 2 * DAY, true], [q1.end + DAY, q1.end + DAY + KEY_GRACE_SECONDS, true], [q1.end + DAY, q1.end + DAY + KEY_GRACE_SECONDS + 1, false], [q1.end - DAY, q1.end + DAY, false]] as const;
+    for (const [revokeAt, sendAt, ok] of cases) {
       const { h, seriesId, privateTerms } = await settled({ terms: { reportingCurrency: 'EUR' } });
       const a = h.attestors[1]!;
       await h.sim.setTime(revokeAt);
       await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a.address });
       await h.sim.setTime(sendAt);
-      const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), pair: 'EUR/USD', fxAvgWad: rate, fxBasis: 'attestor', attestorRate: { attestor: a.address, rateWad: rate, pair: 'EUR/USD' } });
-      if (ok) expect(types((await h.exec(h.issuer, command as Report, [a])).events)).toContain('ReportAccepted');
-      else await refused(h, h.exec(h.issuer, command as Report, [a]), 'InvalidAttestorSignature');
+      const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), pair: 'EUR/USD', fxAvgWad: rate, fxFallback: a });
+      expect(command.fxFallback!.signer).toBe(a.address);
+      if (ok) expect(types((await h.exec(h.issuer, command as Report)).events)).toContain('ReportAccepted');
+      else {
+        await refused(h, h.exec(h.issuer, command as Report), 'InvalidAttestorSignature', 'InvalidAttestation');
+        // the active attestor signs the same rate for the series instead
+        const { command: again } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), pair: 'EUR/USD', fxAvgWad: rate, fxFallback: h.attestors[0]! });
+        expect(types((await h.exec(h.issuer, again as Report)).events)).toContain('ReportAccepted');
+      }
     }
   });
 

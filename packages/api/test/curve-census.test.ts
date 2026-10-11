@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { attestationMessage, type UnsignedTx } from '@merces/domain';
+import type { UnsignedTx } from '@merces/domain';
 import { parsePeriod } from '@merces/math';
 import { generateE2eKeyPair, sealTier3Opening } from '@merces/poi-device';
 import type { PrivateTerms, SimHarness } from '@merces/simulator';
@@ -20,8 +20,9 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - S3-CN: the curve census (syncCurveUnits, the CurveUnitsNotSynced gate, redeem's own census).
  *
  * S4 cause codes:
- *  - S4-ID: attestors are keys linked to an account (S4 WP7): access is the account's linked key (`rig.attestorToken`),
- *    and the tier-3 text is the key's EIP-191 signature (`personalSign`; until S4 WP9).
+ *  - S4-ID: attestors are keys linked to an account (S4 WP7): access is the account's linked key (`rig.attestorToken`);
+ *  - S4-T3: the attestor signs Stage 1's REPORT message with tier 3 (S4 WP9; was the key's EIP-191 text), and the
+ *    report carries the stored signature (no `attestor` co-signer in the body).
  */
 
 /** Stand-in for the client's end-to-end encryption of documents (opaque bytes; the server never decrypts). */
@@ -57,10 +58,11 @@ describe.skipIf(!dbTestsEnabled())('curve census around reports (S3 WP9, amendme
 
   /** The device's assembled report (the harness proves with mock proofs; the rig accepts them). */
   async function device(periodId: string, incomeYtdNow: bigint, tier: 2 | 3 = 2) {
-    const { command } = await h.buildReport({ seriesId, periodId, privateTerms, termsCommitment, incomeYtdNow, tier, attestor: tier === 3 ? h.attestors[0]!.address : null });
+    const { command } = await h.buildReport({ seriesId, periodId, privateTerms, termsCommitment, incomeYtdNow, tier, attestor: tier === 3 ? h.attestors[0]! : null });
+    // cause S4-T3: a tier-3 body names no co-signer; the service carries the attestor's signature stored with the case
     return {
       command,
-      body: { periodId, tier, source: 'stripe', paymentStable: command.paymentStable, priorIncomeCommitment: command.priorIncomeCommitment, incomeCommitment: command.incomeCommitment, proof: command.proof, attestation: command.attestation, ...(tier === 3 ? { attestor: h.attestors[0]!.address } : {}) },
+      body: { periodId, tier, source: 'stripe', paymentStable: command.paymentStable, priorIncomeCommitment: command.priorIncomeCommitment, incomeCommitment: command.incomeCommitment, proof: command.proof, attestation: tier === 2 ? command.attestation : null },
     };
   }
 
@@ -157,8 +159,9 @@ describe.skipIf(!dbTestsEnabled())('curve census around reports (S3 WP9, amendme
     const proved = await device('2026Q2', USDC(75_000), 3);
     const sign = async (proof = proved.command.proof) => {
       const c = { seriesId, periodId: '2026Q2', priorIncomeCommitment: proved.command.priorIncomeCommitment, incomeCommitment: proved.command.incomeCommitment };
-      const signature = await att.personalSign(attestationMessage({ ...c, tier: 3, liquidityEvent: false })); // cause S4-ID: the key's EIP-191 signature
-      return rig.post(`/attestor/tier3/${caseId}/sign`, { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, proof, attestation: { liquidityEvent: false, signature } }, attTok);
+      // cause S4-T3: the key's Stage 1 REPORT signature with tier 3 over the chain's domain and the series key
+      const attestation = await att.attest('REPORT', (await h.sim.info()).signing!, (await h.sim.getSeries(seriesId))!.seriesKey, { ...c, tier: 3, liquidityEvent: false });
+      return rig.post(`/attestor/tier3/${caseId}/sign`, { priorIncomeCommitment: c.priorIncomeCommitment, incomeCommitment: c.incomeCommitment, liquidityEvent: false, proof, attestation }, attTok);
     };
     await h.sim.curveHook(seriesId, { kind: 'dammTrade', wallet: h.backers[3]!.address, units: 50_000n });
     await h.syncCurve(seriesId);
@@ -166,7 +169,7 @@ describe.skipIf(!dbTestsEnabled())('curve census around reports (S3 WP9, amendme
     expect(changed.statusCode, changed.body).toBe(409);
     expect(changed.json().detail).toEqual({ stage1: 'InvalidProof', reason: 'census-changed', unitsOutstanding: '100150000', next: 're-prove' });
     // proved again over the current census (the same commitments: the attestor's signature over them stands): signed,
-    // then assembled with the attestor as co-signer
+    // then assembled carrying the attestor's stored signature
     const reproved = await device('2026Q2', USDC(75_000), 3);
     expect(reproved.command.incomeCommitment).toBe(proved.command.incomeCommitment);
     expect(reproved.command.proof.publicInputs[1]).toBe('100150000');

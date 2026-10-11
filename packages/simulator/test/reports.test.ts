@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { verifyReport } from '@merces/circuits';
-import { ChainError, ZERO_INCOME_COMMITMENT, attestationOf, incomeCommitment, mockProve, reportDigest, reportPublicInputs, signingDomain, type UserCommand } from '@merces/domain';
+import { ChainError, ZERO_INCOME_COMMITMENT, attestationOf, fxDigest, incomeCommitment, mockProve, reportDigest, reportPublicInputs, signingDomain, type UserCommand } from '@merces/domain';
 import { WAD, parsePeriod, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimSigner, SimulatorChain, defaultTerms, harnessFieldSalt, personalitySigning, serialiseState, type SimWallet } from '../src/index.ts';
 import { GENESIS, USDC } from './helpers.ts';
@@ -11,7 +11,11 @@ import { GENESIS, USDC } from './helpers.ts';
  *
  * S4 cause codes:
  *  - S4-T2: tier 2 is Stage 1's REPORT signature (secp256k1 over `MERCES_REPORT_V1` with the chain's domain and the series
- *    key) by a registered verifier key, recovered and checked as both chains do (was ed25519 attestation v1 by key id).
+ *    key) by a registered verifier key, recovered and checked as both chains do (was ed25519 attestation v1 by key id);
+ *  - S4-T3: tier 3 is the same REPORT signature with tier 3 by an attestor key, in `attestation` (was the attestor's
+ *    co-signature of the transaction, named by `attestor`);
+ *  - S4-FX: the FX fallback is an attestor key's `MERCES_FX_V1` signature over the series key, the period and the report's
+ *    `fxAvgWad`, in `fxFallback` (was `attestorRate`, co-signed).
  */
 
 type Report = Extract<UserCommand, { kind: 'submitReport' }>;
@@ -101,33 +105,67 @@ describe('submitReport checks, in Stage 1 order', () => {
   it('11: the tier must be enabled, and tier 1 needs a pure tier-1 series', async () => {
     const { h, seriesId, privateTerms } = await settled({ terms: { tierFlags: { tier1: true, tier2: true, tier3: false, tier4: false } } });
     await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
-    const t3 = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: h.attestors[0]!.address });
-    await refused(h, send(h, t3.command, [h.attestors[0]!]), 'TierNotEnabled', /tier 3/);
+    const t3 = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: h.attestors[0]! }); // cause S4-T3
+    await refused(h, send(h, t3.command), 'TierNotEnabled', /tier 3/); // cause S4-T3: no co-signer
     const t1 = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 1 });
     await refused(h, send(h, t1.command), 'TierNotEnabled', /pure tier-1/);
   });
 
-  it('12: FX (FxMismatch, FxFallbackNotAllowed, FxFallbackRequired, attestor co-signature)', async () => {
+  it('12: FX (FxMismatch, FxFallbackNotAllowed, FxFallbackRequired, the fallback\'s FX signature)', async () => {
+    // cause S4-FX: the fallback is an attestor key's per-series FX signature in `fxFallback` (was `attestorRate`, co-signed)
     const usd = await settled();
     await usd.h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
     const notWad = await usd.h.buildReport({ seriesId: usd.seriesId, periodId: '2026Q1', privateTerms: usd.privateTerms, incomeYtdNow: USDC(100_000), fxAvgWad: WAD + 1n });
     await refused(usd.h, send(usd.h, notWad.command), 'FxMismatch');
     const ok = await usd.h.buildReport({ seriesId: usd.seriesId, periodId: '2026Q1', privateTerms: usd.privateTerms, incomeYtdNow: USDC(100_000) });
-    const a1 = usd.h.attestors[1]!;
-    await refused(usd.h, send(usd.h, { ...ok.command, fxBasis: 'attestor', attestorRate: { attestor: a1.address, rateWad: WAD.toString(), pair: 'USD/USD' } }, [a1]), 'FxFallbackNotAllowed');
+    const usdFx = attestationOf(await usd.h.attestFx(usd.seriesId, '2026Q1', WAD, usd.h.attestors[1]!));
+    await refused(usd.h, send(usd.h, { ...ok.command, fxBasis: 'attestor', fxFallback: usdFx }), 'FxFallbackNotAllowed');
+    await refused(usd.h, send(usd.h, { ...ok.command, fxFallback: usdFx }), 'FxFallbackNotAllowed');
 
     const eur = await settled({ terms: { reportingCurrency: 'EUR' } });
+    // a second EUR series of the same issuer on the same chain: a rate signed for one series is not the other's
+    const other = await eur.h.runRaise({ terms: { reportingCurrency: 'EUR' } });
     await eur.h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
     const rate = wadFromDecimal('1.08');
     const base = { seriesId: eur.seriesId, periodId: '2026Q1', privateTerms: eur.privateTerms, incomeYtdNow: USDC(100_000), pair: 'EUR/USD', fxAvgWad: rate };
     // no snapshots for the quarter: the accumulator cannot be used
     const acc = await eur.h.buildReport({ ...base, fxBasis: 'accumulator' });
     await refused(eur.h, send(eur.h, acc.command), 'FxFallbackRequired');
+    await refused(eur.h, send(eur.h, { ...acc.command, fxBasis: 'attestor' }), 'FxFallbackRequired');
     const ea1 = eur.h.attestors[1]!;
-    const att = await eur.h.buildReport({ ...base, fxBasis: 'attestor', attestorRate: { attestor: ea1.address, rateWad: rate, pair: 'EUR/USD' } });
-    await refused(eur.h, send(eur.h, att.command), 'InvalidAttestorSignature');
-    await refused(eur.h, send(eur.h, { ...att.command, attestorRate: { ...att.command.attestorRate!, rateWad: (rate + 1n).toString() } }, [ea1]), 'FxMismatch');
-    await eur.h.exec(eur.h.issuer, att.command, [ea1]);
+    const att = await eur.h.buildReport({ ...base, fxFallback: ea1 });
+    expect(att.command.fxBasis).toBe('attestor');
+    const fb = att.command.fxFallback!;
+    expect(Object.keys(fb).sort()).toEqual(['signature', 'signer']);
+    expect(fb.signer).toBe(ea1.address);
+    // the chain's digest: MERCES_FX_V1 over its signing domain, the series key, the period and the report's own rate
+    const domain = (await eur.h.sim.info()).signing!;
+    const seriesKey = (await eur.h.sim.getSeries(eur.seriesId))!.seriesKey;
+    expect(await ea1.signDigest(fxDigest({ domain: domain.domain, seriesKey }, { periodId: '2026Q1', fxRateWad: rate }).digest)).toBe(fb.signature);
+    // the signature binds the rate: the report's fxAvgWad is what was signed (no separate rate field)
+    const otherRate = attestationOf(await eur.h.attestFx(eur.seriesId, '2026Q1', rate + 1n, ea1));
+    await refused(eur.h, send(eur.h, { ...att.command, fxFallback: otherRate }), 'InvalidAttestorSignature', /does not recover/);
+    // a rate signed for another series (S4 D14: one signature per series) or another period does not recover
+    const forOther = attestationOf(await eur.h.attestFx(other.seriesId, '2026Q1', rate, ea1));
+    await refused(eur.h, send(eur.h, { ...att.command, fxFallback: forOther }), 'InvalidAttestorSignature', /does not recover/);
+    const otherPeriod = attestationOf(await eur.h.attestFx(eur.seriesId, '2026Q2', rate, ea1));
+    await refused(eur.h, send(eur.h, { ...att.command, fxFallback: otherPeriod }), 'InvalidAttestorSignature', /does not recover/);
+    // another chain's domain (the solana personality's) does not recover either
+    const elsewhere = attestationOf(await ea1.attest('FX', personalitySigning('solana', 'solana'), seriesKey, { periodId: '2026Q1', fxRateWad: rate.toString() }));
+    await refused(eur.h, send(eur.h, { ...att.command, fxFallback: elsewhere }), 'InvalidAttestorSignature', /does not recover/);
+    // the named signer must be the key that signed; a key that is no attestor (the verifier's) is refused
+    await refused(eur.h, send(eur.h, { ...att.command, fxFallback: { ...fb, signer: eur.h.attestors[0]!.address } }), 'InvalidAttestorSignature', /does not recover/);
+    const byVerifier = attestationOf(await eur.h.attestFx(eur.seriesId, '2026Q1', rate, eur.h.verifier));
+    await refused(eur.h, send(eur.h, { ...att.command, fxFallback: byVerifier }), 'InvalidAttestorSignature', /not a usable attestor key/);
+    // a malformed (non-canonical) signature recovers to nobody
+    await refused(eur.h, send(eur.h, { ...att.command, fxFallback: { ...fb, signature: fb.signature.slice(0, -2) + '1d' } }), 'InvalidAttestorSignature', /does not recover/);
+    // no co-signer: the issuer sends the report alone
+    await eur.h.exec(eur.h.issuer, att.command);
+    // the other series takes its own signature over the same rate
+    const second = await eur.h.buildReport({ seriesId: other.seriesId, periodId: '2026Q1', privateTerms: other.privateTerms, incomeYtdNow: USDC(100_000), pair: 'EUR/USD', fxAvgWad: rate, fxFallback: ea1 });
+    expect(second.command.fxFallback!.signature).not.toBe(fb.signature);
+    await refused(eur.h, send(eur.h, { ...second.command, fxFallback: fb }), 'InvalidAttestorSignature', /does not recover/);
+    await eur.h.exec(eur.h.issuer, second.command);
   });
 
   it('13-15: the prior chain, the six signals against the live terms, the proof', async () => {
@@ -161,7 +199,7 @@ describe('submitReport checks, in Stage 1 order', () => {
     await refused(h, send(h, command), 'InvalidProof', /not accepted/);
   });
 
-  it('16: source binding after the proof (tier 2 the verifier key\'s REPORT signature, tier 3 the attestor co-signature)', async () => {
+  it('16: source binding after the proof (the REPORT signature: tier 2 by a verifier key, tier 3 by an attestor key)', async () => {
     // cause S4-T2: a signature recovered over Stage 1's REPORT digest (was an ed25519 attestation v1 named by key id)
     const { h, seriesId, privateTerms } = await settled();
     await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
@@ -200,11 +238,27 @@ describe('submitReport checks, in Stage 1 order', () => {
     await expect(h.verifier.attest('REPORT', signingDomain('evm', 10143, '0x' + '11'.repeat(20)), series.seriesKey, reportFields)).rejects.toThrow(/simulator only/);
     await expect(h.verifier.attest('REPORT', signingDomain('solana', 103, 'Agp61Ua3L6amzQ3F5qZfdaPFqRKLxW6Ldvfny1uRNLcR'), series.seriesKey, reportFields)).rejects.toThrow(/simulator only/);
     await expect(h.verifier.attest('REPORT', signingDomain('evm', 143, '0x' + '11'.repeat(20)), series.seriesKey, reportFields)).rejects.toThrow(/mainnet/);
-    // tier 3 is still the attestor's co-signature (S4 WP9 moves it); a tier-3 report carries no attestation
-    const t3 = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: h.attestors[0]!.address });
-    expect(t3.command.attestation).toBeNull();
-    await refused(h, send(h, t3.command), 'InvalidAttestorSignature');
-    await h.exec(h.issuer, t3.command, [h.attestors[0]!]);
+    // tier 3 (cause S4-T3): the same REPORT message with tier 3, signed by an attestor key (was the attestor's co-signature)
+    const t3 = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: h.attestors[0]! });
+    const a3 = t3.command.attestation!;
+    expect(a3.signer).toBe(h.attestors[0]!.address);
+    const digest3 = reportDigest({ domain: (await h.sim.info()).signing!.domain, seriesKey: series.seriesKey }, { periodId: '2026Q1', priorIncomeCommitment: t3.command.priorIncomeCommitment, incomeCommitment: t3.command.incomeCommitment, tier: 3, liquidityEvent: false }).digest;
+    expect(await h.attestors[0]!.signDigest(digest3)).toBe(a3.signature);
+    await refused(h, send(h, { ...t3.command, attestation: null }), 'InvalidAttestorSignature', /required/);
+    // the tier is in the message: the verifier's tier-2 signature is no tier-3 attestation, nor an attestor's tier-3 one a tier-2
+    await refused(h, send(h, { ...t3.command, attestation: a }), 'InvalidAttestorSignature', /does not recover/);
+    await refused(h, send(h, { ...command, attestation: a3 }), 'InvalidVerifierSignature', /does not recover/);
+    // the verifier's key signing tier 3 is no attestor key; an attestor key signing tier 2 is no verifier key (04#68)
+    const t3ByVerifier = attestationOf(await h.attestReport(seriesId, { periodId: '2026Q1', priorIncomeCommitment: t3.command.priorIncomeCommitment, incomeCommitment: t3.command.incomeCommitment, liquidityEvent: false, tier: 3 }, h.verifier));
+    await refused(h, send(h, { ...t3.command, attestation: t3ByVerifier }), 'InvalidAttestorSignature', /not a usable attestor key/);
+    const t2ByAttestor = attestationOf(await h.attestReport(seriesId, { periodId: '2026Q1', priorIncomeCommitment: command.priorIncomeCommitment, incomeCommitment: command.incomeCommitment, liquidityEvent: false }, h.attestors[0]!));
+    await refused(h, send(h, { ...command, attestation: t2ByAttestor }), 'InvalidVerifierSignature', /not a usable verifier key/);
+    // the liquidity flag is signed; another series' key does not recover
+    await refused(h, send(h, { ...t3.command, liquidityEvent: true }), 'InvalidAttestorSignature', /does not recover/);
+    const t3Elsewhere = await h.attestors[0]!.attest('REPORT', (await h.sim.info()).signing!, '0x' + '00'.repeat(12) + '11'.repeat(20), { periodId: '2026Q1', priorIncomeCommitment: t3.command.priorIncomeCommitment, incomeCommitment: t3.command.incomeCommitment, tier: 3, liquidityEvent: false });
+    await refused(h, send(h, { ...t3.command, attestation: attestationOf(t3Elsewhere) }), 'InvalidAttestorSignature', /does not recover/);
+    // the issuer sends it alone: nobody co-signs
+    await h.exec(h.issuer, t3.command);
   });
 });
 

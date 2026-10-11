@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { encodeProofForSolana, negateG1, verifyReport } from '@merces/circuits';
-import { ZERO_INCOME_COMMITMENT, reportPublicInputs, termsCommitment, type Groth16ProofJson, type UserCommand } from '@merces/domain';
+import { ZERO_INCOME_COMMITMENT, attestationOf, reportPublicInputs, termsCommitment, type Groth16ProofJson, type UserCommand } from '@merces/domain';
 import { WAD, bpsOf, mulDiv, parsePeriod, scaledCapWad } from '@merces/math';
 import { SimHarness, SimulatorChain, type PrivateTerms } from '../src/index.ts';
 import { GENESIS, USDC, expectStage1Error, types } from './helpers.ts';
@@ -17,6 +17,10 @@ import { seriesOf } from './kit.ts';
  * S3 cause codes:
  *  - S3-CN: the curve census: units outstanding = supply − protocol-held, the vault's N, the stake bound and the
  *    report's public input; taken by `syncCurveUnits` and by `redeem` (DAMM pool excluded).
+ *
+ * S4 cause codes:
+ *  - S4-T3: a tier-3 report carries the attestor key's Stage 1 REPORT signature (tier 3) in `attestation` (S4 WP9; was
+ *    the attestor's co-signature, named by `attestor`); the FX fallback is `fxFallback` (was `attestorRate`).
  */
 
 const SWAP_BASE = 100_000_000n; // curve_config.json expected.swapBaseAmount
@@ -257,14 +261,15 @@ describe('curve census (solana): Stage 1 curve report fixture replay', () => {
     const proof = fromSolanaProof(f.proof);
     // the decoding is exact: Stage 1's own encoder gives back the fixture's bytes
     expect(encodeProofForSolana(proof as never, publicInputs).proof).toBe(f.proof);
-    const attestor = h.attestors[0]!;
+    // cause S4-T3: the attestor key's REPORT signature with tier 3, no co-signer
+    const attestation = attestationOf(await h.attestReport(seriesId, { periodId: '2026Q1', priorIncomeCommitment: f.prior_income_commitment, incomeCommitment: f.income_commitment, liquidityEvent: false, tier: 3 }, h.attestors[0]!));
     const cmd: Extract<UserCommand, { kind: 'submitReport' }> = {
       kind: 'submitReport', seriesId, periodId: '2026Q1', tier: 3, paymentStable: f.payment_usd, priorIncomeCommitment: f.prior_income_commitment, incomeCommitment: f.income_commitment,
-      fxBasis: 'unity', fxAvgWad: WAD.toString(), pair: null, attestorRate: null, proof: { system: 'groth16-bn254', proof, publicInputs }, attestation: null, attestor: attestor.address, liquidityEvent: false,
+      fxBasis: 'unity', fxAvgWad: WAD.toString(), pair: null, fxFallback: null, proof: { system: 'groth16-bn254', proof, publicInputs }, attestation, liquidityEvent: false,
     };
-    await expectStage1Error(h.exec(h.issuer, cmd, [attestor]), 'CurveUnitsNotSynced');
+    await expectStage1Error(h.exec(h.issuer, cmd), 'CurveUnitsNotSynced');
     await h.syncCurve(seriesId);
-    const accepted = await h.exec(h.issuer, cmd, [attestor]);
+    const accepted = await h.exec(h.issuer, cmd);
     expect(accepted.events[0]!.type).toBe('ReportAccepted');
     const due = BigInt((accepted.events[0]!.payload as { paymentDue: string }).paymentDue);
     return { ...x, N, due };

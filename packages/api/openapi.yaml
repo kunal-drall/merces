@@ -3504,6 +3504,76 @@ components:
           $ref: "#/components/schemas/SigningDomain"
         nonces:
           $ref: "#/components/schemas/SeriesNonces"
+    SigningRequest:
+      type: object
+      description: "One of Stage 1's MERCES_*_V1 messages for one key to sign on its own device (S4 D2: the backend never holds an attestor key and never signs). The device never trusts it: the Merces attestor tool (merces-attestor sign) requires the chain to be in its own pinned network table with exactly this domain, refuses every mainnet and every network off the signing allow-list, recomputes the series key from the series id, rebuilds the pre-image and the digest from the typed fields with Stage 1's builders, refuses any difference, and signs only the digest it rebuilt. No display text: the device renders what it shows from the typed fields. Public data only: commitments, periods, rates, nonces; never a figure, a salt or an opening."
+      required:
+        - kind
+        - chain
+        - seriesId
+        - seriesKey
+        - domain
+        - signer
+        - fields
+        - preimage
+        - digest
+        - validWhile
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - REPORT
+            - FX
+            - AMEND
+            - PAUSE
+            - EXTINGUISH
+            - TRUEUP
+          description: Stage 1's message (MAGIC MERCES_<KIND>_V1)
+        chain:
+          type: string
+        seriesId:
+          type: string
+        seriesKey:
+          type: string
+          pattern: ^0x[0-9a-f]{64}$
+        domain:
+          $ref: "#/components/schemas/SigningDomain"
+        signer:
+          type: string
+          pattern: ^0x[0-9a-f]{40}$
+          description: "the key addressed: a secp256k1 key's 20-byte address"
+        fields:
+          type: object
+          description: "the message's typed fields, integers as decimal strings: REPORT {periodId, priorIncomeCommitment, incomeCommitment, tier (2 the report verifier's, 3 an attestor's), liquidityEvent}; FX {periodId, fxRateWad}; AMEND {amendmentNonce, termsCommitment, capMultipleWad}; PAUSE {pauseNonce, pauseEnd}; EXTINGUISH {extinguishNonce}; TRUEUP {trueupNonce, year, adjustment, attestationTs}"
+        preimage:
+          type: string
+          pattern: ^0x(?:[0-9a-f]{2})+$
+          description: '"MERCES_<KIND>_V1" ‖ domain ‖ series key ‖ the fields, as Stage 1 encodes them'
+        digest:
+          type: string
+          pattern: ^0x[0-9a-f]{64}$
+          description: keccak256 of the pre-image, the raw digest signed (no EIP-191 prefix)
+        validWhile:
+          type: string
+          description: "what keeps a signature usable: REPORT and FX bind no nonce (one per series and period; a key revoked after the period ended keeps it usable for 45 days); AMEND, PAUSE, EXTINGUISH and TRUEUP bind the live nonce and need an active key"
+    DeviceSignature:
+      type: object
+      description: "What the attestor tool returns for a signing request it checked and signed (`merces-attestor sign`): the key's address, the 65-byte signature r ‖ s ‖ v (low s, v 27 or 28) and the digest it rebuilt. The API rebuilds the digest from the chain's own reads and recovers the signer; a `digest` sent must be the one it rebuilds."
+      required:
+        - signer
+        - signature
+      additionalProperties: false
+      properties:
+        signer:
+          type: string
+          pattern: ^0x[0-9a-fA-F]{40}$
+        signature:
+          type: string
+          pattern: ^0x[0-9a-fA-F]{130}$
+        digest:
+          type: string
+          pattern: ^0x[0-9a-f]{64}$
     ThresholdRow:
       type: object
       required:
@@ -5809,7 +5879,7 @@ paths:
           in: header
           schema:
             type: string
-      description: "The device's assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, on a curve series a census taken after the period ended (the proof is over it), the prior chain, the six public inputs against the series' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (Stage 1's REPORT signature rebuilt from the chain's signing domain and the series key, recovered to its signer, a verifier key the chain holds usable for the period: active, or revoked after the period ended within the 45-day grace; S4 WP6), or for tier 3 the chosen attestor's signed case."
+      description: "The device's assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, on a curve series a census taken after the period ended (the proof is over it), the prior chain, the six public inputs against the series' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (Stage 1's REPORT signature rebuilt from the chain's signing domain and the series key, recovered to its signer, a verifier key the chain holds usable for the period: active, or revoked after the period ended within the 45-day grace; S4 WP6), or for tier 3 the chosen attestor's signed case, whose Stage 1 REPORT signature (tier 3, an attestor key usable for the period with the same grace) the service carries into the report itself (S4 WP9). When the FX fallback is in force the service carries this series' stored FX signature (an attestor key's Stage 1 FX signature over the series key, the period and the rate, GET /series/{seriesId}/reporting/fx-fallback/{periodId}) and the rate it signed. Nobody co-signs: the issuer sends the report alone."
       requestBody:
         required: true
         content:
@@ -5854,21 +5924,7 @@ paths:
                   oneOf:
                     - $ref: "#/components/schemas/Attestation"
                     - type: "null"
-                  description: "tier 2: the signer and signature of the report verifier's record (ReportAttestationRecord); null otherwise"
-                attestorRate:
-                  type:
-                    - object
-                    - "null"
-                  properties:
-                    attestor:
-                      type: string
-                    rateWad:
-                      $ref: "#/components/schemas/Wad"
-                attestor:
-                  type:
-                    - string
-                    - "null"
-                  description: tier 3 co-signer
+                  description: "tier 2: the signer and signature of the report verifier's record (ReportAttestationRecord). Tier 3: optional; the service carries the attestor's signature stored with the signed case, and one sent must be that one (S4 WP9). Ignored for tiers 1 and 4"
                 liquidityEvent:
                   type: boolean
       responses:
@@ -5884,9 +5940,9 @@ paths:
         "400":
           description: Malformed or unknown fields
         "409":
-          description: "Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod), a previous due unpaid (detail.stage1 PaymentOutstanding); on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step) or a proof over another count than the census (detail.reason census-changed: prove again); a tier-2 report on a chain whose signing domain is not known yet (detail.reason signing-domain-unknown)"
+          description: "Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod), a previous due unpaid (detail.stage1 PaymentOutstanding); on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step) or a proof over another count than the census (detail.reason census-changed: prove again); a tier-2 or tier-3 report, or an FX fallback, on a chain whose signing domain is not known yet (detail.reason signing-domain-unknown)"
         "422":
-          description: Proof, attestation (detail.stage1 InvalidVerifierSignature), prior, public inputs or FX basis rejected
+          description: Proof, attestation (detail.stage1 InvalidVerifierSignature for tier 2, InvalidAttestorSignature for tier 3), prior, public inputs or FX basis rejected; no signed tier-3 case for these commitments; the FX fallback in force with no FX signature stored for this series, or one the chain would refuse (detail.stage1 InvalidAttestorSignature)
     get:
       operationId: listReports
       x-access: holder-or-issuer
@@ -5966,13 +6022,13 @@ paths:
             type: string
       responses:
         "200":
-          description: Unsigned submitReport transaction (attestor co-signs for tier 3 or a fallback rate)
+          description: Unsigned submitReport transaction for the issuer alone, carrying the stored signatures (the tier-2 or tier-3 attestation, the FX fallback); nobody co-signs (S4 WP9)
           content:
             application/json:
               schema:
                 type: object
         "409":
-          description: "On a curve series the census is older than the period end (detail.stage1 CurveUnitsNotSynced: sync first) or changed since the report was assembled (detail.reason census-changed: prove again and re-assemble); the chain would refuse the transaction; a report assembled before S4 WP6 with the retired ed25519 attestation (detail.reason attestation-superseded: assemble it again)"
+          description: "On a curve series the census is older than the period end (detail.stage1 CurveUnitsNotSynced: sync first) or changed since the report was assembled (detail.reason census-changed: prove again and re-assemble); the chain would refuse the transaction; a report assembled before S4 WP6 or WP9 with an attestation or FX rate the chains no longer take (detail.reason attestation-superseded: assemble it again)"
   /reports/{reportId}/submitted:
     post:
       operationId: markReportSubmitted
@@ -7918,6 +7974,59 @@ paths:
             application/json:
               schema:
                 type: object
+  /attestor/tier3/{caseId}/message:
+    get:
+      operationId: tier3SigningRequest
+      x-access: attestor
+      tags:
+        - tier3
+        - signing
+      security:
+        - session: []
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: priorIncomeCommitment
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: ^0x[0-9a-f]{64}$
+        - name: incomeCommitment
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: ^0x[0-9a-f]{64}$
+        - name: liquidityEvent
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
+      description: "The signing request for the case's tier-3 attestation (S4 WP9): Stage 1's MERCES_REPORT_V1 with tier 3 over the chain's signing domain (ChainInfo.signing) and the series key (SeriesState.seriesKey), for the commitments and liquidity flag the attestor checked on their device, addressed to the case's attestor key. The attestor signs it on their own device with the Merces attestor tool, which rebuilds and checks it first; the API never signs. Public data only."
+      responses:
+        "200":
+          description: The REPORT signing request (tier 3)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SigningRequest"
+        "400":
+          description: A missing or malformed query field
+        "403":
+          description: Not the account holding the case's attestor key (or an admin), or the key is not active on the case's chain
+        "404":
+          description: Unknown case or series
+        "409":
+          description: The case is not open; the chain's signing domain is not known yet (detail.reason signing-domain-unknown); the domain is not one a signer may sign for (detail.reason signing-network-refused)
+        "422":
+          description: The prior is not the one the chain expects (detail.expectedPrior)
   /attestor/tier3/{caseId}/sign:
     post:
       operationId: signTier3Case
@@ -7936,7 +8045,7 @@ paths:
           in: header
           schema:
             type: string
-      description: "The attestor's device checked the decrypted opening against the documents (the commitments open to it, and its year-to-date figure is max(documented, prior)). The body carries commitments, the issuer's proof and the attestation only, never a figure, a salt or an opening (unknown fields are refused). The API checks the proof is over the series' live terms commitment, units and the prior the chain expects, that it verifies, and that the signature is the chosen attestor key's EIP-191 signature over attestation v1 with tier 3 (transitional until S4 WP9 moves tier 3 to Stage 1's REPORT signature; a simulator sim: signature never counts)."
+      description: The attestor's device checked the decrypted opening against the documents (the commitments open to it, and its year-to-date figure is max(documented, prior)) and signed the case's signing request (GET /attestor/tier3/{caseId}/message). The body carries commitments, the liquidity flag, the issuer's proof and the signature only, never a figure, a salt or an opening (unknown fields are refused). The API checks the proof is over the series' live terms commitment, units and the prior the chain expects, that it verifies, and that the attestation is Stage 1's REPORT signature with tier 3 over the message it rebuilds from the chain's own reads, recovering to the case's attestor key, a key the chain holds usable for the quarter (S4 WP9; was an EIP-191 text signature). The issuer's report then carries it.
       requestBody:
         required: true
         content:
@@ -7947,6 +8056,7 @@ paths:
               required:
                 - priorIncomeCommitment
                 - incomeCommitment
+                - liquidityEvent
                 - proof
                 - attestation
               properties:
@@ -7954,35 +8064,27 @@ paths:
                   $ref: "#/components/schemas/Hash32"
                 incomeCommitment:
                   $ref: "#/components/schemas/Hash32"
+                liquidityEvent:
+                  type: boolean
                 proof:
                   $ref: "#/components/schemas/ReportProof"
                 attestation:
-                  type: object
-                  additionalProperties: false
-                  required:
-                    - liquidityEvent
-                    - signature
-                  properties:
-                    liquidityEvent:
-                      type: boolean
-                    signature:
-                      type: string
-                      description: "the attestor key's EIP-191 personal_sign (65 bytes, 0x hex) of \"merces/attestation/v1\\n\" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier: 3}"
+                  $ref: "#/components/schemas/DeviceSignature"
       responses:
         "200":
-          description: The case marked signed with the attested payment (the proof's public input 5); the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3) with this attestor as co-signer
+          description: The case marked signed with the attested payment (the proof's public input 5) and its attestation {signer, signature, digest}; the issuer then assembles the tier-3 report (POST /series/{seriesId}/reports, tier 3), which carries it
           content:
             application/json:
               schema:
                 type: object
         "400":
-          description: Malformed or unknown fields
+          description: Malformed or unknown fields (the EIP-191 shape {liquidityEvent, signature} included)
         "403":
           description: Not the account holding the chosen attestor key, or the key is not active on the case's chain
         "409":
-          description: "Already signed; on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced) or a proof over another count than the census (detail.reason census-changed: the issuer proves again)"
+          description: "Already signed; the chain's signing domain is not known yet (detail.reason signing-domain-unknown); on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced) or a proof over another count than the census (detail.reason census-changed: the issuer proves again)"
         "422":
-          description: Proof not over this series or not verifying, prior not the expected one, or signature not the attestor's
+          description: Proof not over this series or not verifying, prior not the expected one, or the attestation not the case's attestor key's REPORT signature over these fields on this chain, or its key not usable for the quarter (detail.stage1 InvalidAttestorSignature)
   /attestor/fx-requests:
     get:
       operationId: listFxRequests
@@ -7998,6 +8100,64 @@ paths:
             application/json:
               schema:
                 type: object
+  /attestor/fx-requests/{requestId}/messages:
+    get:
+      operationId: fxSigningRequests
+      x-access: attestor
+      tags:
+        - attestor
+        - signing
+      security:
+        - session: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: rateWad
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: ^[1-9]\d{0,19}$
+          description: the fallback rate (WAD
+          a u64): null
+        - name: attestor
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^0x[0-9a-fA-F]{40}$
+          description: the key to sign with, linked to the caller's account and active on the request's chain; optional when the account holds one such key
+      description: "The signing requests for an FX fallback rate (S4 WP9, D14): Stage 1's MERCES_FX_V1 over the chain's signing domain, each covered series' key, the period and rateWad, one per covered series still without a signature (all of them while the request is open). A covered series is on the request's chain, reports in the pair's base currency, reports the period (settled with a first period at or before it), is not Retired or Extinguished and has no accepted report for the period. The message binds the series key, so one rate is one signature per series. Once a rate is signed it is the period's rate: later requests add only the series that started reporting since, at that rate."
+      responses:
+        "200":
+          description: The request ({requestId, chain, pair, periodId, state, …}), the signer, the rate and `requests`, the FX signing requests
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  signer:
+                    type: string
+                  rateWad:
+                    type: string
+                  requests:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SigningRequest"
+        "400":
+          description: A malformed or zero rate
+          or an unknown query field: null
+        "403":
+          description: The named key is not linked to the caller's account or not active on the request's chain; the account holds no such key
+        "404":
+          description: Unknown request
+        "409":
+          description: The request is not open or signed; another rate is already signed for the period (detail.reason rate-fixed, detail.rateWad); the chain's signing domain is not known yet (detail.reason signing-domain-unknown)
+        "422":
+          description: "The account holds several keys active on the chain: name one (detail.keys)"
   /attestor/fx-requests/{requestId}/sign:
     post:
       operationId: signFxRequest
@@ -8016,46 +8176,62 @@ paths:
           in: header
           schema:
             type: string
+      description: The FX fallback rate signed on the attestor's device, one Stage 1 FX signature per covered series (S4 WP9, D14; was one EIP-191 text signature per pair). The key must be linked to the caller's account and an active attestor on the request's chain. Each signature must be for a covered series without one and recover to the key over the message the service rebuilds from the chain's own domain and series key. An open request needs a signature for every covered series; a signed one takes the series added since, at the same rate. Stored per series; the issuer's report carries its own.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required:
                 - rateWad
-                - attestor
+                - signer
                 - sourceNote
-                - signature
+                - signatures
               properties:
                 rateWad:
-                  $ref: "#/components/schemas/Wad"
-                attestor:
+                  type: string
+                  pattern: ^[1-9]\d{0,19}$
+                  description: "the rate (WAD, a u64): the report's fxAvgWad"
+                signer:
                   type: string
                   pattern: ^0x[0-9a-fA-F]{40}$
-                  description: the attestor key (20-byte address; S4 WP7, was attestorWallet), linked to the caller's account and registered on the request's chain
+                  description: the attestor key (20-byte address), linked to the caller's account and registered on the request's chain
                 sourceNote:
                   type: string
                   description: a code such as ecb-reference-rate
-                signature:
-                  type: string
-                  description: "the key's EIP-191 personal_sign (65 bytes, 0x hex) of fxAttestationMessage({pair, periodId, rateWad}), made on the attestor's device (transitional until S4 WP9: Stage 1's per-series FX signature; a sim: signature never counts)"
+                signatures:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - seriesId
+                      - signature
+                    properties:
+                      seriesId:
+                        type: string
+                      signature:
+                        type: string
+                        pattern: ^0x[0-9a-fA-F]{130}$
       responses:
         "200":
-          description: The request marked signed with the rate
-          attestor key and signature: null
+          description: "The request marked signed with the rate and its first signer, and `signatures`: every stored series signature {seriesId, signer, rateWad, signature, digest, signedAt}"
           content:
             application/json:
               schema:
                 type: object
         "400":
-          description: "Malformed body: an attestor that is not a 20-byte key, the old attestorWallet field, or a free-text source note"
+          description: "Malformed body: the old shape (attestor, signature), a signature that is not 65 bytes of hex, a free-text source note"
         "403":
           description: Key not linked to the account
         "409":
-          description: Not open
+          description: Not open or signed; a series already signed (detail.reason already-signed); another rate already signed (detail.reason rate-fixed); signed concurrently; the chain's signing domain is not known yet (detail.reason signing-domain-unknown)
         "422":
-          description: Signature does not verify or the key is not a registered attestor on the chain
+          description: A signature that does not recover to the key over the series' FX message for the period and rate on this chain, or the key not usable for the period (detail.stage1 InvalidAttestorSignature, detail.seriesId); a series the request does not cover (detail.reason series-not-covered) or named twice (duplicate-series); an open request with a covered series unsigned (detail.reason signatures-missing, detail.missing); the key not a registered attestor on the chain
   /series/{seriesId}/reporting/fx-fallback/{periodId}:
     get:
       operationId: fxFallbackForSeries
@@ -8073,7 +8249,7 @@ paths:
             type: string
       responses:
         "200":
-          description: The signed fallback rate for the series' pair and period, if any, as `attestorRate` for report assembly
+          description: "The FX fallback for the series' pair and period (S4 WP9): basis (unity, accumulator or attestor), the request's state and reason, the period's signed rate (`rateWad`), `seriesSigned`, and this series' own Stage 1 FX signature `fxFallback` {signer, signature} with its `digest` (null until an attestor signed for this series). The report service carries the stored signature into the report itself (was `attestorRate`)"
           content:
             application/json:
               schema:

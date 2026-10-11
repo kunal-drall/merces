@@ -38,9 +38,6 @@ export const reportProofSchema = z.discriminatedUnion('system', [
 ]);
 export type ReportProof = z.infer<typeof reportProofSchema>;
 
-/** An attestor-signed fallback rate (C9) — the attestor is a co-signer of the report transaction. */
-export const attestorRateSchema = z.object({ attestor: addressSchema, rateWad: wadSchema, pair: pairSchema });
-
 export const userCommands = {
   registerIssuer: z.object({ kind: z.literal('registerIssuer') }),
   createSeries: z.object({ kind: z.literal('createSeries'), terms: seriesTermsSchema, /** simulator/testing only: fixed address for deterministic ids */ seriesAddressHint: z.string().optional() }),
@@ -64,20 +61,27 @@ export const userCommands = {
     fxBasis: fxBasisSchema,
     fxAvgWad: wadSchema,
     pair: pairSchema.nullable(),
-    attestorRate: attestorRateSchema.nullable(),
+    /**
+     * The FX fallback (S4 WP9, D14): an attestor key's Stage 1 signature over `MERCES_FX_V1` (domain, series key, period,
+     * the report's own `fxAvgWad`; `fxDigest`), as the chains take it (Solana `fx_fallback_sig` and `fx_attestor_addr`,
+     * income.rs:340-356; EVM `fxFallbackSignature`, MercesIncome.sol:145-170). Present exactly when the accumulator has
+     * no usable average for the period (FxFallbackRequired / FxFallbackNotAllowed); `signer` must be the address it
+     * recovers to and an attestor key usable for the period, with the report keys' 45-day grace as both chains give it
+     * (Stage 1's reference requires an active key, SIM:1092: DIV-S1I-3), else InvalidAttestorSignature. The message binds
+     * the series key, so one attestor rate is one signature per series.
+     */
+    fxFallback: attestationSchema.nullable(),
     proof: reportProofSchema,
     /**
-     * Tier 2: the report verifier key's Stage 1 signature over `MERCES_REPORT_V1` (domain, series key, period, prior and
-     * income commitments, tier 2, liquidity flag; `reportDigest`), as the chains take it (Solana `attestation_sig` and
-     * `attestation_addr`, income.rs:396-424; EVM `attestationSignature`, MercesIncome.sol:207-228): `signer` must be the
-     * address the signature recovers to and a verifier key usable for the period (active, or revoked after the period
-     * ended and within the 45-day grace), else InvalidVerifierSignature. The fields are the report's own, never a
-     * second copy. Tiers 1 and 4 ignore it, as both chains do; tier 3 is still the attestor's co-signature (`attestor`)
-     * until S4 WP9. Builders send null outside tier 2.
+     * Stage 1's REPORT signature over `MERCES_REPORT_V1` (domain, series key, period, prior and income commitments, the
+     * report's tier, liquidity flag; `reportDigest`), as the chains take it (Solana `attestation_sig` and
+     * `attestation_addr`, income.rs:396-424; EVM `attestationSignature`, MercesIncome.sol:207-228): tier 2 by a report
+     * verifier key (else InvalidVerifierSignature), tier 3 by an attestor key (since S4 WP9; else
+     * InvalidAttestorSignature). `signer` must be the address the signature recovers to and a key of that kind usable for
+     * the period (active, or revoked after the period ended and within the 45-day grace). The fields are the report's
+     * own, never a second copy. Tiers 1 and 4 ignore it, as both chains do; builders send null there.
      */
     attestation: attestationSchema.nullable(),
-    /** tier 3: attestor co-signs instead of the verifier attesting (until S4 WP9 moves it to the REPORT signature) */
-    attestor: addressSchema.nullable(),
     liquidityEvent: z.boolean(),
   }),
   payIn: z.object({ kind: z.literal('payIn'), seriesId: seriesIdSchema, periodId: periodIdSchema, amount: moneySchema }),

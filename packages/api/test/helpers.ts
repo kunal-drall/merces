@@ -18,7 +18,9 @@ export const SECRET = 'test-secret';
  *  - S4-ID: attestors are keys linked to an account (S4 WP7): attestor access is read live from the account's linked
  *    keys (`account_signer_keys`) and the indexed registry, never from a token's wallets or roles; `linkKeys` and
  *    `attestorToken` link published simulator test keys directly (the link route's EIP-191 proof is tested in
- *    signer-keys.test.ts).
+ *    signer-keys.test.ts);
+ *  - S4-FX: the FX fallback is Stage 1's FX signature per series, stored through the attestor routes (S4 WP9);
+ *    `signFxFallback` signs a period's rate for every covered series as the attestor's device would.
  */
 
 /** Test rig: one schema, two simulator harnesses, an indexer and the app with every route registered. */
@@ -77,6 +79,25 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
     await linkKeys(accountId, keys);
     return token({ accountId, roles: ['attestor'], ...s });
   };
+  /**
+   * cause S4-FX: an FX fallback signed through the API (S4 WP9, D14). Opens the keeper's request for (chain, pair, period)
+   * when there is none, then attestor key `key` (linked to its account, or to a new one) fetches the signing requests and
+   * signs Stage 1's FX message for every covered series over each request's typed fields, as its device would. Returns
+   * the sign route's body.
+   */
+  const signFxFallback = async (h: SimHarness, pair: string, periodId: string, key: { address: string; attest: SimHarness['attestors'][number]['attest'] }, rateWad: string): Promise<Record<string, unknown>> => {
+    await t.pool.query('insert into fx_fallback_requests (request_id, chain, pair, period_id, reason) values ($1,$2,$3,$4,$5) on conflict (chain, pair, period_id) do nothing', [`fxreq_${h.sim.chain}_${pair.replace('/', '')}_${periodId}`, h.sim.chain, pair, periodId, 'coverage']);
+    const id = (await t.pool.query<{ request_id: string }>('select request_id from fx_fallback_requests where chain = $1 and pair = $2 and period_id = $3', [h.sim.chain, pair, periodId])).rows[0]!.request_id;
+    const owner = (await t.pool.query<{ account_id: string }>('select account_id from account_signer_keys where address = $1', [key.address])).rows[0]?.account_id ?? `acct-fx-${key.address}`;
+    const tok = await attestorToken(owner, [key]);
+    const m = await get(`/attestor/fx-requests/${id}/messages?rateWad=${rateWad}&attestor=${key.address}`, tok);
+    if (m.statusCode !== 200) throw new Error(`test rig: FX messages ${m.statusCode} ${m.body}`);
+    const signatures: { seriesId: string; signature: string }[] = [];
+    for (const r of m.json().requests as { seriesId: string; seriesKey: string; domain: never; fields: never }[]) signatures.push({ seriesId: r.seriesId, signature: (await key.attest('FX', r.domain, r.seriesKey, r.fields)).signature });
+    const s = await post(`/attestor/fx-requests/${id}/sign`, { rateWad, signer: key.address, sourceNote: 'test-rate', signatures }, tok);
+    if (s.statusCode !== 200) throw new Error(`test rig: FX sign ${s.statusCode} ${s.body}`);
+    return s.json();
+  };
   /** Eligibility is checked live against the `eligibility` table, so a backer-tier token also needs a row: this seeds one and returns the token. */
   const grant = async (s: Partial<Session> & { wallets: Session['wallets'] }, kind: 'backer' | 'issuer' = 'backer') => {
     for (const w of s.wallets) await t.pool.query('insert into eligibility (chain, wallet, account_id, kind, allowlist_synced_at) values ($1,$2,$3,$4, now()) on conflict (chain, wallet) do update set revoked_at = null', [w.chain, w.address, s.accountId ?? 'acct', kind]);
@@ -86,7 +107,7 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
   const post = (url: string, body: unknown, tok?: string, extra: Record<string, string> = {}) => app.inject({ method: 'POST', url, payload: body as Record<string, unknown>, headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), ...extra } });
   const put = (url: string, body: unknown, tok?: string) => app.inject({ method: 'PUT', url, payload: body as Record<string, unknown>, headers: tok ? { authorization: `Bearer ${tok}` } : {} });
   return {
-    t, sol, mon, ctx, app, indexer, token, grant, linkKeys, attestorToken, get, post, put, del: (url: string, tok?: string) => app.inject({ method: 'DELETE', url, headers: tok ? { authorization: `Bearer ${tok}` } : {} }), esign, identity, zktls, verifier, kms,
+    t, sol, mon, ctx, app, indexer, token, grant, linkKeys, attestorToken, signFxFallback, get, post, put, del: (url: string, tok?: string) => app.inject({ method: 'DELETE', url, headers: tok ? { authorization: `Bearer ${tok}` } : {} }), esign, identity, zktls, verifier, kms,
     harness: (p: Personality) => (p === 'solana' ? sol : mon),
     async sync() {
       await indexer.catchUp();

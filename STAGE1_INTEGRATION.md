@@ -781,6 +781,16 @@ Asked of Stage 1 (S4 WP5):
    key (`LastKeyOfKind` / `LastActiveKey`). Each simulator personality raises its chain's name, with one chain-neutral
    code per case (S4 D9); canonical names would let a vector cover them on every backend.
 
+Asked of Stage 1 (S4 WP9):
+
+8. **The FX fallback's revocation grace in the TypeScript reference (low).** Both chains give an attestor key revoked
+   after the period ended the report keys' 45-day grace on the FX fallback signature too (Solana income.rs:340-356,
+   `require_key(.., Some((period, now)))`; EVM MercesIncome.sol:163-168, `_keyValid` "as the report-attestation path
+   does"); `@merces/reference`'s simulator requires an active attestor (simulator.ts:1092 `requireActiveAttestor`), and
+   SPEC §1.4 grants the grace to "a report attestation" only (SPEC.md:96). We follow both chains (DIV-S1I-3). Please
+   settle it in the SPEC and the reference, and add a vector that revokes an attestor between a period's end and its FX
+   fallback.
+
 Open since S1, with the same defaults:
 
 1. **Who attests `liquidityEvent` for tier 2?** zkTLS data cannot show a liquidity event. Default: the report
@@ -810,7 +820,9 @@ keys follow Stage 1's registry (register, forward-only revoke with the 45-day gr
 signature row no longer lists "no revocation grace" for them. Since S4 WP6 the report verifier's keys follow the same
 registry and a tier-2 report carries Stage 1's REPORT signature (secp256k1, recovered onchain), so the row lists the
 co-signing attestors only. Since S4 WP7 the attestors are 20-byte keys as on both chains; what still differs is that
-they co-sign at the key's address instead of signing Stage 1's messages (S4 WP9-WP13).
+they co-sign at the key's address instead of signing Stage 1's messages. Since S4 WP9 a tier-3 report and the FX
+fallback carry the attestor key's own Stage 1 signatures (REPORT tier 3, FX per series), so the row lists pause
+approval, amendment and extinguishment only (S4 WP10-WP12).
 
 | Divergence | Milestone |
 | --- | --- |
@@ -835,7 +847,8 @@ they co-sign at the key's address instead of signing Stage 1's messages (S4 WP9-
 | True-up, the FX accumulator (trading-day coverage) and the `tier4Enabled` flag (B.6, B.9) | S5 |
 | Stage 1 internal, resolved toward both chains (DIV-S1I-2 in the vector runner; S4 WP5, D5): the last active key of a kind cannot be revoked. Both chains refuse it (Solana `LastKeyOfKind`, merces_registry lib.rs:239-245; EVM `LastActiveKey`, MercesRegistry.sol:331-335); Stage 1's TS reference revokes it (simulator.ts:535-546), against SPEC §1.4 (SPEC.md:96: the registry refuses to revoke the last active key of a kind unless a replacement is registered in the same transaction). Ours refuses it as both chains do. No vector revokes the last key; our scenario S4d does, on the merces backend only (the reference has no rule to compare, so it has no lockstep entry), with each personality's `expect_revert` | reported to Stage 1 |
 | The key registry's names and re-registration follow the personality (S4 D9): Solana re-emits `AttestorRegistered` for a key that is already active where the EVM reverts `KeyAlreadyActive`; a revoke of a key that is not active is `KeyAlreadyRevoked` (or Anchor's `AccountNotInitialized` for a key never registered) on Solana and `KeyNotRegistered` on the EVM; `ZeroAttestorAddress` / `ZeroAddress`; `LastKeyOfKind` / `LastActiveKey`. The canonical model has no Stage 1 name for these, so each simulator personality raises its chain's, with one chain-neutral code per case, and the admin pre-checks answer one 409 per case on both chains. Rotation is the EVM's `rotateAttestor`; the Solana adapter sends `register_attestor(to)` and `revoke_attestor(from)` in one transaction | reported (canonical names asked); S5 (adapters) |
-| Co-signing attestors: tier 3 (attestation v1 as canonical JSON, signed by the attestor's wallet), the FX fallback, pause approval, amendment and extinguishment take the attestor's transaction signature instead of Stage 1's `MERCES_*_V1` signature argument (B.4) | S4 (WP7-WP13) |
+| Co-signing attestors: pause approval, amendment and extinguishment take the attestor key's transaction co-signature (at the key's address, in the simulator) instead of Stage 1's `MERCES_PAUSE_V1`, `MERCES_AMEND_V1` and `MERCES_EXTINGUISH_V1` signature arguments (B.4; tier 3 and the FX fallback are Stage 1's signatures since S4 WP9) | S4 (WP10-WP13) |
+| Stage 1 internal, resolved toward both chains (DIV-S1I-3; S4 WP9, D5): the FX fallback signature of an attestor key revoked after the period ended stays valid for the report keys' grace (`revokedAt` + 45 days). Both chains apply it (Solana income.rs:340-356, `require_key` with `Some((period, now))`; EVM MercesIncome.sol:163-168, `_keyValid`); Stage 1's TS reference requires an active attestor (simulator.ts:1092 `requireActiveAttestor`), and SPEC §1.4 grants the grace to "a report attestation" only (SPEC.md:96), so the chains go beyond the SPEC's wording. Ours follows both chains (`submitReport.fxFallback`, the simulator's keys tests at the grace's last second and one past it; the attestor and poi services check the same). No vector revokes an attestor before an FX fallback (13 is S5: the runner creates no FX pair), so it has no runner entry | S5 (FX) / reported to Stage 1 |
 | `register_issuer` by the issuer (Stage 1: admin-only, B.7) | S5 |
 | The window durations and the window fee are not series terms, so `createSeries` cannot bound them on a sealed raise (Stage 1: ParameterOutOfBounds) nor require Stage 1's 0 on a curve series (CurveTermsNotZero); every other canonical term follows Stage 1's `create_series` rules (A-TERMS-4): since S3 WP7 a curve series takes Stage 1's zeros for the lockup, the wallet cap and the raise durations, a positive threshold and USDC, in the Solana registry's order. The non-reveal charge is a series term bounded on every series (NRC), as Stage 1 bounds the rate it records, a curve's included | S5 |
 
@@ -990,6 +1003,19 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    current address or a previous one only for quarters that ended by its retirement (amendment D10). Our scenarios
    S4a-S4c (the verifier key's grace, its end and a revocation before the period ended) PASS on the reference, our
    backend and in lockstep. Tier 3 stays the attestor's co-signature until S4 WP9.
+   **S4 WP9:** tier 3 is Stage 1's REPORT signature too: `submitReport.attestation` carries an attestor key's signature
+   over `MERCES_REPORT_V1` with tier 3, recovered as both chains do (InvalidAttestorSignature; a key revoked after the
+   period ended within the 45-day grace), and nobody co-signs the report. The attestor signs on their own device from
+   the API's signing request (`GET /attestor/tier3/{caseId}/message`, checked and signed by the Merces attestor tool);
+   the service recovers the signer over the message it rebuilds from the chain's own reads and stores
+   `{signer, signature, digest}` with the case, and the issuer's report carries it (migration 026). The FX fallback is
+   Stage 1's `MERCES_FX_V1` per series (`submitReport.fxFallback`; one rate, one signature per covered series:
+   `GET /attestor/fx-requests/{requestId}/messages`, stored in `fx_fallback_signatures`), with the chains' grace
+   (DIV-S1I-3). The runner signs a tier-3 report's REPORT message with the named vector key (SH-REP-1 narrowed to the FX
+   basis and pair it derives, S5); our scenario S4f (20's prefix, attestor1 revoked a day after 2026Q1 ended: its
+   2026Q1 tier-3 reports accepted within the grace, its 2026Q2 one refused, attestor2's accepted) PASSes on the
+   reference, our backend and in lockstep. INTERFACE_DRIFT: solana 5 / 220 / 60, EVM 1 / 206 / 78 (`submitReport` lost
+   its co-signer field `attestor` and `attestorRate` became `fxFallback`).
    **S4 WP4:** the signing context is on the chain port (A-SIG-3): `ChainInfo.signing` (the domain, derived on read: the
    simulator's from Stage 1's local ids, Solana tag 104 and EVM 31337, with a per-chain-key registry; null on the live
    adapters until S5, whose signing flows answer 409 `signing-domain-unknown`), `SeriesState.seriesKey` (Solana the
@@ -1016,8 +1042,8 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    (forward-only, `revokedAt` = the chain's time) and `rotateAttestor` (register then revoke, one transaction); a
    revoked key still signs a report (tier 3) or an FX fallback for a period that ended by its revocation until
    `revokedAt` + 45 days (both chains: income.rs:340-356, MercesIncome.sol:168; Stage 1's reference gives the FX
-   fallback no grace, simulator.ts:1092, and SPEC §1.4 names a report attestation only: DIV-S1I-3, recorded once FX
-   lands in S5), while a pause approval, an amendment and an extinguishment need an active
+   fallback no grace, simulator.ts:1092, and SPEC §1.4 names a report attestation only: DIV-S1I-3, in the register
+   since S4 WP9), while a pause approval, an amendment and an extinguishment need an active
    key; the last active key cannot be revoked (DIV-S1I-2). Simulator state version 5 holds each key's revocation
    time; the indexer projects `AttestorRegistered` and `AttestorRevoked` with their times (migration 023). Verifier keys
    follow in S4 WP6 (above, item 4): the same registry, a tier-2 attestation of a period that ended by the revocation
@@ -1031,7 +1057,7 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    (`/admin/attestors/rotate`, the new key linked to the same account) keys; each chain's registry is public
    (`GET /chains/{chain}/signer-keys`). Until S4 WP9-WP13 the flows that still co-sign (tier 3, the FX fallback,
    `approvePause`, `amendTerms`, `extinguish`) sign at the key's address in the simulator, and the tier-3 and FX texts
-   are the key's EIP-191 signatures: transitional, removed flow by flow.
+   are the key's EIP-191 signatures: transitional, removed flow by flow (tier 3 and the FX fallback in S4 WP9, item 4).
    **S4 WP8:** the attestor's signer (A-SIG-2): Stage 1 signs raw keccak digests with no EIP-191 prefix, which ordinary
    wallets cannot produce, so attestors sign with the Merces attestor tool (`merces-attestor` in `@merces/poi-device`)
    on their own machine: a Web3 Secret Storage v3 keystore at go-ethereum's standard scrypt strength, a pinned network
