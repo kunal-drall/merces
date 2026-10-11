@@ -4024,10 +4024,16 @@ export type components = {
             /** @description when the stored status last changed */
             updatedAt: string | null;
         };
+        SyntheticIncomeInfo: {
+            /** @constant */
+            testOnly: true;
+            notice: string;
+        };
         /** @description The report verifier a device talks to (S4 WP6): its URL, the 20-byte address of its secp256k1 key (the address each chain registers as a verifier key; GET /chains and the chains' registries are public) and the chains it signs for, each with the signing domain it holds (the device can compare it with GET /chains). Public data. */
         ReportVerifierInfo: {
             url: string;
             address: string;
+            syntheticIncome?: components["schemas"]["SyntheticIncomeInfo"];
             chains: {
                 chain: string;
                 domain: components["schemas"]["SigningDomain"];
