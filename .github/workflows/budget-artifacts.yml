@@ -1,0 +1,108 @@
+name: Size-optimized testnet candidates
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+# Research builds only: no keys, broadcasts, automatic source pin updates or deployment manifests.
+jobs:
+  solana:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: z
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Install pinned Agave
+        run: |
+          curl --fail --silent --show-error --location https://release.anza.xyz/v3.1.10/install --output /tmp/install-agave.sh
+          sh /tmp/install-agave.sh
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Build smaller SBF candidates without changing protocol source
+        working-directory: stage1/solana
+        run: |
+          for program in merces_registry merces_hook merces_protocol mock_usdg_hook; do
+            cargo-build-sbf --manifest-path "programs/$program/Cargo.toml" --tools-version v1.52 --arch v0 --sbf-out-dir target/deploy
+          done
+      - name: Run the pinned LiteSVM suite against these exact binaries
+        working-directory: stage1/solana
+        run: cargo test -p merces-tests -- --nocapture
+      - name: Package only program binaries and public build provenance
+        run: |
+          mkdir budget-solana
+          cp stage1/solana/target/deploy/merces_{registry,hook,protocol}.so budget-solana/
+          git rev-parse HEAD > budget-solana/backend-commit.txt
+          git -C stage1 rev-parse HEAD > budget-solana/stage1-commit.txt
+          printf 'release opt-level=z; lto=fat; codegen-units=1; overflow-checks=true; SBF v0; platform-tools v1.52\n' > budget-solana/profile.txt
+          cd budget-solana
+          sha256sum *.so *.txt > SHA256SUMS
+          wc -c *.so
+      - uses: actions/upload-artifact@v4
+        with:
+          name: budget-solana-${{ github.sha }}
+          path: budget-solana/
+          retention-days: 14
+  monad:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FOUNDRY_PROFILE: default
+      FOUNDRY_OPTIMIZER_RUNS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: foundry-rs/foundry-toolchain@v1
+        with: { version: v1.7.1 }
+      - name: Install verified Solidity compilers
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, urllib.request
+          base = 'https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/linux-amd64/'
+          compilers = [
+              ('0.8.17', 'solc-linux-amd64-v0.8.17+commit.8df45f5f', '99f2070b776e9714f1f76c43c229cf99b8978a92938ee8d2364c6de11c1a03d4'),
+              ('0.8.30', 'solc-linux-amd64-v0.8.30+commit.73712a01', 'f3e987dc6ecebd4bd350c48edcbc320b46cf9e3109bd3fc3d88f1acaf4c428f7'),
+          ]
+          for version, name, expected in compilers:
+              data = urllib.request.urlopen(base + name, timeout=120).read()
+              assert hashlib.sha256(data).hexdigest() == expected
+              target = pathlib.Path.home() / '.svm' / version / ('solc-' + version)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(data)
+              target.chmod(0o755)
+          PY
+      - name: Compile and test the candidate production bytecode
+        working-directory: stage1/evm
+        run: |
+          forge build --sizes
+          forge test --summary
+      - name: Prepare unsigned candidate only
+        working-directory: stage1/evm
+        env:
+          MERCES_ADMIN: '0x05478199526A3D40428492bea389fe5A625F0d3F'
+          MERCES_TIMELOCK_PROPOSER: '0x05478199526A3D40428492bea389fe5A625F0d3F'
+          MERCES_ALLOWLIST_MANAGER: '0x50E2244ee5fcDF3E15433dd4ADb0Eb5F6b7C01b6'
+          MERCES_STABLECOIN: '0x534b2f3A21130d7a60830c2Df862319e593943A3'
+          MERCES_TIMELOCK_DELAY: '60'
+          MERCES_NETWORK: monad-testnet
+        run: |
+          forge script script/DeployMonadTestnet.s.sol:DeployMonadTestnet \
+            --rpc-url https://testnet-rpc.monad.xyz \
+            --sender 0x62A7e92ba8F36860b54c43e39b3c4BC20eA8cCeE \
+            --gas-estimate-multiplier 110 --non-interactive
+      - name: Package candidate and provenance
+        run: |
+          mkdir budget-monad
+          git rev-parse HEAD > budget-monad/backend-commit.txt
+          git -C stage1 rev-parse HEAD > budget-monad/stage1-commit.txt
+          forge --version > budget-monad/foundry-version.txt
+          printf 'production profile; optimizer_runs=1; Merces viaIR, T-REX/ONCHAINID legacy\n' > budget-monad/profile.txt
+          tar -czf budget-monad/evm-out.tar.gz -C stage1/evm out
+          cp stage1/evm/broadcast/DeployMonadTestnet.s.sol/10143/dry-run/run-latest.json budget-monad/unsigned-deployment.json
+          cp stage1/evm/deployments/monad-testnet.json budget-monad/planned-deployment.json
+          cd budget-monad
+          sha256sum *.tar.gz *.txt *.json > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: budget-monad-${{ github.sha }}
+          path: budget-monad/
+          retention-days: 14
