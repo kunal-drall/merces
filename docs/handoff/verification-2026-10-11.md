@@ -25,6 +25,7 @@ All commands below exited 0. Tests used an isolated PostgreSQL 16 database; no p
 | `pnpm docs:events` | event documentation and schema regenerated |
 | `pnpm keys:check` | `published keys: 133 addresses` |
 | `pnpm dev:mock` | started on an isolated empty database; `/health`, `/chains`, `/series`, `/issuers` each HTTP 200; process stopped afterward |
+| Clean install with generated clients absent | `pnpm install --offline --frozen-lockfile` passed; postinstall regenerated 4 IDLs and 28 ABIs; typecheck and every pre-push command rerun successfully |
 | `git diff --check` | passed |
 
 `stage1:sync` still reports the raw canonical/chain interface differences as WARN: 28 items without a direct
@@ -37,3 +38,8 @@ The final integration review corrected consecutive event numbering for the index
 tail-report unit census, Hermes base64-to-hex conversion, complete EVM module health, and redaction of transport errors.
 ABI/IDL and Meteora fixtures run offline; actual RPC, signing-provider, fee and deployment behavior remains to be
 rehearsed on deployment day. `DEPLOY_DAY.md` names the manifest, funded keys, real provider and frontend prover prerequisites.
+
+Implementation merge: `4625660bad2c28c9d88020def0f04a59f62f21e9`; adapter implementation `7fccb08`, clean-install
+bootstrap `711c576`. Both source histories are ancestors of the integration, with the exact Stage 1 code retained as
+its submodule. New author/committer fields and empty trailer blocks were checked before publication. Subsequent
+publication-status edits touch only `HANDOFF.md`, `API_CHANGELOG.md` and this report; no tests read these files.

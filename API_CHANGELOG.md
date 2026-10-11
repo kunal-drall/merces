@@ -6,7 +6,7 @@ The frontend builds against this API. **Every push lists every changed or remove
 count; `API.md` is the narrative; `packages/client/src/generated/openapi.d.ts` is regenerated with `pnpm openapi:client`.
 Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
-## Unreleased
+## 4625660 — 2026-10-11 (213 operations)
 
 Live adapters and registry completion (213 operations):
 - Added admin `POST /admin/issuers/deactivate`, with `{chain,wallet}` and a stored admin transaction request.

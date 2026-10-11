@@ -22,9 +22,10 @@ frontend integration. Read §0, then the section for your job. Every claim cites
 ## 0. Start here
 
 - **Repository:** `kunal-drall/merces`; backend branch `claude/jolly-tesla-8j0s7n`, Stage 1 branch
-  `claude/sweet-goodall-b7acm3`. Integration is in local branch `integrate-handoff`; the requested merge into `main`
-  and pushes are still pending. Stage 1 stays under the `stage1/` submodule, now pinned at `bafe1fb` (SPEC v1.1.2).
-- **Current work:** S4 recovery/security fixes, S5 items 1–12, registry completion and both live adapters are implemented locally.
+  `claude/sweet-goodall-b7acm3`. Both histories are integrated on `main` (implementation merge `4625660`) and pushed
+  to GitHub. The backend branch shares the main integration; the Stage 1 branch is at `bafe1fb`, retained under the
+  `stage1/` submodule (SPEC v1.1.2). The local checkout is on `main`.
+- **Current work:** S4 recovery/security fixes, S5 items 1–12, registry completion and both live adapters are implemented and pushed.
   Stage 1 commit `bafe1fb` fixes reference final-share weighting for redeemed units in uncleared ask escrow, with a
   regression fixture. Chain programs and all 25 official vectors are unchanged. Every new commit is kunal-drall only.
 - **Latest integration verification:** 939 tests pass with database integration; all 25 original vectors pass in full
@@ -147,7 +148,7 @@ Node 22, pnpm 10.28.0, Postgres 16, git (with submodules), and Rust via rustup w
 git clone https://github.com/kunal-drall/merces && cd merces
 git checkout claude/jolly-tesla-8j0s7n
 git submodule update --init --recursive          # stage1/ at the committed gitlink
-pnpm install                                     # postinstall builds @merces/sdk, @merces/reference, @merces/circuits from stage1/
+pnpm install                                     # postinstall builds Stage 1 packages and generates pinned ABI/IDL clients
 docker compose up -d postgres                    # or a local Postgres 16; createdb merces
 export DATABASE_URL=postgres://postgres@localhost:5432/merces
 pnpm dev:mock                                    # API on :3000, both simulator personalities, seeded personas, keepers in-process
@@ -184,12 +185,14 @@ After a run, `git status` must be clean (regenerated files unchanged). CI (`.git
 
 Sizes: S = under a day, M = 1-3 days, L = more. Each item names its acceptance.
 
-### 4.1 Integrate both GitHub branches and push main (pending)
+### 4.1 Both GitHub branches integrated and pushed
 
-Start from backend `51be0e0`; preserve the Stage 1 branch as the submodule and retain both histories when integrating
-into `main`. Stage 1's fix is committed locally as `bafe1fb`; backend changes have not yet been pushed. Run every gate,
-review the final diff, verify author/committer and absence of trailers, then push the Stage 1 ref before the backend
-that references it. Verify remote refs after the push.
+`main` and `claude/jolly-tesla-8j0s7n` contain the backend implementation and both histories (merge `4625660`).
+`claude/sweet-goodall-b7acm3` contains the Stage 1 reference fix at `bafe1fb`; main pins that exact commit under
+`stage1/`. The Stage 1 branch was published first, then main and the backend branch atomically, with no force push.
+Every new commit has kunal-drall as author and committer, with no trailers. Required checks and the clean-install
+bootstrap are recorded in `docs/handoff/verification-2026-10-11.md`. This handoff's publication wording is a text-only
+follow-up to the tested implementation.
 
 ### 4.2 S4 review fixes (implemented)
 
