@@ -97,6 +97,7 @@ export class MercesWorld implements World, OpContext {
 
   static async create(vector: LoadedVector, opts: MercesWorldOptions = {}): Promise<MercesWorld> {
     const w = new MercesWorld(vector, opts.personality ?? 'solana', opts.synthetic);
+    await w.send(w.actors.admin, { kind: 'setFlags', windowsEnabled: vector.flags.windowsEnabled, tier4Enabled: vector.flags.tier4Enabled });
     // Stage 1 refuses open_raise while new raises are paused (NewRaisesPaused); so does the canonical flag (openRaise)
     if (vector.flags.newRaisesPaused) await w.send(w.actors.admin, { kind: 'pauseNewRaises', paused: true });
     return w;

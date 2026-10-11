@@ -72,21 +72,13 @@ export function mercesSnapshot(src: ViewSource, seriesName: string | null, now: 
     out.treasury = money.treasury;
     out.vault = money.vault;
     out.auctionEscrow = money.auctionEscrow;
-    if (b.window) {
-      const ew = s.transferWindows[b.window.windowId];
+    const w = s.transferWindows.at(-1);
+    if (w) {
       out.windowEscrowStable = money.windowEscrowStable ?? '0';
       out.windowEscrowUnits = money.windowEscrowUnits ?? '0';
-      out.window = {
-        period: D(b.window.period),
-        state: b.window.state,
-        tallyRound: D(b.window.tallyRound),
-        roundRejected: b.window.roundRejected,
-        clearingPrice: ew?.clearingPrice != null && b.window.state !== 'NoMatch' ? D(ew.clearingPrice) : null,
-        branch: null,
-        matchedUnits: b.window.matchedUnits,
-        escrowStable: money.windowEscrowStable ?? '0',
-        escrowUnits: money.windowEscrowUnits ?? '0',
-      };
+      out.window = { period: D(w.period), state: w.state, tallyRound: D(w.tallyRound), roundRejected: w.roundRejected,
+        clearingPrice: w.clearingPrice === null ? null : D(w.clearingPrice), branch: w.clearing?.branch ?? null,
+        matchedUnits: D(w.clearing?.matchedUnits ?? 0n), escrowStable: D(w.escrowStable), escrowUnits: D(w.escrowUnits) };
     }
     out.ledger = ledgerView(s, now);
     out.auction = auctionEngineView(s);

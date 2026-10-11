@@ -51,8 +51,14 @@ export function undeliveredUnits(s: SimSeries, wallet: string): bigint {
  * The units a holder's account holds (Stage 1 `unitsOf`): its units less those held for a window ask and those
  * allocated but not yet delivered. What a window ask may escrow and what a Retired burn burns.
  */
+export function windowPendingUnits(s: SimSeries, wallet: string): bigint {
+  return s.transferWindows.reduce((sum, w) => { const o = w.orders.get(wallet); return sum + (o?.processed && !o.delivered ? o.pendingUnits : 0n); }, 0n);
+}
+export function requireWindowDelivery(s: SimSeries, wallet: string): void {
+  if (windowPendingUnits(s, wallet) > 0n) fail('DeliverFirst');
+}
 export function heldUnits(s: SimSeries, p: SimPosition): bigint {
-  return p.units - p.escrowed - undeliveredUnits(s, p.wallet);
+  return p.units - p.escrowed - undeliveredUnits(s, p.wallet) - windowPendingUnits(s, p.wallet);
 }
 /**
  * The units a holder's payouts accrue on (Stage 1 `accrual_units`, SPEC §6.1: balance + undelivered auction units +
@@ -72,7 +78,17 @@ export function accrualUnits(s: SimSeries, p: SimPosition): bigint {
 function accruedSince(s: SimSeries, p: SimPosition): bigint {
   if (!p.registered) return 0n;
   const w = accrualUnits(s, p);
-  const net = settleHolderDelta(s.vault.netAccWad, p.lastNetAccWad, w);
+  let net = settleHolderDelta(s.vault.netAccWad, p.lastNetAccWad, w);
+  // C-S4: ask escrow earns only up to clearing; sold units earn for buyers from that accumulator onward.
+  if (!s.curve && p.escrowed > 0n) {
+    const cleared = s.transferWindows.find((x) => x.clearing && x.orders.get(p.wallet)?.side === 'sell' && !x.orders.get(p.wallet)!.processed);
+    if (cleared) {
+      const base = w - p.escrowed, snap = cleared.accAtClear;
+      net = p.lastNetAccWad < snap
+        ? settleHolderDelta(snap, p.lastNetAccWad, w) + settleHolderDelta(s.vault.netAccWad, snap, base)
+        : settleHolderDelta(s.vault.netAccWad, p.lastNetAccWad, base);
+    }
+  }
   return curveTakesFinal(s) ? net + settleHolderDelta(s.final.finalAccWad, p.lastFinalAccWad, w) : net;
 }
 /** Curve mode settles the final pool into `pending` while the series has not redeemed (Stage 1 `redemption_ts == 0`). */

@@ -6,7 +6,7 @@ import { withIdempotency } from '@merces/core';
 import { svc } from '../context.ts';
 import {
   AdminService, auditLogQuerySchema, auditSamplesQuerySchema, auditSamplesSchema, keeperRunsQuerySchema, pauseRaisesSchema, registerAttestorSchema, registerVerifierKeySchema, revokeAttestorSchema,
-  revokeVerifierKeySchema, rotateAttestorSchema, rotateVerifierKeySchema, txRequestsQuerySchema, fxPairSchema,
+  revokeVerifierKeySchema, rotateAttestorSchema, rotateVerifierKeySchema, txRequestsQuerySchema, fxPairSchema, protocolFlagsSchema,
 } from './service.ts';
 
 /** E13 admin API. Every route is admin-tier; every write is audited and takes an Idempotency-Key. */
@@ -15,6 +15,11 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
   const s = new AdminService(ctx);
   const idem = (req: { headers: Record<string, unknown> }) => (req.headers['idempotency-key'] as string | undefined) ?? undefined;
   const chainQuery = z.object({ chain: z.string().optional() });
+  defineRoute(app, ctx, { method: 'POST', url: '/admin/protocol-flags', access: 'admin', handler: async (req, reply, session) => {
+    const b = protocolFlagsSchema.parse(req.body);
+    const r = await withIdempotency(ctx.pool, `protocol-flags:${session!.accountId}`, idem(req), b, async () => ({ status: 201, response: await s.setProtocolFlags(b, session!) }));
+    reply.code(r.status); return r.response;
+  } });
   defineRoute(app, ctx, { method: 'POST', url: '/admin/fx-pairs', access: 'admin', handler: async (req, reply, session) => {
     const b = fxPairSchema.parse(req.body);
     const r = await withIdempotency(ctx.pool, `fx-pair:${session!.accountId}`, idem(req), b, async () => ({ status: 201, response: await s.setFxPair(b, session!) }));

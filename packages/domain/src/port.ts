@@ -50,7 +50,7 @@ export interface ChainPort {
   getSignerKey(kind: SignerKind, address: Address): Promise<SignerKeyState | null>;
   /** Every registered key of `kind`, active and revoked (revoked keys carry `revokedAt` and `graceUntil`). */
   listSignerKeys(kind: SignerKind): Promise<SignerKeyState[]>;
-  getTransferWindow(seriesId: string): Promise<TransferWindowState | null>;
+  getTransferWindow(seriesId: string, windowId?: number): Promise<TransferWindowState | null>;
   getCurve(seriesId: string): Promise<CurveState | null>;
   /**
    * Quote a `curveSwap` on a curve series at the current state (moves nothing): the simulator's stand-in pool; the live

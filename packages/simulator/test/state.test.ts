@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { orderCommitment } from '@merces/domain';
-import { WAD, ZERO_INCOME_COMMITMENT, toPid, type LedgerExpect } from '@merces/math';
+import { WAD, ZERO_INCOME_COMMITMENT, toPid, parsePeriod, periodOf, type LedgerExpect } from '@merces/math';
 import { SimHarness, SimSigner, SimStateVersionError, balanceUnits, defaultTerms, deserialiseState, pendingRefundOf, serialiseState } from '../src/index.ts';
 import { ZERO_INCOME_COMMITMENT_HEX, derivedStatus, ledgerClock } from '../src/engine/ledger.ts';
 import { GENESIS, USDC } from './helpers.ts';
@@ -34,7 +34,7 @@ const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json',
  *  - S3-UL: a curve series keeps base lamports (unit scale 10^6) from its creation.
  *  - S3-CV: a curve's completion settles at the pool's finish time and registers nobody (Stage 1 complete_curve).
  */
-describe('simulator state version 7', () => { // cause S4-V5 (was version 4)
+describe('simulator state version 8', () => { // cause S4-V5 (was version 4)
   it('round-trips the Stage 1 vault, tail and final states and bigint pauses through serialisation and structuredClone', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
     const { seriesId } = await h.runRaise();
@@ -63,7 +63,7 @@ describe('simulator state version 7', () => { // cause S4-V5 (was version 4)
     expect(s.tail.tailExhausted).toBe(true);
     expect(s.final.finalUnits).toBe(500n);
     expect([s.unitScale, s.stakedTotal, s.tenderedTotal, s.unitsSyncedAt, s.positions.get(h.backers[0]!.address)!.stakedUnits]).toEqual([1_000_000n, 7n, 3n, now, 7n]);
-    expect(back.version).toBe(7); // cause S4-V5 (was 4; S3-V4: was 3)
+    expect(back.version).toBe(8); // cause S4-V5 (was 4; S3-V4: was 3)
     expect(structuredClone(h.sim.state)).toEqual(h.sim.state);
   });
 
@@ -73,15 +73,16 @@ describe('simulator state version 7', () => { // cause S4-V5 (was version 4)
     const { version: _v, ...v1 } = v5;
     // S5-FX: version 6 lacks registered pair configuration and quarter checkpoint Maps.
     expect(() => deserialiseState(JSON.stringify({ ...v5, version: 6 }))).toThrow(SimStateVersionError);
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 7 }))).toThrow(SimStateVersionError);
     expect(() => deserialiseState(JSON.stringify(v1))).toThrow(SimStateVersionError);
     expect(() => deserialiseState(JSON.stringify({ ...v5, version: 1 }))).toThrow(/version 1 is not supported.*sim:reset/);
     // cause S2-V3: a version-2 state (S1) is refused too
-    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 2 }))).toThrow(/version 2 is not supported \(this build needs version 7\).*sim:reset/); // cause S4-V5 (was version 4; S3-V4: was 3)
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 2 }))).toThrow(/version 2 is not supported \(this build needs version 8\).*sim:reset/); // cause S4-V5 (was version 4; S3-V4: was 3)
     // cause S3-V4: a version-3 state (S2) is refused too
-    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 3 }))).toThrow(/version 3 is not supported \(this build needs version 7\).*sim:reset/); // cause S4-V5 (was version 4)
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 3 }))).toThrow(/version 3 is not supported \(this build needs version 8\).*sim:reset/); // cause S4-V5 (was version 4)
     // cause S4-V5: a version-4 state (S3, attestors as booleans) is refused too
     expect(() => deserialiseState(JSON.stringify({ ...v5, version: 5 }))).toThrow(SimStateVersionError);
-    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 4 }))).toThrow(/version 4 is not supported \(this build needs version 7\).*sim:reset/);
+    expect(() => deserialiseState(JSON.stringify({ ...v5, version: 4 }))).toThrow(/version 4 is not supported \(this build needs version 8\).*sim:reset/);
     expect(() => deserialiseState(JSON.stringify(v5))).not.toThrow();
   });
 
@@ -227,9 +228,12 @@ describe('Stage 1 registration, first period and money views', () => {
 
   it('a window buyer with a fill becomes a registered holder', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
-    const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 } });
-    const now = (await h.sim.now()) + 11;
+    const { seriesId, terms, privateTerms } = await h.runRaise({ terms: { lockupSeconds: 10 } });
+    const first = periodOf((await h.sim.getSeries(seriesId))!.settledAt!).id;
+    const now = parsePeriod(first).end + 1;
     await h.sim.setTime(now);
+    await h.reportAndPay(seriesId, first, privateTerms, terms.termsCommitment, 0n, 0n);
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
     await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 }, 'keeper');
     const seller = h.backers[1]!;
     const buyer = h.sim.address('wallet:window-buyer');
@@ -239,15 +243,15 @@ describe('Stage 1 registration, first period and money views', () => {
     // cause S4-BID: Stage 1's keccak commitment, over no series or window
     await h.exec(seller, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment: orderCommitment({ wallet: seller.address, pricePerUnit: USDC(10), quantity: 50n, salt }), deposit: '0', units: '50' });
     // cause S4-BID: Stage 1's keccak commitment, over no series or window
-    const tx = await h.sim.build({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: orderCommitment({ wallet: buyer, pricePerUnit: USDC(10.5), quantity: 50n, salt }), deposit: USDC(525).toString(), units: '0' }, buyer);
+    const tx = await h.sim.build({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: orderCommitment({ wallet: buyer, pricePerUnit: USDC(10.5), quantity: 50n, salt }), deposit: USDC(530.25).toString(), units: '0' }, buyer);
     await h.sim.send({ tx, signatures: { [buyer]: `sim:${buyer}` } });
-    expect(h.sim.stage1View(seriesId).money).toMatchObject({ windowEscrowStable: USDC(525).toString(), windowEscrowUnits: '50' });
-    await h.sim.setTime(now + 100);
+    expect(h.sim.stage1View(seriesId).money).toMatchObject({ windowEscrowStable: USDC(530.25).toString(), windowEscrowUnits: '50' });
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.commitEndsAt);
     await h.exec(seller, { kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'sell', pricePerUnit: USDC(10).toString(), quantity: '50', salt });
     const rtx = await h.sim.build({ kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'buy', pricePerUnit: USDC(10.5).toString(), quantity: '50', salt }, buyer);
     await h.sim.send({ tx: rtx, signatures: { [buyer]: `sim:${buyer}` } });
     expect(seriesOf(h.sim, seriesId).positions.get(buyer)).toBeUndefined();
-    await h.sim.setTime(now + 200);
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.revealEndsAt);
     await h.sim.submit({ kind: 'clearTransferWindow', seriesId, windowId: 0 }, 'keeper');
     expect(seriesOf(h.sim, seriesId).positions.get(buyer)).toMatchObject({ units: 50n, registered: true });
     expect(h.sim.stage1View(seriesId).money).toMatchObject({ windowEscrowStable: '0', windowEscrowUnits: '0' });

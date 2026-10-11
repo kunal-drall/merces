@@ -269,8 +269,27 @@ paths:
       operationId: getTransferWindow
       x-access: public
       tags: [lifecycle]
-      parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      responses: { '200': { description: 'Current transfer window, phase, flag state and market rules. A curve-mode series has no transfer windows and no cap at any stage: walletCapUnits null, noCap true and noCapStatement (the one no-cap statement)', content: { application/json: { schema: { type: object, properties: { walletCapUnits: { type: [string, 'null'], description: "the window's wallet cap in units; null on a curve-mode series" }, noCap: { type: boolean, description: 'present and true on a curve-mode series' }, noCapStatement: { type: string } } } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+      parameters:
+        - { $ref: '#/components/parameters/seriesId' }
+        - { name: windowId, in: query, schema: { type: integer, minimum: 0 }, description: Omit for the current window; supply an earlier id to inspect its pending delivery. }
+      responses:
+        '200':
+          description: Current or historical window, Stage 1 settlement state, next bounded command and independent deliveries. Curve series have no windows or wallet cap.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  seriesId: { type: string }
+                  enabled: { type: boolean }
+                  phase: { type: string, enum: [none, Commit, Reveal, Settling, Settled, NoMatch, Done] }
+                  window: { type: [object, 'null'], description: 'Period, immutable phase deadlines, tally round, rejection state, orders with processed/delivered flags and pending balances, clearing price and escrow totals.' }
+                  nextStep: { type: [object, 'null'], description: Recompute from a fresh read after every submitted transaction. }
+                  deliveries: { type: array, items: { type: object }, description: Processed orders still owed units or refunds; independent of flags and terminal status. }
+                  walletCapUnits: { type: [string, 'null'], description: Floor of outstanding units times wallet cap bps divided by 10000; null on curves. }
+                  noCap: { type: boolean }
+                  noCapStatement: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
   /series/{seriesId}/window/build-commit:
     post:
       operationId: buildWindowCommit
@@ -288,7 +307,7 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet, side, pricePerUnit, quantity, salt], properties: { wallet: { type: string }, side: { type: string }, pricePerUnit: { type: string }, quantity: { type: string }, salt: { type: string } } } } } }
-      responses: { '200': { description: Unsigned revealWindowOrder, content: { application/json: { schema: { type: object } } } }, '403': { description: Transfer windows are switched off } }
+      responses: { '200': { description: 'Unsigned revealWindowOrder. Recovery remains available with the opening flag disabled.', content: { application/json: { schema: { type: object } } } } }
   /series/{seriesId}/window/backup:
     put:
       operationId: putWindowBackup

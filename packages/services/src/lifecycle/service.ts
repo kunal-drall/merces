@@ -1,6 +1,8 @@
+import { nextWindowStep, windowDeliveries } from '@merces/domain';
+import { walletCapUnits } from '@merces/math';
 import { AppError, audit, getFlag } from '@merces/core';
 import { CURVE_NO_CAP, ChainError, orderCommitment, perWholeUnit, type ChainPort, type PositionState, type SeriesState, type UnsignedTx } from '@merces/domain';
-import { SeriesStatus, YEAR, capRemainingScaled, fromPid, interim, isTerminal, isCappedScaled, periodStart, pidAt, redemptionQuoteScaled, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
+import { SeriesStatus, YEAR, capRemainingScaled, fromPid, isTerminal, isCappedScaled, periodStart, pidAt, redemptionQuoteScaled, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -350,16 +352,16 @@ export class LifecycleService {
   private async windowsEnabled(): Promise<void> {
     if (!(await getFlag(this.ctx.pool, 'transfer_windows'))) throw AppError.forbidden('transfer windows are switched off until the 18-month lockups end (feature flag transfer_windows)');
   }
-  async window(seriesId: string): Promise<Record<string, unknown>> {
+  async window(seriesId: string, windowId?: number): Promise<Record<string, unknown>> {
     const chain = this.ctx.chainFor(seriesId);
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
-    const w = await chain.getTransferWindow(seriesId);
+    const w = await chain.getTransferWindow(seriesId, windowId);
     const now = await chain.now();
     const enabled = await getFlag(this.ctx.pool, 'transfer_windows');
     // a curve series has no transfer windows and no cap at any stage (A-CURVE-2): no window cap, and the one statement
     if (s.terms.raiseStyle === 'curve') return { seriesId, enabled: false, lockupEndsAt: s.lockupEndsAt, window: null, phase: 'none', walletCapUnits: null, noCap: true, noCapStatement: CURVE_NO_CAP, rules: `Curve-mode units have no transfer windows: after graduation they trade freely on the DEX pool, with no allowlist. ${CURVE_NO_CAP}` };
-    return { seriesId, enabled, lockupEndsAt: s.lockupEndsAt, window: w, phase: !w || w.cleared ? 'none' : now < w.commitEndsAt ? 'commit' : now < w.revealEndsAt ? 'reveal' : 'clear-due', walletCapUnits: interim.walletCapUnits(BigInt(s.unitsOutstanding), BigInt(s.terms.walletCapBps)).toString(), rules: 'Units move only through windows; direct transfers always fail; no lending, AMMs or shorting (C10).' };
+    return { seriesId, enabled, lockupEndsAt: s.lockupEndsAt, window: w, phase: w?.state ?? 'none', nextStep: w ? nextWindowStep(w, now, (await chain.info()).limits) : null, deliveries: w ? windowDeliveries(w) : [], walletCapUnits: walletCapUnits(BigInt(s.unitsOutstanding), s.terms.walletCapBps).toString(), rules: 'Units move only through windows; direct transfers always fail; no lending, AMMs or shorting (C10).' };
   }
   async buildWindowCommit(seriesId: string, session: Session, input: { wallet: string; side: 'buy' | 'sell'; commitment: string; deposit: string; units: string }): Promise<{ tx: UnsignedTx }> {
     await this.windowsEnabled();
@@ -372,7 +374,6 @@ export class LifecycleService {
     return { tx: await chain.build({ kind: 'commitWindowOrder', seriesId, windowId: w.windowId, side: input.side, commitment: input.commitment, deposit: input.deposit, units: input.units }, input.wallet) };
   }
   async buildWindowReveal(seriesId: string, session: Session, input: { wallet: string; side: 'buy' | 'sell'; pricePerUnit: string; quantity: string; salt: string }): Promise<{ tx: UnsignedTx }> {
-    await this.windowsEnabled();
     const chain = this.ctx.chainFor(seriesId);
     if ((await chain.getSeries(seriesId))?.terms.raiseStyle === 'curve') throw AppError.conflict('curve units trade on the DEX pool, not in transfer windows');
     this.requireWallet(session, chain.chain, input.wallet);
@@ -380,6 +381,19 @@ export class LifecycleService {
     if (!w || w.cleared) throw AppError.conflict('no open window');
     void orderCommitment;
     return { tx: await chain.build({ kind: 'revealWindowOrder', seriesId, windowId: w.windowId, side: input.side, pricePerUnit: input.pricePerUnit, quantity: input.quantity, salt: input.salt }, input.wallet) };
+  }
+  async buildWindowStep(seriesId: string, session: Session, wallet: string): Promise<{ tx: UnsignedTx | null }> {
+    const chain = this.ctx.chainFor(seriesId);
+    this.requireWallet(session, chain.chain, wallet);
+    const w = await chain.getTransferWindow(seriesId);
+    if (!w) throw AppError.notFound('transfer window');
+    const cmd = nextWindowStep(w, await chain.now(), (await chain.info()).limits);
+    return { tx: cmd ? await chain.build(cmd, wallet) : null };
+  }
+  async buildWindowDelivery(seriesId: string, session: Session, input: { wallet: string; windowId: number; owner: string }): Promise<{ tx: UnsignedTx }> {
+    const chain = this.ctx.chainFor(seriesId);
+    this.requireWallet(session, chain.chain, input.wallet);
+    return { tx: await chain.build({ kind: 'deliverOrder', seriesId, windowId: input.windowId, owner: input.owner }, input.wallet) };
   }
   async putWindowBackup(seriesId: string, session: Session, wallet: string, ciphertext: string, keyHint: string | null): Promise<{ ok: true }> {
     const chain = this.ctx.chainFor(seriesId);

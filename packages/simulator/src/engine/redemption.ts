@@ -1,3 +1,4 @@
+import { requireWindowDelivery } from './holders.ts';
 import { DEFAULTS, ChainError, type Command } from '@merces/domain';
 import { U64_MAX, mulDiv, newTailState, pidAt, redemptionQuoteScaled, scaledAmount, settleHolderDelta, tailReceiveScaled, wadPerScaledUnit, type RedemptionQuote } from '@merces/math';
 import type { SimPeriod, SimPosition, SimSeries } from '../state.ts';
@@ -111,6 +112,7 @@ export function claimRedemption(e: EngineCore, signer: string, cmd: Extract<Comm
   if (!s.redemption || (s.status !== 'Redeemed' && s.status !== 'Extinguished')) fail('NotRedeemed', 'the series has not redeemed');
   const p = s.positions.get(signer);
   if (!p || !p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');
+  requireWindowDelivery(s, signer);
   redeemBody(e, s, p, emit);
 }
 
@@ -271,7 +273,8 @@ export function claimTail(e: EngineCore, signer: string, cmd: Extract<Command, {
   if (s.curve) {
     curveTailPending(e, s, p, emit);
   } else if (p.redeemedUnits === 0n && accrualUnits(s, p) > 0n) {
-    redeemBody(e, s, p, emit);
+    requireWindowDelivery(s, signer);
+  redeemBody(e, s, p, emit);
   }
   if (p.redeemedUnits === 0n) fail('NoRedeemedUnits', 'the holder has redeemed no units');
   const amount = tailSince(s, p, p.redeemedUnits);

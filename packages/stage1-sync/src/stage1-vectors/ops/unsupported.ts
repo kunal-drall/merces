@@ -12,7 +12,6 @@ import { blocked, type Translation, type TranslatorTable } from './types.ts';
 export const NOT_YET: Readonly<Partial<Record<CallOp, string>>> = Object.freeze({
   route_income: 'S5',
   close_router_period: 'S5',
-  set_flags: 'S5',
   stop_issuance: 'S5',
   resume_issuance: 'S5',
   deactivate_issuer: 'S5',

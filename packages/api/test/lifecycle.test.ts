@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { setFlag } from '@merces/core';
 import { orderCommitment, type UnsignedTx } from '@merces/domain';
-import { parsePeriod } from '@merces/math';
+import { parsePeriod, periodOf } from '@merces/math';
 import { SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
@@ -129,8 +129,11 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     expect((await rig.post(`/series/${seriesId}/window/build-commit`, { wallet: h.backers[1]!.address, side: 'sell', commitment: '0x' + '00'.repeat(32), deposit: '0', units: '10' }, rig.token({ accountId: 'b1', wallets: [{ chain: 'monad', address: h.backers[1]!.address }], roles: ['backer'] }))).statusCode).toBe(403);
     await setFlag(rig.t.pool, 'transfer_windows', true, 'test');
     const other = await rig.mon.runRaise({ terms: { lockupSeconds: 10 } });
-    await h.sim.advanceTime(11);
+    const first = periodOf((await h.sim.getSeries(other.seriesId))!.settledAt!).id;
+    await h.sim.setTime(parsePeriod(first).end + 1);
+    await h.reportAndPay(other.seriesId, first, other.privateTerms, other.terms.termsCommitment, 0n, 0n);
     const now = await h.sim.now();
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
     await h.sim.submit({ kind: 'openTransferWindow', seriesId: other.seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 }, 'keeper');
     const b1 = h.backers[1]!;
     const b1Tok = rig.token({ accountId: 'b1', wallets: [{ chain: 'monad', address: b1.address }], roles: ['backer'] });
@@ -142,7 +145,7 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     const wsent = await rig.post('/tx/send', await b1.sign(wc.json().tx as UnsignedTx), b1Tok);
     expect(wsent.statusCode, wsent.body).toBe(200);
     expect((await rig.put(`/series/${other.seriesId}/window/backup`, { wallet: b1.address, ciphertext: 'age:...' }, b1Tok)).statusCode).toBe(200);
-    expect((await rig.get(`/series/${other.seriesId}/window`)).json().phase).toBe('commit');
+    expect((await rig.get(`/series/${other.seriesId}/window`)).json().phase).toBe('Commit');
     // cause S3-BR: burnRetired takes a Retired series only; redeemed units burn at their redemption
     const burn = await rig.post(`/series/${seriesId}/retirement/crank-burn`, {}, adminTok);
     expect(burn.statusCode).toBe(409);
@@ -271,12 +274,14 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
   it('S3 review: the final claim builder previews the share of an open ask\'s units too, as the chain pays it', async () => {
     const h = rig.sol;
     const bids = [0, 1, 2, 3, 4].map((backer) => ({ backer, price: USDC(52.5), qty: 100n }));
-    const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 }, bids });
+    const { seriesId, terms, privateTerms } = await h.runRaise({ terms: { lockupSeconds: 10 }, bids });
     const b1 = h.backers[1]!;
     const tok = rig.token({ accountId: 'fin-ask-b1', wallets: [{ chain: 'solana', address: b1.address }], roles: ['backer'] });
-    const open = (await h.sim.getSeries(seriesId))!.settledAt! + 11;
-    await h.sim.setTime(Math.max(open, await h.sim.now()));
+    const first = periodOf((await h.sim.getSeries(seriesId))!.settledAt!).id;
+    await h.sim.setTime(parsePeriod(first).end + 1);
+    await h.reportAndPay(seriesId, first, privateTerms, terms.termsCommitment, 0n, 0n);
     const now = await h.sim.now();
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
     await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 }, 'keeper');
     const salt = '0x' + 'cd'.repeat(32);
     // cause S4-BID: Stage 1's keccak commitment, over no series or window

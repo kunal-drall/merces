@@ -37,6 +37,7 @@ describe.skipIf(!dbTestsEnabled())('concurrency and past-holder edges', () => {
     const seller = h.backers[0]!;
     const units = BigInt((await h.sim.getPosition(seriesId, seller.address))!.units);
     const now = await h.sim.now();
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
     await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 }, 'keeper');
     const buyer = h.sim.address('wallet:past-holder-buyer');
     await h.sim.submit({ kind: 'setAllowlist', wallet: buyer, allowed: true }, 'allowlistManager');
@@ -48,11 +49,11 @@ describe.skipIf(!dbTestsEnabled())('concurrency and past-holder edges', () => {
     // cause S4-BID: Stage 1's keccak commitment, over no series or window
     await h.exec(seller, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment: orderCommitment({ wallet: seller.address, pricePerUnit: price, quantity: units, salt: ss }), deposit: '0', units: units.toString() });
     // cause S4-BID: Stage 1's keccak commitment, over no series or window
-    await asBuyer({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: orderCommitment({ wallet: buyer, pricePerUnit: price, quantity: units, salt: bs }), deposit: (price * units).toString(), units: '0' });
-    await h.sim.setTime(now + 100);
+    await asBuyer({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: orderCommitment({ wallet: buyer, pricePerUnit: price, quantity: units, salt: bs }), deposit: (price * units * 101n / 100n).toString(), units: '0' });
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.commitEndsAt);
     await h.exec(seller, { kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'sell', pricePerUnit: price.toString(), quantity: units.toString(), salt: ss });
     await asBuyer({ kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'buy', pricePerUnit: price.toString(), quantity: units.toString(), salt: bs });
-    await h.sim.setTime(now + 200);
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.revealEndsAt);
     await h.sim.submit({ kind: 'clearTransferWindow', seriesId, windowId: 0 }, 'keeper');
     await rig.sync();
     expect((await h.sim.getPosition(seriesId, seller.address))!.units).toBe('0');

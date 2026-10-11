@@ -35,14 +35,6 @@ export interface Shim {
 }
 
 export const SHIMS: readonly Shim[] = [
-  { id: 'SH-WIN-1', ops: ['open_window'], call: 'keeper openTransferWindow{t + windowCommitDuration, + windowRevealDuration}; period kept by the runner', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-WIN-2', ops: ['commit_ask'], call: 'commitWindowOrder{side: sell, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit 0, units}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-WIN-3', ops: ['window_commit_bid'], call: 'commitWindowOrder{side: buy, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit: escrow, units 0}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-WIN-4', ops: ['reveal_order'], call: 'revealWindowOrder (side from the commit)', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-WIN-5', ops: ['begin_window_settlement'], call: 'record only, for NO_MATCH or a terminal series; a priced proposal on a live series is BLOCKED', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-WIN-6', ops: ['finalize_window'], call: 'clearTransferWindow; asserts nothing transferred where Stage 1 settles NoMatch', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-WIN-7', ops: ['process_orders'], call: 'no-op', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-FLG-1', ops: ['config.flags.windowsEnabled'], call: 'runner only: open_window on a series with windows disabled is BLOCKED', why: 'no canonical windows flag', removedIn: 'S5', kind: 'shim' },
 ];
 
 export const SHIM_BY_ID: ReadonlyMap<string, Shim> = new Map(SHIMS.map((s) => [s.id, s]));

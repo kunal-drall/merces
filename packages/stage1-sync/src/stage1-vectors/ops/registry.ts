@@ -28,6 +28,9 @@ function keyAddressOf(ctx: OpContext, name: string): string {
 }
 
 export const registryOps: TranslatorTable = {
+  set_flags: (ctx, c) => direct(async () => {
+    await ctx.send(ctx.actors.admin, { kind: 'setFlags', newRaisesPaused: c.newRaisesPaused, windowsEnabled: c.windowsEnabled, tier4Enabled: c.tier4Enabled });
+  }),
   fund: (ctx, c) =>
     direct(async () => {
       await ctx.chain.fund(ctx.actors.address(c.actor), 'USDC', BigInt(c.amount));

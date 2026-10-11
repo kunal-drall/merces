@@ -1,3 +1,4 @@
+import { requireWindowDelivery } from './holders.ts';
 import { ChainError, amendDigest, extinguishDigest, type Command } from '@merces/domain';
 import { PARAMETER_BOUNDS, U64_MAX, finalDistribute, settleHolderDelta, vested } from '@merces/math';
 import type { SimPosition, SimSeries } from '../state.ts';
@@ -218,6 +219,7 @@ function finalShare(e: EngineCore, s: SimSeries, p: SimPosition, emit: Emit): { 
 export function claimFinal(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'claimFinal' }>, emit: Emit): void {
   const s = e.series(cmd.seriesId);
   if (s.status !== 'Extinguished') fail('TerminalStatus', 'the series is not extinguished');
+  requireWindowDelivery(s, signer);
   deliverPending(e, s, signer, emit); // SIM:1453
   const p = s.positions.get(signer);
   if (!p || !p.registered) fail('HolderNotRegistered', 'not a registered holder of this series');

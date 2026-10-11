@@ -165,7 +165,7 @@ describe('S3 claim scenarios: replay', () => {
       expect(run.runnerAtomic).toEqual([]);
       // cause S3-SH: no shim stands in for the claim family any more (SH-CLM-1, the last, retired in WP3); (l) runs 22's
       // S2 window through the one-step window rows (SH-WIN-1..7, until S5)
-      const windows = run.id === 'S3l' ? ['SH-WIN-1', 'SH-WIN-2', 'SH-WIN-3', 'SH-WIN-4', 'SH-WIN-5', 'SH-WIN-6', 'SH-WIN-7'] : [];
+      const windows: string[] = []; // All window operations now execute canonical commands.
       // cause S4-BID: SH-AUC-2 is no longer allowed (retired in S4 WP2)
       // cause S4-SH: SH-REG-2 is no longer allowed (retired in S4 WP5)
       // cause S4-SH: SH-REG-3 is gone (the verifier keys run directly since S4 WP6)

@@ -9,6 +9,15 @@ import type { ErrorName } from '@merces/math';
  * the API returns `detail` as is. `STAGE1_CODE` fixes the code each name travels with.
  */
 export const STAGE1_CODE = {
+  OutOfOrder: 'WrongPhase',
+  BidsNotProcessed: 'WrongPhase',
+  DeliverFirst: 'WrongStatus',
+  WindowsDisabled: 'NotPermitted',
+  WindowNotEligible: 'WrongStatus',
+  WindowOpen: 'Duplicate',
+  WindowNotOpen: 'WrongPhase',
+  OrderExists: 'Duplicate',
+  InsufficientUnits: 'InsufficientFunds',
   NotIssuer: 'Unauthorized',
   RaiseNotSettled: 'WrongPhase',
   TerminalStatus: 'WrongStatus',

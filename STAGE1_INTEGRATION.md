@@ -9,10 +9,21 @@ Stage 1 is pinned at `bafe1fb76094afa423211320356b8db868c2b340` on `claude/sweet
 The reference final-share fix matches both chains and adds the missing regression fixture; official vectors and chain
 programs are unchanged. Its SDK, reference and circuit packages build through `pnpm stage1:build`.
 
-S5 items 2, 3, 4, 5, 7, 9, 10 and 12 are implemented. Eighteen vectors are now required full passes, with three window
-prefix gates and four router/FX vectors pending. No vector uses a waiver. Remaining shims: FX, seven window shims and
-the window flag. Adapters remain unwired. The older milestone result sections below are historical records; use
-HANDOFF §0 and generated parity reports for current validation and remaining work.
+S5 items 1–7, 9, 10 and 12 are implemented. Twenty-three vectors pass in full on both personalities, with
+no prefix gates, shims or waived steps. Vectors 12 and 18 await the router. Live adapters remain unwired.
+
+### S5 results: transfer windows
+
+The simulator and API use Stage 1's open, commit/reveal, proposal, paged tally, finalize, per-order processing and
+independent delivery. Immutable durations, paid previous quarter, mint finalization, wallet-cap floor, escrow including
+fees, rejected-round retally, bid cancellation and ask take-back use the pinned math. `transfer.windows` advances one
+step; `window.deliver` retries recipients independently with backoff, including older windows and with flags disabled.
+Payout ownership changes at `accAtClear`, following both programs (C-S4; DIV-S1I-6), with regressions for intervening
+payments and delayed delivery. Admin `setFlags` opens new windows only; default remains off. Legacy simulator
+open/clear conveniences delegate to canonical steps; live command encoding is still §5 work.
+
+Window vectors 10 (92 steps), 16 (77) and 22 (111) pass full lockstep on both personalities. State version 8 refuses
+older serialized states; migration 035 adds replayable order projections and delivery retries. API operations total 206.
 
 ### S5 results: lifecycle foundation and true-up
 

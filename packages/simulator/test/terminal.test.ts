@@ -202,22 +202,24 @@ describe('amendments and extinguishment', () => {
   it('on a redeemed series weighs the final share on the redeemed units plus an open ask\'s escrow, as both chains do: 2,625 USDC for the 100-unit holder (S3 review)', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
     const bids = [0, 1, 2, 3, 4].map((backer) => ({ backer, price: USDC(52.5), qty: 100n }));
-    const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 }, bids });
+    const { seriesId, terms, privateTerms } = await h.runRaise({ terms: { lockupSeconds: 10, windowCommitDuration: 3600, windowRevealDuration: 3600 }, bids });
     const settledAt = (await h.sim.getSeries(seriesId))!.settledAt!;
     const [b0, b1, b2, b3, b4] = h.backers as [typeof h.backers[0], typeof h.backers[0], typeof h.backers[0], typeof h.backers[0], typeof h.backers[0]];
     // b1 asks 40 of its 100 units in a window, and reveals; the window is still open when the series ends
-    const open = settledAt + 11;
+    const open = parsePeriod('2026Q1').end + 1;
     await h.sim.setTime(open);
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
+    await h.reportAndPay(seriesId, '2026Q1', privateTerms, terms.termsCommitment, 0n, 0n);
     await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: open + 100, revealEndsAt: open + 200 }, 'keeper');
     const salt = '0x' + 'cd'.repeat(32);
     // cause S4-BID: Stage 1's keccak commitment, over no series or window
     const commitment = orderCommitment({ wallet: b1.address, pricePerUnit: USDC(60), quantity: 40n, salt });
     await h.exec(b1, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment, deposit: '0', units: '40' });
-    await h.sim.setTime(open + 100);
+    await h.sim.setTime(open + 3600);
     await h.exec(b1, { kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'sell', pricePerUnit: USDC(60).toString(), quantity: '40', salt });
     expect(seriesOf(h.sim, seriesId).positions.get(b1.address)).toMatchObject({ units: 100n, escrowed: 40n });
 
-    await h.sim.setTime(open + 150);
+    await h.sim.setTime(open + 3650);
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
     const price = BigInt((await h.sim.getRedemption(seriesId))!.pricePerUnit);
     expect((await h.sim.getRedemption(seriesId))!.unitsAtRedemption).toBe('500');
@@ -238,7 +240,7 @@ describe('amendments and extinguishment', () => {
 
     // the window ends in NoMatch on the terminal series and returns the 40 units; b1's next final claim redeems them at
     // the redemption price with a share of 0 (it was paid on them already)
-    await h.sim.setTime(open + 200);
+    await h.sim.setTime(open + 7200);
     await h.sim.submit({ kind: 'clearTransferWindow', seriesId, windowId: 0 }, 'keeper');
     const mid = await balance(h, b1.address);
     const second = await h.exec(b1, { kind: 'claimFinal', seriesId });

@@ -18,6 +18,8 @@ export interface ChainInfo {
   admin: Address;
   feeCollector: Address;
   newRaisesPaused: boolean;
+  windowsEnabled?: boolean;
+  tier4Enabled?: boolean;
   /** the chain's settlement limits (a property of the chain family, not of its state) */
   limits: ChainLimits;
   /**
@@ -403,7 +405,35 @@ export interface QuarterRateState {
   fallbackReason: 'coverage' | 'deviation' | null;
 }
 
+export interface WindowOrderState {
+  owner: string;
+  side: 'buy' | 'sell';
+  commitment: string;
+  escrow: string;
+  revealed: boolean;
+  valid: boolean;
+  pricePerUnit: string | null;
+  quantity: string | null;
+  revealIndex: number;
+  talliedRound: number;
+  processed: boolean;
+  delivered: boolean;
+  fill: string;
+  pendingUnits: string;
+  pendingStable: string;
+  cancelled: boolean;
+}
 export interface TransferWindowState {
+  periodId: string;
+  state: 'Commit' | 'Reveal' | 'Settling' | 'Settled' | 'NoMatch' | 'Done';
+  tallyRound: number;
+  roundRejected: boolean;
+  proposal: string | null;
+  talliedCount: number;
+  branch: 'SupplyLimited' | 'DemandLimited' | null;
+  matchedUnits: string;
+  accAtClear: string;
+  orders: WindowOrderState[];
   seriesId: string;
   windowId: number;
   commitEndsAt: number;

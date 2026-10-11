@@ -8,6 +8,17 @@ Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
 ## Unreleased
 
+Window flow:
+- Added `POST /admin/protocol-flags` [admin], returning a stored request and unsigned `setFlags` transaction.
+- Added `POST /series/{seriesId}/window/build-step` and `/window/build-delivery` [account]. A linked fee payer signs;
+  delivery always pays the recorded owner and can target an older window.
+- `GET /series/{seriesId}/window` accepts optional `windowId`, returns Stage 1 state (`Commit`, `Reveal`, `Settling`,
+  `Settled`, `NoMatch`, `Done`), bounded `nextStep`, pending `deliveries` and detailed order/escrow state. Cap rounds down.
+- `POST /series/{seriesId}/window/build-reveal` remains usable with the opening flag disabled.
+- Domain adds explicit window commands/events, `ProtocolFlagsSet`, and `FeeTaken.kind=window`; `TransferWindowCleared`
+  describes a clearing decision, with `done` only when no processing remains. Units reach wallets through delivery.
+
+
 S4 recovery, S5 lifecycle and FX (203 operations, previously 190).
 
 FX additions and changes:

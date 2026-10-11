@@ -1,3 +1,4 @@
+import type { WindowClearing, WindowTally } from '@merces/math';
 import type { LifecycleStatus, RaiseStateName, Stablecoin } from '@merces/domain';
 import type { FinalState, Pause, Proposal, TailState, FxPairState, VaultState as Stage1VaultState } from '@merces/math';
 import type { PersonalityConfig } from './addresses.ts';
@@ -24,7 +25,7 @@ import type { PersonalityConfig } from './addresses.ts';
  * States of another version are never upgraded in place.
  */
 // S5: immutable transfer-window terms. Older snapshots cannot supply the series' committed values.
-export const SIM_STATE_VERSION = 7;
+export const SIM_STATE_VERSION = 8;
 
 /** A persisted simulator state from another layout (version 1 before S1, 2 before S2, 3 before S3, 4 before S4): never upgraded in place, reset it. */
 export class SimStateVersionError extends Error {
@@ -223,6 +224,16 @@ export interface SimRedemption {
 }
 
 export interface SimWindowOrder {
+  valid: boolean;
+  revealIndex: number;
+  talliedRound: number;
+  processed: boolean;
+  delivered: boolean;
+  fill: bigint;
+  fee: bigint;
+  pendingUnits: bigint;
+  pendingStable: bigint;
+  cancelled: boolean;
   wallet: string;
   side: 'buy' | 'sell';
   commitment: string;
@@ -233,6 +244,17 @@ export interface SimWindowOrder {
 }
 
 export interface SimTransferWindow {
+  period: number;
+  state: 'Commit' | 'Reveal' | 'Settling' | 'Settled' | 'NoMatch' | 'Done';
+  proposal: bigint | null;
+  tallyRound: number;
+  roundRejected: boolean;
+  tally: WindowTally;
+  talliedCount: number;
+  clearing: WindowClearing | null;
+  accAtClear: bigint;
+  escrowStable: bigint;
+  escrowUnits: bigint;
   windowId: number;
   commitEndsAt: number;
   revealEndsAt: number;
@@ -464,6 +486,8 @@ export interface SimState {
   keeper: string;
   allowlistManager: string;
   newRaisesPaused: boolean;
+  windowsEnabled: boolean;
+  tier4Enabled: boolean;
   seq: number;
   txCount: number;
   balances: Map<string, bigint>;

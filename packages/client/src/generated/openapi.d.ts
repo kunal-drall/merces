@@ -3203,6 +3203,57 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/admin/protocol-flags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Prepare an unsigned registry flags transaction. At least one flag is required. Windows default off; turning them off stops new openings and leaves settlement and delivery available. Tier 4 stays off. */
+        post: operations["setProtocolFlags"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/window/build-step": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Build one bounded permissionless settlement step for the current window. Re-read after sending; proposals may be rejected and retallied. Processing visits bids before asks. No opening flag or issuer role is needed. */
+        post: operations["buildWindowStep"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/window/build-delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Deliver one processed order to its owner. Anyone with a linked fee payer may build; the payout recipient cannot be redirected. Historical windows and removed buyers remain deliverable, with flags off or after a terminal transition. */
+        post: operations["buildWindowDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -10824,7 +10875,10 @@ export interface operations {
     };
     getTransferWindow: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Omit for the current window; supply an earlier id to inspect its pending delivery. */
+                windowId?: number;
+            };
             header?: never;
             path: {
                 /** @description <chain>:<address> */
@@ -10834,16 +10888,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Current transfer window, phase, flag state and market rules. A curve-mode series has no transfer windows and no cap at any stage: walletCapUnits null, noCap true and noCapStatement (the one no-cap statement) */
+            /** @description Current or historical window, Stage 1 settlement state, next bounded command and independent deliveries. Curve series have no windows or wallet cap. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        /** @description the window's wallet cap in units; null on a curve-mode series */
+                        seriesId?: string;
+                        enabled?: boolean;
+                        /** @enum {string} */
+                        phase?: "none" | "Commit" | "Reveal" | "Settling" | "Settled" | "NoMatch" | "Done";
+                        /** @description Period, immutable phase deadlines, tally round, rejection state, orders with processed/delivered flags and pending balances, clearing price and escrow totals. */
+                        window?: Record<string, never> | null;
+                        /** @description Recompute from a fresh read after every submitted transaction. */
+                        nextStep?: Record<string, never> | null;
+                        /** @description Processed orders still owed units or refunds; independent of flags and terminal status. */
+                        deliveries?: Record<string, never>[];
+                        /** @description Floor of outstanding units times wallet cap bps divided by 10000; null on curves. */
                         walletCapUnits?: string | null;
-                        /** @description present and true on a curve-mode series */
                         noCap?: boolean;
                         noCapStatement?: string;
                     };
@@ -10915,7 +10978,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unsigned revealWindowOrder */
+            /** @description Unsigned revealWindowOrder. Recovery remains available with the opening flag disabled. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10923,13 +10986,6 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
-            };
-            /** @description Transfer windows are switched off */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };
@@ -12115,6 +12171,106 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    setProtocolFlags: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    chain: string;
+                    windowsEnabled?: boolean;
+                    newRaisesPaused?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Stored admin request and unsigned transaction */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        request: components["schemas"]["AdminTxRequest"];
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+        };
+    };
+    buildWindowStep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Linked fee payer wallet */
+                    wallet: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned next step or null when no step is due */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"] | null;
+                    };
+                };
+            };
+        };
+    };
+    buildWindowDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Linked fee payer wallet */
+                    wallet: string;
+                    windowId: number;
+                    /** @description Order owner and immutable payout recipient */
+                    owner: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned deliverOrder */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
         };
     };
 }

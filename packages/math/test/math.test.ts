@@ -98,6 +98,7 @@ const REFERENCE_REEXPORTS = [
   'owedYtd', 'paymentUsd',
   // cause S2-G: Stage 1's auction family
   'walletCapUnitsAtAuction', 'requiredEscrow', 'isBidValid', 'beginSettlement', 'tallyBids', 'isClearingPriceValid', 'finalizeSettlement', 'marginalAllocation', 'processBid', 'claimsFor', 'findClearingPrice',
+  'walletCapUnits', 'requiredBidEscrow', 'isOrderValid', 'tallyOrders', 'isNoMatchValid', 'classifyWindowPrice', 'finalizeWindow', 'findWindowClearingPrice', 'computeFills',
 ] as const;
 
 /** cause S3-M: ported from merces-common @1bfc66b (A-MATH-3); `stage1:sync` lists them as ported. */
@@ -128,7 +129,7 @@ describe('@merces/math gateway', () => {
     // Stage 1's positional quarterPayment (θ third) and Stage 1's `walletCapUnits` (the redemption-window cap, S5) are
     // deliberately not re-exported; the auction's cap is `walletCapUnitsAtAuction` (cause S2-G)
     expect(keys).not.toContain('quarterPayment');
-    expect(keys).not.toContain('walletCapUnits');
+    expect(gateway.walletCapUnits).toBe(ref.walletCapUnits);
     // cause S4-G: Stage 1's test-key derivation is only on `@merces/math/testing`, and the SDK's `bidCommitment` only
     // under its byte-returning name (the domain's `bidCommitment` is the hex one)
     expect(keys).not.toContain('deriveTestPrivateKey');
@@ -136,15 +137,7 @@ describe('@merces/math gateway', () => {
     expect(gateway.walletCapUnitsAtAuction).toBe(ref.walletCapUnitsAtAuction);
     expect(gateway.redemptionQuote).toBe(ref.redemptionQuote);
   });
-  it('`interim` keeps exactly the window cap (S5) and the FX family (S5)', () => {
-    // cause S2-G: the interim auction family (clearing, deposit, fee) is retired; the sealed raise runs Stage 1's
-    expect(Object.keys(interim).sort()).toEqual([
-      // window cap (S5); cause S3-NC: no longer the curve's (a curve raise has no cap)
-      'walletCapUnits',
-    ].sort());
-    // the interim cap is not Stage 1's (S5 moves the window to Stage 1's)
-    expect(interim.walletCapUnits).not.toBe((ref as unknown as Record<string, unknown>).walletCapUnits);
-  });
+  it('has retired all interim math', () => { expect(Object.keys(interim)).toEqual([]); });
 });
 
 /** The repository root (packages/math/test → ../../..). */
@@ -435,7 +428,7 @@ describe('Stage 1 auction family (SPEC v1.1 §5.1–§5.2; cause S2-G)', () => {
 
   it('the auction wallet cap has no minimum of one unit (the interim cap rounded up to one)', () => {
     expect(walletCapUnitsAtAuction(5n, 1000)).toBe(0n);
-    expect(interim.walletCapUnits(5n, 1_000n)).toBe(1n);
+    expect(gateway.walletCapUnits(5n, 1_000)).toBe(0n);
     // so no bid on such a series is valid (Stage 1's create_series refuses a cap below one unit)
     const tiny: AuctionRules = { ...rules, unitsOffered: 5n, walletCapBps: 1000 };
     expect(isBidValid(usdc(9), 1n, requiredEscrow(usdc(9), 1n, 100), tiny)).toBe(false);
@@ -477,9 +470,9 @@ describe('time', () => {
   });
 });
 
-describe('the interim window cap (S5)', () => {
+describe('Stage 1 window cap', () => {
   it('wallet cap is at least one unit', () => {
-    expect(interim.walletCapUnits(1_000n, 1_000n)).toBe(100n);
-    expect(interim.walletCapUnits(5n, 1_000n)).toBe(1n);
+    expect(gateway.walletCapUnits(1_000n, 1_000)).toBe(100n);
+    expect(gateway.walletCapUnits(5n, 1_000)).toBe(0n);
   });
 });

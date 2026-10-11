@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { setFlag } from '@merces/core';
 import { CURVE_NO_CAP, orderCommitment } from '@merces/domain';
-import { KeeperScheduler, transferWindowsJob } from '@merces/keepers';
+import { KeeperScheduler, transferWindowsJob, windowDeliverJob } from '@merces/keepers';
 import { periodOf } from '@merces/math';
 import { defaultTerms } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
@@ -44,11 +44,14 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
 
   it('an open transfer window is cleared after its reveal even when the series became terminal and the flag is off', async () => {
     const h = rig.mon;
-    const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 } });
+    const { seriesId, terms, privateTerms } = await h.runRaise({ terms: { lockupSeconds: 10 } });
     await setFlag(rig.t.pool, 'transfer_windows', true, 'test');
     const sched = new KeeperScheduler(rig.ctx, [transferWindowsJob]);
     const now0 = await h.sim.now();
-    await h.sim.setTime(Math.max(now0 + 11, periodOf(now0).start + 15 * 86_400));
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
+    const q = periodOf(now0);
+    await h.sim.setTime(q.end + 1);
+    await h.reportAndPay(seriesId, q.id, privateTerms, terms.termsCommitment, 0n, 0n);
     await sched.runAll();
     const w = (await h.sim.getTransferWindow(seriesId))!;
     expect(w.cleared).toBe(false);
@@ -62,8 +65,11 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1000).toString() });
     await setFlag(rig.t.pool, 'transfer_windows', false, 'test');
     await h.sim.setTime(w.revealEndsAt + 1);
-    const r = await sched.runAll();
-    expect(r['transfer.windows']).toMatchObject({ ok: true, actions: 1 });
+    for (let i = 0; i < 3; i++) {
+      const r = await sched.runAll();
+      expect(r['transfer.windows']).toMatchObject({ ok: true, actions: 1 });
+    }
+    await new KeeperScheduler(rig.ctx, [windowDeliverJob]).runAll();
     expect((await h.sim.getTransferWindow(seriesId))!.cleared).toBe(true);
     // nothing is matched on a Redeemed series: clearing paid the whole deposit back
     expect(BigInt(await h.sim.getBalance(buyer, 'USDC'))).toBe(USDC(10_000));

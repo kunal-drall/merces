@@ -6,9 +6,9 @@ import { AuctionService, TEMPLATES, createServiceContext, safeData, type Service
 import { MockChainlink, MockPyth } from '@merces/ports';
 import { fxPairId, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimulatorChain } from '@merces/simulator';
-import { ChainError, type ChainPort } from '@merces/domain';
+import { ChainError, orderCommitment, type ChainPort } from '@merces/domain';
 import type { ChainRegistry } from '@merces/chains';
-import { KeeperScheduler, auctionDeliverJob, auctionSettleJob, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, rateKeeperJob, statusCrankJob, burnCrankJob, outboxJob, transferWindowsJob } from '../src/index.ts';
+import { KeeperScheduler, auctionDeliverJob, auctionSettleJob, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, rateKeeperJob, statusCrankJob, burnCrankJob, outboxJob, transferWindowsJob, windowDeliverJob } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const GENESIS = Date.UTC(2026, 0, 1) / 1000;
@@ -410,12 +410,16 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
       const s = (await h.sim.getSeries(a.seriesId))!;
       expect([s.phase, s.mintFinalized, (await h.sim.now()) >= s.lockupEndsAt!]).toEqual(['Settled', false, true]);
       // the chain would refuse the window (MintNotFinalized): the job does not try, and the run is clean
+      await h.exec(h.admin, {kind:'setFlags',windowsEnabled:true});
       await expect(h.sim.submit({ kind: 'openTransferWindow', seriesId: a.seriesId, commitEndsAt: (await h.sim.now()) + 7 * DAY, revealEndsAt: (await h.sim.now()) + 9 * DAY }, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'MintNotFinalized' } });
       const job = new KeeperScheduler(c, [transferWindowsJob]);
       expect((await job.runAll())['transfer.windows']).toMatchObject({ ok: true, actions: 0 });
       expect(await h.sim.getTransferWindow(a.seriesId)).toBeNull();
-      // once the last bid is processed the window opens
+      // Processing alone is insufficient: the previous quarter must also be paid.
       await h.settle(a.seriesId, 'process');
+      expect((await job.runAll())['transfer.windows']).toMatchObject({ ok: true, actions: 0 });
+      await h.sim.setTime(q.end + 1);
+      await h.reportAndPay(a.seriesId, q.id, a.privateTerms, a.terms.termsCommitment, 0n, 0n);
       expect((await job.runAll())['transfer.windows']).toMatchObject({ ok: true, actions: 1 });
       expect(await h.sim.getTransferWindow(a.seriesId)).not.toBeNull();
     } finally {
@@ -523,4 +527,40 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
       expect((await sched.runAll())['reporting.reminders']!.actions).toBe(0);
     }
   });
+  it('retries one failed window recipient independently, without exposing adapter amounts or blocking another delivery', async () => {
+    const key = 'window-delivery-retry';
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const a = await h.runRaise({terms:{lockupSeconds:10}});
+    const q = periodOf(await h.sim.now());
+    await h.sim.setTime(q.end + 1);
+    await h.reportAndPay(a.seriesId,q.id,a.privateTerms,a.terms.termsCommitment,0n,0n);
+    await h.exec(h.admin,{kind:'setFlags',windowsEnabled:true});
+    await h.sim.submit({kind:'openWindow',seriesId:a.seriesId,periodId:q.id},'keeper');
+    for (const seller of h.backers.slice(0,2)) await h.exec(seller,{kind:'commitWindowOrder',seriesId:a.seriesId,windowId:0,side:'sell',commitment:orderCommitment({wallet:seller.address,pricePerUnit:USDC(10),quantity:10n,salt:'0x' + 'ef'.repeat(32)}),deposit:'0',units:'10'});
+    await h.sim.setTime((await h.sim.getTransferWindow(a.seriesId))!.revealEndsAt);
+    let refusedOwner: string | null = h.backers[0]!.address;
+    const port = new Proxy(h.sim,{ get(target,k) {
+      if (k === 'submit') return async (...args: Parameters<typeof target.submit>) => {
+        if (args[0].kind === 'deliverOrder' && args[0].owner === refusedOwner) throw new ChainError('ChainSpecific','recipient refused amount 2039280');
+        return target.submit(...args);
+      };
+      const v = Reflect.get(target,k); return typeof v === 'function' ? v.bind(target) : v;
+    }});
+    const c = createServiceContext(makeContext({pool:t.pool,chains:registryOf(key,port as never),log:silent,sessionSecret:'s',devMode:true}));
+    const settle = new KeeperScheduler(c,[transferWindowsJob]);
+    for (let i=0;i<4;i++) expect((await settle.runAll())['transfer.windows']).toMatchObject({ok:true,actions:1});
+    expect(await h.sim.getTransferWindow(a.seriesId)).toMatchObject({state:'Done'});
+    await h.exec(h.admin,{kind:'setFlags',windowsEnabled:false});
+    const deliver = new KeeperScheduler(c,[windowDeliverJob]);
+    expect((await deliver.runAll())['window.deliver']).toMatchObject({ok:false,actions:1});
+    const retry = (await t.pool.query('select attempts,last_error from window_delivery_retries where series_id=$1',[a.seriesId])).rows;
+    expect(retry).toEqual([{attempts:1,last_error:'ChainSpecific'}]);
+    expect((await h.sim.getTransferWindow(a.seriesId))!.orders.map((o)=>o.delivered)).toEqual([false,true]);
+    expect((await deliver.runAll())['window.deliver']).toMatchObject({ok:true,actions:0});
+    await h.sim.advanceTime(60);
+    refusedOwner = null;
+    expect((await deliver.runAll())['window.deliver']).toMatchObject({ok:true,actions:1});
+    expect((await t.pool.query('select 1 from window_delivery_retries where series_id=$1',[a.seriesId])).rowCount).toBe(0);
+  });
+
 });

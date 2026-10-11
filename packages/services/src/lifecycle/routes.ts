@@ -27,7 +27,9 @@ export function registerLifecycleRoutes(app: FastifyInstance, base: AppContext):
     return s.buildBurn(sid(req), session!, b.wallet, b.holder);
   } });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/retirement/crank-burn', access: 'admin', handler: async (req, _r, session) => s.burnRetiredHolders(sid(req), session!.accountId) });
-  defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/window', access: 'public', handler: async (req) => s.window(sid(req)) });
+  defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/window', access: 'public', handler: async (req) => s.window(sid(req), z.object({ windowId: z.coerce.number().int().nonnegative().optional() }).parse(req.query).windowId) });
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/window/build-step', access: 'account', handler: async (req, _r, session) => s.buildWindowStep(sid(req), session!, z.object({ wallet: z.string() }).parse(req.body).wallet) });
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/window/build-delivery', access: 'account', handler: async (req, _r, session) => s.buildWindowDelivery(sid(req), session!, z.object({ wallet: z.string(), windowId: z.number().int().nonnegative(), owner: z.string() }).parse(req.body)) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/window/build-commit', access: 'account', handler: async (req, _r, session) => s.buildWindowCommit(sid(req), session!, z.object({ wallet: z.string(), side: z.enum(['buy', 'sell']), commitment: z.string(), deposit: z.string().regex(/^\d+$/), units: z.string().regex(/^\d+$/) }).parse(req.body)) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/window/build-reveal', access: 'account', handler: async (req, _r, session) => s.buildWindowReveal(sid(req), session!, z.object({ wallet: z.string(), side: z.enum(['buy', 'sell']), pricePerUnit: z.string().regex(/^\d+$/), quantity: z.string().regex(/^\d+$/), salt: z.string() }).parse(req.body)) });
   defineRoute(app, ctx, { method: 'PUT', url: '/series/:seriesId/window/backup', access: 'account', handler: async (req, _r, session) => {

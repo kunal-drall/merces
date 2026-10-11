@@ -1,0 +1,57 @@
+paths:
+  /admin/protocol-flags:
+    post:
+      operationId: setProtocolFlags
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      parameters: [{ name: Idempotency-Key, in: header, schema: { type: string } }]
+      description: Prepare an unsigned registry flags transaction. At least one flag is required. Windows default off; turning them off stops new openings and leaves settlement and delivery available. Tier 4 stays off.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [chain]
+              properties:
+                chain: { type: string }
+                windowsEnabled: { type: boolean }
+                newRaisesPaused: { type: boolean }
+      responses:
+        '201': { description: Stored admin request and unsigned transaction, content: { application/json: { schema: { type: object, required: [request, tx], properties: { request: { $ref: '#/components/schemas/AdminTxRequest' }, tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }
+  /series/{seriesId}/window/build-step:
+    post:
+      operationId: buildWindowStep
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      description: Build one bounded permissionless settlement step for the current window. Re-read after sending; proposals may be rejected and retallied. Processing visits bids before asks. No opening flag or issuer role is needed.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [wallet], properties: { wallet: { type: string, description: Linked fee payer wallet } } } } }
+      responses:
+        '200': { description: Unsigned next step or null when no step is due, content: { application/json: { schema: { type: object, required: [tx], properties: { tx: { anyOf: [{ $ref: '#/components/schemas/UnsignedTx' }, { type: 'null' }] } } } } } }
+  /series/{seriesId}/window/build-delivery:
+    post:
+      operationId: buildWindowDelivery
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      description: Deliver one processed order to its owner. Anyone with a linked fee payer may build; the payout recipient cannot be redirected. Historical windows and removed buyers remain deliverable, with flags off or after a terminal transition.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wallet, windowId, owner]
+              properties:
+                wallet: { type: string, description: Linked fee payer wallet }
+                windowId: { type: integer, minimum: 0 }
+                owner: { type: string, description: Order owner and immutable payout recipient }
+      responses:
+        '200': { description: Unsigned deliverOrder, content: { application/json: { schema: { type: object, required: [tx], properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }

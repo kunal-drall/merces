@@ -1,8 +1,9 @@
+import { nextWindowStep, windowDeliveries } from '@merces/domain';
 import { dispatchOutbox, enqueueOutbox, getFlag } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import { ChainError, type ChainErrorCode, type ChainPort } from '@merces/domain';
 import { isCappedScaled, parsePeriod, periodOf, periodsBetween } from '@merces/math';
-import { AuctionService, heldUnits, type ServiceContext } from '@merces/services';
+import { AuctionService, errorCode, heldUnits, type ServiceContext } from '@merces/services';
 import type { OutboxHandler } from '@merces/core';
 
 /**
@@ -296,44 +297,69 @@ export const deadlineRemindersJob: KeeperJob = {
 
 /** Quarterly transfer windows (R19): built, switched off by the `transfer_windows` flag. Opens a window after lockup once per quarter and clears it when due. */
 export const transferWindowsJob: KeeperJob = {
-  name: 'transfer.windows',
-  intervalSeconds: 3600,
+  name: 'transfer.windows', intervalSeconds: 60,
   async run(ctx) {
     const flagOn = await getFlag(ctx.pool, 'transfer_windows');
     let actions = 0;
     const errors: string[] = [];
-    // a window opens on a mint-finalized series only (Stage 1 MintNotFinalized), so one still processing its bids has no
-    // window to clear either
     await forEachSettled(ctx, errors, async (chain, s, now) => {
-      // An open window is always cleared once its reveal phase is over, whatever the series' status and even with the
-      // flag switched off, so buy deposits and sell escrow are never left locked (A-REV-16). Only opening is gated.
-      const w = await chain.getTransferWindow(s.seriesId);
-      if (w && !w.cleared) {
-        if (now >= w.revealEndsAt) {
-          try {
-            await chain.submit({ kind: 'clearTransferWindow', seriesId: s.seriesId, windowId: w.windowId }, 'keeper');
-            actions++;
-          } catch (e) {
-            if (!refused(e, ['Duplicate', 'TooEarly'])) throw e;
-          }
-        }
-        return;
+      const [w, info] = await Promise.all([chain.getTransferWindow(s.seriesId), chain.info()]);
+      if (w) {
+        const next = nextWindowStep(w, now, info.limits);
+        if (next) { await chain.submit(next, 'keeper'); actions++; return; }
+        if (w.state !== 'Done') return;
       }
-      // curve series trade on the DEX pool after graduation, never in windows (A-CURVE-2)
-      if (!flagOn || s.terms.raiseStyle === 'curve' || ['Retired', 'Redeemed', 'Extinguished'].includes(s.status) || s.lockupEndsAt === null || now < s.lockupEndsAt) return;
-      // one window per quarter, opening 14 days after quarter start
-      const q = periodOf(now);
-      if (now < q.start + 14 * 86_400) return;
-      const lastQuarter = w ? periodOf(w.commitEndsAt).id : null;
-      if (lastQuarter === q.id) return;
+      if (!flagOn || info.windowsEnabled !== true || s.terms.raiseStyle === 'curve' || !['OnTime', 'InGrace'].includes(s.status) || s.lockupEndsAt === null || now < s.lockupEndsAt) return;
+      const current = periodOf(now);
+      const previous = periodOf(current.start - 1).id;
+      if (w?.periodId === previous) return;
       try {
-        await chain.submit({ kind: 'openTransferWindow', seriesId: s.seriesId, commitEndsAt: now + 7 * 86_400, revealEndsAt: now + 9 * 86_400 }, 'keeper');
+        await chain.submit({ kind: 'openWindow', seriesId: s.seriesId, periodId: previous }, 'keeper');
         actions++;
-      } catch (e) {
-        if (!refused(e, ['Duplicate', 'TooEarly', 'WrongStatus'])) throw e;
-      }
+      } catch (e) { if (!refused(e, ['Duplicate', 'TooEarly', 'WrongStatus', 'NotPermitted'])) throw e; }
     }, { requireMintFinalized: true });
-    return { actions, errors, detail: flagOn ? undefined : 'flag off: open windows are cleared, none opened' };
+    return { actions, errors };
+  },
+};
+
+/** Delivery retries are independent of window settlement/opening and of every other recipient. */
+export const windowDeliverJob: KeeperJob = {
+  name: 'window.deliver', intervalSeconds: 60,
+  async run(ctx) {
+    let actions = 0;
+    const errors: string[] = [];
+    await forEachSettled(ctx, errors, async (chain, s, now) => {
+      const current = await chain.getTransferWindow(s.seriesId);
+      const candidates = new Map((current ? windowDeliveries(current) : []).map((c) => [`${c.windowId}:${c.owner}`, c]));
+      const historical = await ctx.pool.query<{ window_id: number; owner: string }>(
+        'select window_id,owner from window_orders where series_id=$1 and processed and not delivered order by window_id,owner', [s.seriesId]);
+      for (const row of historical.rows) candidates.set(`${row.window_id}:${row.owner}`, {kind:'deliverOrder',seriesId:s.seriesId,windowId:row.window_id,owner:row.owner});
+      let attempted = 0;
+      for (const cmd of candidates.values()) {
+        if (attempted >= 100) break;
+        const key = [s.seriesId,cmd.windowId,cmd.owner];
+        const retry = (await ctx.pool.query<{ attempts: number; next_at: string }>('select attempts,next_at from window_delivery_retries where series_id=$1 and window_id=$2 and owner=$3',key)).rows[0];
+        if (retry && Number(retry.next_at) > now) continue;
+        attempted++;
+        try {
+          const state = await chain.getTransferWindow(s.seriesId,cmd.windowId);
+          const order = state?.orders.find((o) => o.owner === cmd.owner);
+          if (order?.processed && !order.delivered) { await chain.submit(cmd,'keeper'); actions++; }
+          await ctx.pool.query('delete from window_delivery_retries where series_id=$1 and window_id=$2 and owner=$3', key);
+        } catch (e) {
+          const code = errorCode(e);
+          if (code === 'AlreadyDelivered') {
+            await ctx.pool.query('delete from window_delivery_retries where series_id=$1 and window_id=$2 and owner=$3', key);
+            continue;
+          }
+          const attempts = (retry?.attempts ?? 0) + 1;
+          const delay = [60,300,1800,7200,43200,86400][Math.min(attempts - 1,5)]!;
+          await ctx.pool.query('insert into window_delivery_retries (series_id,window_id,owner,attempts,next_at,last_error) values ($1,$2,$3,$4,$5,$6) on conflict (series_id,window_id,owner) do update set attempts=excluded.attempts,next_at=excluded.next_at,last_error=excluded.last_error', [...key,attempts,now + delay,code]);
+          errors.push(`${s.seriesId} window ${cmd.windowId} ${cmd.owner}: ${code} (attempt ${attempts})`);
+        }
+      }
+    }, {requireMintFinalized:true});
+    return {actions,errors};
   },
 };
 

@@ -35,7 +35,7 @@ export const tierSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.l
  * `collectCurveProceeds` (Meteora keeps its own share); `nonReveal`: the non-reveal charge kept from an unrevealed bid's
  * escrow when a sealed raise settles (Stage 1 `process_bid`, `NonRevealCharged`), paid to the fee collector.
  */
-export const feeKindSchema = z.enum(['auction', 'payout', 'curveTrading', 'nonReveal']);
+export const feeKindSchema = z.enum(['auction', 'payout', 'curveTrading', 'nonReveal', 'window']);
 export const paymentSourceSchema = z.enum(['payIn', 'split', 'redemption', 'tail', 'extinguishment']);
 export const fxBasisSchema = z.enum(['accumulator', 'attestor', 'unity']);
 
@@ -292,8 +292,16 @@ export const eventPayloads = {
   SeriesExtinguished: z.object({ ...seriesScoped, attestors: z.array(signerAddressSchema).length(2), returnedToHolders: moneySchema }),
   RateSnapshot: z.object({ pair: pairSchema, rateWad: wadSchema, confWad: wadSchema, publishTime: z.number().int(), dayIndex: z.number().int(), sumWad: wadSchema, count: z.number().int() }),
   FxFallbackFlagged: z.object({ pair: pairSchema, periodId: periodIdSchema, reason: z.enum(['coverage', 'deviation']) }),
-  TransferWindowOpened: z.object({ ...seriesScoped, windowId: z.number().int(), commitEndsAt: z.number().int(), revealEndsAt: z.number().int() }),
-  TransferWindowCleared: z.object({ ...seriesScoped, windowId: z.number().int(), clearingPrice: moneySchema, unitsTransferred: unitsSchema }),
+  ProtocolFlagsSet: z.object({ newRaisesPaused: z.boolean(), windowsEnabled: z.boolean(), tier4Enabled: z.boolean() }),
+  WindowOrderCommitted: z.object({ ...seriesScoped, windowId: z.number().int(), owner: addressSchema, side: z.enum(['buy', 'sell']), commitment: hash32Schema, escrow: moneySchema }),
+  WindowOrderRevealed: z.object({ ...seriesScoped, windowId: z.number().int(), owner: addressSchema, pricePerUnit: moneySchema, quantity: unitsSchema, valid: z.boolean(), revealIndex: z.number().int() }),
+  WindowSettlementProposed: z.object({ ...seriesScoped, windowId: z.number().int(), clearingPrice: moneySchema.nullable(), round: z.number().int() }),
+  WindowOrdersTallied: z.object({ ...seriesScoped, windowId: z.number().int(), round: z.number().int(), talliedCount: z.number().int() }),
+  WindowSettlementRejected: z.object({ ...seriesScoped, windowId: z.number().int(), round: z.number().int(), reason: z.string() }),
+  WindowOrderProcessed: z.object({ ...seriesScoped, windowId: z.number().int(), owner: addressSchema, side: z.enum(['buy', 'sell']), fill: unitsSchema, pricePerUnit: moneySchema, fee: moneySchema, refund: moneySchema, pendingUnits: unitsSchema, pendingStable: moneySchema, cancelled: z.boolean(), done: z.boolean() }),
+  WindowOrderDelivered: z.object({ ...seriesScoped, windowId: z.number().int(), owner: addressSchema, units: unitsSchema, amount: moneySchema }),
+  TransferWindowOpened: z.object({ ...seriesScoped, windowId: z.number().int(), periodId: periodIdSchema.optional(), commitEndsAt: z.number().int(), revealEndsAt: z.number().int() }),
+  TransferWindowCleared: z.object({ ...seriesScoped, windowId: z.number().int(), clearingPrice: moneySchema, unitsTransferred: unitsSchema, done: z.boolean().optional() }),
   UnitsTransferred: z.object({ ...seriesScoped, from: addressSchema, to: addressSchema, units: unitsSchema, windowId: z.number().int() }),
   AllowlistUpdated: z.object({ wallet: addressSchema, allowed: z.boolean() }),
   /** Stage 1's `AttestorRegistered{addr}` (registry events; MercesRegistry.sol:321): the key is active, `revokedAt` 0. */
@@ -409,5 +417,6 @@ export const amountBearingEvents: ReadonlySet<EventType> = new Set<EventType>([
   'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'SettlementProposed', 'SettlementRejected', 'UnitsAllocated',
   'BidDelivered', 'NonRevealCharged', 'RaiseMintFinalized', 'TreasuryFunded', 'FundsReleased', 'SplitReceipt', 'ReportAccepted',
   'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'TailClaimed', 'FinalClaimed', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout', 'TrueUpRecorded', 'TrueUpPaid',
+  'WindowOrderCommitted', 'WindowOrderRevealed', 'WindowSettlementProposed', 'WindowOrderProcessed', 'WindowOrderDelivered',
   'SeriesExtinguished', 'TransferWindowCleared', 'CurveActivated', 'CurveGraduated', 'CurveProceedsCollected',
 ]);

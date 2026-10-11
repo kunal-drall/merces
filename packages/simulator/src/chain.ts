@@ -79,7 +79,7 @@ export class SimulatorChain implements ChainPort {
       feeCollector: deriveAddress(cfg.family, 'role:feeCollector'),
       keeper: deriveAddress(cfg.family, 'role:keeper'),
       allowlistManager: deriveAddress(cfg.family, 'role:allowlistManager'),
-      newRaisesPaused: false,
+      newRaisesPaused: false, windowsEnabled: false, tier4Enabled: false,
       seq: 0,
       txCount: 0,
       balances: new Map(),
@@ -113,7 +113,7 @@ export class SimulatorChain implements ChainPort {
       feeCollector: deriveAddress(cfg.family, 'role:feeCollector'),
       keeper: deriveAddress(cfg.family, 'role:keeper'),
       allowlistManager: deriveAddress(cfg.family, 'role:allowlistManager'),
-      newRaisesPaused: false, seq: 0, txCount: 0, balances: new Map(), allowlist: new Set(opts.seedAllowlist ?? []), attestors: new Map(), verifierKeys: new Map(), issuers: new Map(), series: new Map(), rates: new Map(), fxFallbacks: new Map(),
+      newRaisesPaused: false, windowsEnabled: false, tier4Enabled: false, seq: 0, txCount: 0, balances: new Map(), allowlist: new Set(opts.seedAllowlist ?? []), attestors: new Map(), verifierKeys: new Map(), issuers: new Map(), series: new Map(), rates: new Map(), fxFallbacks: new Map(),
     };
     return new SimulatorChain(opts, state, [], new SimClock(opts.genesis ?? DEFAULT_GENESIS));
   }
@@ -211,7 +211,7 @@ export class SimulatorChain implements ChainPort {
     const registry = personalityRegistry(p, st.config.chain);
     return {
       chain: this.chain, family: this.family, mode: 'mock', network: st.config.network, stablecoins: st.config.stablecoins,
-      modules: { simulator: this.address('program:simulator'), [registry.module]: registry.address }, admin: st.admin, feeCollector: st.feeCollector, newRaisesPaused: st.newRaisesPaused,
+      modules: { simulator: this.address('program:simulator'), [registry.module]: registry.address }, admin: st.admin, feeCollector: st.feeCollector, newRaisesPaused: st.newRaisesPaused, windowsEnabled: st.windowsEnabled, tier4Enabled: st.tier4Enabled,
       limits: personalityLimits(p), signing: personalitySigning(p, st.config.chain),
     };
   }
@@ -298,8 +298,9 @@ export class SimulatorChain implements ChainPort {
   async listSignerKeys(kind: SignerKind): Promise<SignerKeyState[]> {
     return listSignerKeys(this.state, kind);
   }
-  async getTransferWindow(seriesId: string): Promise<TransferWindowState | null> {
-    const w = this.state.series.get(seriesId)?.transferWindows.at(-1);
+  async getTransferWindow(seriesId: string, windowId?: number): Promise<TransferWindowState | null> {
+    const windows = this.state.series.get(seriesId)?.transferWindows;
+    const w = windowId === undefined ? windows?.at(-1) : windows?.[windowId];
     return w ? toTransferWindow(seriesId, w) : null;
   }
   async getCurve(seriesId: string): Promise<CurveState | null> {

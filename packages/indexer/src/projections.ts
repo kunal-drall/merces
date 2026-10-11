@@ -55,7 +55,7 @@ function summary(e: DomainEvent): string | null {
     case 'TermsAmended': return 'Terms amended (issuer-favourable)';
     case 'SeriesExtinguished': return 'Series extinguished';
     case 'TransferWindowOpened': return `Transfer window ${p.windowId} opened`;
-    case 'TransferWindowCleared': return `Transfer window ${p.windowId} cleared: ${p.unitsTransferred} units moved`;
+    case 'TransferWindowCleared': return `Transfer window ${p.windowId} cleared: ${p.unitsTransferred} units matched`;
     case 'UnitsTransferred': return `${p.units} units transferred in window ${p.windowId}`;
     case 'CurveGraduated': return `Curve filled: the raise settled with ${p.unitsSold} base units sold`;
     case 'CurveUnitsSynced': return `Units counted: ${p.unitsOutstanding} base units outstanding`;
@@ -517,14 +517,57 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       );
       break;
     }
+    case 'ProtocolFlagsSet': break; // ChainInfo is authoritative; application feature flags are separate.
+    case 'WindowOrderCommitted': {
+      const p = e.payload as P<'WindowOrderCommitted'>;
+      await client.query('insert into window_orders (series_id,window_id,owner,side,commitment,escrow) values ($1,$2,$3,$4,$5,$6) on conflict do nothing', [p.seriesId,p.windowId,p.owner,p.side,p.commitment,p.escrow]);
+      break;
+    }
+    case 'WindowOrderRevealed': {
+      const p = e.payload as P<'WindowOrderRevealed'>;
+      await client.query('update window_orders set revealed=true,price=$4,quantity=$5,valid=$6,reveal_index=$7 where series_id=$1 and window_id=$2 and owner=$3', [p.seriesId,p.windowId,p.owner,p.pricePerUnit,p.quantity,p.valid,p.revealIndex]);
+      await client.query("update transfer_windows set state='Reveal' where series_id=$1 and window_id=$2", [p.seriesId,p.windowId]);
+      break;
+    }
+    case 'WindowSettlementProposed': {
+      const p = e.payload as P<'WindowSettlementProposed'>;
+      await client.query("update transfer_windows set state='Settling',proposed_price=$3,tally_round=$4,round_rejected=false,tallied_count=0 where series_id=$1 and window_id=$2", [p.seriesId,p.windowId,p.clearingPrice,p.round]);
+      break;
+    }
+    case 'WindowOrdersTallied': {
+      const p = e.payload as P<'WindowOrdersTallied'>;
+      await client.query('update transfer_windows set tallied_count=$3 where series_id=$1 and window_id=$2 and tally_round=$4', [p.seriesId,p.windowId,p.talliedCount,p.round]);
+      break;
+    }
+    case 'WindowSettlementRejected': {
+      const p = e.payload as P<'WindowSettlementRejected'>;
+      await client.query('update transfer_windows set round_rejected=true where series_id=$1 and window_id=$2 and tally_round=$3', [p.seriesId,p.windowId,p.round]);
+      break;
+    }
+    case 'WindowOrderProcessed': {
+      const p = e.payload as P<'WindowOrderProcessed'>;
+      const changed = await client.query('update window_orders set processed=true,fill=$4,pending_units=$5,pending_stable=$6,fee=$7,cancelled=$8 where series_id=$1 and window_id=$2 and owner=$3 and not processed returning owner', [p.seriesId,p.windowId,p.owner,p.fill,p.pendingUnits,p.pendingStable,p.fee,p.cancelled]);
+      if (changed.rowCount && p.fill !== '0') {
+        if (p.side === 'buy') await client.query('insert into positions (series_id,wallet,units,first_seq,last_seq) values ($1,$2,$3,$4,$4) on conflict (series_id,wallet) do update set units=positions.units + excluded.units,last_seq=excluded.last_seq', [p.seriesId,p.owner,p.fill,e.seq]);
+        else await client.query('update positions set units=units - $3,last_seq=$4 where series_id=$1 and wallet=$2', [p.seriesId,p.owner,p.fill,e.seq]);
+      }
+      if (p.done) await client.query("update transfer_windows set state='Done',cleared=true where series_id=$1 and window_id=$2", [p.seriesId,p.windowId]);
+      break;
+    }
+    case 'WindowOrderDelivered': {
+      const p = e.payload as P<'WindowOrderDelivered'>;
+      await client.query('update window_orders set delivered=true where series_id=$1 and window_id=$2 and owner=$3', [p.seriesId,p.windowId,p.owner]);
+      await money(client,e,'window-delivery',p.amount,{wallet:p.owner});
+      break;
+    }
     case 'TransferWindowOpened': {
       const p = e.payload as P<'TransferWindowOpened'>;
-      await client.query('insert into transfer_windows (series_id, window_id, commit_ends_at, reveal_ends_at) values ($1,$2,$3,$4) on conflict do nothing', [p.seriesId, p.windowId, p.commitEndsAt, p.revealEndsAt]);
+      await client.query('insert into transfer_windows (series_id, window_id, commit_ends_at, reveal_ends_at, period_id) values ($1,$2,$3,$4,$5) on conflict do nothing', [p.seriesId, p.windowId, p.commitEndsAt, p.revealEndsAt, p.periodId ?? null]);
       break;
     }
     case 'TransferWindowCleared': {
       const p = e.payload as P<'TransferWindowCleared'>;
-      await client.query('update transfer_windows set cleared = true, clearing_price = $3, units_transferred = $4 where series_id = $1 and window_id = $2', [p.seriesId, p.windowId, p.clearingPrice, p.unitsTransferred]);
+      await client.query("update transfer_windows set state = case when $5 then 'Done' when $3::numeric = 0 then 'NoMatch' else 'Settled' end, cleared=$5, clearing_price = $3, units_transferred = $4 where series_id = $1 and window_id = $2", [p.seriesId, p.windowId, p.clearingPrice, p.unitsTransferred, p.done ?? true]);
       break;
     }
     case 'UnitsTransferred': {

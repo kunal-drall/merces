@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { makeContext } from '@merces/api';
-import { KeeperScheduler, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, statusCrankJob, transferWindowsJob } from '@merces/keepers';
+import { KeeperScheduler, deadlineRemindersJob, fxCoverageJob, pauseCrankJob, statusCrankJob, transferWindowsJob, windowDeliverJob } from '@merces/keepers';
 import { setFlag } from '@merces/core';
 import { orderCommitment, type UnsignedTx } from '@merces/domain';
 import { parsePeriod, ratePerUnit, wadFromDecimal } from '@merces/math';
@@ -342,12 +342,14 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     const sched = new KeeperScheduler(rig.ctx as never, [transferWindowsJob]);
     const now0 = await h.sim.now();
     const q = parsePeriod(`${new Date(now0 * 1000).getUTCFullYear()}Q${Math.floor(new Date(now0 * 1000).getUTCMonth() / 3) + 1}`);
-    await h.sim.setTime(Math.max(now0 + 11, q.start + 15 * 86_400));
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
+    await h.sim.setTime(q.end + 1);
+    await h.reportAndPay(seriesId, q.id, raise.privateTerms, raise.terms.termsCommitment, 0n, 0n);
     const r1 = await sched.runAll();
     expect(r1['transfer.windows']!.actions).toBeGreaterThanOrEqual(1);
     await rig.sync();
     const win = (await rig.get(`/series/${seriesId}/window`)).json();
-    expect(win.phase).toBe('commit');
+    expect(win.phase).toBe('Commit');
     const seller = h.backers[1]!;
     const sellerTok = rig.token({ accountId: 'tw-s', wallets: [{ chain: 'monad', address: seller.address }], roles: ['backer'] });
     const buyer = h.sim.address('wallet:tw-buyer');
@@ -360,21 +362,24 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     // cause S4-BID: Stage 1's keccak commitment, over no series or window
     const bc = orderCommitment({ wallet: buyer, pricePerUnit: USDC(11), quantity: 40n, salt });
     await send(seller, (await rig.post(`/series/${seriesId}/window/build-commit`, { wallet: seller.address, side: 'sell', commitment: sc, deposit: '0', units: '40' }, sellerTok)).json().tx, sellerTok);
-    const bcTx = (await rig.post(`/series/${seriesId}/window/build-commit`, { wallet: buyer, side: 'buy', commitment: bc, deposit: USDC(440).toString(), units: '0' }, buyerTok)).json().tx as UnsignedTx;
+    const bcTx = (await rig.post(`/series/${seriesId}/window/build-commit`, { wallet: buyer, side: 'buy', commitment: bc, deposit: USDC(444.4).toString(), units: '0' }, buyerTok)).json().tx as UnsignedTx;
     expect((await rig.post('/tx/send', { tx: bcTx, signatures: { [buyer]: `sim:${buyer}` } }, buyerTok)).statusCode).toBe(200);
     await h.sim.setTime(win.window.commitEndsAt);
     await send(seller, (await rig.post(`/series/${seriesId}/window/build-reveal`, { wallet: seller.address, side: 'sell', pricePerUnit: USDC(10).toString(), quantity: '40', salt }, sellerTok)).json().tx, sellerTok);
     const brTx = (await rig.post(`/series/${seriesId}/window/build-reveal`, { wallet: buyer, side: 'buy', pricePerUnit: USDC(11).toString(), quantity: '40', salt }, buyerTok)).json().tx as UnsignedTx;
     await rig.post('/tx/send', { tx: brTx, signatures: { [buyer]: `sim:${buyer}` } }, buyerTok);
     await h.sim.setTime(win.window.revealEndsAt);
-    const r2 = await sched.runAll();
-    expect(r2['transfer.windows']!.actions).toBe(1);
+    for (let i = 0; i < 5; i++) {
+      const r2 = await sched.runAll();
+      expect(r2['transfer.windows']!.actions).toBeGreaterThanOrEqual(1);
+    }
+    await new KeeperScheduler(rig.ctx, [windowDeliverJob]).runAll();
     await rig.sync();
     expect((await rig.get(`/series/${seriesId}/window`)).json().window.cleared).toBe(true);
     const holders = await rig.get(`/series/${seriesId}/holders`, sellerTok);
     expect(holders.json().holders.find((x: { wallet: string }) => x.wallet === buyer).units).toBe('40');
     expect(holders.json().holders.find((x: { wallet: string }) => x.wallet === seller.address).units).toBe('60');
-    expect((await rig.get(`/series/${seriesId}/activity`)).json().activity.map((a: { summary: string }) => a.summary)).toContain('40 units transferred in window 0');
+    expect((await rig.get(`/series/${seriesId}/activity`)).json().activity.map((a: { summary: string }) => a.summary)).toContain('Transfer window 0 cleared: 40 units matched');
     await setFlag(rig.t.pool, 'transfer_windows', false, 'test');
   });
 

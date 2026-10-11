@@ -20,6 +20,7 @@ import { fxPairId } from '@merces/math';
 
 export const FLAG_NAMES = ['tier4', 'transfer_windows', 'early_draws', 'secondary_trading', 'private_payouts'] as const;
 export type FlagName = (typeof FLAG_NAMES)[number];
+export const protocolFlagsSchema = z.object({ chain: z.string().min(1), windowsEnabled: z.boolean().optional(), newRaisesPaused: z.boolean().optional() }).strict().refine((x) => x.windowsEnabled !== undefined || x.newRaisesPaused !== undefined, 'at least one flag is required');
 export const fxPairSchema = z.object({ chain: z.string().min(1), feedId: z.string().regex(/^0x[0-9a-f]{64}$/), inverted: z.boolean(), crosscheck: z.string().min(1).max(64).nullable().default(null) }).strict();
 /** R: private payouts are "coming soon" (E15) — the flag exists but can never be switched on from the API. */
 export const LOCKED_FLAGS: ReadonlySet<FlagName> = new Set<FlagName>(['private_payouts']);
@@ -149,6 +150,12 @@ export class AdminService {
   }
 
   // ---------------------------------------------------------------- multisig requests
+  async setProtocolFlags(input: z.infer<typeof protocolFlagsSchema>, admin: Session): Promise<{request: AdminTxRequest; tx: UnsignedTx}> {
+    const { chain, ...flags } = input;
+    const r = await this.propose(chain, { kind: 'setFlags', ...flags }, admin);
+    await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'protocol.flags', target: chain, detail: { requestId: r.request.requestId, ...flags } });
+    return r;
+  }
   async setFxPair(input: z.infer<typeof fxPairSchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
     const info = await this.port(input.chain).info();
     if (input.crosscheck) {
@@ -398,6 +405,10 @@ export class AdminService {
     const port = this.port(req.chain);
     const cmd = req.command;
     switch (cmd.kind) {
+      case 'setFlags': {
+        const info = await port.info();
+        return (cmd.newRaisesPaused === undefined || info.newRaisesPaused === cmd.newRaisesPaused) && (cmd.windowsEnabled === undefined || info.windowsEnabled === cmd.windowsEnabled) && (cmd.tier4Enabled === undefined || info.tier4Enabled === cmd.tier4Enabled);
+      }
       case 'setFxPair':
         return !!(await port.getRateAccumulator('0x' + Buffer.from(fxPairId(cmd.feedId, cmd.inverted)).toString('hex')));
       // the registry as the chain holds it (S4 WP5): a registration shows as an active key, a revocation as a revoked one

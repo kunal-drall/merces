@@ -205,6 +205,12 @@ export const serviceCommands = {
  * any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans the settlement steps.
  */
 export const permissionlessCommands = {
+  openWindow: z.object({ kind: z.literal('openWindow'), seriesId: seriesIdSchema, periodId: periodIdSchema }),
+  beginWindowSettlement: z.object({ kind: z.literal('beginWindowSettlement'), seriesId: seriesIdSchema, windowId: z.number().int().nonnegative(), clearingPrice: moneySchema.nullable() }),
+  tallyWindow: z.object({ kind: z.literal('tallyWindow'), seriesId: seriesIdSchema, windowId: z.number().int().nonnegative(), maxOrders: z.number().int().positive() }),
+  finalizeWindow: z.object({ kind: z.literal('finalizeWindow'), seriesId: seriesIdSchema, windowId: z.number().int().nonnegative() }),
+  processOrder: z.object({ kind: z.literal('processOrder'), seriesId: seriesIdSchema, windowId: z.number().int().nonnegative(), owner: addressSchema }),
+  deliverOrder: z.object({ kind: z.literal('deliverOrder'), seriesId: seriesIdSchema, windowId: z.number().int().nonnegative(), owner: addressSchema }),
   /** Raw Pyth fields are simulator inputs; live adapters consume the verified provider update payloads. */
   snapshotFx: z.object({ kind: z.literal('snapshotFx'), pairId: hash32Schema, price: i64StringSchema, conf: u64StringSchema, expo: z.number().int().min(-18).max(40), publishTime: u64StringSchema, crosscheckPrice: i64StringSchema.optional(), crosscheckExpo: z.number().int().min(-36).max(40).optional(), crosscheckPublishTime: u64StringSchema.optional(), updates: z.array(z.string()).optional() }),
   /** Stage 1 retire_if_capped: after mint finalization, retire when the current cap has been met. */
@@ -288,6 +294,7 @@ export const permissionlessCommands = {
 } as const;
 
 export const adminCommands = {
+  setFlags: z.object({ kind: z.literal('setFlags'), newRaisesPaused: z.boolean().optional(), windowsEnabled: z.boolean().optional(), tier4Enabled: z.boolean().optional() }),
   setFxPair: z.object({ kind: z.literal('setFxPair'), feedId: hash32Schema, inverted: z.boolean(), crosscheck: addressSchema.nullable() }),
   /** Stage 1 register_issuer: only the protocol admin registers a wallet. Re-registration is idempotent. */
   registerIssuer: z.object({ kind: z.literal('registerIssuer'), wallet: addressSchema }),

@@ -204,7 +204,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 ### FeeTaken (amount-bearing)
 
 - `seriesId`: string
-- `kind`: `auction` \| `payout` \| `curveTrading` \| `nonReveal`
+- `kind`: `auction` \| `payout` \| `curveTrading` \| `nonReveal` \| `window`
 - `amount`: decimal string (base units / WAD / units)
 - `payer`: string
 
@@ -328,10 +328,80 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `periodId`: period id (YYYYQn)
 - `reason`: `coverage` \| `deviation`
 
+### ProtocolFlagsSet
+
+- `newRaisesPaused`: boolean
+- `windowsEnabled`: boolean
+- `tier4Enabled`: boolean
+
+### WindowOrderCommitted (amount-bearing)
+
+- `seriesId`: string
+- `windowId`: integer
+- `owner`: string
+- `side`: `buy` \| `sell`
+- `commitment`: hex32
+- `escrow`: decimal string (base units / WAD / units)
+
+### WindowOrderRevealed (amount-bearing)
+
+- `seriesId`: string
+- `windowId`: integer
+- `owner`: string
+- `pricePerUnit`: decimal string (base units / WAD / units)
+- `quantity`: decimal string (base units / WAD / units)
+- `valid`: boolean
+- `revealIndex`: integer
+
+### WindowSettlementProposed (amount-bearing)
+
+- `seriesId`: string
+- `windowId`: integer
+- `clearingPrice`: decimal string (base units / WAD / units) \| null
+- `round`: integer
+
+### WindowOrdersTallied
+
+- `seriesId`: string
+- `windowId`: integer
+- `round`: integer
+- `talliedCount`: integer
+
+### WindowSettlementRejected
+
+- `seriesId`: string
+- `windowId`: integer
+- `round`: integer
+- `reason`: string
+
+### WindowOrderProcessed (amount-bearing)
+
+- `seriesId`: string
+- `windowId`: integer
+- `owner`: string
+- `side`: `buy` \| `sell`
+- `fill`: decimal string (base units / WAD / units)
+- `pricePerUnit`: decimal string (base units / WAD / units)
+- `fee`: decimal string (base units / WAD / units)
+- `refund`: decimal string (base units / WAD / units)
+- `pendingUnits`: decimal string (base units / WAD / units)
+- `pendingStable`: decimal string (base units / WAD / units)
+- `cancelled`: boolean
+- `done`: boolean
+
+### WindowOrderDelivered (amount-bearing)
+
+- `seriesId`: string
+- `windowId`: integer
+- `owner`: string
+- `units`: decimal string (base units / WAD / units)
+- `amount`: decimal string (base units / WAD / units)
+
 ### TransferWindowOpened
 
 - `seriesId`: string
 - `windowId`: integer
+- `periodId?`: period id (YYYYQn)
 - `commitEndsAt`: integer
 - `revealEndsAt`: integer
 
@@ -341,6 +411,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `windowId`: integer
 - `clearingPrice`: decimal string (base units / WAD / units)
 - `unitsTransferred`: decimal string (base units / WAD / units)
+- `done?`: boolean
 
 ### UnitsTransferred
 
@@ -467,6 +538,12 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### Permissionless commands (keeper `submit` or any wallet `build`)
 
+- **openWindow**: `seriesId`: string; `periodId`: period id (YYYYQn)
+- **beginWindowSettlement**: `seriesId`: string; `windowId`: integer; `clearingPrice`: decimal string (base units / WAD / units) \| null
+- **tallyWindow**: `seriesId`: string; `windowId`: integer; `maxOrders`: integer
+- **finalizeWindow**: `seriesId`: string; `windowId`: integer
+- **processOrder**: `seriesId`: string; `windowId`: integer; `owner`: string
+- **deliverOrder**: `seriesId`: string; `windowId`: integer; `owner`: string
 - **snapshotFx**: `pairId`: hex32; `price`: string; `conf`: string; `expo`: integer; `publishTime`: string; `crosscheckPrice?`: string; `crosscheckExpo?`: integer; `crosscheckPublishTime?`: string; `updates?`: array of string
 - **retireIfCapped**: `seriesId`: string
 - **beginSettlement**: `seriesId`: string; `clearingPrice`: decimal string (base units / WAD / units); `qAboveClaim`: decimal string (base units / WAD / units); `qAtClaim`: decimal string (base units / WAD / units)
@@ -484,6 +561,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### Admin commands (multisig)
 
+- **setFlags**: `newRaisesPaused?`: boolean; `windowsEnabled?`: boolean; `tier4Enabled?`: boolean
 - **setFxPair**: `feedId`: hex32; `inverted`: boolean; `crosscheck`: string \| null
 - **registerIssuer**: `wallet`: string
 - **registerAttestor**: `attestor`: string

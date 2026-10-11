@@ -21,7 +21,7 @@ import { beginSettlement, deliverBid, finalizeSettlement, processBid, registerHo
 import { accrualNow, approvePause, crankPause, crankStatus, endPause, deadlines, reportablePeriods, requestPause, withdrawPauseRequest, type PeriodDeadlines } from './status.ts';
 import { amendTerms, claimFinal, extinguish } from './terminal.ts';
 import { drawRelease, pauseReleases } from './treasury.ts';
-import { clearTransferWindow, commitWindowOrder, openTransferWindow, revealWindowOrder } from './window.ts';
+import { openWindow, beginWindowSettlement, tallyWindow, finalizeWindowSettlement, processOrder, deliverOrder, clearTransferWindow, commitWindowOrder, openTransferWindow, revealWindowOrder } from './window.ts';
 
 export type { EngineOptions, ExecContext, ReportProofVerifier } from './core.ts';
 
@@ -142,6 +142,20 @@ export class SimEngine implements EngineCore {
       case 'snapshotFx': service('any'); return snapshotFx(this, cmd, now, emit);
       case 'setFxPair': admin(); return setFxPair(this, cmd, now, emit);
       case 'flagFxFallback': service('keeper'); return flagFxFallback(this, cmd, now, emit);
+      case 'setFlags': {
+        admin();
+        if (cmd.newRaisesPaused !== undefined) this.state.newRaisesPaused = cmd.newRaisesPaused;
+        if (cmd.windowsEnabled !== undefined) this.state.windowsEnabled = cmd.windowsEnabled;
+        if (cmd.tier4Enabled !== undefined) this.state.tier4Enabled = cmd.tier4Enabled;
+        emit('ProtocolFlagsSet', { newRaisesPaused: this.state.newRaisesPaused, windowsEnabled: this.state.windowsEnabled, tier4Enabled: this.state.tier4Enabled });
+        return;
+      }
+      case 'openWindow': service('any'); return openWindow(this, cmd, now, emit);
+      case 'beginWindowSettlement': service('any'); return beginWindowSettlement(this, cmd, now, emit);
+      case 'tallyWindow': service('any'); return tallyWindow(this, cmd, emit);
+      case 'finalizeWindow': service('any'); return finalizeWindowSettlement(this, cmd, emit);
+      case 'processOrder': service('any'); return processOrder(this, cmd, emit);
+      case 'deliverOrder': service('any'); return deliverOrder(this, cmd, emit);
       case 'openTransferWindow': service('any'); return openTransferWindow(this, cmd, now, emit);
       case 'commitWindowOrder': return commitWindowOrder(this, user(), cmd, now, emit);
       case 'revealWindowOrder': return revealWindowOrder(this, user(), cmd, now, emit);

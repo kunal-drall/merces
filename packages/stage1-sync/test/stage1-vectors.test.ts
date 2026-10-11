@@ -315,10 +315,10 @@ describe('stage1 vector runner: expectations and the op map', () => {
   // five DIV-NRC-1 entries and its lockstep parting)
   it('targets are never NOT-YET; waivers only on blocked or n/a rows; no vector carries a divergence; prefix gates carry until; the rest are NOT-YET with a milestone', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(listVectorFiles(VECTORS).map((f) => f.split('/').at(-1)!.slice(0, 2)));
-    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20', '13', '24']);
+    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20', '13', '24', '10', '16', '22']);
     expect([...TARGETS_S2]).toEqual(['02', '03', '15', '17']);
     expect([...TARGETS_S4]).toEqual(['21']); // cause S4-PAU: 21 in full (was gated at #40)
-    expect(PREFIX_GATES).toEqual({ '10': 35, '16': 40, '22': 75 }); // S5: true-up vector 20 passed full lockstep on both personalities.
+    expect(PREFIX_GATES).toEqual({}); // S5: true-up vector 20 passed full lockstep on both personalities.
     for (const [id, e] of Object.entries(EXPECTED)) {
       const v = loadVector(vectorFile(id));
       if (TARGETS.includes(id)) {
@@ -345,8 +345,8 @@ describe('stage1 vector runner: expectations and the op map', () => {
     // DIV-NRC-1 went with the non-reveal charge modelled, and 03 is PASS. Cause S3R-F: the register's first row is
     // DIV-S1I-1, which only our scenario S3l meets (was: the register empty). Cause S4-REG: DIV-S1I-2, the last-key rule,
     // which only our merces-only scenario S4d shows, as an expected revert: no entry anywhere (amendment fix 1)
-    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-5', 'DIV-S1I-4', 'DIV-S1I-2']);
-    expect(DIVERGENCE_BY_ID.size).toBe(3);
+    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-6', 'DIV-S1I-5', 'DIV-S1I-4', 'DIV-S1I-2']);
+    expect(DIVERGENCE_BY_ID.size).toBe(4);
     expect(DIVERGENCE_BY_ID.get('DIV-S1I-2')?.shownBy).toEqual(['S4d']);
     expect(Object.values(SCENARIO_EXPECTATIONS).filter((e) => e.divergences?.some((d) => d.id === 'DIV-S1I-2') || e.lockstep?.id === 'DIV-S1I-2')).toEqual([]);
     expect(EXPECTED['03']).toMatchObject({ status: 'PASS' });
@@ -359,7 +359,7 @@ describe('stage1 vector runner: expectations and the op map', () => {
     }
     expect([opLabel(v03.steps[65]!), (v03.steps[65] as unknown as { bidder: string }).bidder]).toEqual(['process_bid', 'b8']);
     // cause S3-SH: the claims 22 waits for run since S3 WP2; only its windows (#76 on) wait, for S5 (was: 'S3 + S5')
-    expect(EXPECTED['22']).toMatchObject({ until: 75, milestone: 'S5', reason: 'multi-step windows (#76); its claim steps #88-#110 run once windows land' });
+    expect(EXPECTED['22']).toMatchObject({ status: 'PASS' });
     const v22 = loadVector(vectorFile('22'));
     // the redemption and claim part of 22 is #88 (redeem) to its last step, #110, all past the gate
     const claimSteps = v22.steps.flatMap((st, i) => (['redeem', 'claim_redemption', 'claim_tail', 'register_holder', 'extinguish', 'claim_final'].includes(st.op === 'expect_revert' ? st.call.op : st.op) ? [i] : []));
@@ -1013,7 +1013,7 @@ describe('stage1 vector runner: merces backend', () => {
 
   // cause S2-NY: 42 runs, the 14 targets and the 7 prefix gates on both personalities (was: the 10 S1 targets, 20 runs).
   // Cause NRC: 42/42 PASS, 03 among them (was 36/42, 03 PASS-WITH-DIVERGENCES on its five DIV-NRC-1 fields)
-  it('every target and prefix gate is at its expected status on both personalities: 46/46 PASS, FX in full', async () => {
+  it('every target and prefix gate is at its expected status on both personalities: 46/46 PASS, windows and FX in full', async () => {
     const report = await fullRun();
     const ids = [...TARGETS, ...Object.keys(PREFIX_GATES)].sort();
     expect(report.runs.map((r) => `${r.id}/${r.world}`)).toEqual(ids.flatMap((id) => [`${id}/merces/solana`, `${id}/merces/monad`]));
@@ -1056,6 +1056,7 @@ describe('stage1 vector runner: merces backend', () => {
     expect(known).not.toContain('None: the register is empty');
     // cause S4-REG: and DIV-S1I-2, the last-key rule, which our merces-only scenario S4d shows with no entries
     expect(known.match(/^### .*$/gm)).toEqual([
+      '### DIV-S1I-6: window payout ownership follows the clearing accumulator',
       '### DIV-S1I-5: configured FX cross-check availability follows each chain',
       '### DIV-S1I-4: true-up submissions reject terminal series and future attestation times',
       '### DIV-S1I-2: the last active key of a kind cannot be revoked (Stage 1 internal, resolved toward both chains)',

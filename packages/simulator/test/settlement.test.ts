@@ -115,7 +115,7 @@ describe('the chain\'s settlement limits and the permissionless group', () => {
     // S3-CV, S3-CN); `approvePause` an attestor's signature over a pending request (pause.test.ts; cause S4-PAU);
     // `snapshotFx` is tested with raw prices in fx.test.ts (S5-FX);
     // `extinguish` two attestors' signatures (terminal.test.ts; cause S4-EXT)
-    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['snapshotFx', 'retireIfCapped', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish'].includes(k)));
+    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['openWindow', 'beginWindowSettlement', 'tallyWindow', 'finalizeWindow', 'processOrder', 'deliverOrder', 'snapshotFx', 'retireIfCapped', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish'].includes(k)));
     for (const cmd of cmds) {
       const tx = await h.sim.build(cmd, anyone.address);
       expect(tx.command).toEqual(cmd);
@@ -390,6 +390,7 @@ describe('the mint gate, delivery and holders', () => {
   // cause S2-MF: Stage 1's MintNotFinalized until the last processBid (SIM:458, 1034, 1062, 1154, 1332, 1426, 1489)
   it('refuses the money paths with MintNotFinalized between finalize and the last process', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
+    await h.exec(h.admin, {kind:'setFlags',windowsEnabled:true});
     const { seriesId, privateTerms } = await h.runRaise({ terms: { lockupSeconds: 10 }, settle: 'finalize' });
     const now = await h.sim.now();
     await h.sim.setTime(now + 11);

@@ -24,6 +24,7 @@ export const REFERENCE_REEXPORTS = [
   'owedYtd', 'paymentUsd',
   // auction (SPEC §5.1-5.2; S2)
   'walletCapUnitsAtAuction', 'requiredEscrow', 'isBidValid', 'beginSettlement', 'tallyBids', 'isClearingPriceValid', 'finalizeSettlement', 'marginalAllocation', 'processBid', 'claimsFor', 'findClearingPrice',
+  'walletCapUnits', 'requiredBidEscrow', 'isOrderValid', 'tallyOrders', 'isNoMatchValid', 'classifyWindowPrice', 'finalizeWindow', 'findWindowClearingPrice', 'computeFills',
 ] as const;
 
 /** Where the ported family's Rust lives in a Stage 1 checkout (merces-common, "CM"). */
@@ -128,7 +129,6 @@ export function checkPorted(root: string, stage1Math: Record<string, unknown>): 
  * A name outside them is reported as "unclassified".
  */
 export const INTERIM_FAMILIES: { family: string; names: string[] }[] = [
-  { family: 'window cap (S5)', names: ['walletCapUnits'] },
 ];
 
 /** Interim families with at least one name still exported, with those names; unknown names land in "unclassified". */
@@ -261,7 +261,7 @@ function writeParity(ctx: StepCtx, r: { pkg: string | null; commit: string | nul
   }
   lines.push(
     '- No function-by-function comparison: the gateway runs Stage 1\'s functions, so comparing them would compare Stage 1 with itself. Behavioural parity is measured by the Stage 1 vector runner (`VECTOR_PARITY.md`). The last comparison of the interim math against Stage 1 (6 of 12 families disagreeing) is in this file\'s git history.',
-    '- The interim (Part C) math survives only under `interim.*`: since S2, only the window cap (S5; a curve raise has no cap since S3) and the FX family (S5); the sealed-bid auction runs Stage 1\'s auction family. Any other name there is reported as unclassified.',
+    '- All interim mechanism math has been retired. An unexpected name under `interim` is reported as unclassified.',
     '',
   );
   if (r.remaining.length) {

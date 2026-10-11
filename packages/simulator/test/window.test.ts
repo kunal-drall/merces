@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ChainError, orderCommitment, type UserCommand } from '@merces/domain';
-import { parsePeriod } from '@merces/math';
+import { parsePeriod, toPid } from '@merces/math';
 import { SimHarness, serialiseState, type SimWallet } from '../src/index.ts';
 import { GENESIS, USDC, types } from './helpers.ts';
 import { seedHolder, seedPause, seriesOf } from './kit.ts';
@@ -33,7 +33,8 @@ type Order = { side: 'buy' | 'sell'; price: bigint; quantity: bigint; deposit?: 
 
 async function settled(lockupSeconds: number) {
   const h = await SimHarness.create('solana', { genesis: GENESIS });
-  const raise = await h.runRaise({ terms: { lockupSeconds } });
+  await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
+  const raise = await h.runRaise({ terms: { lockupSeconds, windowCommitDuration: 3600, windowRevealDuration: 3600 } });
   const settledAt = (await h.sim.getSeries(raise.seriesId))!.settledAt!;
   return { h, settledAt, ...raise };
 }
@@ -59,7 +60,7 @@ async function commit(h: SimHarness, seriesId: string, who: SimWallet | string, 
   const wallet = addressOf(who);
   // cause S4-BID: Stage 1's keccak commitment, over no series or window
   const commitment = orderCommitment({ wallet, pricePerUnit: o.price, quantity: o.quantity, salt: SALT });
-  const deposit = o.side === 'buy' ? (o.deposit ?? o.price * o.quantity) : 0n;
+  const deposit = o.side === 'buy' ? (o.deposit ?? o.price * o.quantity * 101n / 100n) : 0n;
   return sendAs(h, who, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: o.side, commitment, deposit: deposit.toString(), units: o.side === 'sell' ? o.quantity.toString() : '0' });
 }
 
@@ -73,8 +74,11 @@ const stored = (h: SimHarness, seriesId: string, wallet: string) => seriesOf(h.s
 describe('transfer windows and allowlist', () => {
   it('moves units only through a window after lockup, respecting the wallet cap, and never strands a removed wallet', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 } });
-    const now = (await h.sim.now()) + 11;
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
+    const { seriesId, terms, privateTerms } = await h.runRaise({ terms: { lockupSeconds: 10 } });
+    await h.sim.setTime(parsePeriod('2026Q1').end + DAY);
+    await h.reportAndPay(seriesId, '2026Q1', privateTerms, terms.termsCommitment, 0n, 0n);
+    const now = await h.sim.now();
     await h.sim.setTime(now);
     // remove backer 1 from the allowlist: it may still sell and claim
     await h.sim.submit({ kind: 'setAllowlist', wallet: h.backers[1]!.address, allowed: false }, 'allowlistManager');
@@ -93,17 +97,17 @@ describe('transfer windows and allowlist', () => {
     await h.exec(buyer, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: bc, deposit: USDC(550).toString(), units: '0' });
     // cause S4-BID: Stage 1's keccak commitment, over no series or window
     const bc2 = orderCommitment({ wallet: buyer2, pricePerUnit: USDC(10.5), quantity: 50n, salt });
-    const tx = await h.sim.build({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: bc2, deposit: USDC(525).toString(), units: '0' }, buyer2);
+    const tx = await h.sim.build({ kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'buy', commitment: bc2, deposit: USDC(530.25).toString(), units: '0' }, buyer2);
     await h.sim.send({ tx, signatures: { [buyer2]: `sim:${buyer2}` } });
-    await h.sim.setTime(now + 100);
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.commitEndsAt);
     await h.exec(seller, { kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'sell', pricePerUnit: USDC(10).toString(), quantity: '50', salt });
     await h.exec(buyer, { kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'buy', pricePerUnit: USDC(11).toString(), quantity: '50', salt });
     const rtx = await h.sim.build({ kind: 'revealWindowOrder', seriesId, windowId: 0, side: 'buy', pricePerUnit: USDC(10.5).toString(), quantity: '50', salt }, buyer2);
     await h.sim.send({ tx: rtx, signatures: { [buyer2]: `sim:${buyer2}` } });
-    await h.sim.setTime(now + 200);
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.revealEndsAt);
     const cleared = await h.sim.submit({ kind: 'clearTransferWindow', seriesId, windowId: 0 }, 'keeper');
-    const transfers = cleared.events.filter((e) => e.type === 'UnitsTransferred').map((e) => e.payload as { to: string; units: string });
-    expect(transfers).toEqual([{ seriesId, from: seller.address, to: buyer2, units: '50', windowId: 0 }]);
+    const transfers = cleared.events.filter((e) => e.type === 'WindowOrderProcessed').map((e) => e.payload);
+    expect(transfers).toContainEqual(expect.objectContaining({ owner: buyer2, side: 'buy', fill: '50', fee: USDC(5.25).toString() }));
     expect((await h.sim.getPosition(seriesId, buyer2))!.units).toBe('50');
     expect((await h.sim.getPosition(seriesId, seller.address))!.units).toBe('50');
     // cause S2-PR: the deposit 1111 less cost 900 and fee 9 came back at delivery (+ 202; was still claimable)
@@ -157,8 +161,8 @@ describe('window escrow on Stage 1', () => {
     const bid: Order = { side: 'buy', price: USDC(10), quantity: 50n };
     await commit(h, seriesId, b1, ask);
     await commit(h, seriesId, buyer, bid);
-    expect(await h.sim.getTransferWindow(seriesId)).toMatchObject({ escrowUnits: '50', escrowStable: USDC(500).toString(), cleared: false });
-    await h.sim.setTime(open + 100);
+    expect(await h.sim.getTransferWindow(seriesId)).toMatchObject({ escrowUnits: '50', escrowStable: USDC(505).toString(), cleared: false });
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.commitEndsAt);
     await reveal(h, seriesId, b1, ask);
     await reveal(h, seriesId, buyer, bid);
     // 2026Q2 pays while the 50 units are held (100,000 YTD → 4,000 due, net 7.6 per unit): they earn like the rest
@@ -168,8 +172,8 @@ describe('window escrow on Stage 1', () => {
 
     await h.sim.setTime(revealEndsAt);
     const cleared = await h.sim.submit({ kind: 'clearTransferWindow', seriesId, windowId: 0 }, 'keeper');
-    expect(types(cleared.events)).toEqual(['TransferWindowCleared']);
-    expect(cleared.events[0]!.payload).toMatchObject({ clearingPrice: '0', unitsTransferred: '0' });
+    expect(types(cleared.events)).toContain('TransferWindowCleared');
+    expect(cleared.events.find((e) => e.type === 'TransferWindowCleared')!.payload).toMatchObject({ clearingPrice: '0', unitsTransferred: '0' });
     // the asker was settled at clearing (S): its stored pending holds the 760 earned on all 100 units; a holder with no
     // ask is still settled lazily
     expect(stored(h, seriesId, b1.address)).toMatchObject({ pending: USDC(760), escrowed: 0n, units: 100n });
@@ -198,6 +202,7 @@ describe('window escrow on Stage 1', () => {
     expect(seriesOf(h.sim, seriesId).transferWindows).toHaveLength(0);
     // the lockup ends at settlement + lockupSeconds exactly (Stage 1 fails only while now < that)
     await h.sim.setTime(lockupEnd);
+    seriesOf(h.sim, seriesId).ledger.lastPaidPeriod = toPid('2025Q4');
     const r = await h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: lockupEnd + 100, revealEndsAt: lockupEnd + 200 }, 'keeper');
     expect(types(r.events)).toContain('TransferWindowOpened');
   });
@@ -236,7 +241,7 @@ describe('transfer windows on a series that ended during the window', () => {
     const bid: Order = { side: 'buy', price: USDC(10.5), quantity: 50n };
     await commit(h, seriesId, seller, ask);
     await commit(h, seriesId, buyer, bid);
-    await h.sim.setTime(open + 100);
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.commitEndsAt);
     await reveal(h, seriesId, seller, ask);
     await reveal(h, seriesId, buyer, bid);
 
@@ -266,8 +271,8 @@ describe('transfer windows on a series that ended during the window', () => {
     await h.sim.setTime(revealEndsAt);
     const sellerBalance = await balance(h, seller.address);
     const cleared = await h.sim.submit({ kind: 'clearTransferWindow', seriesId, windowId: 0 }, 'keeper');
-    expect(types(cleared.events)).toEqual(['TransferWindowCleared']);
-    expect(cleared.events[0]!.payload).toMatchObject({ unitsTransferred: '0', clearingPrice: '0' });
+    expect(types(cleared.events)).toContain('TransferWindowCleared');
+    expect(cleared.events.find((e) => e.type === 'TransferWindowCleared')!.payload).toMatchObject({ unitsTransferred: '0', clearingPrice: '0' });
     // the escrow comes back to the seller (the units never left its position); the buyer gets its whole deposit back
     expect(stored(h, seriesId, seller.address)).toMatchObject({ units: 50n, escrowed: 0n, redeemedUnits: 50n });
     expect((await h.sim.getPosition(seriesId, buyer))?.units ?? '0').toBe('0');
@@ -302,7 +307,7 @@ describe('transfer windows on a series that ended during the window', () => {
     await commit(h, seriesId, b1, askB1);
     await commit(h, seriesId, b2, askB2);
     await commit(h, seriesId, buyer, bid);
-    await h.sim.setTime(open + 100);
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.commitEndsAt);
     await reveal(h, seriesId, b1, askB1);
     await reveal(h, seriesId, b2, askB2);
     await reveal(h, seriesId, buyer, bid);
@@ -330,8 +335,8 @@ describe('transfer windows on a series that ended during the window', () => {
     // forced NoMatch on the Retired series, although the book crosses
     await h.sim.setTime(revealEndsAt);
     const cleared = await h.sim.submit({ kind: 'clearTransferWindow', seriesId, windowId: 0 }, 'keeper');
-    expect(types(cleared.events)).toEqual(['TransferWindowCleared']);
-    expect(cleared.events[0]!.payload).toMatchObject({ unitsTransferred: '0', clearingPrice: '0' });
+    expect(types(cleared.events)).toContain('TransferWindowCleared');
+    expect(cleared.events.find((e) => e.type === 'TransferWindowCleared')!.payload).toMatchObject({ unitsTransferred: '0', clearingPrice: '0' });
     // askers settled first (S): b2's stored pending is its 2,137.5; b1 had claimed already
     expect(stored(h, seriesId, b2.address)).toMatchObject({ pending: USDC(2_137.5), units: 100n, escrowed: 0n });
     expect(stored(h, seriesId, b1.address)).toMatchObject({ pending: 0n, units: 40n, escrowed: 0n });
@@ -348,5 +353,68 @@ describe('transfer windows on a series that ended during the window', () => {
     await h.exec(b2, { kind: 'claimPayout', seriesId });
     expect((await balance(h, b2.address)) - b2Before).toBe(USDC(2_137.5));
     expect((await h.sim.getSeries(seriesId))!.unitsOutstanding).toBe('200');
+  });
+});
+
+// Both programs implement C-S4: economic ownership changes at clearing, although processing and delivery are later.
+describe.each(['solana', 'monad'] as const)('paged window ownership on %s', (personality) => {
+  it('rejects and retallies a bad proposal, attributes intervening payouts once, and delivers an older window with flags off', async () => {
+    const h = await SimHarness.create(personality, { genesis: GENESIS });
+    const { seriesId, terms, privateTerms } = await h.runRaise({ terms: { lockupSeconds: 10, windowCommitDuration: 3600, windowRevealDuration: 3600 } });
+    const seller = h.backers[1]!, buyer = await newBuyer(h, 'delayed-window');
+    const base = { seriesId, windowId: 0 };
+    await expect(h.sim.submit({ kind: 'openWindow', seriesId, periodId: '2026Q1' }, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'WindowsDisabled' } });
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
+    await h.sim.setTime(parsePeriod('2026Q1').end + DAY);
+    await expect(h.sim.submit({ kind: 'openWindow', seriesId, periodId: '2026Q1' }, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'WindowNotEligible' } });
+    await h.reportAndPay(seriesId, '2026Q1', privateTerms, terms.termsCommitment, 0n, USDC(100_000));
+    await h.sim.submit({ kind: 'openWindow', seriesId, periodId: '2026Q1' }, 'keeper');
+    const ask: Order = { side: 'sell', price: USDC(10), quantity: 40n };
+    const bid: Order = { side: 'buy', price: USDC(10), quantity: 25n };
+    await commit(h, seriesId, seller, ask);
+    await commit(h, seriesId, buyer, bid);
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.commitEndsAt);
+    await reveal(h, seriesId, seller, ask);
+    await reveal(h, seriesId, buyer, bid);
+    await h.sim.setTime((await h.sim.getTransferWindow(seriesId))!.revealEndsAt);
+    // A crossed book cannot clear as NoMatch; reject the proposal, then start a fresh tally round.
+    await h.sim.submit({ kind: 'beginWindowSettlement', ...base, clearingPrice: null }, 'keeper');
+    await expect(h.sim.submit({ kind: 'finalizeWindow', ...base }, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'TallyIncomplete' } });
+    await h.sim.submit({ kind: 'tallyWindow', ...base, maxOrders: 1 }, 'keeper');
+    expect((await h.sim.getTransferWindow(seriesId))!.talliedCount).toBe(1);
+    await h.sim.submit({ kind: 'tallyWindow', ...base, maxOrders: 1 }, 'keeper');
+    expect(types((await h.sim.submit({ kind: 'finalizeWindow', ...base }, 'keeper')).events)).toEqual(['WindowSettlementRejected']);
+    await h.sim.submit({ kind: 'beginWindowSettlement', ...base, clearingPrice: USDC(10).toString() }, 'keeper');
+    await h.sim.submit({ kind: 'tallyWindow', ...base, maxOrders: 2 }, 'keeper');
+    await h.sim.submit({ kind: 'finalizeWindow', ...base }, 'keeper');
+    await expect(h.sim.submit({ kind: 'processOrder', ...base, owner: seller.address }, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'BidsNotProcessed' } });
+    // 950 net arrives after clearing. The 40 escrowed units stop earning for the seller until its unsold 15 return.
+    await h.sim.setTime(parsePeriod('2026Q2').end + DAY);
+    await h.reportAndPay(seriesId, '2026Q2', privateTerms, terms.termsCommitment, USDC(100_000), USDC(110_000));
+    expect((await h.sim.getPosition(seriesId, seller.address))!.claimable).toBe(USDC(874).toString());
+    await h.exec(seller, { kind: 'claimPayout', seriesId });
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: false });
+    await h.sim.submit({ kind: 'processOrder', ...base, owner: buyer }, 'keeper');
+    await h.sim.submit({ kind: 'processOrder', ...base, owner: seller.address }, 'keeper');
+    expect((await h.sim.getPosition(seriesId, buyer))!.claimable).toBe(USDC(47.5).toString());
+    expect((await h.sim.getPosition(seriesId, seller.address))!.claimable).toBe(USDC(28.5).toString());
+    expect(await h.sim.getTransferWindow(seriesId)).toMatchObject({ state: 'Done', escrowUnits: '40', escrowStable: USDC(250).toString() });
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: true });
+    await h.sim.submit({ kind: 'openWindow', seriesId, periodId: '2026Q2' }, 'keeper');
+    await h.exec(h.admin, { kind: 'setFlags', windowsEnabled: false });
+    await h.sim.submit({ kind: 'setAllowlist', wallet: buyer, allowed: false }, 'allowlistManager');
+    // A second 950 net arrives while the units still await delivery in the previous window.
+    await h.sim.setTime(parsePeriod('2026Q3').end + DAY);
+    await h.reportAndPay(seriesId, '2026Q3', privateTerms, terms.termsCommitment, USDC(110_000), USDC(120_000));
+    expect((await h.sim.getPosition(seriesId, buyer))!.claimable).toBe(USDC(95).toString());
+    expect((await h.sim.getPosition(seriesId, seller.address))!.claimable).toBe(USDC(171).toString());
+    const before = await balance(h, seller.address);
+    await h.sim.submit({ kind: 'deliverOrder', ...base, owner: buyer }, 'keeper');
+    await h.sim.submit({ kind: 'deliverOrder', ...base, owner: seller.address }, 'keeper');
+    expect((await balance(h, seller.address)) - before).toBe(USDC(250));
+    expect(await h.sim.getTransferWindow(seriesId, 0)).toMatchObject({ escrowUnits: '0', escrowStable: '0' });
+    expect((await h.sim.getPosition(seriesId, buyer))!.claimable).toBe(USDC(95).toString());
+    expect((await h.sim.getPosition(seriesId, seller.address))!.claimable).toBe(USDC(171).toString());
+    await expect(h.sim.submit({ kind: 'deliverOrder', ...base, owner: buyer }, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'AlreadyDelivered' } });
   });
 });

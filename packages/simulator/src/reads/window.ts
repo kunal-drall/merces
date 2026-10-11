@@ -1,3 +1,4 @@
+import { fromPid } from '@merces/math';
 import type { TransferWindowState } from '@merces/domain';
 import type { SimTransferWindow } from '../state.ts';
 import { str as s } from '../engine/core.ts';
@@ -8,19 +9,21 @@ import { str as s } from '../engine/core.ts';
  * the vector `expect` money view (`stage1-view.ts`).
  */
 export function windowEscrow(w: SimTransferWindow): { stable: bigint; units: bigint } {
-  let stable = 0n;
-  let units = 0n;
-  for (const o of w.orders.values()) {
-    if (o.side === 'buy') stable += o.deposit;
-    else units += o.escrowedUnits;
-  }
-  return { stable, units };
+  return { stable: w.escrowStable, units: w.escrowUnits };
 }
 
 export function toTransferWindow(seriesId: string, w: SimTransferWindow): TransferWindowState {
   const escrow = windowEscrow(w);
   return {
     seriesId,
+    periodId: fromPid(w.period), state: w.state, tallyRound: w.tallyRound, roundRejected: w.roundRejected,
+    proposal: w.proposal?.toString() ?? null, talliedCount: w.talliedCount, branch: w.clearing?.branch ?? null,
+    matchedUnits: s(w.clearing?.matchedUnits ?? 0n), accAtClear: s(w.accAtClear),
+    orders: [...w.orders.values()].map((o) => ({ owner: o.wallet, side: o.side, commitment: o.commitment,
+      escrow: s(o.side === 'buy' ? o.deposit : o.escrowedUnits), revealed: o.revealed !== null, valid: o.valid,
+      pricePerUnit: o.revealed?.pricePerUnit.toString() ?? null, quantity: o.revealed?.quantity.toString() ?? null,
+      revealIndex: o.revealIndex, talliedRound: o.talliedRound, processed: o.processed, delivered: o.delivered,
+      fill: s(o.fill), pendingUnits: s(o.pendingUnits), pendingStable: s(o.pendingStable), cancelled: o.cancelled })),
     windowId: w.windowId,
     commitEndsAt: w.commitEndsAt,
     revealEndsAt: w.revealEndsAt,

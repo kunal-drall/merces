@@ -38,6 +38,15 @@ export interface DivergenceRow {
  * guards both chains enforce and the reference omits. No official vector carries a waiver. */
 export const DIVERGENCES: readonly DivergenceRow[] = Object.freeze([
   {
+    id: 'DIV-S1I-6',
+    title: 'window payout ownership follows the clearing accumulator',
+    what: 'Both programs freeze accAtClear and credit the buyer or the returned ask units from that point when each order is processed. The TS reference processes the whole book atomically and has no intervening payout or pending delivery state.',
+    why: 'MercesVault.sol _settle/creditWindowAccrual and the Solana window processing implement C-S4: every unit earns for exactly one wallet, independently of keeper delays.',
+    milestone: 'until the reference exposes per-order processing and delivery with clearing-time accrual',
+    seen: 'packages/simulator/test/window.test.ts exercises both personalities with payouts before processing and before historical delivery. Vectors 10, 16 and 22 pass in full; no waived step or accepted snapshot difference.',
+    lift: ['Extend the reference with separate process/deliver calls and the clearing accumulator, then replay the delayed-processing regression in lockstep.'],
+  },
+  {
     id: 'DIV-S1I-5',
     title: 'configured FX cross-check availability follows each chain',
     what: 'Solana fx.rs snapshot_fx requires the configured second Pyth update and rejects stale/nonpositive cross-checks; EVM MercesFxAccumulator._chainlink ignores unavailable, stale or nonpositive Chainlink answers. The TS reference accepts an omitted cross-check even when configured and has no cross-check timestamp input.',

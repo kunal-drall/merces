@@ -229,7 +229,7 @@ describe('stage1:sync', () => {
     const md = readFileSync(join(outDir, 'MATH_PARITY.md'), 'utf8');
     // cause S2-G: the interim auction family is gone; the window cap (S5; cause S3-NC: no curve cap) and the FX family
     // (S5) remain
-    expect(md).toMatch(new RegExp(`^Stage 1 math imported at ${pinned.slice(0, 7)}; interim families remaining: .*window cap \\(S5\\)`, 'm'));
+    expect(md).toContain(`Stage 1 math imported at ${pinned.slice(0, 7)}; interim families remaining: none.`);
     expect(md).not.toMatch(/auction \(S2\)/);
     expect(md).toContain('## Ported from Stage 1\'s Rust (A-MATH-3)');
     expect(md).toContain('Check at this checkout: **ok**.');
@@ -381,13 +381,12 @@ describe('stage1:sync', () => {
     expect(all.find((f) => f.family === 'unclassified')).toBeUndefined();
     // cause S2-G: since S2 exactly these two families remain, each in full (the auction family is retired)
     expect(all).toEqual(INTERIM_FAMILIES);
-    expect(INTERIM_FAMILIES.map((f) => f.family)).toEqual(['window cap (S5)']);
+    expect(INTERIM_FAMILIES.map((f) => f.family)).toEqual([]);
     expect(INTERIM_FAMILIES.flatMap((f) => f.names).filter((n, i, a) => a.indexOf(n) !== i)).toEqual([]);
-    expect(Object.keys(interim)).toContain('walletCapUnits');
+    expect(Object.keys(interim)).toEqual([]);
     // a name outside the families (a retired interim name coming back, a Stage 1 name under `interim`) is unclassified
     expect(interimRemaining(['walletCapUnits', 'pythToWad', 'min', 'requiredEscrow'])).toEqual([
-      { family: 'window cap (S5)', names: ['walletCapUnits'] },
-      { family: 'unclassified', names: ['pythToWad', 'min', 'requiredEscrow'] },
+      { family: 'unclassified', names: ['walletCapUnits', 'pythToWad', 'min', 'requiredEscrow'] },
     ]);
   });
 

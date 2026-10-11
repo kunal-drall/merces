@@ -20,8 +20,7 @@
  * lives on the subpath `@merces/math/testing`, which only tests, the harness, the vector runner, the local KMS and the
  * dev seeds may import (a grep gate in `test/math.test.ts` keeps it out of every other `src`).
  *
- * The interim Merces math (Part C) survives only under `interim.*`, and since S2 only the window cap (`walletCapUnits`;
- * S5; a curve raise has no cap since S3). The FX accumulator and normalization now re-export Stage 1's functions.
+ * All interim mechanism math has been retired; the empty namespace remains for sync-report compatibility.
  */
 export * as interim from './interim/index.ts';
 
@@ -257,3 +256,6 @@ export {
   walletTenderFits,
   type MigrationFeeSplit,
 } from './curve/index.ts';
+
+// Stage 1 transfer-window clearing (SPEC §7), shared by engine and transaction planner.
+export { walletCapUnits, requiredBidEscrow, isOrderValid, tallyOrders, isNoMatchValid, classifyWindowPrice, finalizeWindow, findWindowClearingPrice, computeFills, type WindowOrder, type WindowRules, type WindowTally, type WindowClearing, type OrderFill } from '@merces/reference';
