@@ -11742,6 +11742,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /drafts/{draftId}/contract/test-sign:
+    post:
+      operationId: testSignDraftContract
+      x-access: issuer
+      tags:
+        - contracts
+      summary: Complete the owning issuer's explicitly enabled test-only mock envelope
+      description: Requires MERCES_TEST_ESIGN=true, the mock e-sign provider, authenticated issuer ownership and a verified test-network signing domain. This is synthetic test evidence, not a legal signature. Does not enable development routes or mock income proofs.
+      security:
+        - session: []
+      parameters:
+        - name: draftId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - testOnly
+              additionalProperties: false
+              properties:
+                testOnly:
+                  type: boolean
+                  enum:
+                    - true
+      responses:
+        "200":
+          description: Test envelope status and signed document hash
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "403":
+          description: Disabled or not the owning issuer
+        "409":
+          description: Network or prepared test envelope unavailable
   /thresholds:
     get:
       operationId: listThresholdCountries

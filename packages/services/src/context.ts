@@ -8,6 +8,8 @@ export interface ServiceContext extends AppContext {
   vault: VaultCrypto;
   identity: IdentityCheckPort;
   esign: ESignPort;
+  /** Explicit test-network-only e-sign simulation; never enables dev routes or mock income proofs. */
+  testESign: boolean;
   zktls: ZkTlsPort;
   proofVerifier: ProofVerifierPort;
   /** client for the isolated report verifier (used only to read its public key; devices call it directly) */

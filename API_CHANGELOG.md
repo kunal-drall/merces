@@ -6,6 +6,14 @@ The frontend builds against this API. **Every push lists every changed or remove
 count; `API.md` is the narrative; `packages/client/src/generated/openapi.d.ts` is regenerated with `pnpm openapi:client`.
 Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
+## 2026-10-11 — explicit test-only contract signing (219 operations)
+
+- Added issuer `POST /drafts/{draftId}/contract/test-sign`, requiring `{ testOnly: true }`.
+  Disabled unless `MERCES_TEST_ESIGN=true` and the mock e-sign provider is active.
+  It checks ownership and the chain's signing domain, refuses mainnet, and records a mock audit trail.
+- Contract preparation/status objects add `testSigningAvailable` so the app can display the test action.
+  No development route or mock zkTLS acceptance is enabled.
+
 ## d845658 — native curve setup and migration, 2026-10-11 (218 operations)
 
 - Added issuer `POST /series/{seriesId}/curve/build-setup`: a single `createCurveConfig`,

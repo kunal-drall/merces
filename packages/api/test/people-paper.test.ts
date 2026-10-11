@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { amendDigest, recoverSigner, termsCommitment, type SignedTx, type SigningRequest, type UnsignedTx } from '@merces/domain';
+import { amendDigest, recoverSigner, signingDomain, termsCommitment, type SignedTx, type SigningRequest, type UnsignedTx } from '@merces/domain';
 import { deriveTestPrivateKey } from '@merces/math/testing';
 import { AttestorKey, checkRequest, describeSigningRequest, pinNetworks, signRequest } from '@merces/poi-device';
 import { SimSigner, SimWallet } from '@merces/simulator';
@@ -175,7 +175,21 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     expect(prep.json().documents.map((d: { name: string }) => d.name)).toEqual(['HEU Contract', 'Autonomy Charter']);
     expect(prep.json().documents[1].body).toContain('Units carry no vote');
     expect((await rig.get(`/drafts/${draft.draftId}/contract`, issuerTok)).json().state).toBe('sent');
-    const done = await rig.post('/dev/esign/complete', { sessionId: prep.json().sessionId });
+    const testSignUrl = `/drafts/${draft.draftId}/contract/test-sign`;
+    expect((await rig.post(testSignUrl, { testOnly: true }, issuerTok)).statusCode).toBe(403);
+    rig.ctx.testESign = true;
+    expect((await rig.post(testSignUrl, {}, issuerTok)).statusCode).toBe(400);
+    expect((await rig.post(testSignUrl, { testOnly: true })).statusCode).toBe(401);
+    expect((await rig.post(testSignUrl, { testOnly: true }, adminTok)).statusCode).toBe(403);
+    const originalInfo = rig.sol.sim.info.bind(rig.sol.sim);
+    try {
+      rig.sol.sim.info = async () => { const info = await originalInfo(); return { ...info, signing: signingDomain('solana', 101, info.signing!.registry) }; };
+      expect((await rig.post(testSignUrl, { testOnly: true }, issuerTok)).statusCode).toBe(403);
+    } finally { rig.sol.sim.info = originalInfo; }
+    const done = await rig.post(testSignUrl, { testOnly: true }, issuerTok);
+    expect(done.statusCode, done.body).toBe(200);
+    expect((await rig.post(testSignUrl, { testOnly: true }, issuerTok)).json().signedHash).toBe(done.json().signedHash);
+    rig.ctx.testESign = false;
     expect(done.json().state).toBe('signed');
     const signedHash = done.json().signedHash as string;
     expect(signedHash).toMatch(/^0x[0-9a-f]{64}$/);

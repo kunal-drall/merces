@@ -42,6 +42,7 @@ export interface ProviderOverrides {
   vault?: VaultCrypto;
   identity?: IdentityCheckPort;
   esign?: ESignPort;
+  testESign?: boolean;
   zktls?: ZkTlsPort;
   proofVerifier?: ProofVerifierPort;
   verifier?: ReportVerifierPort;
@@ -66,6 +67,7 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   ctx.vault = over.vault ?? vaultFromEnv(process.env, { simulatorOnly: simOnly });
   ctx.identity = over.identity ?? new MockIdentityCheck();
   ctx.esign = over.esign ?? new MockESign();
+  ctx.testESign = over.testESign ?? process.env.MERCES_TEST_ESIGN === 'true';
   ctx.zktls = over.zktls ?? new MockZkTls();
   if (!simOnly && ctx.zktls instanceof MockZkTls) throw new Error('mock zkTLS is simulator-only: configure a real zkTLS provider before live reporting (Part J.3)');
   // Stage 1 Groth16 by default; mock proofs too only in a simulator-only process with MERCES_PROOF_SYSTEM=mock (H3;

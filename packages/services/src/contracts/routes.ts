@@ -8,6 +8,10 @@ import { ContractService } from './service.ts';
 export function registerContractRoutes(app: FastifyInstance, base: AppContext): void {
   const ctx = svc(base);
   const s = new ContractService(ctx);
+  defineRoute(app, ctx, { method: 'POST', url: '/drafts/:draftId/contract/test-sign', access: 'issuer', handler: async (req, _reply, session) => {
+    z.object({ testOnly: z.literal(true) }).strict().parse(req.body);
+    return s.testSign((req.params as { draftId: string }).draftId, session!);
+  } });
   defineRoute(app, ctx, { method: 'POST', url: '/drafts/:draftId/contract/prepare', access: 'issuer', handler: async (req, _reply, session) => s.prepare((req.params as { draftId: string }).draftId, session!) });
   defineRoute(app, ctx, { method: 'GET', url: '/drafts/:draftId/contract', access: 'issuer', handler: async (req, _reply, session) => s.status((req.params as { draftId: string }).draftId, session!) });
   defineRoute(app, ctx, { method: 'GET', url: '/drafts/:draftId/contract/document', access: 'issuer', handler: async (req, _reply, session) => s.signedDocument((req.params as { draftId: string }).draftId, session!) });

@@ -3312,6 +3312,26 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/drafts/{draftId}/contract/test-sign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete the owning issuer's explicitly enabled test-only mock envelope
+         * @description Requires MERCES_TEST_ESIGN=true, the mock e-sign provider, authenticated issuer ownership and a verified test-network signing domain. This is synthetic test evidence, not a legal signature. Does not enable development routes or mock income proofs.
+         */
+        post: operations["testSignDraftContract"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/thresholds": {
         parameters: {
             query?: never;
@@ -12798,6 +12818,51 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Error"];
                 };
+            };
+        };
+    };
+    testSignDraftContract: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draftId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {boolean} */
+                    testOnly: true;
+                };
+            };
+        };
+        responses: {
+            /** @description Test envelope status and signed document hash */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Disabled or not the owning issuer */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Network or prepared test envelope unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

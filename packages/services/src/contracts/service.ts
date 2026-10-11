@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import type { Session } from '@merces/api';
+import { assertSigningNetwork } from '@merces/domain';
+import { MockESign } from '@merces/ports';
 import type { ServiceContext } from '../context.ts';
 import { PLACEHOLDER_CHARTER_TEMPLATE, PLACEHOLDER_HEU_TEMPLATE, render } from './templates.ts';
 
@@ -13,6 +15,28 @@ import { PLACEHOLDER_CHARTER_TEMPLATE, PLACEHOLDER_HEU_TEMPLATE, render } from '
  */
 export class ContractService {
   constructor(private readonly ctx: ServiceContext) {}
+
+  private testSigningAvailable(): boolean { return this.ctx.testESign && this.ctx.esign instanceof MockESign; }
+
+  /** Test-only envelope completion by its owning issuer. This does not open development routes. */
+  async testSign(draftId: string, session: Session): Promise<Record<string, unknown>> {
+    if (!this.testSigningAvailable()) throw AppError.forbidden('test signing is disabled');
+    const row = (await this.ctx.pool.query('select * from series_drafts where draft_id = $1', [draftId])).rows[0];
+    if (!row) throw AppError.notFound('draft');
+    if (row.account_id !== session.accountId) throw AppError.forbidden();
+    const info = await this.ctx.chains.get(row.chain).info();
+    if (!info.signing) throw AppError.conflict('test-network identity is unavailable');
+    try { assertSigningNetwork(info.signing, { allowLocal: info.mode === 'mock' }); }
+    catch { throw AppError.forbidden('test signing requires a verified test-network domain'); }
+    const cs = (await this.ctx.pool.query('select session_id, provider, provider_ref, state from contract_sessions where draft_id = $1 and account_id = $2 order by created_at desc limit 1', [draftId, session.accountId])).rows[0];
+    if (!cs || cs.provider !== 'mock') throw AppError.conflict('prepare a test envelope first');
+    if (cs.state === 'signed') return this.refresh(cs.session_id);
+    if (row.state !== 'terms_set' || cs.state !== 'sent') throw AppError.conflict('the test envelope is not awaiting a signature');
+    if (await this.ctx.esign.status(cs.provider_ref) !== 'sent') throw AppError.conflict('the test envelope expired; prepare a new test draft');
+    await (this.ctx.esign as MockESign).complete(cs.provider_ref);
+    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'issuer', action: 'contract.test-sign', target: draftId, detail: { testOnly: true } });
+    return this.refresh(cs.session_id);
+  }
 
   async ensureTemplates(): Promise<{ heu: string; charter: string }> {
     const rows = await this.ctx.pool.query<{ template_id: string; kind: string }>('select template_id, kind from contract_templates order by created_at desc');
@@ -63,7 +87,7 @@ export class ContractService {
       "insert into contract_sessions (session_id, account_id, chain, issuer, draft_id, provider, provider_ref, state, heu_template_id, charter_template_id, rendered_hash) values ($1,$2,$3,$4,$5,$6,$7,'sent',$8,$9,$10)",
       [sessionId, session.accountId, draft.chain, draft.issuer, draftId, this.ctx.esign.provider, env.envelopeId, heu, charter, sha(heuBody + '\n' + charterBody)],
     );
-    return { sessionId, state: 'sent', provider: this.ctx.esign.provider, signingUrl: env.signingUrl, documents: [{ name: 'HEU Contract', body: heuBody }, { name: 'Autonomy Charter', body: charterBody }] };
+    return { sessionId, state: 'sent', provider: this.ctx.esign.provider, testSigningAvailable: this.testSigningAvailable(), signingUrl: env.signingUrl, documents: [{ name: 'HEU Contract', body: heuBody }, { name: 'Autonomy Charter', body: charterBody }] };
   }
 
   /** Poll the provider (or receive its webhook) and persist the signed bundle. */
@@ -97,7 +121,7 @@ export class ContractService {
     return this.view(r.rows[0]);
   }
   private view(cs: Record<string, unknown>): Record<string, unknown> {
-    return { sessionId: cs.session_id, draftId: cs.draft_id, state: cs.state, provider: cs.provider, renderedHash: '0x' + cs.rendered_hash, signedHash: cs.signed_hash ?? null, signedAt: cs.signed_at ?? null, templates: { heu: cs.heu_template_id, charter: cs.charter_template_id } };
+    return { sessionId: cs.session_id, draftId: cs.draft_id, state: cs.state, provider: cs.provider, testSigningAvailable: this.testSigningAvailable(), renderedHash: '0x' + cs.rendered_hash, signedHash: cs.signed_hash ?? null, signedAt: cs.signed_at ?? null, templates: { heu: cs.heu_template_id, charter: cs.charter_template_id } };
   }
 
   async status(draftId: string, session: Session): Promise<Record<string, unknown>> {
