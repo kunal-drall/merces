@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ChainError, KEY_GRACE_SECONDS, orderCommitment, termsCommitment, type UserCommand } from '@merces/domain';
+import { ChainError, KEY_GRACE_SECONDS, orderCommitment, permissionlessCommandSchema, termsCommitment, userCommandSchema, type PermissionlessCommand, type UserCommand } from '@merces/domain';
 import { WAD, parsePeriod, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimSigner, defaultTerms, personalitySigning, serialiseState } from '../src/index.ts';
 import { GENESIS, USDC, expectStage1Error, types } from './helpers.ts';
@@ -17,6 +17,11 @@ import { seriesOf } from './kit.ts';
  *    the domain, the series key, the live amendment nonce, the new commitment and the new cap (`h.amendment`; S4 WP11,
  *    D8), in the EVM's order (NotIssuer, AmendmentAfterTerminal, the cap a u64, the signature, UnfavourableAmendment);
  *    `TermsAmended` carries the nonce that was signed. Was the attestor co-signing the issuer's transaction.
+ *  - S4-EXT: `extinguish` is Stage 1's permissionless `extinguish(attestorA, signatureA, attestorB, signatureB)`: two
+ *    attestor keys' EXTINGUISH signatures over the domain, the series key and the live extinguish nonce
+ *    (`h.extinguishment`; S4 WP12, D8), sent by anyone (the keeper here); SameAttestor on the named keys, then each
+ *    signature (InvalidAttestorSignature), then the raise, mint and terminal checks. Was `{attestors}` with the second
+ *    attestor co-signing the first one's transaction.
  */
 
 /**
@@ -78,18 +83,20 @@ describe('amendments and extinguishment', () => {
     await h.sim.setTime(parsePeriod('2026Q1').end + DAY);
     await expectStage1Error(h.reportAndPay(seriesId, '2026Q1', privateTerms, terms.termsCommitment, 0n, 0n), 'InvalidProof');
 
-    // extinguishment: two distinct, active, co-signing attestors
-    const extinguish = (attestors: [string, string], coSigners = [a2]) => h.exec(a1, { kind: 'extinguish', seriesId, attestors }, coSigners);
-    await expectStage1Error(extinguish([a1.address, a1.address], []), 'SameAttestor'); // E: was InvalidTerms
-    await expectStage1Error(extinguish([a1.address, a2.address], []), 'InvalidAttestorSignature'); // E: was Unauthorized
+    // extinguishment: two distinct, active attestor keys' signatures; cause S4-EXT: the keeper relays them (was a2 co-signing a1's transaction)
+    const extinguish = async (a: typeof a1 = a1, b: typeof a1 = a2) => h.sim.submit(await h.extinguishment(seriesId, a, b), 'keeper');
+    await expectStage1Error(extinguish(a1, a1), 'SameAttestor'); // E: was InvalidTerms
+    // cause S4-EXT: a signature that recovers to nobody (E: was Unauthorized, no co-signer)
+    await expectStage1Error(h.sim.submit({ ...(await h.extinguishment(seriesId)), signatureB: '0x' + '00'.repeat(65) }, 'keeper'), 'InvalidAttestorSignature');
     await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a2.address }); // cause S4-REG (was registerAttestor{active: false})
-    await expectStage1Error(extinguish([a1.address, a2.address]), 'InvalidAttestorSignature'); // a revoked attestor (vector 11 #37)
+    await expectStage1Error(extinguish(), 'InvalidAttestorSignature'); // a revoked attestor (vector 11 #37)
     await h.exec(h.admin, { kind: 'registerAttestor', attestor: a2.address }); // cause S4-REG (was {active: true})
-    const ex = await extinguish([a1.address, a2.address]);
+    const ex = await extinguish();
     expect(types(ex.events)).toEqual(['PaymentReceived', 'SeriesExtinguished', 'StatusChanged']);
     expect(ex.events[0]!.payload).toMatchObject({ source: 'extinguishment', gross: USDC(2250).toString(), fee: '0', net: USDC(2250).toString() });
     // only tranches 1 and 2 (90 and 180 days) are unvested on 2026-04-02: 2,250 returns (G7; was all 4,500 unreleased)
     expect((ex.events[1]!.payload as { returnedToHolders: string }).returnedToHolders).toBe(USDC(2250).toString());
+    expect((ex.events[1]!.payload as { attestors: string[] }).attestors).toEqual([a1.address, a2.address]); // cause S4-EXT: the two keys
     const x = (await h.sim.getSeries(seriesId))!;
     expect(x).toMatchObject({ status: 'Extinguished', nonces: { amendment: '1', extinguish: '1' }, accNetWad: '0' }); // the net accumulator is untouched (G7); cause S4-CTX
     expect(x.final).toEqual({ accWad: (USDC(2250) * WAD / 500n).toString(), units: '500', distributed: USDC(2250).toString() });
@@ -127,28 +134,29 @@ describe('amendments and extinguishment', () => {
     await expectStage1Error(h.exec(h.issuer, { kind: 'drawRelease', seriesId }), 'NothingVested');
     expect(await h.sim.getTreasury(seriesId)).toMatchObject({ released: USDC(2250).toString(), balance: '0' });
     // terminal: no second extinguishment, no amendment (E; were Duplicate and WrongStatus)
-    await expectStage1Error(extinguish([a1.address, a2.address]), 'TerminalStatus');
+    // cause S4-EXT: a signature over the new nonce reaches the terminal check; the used one is dead (nonce 0)
+    await expectStage1Error(extinguish(), 'TerminalStatus');
+    await expectStage1Error(h.sim.submit(await h.extinguishment(seriesId, a1, a2, { extinguishNonce: 0n }), 'keeper'), 'InvalidAttestorSignature');
     await expectStage1Error(amend('2.3'), 'AmendmentAfterTerminal');
   });
 
   it('refuses a raise that has not settled (amendment M5)', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     await h.exec(h.issuer, { kind: 'registerIssuer' });
     const { terms } = defaultTerms(h.sim);
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
-    // a Draft raise (Stage 1 exit.rs: RaiseNotSettled; was cancelled by the extinguishment)
-    await expectStage1Error(h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]), 'RaiseNotSettled');
+    // a Draft raise (Stage 1 exit.rs: RaiseNotSettled; was cancelled by the extinguishment); cause S4-EXT: the keeper
+    // relays the two signatures (was a1 sending with a2 co-signing)
+    await expectStage1Error(h.sim.submit(await h.extinguishment(seriesId), 'keeper'), 'RaiseNotSettled');
     await h.exec(h.issuer, { kind: 'openRaise', seriesId }); // cause S2-AD: the terms' 3-day commit and 1-day reveal
     // an Open raise (was failed with every deposit refundable)
-    await expectStage1Error(h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]), 'RaiseNotSettled');
+    await expectStage1Error(h.sim.submit(await h.extinguishment(seriesId), 'keeper'), 'RaiseNotSettled');
     expect((await h.sim.getSeries(seriesId))!.phase).toBe('Open');
   });
 
   it('on a redeemed series weighs the final share on redeemed units, redeeming the rest first (amendment M4)', async () => {
     const { h, seriesId, settledAt } = await settled(10);
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     const [b0, b1] = [h.backers[0]!, h.backers[1]!];
     await h.sim.setTime(settledAt + 11);
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(100).toString() });
@@ -157,7 +165,7 @@ describe('amendments and extinguishment', () => {
     expect(types(r0.events)).toEqual(['UnitsBurned', 'RedemptionClaimed']);
     expect((await h.sim.getPosition(seriesId, b0.address))!).toMatchObject({ units: '0', redeemedUnits: '100' });
     await h.sim.setTime(settledAt + 12);
-    const ex = await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    const ex = await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT (was a co-signed transaction)
     // a Redeemed series may be extinguished; the final units are the units at redemption, 500 (not the 400 left)
     expect((ex.events.find((e) => e.type === 'SeriesExtinguished')!.payload as { returnedToHolders: string }).returnedToHolders).toBe(USDC(2250).toString());
     expect((await h.sim.getSeries(seriesId))!.final).toMatchObject({ units: '500', accWad: (USDC(2250) * WAD / 500n).toString() });
@@ -196,7 +204,6 @@ describe('amendments and extinguishment', () => {
     const bids = [0, 1, 2, 3, 4].map((backer) => ({ backer, price: USDC(52.5), qty: 100n }));
     const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 }, bids });
     const settledAt = (await h.sim.getSeries(seriesId))!.settledAt!;
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     const [b0, b1, b2, b3, b4] = h.backers as [typeof h.backers[0], typeof h.backers[0], typeof h.backers[0], typeof h.backers[0], typeof h.backers[0]];
     // b1 asks 40 of its 100 units in a window, and reveals; the window is still open when the series ends
     const open = settledAt + 11;
@@ -214,7 +221,7 @@ describe('amendments and extinguishment', () => {
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
     const price = BigInt((await h.sim.getRedemption(seriesId))!.pricePerUnit);
     expect((await h.sim.getRedemption(seriesId))!.unitsAtRedemption).toBe('500');
-    await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT (was a co-signed transaction)
     expect((await h.sim.getSeries(seriesId))!.final).toMatchObject({ units: '500', accWad: (USDC(26.25) * WAD).toString(), distributed: USDC(13_125).toString() });
 
     // the read and the claim agree: b1's share is weighed on 60 + 40 = 100 units, like b0's
@@ -356,5 +363,93 @@ describe('signed amendments (Stage 1 amend_terms)', () => {
     expect(now + 1).toBeLessThan(now + KEY_GRACE_SECONDS);
     await refused(h, h.exec(h.issuer, signed), 'InvalidAttestorSignature', /not a usable attestor key/);
     expect(types((await h.exec(h.issuer, await h.amendment(seriesId, f, h.attestors[1]!))).events)).toEqual(['TermsAmended']);
+  });
+});
+
+type Extinguish = Extract<PermissionlessCommand, { kind: 'extinguish' }>;
+
+// cause S4-EXT (S4 WP12, D8): the EXTINGUISH signatures bind the domain, the series key and the live extinguish nonce;
+// anyone sends them. Each refusal leaves the state and the event log as they were.
+describe('signed extinguishment (Stage 1 extinguish)', () => {
+  it('anyone relays two attestor keys\' EXTINGUISH signatures: distinct named keys first, then each signature over the live nonce, then the raise checks', async () => {
+    for (const personality of ['solana', 'monad'] as const) {
+      const h = await SimHarness.create(personality, { genesis: GENESIS });
+      const { seriesId } = await h.runRaise();
+      const other = (await h.runRaise()).seriesId;
+      const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
+      const good = await h.extinguishment(seriesId);
+      const series = (await h.sim.getSeries(seriesId))!;
+      expect(series.nonces.extinguish).toBe('0');
+      expect(good).toMatchObject({ attestorA: a1.address, attestorB: a2.address });
+      // the two named keys must differ, before any signature is read (Solana's AttestorsNotDistinct on the supplied
+      // addresses): with placeholders, and with a1's own signature twice
+      await refused(h, h.sim.submit({ ...good, attestorB: a1.address, signatureA: ZERO_SIG, signatureB: ZERO_SIG }, 'keeper'), 'SameAttestor');
+      await refused(h, h.sim.submit(await h.extinguishment(seriesId, a1, a1), 'keeper'), 'SameAttestor');
+      // each signature must recover to its named key: A, then B
+      await refused(h, h.sim.submit({ ...good, signatureA: ZERO_SIG }, 'keeper'), 'InvalidAttestorSignature', /does not recover/);
+      await refused(h, h.sim.submit({ ...good, signatureB: ZERO_SIG }, 'keeper'), 'InvalidAttestorSignature', /does not recover/);
+      // the signatures swapped between the named keys; one key's two signatures named as two keys (the EVM compares the
+      // recovered addresses and says SameAttestor there: an adapter note)
+      await refused(h, h.sim.submit({ ...good, signatureA: good.signatureB, signatureB: good.signatureA }, 'keeper'), 'InvalidAttestorSignature', /does not recover/);
+      await refused(h, h.sim.submit({ ...good, signatureB: good.signatureA }, 'keeper'), 'InvalidAttestorSignature', /does not recover/);
+      // another series' signatures (also at nonce 0): no replay across series
+      await refused(h, h.sim.submit({ ...(await h.extinguishment(other)), seriesId }, 'keeper'), 'InvalidAttestorSignature', /does not recover/);
+      // another chain's domain (the other personality's simulator): no replay across domains
+      const foreign = personalitySigning(personality === 'solana' ? 'monad' : 'solana', personality === 'solana' ? 'monad' : 'solana');
+      const elsewhere = await a2.attest('EXTINGUISH', foreign, series.seriesKey, { extinguishNonce: series.nonces.extinguish });
+      await refused(h, h.sim.submit({ ...good, signatureB: elsewhere.signature }, 'keeper'), 'InvalidAttestorSignature', /does not recover/);
+      // another nonce (a signature made for an extinguish nonce that is not the live one)
+      await refused(h, h.sim.submit(await h.extinguishment(seriesId, a1, a2, { extinguishNonce: '1' }), 'keeper'), 'InvalidAttestorSignature', /does not recover/);
+      // the report verifier's key is no attestor; an unregistered key; a non-canonical (high-s) signature
+      await refused(h, h.sim.submit(await h.extinguishment(seriesId, a1, h.verifier), 'keeper'), 'InvalidAttestorSignature', /not a usable attestor key/);
+      await refused(h, h.sim.submit(await h.extinguishment(seriesId, SimSigner.attestor('never-registered'), a2), 'keeper'), 'InvalidAttestorSignature', /not a usable attestor key/);
+      const n = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
+      const sHigh = (n - BigInt('0x' + good.signatureA.slice(66, 130))).toString(16).padStart(64, '0');
+      const flipV = good.signatureA.slice(130) === '1b' ? '1c' : '1b';
+      await refused(h, h.sim.submit({ ...good, signatureA: good.signatureA.slice(0, 66) + sHigh + flipV }, 'keeper'), 'InvalidAttestorSignature', /does not recover/);
+      // the schema takes 65-byte hex signatures and lowercase 20-byte keys, and it is no user command
+      for (const bad of [{ ...good, signatureA: 'sim:' + a1.address }, { ...good, signatureB: undefined }, { ...good, attestorA: h.backers[0]!.address }, { ...good, attestorB: a2.address.toUpperCase().replace('0X', '0x') }, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }]) {
+        await expect(h.sim.submit(bad as unknown as Extinguish, 'keeper')).rejects.toThrow();
+      }
+      expect(() => userCommandSchema.parse(good)).toThrow();
+      expect(permissionlessCommandSchema.parse(good)).toEqual(good);
+      // the signer and the sender are independent: a backer relays it from its own wallet; the event names the two keys
+      const ex = await h.exec(h.backers[3]!, good);
+      expect(types(ex.events)).toEqual(['PaymentReceived', 'SeriesExtinguished', 'StatusChanged']);
+      expect(ex.events[1]!.payload).toMatchObject({ seriesId, attestors: [a1.address, a2.address] });
+      expect((await h.sim.getSeries(seriesId))!.nonces).toEqual({ pause: '0', amendment: '0', extinguish: '1', trueup: '0' });
+      expect(h.sim.stage1View(seriesId).ledger.extinguishNonce).toBe('1');
+      // a replay of the same signatures is dead (the nonce moved), and fresh ones reach the terminal check
+      await refused(h, h.sim.submit(good, 'keeper'), 'InvalidAttestorSignature', /does not recover/);
+      await refused(h, h.sim.submit(await h.extinguishment(seriesId), 'keeper'), 'TerminalStatus');
+      // the other series' nonce is its own, and its own signatures still extinguish it
+      expect((await h.sim.getSeries(other))!.nonces.extinguish).toBe('0');
+      expect(types((await h.sim.submit(await h.extinguishment(other, a2, a1), 'keeper')).events)).toContain('SeriesExtinguished');
+    }
+  });
+
+  it('the signatures are read before the raise: an unsettled raise with a bad signature is InvalidAttestorSignature, with good ones RaiseNotSettled', async () => {
+    const h = await SimHarness.create('solana', { genesis: GENESIS });
+    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
+    const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
+    const good = await h.extinguishment(seriesId);
+    await refused(h, h.sim.submit({ ...good, signatureB: ZERO_SIG }, 'keeper'), 'InvalidAttestorSignature');
+    await refused(h, h.sim.submit(good, 'keeper'), 'RaiseNotSettled');
+  });
+
+  it('a revoked attestor key cannot sign an extinguishment, inside the report grace or not: an EXTINGUISH needs active keys', async () => {
+    const h = await SimHarness.create('monad', { genesis: GENESIS });
+    const { seriesId } = await h.runRaise();
+    const third = SimSigner.attestor('attestor-3');
+    await h.exec(h.admin, { kind: 'registerAttestor', attestor: third.address });
+    const signed = await h.extinguishment(seriesId);
+    const now = await h.sim.now();
+    await h.exec(h.admin, { kind: 'revokeAttestor', attestor: h.attestors[1]!.address });
+    await h.sim.setTime(now + 1);
+    expect(now + 1).toBeLessThan(now + KEY_GRACE_SECONDS);
+    await refused(h, h.sim.submit(signed, 'keeper'), 'InvalidAttestorSignature', /not a usable attestor key/);
+    // a rotation's new key signs in its place
+    expect(types((await h.sim.submit(await h.extinguishment(seriesId, h.attestors[0]!, third), 'keeper')).events)).toContain('SeriesExtinguished');
   });
 });

@@ -11,6 +11,9 @@ import { makeRig } from './helpers.ts';
  * S4 cause codes:
  *  - S4-ID: attestors are keys linked to an account (S4 WP7): attestor access is the account's linked key, read live
  *    (`rig.attestorToken`), never a token's wallets.
+ *  - S4-EXT: an extinguishment request names the caller's key and a co-attestor key of another account
+ *    (`{attestor, coAttestor}`) and opens collecting their EXTINGUISH signatures (S4 WP12; was `{attestors}` returning a
+ *    transaction for the first attestor to send with the second co-signing).
  */
 
 /** Stand-in for the client's end-to-end encryption (as attestor.test.ts): AES-256-GCM under a throwaway key. */
@@ -42,7 +45,8 @@ describe.skipIf(!dbTestsEnabled())('S2 mint gates in the services (extinguishmen
     const issuerTok = rig.token({ accountId: 'gate-issuer', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
     const attTok = await rig.attestorToken('gate-att', [h.attestors[0]!]); // cause S4-ID: attestor access is the account's linked key
     const adminTok = rig.token({ accountId: 'gate-admin', wallets: [], roles: ['admin'] });
-    const extinguish = () => rig.post('/attestor/extinguish', { seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address], evidenceCiphertext: e2e('evidence') }, attTok);
+    await rig.linkKeys('gate-att-2', [h.attestors[1]!]); // the co-attestor's key, held by another account (S4 D15)
+    const extinguish = () => rig.post('/attestor/extinguish', { seriesId, attestor: h.attestors[0]!.address, coAttestor: h.attestors[1]!.address, evidenceCiphertext: e2e('evidence') }, attTok); // cause S4-EXT
     const quote = () => rig.get(`/series/${seriesId}/redemption/quote`, issuerTok);
     const reconciled = async () => {
       const r = await rig.get('/admin/accounting/reconcile', adminTok);
@@ -54,6 +58,7 @@ describe.skipIf(!dbTestsEnabled())('S2 mint gates in the services (extinguishmen
     const ext = await extinguish();
     expect(ext.statusCode).toBe(409);
     expect(ext.json().message).toContain('MintNotFinalized');
+    expect(ext.json().detail).toEqual({ stage1: 'MintNotFinalized' });
     expect((await rig.t.pool.query('select 1 from extinguishment_requests where series_id = $1', [seriesId])).rowCount).toBe(0);
     const q = await quote();
     expect(q.statusCode).toBe(409);
@@ -74,8 +79,10 @@ describe.skipIf(!dbTestsEnabled())('S2 mint gates in the services (extinguishmen
     expect((await h.sim.getSeries(seriesId))!.mintFinalized).toBe(true);
     expect((await quote()).statusCode).toBe(200);
     expect(await reconciled()).toEqual(['vault-gross', 'vault-fees', 'treasury-total', 'treasury-released']);
-    const built = await extinguish();
-    expect(built.statusCode, JSON.stringify(built.json())).toBe(201);
-    expect(built.json().tx.command).toEqual({ kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] });
+    const opened = await extinguish();
+    expect(opened.statusCode, JSON.stringify(opened.json())).toBe(201);
+    // cause S4-EXT: the request opens collecting the two keys' signatures; there is no transaction for an attestor to send
+    expect(opened.json()).toMatchObject({ state: 'collecting', attestors: [h.attestors[0]!.address, h.attestors[1]!.address], signers: [], extinguishNonce: null });
+    expect(opened.json()).not.toHaveProperty('tx');
   });
 });

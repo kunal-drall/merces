@@ -421,6 +421,18 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       // nothing more is owed: the open due ends with the series (SIM:1438-1441)
       await client.query('update series set extinguished_at = $2, open_due_period = null, open_due_amount = 0, last_event_seq = $3 where series_id = $1', [p.seriesId, e.blockTime, e.seq]);
       await money(client, e, 'extinguishment', p.returnedToHolders, { detail: { attestors: p.attestors } });
+      // S4 WP12: the extinguishment consumed the series' extinguish nonce, so every EXTINGUISH signature still held for it
+      // is dead. A ready request naming exactly this event's two keys is the one that landed (its relay's own update was
+      // lost, or someone else relayed it): sent, with this transaction. Every other open request can no longer be
+      // completed: withdrawn (decision code series-extinguished), its dead signatures dropped.
+      await client.query(
+        "update extinguishment_requests set state = 'sent', relay_tx = $2, relay_error = null, decision_code = 'extinguished' where series_id = $1 and state = 'ready' and attestors = $3::text[]",
+        [p.seriesId, e.txId, p.attestors],
+      );
+      await client.query(
+        "update extinguishment_requests set state = 'withdrawn', decision_code = 'series-extinguished', signatures = '[]', extinguish_nonce = null, relay_error = null where series_id = $1 and state in ('collecting', 'ready')",
+        [p.seriesId],
+      );
       break;
     }
     case 'RateSnapshot': {

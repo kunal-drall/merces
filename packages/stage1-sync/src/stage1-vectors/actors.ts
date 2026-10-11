@@ -13,10 +13,9 @@ import { RunnerError } from './errors.ts';
  *
  * A name the vector gives a key (`keys[name]`: `attestor1`, `attestor2`, `verifier1`, …) is that key's 20-byte address
  * on both personalities (S4 WP5): `register_attestor` registers `keys[name].address`, as Stage 1's harnesses do
- * (vectors README:48-50). Its wallet is the **transitional co-signing wallet** at the key's address: the one flow that
- * still takes an attestor's co-signature instead of its signature (extinguishment) signs with it until it moves to
- * Stage 1's signatures (S4 WP12; tier-3 and FX reports did in WP9, the pause approval in WP10, the amendment in WP11),
- * and it is gone in S4 WP13.
+ * (vectors README:48-50). Its wallet is the **transitional co-signing wallet** at the key's address, which no flow uses
+ * any more: every attestation is the key's own Stage 1 signature (tier-3 and FX reports since S4 WP9, the pause
+ * approval WP10, the amendment WP11, the extinguishment WP12). It is gone in S4 WP13 with `coSigners`.
  */
 export class Actors {
   readonly admin: SimWallet;

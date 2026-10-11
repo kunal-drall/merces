@@ -19,6 +19,7 @@ import { GENESIS, USDC, expectChainError, types } from './helpers.ts';
  *  - S4-PAU: a pause approval is the attestor key's PAUSE signature, relayed by anyone (S4 WP10); an active key only.
  *  - S4-AMD: an amendment is the issuer's amendTerms carrying the attestor key's AMEND signature (S4 WP11); an active key
  *    only.
+ *  - S4-EXT: an extinguishment is two attestor keys' EXTINGUISH signatures, relayed by anyone (S4 WP12); active keys only.
  */
 
 type Report = Extract<UserCommand, { kind: 'submitReport' }>;
@@ -273,7 +274,8 @@ describe('revocation grace on the signed paths (S4-REG; Stage 1 SPEC §1.4, SIM:
     await refused(h, h.sim.submit(await h.pauseApproval(seriesId, now + 30 * DAY, a1), 'keeper'), 'InvalidAttestorSignature');
     // cause S4-AMD: the revoked key's AMEND signature in the issuer's amendTerms (was a1 co-signing)
     await refused(h, h.exec(h.issuer, await h.amendment(seriesId, { termsCommitment: terms.termsCommitment, capMultipleWad: terms.capMultipleWad }, a1)), 'InvalidAttestorSignature');
-    await refused(h, h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]), 'InvalidAttestorSignature');
+    // cause S4-EXT: the revoked key's EXTINGUISH signature, relayed by the keeper (extinguish is permissionless since S4 WP12)
+    await refused(h, h.sim.submit(await h.extinguishment(seriesId, a1, a2), 'keeper'), 'InvalidAttestorSignature');
     // the active key still approves
     expect(types((await h.sim.submit(await h.pauseApproval(seriesId, now + 30 * DAY, a2), 'keeper')).events)).toContain('PauseApproved'); // cause S4-PAU
   });

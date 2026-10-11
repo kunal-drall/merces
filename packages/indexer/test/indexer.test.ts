@@ -12,10 +12,14 @@ import { Indexer, project } from '../src/index.ts';
  *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address on both
  *    personalities (transitionally a co-signing wallet at the key's address);
  *  - S4-AMD: the issuer's amendTerms carries the attestor key's AMEND signature over the live nonce (`h.amendment`; S4
- *    WP11; was the attestor co-signing), and `TermsAmended` carries that nonce.
+ *    WP11; was the attestor co-signing), and `TermsAmended` carries that nonce;
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  * S4 cause codes on new checks:
  *  - S4-AMD: an indexed `TermsAmended` sends the series' amendments signed over the nonce it consumed (or an older one)
  *    back to awaiting an attestor (S4 WP11, migration 028);
+ *  - S4-EXT: an indexed `SeriesExtinguished` closes the series' open extinguishment requests (S4 WP12, migration 029);
  *  - S4-REG: Stage 1's key registry (S4 WP5, migration 023): `AttestorRegistered` and `AttestorRevoked` with their times,
  *    guarded by `updated_seq`; not in the public feed;
  *  - S4-T2: the report verifier's keys likewise (S4 WP6, migration 024): `VerifierKeyRegistered` and `VerifierKeyRevoked`
@@ -401,6 +405,39 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect((await t.pool.query("select summary from activity where series_id = $1 and kind = 'TermsAmended'", [a.seriesId])).rows.map((r) => r.summary)).toEqual(['Terms amended (issuer-favourable)', 'Terms amended (issuer-favourable)']);
   });
 
+  // cause S4-EXT (S4 WP12): a SeriesExtinguished consumes the series' extinguish nonce, so every EXTINGUISH signature still
+  // held for it is dead: a ready request naming exactly the event's two keys is the one that landed (sent, with the
+  // event's transaction); every other open request of the series is withdrawn with its signatures dropped; other series'
+  // requests and closed ones are untouched
+  it('closes the open extinguishment requests of a series an extinguishment ended: the matching ready one sent, the rest withdrawn', async () => {
+    const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: 'ext-close', genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const [a, b] = [await h.runRaise(), await h.runRaise()];
+    await idx.catchUp();
+    const [k1, k2] = [h.attestors[0]!.address, h.attestors[1]!.address];
+    const other = '0x' + 'ef'.repeat(20);
+    const sig = (signer: string) => ({ signer, signature: '0x' + '11'.repeat(65), digest: '0x' + '22'.repeat(32) });
+    const seed = (id: string, seriesId: string, state: string, attestors: string[], sigs: unknown[]) =>
+      t.pool.query("insert into extinguishment_requests (request_id, series_id, chain, attestors, requested_by, evidence_ciphertext, state, extinguish_nonce, signatures) values ($1, $2, 'ext-close', $3, 'acct', 'c', $4, $5, $6)",
+        [id, seriesId, attestors, state, sigs.length ? '0' : null, JSON.stringify(sigs)]);
+    const row = async (id: string) => (await t.pool.query('select state, decision_code, extinguish_nonce::text as nonce, jsonb_array_length(signatures) as sigs, relay_tx from extinguishment_requests where request_id = $1', [id])).rows[0];
+    await seed('x-match', a.seriesId, 'ready', [k1, k2], [sig(k1), sig(k2)]);
+    await seed('x-closed', a.seriesId, 'withdrawn', [k1, other], []);
+    await seed('x-elsewhere', b.seriesId, 'collecting', [k1, other], [sig(k1)]);
+    const ex = await h.sim.submit(await h.extinguishment(a.seriesId), 'keeper');
+    await idx.catchUp();
+    expect(await row('x-match')).toEqual({ state: 'sent', decision_code: 'extinguished', nonce: '0', sigs: 2, relay_tx: ex.txId });
+    expect(await row('x-closed')).toMatchObject({ state: 'withdrawn', decision_code: null });
+    expect(await row('x-elsewhere')).toMatchObject({ state: 'collecting', nonce: '0', sigs: 1 });
+    // on the other series an open request naming other keys can no longer be completed: withdrawn, its signature dropped
+    await t.pool.query("update extinguishment_requests set attestors = $2, signatures = $3 where request_id = $1", ['x-elsewhere', [other, k2], JSON.stringify([sig(other)])]);
+    await h.sim.submit(await h.extinguishment(b.seriesId, h.attestors[1]!, h.attestors[0]!), 'keeper');
+    await idx.catchUp();
+    expect(await row('x-elsewhere')).toEqual({ state: 'withdrawn', decision_code: 'series-extinguished', nonce: null, sigs: 0, relay_tx: null });
+    // the feed names the extinguishment, never a signature
+    expect(JSON.stringify((await t.pool.query("select summary from activity where kind = 'SeriesExtinguished' and series_id = any($1)", [[a.seriesId, b.seriesId]])).rows)).not.toMatch(/0x[0-9a-f]{130}/);
+  });
+
   // S1 review: a curve's issue price and its cap per unit must be projected (the statement's C_remaining, the holdings'
   // yield and every later amendment read them). cause S3-CV: they are fixed at activation (Stage 1 mark_curve_activated),
   // the raise settles at the pool's finish time, and only the collection funds the treasury (migration 020)
@@ -784,7 +821,6 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
     const { seriesId } = await h.runRaise({ terms: { lockupSeconds: 10 } });
     const [b0, b1] = [h.backers[0]!, h.backers[1]!];
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     const settledAt = (await h.sim.getSeries(seriesId))!.settledAt!;
     await h.sim.setTime(settledAt + 11);
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(100).toString() });
@@ -796,7 +832,7 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     await h.exec(b0, { kind: 'claimTail', seriesId });
     await h.exec(b0, { kind: 'claimTail', seriesId });
     await h.sim.setTime(settledAt + 12);
-    await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
     // b1: redeemed first, then its final share 4.5 × 100; a second claim of 0
     await h.exec(b1, { kind: 'claimFinal', seriesId });
     await h.exec(b1, { kind: 'claimFinal', seriesId });

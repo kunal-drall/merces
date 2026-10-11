@@ -2238,6 +2238,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description Opens an extinguishment request (S4 WP12; C11.6) naming the caller's own attestor key and a second attestor key held by another account (S4 D15: an extinguishment needs two attestors, two accounts; Stage 1 itself checks only that the keys differ), with the evidence (death or permanent disability) as end-to-end ciphertext for them. Only for a series Stage 1 would extinguish now; one open request per series. Nothing is signed yet and there is no transaction for an attestor: each named key signs the request's EXTINGUISH message on its own device (GET .../message, POST .../sign), and once both have signed the keeper relays Stage 1's extinguish (permissionless). */
         post: operations["requestExtinguishment"];
         delete?: never;
         options?: never;
@@ -2255,6 +2256,40 @@ export type paths = {
         get: operations["getExtinguishment"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/extinguish/{requestId}/message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The signing request for a named key's EXTINGUISH signature (S4 WP12): Stage 1's MERCES_EXTINGUISH_V1 over the chain's signing domain (ChainInfo.signing), the series key (SeriesState.seriesKey) and the series' live extinguish nonce (SeriesState.nonces.extinguish). Only while the request collects signatures, for a key that has not signed, two keys of two accounts, and a series Stage 1 would extinguish now. The attestor signs it on their own device with the Merces attestor tool, which rebuilds and checks it first and warns that the signature cannot be recalled (with the other key's signature anyone can extinguish the series until the nonce moves or a key is revoked); the API never signs. Public data only: the domain, the series key and the nonce. */
+        get: operations["extinguishmentSigningRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/extinguish/{requestId}/sign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description One named key's Stage 1 EXTINGUISH signature (S4 WP12), made on its own device from GET .../message and posted as the attestor tool prints it, with the nonce it signed. Only the account holding the key signs (an admin never does). The API rebuilds the message from the chain's reads with that nonce (a digest sent must equal it), recovers the signer, checks the key is active on the chain (no grace) and reads the nonce again. With both keys' signatures the request is ready and the keeper relays Stage 1's extinguish{attestorA, signatureA, attestorB, signatureB} at once (permissionless; checking first that the nonce is live and both keys still active): the request is sent and the response carries the relay transaction and the two signatures (public onchain). A relay the chain refuses leaves the request ready with the refusal's Stage 1 name (relayError) and returns the refusal; posting a stored signature again retries the relay. An unrelayed signature is never shown by any read, the audit log, a notification or the feed (S4 amendment D2). */
+        post: operations["signExtinguishment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3880,6 +3915,37 @@ export type components = {
                 decidedAt?: string | null;
             }[];
         };
+        /** @description An extinguishment request (S4 WP12): the two named attestor keys (the opener's first; linked to two accounts, S4 D15), the keys that have signed Stage 1's EXTINGUISH message and the nonce they signed, and the keeper's relay. An unrelayed EXTINGUISH signature is a bearer authorisation and is never shown; once relayed (state sent) the two signatures are public onchain data. */
+        ExtinguishmentRequest: {
+            requestId?: string;
+            seriesId?: string;
+            chain?: string;
+            attestors?: string[];
+            /**
+             * @description collecting: fewer than two signatures; ready: both, the relay pending or refused (relayError); sent: the chain extinguished the series with them; withdrawn: it can no longer be completed (another extinguishment landed, or closed in S4)
+             * @enum {string}
+             */
+            state?: "collecting" | "ready" | "sent" | "withdrawn";
+            /** @description why it last changed state: extinguished, stale-nonce, attestor-key-inactive, series-extinguished, resign-s4 (opened before S4 WP12: both keys sign again), superseded-s4 */
+            decisionCode?: string | null;
+            keyHint?: string | null;
+            requestedBy?: string;
+            createdAt?: string;
+            /** @description the extinguish nonce the stored signatures bind */
+            extinguishNonce?: string | null;
+            /** @description the named keys that have signed (never their signatures before the relay) */
+            signers?: string[];
+            relayTx?: string | null;
+            /** @description the Stage 1 name (or canonical code) of the chain's refusal of the last relay of a ready request */
+            relayError?: string | null;
+            /** @description the two relayed signatures, once sent (named attestors and admins; public onchain) */
+            signatures?: {
+                signer?: string;
+                signature?: string;
+                digest?: string;
+            }[];
+            evidenceCiphertext?: components["schemas"]["Ciphertext"];
+        };
         /** @description A transaction for the user or attestor to sign; the backend never signs. */
         UnsignedTx: {
             chain?: string;
@@ -5372,7 +5438,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Work addressed to the key is open (detail.reason open-work, detail.openWork the counts: pending hardship requests, open tier-3 cases and annual attestations, extinguishment requests, attested amendments not landed) */
+            /** @description Work addressed to the key is open (detail.reason open-work, detail.openWork the counts: pending hardship requests, open tier-3 cases and annual attestations, open extinguishment requests naming it (collecting signatures or awaiting the relay; S4 WP12), attested amendments not landed) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9251,47 +9317,47 @@ export interface operations {
             content: {
                 "application/json": {
                     seriesId: string;
-                    /** @description two distinct attestor keys registered on the series' chain (20-byte addresses); both sign (transitional co-signing until S4 WP12) */
-                    attestors: string[];
+                    /** @description the caller's own attestor key (a secp256k1 key's 20-byte address), linked to its account and registered on the series' chain */
+                    attestor: string;
+                    /** @description a second attestor key registered on the series' chain and linked to another account */
+                    coAttestor: string;
                     evidenceCiphertext: components["schemas"]["Ciphertext"];
                     keyHint?: string | null;
                 };
             };
         };
         responses: {
-            /** @description The request and the unsigned extinguish transaction (signer = first attestor */
+            /** @description The request (`state` collecting, `attestors` [attestor, coAttestor], `signers` [], no ciphertext); no transaction */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        tx?: components["schemas"]["UnsignedTx"];
-                    };
+                    "application/json": components["schemas"]["ExtinguishmentRequest"];
                 };
             };
-            /** @description Malformed body: an attestor that is not a 20-byte key */
+            /** @description Malformed body: a key that is not a 20-byte key, a missing field, or an unknown one (the old `attestors` list) */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Neither attestor key is linked to the caller's account and registered on the series' chain */
+            /** @description `attestor` is not a key linked to the caller's account and registered on the series' chain (an admin opens none) */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Already extinguished, or the raise has not settled (an open raise or an ungraduated curve cannot be extinguished) */
+            /** @description Both keys linked to the caller's account (detail.reason same-account); the raise has not settled (detail.stage1 RaiseNotSettled: an open raise or a curve before its completion), its mint is not final (MintNotFinalized) or the series is extinguished (TerminalStatus); a request is already open for the series */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Attestors not distinct or not registered; plaintext-looking evidence */
+            /** @description The same key twice (detail.stage1 SameAttestor); a co-attestor key not registered on the series' chain, or linked to no account (detail.reason co-attestor-not-linked: nobody could sign for it); plaintext-looking evidence */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -9311,17 +9377,144 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The request with its evidence ciphertext (named attestors or admin) and the series' onchain status */
+            /** @description The request with its evidence ciphertext (the named keys' accounts or an admin), the keys that have signed (`signers`, never an unrelayed signature: S4 amendment D2), the nonce they signed, the relay (`relayTx`; the Stage 1 name of a refused relay in `relayError`), the two signatures once relayed (`state` sent: public onchain), and the series' onchain status and live extinguish nonce */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["ExtinguishmentRequest"];
                 };
             };
             /** @description Names other attestor keys, or the caller's key is not linked or not active on the series' chain */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    extinguishmentSigningRequest: {
+        parameters: {
+            query?: {
+                /** @description the named key to sign; by default the caller's named key that has not signed (an admin, who may read it, names one) */
+                attestor?: string;
+            };
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The EXTINGUISH signing request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningRequest"];
+                };
+            };
+            /** @description A malformed or unknown query field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The key is not linked to the caller's account (or the caller is no admin), or not active on the request's chain */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown request or series */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is ready, sent or withdrawn; the key has signed already (detail.reason already-signed); both keys linked to one account (detail.reason same-account); the series cannot be extinguished now (detail.stage1 RaiseNotSettled, MintNotFinalized or TerminalStatus); the chain's signing domain is not known yet (detail.reason signing-domain-unknown) or is not one a signer may sign for (detail.reason signing-network-refused) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request does not name that key */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    signExtinguishment: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description the nonce the signature binds: the signing request's fields.extinguishNonce */
+                    extinguishNonce: string;
+                    attestation: components["schemas"]["DeviceSignature"];
+                };
+            };
+        };
+        responses: {
+            /** @description The request: collecting (one signature in, `signers` names it) or sent (`relayTx`, `signatures`), with `relayTx` at the top level */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtinguishmentRequest"];
+                };
+            };
+            /** @description Malformed body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not the account holding a key the request names, or the key is not active on the request's chain */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown request or series */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is sent or withdrawn; both keys linked to one account (detail.reason same-account); the series cannot be extinguished now (detail.stage1 RaiseNotSettled, MintNotFinalized or TerminalStatus); the signature binds a nonce that is not the live one (detail.reason stale-nonce, with detail.liveExtinguishNonce and detail.request, the fresh signing request); at the relay, a stored signature's key is no longer active (detail.reason attestor-key-inactive, detail.stage1 InvalidAttestorSignature, detail.keys: that signature is dropped and the request collects again) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The signature does not recover to the named key over this request's EXTINGUISH message on this chain, or the key is not active (detail.stage1 InvalidAttestorSignature); or the chain refused the relay (error Chain<code>, detail.stage1 its Stage 1 name; the request stays ready) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

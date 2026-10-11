@@ -273,7 +273,15 @@ export const eventPayloads = {
    * lockstep never compares: S4 amendment fix 7), a u64 decimal string.
    */
   TermsAmended: z.object({ ...seriesScoped, termsCommitment: hash32Schema, previousCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: signerAddressSchema, nonce: z.string().regex(/^\d+$/) }),
-  SeriesExtinguished: z.object({ ...seriesScoped, attestors: z.array(addressSchema).length(2), returnedToHolders: moneySchema }),
+  /**
+   * Stage 1's `SeriesExtinguished{series, unreleased, attestor_a, attestor_b}` (merces_protocol events.rs:320-325;
+   * IMercesVault.sol:89, emitted at MercesVault.sol:610): `attestors` are the two attestor keys whose EXTINGUISH
+   * signatures it carried, in the command's order (`attestorA`, `attestorB`; 20-byte keys since S4 WP12), and
+   * `returnedToHolders` the unvested treasury that moved to the final pool (Stage 1's `unreleased`). The extinguish nonce
+   * the signatures bound is the series' nonce before the extinguishment (`SeriesState.nonces.extinguish` − 1 after it):
+   * Stage 1's event does not carry it.
+   */
+  SeriesExtinguished: z.object({ ...seriesScoped, attestors: z.array(signerAddressSchema).length(2), returnedToHolders: moneySchema }),
   RateSnapshot: z.object({ pair: pairSchema, rateWad: wadSchema, confWad: wadSchema, publishTime: z.number().int(), dayIndex: z.number().int(), sumWad: wadSchema, count: z.number().int() }),
   FxFallbackFlagged: z.object({ pair: pairSchema, periodId: periodIdSchema, reason: z.enum(['coverage', 'deviation']) }),
   TransferWindowOpened: z.object({ ...seriesScoped, windowId: z.number().int(), commitEndsAt: z.number().int(), revealEndsAt: z.number().int() }),

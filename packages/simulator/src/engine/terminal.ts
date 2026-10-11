@@ -1,4 +1,4 @@
-import { ChainError, amendDigest, type Command } from '@merces/domain';
+import { ChainError, amendDigest, extinguishDigest, type Command } from '@merces/domain';
 import { PARAMETER_BOUNDS, U64_MAX, finalDistribute, settleHolderDelta, vested } from '@merces/math';
 import type { SimPosition, SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
@@ -15,11 +15,6 @@ import { requireSigned, signingContextOf } from './keys.ts';
  * 1419-1475), through `@merces/math`: `vested` for what the treasury keeps, `finalDistribute` for the final pool and
  * `settleHolderDelta` for a holder's share of it.
  */
-
-/** A co-signing attestor must be registered and active (Stage 1 `requireActiveAttestor`; no revocation grace here, S4 D5). */
-function requireCoSigningAttestor(e: EngineCore, signers: string[], attestor: string, now: number, what: string): void {
-  if (!signers.includes(attestor) || !e.attestorUsable(attestor, now)) fail('InvalidAttestorSignature', `${what} needs an active attestor as co-signer`);
-}
 
 // ------------------------------------------------------------------ amendments
 /**
@@ -66,10 +61,16 @@ export function amendTerms(e: EngineCore, signer: string | null, cmd: Extract<Co
 
 // ------------------------------------------------------------------ extinguishment
 /**
- * Stage 1 `extinguish` (SIM:1419-1447). Checks, in order:
+ * Stage 1 `extinguish` (SIM:1419-1447; exit.rs:202-306; MercesVault.sol:585-612; S4 WP12, D8). Permissionless: the
+ * sender is never checked, the two signatures are. Checks, in order:
  *
- *  1. two distinct attestors (SameAttestor);
- *  2. each is active and co-signs (InvalidAttestorSignature);
+ *  1. the two named keys are distinct (SameAttestor; Solana's `AttestorsNotDistinct` on the supplied addresses,
+ *     exit.rs:215-218);
+ *  2. each signature over `MERCES_EXTINGUISH_V1(domain, series key, the live extinguish nonce)` recovers to its named
+ *     key, an active attestor key (no grace: an extinguishment needs active keys; else InvalidAttestorSignature), A then
+ *     B. Solana checks both keys' activity, then both signatures (exit.rs:219-228); the EVM recovers both first and
+ *     compares the recovered addresses (MercesVault.sol:592-596: two malformed signatures, or one key's two signatures
+ *     named as two keys, are SameAttestor there): adapter notes, S4 WP13;
  *  3. the raise settled (RaiseNotSettled): a Draft or Open sealed raise cannot be extinguished (amendment M5; it ends by
  *     cancellation or failure instead), nor can a Cancelled or Failed one, nor a curve before `completeCurve` (Stage 1
  *     exit.rs:229-236; an unfilled curve has nothing in its treasury);
@@ -81,17 +82,17 @@ export function amendTerms(e: EngineCore, signer: string | null, cmd: Extract<Co
  * issuer up to `vested(extinguishedAt)`); `syncStatus` (the sync point, before the mutations); the unvested tranches are
  * marked returned and their amount moves into the vault and onto the final pool (`finalDistribute`: no fee, its own
  * carry); the vault's net accumulator is not touched. Then Extinguished, `extinguishedAt`, the open due and any
- * true-up cleared, `extinguishNonce += 1`.
+ * true-up cleared, `extinguishNonce += 1` (an EXTINGUISH signature is dead once used).
  *
  * Events: `PaymentReceived{source: 'extinguishment', gross = net = returned, fee 0}` (returned > 0),
  * `SeriesExtinguished{returnedToHolders}`, `StatusChanged`, then the release-block events if the block ended.
  */
-export function extinguish(e: EngineCore, signers: string[], cmd: Extract<Command, { kind: 'extinguish' }>, now: number, emit: Emit): void {
+export function extinguish(e: EngineCore, cmd: Extract<Command, { kind: 'extinguish' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
-  const [a1, a2] = cmd.attestors as [string, string];
-  if (a1 === a2) fail('SameAttestor', 'two distinct attestors are required');
-  requireCoSigningAttestor(e, signers, a1, now, 'an extinguishment');
-  requireCoSigningAttestor(e, signers, a2, now, 'an extinguishment');
+  if (cmd.attestorA === cmd.attestorB) fail('SameAttestor', 'two distinct attestors are required');
+  const m = extinguishDigest(signingContextOf(e.state, s.seriesId), { extinguishNonce: s.ledger.extinguishNonce });
+  const a1 = requireSigned(e, 'attestor', m.digest, { signer: cmd.attestorA, signature: cmd.signatureA }, now); // active only: no grace
+  const a2 = requireSigned(e, 'attestor', m.digest, { signer: cmd.attestorB, signature: cmd.signatureB }, now);
   if (s.phase !== 'Settled') fail('RaiseNotSettled', 'the raise has not settled');
   if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids');
   if (s.status === 'Extinguished') fail('TerminalStatus', 'already extinguished');

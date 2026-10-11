@@ -78,6 +78,7 @@ document file (A-PRIV-4).
 | Decision code | `hardship_requests.decision_code`, `audit_log` | plain (codes only) | attestor, admin | — |
 | Approval refusal | API response only (`detail.stage1`: Stage 1's rule name; the message names the rule and the protocol bound, never a date); nothing stored, audited or notified | plain (codes only) | the deciding attestor | — |
 | Extinguishment evidence | `extinguishment_requests.evidence_ciphertext` | e2e | the two attestors; server: nobody | — |
+| Extinguishment signatures (S4 WP12: the two named keys' Stage 1 EXTINGUISH signatures `{signer, signature, digest}`, the nonce they bind, the keeper's relay transaction and the Stage 1 name of a refused relay; no evidence, no figure) | `extinguishment_requests.signatures`, `.extinguish_nonce`, `.relay_tx`, `.relay_error` (migration 029), `audit_log` (signer, nonce, digest, relay transaction), onchain once relayed (`extinguish`'s arguments) | plain; an unrelayed signature is a bearer authorisation (S4 amendment D2) | before the relay: no read shows a signature (the named keys' holders and admins see which keys signed, `signers`); once relayed (public onchain): the named keys' holders and admins (`GET /attestor/extinguish/{id}`, the relay's response); never in the activity feed or a notification | — (a signature over a nonce that moved, or by a key no longer active, is dropped) |
 
 ## Identity and accounts
 

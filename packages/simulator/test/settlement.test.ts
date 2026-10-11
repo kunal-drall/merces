@@ -13,6 +13,9 @@ import { seedAuction, seedBid, seriesOf } from './kit.ts';
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes.
  *  - S4-PAU: a signed pause approval (`approvePause`, Stage 1 `approve_pause`) joins the permissionless group (S4 WP10).
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  */
 
 /*
@@ -109,8 +112,9 @@ describe('the chain\'s settlement limits and the permissionless group', () => {
     ];
     // cause S3-BR: every settlement step and registration; `burnRetired` needs a Retired series (claims.test.ts), and
     // `completeCurve`, `collectCurveProceeds` and `syncCurveUnits` a curve series (curve.test.ts, census.test.ts; cause
-    // S3-CV, S3-CN); `approvePause` an attestor's signature over a pending request (pause.test.ts; cause S4-PAU)
-    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause'].includes(k)));
+    // S3-CV, S3-CN); `approvePause` an attestor's signature over a pending request (pause.test.ts; cause S4-PAU);
+    // `extinguish` two attestors' signatures (terminal.test.ts; cause S4-EXT)
+    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish'].includes(k)));
     for (const cmd of cmds) {
       const tx = await h.sim.build(cmd, anyone.address);
       expect(tx.command).toEqual(cmd);
@@ -386,7 +390,6 @@ describe('the mint gate, delivery and holders', () => {
   it('refuses the money paths with MintNotFinalized between finalize and the last process', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const { seriesId, privateTerms } = await h.runRaise({ terms: { lockupSeconds: 10 }, settle: 'finalize' });
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     const now = await h.sim.now();
     await h.sim.setTime(now + 11);
     const report = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: 0n });
@@ -395,7 +398,7 @@ describe('the mint gate, delivery and holders', () => {
       h.exec(h.issuer, report.command),
       h.exec(h.issuer, { kind: 'payIn', seriesId, periodId: '2026Q1', amount: '1' }),
       h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(100).toString() }),
-      h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]),
+      h.extinguishment(seriesId).then((cmd) => h.sim.submit(cmd, 'keeper')), // cause S4-EXT: the keeper relays the signatures
       h.sim.submit({ kind: 'openTransferWindow', seriesId, commitEndsAt: now + 100, revealEndsAt: now + 200 }, 'keeper'),
     ];
     for (const p of gated) {
@@ -454,8 +457,7 @@ describe('the mint gate, delivery and holders', () => {
     expect(types(r.events)).toEqual(['BidDelivered', 'UnitsBurned', 'RedemptionClaimed']);
     expect(r.events[0]!.payload).toEqual({ seriesId, bidder: b0.address, units: '100', refund: USDC(303).toString() });
     expect(await balance(h, b0.address)).toBe(before + USDC(303) + USDC(900)); // the refund and 100 × the redemption price 9
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
-    await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
     const fin = await h.exec(b1, { kind: 'claimFinal', seriesId }); // cause S3-FN
     expect(types(fin.events)[0]).toBe('BidDelivered');
     expect(fin.events[0]!.payload).toEqual({ seriesId, bidder: b1.address, units: '100', refund: USDC(202).toString() });

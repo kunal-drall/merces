@@ -21,6 +21,9 @@ import { seriesOf } from './kit.ts';
  * S4 cause codes:
  *  - S4-T3: a tier-3 report carries the attestor key's Stage 1 REPORT signature (tier 3) in `attestation` (S4 WP9; was
  *    the attestor's co-signature, named by `attestor`); the FX fallback is `fxFallback` (was `attestorRate`).
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  */
 
 const SWAP_BASE = 100_000_000n; // curve_config.json expected.swapBaseAmount
@@ -125,8 +128,7 @@ describe('curve census (solana): syncCurveUnits', () => {
     const b = await curveSeries();
     await b.h.fillCurve(b.seriesId, b.buyers);
     await b.h.syncCurve(b.seriesId);
-    const [a1, a2] = b.h.attestors as [typeof b.h.attestors[0], typeof b.h.attestors[0]];
-    await b.h.exec(a1, { kind: 'extinguish', seriesId: b.seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    await b.h.sim.submit(await b.h.extinguishment(b.seriesId), 'keeper'); // cause S4-EXT
     await expectStage1Error(b.h.syncCurve(b.seriesId), 'TerminalStatus');
   });
 
@@ -152,8 +154,7 @@ describe('curve census (solana): syncCurveUnits', () => {
       const { h, seriesId, s, buyers } = await curveSeries();
       await h.fillCurve(seriesId, buyers);
       if (synced) await h.syncCurve(seriesId);
-      const [a1, a2] = h.attestors as [typeof h.attestors[0], typeof h.attestors[0]];
-      await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+      await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
       expect(s().final.finalUnits).toBe(synced ? SWAP_BASE : 0n);
       expect(s().final.finalAccWad > 0n).toBe(synced);
     }

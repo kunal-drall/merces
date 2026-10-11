@@ -3402,8 +3402,7 @@
                 "type": "array",
                 "items": {
                   "type": "string",
-                  "minLength": 1,
-                  "maxLength": 64
+                  "pattern": "^0x[0-9a-f]{40}$"
                 }
               },
               "returnedToHolders": {
@@ -6086,8 +6085,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 64
+            "pattern": "^0x[0-9a-f]{40}$"
           }
         },
         "returnedToHolders": {
@@ -7394,36 +7392,6 @@
       ],
       "additionalProperties": false
     },
-    "extinguish": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "extinguish"
-        },
-        "seriesId": {
-          "type": "string",
-          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-        },
-        "attestors": {
-          "minItems": 2,
-          "maxItems": 2,
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          }
-        }
-      },
-      "required": [
-        "kind",
-        "seriesId",
-        "attestors"
-      ],
-      "additionalProperties": false
-    },
     "commitWindowOrder": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -8105,6 +8073,45 @@
         "pauseEnd",
         "attestor",
         "signature"
+      ],
+      "additionalProperties": false
+    },
+    "extinguish": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "extinguish"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "attestorA": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
+        },
+        "signatureA": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{130}$"
+        },
+        "attestorB": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
+        },
+        "signatureB": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{130}$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "attestorA",
+        "signatureA",
+        "attestorB",
+        "signatureB"
       ],
       "additionalProperties": false
     },

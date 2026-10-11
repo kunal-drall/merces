@@ -204,8 +204,8 @@ export class SimHarness {
    * the attestors: published secp256k1 test keys (seeds `sim-attestor:attestor-1/2`), registered by their 20-byte
    * addresses on both personalities (S4 WP7); a tier-3 report and the FX fallback carry their Stage 1 signatures (S4
    * WP9), a pause approval carries a key's PAUSE signature, sent by anyone (S4 WP10: `pauseApproval`), and the issuer's
-   * amendTerms carries a key's AMEND signature (S4 WP11: `amendment`); extinguish still co-signs with a wallet at the
-   * key's address until S4 WP12-WP13
+   * amendTerms carries a key's AMEND signature (S4 WP11: `amendment`) and an extinguishment two keys' EXTINGUISH
+   * signatures, sent by anyone (S4 WP12: `extinguishment`); no flow co-signs any more
    */
   readonly attestors: SimAttestor[];
   /** the report verifier's key (a published secp256k1 test key, seed `sim-verifier:verifier-1`; S4 WP6) */
@@ -376,6 +376,26 @@ export class SimHarness {
   async amendment(seriesId: string, f: { termsCommitment: string; capMultipleWad: bigint | string }, key: HarnessKey = this.attestors[0]!, opts: { amendmentNonce?: bigint | string } = {}): Promise<Extract<UserCommand, { kind: 'amendTerms' }>> {
     const a = await this.attestAmend(seriesId, f, key, opts);
     return { kind: 'amendTerms', seriesId, termsCommitment: f.termsCommitment, capMultipleWad: f.capMultipleWad.toString(), attestor: a.signer, signature: a.signature };
+  }
+
+  /**
+   * An EXTINGUISH signature (S4 WP12, D8): Stage 1's `MERCES_EXTINGUISH_V1` over the chain's signing domain, the series
+   * key and the series' extinguish nonce (default the live one, `SeriesState.nonces.extinguish`), by attestor key `key`.
+   */
+  async attestExtinguish(seriesId: string, key: HarnessKey, opts: { extinguishNonce?: bigint | string } = {}): Promise<{ signer: string; signature: string; digest: string }> {
+    const [info, series] = await Promise.all([this.sim.info(), this.sim.getSeries(seriesId)]);
+    if (!info.signing || !series) throw new Error(`harness: no signing context for ${seriesId}`);
+    return key.attest('EXTINGUISH', info.signing, series.seriesKey, { extinguishNonce: (opts.extinguishNonce ?? series.nonces.extinguish).toString() });
+  }
+
+  /**
+   * The permissionless `extinguish` command carrying keys `a` and `b`'s EXTINGUISH signatures over the live nonce
+   * (`attestExtinguish`; default the harness's two attestors): send it as the keeper (`sim.submit(cmd, 'keeper')`) or
+   * from any wallet (`exec`); the sender is never a signer.
+   */
+  async extinguishment(seriesId: string, a: HarnessKey = this.attestors[0]!, b: HarnessKey = this.attestors[1]!, opts: { extinguishNonce?: bigint | string } = {}): Promise<Extract<PermissionlessCommand, { kind: 'extinguish' }>> {
+    const [sa, sb] = [await this.attestExtinguish(seriesId, a, opts), await this.attestExtinguish(seriesId, b, opts)];
+    return { kind: 'extinguish', seriesId, attestorA: sa.signer, signatureA: sa.signature, attestorB: sb.signer, signatureB: sb.signature };
   }
 
   /** The prior opening the chain will expect for period `pid` (SPEC §6.2 step 5; Stage 1 builder `priorFor`). */

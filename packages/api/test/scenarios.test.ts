@@ -12,6 +12,9 @@ import { makeRig } from './helpers.ts';
  *  - S4-PAU: a pause approval is the attestor key's PAUSE signature over the live nonce, relayed by the keeper (S4 WP10).
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes.
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce (`h.extinguishment`; S4 WP12): any wallet relays it (was the first attestor sending
+ *    a transaction the second co-signed).
  */
 
 /**
@@ -257,11 +260,11 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     const raise = await h.runRaise();
     const seriesId = raise.seriesId;
     await rig.sync();
-    const att1 = rig.token({ accountId: 'ex-a1', roles: ['attestor'], wallets: [{ chain: 'solana', address: h.attestors[0]!.address }] });
     const holderTok = rig.token({ accountId: 'ex-b2', wallets: [{ chain: 'solana', address: h.backers[2]!.address }], roles: ['backer'] });
-    const tx = await h.sim.build({ kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, h.attestors[0]!.address, [h.attestors[1]!.address]);
-    const signed = await h.attestors[1]!.coSign(await h.attestors[0]!.sign(tx));
-    const r = await rig.post('/tx/send', signed, att1);
+    // cause S4-EXT: the two attestor keys' EXTINGUISH signatures, relayed here by a holder's own wallet (anyone may send
+    // Stage 1's extinguish; was the first attestor's transaction with the second co-signing)
+    const tx = await h.sim.build(await h.extinguishment(seriesId), h.backers[2]!.address);
+    const r = await rig.post('/tx/send', await h.backers[2]!.sign(tx), holderTok);
     expect(r.statusCode, r.body).toBe(200);
     expect(r.json().events.map((e: { type: string }) => e.type)).toEqual(['PaymentReceived', 'SeriesExtinguished', 'StatusChanged']);
     await rig.sync();

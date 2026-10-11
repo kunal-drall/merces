@@ -148,6 +148,9 @@ const FIELD_ALIASES: Record<string, string[]> = {
   // (`attestor_addr`, `attestor_sig`), the EVM the signature only (`attestorSignature`, it recovers the signer); a pause's
   // end is Stage 1's `end` in PauseApproved
   attestor: ['attestor_addr'], signature: ['attestor_sig', 'attestorSignature'], until: ['end'],
+  // an extinguishment's two signatures (S4 WP12): Solana's `sig_a`, `sig_b` beside `attestor_a`, `attestor_b`, the EVM's
+  // `signatureA`, `signatureB`; what it returns to holders is Stage 1's `unreleased` (SeriesExtinguished)
+  signatureA: ['sig_a'], signatureB: ['sig_b'], returnedToHolders: ['unreleased'],
 };
 
 /** Stage 1 items that only another Merces program or contract may call: the registry write interface, inter-module calls, the transfer hook. */

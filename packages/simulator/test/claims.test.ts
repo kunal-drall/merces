@@ -23,6 +23,11 @@ import { seedHolder, seedTail, seedVault, seriesOf } from './kit.ts';
  *  - S3-BR: `burnRetired{holder}` (TerminalStatus unless Retired, `UnitsBurned(0)` for a wallet holding nothing);
  *  - S3-BU: `PayoutClaimed.burnedUnits`;
  *  - S3-Z: the zero-amount rule: a claim of nothing emits its event with zeros.
+ *
+ * S4 cause codes:
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  */
 
 const DAY = 86_400;
@@ -153,7 +158,7 @@ describe('claimFinal (Stage 1 claim_final)', () => {
     await refused(h, () => h.sim.submit({ kind: 'burnRetired', seriesId, holder: b0.address }, 'keeper'), 'TerminalStatus');
 
     seedNetPayout(h, seriesId, USDC(2.5), 500n);
-    await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
     // one day after settlement only tranche 0 has vested: 2,250 returns through the final pool, 4.5 per unit
     expect((await h.sim.getSeries(seriesId))!.final).toEqual({ accWad: (USDC(4.5) * WAD).toString(), units: '500', distributed: USDC(2250).toString() });
     // S3-BR: an Extinguished series is not Retired (its units burn at claimFinal)
@@ -187,7 +192,6 @@ describe('claimFinal (Stage 1 claim_final)', () => {
   it('on a series that redeemed, weighs redeemed units and redeems a remaining balance first; the tail stays claimable', async () => {
     const { h, seriesId, settledAt } = await settled({ terms: { lockupSeconds: 10 } });
     const [b0, b1, b2, b3] = [h.backers[0]!, h.backers[1]!, h.backers[2]!, h.backers[3]!];
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     const final = (w: SimWallet) => claim(h, w, { kind: 'claimFinal', seriesId });
     await h.sim.setTime(settledAt + 11);
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(100).toString() });
@@ -195,7 +199,7 @@ describe('claimFinal (Stage 1 claim_final)', () => {
     // white-box: 2.5 per unit on the 400 units still held (250 pending each for b1..b4)
     seedNetPayout(h, seriesId, USDC(2.5), 400n);
     await h.sim.setTime(settledAt + 12);
-    await h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
     // the final units are the units at redemption, 500: 2,250 / 500 = 4.5 per unit
     expect((await h.sim.getSeries(seriesId))!.final).toMatchObject({ units: '500', accWad: (USDC(4.5) * WAD).toString() });
 

@@ -1,7 +1,7 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { E2E_TIER3_OPENING, SigningError, ZERO_INCOME_COMMITMENT, fxDigest, pauseDigest, recoverSigner, reportDigest, type SigningRequest, type UnsignedTx } from '@merces/domain';
+import { ChainError, E2E_TIER3_OPENING, SigningError, ZERO_INCOME_COMMITMENT, extinguishDigest, fxDigest, pauseDigest, recoverSigner, reportDigest, type SigningRequest, type UnsignedTx } from '@merces/domain';
 import { WAD, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { deriveTestPrivateKey } from '@merces/math/testing';
 import { AttestorKey, assembleOnDevice, checkRequest, checkTier3Opening, describeSigningRequest, generateE2eKeyPair, openTier3Opening, pinNetworks, sealE2e, sealTier3Opening, signRequest } from '@merces/poi-device';
@@ -38,6 +38,11 @@ const DAY = 86_400;
  *  - S4-WD: the issuer withdraws a pending onchain request (`POST /series/{id}/hardship/build-withdraw`, Stage 1
  *    `withdraw_pause_request`); the indexer marks the hardship request withdrawn, and a signature collected for it is
  *    stale (409 `stale-nonce`).
+ *  - S4-EXT: an extinguishment request names the caller's key and a co-attestor key of another account (`{attestor,
+ *    coAttestor}`, S4 D15: 409 `same-account`); each named key signs Stage 1's EXTINGUISH message from
+ *    `GET /attestor/extinguish/{id}/message` on its own device and posts it to `.../sign`; with both the keeper relays
+ *    `extinguish` (permissionless) and the request is sent (was `{attestors}` returning a transaction the first attestor
+ *    sent with the second co-signing). An unrelayed signature is never shown.
  */
 
 /** The attestor's own device key for a harness attestor: the same published test key (its seed), in the tool's keystore type. */
@@ -108,7 +113,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await rig.get('/attestor/queue', holderTok)).statusCode).toBe(403);
     expect((await rig.get('/attestor/me', issuerTok)).statusCode).toBe(403);
     expect((await rig.get('/attestor/fx-requests', holderTok)).statusCode).toBe(403);
-    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address], evidenceCiphertext: e2e('x') }, issuerTok)).statusCode).toBe(403);
+    expect((await rig.post('/attestor/extinguish', { seriesId, attestor: h.attestors[0]!.address, coAttestor: h.attestors[1]!.address, evidenceCiphertext: e2e('x') }, issuerTok)).statusCode).toBe(403); // cause S4-EXT
     // only the issuer opens hardship and tier-3 requests
     expect((await rig.post(`/series/${seriesId}/hardship`, { until: 1, attestor: h.attestors[0]!.address, ciphertext: e2e('x') }, holderTok)).statusCode).toBe(403);
     expect((await rig.post(`/series/${seriesId}/tier3/2026Q1`, { attestor: h.attestors[0]!.address, documentsCiphertext: e2e('x'), estimatePaymentStable: '1' }, attTok)).statusCode).toBe(403);
@@ -626,47 +631,227 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(409); // paused: no new request
   });
 
-  it('extinguishment: two distinct registered attestors sign one transaction; the chain returns unvested treasury to holders', async () => {
+  // cause S4-EXT (S4 WP12): the attestor service opens a request naming the caller's key and a co-attestor key of another
+  // account (S4 D15), each key signs Stage 1's EXTINGUISH message on its own device, and once both are in the keeper
+  // relays Stage 1's extinguish (was: one transaction the first attestor sent with the second co-signing)
+  it('extinguishment: two attestor keys of two accounts sign on their devices; the keeper relays Stage 1\'s extinguish; the chain returns unvested treasury to holders', async () => {
     const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
+    const adminTok = rig.token({ accountId: 'ext-adm', roles: ['admin'], wallets: [] });
     const evidence = e2e(`death certificate ${CANARY}`);
-    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a1.address], evidenceCiphertext: evidence }, attTok)).statusCode).toBe(422);
-    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, SimSigner.attestor('never-registered').address], evidenceCiphertext: evidence }, attTok)).statusCode).toBe(422);
-    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, h.backers[0]!.address], evidenceCiphertext: evidence }, attTok)).statusCode).toBe(400); // cause S4-ID: a wallet is no key
-    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: 'death certificate attached as plaintext here' }, attTok)).statusCode).toBe(422);
-    // the caller must hold one of the two attestor keys (cause S4-ID: another registered key's account is refused)
-    const third = SimSigner.attestor('ext-third');
-    await h.exec(h.admin, { kind: 'registerAttestor', attestor: third.address });
+    const open = (b: Record<string, unknown> = {}, tok = attTok, headers?: Record<string, string>) => rig.post('/attestor/extinguish', { seriesId, attestor: a1.address, coAttestor: a2.address, evidenceCiphertext: evidence, ...b }, tok, headers);
+    // the same key twice is Stage 1's SameAttestor; an unregistered co-attestor key; a wallet is no key; plaintext evidence;
+    // the old body ({attestors}) is refused
+    const same = await open({ coAttestor: a1.address });
+    expect([same.statusCode, same.json().detail]).toEqual([422, { stage1: 'SameAttestor' }]);
+    expect((await open({ coAttestor: SimSigner.attestor('never-registered').address })).statusCode).toBe(422);
+    expect((await open({ coAttestor: h.backers[0]!.address })).statusCode).toBe(400); // cause S4-ID: a wallet is no key
+    expect((await open({ evidenceCiphertext: 'death certificate attached as plaintext here' })).statusCode).toBe(422);
+    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: evidence }, attTok)).statusCode).toBe(400);
+    // `attestor` must be the caller's own key: another registered key's account and an admin are refused
+    const [third, fourth, fifth] = ['ext-third', 'ext-fourth', 'ext-fifth'].map((l) => SimSigner.attestor(l)) as [SimSigner, SimSigner, SimSigner];
+    for (const k of [third, fourth, fifth]) await h.exec(h.admin, { kind: 'registerAttestor', attestor: k.address });
     await rig.sync();
-    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: evidence }, await rig.attestorToken('att-third', [third]))).statusCode).toBe(403);
-    const req = await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: evidence, keyHint: 'attestors shared key v1' }, attTok, { 'idempotency-key': 'ext-1' });
+    const thirdTok = await rig.attestorToken('att-third', [third, fourth]);
+    expect((await open({}, thirdTok)).statusCode).toBe(403);
+    expect((await open({}, adminTok)).statusCode).toBe(403);
+    // S4 D15: two keys of one account (409 same-account); a co-attestor key linked to no account (422: nobody could sign)
+    const twoKeys = await open({ attestor: third.address, coAttestor: fourth.address }, thirdTok);
+    expect([twoKeys.statusCode, twoKeys.json().detail]).toEqual([409, { reason: 'same-account' }]);
+    const unlinked = await open({ coAttestor: fifth.address });
+    expect([unlinked.statusCode, unlinked.json().detail]).toEqual([422, { reason: 'co-attestor-not-linked' }]);
+    expect((await rig.t.pool.query('select 1 from extinguishment_requests where series_id = $1', [seriesId])).rowCount).toBe(0);
+
+    const req = await open({ keyHint: 'attestors shared key v1' }, attTok, { 'idempotency-key': 'ext-1' });
     expect(req.statusCode, JSON.stringify(req.json())).toBe(201);
     const requestId = req.json().requestId as string;
-    expect(req.json()).toMatchObject({ state: 'built', attestors: [a1.address, a2.address] });
-    const tx = req.json().tx as UnsignedTx;
-    expect(tx.command).toEqual({ kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] });
-    expect(tx.signer).toBe(a1.address);
-    expect(tx.coSigners).toEqual([a2.address]);
-    expect((await rig.get('/attestor/queue', att1Tok)).json().extinguishments.map((x: { requestId: string }) => x.requestId)).toEqual([requestId]);
+    expect(req.json()).toMatchObject({ state: 'collecting', attestors: [a1.address, a2.address], signers: [], extinguishNonce: null, relayTx: null, relayError: null });
+    expect(req.json()).not.toHaveProperty('tx');
+    expect((await open({ keyHint: 'attestors shared key v1' }, attTok, { 'idempotency-key': 'ext-1' })).json()).toEqual(req.json());
+    // one open request per series
+    expect((await open()).statusCode).toBe(409);
+    expect((await rig.get('/attestor/queue', att1Tok)).json().extinguishments).toEqual([expect.objectContaining({ requestId, state: 'collecting', signers: [] })]);
     expect((await rig.get(`/attestor/extinguish/${requestId}`, issuerTok)).statusCode).toBe(403);
-    expect((await rig.get(`/attestor/extinguish/${requestId}`, att1Tok)).json()).toMatchObject({ evidenceCiphertext: evidence, seriesStatus: 'Paused', state: 'built' });
-    // one signature is not enough; both attestors sign and the first relays
-    const oneSig = await a1.sign(tx);
-    expect((await rig.post('/tx/send', oneSig, attTok)).statusCode).toBe(403);
-    const sent = await rig.post('/tx/send', await a2.coSign(oneSig), attTok);
-    expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
-    const ext = sent.json().events.find((e: { type: string }) => e.type === 'SeriesExtinguished');
-    expect(ext.payload.attestors).toEqual([a1.address, a2.address]);
+    expect((await rig.get(`/attestor/extinguish/${requestId}`, att1Tok)).json()).toMatchObject({ evidenceCiphertext: evidence, seriesStatus: 'Paused', state: 'collecting', liveExtinguishNonce: '0' });
+
+    // the EXTINGUISH signing request for the caller's own named key that has not signed; another account's key (403), a
+    // key the request does not name (422), a stranger key's account (403); an admin may read it, never sign
+    const msg = await rig.get(`/attestor/extinguish/${requestId}/message`, attTok);
+    expect(msg.statusCode, msg.body).toBe(200);
+    const signing = (await h.sim.info()).signing!;
+    const seriesKey = (await h.sim.getSeries(seriesId))!.seriesKey;
+    expect(msg.json()).toMatchObject({ kind: 'EXTINGUISH', chain: h.sim.chain, seriesId, seriesKey, domain: signing, signer: a1.address, fields: { extinguishNonce: '0' }, validWhile: 'extinguish nonce 0' });
+    expect(msg.json().digest).toBe(extinguishDigest({ domain: signing.domain, seriesKey }, { extinguishNonce: 0n }).digest);
+    expect(msg.body).not.toContain(evidence.slice(0, 24));
+    expect((await rig.get(`/attestor/extinguish/${requestId}/message?attestor=${a2.address}`, attTok)).statusCode).toBe(403);
+    expect((await rig.get(`/attestor/extinguish/${requestId}/message?attestor=${third.address}`, attTok)).statusCode).toBe(422);
+    expect((await rig.get(`/attestor/extinguish/${requestId}/message`, thirdTok)).statusCode).toBe(403);
+    expect((await rig.get(`/attestor/extinguish/${requestId}/message?attestor=${a2.address}`, adminTok)).json()).toMatchObject({ signer: a2.address });
+    // the attestor's device: its own pinned networks and key; it shows what is authorised and warns that the signature
+    // cannot be recalled; it refuses a request whose nonce was changed under the digest
+    const request = msg.json() as SigningRequest<'EXTINGUISH'>;
+    const pinned = pinNetworks({ [h.sim.chain]: signing }, { allowLocal: true });
+    const deviceA = deviceKey(a1);
+    expect(() => signRequest({ ...request, fields: { extinguishNonce: '1' } }, deviceA, pinned, { allowLocal: true })).toThrow(SigningError);
+    const shown = describeSigningRequest(checkRequest(request, pinned, { allowLocal: true })).join('\n');
+    expect(shown).toMatch(/^Extinguishment approval \(MERCES_EXTINGUISH_V1\) at extinguish nonce 0/);
+    expect(shown).toMatch(/cannot be recalled/);
+    const sigA = signRequest(request, deviceA, pinned, { allowLocal: true });
+    deviceA.wipe();
+    expect(sigA).toEqual({ signer: a1.address, signature: expect.stringMatching(/^0x[0-9a-f]{130}$/), digest: request.digest });
+    const bodyA = { extinguishNonce: '0', attestation: sigA };
+    const sign = (b: unknown, tok: string, headers?: Record<string, string>) => rig.post(`/attestor/extinguish/${requestId}/sign`, b, tok, headers);
+
+    // signing: only the account holding the named key (another account's; an admin never signs); the body's shape
+    expect((await sign(bodyA, att1Tok)).statusCode).toBe(403);
+    expect((await sign(bodyA, adminTok)).statusCode).toBe(403);
+    for (const bad of [{}, { attestation: sigA }, { ...bodyA, extinguishNonce: 0 }, { ...bodyA, attestation: { ...sigA, signature: 'sim:' + a1.address } }, { ...bodyA, extra: 1 }]) {
+      expect((await sign(bad, attTok)).statusCode, JSON.stringify(bad)).toBe(400);
+    }
+    // the API recovers the signer over the EXTINGUISH message it rebuilds from the chain's reads (never the caller's
+    // digest): another series' signature, the other chain's domain, another nonce, a non-canonical signature: 422
+    // InvalidAttestorSignature, nothing stored
+    const refusedSig = async (b: unknown, message: RegExp) => {
+      const r = await sign(b, attTok);
+      expect(r.statusCode, r.body).toBe(422);
+      expect(r.json().detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+      expect(r.json().message).toMatch(message);
+    };
+    const other = (await h.runRaise()).seriesId;
+    const otherSeries = await h.attestExtinguish(other, a1);
+    await refusedSig({ ...bodyA, attestation: otherSeries }, /digest/);
+    await refusedSig({ ...bodyA, attestation: { signer: a1.address, signature: otherSeries.signature } }, /does not recover/);
+    const foreign = await a1.attest('EXTINGUISH', (await rig.mon.sim.info()).signing!, seriesKey, { extinguishNonce: '0' });
+    await refusedSig({ ...bodyA, attestation: { signer: a1.address, signature: foreign.signature } }, /does not recover/);
+    await refusedSig({ extinguishNonce: '1', attestation: { signer: sigA.signer, signature: sigA.signature } }, /does not recover/);
+    const n = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
+    const sHigh = (n - BigInt('0x' + sigA.signature.slice(66, 130))).toString(16).padStart(64, '0');
+    await refusedSig({ ...bodyA, attestation: { signer: sigA.signer, signature: sigA.signature.slice(0, 66) + sHigh + (sigA.signature.slice(130) === '1b' ? '1c' : '1b') } }, /does not recover/);
+    // a signature over a nonce the series has not reached is 409 stale-nonce, with the fresh request
+    const ahead = await h.attestExtinguish(seriesId, a1, { extinguishNonce: '1' });
+    const stale = await sign({ extinguishNonce: '1', attestation: ahead }, attTok);
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json().detail).toMatchObject({ reason: 'stale-nonce', liveExtinguishNonce: '0', request: { kind: 'EXTINGUISH', signer: a1.address, fields: { extinguishNonce: '0' } } });
+    expect((await rig.t.pool.query('select state, signatures, extinguish_nonce from extinguishment_requests where request_id = $1', [requestId])).rows[0]).toEqual({ state: 'collecting', signatures: [], extinguish_nonce: null });
+
+    // a1 signs: stored, still collecting; the response and every read name the signer, never the signature (a bearer
+    // authorisation until the chain has it: S4 amendment D2)
+    const signedA = await sign(bodyA, attTok);
+    expect(signedA.statusCode, signedA.body).toBe(200);
+    expect(signedA.json()).toMatchObject({ state: 'collecting', signers: [a1.address], extinguishNonce: '0', relayTx: null });
+    const hidden = sigA.signature.slice(2, 42);
+    expect(signedA.body).not.toContain(hidden);
+    for (const tok of [attTok, att1Tok, adminTok]) expect((await rig.get(`/attestor/extinguish/${requestId}`, tok)).body).not.toContain(hidden);
+    expect((await rig.get('/attestor/queue', att1Tok)).json().extinguishments).toEqual([expect.objectContaining({ requestId, signers: [a1.address] })]);
+    expect((await rig.get('/attestor/queue', att1Tok)).body).not.toContain(hidden);
+    // a1 has signed: no second request for it
+    expect((await rig.get(`/attestor/extinguish/${requestId}/message`, attTok)).json().detail).toEqual({ reason: 'already-signed' });
+    expect((await h.sim.getSeries(seriesId))!.status).toBe('Paused');
+
+    // a2 signs on its own device: the request is ready, and the keeper relays both signatures at once
+    const msgB = (await rig.get(`/attestor/extinguish/${requestId}/message`, att1Tok)).json() as SigningRequest<'EXTINGUISH'>;
+    expect(msgB).toMatchObject({ signer: a2.address, fields: { extinguishNonce: '0' } });
+    const deviceB = deviceKey(a2);
+    const sigB = signRequest(msgB, deviceB, pinned, { allowLocal: true });
+    deviceB.wipe();
+    const sent = await sign({ extinguishNonce: '0', attestation: sigB }, att1Tok, { 'idempotency-key': 'ext-sign-b' });
+    expect(sent.statusCode, sent.body).toBe(200);
+    expect(sent.json()).toMatchObject({
+      state: 'sent', signers: [a1.address, a2.address], extinguishNonce: '0', relayTx: expect.any(String), relayError: null, decisionCode: 'extinguished',
+      signatures: [{ signer: a1.address, signature: sigA.signature, digest: sigA.digest }, { signer: a2.address, signature: sigB.signature, digest: sigB.digest }],
+    });
+    expect(sent.json()).not.toHaveProperty('evidenceCiphertext');
+    // the same idempotency key replays the stored answer; the signatures are not relayed twice
+    expect((await sign({ extinguishNonce: '0', attestation: sigB }, att1Tok, { 'idempotency-key': 'ext-sign-b' })).json()).toEqual(sent.json());
+    const relayed = (await h.sim.readEvents(null, 100_000)).events.filter((e) => e.txId === sent.json().relayTx);
+    const ext = relayed.find((e) => e.type === 'SeriesExtinguished')!;
+    expect(ext.payload).toMatchObject({ seriesId, attestors: [a1.address, a2.address] });
     // every tranche vested by 2027 (180 days after settlement), so nothing returns to holders: the vested treasury stays
     // drawable by the issuer (G7; was > 0, the whole unreleased treasury)
-    expect(ext.payload.returnedToHolders).toBe('0');
-    expect(sent.json().events.map((e: { type: string }) => e.type)).not.toContain('PaymentReceived');
+    expect((ext.payload as { returnedToHolders: string }).returnedToHolders).toBe('0');
+    expect(relayed.map((e) => e.type)).not.toContain('PaymentReceived');
+    expect((await h.sim.getSeries(seriesId))!.nonces.extinguish).toBe('1');
     await rig.sync();
     expect((await rig.get(`/series/${seriesId}/status`)).json().status).toBe('Extinguished');
-    expect((await rig.get(`/attestor/extinguish/${requestId}`, attTok)).json()).toMatchObject({ state: 'sent', seriesStatus: 'Extinguished' });
+    expect((await rig.get(`/attestor/extinguish/${requestId}`, attTok)).json()).toMatchObject({ state: 'sent', seriesStatus: 'Extinguished', relayTx: sent.json().relayTx, signatures: [{ signer: a1.address }, { signer: a2.address }] });
     expect((await rig.get('/attestor/queue', attTok)).json().extinguishments).toEqual([]);
-    expect((await rig.post('/attestor/extinguish', { seriesId, attestors: [a1.address, a2.address], evidenceCiphertext: e2e('x'.repeat(40)) }, attTok)).statusCode).toBe(409);
-    const audit = await rig.t.pool.query("select detail from audit_log where action = 'extinguishment.request' and target = $1", [requestId]);
+    // a sent request takes no more signatures; the extinguished series takes no new request (TerminalStatus)
+    expect((await sign(bodyA, attTok)).statusCode).toBe(409);
+    expect((await open({ evidenceCiphertext: e2e('x'.repeat(40)) })).json().detail).toEqual({ stage1: 'TerminalStatus' });
+    // the audit names the keys, the nonce, the digest and the relay, never a signature or the evidence
+    const audit = await rig.t.pool.query('select action, detail from audit_log where target = $1 order by id', [requestId]);
+    expect(audit.rows.map((r) => r.action)).toEqual(['extinguishment.request', 'extinguishment.sign', 'extinguishment.sign', 'extinguishment.relay']);
     expect(audit.rows[0].detail).toMatchObject({ seriesId, attestors: [a1.address, a2.address] });
+    expect(audit.rows[3].detail).toMatchObject({ seriesId, attestors: [a1.address, a2.address], extinguishNonce: '0', digest: sigA.digest, relayTx: sent.json().relayTx });
+    expect(JSON.stringify(audit.rows)).not.toMatch(new RegExp(`${CANARY}|${hidden}|${sigB.signature.slice(2, 42)}`));
+    // the activity feed and the notifications never carry a signature
+    expect(JSON.stringify((await rig.t.pool.query('select summary from activity where series_id = $1', [seriesId])).rows)).not.toMatch(/0x[0-9a-f]{130}/);
+    expect(JSON.stringify((await rig.t.pool.query('select payload from outbox')).rows)).not.toMatch(/0x[0-9a-f]{130}/);
+  });
+
+  // cause S4-EXT (S4 WP12): what kills a collected EXTINGUISH signature, and what a refused relay leaves
+  it('extinguishment: a key revoked after it signed kills its signature, a refused relay stays ready with its code, two keys of one account never sign, another extinguishment withdraws an open request', async () => {
+    const s2 = (await h.runRaise()).seriesId;
+    await rig.sync();
+    const [k5, k6, k7] = ['ext-k5', 'ext-k6', 'ext-k7'].map((l) => SimSigner.attestor(l)) as [SimSigner, SimSigner, SimSigner];
+    for (const k of [k5, k6, k7]) await h.exec(h.admin, { kind: 'registerAttestor', attestor: k.address });
+    await rig.sync();
+    const [t5, t6, t7] = [await rig.attestorToken('att-k5', [k5]), await rig.attestorToken('att-k6', [k6]), await rig.attestorToken('att-k7', [k7])];
+    const openFor = async (sid: string, a: SimSigner, b: SimSigner, tok: string) => {
+      const r = await rig.post('/attestor/extinguish', { seriesId: sid, attestor: a.address, coAttestor: b.address, evidenceCiphertext: e2e('evidence of permanent disability') }, tok);
+      expect(r.statusCode, r.body).toBe(201);
+      return r.json().requestId as string;
+    };
+    const row = async (id: string) => (await rig.t.pool.query('select state, decision_code, extinguish_nonce::text, relay_error, relay_tx, signatures from extinguishment_requests where request_id = $1', [id])).rows[0];
+    const id = await openFor(s2, k5, k6, t5);
+    expect((await rig.signExtinguish(id, k5, t5)).json()).toMatchObject({ state: 'collecting', signers: [k5.address] });
+    // k5 is revoked after it signed: when k6's signature makes the request ready, the relay's own check finds k5's dead,
+    // drops it and the request collects again (409 attestor-key-inactive, Stage 1's InvalidAttestorSignature)
+    await h.exec(h.admin, { kind: 'revokeAttestor', attestor: k5.address });
+    const dead = await rig.signExtinguish(id, k6, t6);
+    expect(dead.statusCode, dead.body).toBe(409);
+    expect(dead.json().detail).toEqual({ reason: 'attestor-key-inactive', stage1: 'InvalidAttestorSignature', keys: [k5.address] });
+    expect(await row(id)).toMatchObject({ state: 'collecting', decision_code: 'attestor-key-inactive', extinguish_nonce: '0', relay_error: null, relay_tx: null, signatures: [expect.objectContaining({ signer: k6.address })] });
+    expect((await h.sim.getSeries(s2))!.status).not.toBe('Extinguished');
+    // registered again, k5 signs again; the chain refuses the relay (here, once, by a stubbed refusal): the request stays
+    // ready with the code and the error comes back with Stage 1's name; posting the stored signature again retries
+    await h.exec(h.admin, { kind: 'registerAttestor', attestor: k5.address });
+    await rig.sync();
+    const stub = vi.spyOn(h.sim, 'submit').mockRejectedValueOnce(new ChainError('WrongStatus', 'the series is terminal', { stage1: 'TerminalStatus' }));
+    const refused = await rig.signExtinguish(id, k5, t5);
+    expect(refused.statusCode, refused.body).toBe(422);
+    expect(refused.json()).toMatchObject({ error: 'ChainWrongStatus', detail: { stage1: 'TerminalStatus' } });
+    expect(stub).toHaveBeenCalledTimes(1);
+    stub.mockRestore();
+    expect(await row(id)).toMatchObject({ state: 'ready', relay_error: 'TerminalStatus', relay_tx: null });
+    expect((await rig.get(`/attestor/extinguish/${id}`, t6)).json()).toMatchObject({ state: 'ready', relayError: 'TerminalStatus', signers: [k5.address, k6.address] });
+    expect((await rig.get(`/attestor/extinguish/${id}`, t6)).json()).not.toHaveProperty('signatures');
+    expect((await rig.get(`/attestor/extinguish/${id}/message`, t6)).statusCode).toBe(409); // ready: nothing more to sign
+    const retried = await rig.signExtinguish(id, k5, t5); // the message route is closed while ready: post the stored signature
+    expect(retried.statusCode).toBe(409);
+    const stored = (await row(id)).signatures as { signer: string; signature: string; digest: string }[];
+    const again = await rig.post(`/attestor/extinguish/${id}/sign`, { extinguishNonce: '0', attestation: stored.find((x) => x.signer === k5.address)! }, t5);
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json()).toMatchObject({ state: 'sent', relayError: null, relayTx: expect.any(String) });
+    expect((await h.sim.getSeries(s2))!.status).toBe('Extinguished');
+
+    // S4 D15 is read live: a key relinked to the other named key's account cannot sign (409 same-account)
+    const s3 = (await h.runRaise()).seriesId;
+    await rig.sync();
+    const id3 = await openFor(s3, k6, k7, t6);
+    await rig.t.pool.query("update account_signer_keys set account_id = 'att-k6' where address = $1", [k7.address]);
+    const both = await rig.signExtinguish(id3, k6, t6);
+    expect([both.statusCode, both.json().detail]).toEqual([409, { reason: 'same-account' }]);
+    await rig.t.pool.query("update account_signer_keys set account_id = 'att-k7' where address = $1", [k7.address]);
+    expect((await rig.signExtinguish(id3, k6, t6)).json()).toMatchObject({ state: 'collecting', signers: [k6.address] });
+    // a key an open request names cannot be unlinked (its account is one of the two)
+    const unlink = await rig.del(`/me/signer-keys/${k7.address}`, t7);
+    expect([unlink.statusCode, unlink.json().detail]).toEqual([409, { reason: 'open-work', openWork: { hardship: 0, tier3: 0, annual: 0, extinguishments: 1, amendments: 0 } }]);
+    // another extinguishment of the series lands (two other keys' signatures relayed directly): the open request can no
+    // longer be completed, and the indexer withdraws it, its dead signature dropped
+    await h.sim.submit(await h.extinguishment(s3), 'keeper');
+    await rig.sync();
+    expect(await row(id3)).toMatchObject({ state: 'withdrawn', decision_code: 'series-extinguished', extinguish_nonce: null, signatures: [] });
+    expect((await rig.get('/attestor/queue', t7)).json().extinguishments).toEqual([]);
   });
 
   // S1 review: decide checked only the requested end and "in the future", so it recorded 'approved' (and notified it) for a

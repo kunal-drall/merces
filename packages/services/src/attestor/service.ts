@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import {
-  E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, expectedPrior, fxDigest, hex32ToField, keyUsable, noPauseApprovable, parseE2eEnvelope, pauseApprovalRefusal, pauseDigest, readsAsText,
-  recoverSigner, reportDigest, reportProofSchema, type ChainPort, type PauseApprovalRule, type SeriesState, type SigningRequest, type UnsignedTx,
+  ChainError, E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, expectedPrior, extinguishDigest, fxDigest, hex32ToField, keyUsable, noPauseApprovable, parseE2eEnvelope, pauseApprovalRefusal, pauseDigest,
+  readsAsText, recoverSigner, reportDigest, reportProofSchema, type ChainPort, type PauseApprovalRule, type SeriesState, type SigningRequest, type UnsignedTx,
 } from '@merces/domain';
 import { U64_MAX, parsePeriod, periodFrom, toPid } from '@merces/math';
 import { withTransaction } from '@merces/db';
@@ -28,12 +28,15 @@ import { invalidAttestorSignature, requestFor, signingDomainOf } from '../signin
  *    extracts nothing); the annual true-up as amounts and a deadline;
  *  - FX fallback requests the keeper opened (C9): the attestor's device signs Stage 1's FX message for the rate once per
  *    affected series (the message binds the series key; S4 WP9, D14), the service checks and stores the signatures;
- *  - extinguishment (C11.6): one transaction with two distinct registered attestors as signers.
+ *  - extinguishment (C11.6): two attestor keys held by two different accounts (S4 D15) each sign Stage 1's
+ *    EXTINGUISH message over the series' live extinguish nonce on their own devices (S4 WP12); once both are in, the
+ *    keeper relays `extinguish` (permissionless).
  * No income figure, document or reason is ever at rest or in a log. Decision fields are codes.
  * The backend never signs (S4 D2, no custody): it builds signing requests from the chain's own reads (`ChainInfo.signing`,
  * `SeriesState.seriesKey`, `SeriesState.nonces`), which the attestor's device rebuilds and checks before it signs, and it
- * recovers and checks every signature it is sent. Every onchain action is returned as an UnsignedTx for the issuer or the
- * attestor, except a checked pause approval, which the keeper relays (S4 D3: keepers send only permissionless commands).
+ * recovers and checks every signature it is sent. Every onchain action is returned as an UnsignedTx for the issuer, except
+ * a checked pause approval and a checked pair of extinguishment signatures, which the keeper relays (S4 D3: keepers send
+ * only permissionless commands).
  */
 
 const money = z.string().regex(/^\d+$/, 'money must be a non-negative integer string in base units');
@@ -111,7 +114,19 @@ export const fxSignSchema = z.object({
   sourceNote: code,
   signatures: z.array(z.object({ seriesId: z.string().regex(/^[a-z0-9-]+:[A-Za-z0-9]+$/), signature: signature65 }).strict()).min(1).max(500),
 }).strict();
-export const extinguishSchema = z.object({ seriesId: z.string().regex(/^[a-z0-9-]+:[A-Za-z0-9]+$/), attestors: z.array(attestorKey).length(2), evidenceCiphertext: ciphertext, keyHint });
+/**
+ * Opening an extinguishment (S4 WP12): `attestor` is the caller's own key, `coAttestor` a second attestor key held by
+ * another account (S4 D15), and the evidence is E2E ciphertext for them. No signature yet: each named key signs the
+ * request's EXTINGUISH message afterwards (`GET .../message`, `POST .../sign`).
+ */
+export const extinguishSchema = z.object({ seriesId: z.string().regex(/^[a-z0-9-]+:[A-Za-z0-9]+$/), attestor: attestorKey, coAttestor: attestorKey, evidenceCiphertext: ciphertext, keyHint }).strict();
+/** The query of `GET /attestor/extinguish/{requestId}/message`: the named key to sign (optional when the caller holds one that has not signed). */
+export const extinguishMessageQuerySchema = z.object({ attestor: attestorKey.optional() }).strict();
+/**
+ * One named key's EXTINGUISH signature (S4 WP12), made on its own device from `GET .../message` and posted as the
+ * attestor tool prints it, with the nonce it signed (the request's `fields.extinguishNonce`).
+ */
+export const extinguishSignSchema = z.object({ extinguishNonce: nonce, attestation: z.object({ signer: attestorKey, signature: signature65, digest: hex32.optional() }).strict() }).strict();
 
 /**
  * A Stage 1 pause-approval refusal as an API error: Stage 1's name in `detail.stage1` and a message naming the rule and
@@ -272,14 +287,15 @@ export class AttestorService {
     const annual = await p.query(`select annual_id, series_id, chain, year, attestor, created_at from tier3_annual where state = $3 and ${inPairs('chain', 'attestor')} order by created_at`, [pc, pk, 'open']);
     const fx = await p.query('select request_id, chain, pair, period_id, reason, created_at from fx_fallback_requests where state = $2 and ($1::text[] is null or chain = any($1::text[])) order by created_at', [chains, 'open']);
     const amendments = await p.query('select a.amendment_id, a.series_id, s.chain, a.kind, a.version, a.rationale_code, a.created_at from terms_amendments a join series s on s.series_id = a.series_id where a.state = $2 and ($1::text[] is null or s.chain = any($1::text[])) order by a.created_at', [chains, 'proposed']);
-    const ext = await p.query(`select request_id, series_id, chain, attestors, created_at from extinguishment_requests e where state = $3 and ($1::text[] is null or exists (select 1 from unnest(e.attestors) as x(a) where ${inPairs('e.chain', 'x.a')})) order by created_at`, [pc, pk, 'built']);
+    // open extinguishments naming one of the caller's keys (collecting signatures, or ready and awaiting the relay)
+    const ext = await p.query(`select request_id, series_id, chain, attestors, state, signatures, created_at from extinguishment_requests e where state = any($3::text[]) and ($1::text[] is null or exists (select 1 from unnest(e.attestors) as x(a) where ${inPairs('e.chain', 'x.a')})) order by created_at`, [pc, pk, ['collecting', 'ready']]);
     return {
       hardship: hardship.rows.map((r) => ({ hardshipId: r.hardship_id, seriesId: r.series_id, chain: r.chain, attestor: r.attestor, requestedUntil: Number(r.requested_until), createdAt: r.created_at })),
       tier3: tier3.rows.map((r) => ({ caseId: r.case_id, seriesId: r.series_id, chain: r.chain, periodId: r.period_id, attestor: r.attestor, estimatePaymentStable: r.estimate_payment_stable, createdAt: r.created_at })),
       tier3Annual: annual.rows.map((r) => ({ annualId: r.annual_id, seriesId: r.series_id, chain: r.chain, year: r.year, attestor: r.attestor, createdAt: r.created_at })),
       fxRequests: fx.rows.map((r) => ({ requestId: r.request_id, chain: r.chain, pair: r.pair, periodId: r.period_id, reason: r.reason, createdAt: r.created_at })),
       amendments: amendments.rows.map((r) => ({ amendmentId: r.amendment_id, seriesId: r.series_id, chain: r.chain, kind: r.kind, version: r.version, rationaleCode: r.rationale_code, createdAt: r.created_at })),
-      extinguishments: ext.rows.map((r) => ({ requestId: r.request_id, seriesId: r.series_id, chain: r.chain, attestors: r.attestors, createdAt: r.created_at })),
+      extinguishments: ext.rows.map((r) => ({ requestId: r.request_id, seriesId: r.series_id, chain: r.chain, attestors: r.attestors, state: r.state, signers: signersOf(r.signatures), createdAt: r.created_at })),
     };
   }
 
@@ -918,55 +934,262 @@ export class AttestorService {
     };
   }
 
-  // ------------------------------------------------------------------ extinguishment (C11.6)
+  // ------------------------------------------------------------------ extinguishment (C11.6, S4 WP12)
 
-  private extView(e: Record<string, unknown>, withCiphertext: boolean): Record<string, unknown> {
-    return { requestId: e.request_id, seriesId: e.series_id, chain: e.chain, attestors: e.attestors, state: e.state, decisionCode: e.decision_code ?? null, keyHint: e.key_hint ?? null, requestedBy: e.requested_by, createdAt: e.created_at, ...(withCiphertext ? { evidenceCiphertext: e.evidence_ciphertext } : {}) };
-  }
-
-  /**
-   * Attestor: build the extinguish transaction with both attestor keys as signers (the first signs, the second
-   * co-signs; transitional until S4 WP12 makes it two Stage 1 EXTINGUISH signatures relayed by the keeper). One of the
-   * two keys must be linked to the caller's account and active on the series' chain.
-   */
-  async requestExtinguishment(session: Session, input: z.infer<typeof extinguishSchema>): Promise<Record<string, unknown> & { tx: UnsignedTx }> {
-    const chain = this.chainOf(input.seriesId);
-    const series = await chain.getSeries(input.seriesId);
-    if (!series) throw AppError.notFound('series');
-    // Stage 1 extinguishes a settled raise only (RaiseNotSettled): not an open raise, nor an ungraduated curve
-    if (series.phase !== 'Settled') throw AppError.conflict(`only a settled raise can be extinguished (the raise is ${series.phase})`);
-    // Stage 1 refuses it until the raise's last bid is processed (MintNotFinalized, S2)
-    if (!series.mintFinalized) throw AppError.conflict('the raise is still processing its bids (MintNotFinalized): it cannot be extinguished yet');
-    if (series.status === 'Extinguished') throw AppError.conflict('series is already extinguished');
-    const [a1, a2] = input.attestors as [string, string];
-    if (a1 === a2) throw AppError.unprocessable('two distinct attestors are required');
-    await this.requireRegisteredAttestor(chain, a1);
-    await this.requireRegisteredAttestor(chain, a2);
-    if (!(await this.actsAs(session, chain.chain, a1)) && !(await this.actsAs(session, chain.chain, a2)) && !session.roles.includes('admin')) throw AppError.forbidden('one of the two attestor keys must be linked to your account and registered on the series\' chain');
-    assertOpaqueCiphertext(input.evidenceCiphertext, 'evidenceCiphertext');
-    const id = this.ctx.newId('ext');
-    await this.ctx.pool.query('insert into extinguishment_requests (request_id, series_id, chain, attestors, requested_by, evidence_ciphertext, key_hint) values ($1,$2,$3,$4,$5,$6,$7)', [id, input.seriesId, chain.chain, [a1, a2], session.accountId, input.evidenceCiphertext, input.keyHint]);
-    const tx = await chain.build({ kind: 'extinguish', seriesId: input.seriesId, attestors: [a1, a2] }, a1, [a2]);
-    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'extinguishment.request', target: id, detail: { seriesId: input.seriesId, attestors: [a1, a2] } });
-    const row = (await this.ctx.pool.query('select * from extinguishment_requests where request_id = $1', [id])).rows[0];
-    return { ...this.extView(row, false), tx };
-  }
-
-  async getExtinguishment(id: string, session: Session): Promise<Record<string, unknown>> {
+  private async extRow(id: string): Promise<Record<string, unknown>> {
     const r = await this.ctx.pool.query('select * from extinguishment_requests where request_id = $1', [id]);
     const e = r.rows[0];
     if (!e) throw AppError.notFound('extinguishment request');
-    const attestors = e.attestors as string[];
-    let named = false;
-    for (const a of attestors) if (await this.actsAs(session, e.chain, a)) named = true;
-    if (!named && !session.roles.includes('admin')) throw AppError.forbidden('this request names other attestor keys, or your key is not linked or not active on its chain');
-    const series = await this.ctx.chains.get(e.chain).getSeries(e.series_id);
-    if (series?.status === 'Extinguished' && e.state === 'built') {
-      await this.ctx.pool.query("update extinguishment_requests set state = 'sent' where request_id = $1", [id]);
-      e.state = 'sent';
-    }
-    return { ...this.extView(e, true), seriesStatus: series?.status ?? null, extinguishedAt: series?.extinguishedAt ?? null };
+    return e;
   }
+
+  /**
+   * The record as the named attestors and admins see it (the evidence with `withCiphertext`). While signatures are
+   * collected or wait for the relay the view names the keys that signed and the nonce, never a signature: an unrelayed
+   * EXTINGUISH signature is a bearer authorisation (anyone holding both could extinguish the series), so no read, audit
+   * row, notification or feed shows it (S4 amendment D2). Once relayed (`sent`) the signatures are public onchain data
+   * and `withSignatures` shows them.
+   */
+  private extView(e: Record<string, unknown>, withCiphertext: boolean, withSignatures = withCiphertext): Record<string, unknown> {
+    const sigs = signatureEntries(e.signatures);
+    return {
+      requestId: e.request_id, seriesId: e.series_id, chain: e.chain, attestors: e.attestors, state: e.state, decisionCode: e.decision_code ?? null, keyHint: e.key_hint ?? null, requestedBy: e.requested_by, createdAt: e.created_at,
+      extinguishNonce: str(e.extinguish_nonce), signers: sigs.map((x) => x.signer), relayTx: e.relay_tx ?? null, relayError: e.relay_error ?? null,
+      ...(withSignatures && e.state === 'sent' ? { signatures: sigs } : {}),
+      ...(withCiphertext ? { evidenceCiphertext: e.evidence_ciphertext } : {}),
+    };
+  }
+
+  /** The account a key is linked to (its own EIP-191 proof), or null. */
+  private async accountOf(address: string): Promise<string | null> {
+    const r = await this.ctx.pool.query<{ account_id: string }>('select account_id from account_signer_keys where address = $1', [address]);
+    return r.rows[0]?.account_id ?? null;
+  }
+
+  /**
+   * S4 D15 (ours, stricter than Stage 1, which checks keys only): the two named keys must be linked to two different
+   * accounts, read live, so one person holding two attestor keys cannot extinguish a series alone. 409 `same-account`.
+   */
+  private async requireDistinctAccounts(e: Record<string, unknown>): Promise<void> {
+    const [a, b] = e.attestors as [string, string];
+    const [x, y] = await Promise.all([this.accountOf(a), this.accountOf(b)]);
+    if (x !== null && x === y) throw AppError.conflict('both attestor keys of this request are linked to one account: an extinguishment needs two attestors holding their own keys', { reason: 'same-account' });
+  }
+
+  /**
+   * Stage 1 extinguishes a settled raise whose mint is final and that is not extinguished yet (exit.rs:229-241;
+   * MercesVault.sol:598-600), checked on the chain's read before anything is opened, signed or relayed: 409 with
+   * Stage 1's name. An open raise or a curve before its completion cannot be extinguished.
+   */
+  private extinguishable(series: SeriesState): void {
+    if (series.phase !== 'Settled') throw new AppError(409, 'Conflict', `only a settled raise can be extinguished (the raise is ${series.phase})`, { stage1: 'RaiseNotSettled' });
+    if (!series.mintFinalized) throw new AppError(409, 'Conflict', 'the raise is still processing its bids (MintNotFinalized): it cannot be extinguished yet', { stage1: 'MintNotFinalized' });
+    if (series.status === 'Extinguished') throw new AppError(409, 'Conflict', 'series is already extinguished', { stage1: 'TerminalStatus' });
+  }
+
+  private async extinguishRequestFor(chain: ChainPort, series: SeriesState, signer: string): Promise<SigningRequest<'EXTINGUISH'>> {
+    const domain = await signingDomainOf(chain);
+    return requestFor({ kind: 'EXTINGUISH', chain: chain.chain, seriesId: series.seriesId, seriesKey: series.seriesKey, domain, signer, fields: { extinguishNonce: series.nonces.extinguish } });
+  }
+
+  /**
+   * Attestor: open an extinguishment request (S4 WP12; C11.6) naming the caller's own key (`attestor`, linked to the
+   * caller's account and registered on the series' chain) and a second registered key held by another account
+   * (`coAttestor`; S4 D15: 409 `same-account` when the caller's account holds it too, 422 when no account holds it, since
+   * nobody could sign for it here). The evidence (death or permanent disability) is E2E ciphertext for the attestors. The
+   * series must be one Stage 1 would extinguish now. One open request per series. Nothing is signed yet: each named key
+   * signs the request's EXTINGUISH message on its own device (`extinguishMessage`, `signExtinguishment`).
+   */
+  async requestExtinguishment(session: Session, input: z.infer<typeof extinguishSchema>): Promise<Record<string, unknown>> {
+    const chain = this.chainOf(input.seriesId);
+    const series = await chain.getSeries(input.seriesId);
+    if (!series) throw AppError.notFound('series');
+    this.extinguishable(series);
+    if (input.attestor === input.coAttestor) throw AppError.unprocessable('two distinct attestor keys are required', { stage1: 'SameAttestor' });
+    if (!(await this.actsAs(session, chain.chain, input.attestor))) throw AppError.forbidden('`attestor` must be a key linked to your account and registered on the series\' chain');
+    await this.requireRegisteredAttestor(chain, input.coAttestor);
+    const coAccount = await this.accountOf(input.coAttestor);
+    if (coAccount === session.accountId) throw AppError.conflict('the co-attestor key is linked to your own account: an extinguishment needs two attestors holding their own keys', { reason: 'same-account' });
+    if (coAccount === null) throw AppError.unprocessable('the co-attestor key is not linked to any account: nobody could sign this request for it', { reason: 'co-attestor-not-linked' });
+    assertOpaqueCiphertext(input.evidenceCiphertext, 'evidenceCiphertext');
+    const id = this.ctx.newId('ext');
+    const attestors = [input.attestor, input.coAttestor];
+    try {
+      await this.ctx.pool.query("insert into extinguishment_requests (request_id, series_id, chain, attestors, requested_by, evidence_ciphertext, key_hint, state) values ($1,$2,$3,$4,$5,$6,$7,'collecting')", [id, input.seriesId, chain.chain, attestors, session.accountId, input.evidenceCiphertext, input.keyHint]);
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') throw AppError.conflict('an extinguishment request is already open for this series');
+      throw err;
+    }
+    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'extinguishment.request', target: id, detail: { seriesId: input.seriesId, attestors } });
+    return this.extView(await this.extRow(id), false);
+  }
+
+  async getExtinguishment(id: string, session: Session): Promise<Record<string, unknown>> {
+    const e = await this.extRow(id);
+    let named = false;
+    for (const a of e.attestors as string[]) if (await this.actsAs(session, String(e.chain), a)) named = true;
+    if (!named && !session.roles.includes('admin')) throw AppError.forbidden('this request names other attestor keys, or your key is not linked or not active on its chain');
+    const series = await this.ctx.chains.get(String(e.chain)).getSeries(String(e.series_id));
+    return { ...this.extView(e, true), seriesStatus: series?.status ?? null, extinguishedAt: series?.extinguishedAt ?? null, liveExtinguishNonce: series?.nonces.extinguish ?? null };
+  }
+
+  /**
+   * Attestor (a named key's holder, or an admin reading it): the signing request for that key's EXTINGUISH signature
+   * (S4 WP12, D2): Stage 1's `MERCES_EXTINGUISH_V1` over the chain's signing domain, the series key and the series' live
+   * extinguish nonce. The key is `q.attestor`, or the caller's named key that has not signed yet. Only while the request
+   * collects signatures, for a key that has not signed, for two keys of two accounts (409 `same-account`) and a series
+   * Stage 1 would extinguish now. The device warns that the signature cannot be recalled (with the other key's it lets
+   * anyone extinguish the series until the nonce moves or a key is revoked) and signs; the API never signs.
+   */
+  async extinguishMessage(id: string, session: Session, q: z.infer<typeof extinguishMessageQuerySchema>): Promise<SigningRequest<'EXTINGUISH'>> {
+    const e = await this.extRow(id);
+    const chainKey = String(e.chain);
+    const attestors = e.attestors as string[];
+    const signed = signatureEntries(e.signatures).map((x) => x.signer);
+    let key: string | undefined = q.attestor;
+    if (key !== undefined) {
+      if (!attestors.includes(key)) throw AppError.unprocessable('this request does not name that key');
+      if (!(await this.actsAs(session, chainKey, key)) && !session.roles.includes('admin')) throw AppError.forbidden('that key is not linked to your account or not active on the request\'s chain');
+    } else {
+      const mine: string[] = [];
+      for (const a of attestors) if (await this.actsAs(session, chainKey, a)) mine.push(a);
+      if (!mine.length) throw AppError.forbidden('this request names other attestor keys, or your key is not linked or not active on its chain');
+      key = mine.find((a) => !signed.includes(a)) ?? mine[0]!;
+    }
+    if (e.state !== 'collecting') throw AppError.conflict(`extinguishment request is ${e.state}`);
+    if (signed.includes(key)) throw AppError.conflict('this key has signed this request already', { reason: 'already-signed' });
+    await this.requireDistinctAccounts(e);
+    const chain = this.ctx.chains.get(chainKey);
+    const series = await chain.getSeries(String(e.series_id));
+    if (!series) throw AppError.notFound('series');
+    this.extinguishable(series);
+    return this.extinguishRequestFor(chain, series, key);
+  }
+
+  /**
+   * Attestor: one named key's EXTINGUISH signature (only the account holding that key, while it is registered; an admin
+   * never signs: A-M5-3). In order:
+   *  1. the request is open and the key is one it names, acting for the caller; the two keys are held by two accounts
+   *     (409 `same-account`, read live: S4 D15);
+   *  2. the series is one Stage 1 would extinguish now (`extinguishable`);
+   *  3. the signature: the EXTINGUISH message rebuilt here from the chain's domain and series key with the nonce the key
+   *     signed (a digest sent must equal it) recovers to the key, and the key is active on the chain (no grace): 422
+   *     `detail.stage1` InvalidAttestorSignature otherwise;
+   *  4. the nonce read again must still be the one signed: 409 `stale-nonce` with a fresh signing request otherwise;
+   *  5. the signature is stored with the request locked (a stored signature over an older nonce is dropped: it is dead);
+   *     with both keys' signatures the request is `ready` and the keeper relays it at once (`relayExtinguishment`).
+   * Posting a stored signature again on a ready request retries the relay. The audit names the signer, nonce and digest,
+   * never the signature.
+   */
+  async signExtinguishment(id: string, session: Session, input: z.infer<typeof extinguishSignSchema>): Promise<Record<string, unknown> & { relayTx: string | null }> {
+    const e = await this.extRow(id);
+    const chainKey = String(e.chain);
+    const seriesId = String(e.series_id);
+    const attestors = e.attestors as string[];
+    const key = input.attestation.signer;
+    if (!attestors.includes(key) || !(await this.actsAs(session, chainKey, key))) throw AppError.forbidden('only the account holding one of the two named attestor keys, while the key is registered, signs this request');
+    if (e.state !== 'collecting' && e.state !== 'ready') throw AppError.conflict(`extinguishment request is ${e.state}`);
+    await this.requireDistinctAccounts(e);
+    const chain = this.ctx.chains.get(chainKey);
+    const [now, series] = await Promise.all([chain.now(), chain.getSeries(seriesId)]);
+    if (!series) throw AppError.notFound('series');
+    this.extinguishable(series);
+    // Stage 1's EXTINGUISH message, rebuilt here from the chain's own domain and series key (never the caller's digest)
+    const domain = await signingDomainOf(chain);
+    const { digest } = extinguishDigest({ domain: domain.domain, seriesKey: series.seriesKey }, { extinguishNonce: input.extinguishNonce });
+    if (input.attestation.digest !== undefined && input.attestation.digest !== digest) throw invalidAttestorSignature('the attestation\'s digest is not this series\' EXTINGUISH message on this chain (another series, chain or nonce)');
+    if (recoverSigner(digest, input.attestation.signature) !== key) throw invalidAttestorSignature('the signature does not recover to the named key over Stage 1\'s EXTINGUISH message for this nonce on this chain');
+    const k = await chain.getSignerKey('attestor', key);
+    if (!k || !keyUsable(k, now)) throw invalidAttestorSignature('the attestor key is not active on this chain: an extinguishment needs active keys');
+    if (series.nonces.extinguish !== input.extinguishNonce) {
+      throw new AppError(409, 'Conflict', 'the series\' extinguish nonce moved since this was signed: the signature is dead; sign the fresh request', { reason: 'stale-nonce', liveExtinguishNonce: series.nonces.extinguish, request: await this.extinguishRequestFor(chain, series, key) });
+    }
+    const entry: ExtinguishSignature = { signer: key, signature: input.attestation.signature, digest };
+    const state = await withTransaction(this.ctx.pool, async (db) => {
+      const row = (await db.query('select state, signatures, extinguish_nonce from extinguishment_requests where request_id = $1 for update', [id])).rows[0];
+      if (!row || (row.state !== 'collecting' && row.state !== 'ready')) throw AppError.conflict(`extinguishment request is ${row?.state ?? 'gone'}`);
+      // a signature stored over another nonce is dead on the chain: dropped (the key signs again)
+      const kept = row.extinguish_nonce !== null && String(row.extinguish_nonce) !== input.extinguishNonce ? [] : signatureEntries(row.signatures);
+      const sigs = [...kept.filter((x) => x.signer !== key), entry].sort((x, y) => attestors.indexOf(x.signer) - attestors.indexOf(y.signer));
+      const next = sigs.length === 2 ? 'ready' : 'collecting';
+      await db.query('update extinguishment_requests set signatures = $2, extinguish_nonce = $3, state = $4, decision_code = null, relay_error = null where request_id = $1', [id, JSON.stringify(sigs), input.extinguishNonce, next]);
+      await audit(db, { actor: session.accountId, actorRole: 'attestor', action: 'extinguishment.sign', target: id, detail: { seriesId, signer: key, extinguishNonce: input.extinguishNonce, digest } });
+      return next;
+    });
+    if (state !== 'ready') return { ...this.extView(await this.extRow(id), false), relayTx: null };
+    return this.relayExtinguishment(id, session);
+  }
+
+  /**
+   * The keeper relays a ready request (S4 D3: `extinguish` is permissionless; keepers send only commands they checked),
+   * the row locked. Both stored signatures are checked against the chain's reads first: the nonce they bind must be the
+   * live one (else both are dead: dropped, the request collects again, 409 `stale-nonce`), and each key must still be an
+   * active attestor (a key revoked since kills its signature: dropped, 409 `attestor-key-inactive` with Stage 1's
+   * InvalidAttestorSignature). Then the keeper submits `extinguish{attestorA, signatureA, attestorB, signatureB}` in the
+   * request's order: on success the request is `sent` with the relay transaction; a chain refusal leaves it `ready` with
+   * the refusal's Stage 1 name (or canonical code) in `relay_error` and comes back with its canonical code (A-REV-23);
+   * posting either stored signature again retries.
+   */
+  private async relayExtinguishment(id: string, session: Session): Promise<Record<string, unknown> & { relayTx: string }> {
+    type Outcome = { relayTx: string } | { error: Error };
+    const outcome = await withTransaction<Outcome>(this.ctx.pool, async (db) => {
+      const row = (await db.query('select * from extinguishment_requests where request_id = $1 for update', [id])).rows[0];
+      if (row?.state === 'sent') return { relayTx: String(row.relay_tx) }; // a concurrent relay landed
+      if (!row || row.state !== 'ready') throw AppError.conflict(`extinguishment request is ${row?.state ?? 'gone'}`);
+      const chain = this.ctx.chains.get(String(row.chain));
+      const seriesId = String(row.series_id);
+      const [now, series] = await Promise.all([chain.now(), chain.getSeries(seriesId)]);
+      if (!series) throw AppError.notFound('series');
+      const sigs = signatureEntries(row.signatures);
+      if (String(row.extinguish_nonce) !== series.nonces.extinguish) {
+        await db.query("update extinguishment_requests set signatures = '[]', extinguish_nonce = null, state = 'collecting', decision_code = 'stale-nonce', relay_error = null where request_id = $1", [id]);
+        return { error: new AppError(409, 'Conflict', 'the series\' extinguish nonce moved since these were signed: both signatures are dead; both keys sign again', { reason: 'stale-nonce', liveExtinguishNonce: series.nonces.extinguish }) };
+      }
+      const dead: string[] = [];
+      for (const x of sigs) {
+        const k = await chain.getSignerKey('attestor', x.signer);
+        if (!k || !keyUsable(k, now)) dead.push(x.signer);
+      }
+      if (dead.length) {
+        const kept = sigs.filter((x) => !dead.includes(x.signer));
+        await db.query("update extinguishment_requests set signatures = $2, extinguish_nonce = $3, state = 'collecting', decision_code = 'attestor-key-inactive', relay_error = null where request_id = $1", [id, JSON.stringify(kept), kept.length ? row.extinguish_nonce : null]);
+        return { error: new AppError(409, 'Conflict', 'an attestor key of this request is no longer active on the chain: its signature is dead (an extinguishment needs active keys)', { reason: 'attestor-key-inactive', stage1: 'InvalidAttestorSignature', keys: dead }) };
+      }
+      const [a, b] = sigs as [ExtinguishSignature, ExtinguishSignature];
+      try {
+        // the keeper relays both signatures: extinguish is permissionless (S4 D3)
+        const res = await chain.submit({ kind: 'extinguish', seriesId, attestorA: a.signer, signatureA: a.signature, attestorB: b.signer, signatureB: b.signature }, 'keeper');
+        await db.query("update extinguishment_requests set state = 'sent', relay_tx = $2, relay_error = null, decision_code = 'extinguished' where request_id = $1", [id, res.txId]);
+        await audit(db, { actor: session.accountId, actorRole: 'attestor', action: 'extinguishment.relay', target: id, detail: { seriesId, attestors: [a.signer, b.signer], extinguishNonce: String(row.extinguish_nonce), digest: a.digest, relayTx: res.txId } });
+        return { relayTx: res.txId };
+      } catch (err) {
+        if (!(err instanceof ChainError)) throw err; // not a refusal: rolled back, the request stays ready as it was
+        const name = typeof err.detail?.stage1 === 'string' ? err.detail.stage1 : err.code;
+        await db.query('update extinguishment_requests set relay_error = $2 where request_id = $1', [id, name]);
+        return { error: err };
+      }
+    });
+    if ('error' in outcome) throw outcome.error;
+    return { ...this.extView(await this.extRow(id), false, true), relayTx: outcome.relayTx };
+  }
+}
+
+/** One named key's stored Stage 1 EXTINGUISH signature (S4 WP12). */
+interface ExtinguishSignature {
+  signer: string;
+  signature: string;
+  digest: string;
+}
+
+/** The stored EXTINGUISH signatures of an extinguishment request (`signatures` jsonb), in the request's key order. */
+function signatureEntries(x: unknown): ExtinguishSignature[] {
+  if (!Array.isArray(x)) return [];
+  return x.filter((s): s is ExtinguishSignature => !!s && typeof s.signer === 'string' && typeof s.signature === 'string' && typeof s.digest === 'string').map((s) => ({ signer: s.signer, signature: s.signature, digest: s.digest }));
+}
+
+/** The keys that have signed an extinguishment request (never their signatures). */
+function signersOf(x: unknown): string[] {
+  return signatureEntries(x).map((s) => s.signer);
 }
 
 /** A case's stored attestation as the API shows it: Stage 1's REPORT signature {signer, signature, digest} (S4 WP9), else null. */

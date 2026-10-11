@@ -1,13 +1,17 @@
 import { U64_MAX } from '@merces/math';
 import { dec, hex32 } from '../codec.ts';
 import { RunnerError } from '../errors.ts';
-import { direct, shim, type TranslatorTable } from './types.ts';
+import { direct, type TranslatorTable } from './types.ts';
 
 /**
  * Extinguishment and amendments: Stage 1 passes attestor signatures as arguments.
  *
- * - `extinguish` (SH-EXT-1): `extinguish{attestors}` sent by `attestors[0]` with `attestors[1]` co-signing; a repeated
- *   attestor signs once, so the chain sees the duplicate and refuses it (S4 WP12 moves it to signatures).
+ * - `extinguish` (direct since S4 WP12; was SH-EXT-1): Stage 1 passes the two attestors' signatures as arguments and
+ *   anyone may send it, so the runner has each named vector key sign Stage 1's EXTINGUISH message over the chain's
+ *   signing domain, the series key and the series' live extinguish nonce (`SeriesState.nonces.extinguish`), as Stage 1's
+ *   harnesses do, and the keeper submits `extinguish{attestorA, signatureA, attestorB, signatureB}`. A repeated attestor
+ *   (11#35, `[attestor1, attestor1]`) names one key twice and the chain refuses it before any signature is read
+ *   (SameAttestor); a revoked key's valid signature (11#37) is InvalidAttestorSignature.
  * - `claim_final`: `claimFinal` (direct since S3; was shim SH-CLM-3, `claimPayout`), Stage 1's body (SIM:1449-1475).
  * - `amend_terms` (direct since S4 WP11; was SH-AMD-1): the actor sends `amendTerms{termsCommitment, capMultipleWad,
  *   attestor, signature}`, the signature being the named vector key's Stage 1 AMEND message over the chain's signing
@@ -20,11 +24,14 @@ import { direct, shim, type TranslatorTable } from './types.ts';
  */
 export const terminalOps: TranslatorTable = {
   extinguish: (ctx, c) =>
-    shim('SH-EXT-1', async () => {
-      const [a, b] = c.attestors;
-      const first = ctx.actors.wallet(a);
-      const second = ctx.actors.wallet(b);
-      await ctx.send(first, { kind: 'extinguish', seriesId: ctx.seriesBook(c.series).seriesId, attestors: [first.address, second.address] }, a === b ? [] : [second]);
+    direct(async () => {
+      const seriesId = ctx.seriesBook(c.series).seriesId;
+      const [info, series] = await Promise.all([ctx.chain.info(), ctx.chain.getSeries(seriesId)]);
+      if (!info.signing || !series) throw new RunnerError(`extinguish ${c.series}: the chain has no signing context`);
+      const [a, b] = await Promise.all(
+        (c.attestors as [string, string]).map((name) => ctx.keyring.signer(name).attest('EXTINGUISH', info.signing!, series.seriesKey, { extinguishNonce: series.nonces.extinguish })),
+      ) as [{ signer: string; signature: string }, { signer: string; signature: string }];
+      await ctx.submit({ kind: 'extinguish', seriesId, attestorA: a.signer, signatureA: a.signature, attestorB: b.signer, signatureB: b.signature }, 'keeper');
     }),
 
   claim_final: (ctx, c) =>

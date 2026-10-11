@@ -26,6 +26,9 @@ import * as domainModule from '../src/index.ts';
  *  - S4-AMD: `amendTerms` is Stage 1's `amend_terms(termsCommitment, capMultipleWad, attestor, signature)`, still the
  *    issuer's user command (S4 WP11; was `{attestor}` with the attestor co-signing); `TermsAmended` carries the signed
  *    nonce and a 20-byte attestor key.
+ *  - S4-EXT: `extinguish` joins the permissionless group as Stage 1's `extinguish(attestorA, signatureA, attestorB,
+ *    signatureB)` (S4 WP12; was a user command `{attestors}` with the second attestor co-signing); `SeriesExtinguished`
+ *    names two 20-byte attestor keys.
  *
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
@@ -265,6 +268,23 @@ describe('hashing', () => {
     expect(() => parseDomainEvent({ ...env, type: 'TermsAmended', payload: { ...payload, attestor: 'w' } })).toThrow();
     expect(amountBearingEvents.has('TermsAmended' as never)).toBe(false);
   });
+  it('an extinguishment is Stage 1\'s permissionless extinguish with two attestor keys\' signatures; SeriesExtinguished names the keys (cause S4-EXT)', () => {
+    const sid = 'solana:abc';
+    const ext = { kind: 'extinguish', seriesId: sid, attestorA: '0x' + 'ab'.repeat(20), signatureA: '0x' + '11'.repeat(65), attestorB: '0x' + 'cd'.repeat(20), signatureB: '0x' + '22'.repeat(65) };
+    expect(permissionlessCommandSchema.parse(ext)).toEqual(ext);
+    expect(() => userCommandSchema.parse(ext)).toThrow();
+    // the schema does not refuse two equal keys: the chain does (SameAttestor), as both Stage 1 chains do
+    expect(permissionlessCommandSchema.parse({ ...ext, attestorB: ext.attestorA })).toMatchObject({ attestorB: ext.attestorA });
+    const { signatureB: _s, ...oneSignature } = ext;
+    for (const bad of [oneSignature, { ...ext, signatureA: 'sim:x' }, { ...ext, signatureB: '0x' + '11'.repeat(64) }, { ...ext, attestorA: 'w' }, { ...ext, attestorB: '0x' + 'CD'.repeat(20) }, { kind: 'extinguish', seriesId: sid, attestors: [ext.attestorA, ext.attestorB] }]) {
+      expect(() => permissionlessCommandSchema.parse(bad), JSON.stringify(bad)).toThrow();
+    }
+    const env = { chain: 'solana', cursor: '1', seq: 1, blockTime: 1, blockRef: '1', txId: 't', finality: 'finalized' as const };
+    const payload = { seriesId: sid, attestors: [ext.attestorA, ext.attestorB], returnedToHolders: '2250000000' };
+    expect(parseDomainEvent({ ...env, type: 'SeriesExtinguished', payload }).payload).toEqual(payload);
+    expect(() => parseDomainEvent({ ...env, type: 'SeriesExtinguished', payload: { ...payload, attestors: ['w', 'v'] } })).toThrow();
+    expect(() => parseDomainEvent({ ...env, type: 'SeriesExtinguished', payload: { ...payload, attestors: [ext.attestorA] } })).toThrow();
+  });
   it('mock proofs are a digest over the six public inputs only', () => {
     const pub = ['1', '2', '3', '4', '5', '6'];
     const proof = mockProve(pub);
@@ -326,8 +346,8 @@ describe('schemas', () => {
     expect(userCommandKinds.filter((k) => /Raise|Bid|Refund/.test(k))).toEqual(['openRaise', 'cancelRaise', 'commitBid', 'revealBid']);
     // cause S3-BR, S3-CV: a curve's completion and proceeds are permissionless (Stage 1 complete_curve, collect_curve_proceeds);
     // cause S3-CN: and its census (Stage 1 sync_curve_units)
-    // cause S4-PAU: and a signed pause approval (Stage 1 approve_pause)
-    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause']);
+    // cause S4-PAU: and a signed pause approval (Stage 1 approve_pause); cause S4-EXT: and a signed extinguishment
+    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish']);
     // cause S3-BR: burnRetired{holder} (permissionless, above) replaces the S1 list burn crank (`holders[]`), so no service
     // command burns any more; cause S3-CV: completion is permissionless `completeCurve` (was a service graduation command)
     expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'setAllowlist']);

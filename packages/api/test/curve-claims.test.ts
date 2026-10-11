@@ -18,6 +18,9 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  * S4 cause codes:
  *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address (transitionally
  *    a co-signing wallet at the key's address).
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  */
 describe.skipIf(!dbTestsEnabled())('claim builders on a curve series (S3 WP10)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -98,8 +101,7 @@ describe.skipIf(!dbTestsEnabled())('claim builders on a curve series (S3 WP10)',
     // b registers and tenders wallet units only: the tender creates its position (amendment M3)
     await h.registerHolder(seriesId, b);
     await h.tender(seriesId, b, 0n, 1_000_000n);
-    const [k1, k2] = h.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
-    await h.exec(k1, { kind: 'extinguish', seriesId, attestors: [k1.address, k2.address] }, [k2]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
     await rig.sync();
     const p = (await h.sim.getPosition(seriesId, a.address))!;
     expect(BigInt(p.finalClaimable) > 0n).toBe(true);

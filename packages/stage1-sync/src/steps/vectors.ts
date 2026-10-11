@@ -85,7 +85,7 @@ export const STAGE1_OP_MAP: Record<string, { canonical: string; kind: OpKind; sh
   claim_redemption: { canonical: 'claimRedemption', kind: 'direct' },
   claim_tail: { canonical: 'claimTail', kind: 'direct' },
   claim_final: { canonical: 'claimFinal', kind: 'direct' },
-  extinguish: { canonical: 'extinguish with a co-signing attestor', kind: 'shim', shim: 'SH-EXT-1' },
+  extinguish: { canonical: "extinguish (permissionless; the two named keys' EXTINGUISH signatures over the live extinguish nonce, sent by the keeper)", kind: 'direct' },
   amend_terms: { canonical: "amendTerms (the issuer's; the named key's AMEND signature over the live amendment nonce)", kind: 'direct' },
   fx_snapshot: { canonical: 'snapshotRate', kind: 'not-yet', milestone: 'S5' },
   set_fx_pair: { canonical: 'none (admin FX pair configuration)', kind: 'not-yet', milestone: 'S5' },

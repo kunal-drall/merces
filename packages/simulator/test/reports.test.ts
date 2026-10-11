@@ -16,6 +16,9 @@ import { GENESIS, USDC } from './helpers.ts';
  *    co-signature of the transaction, named by `attestor`);
  *  - S4-FX: the FX fallback is an attestor key's `MERCES_FX_V1` signature over the series key, the period and the report's
  *    `fxAvgWad`, in `fxFallback` (was `attestorRate`, co-signed).
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  */
 
 type Report = Extract<UserCommand, { kind: 'submitReport' }>;
@@ -64,7 +67,7 @@ describe('submitReport checks, in Stage 1 order', () => {
 
   it('5: a Retired or Extinguished series takes no report', async () => {
     const { h, seriesId, privateTerms } = await settled();
-    await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
     await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
     const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000) });
     await refused(h, send(h, command), 'TerminalStatus');

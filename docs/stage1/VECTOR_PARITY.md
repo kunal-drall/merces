@@ -114,7 +114,6 @@ The merces backend runs these Stage 1 ops through canonical calls of another sha
 | SH-PAY-1 | `pay` | payIn{periodId: open due period (else the next expected period), amount: the period payment due} | Stage 1's pay has no amount or period | S5 | 01, 04, 05, 06, 07, 08, 09, 10, 11, 14, 16, 17, 19, 20, 21, 22, 23, 25 |
 | SH-PAU-1 | `request_pause` | requestPause{until: t + maxPauseSeconds} | Stage 1's request has no end | S5 | 08, 19, 21 |
 | SH-RED-1 | `redeem` | redeem{maxPricePerUnit: U64_MAX} | Stage 1 has no slippage bound | — | 01, 05, 06, 09, 11, 23, 25 |
-| SH-EXT-1 | `extinguish` | extinguish{attestors} sent by attestors[0], attestors[1] co-signing (deduplicated) | co-signing vs signatures | S4 | 11, 25 |
 | SH-WIN-1 | `open_window` | keeper openTransferWindow{t + windowCommitDuration, + windowRevealDuration}; period kept by the runner | one-step windows | S5 | 22, 23, 25 |
 | SH-WIN-2 | `commit_ask` | commitWindowOrder{side: sell, Stage 1's keccak order commitment over the plaintext and the wallet (S4), deposit 0, units} | one-step windows | S5 | 22, 23, 25 |
 | SH-WIN-3 | `window_commit_bid` | commitWindowOrder{side: buy, Stage 1's keccak order commitment over the plaintext and the wallet (S4), deposit: escrow, units 0} | one-step windows | S5 | 22, 25 |
@@ -199,7 +198,7 @@ Stage 1's key registry and signatures on paths no Stage 1 vector takes (S4 plan 
 | 08_hardship_pause.json | 64 | 7 | 8 | `create_series`, `end_pause`, `pay`, `register_issuer`, `request_pause`, `submit_report` |
 | 09_tail_clause.json | 95 | 7 | 4 | `create_series`, `pay`, `redeem`, `register_issuer`, `submit_report` |
 | 10_transfer_window.json | 92 | 6 | 12 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_issuer`, `reveal_order`, `set_flags`, `submit_report`, `transfer_units`, `window_commit_bid` |
-| 11_extinguishment.json | 52 | 4 | 7 | `create_series`, `extinguish`, `pay`, `redeem`, `register_issuer`, `submit_report` |
+| 11_extinguishment.json | 52 | 4 | 7 | `create_series`, `pay`, `redeem`, `register_issuer`, `submit_report` |
 | 12_multi_series_router.json | 118 | 10 | 6 | `close_router_period`, `create_series`, `pay`, `register_issuer`, `resume_issuance`, `route_income`, `stop_issuance`, `submit_report` |
 | 13_fx.json | 281 | 5 | 10 | `create_series`, `fx_snapshot`, `pay`, `register_issuer`, `set_fx_pair`, `submit_report` |
 | 14_amendment.json | 83 | 6 | 8 | `create_series`, `pay`, `register_issuer`, `retire_if_capped`, `submit_report` |
@@ -210,10 +209,10 @@ Stage 1's key registry and signatures on paths no Stage 1 vector takes (S4 plan 
 | 19_pause_while_late.json | 60 | 8 | 4 | `create_series`, `pay`, `register_issuer`, `request_pause`, `submit_report` |
 | 20_tier3_trueup.json | 120 | 11 | 12 | `create_series`, `pay`, `pay_trueup`, `redeem`, `register_issuer`, `submit_report`, `submit_trueup` |
 | 21_entry_rules.json | 61 | 5 | 10 | `create_series`, `pay`, `register_issuer`, `request_pause`, `submit_report` |
-| 22_late_holder_tail_final.json | 111 | 6 | 1 | `begin_window_settlement`, `commit_ask`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `reveal_order`, `submit_report`, `window_commit_bid` |
+| 22_late_holder_tail_final.json | 111 | 6 | 1 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `reveal_order`, `submit_report`, `window_commit_bid` |
 | 23_redeem_twice_with_tail.json | 63 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `reveal_order`, `submit_report` |
 | 24_inverted_fx.json | 94 | 2 | 0 | `create_series`, `fx_snapshot`, `pay`, `register_issuer`, `set_fx_pair`, `submit_report` |
-| 25_window_on_terminal.json | 91 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `reveal_order`, `submit_report`, `window_commit_bid` |
+| 25_window_on_terminal.json | 91 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `reveal_order`, `submit_report`, `window_commit_bid` |
 
 ### Ops used and how they run on the merces backend
 
@@ -255,7 +254,7 @@ Stage 1's key registry and signatures on paths no Stage 1 vector takes (S4 plan 
 | `amend_terms` | 9 | amendTerms (the issuer's; the named key's AMEND signature over the live amendment nonce) | direct |
 | `claim_final` | 9 | claimFinal | direct |
 | `process_orders` | 9 | none (canonical clearing delivers inside clearTransferWindow) | shim (SH-WIN-7) |
-| `extinguish` | 6 | extinguish with a co-signing attestor | shim (SH-EXT-1) |
+| `extinguish` | 6 | extinguish (permissionless; the two named keys' EXTINGUISH signatures over the live extinguish nonce, sent by the keeper) | direct |
 | `request_pause` | 6 | requestPause (until supplied by the runner) | shim (SH-PAU-1) |
 | `burn_retired` | 5 | burnRetired (permissionless; sent by the keeper) | direct |
 | `retire_if_capped` | 5 | none (canonical retirement happens inside payIn; Stage 1 also retires after a cap-lowering amendment) | blocked (BLK-1) |

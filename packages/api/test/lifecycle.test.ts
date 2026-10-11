@@ -9,7 +9,10 @@ import { makeRig } from './helpers.ts';
 /*
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
- *    the builders take no series, window or side, and the salt is 32 bytes.
+ *    the builders take no series, window or side, and the salt is 32 bytes;
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  */
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -233,7 +236,7 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     expect([r3.paid, r3.burned]).toEqual([rc.json().amount, '100']);
 
     // two attestors extinguish the redeemed series: the unvested proceeds go to the final pool
-    await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
     await rig.sync();
     expect((await tail(b0)).statusCode).toBe(200); // the tail claim stays open on an extinguished series that redeemed
 
@@ -280,7 +283,7 @@ describe.skipIf(!dbTestsEnabled())('lifecycle builders (R6, R13, R14, R15, R19)'
     const commitment = orderCommitment({ wallet: b1.address, pricePerUnit: USDC(60), quantity: 40n, salt });
     await h.exec(b1, { kind: 'commitWindowOrder', seriesId, windowId: 0, side: 'sell', commitment, deposit: '0', units: '40' });
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(1_000).toString() });
-    await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
     await rig.sync();
     const p1 = (await rig.get(`/series/${seriesId}/position`, tok)).json().positions[0] as Record<string, string>;
     expect(p1).toMatchObject({ units: '100', escrowedUnits: '40', finalClaimable: USDC(2_625).toString() });

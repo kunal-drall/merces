@@ -30,6 +30,8 @@ async function withFreshSchema(fn: (schema: string) => Promise<void>): Promise<v
  *    approval and its transaction) and a withdrawn request has its own state.
  *  - S4-AMD: 028, an amendment carries the attestor key's AMEND signature with its nonce and digest; rows attested or
  *    built before it without one await an attestor again (resign-s4).
+ *  - S4-EXT: 029, an extinguishment request collects two attestor keys' EXTINGUISH signatures (collecting, ready, sent);
+ *    rows 025 left built go back to collecting (resign-s4), or are sent when the series is extinguished.
  */
 describe.skipIf(!dbTestsEnabled())('migrate', () => {
   it('serialises concurrent processes: three migrate() calls on a fresh schema all succeed, each file applied once', async () => {
@@ -513,6 +515,87 @@ describe.skipIf(!dbTestsEnabled())('migrate', () => {
         await expect(amend('m-x6', 'attested', KEY, '0xnew7', { ...sig, signature: 'sim:x' })).rejects.toThrow(/terms_amendments_attestor_signature_check/);
         await expect(amend('m-x7', 'attested', KEY, '0xnew7', { ...sig, digest: '0x01' })).rejects.toThrow(/terms_amendments_digest_check/);
         await expect(amend('m-x8', 'attested', KEY, '0xnew7', { ...sig, nonce: '18446744073709551616' })).rejects.toThrow(/terms_amendments_amendment_nonce_check/);
+        // migrating again changes nothing
+        expect(await migrate(pool, dir)).toEqual([]);
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+  // S4 WP12 (cause S4-EXT): migration 029 on a database seeded at 028. An extinguishment request gains the nonce, the
+  // two signatures and the relay. Rows 025 left `built` (two keys, a co-signed transaction that can no longer land): sent
+  // when the read model shows the series extinguished, else back to collecting (resign-s4; an older duplicate withdrawn);
+  // rows 025 withdrew are not touched again (amendment fix 2).
+  it('029_extinguish_signatures on a database seeded at 028: two signatures, collecting, ready and sent; built rows collect again', async () => {
+    await withFreshSchema(async (schema) => {
+      const pool = createPool(databaseUrl(), schema);
+      try {
+        const dir = mkdtempSync(join(tmpdir(), 'merces-mig029-'));
+        for (const f of files.filter((x) => x < '029')) copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+        await migrate(pool, dir);
+        const [A, B] = ['0x' + 'ab'.repeat(20), '0x' + 'cd'.repeat(20)];
+        const q = (sql: string, params: unknown[] = []) => pool.query(sql, params);
+        const series = (id: string, extinguishedAt: number | null) =>
+          q(
+            `insert into series (series_id, chain, issuer, stablecoin, stablecoin_mint, raise_style, units_offered, reserve_price, minimum_raise, cap_multiple_wad, lockup_seconds, release_schedule,
+                                 auction_fee_bps, payout_fee_bps, hurdle_wad, payout_multiple_k, wallet_cap_bps, due_days, grace_days, formal_notice_days, contract_hash, terms_commitment, tier_flags, reporting_currency, created_at, extinguished_at)
+             values ($1, 'solana', 'iss', 'USDC', 'mint', 'sealed', 1, 1, 1, 1, 0, '[]', 0, 0, 0, 1, 0, 30, 15, 30, '0x00', '0x00', '{}', 'USD', 0, $2)`,
+            [id, extinguishedAt],
+          );
+        await series('solana:live', null);
+        await series('solana:gone', 1_800_000_000);
+        await series('solana:twice', null);
+        const req = (id: string, sid: string, state: string, decisionCode: string | null = null, attestors = [A, B], createdAt = '2026-10-01') =>
+          q("insert into extinguishment_requests (request_id, series_id, chain, attestors, requested_by, evidence_ciphertext, state, decision_code, created_at) values ($1, $2, 'solana', $3, 'acct-a', 'c', $4, $5, $6)", [id, sid, attestors, state, decisionCode, createdAt]);
+        await req('x-live', 'solana:live', 'built');
+        await req('x-gone', 'solana:gone', 'built');
+        await req('x-old', 'solana:twice', 'built', null, [A, B], '2026-09-01');
+        await req('x-new', 'solana:twice', 'built', null, [A, B], '2026-09-02');
+        await req('x-closed', 'solana:live', 'withdrawn', 'superseded-s4', ['wallet-a', B]);
+        await req('x-sent', 'solana:gone', 'sent');
+
+        copyFileSync(join(MIGRATIONS_DIR, '029_extinguish_signatures.sql'), join(dir, '029_extinguish_signatures.sql'));
+        expect(await migrate(pool, dir)).toEqual(['029_extinguish_signatures.sql']);
+        expect((await q('select request_id, state, decision_code, extinguish_nonce, signatures, relay_tx, relay_error from extinguishment_requests order by request_id')).rows).toEqual([
+          { request_id: 'x-closed', state: 'withdrawn', decision_code: 'superseded-s4', extinguish_nonce: null, signatures: [], relay_tx: null, relay_error: null },
+          { request_id: 'x-gone', state: 'sent', decision_code: null, extinguish_nonce: null, signatures: [], relay_tx: null, relay_error: null },
+          { request_id: 'x-live', state: 'collecting', decision_code: 'resign-s4', extinguish_nonce: null, signatures: [], relay_tx: null, relay_error: null },
+          { request_id: 'x-new', state: 'collecting', decision_code: 'resign-s4', extinguish_nonce: null, signatures: [], relay_tx: null, relay_error: null },
+          { request_id: 'x-old', state: 'withdrawn', decision_code: 'resign-s4-duplicate', extinguish_nonce: null, signatures: [], relay_tx: null, relay_error: null },
+          { request_id: 'x-sent', state: 'sent', decision_code: null, extinguish_nonce: null, signatures: [], relay_tx: null, relay_error: null },
+        ]);
+        const sigA = { signer: A, signature: '0x' + '11'.repeat(65), digest: '0x' + '22'.repeat(32) };
+        const sigB = { ...sigA, signer: B, signature: '0x' + '33'.repeat(65) };
+        const put = (id: string, f: { state?: string; nonce?: string | null; sigs?: unknown; relayTx?: string | null; relayError?: string | null }) =>
+          q('update extinguishment_requests set state = coalesce($2, state), extinguish_nonce = $3, signatures = $4, relay_tx = $5, relay_error = $6 where request_id = $1', [id, f.state ?? null, f.nonce ?? null, JSON.stringify(f.sigs ?? []), f.relayTx ?? null, f.relayError ?? null]);
+        // collecting with one signature, ready with two (a refused relay's code), sent with both and the relay
+        await put('x-live', { nonce: '0', sigs: [sigA] });
+        await put('x-live', { state: 'ready', nonce: '0', sigs: [sigA, sigB], relayError: 'TerminalStatus' });
+        await put('x-live', { state: 'sent', nonce: '0', sigs: [sigA, sigB], relayTx: 'tx-1' });
+        const check = /extinguishment_requests_signatures_check/;
+        // the state's count; a nonce goes with the signatures; the relay only on a sent row with both
+        await expect(put('x-new', { nonce: '0', sigs: [sigA, sigB] })).rejects.toThrow(check);
+        await expect(put('x-new', { state: 'ready', nonce: '0', sigs: [sigA] })).rejects.toThrow(check);
+        await expect(put('x-new', { nonce: null, sigs: [sigA] })).rejects.toThrow(check);
+        await expect(put('x-new', { nonce: '0', sigs: [] })).rejects.toThrow(check);
+        await expect(put('x-new', { nonce: '0', sigs: [sigA], relayTx: 'tx-2' })).rejects.toThrow(check);
+        await expect(put('x-new', { nonce: '0', sigs: [sigA], relayError: 'X' })).rejects.toThrow(check);
+        await expect(put('x-new', { state: 'sent', nonce: '0', sigs: [sigA, sigB] })).rejects.toThrow(check);
+        // well-formed entries by distinct named keys
+        await expect(put('x-new', { nonce: '0', sigs: [{ ...sigA, signature: 'sim:x' }] })).rejects.toThrow(check);
+        await expect(put('x-new', { nonce: '0', sigs: [{ ...sigA, digest: undefined }] })).rejects.toThrow(check);
+        await expect(put('x-new', { nonce: '0', sigs: [{ ...sigA, signer: '0x' + 'ef'.repeat(20) }] })).rejects.toThrow(check);
+        await expect(put('x-new', { state: 'ready', nonce: '0', sigs: [sigA, sigA] })).rejects.toThrow(check);
+        await expect(put('x-new', { nonce: '0', sigs: { signer: A } })).rejects.toThrow(check);
+        await expect(put('x-new', { nonce: '18446744073709551616', sigs: [sigA] })).rejects.toThrow(/extinguishment_requests_extinguish_nonce_check/);
+        // the states and the two keys; one open request per series
+        await expect(q("update extinguishment_requests set state = 'built' where request_id = 'x-new'")).rejects.toThrow(/extinguishment_requests_state_check/);
+        await expect(req('x-same', 'solana:gone', 'withdrawn', null, [A, A])).rejects.toThrow(/extinguishment_requests_attestors_check/);
+        await expect(req('x-three', 'solana:gone', 'withdrawn', null, [A, B, A])).rejects.toThrow(/extinguishment_requests_attestors_check/);
+        await expect(req('x-dup', 'solana:twice', 'collecting')).rejects.toThrow(/extinguishment_requests_open/);
+        // a new row defaults to collecting with no signatures
+        await q("insert into extinguishment_requests (request_id, series_id, chain, attestors, requested_by, evidence_ciphertext) values ('x-fresh', 'solana:gone', 'solana', $1, 'acct-a', 'c')", [[A, B]]);
+        expect((await q("select state, signatures from extinguishment_requests where request_id = 'x-fresh'")).rows[0]).toEqual({ state: 'collecting', signatures: [] });
         // migrating again changes nothing
         expect(await migrate(pool, dir)).toEqual([]);
       } finally {

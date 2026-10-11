@@ -157,6 +157,27 @@ An amendment whose build answers 409 `stale-nonce` (another amendment landed aft
 again over the live nonce. The indexer does the same for every amendment a landed `TermsAmended` made stale. 409
 `already-amended` means the chain carries it: apply it (`POST /amendments/{amendmentId}/apply`).
 
+S4 WP12 changes no simulator state layout (still version 5; no reset): an extinguishment is Stage 1's permissionless
+`extinguish` carrying two attestor keys' EXTINGUISH signatures over the series' extinguish nonce (nobody co-signs), which
+the keeper relays once both are in. Migration 029:
+- adds `extinguishment_requests.extinguish_nonce`, `signatures` (`[{signer, signature, digest}]`), `relay_tx` and
+  `relay_error`; the states become `collecting` (fewer than two signatures), `ready` (both; the relay pending or
+  refused), `sent` and `withdrawn`, with one open request per series;
+- converts the rows 025 left `built` (two keys, a co-signed transaction that can no longer land): `sent` when the read
+  model shows the series extinguished, otherwise back to `collecting` (`decision_code = 'resign-s4'`; an older
+  duplicate for the same series `withdrawn`, `resign-s4-duplicate`): both named attestors sign from `GET
+  /attestor/extinguish/{requestId}/message`. Rows 025 withdrew are not touched again.
+An extinguishment request:
+- 409 `same-account` at the opening, the message or a signature: both named keys are linked to one account (S4 D15).
+  Name a co-attestor key held by another person;
+- 409 `attestor-key-inactive` from the second signature: a key was revoked after it signed. Its signature is dropped and
+  the request collects again; that key (registered again) or a request naming another key signs;
+- `ready` with `relayError` (the Stage 1 name): the chain refused the keeper's relay. When the cause has cleared (a
+  transient failure), post either stored signature again to retry; when the series is extinguished already, the indexer
+  closes the request (`sent` when the event names the same two keys, else `withdrawn`, `series-extinguished`);
+- an unrelayed EXTINGUISH signature is a bearer authorisation (with the other key's, anyone could extinguish the
+  series): the API never shows one. If one leaks, rotate the key (its signature dies once the key is revoked).
+
 Before version 5:
 
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final
@@ -343,7 +364,9 @@ the attestor's machine, never on a server.
    `{signer, signature, digest}` as its `attestation`; an FX request takes `{rateWad, signer, sourceNote, signatures:
    [{seriesId, signature}]}`, one per request in the list; a hardship approval takes `{approve: true, pauseEnd,
    pauseNonce, attestation: {signer, signature, digest}}`, the request's `fields.pauseNonce` and the end you signed, and
-   the keeper relays it). Limits in S4: the nonce
+   the keeper relays it; since WP12 an extinguishment request's `GET /attestor/extinguish/{requestId}/message` for your
+   named key, posted to `POST /attestor/extinguish/{requestId}/sign` as `{extinguishNonce, attestation: {signer,
+   signature, digest}}`, and the keeper relays both once the second key has signed). Limits in S4: the nonce
    of a PAUSE, AMEND, EXTINGUISH or TRUEUP request comes from the server and the tool cannot check it against the chain
    yet (S5 reads it from a public RPC), so sign only a request you expect; an unrelayed EXTINGUISH signature that leaks
    is withdrawn only by rotating the key, a PAUSE one also dies when the issuer withdraws or renews its request (the

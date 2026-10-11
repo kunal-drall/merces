@@ -99,6 +99,8 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *    target, PASS in full (was gated at #40), and 08's gate moves from #33 to #57 (its next step #58 `end_pause`, S5).
  *  - S4-AMD: `amend_terms` runs directly, the actor's `amendTerms` carrying the named key's AMEND signature over the
  *    live amendment nonce (S4 WP11; shim SH-AMD-1 retired): 05#44, 11#45 and 14#51-#55 (14 replays to #61) count no shim.
+ *  - S4-EXT: `extinguish` runs directly, the two named keys' EXTINGUISH signatures over the live extinguish nonce sent by
+ *    the keeper (S4 WP12; shim SH-EXT-1 retired): 11#35-#44 and 25#86 count no shim, at the same statuses.
  */
 afterAll(shutdown);
 
@@ -655,11 +657,12 @@ describe('stage1 vector runner: merces backend', () => {
     }
   }, 120_000);
 
-  it('lockstep counts the shims of passing reverts (11: redeem at #43 runs only inside expect_revert; amend_terms at #45 is direct)', async () => {
+  it('lockstep counts the shims of passing reverts (11: redeem at #43 runs only inside expect_revert; amend_terms at #45 and extinguish at #35-#44 are direct)', async () => {
     const r = (await runStage1Vectors({ dir: VECTORS, backend: 'lockstep', only: ['11'], personalities: ['solana'] })).runs[0]!;
     expect(r.issues).toEqual([]);
     expect(r.status).toBe('PASS');
     expect(r.shims['SH-AMD-1']).toBeUndefined(); // cause S4-AMD: was 1
+    expect(r.shims['SH-EXT-1']).toBeUndefined(); // cause S4-EXT: was 6 (#35-#39 inside expect_revert, #44)
     expect(r.shims['SH-RED-1']).toBe(1);
     expect(r.runnerAtomic).toEqual([]);
   }, 60_000);
@@ -1092,9 +1095,9 @@ describe('stage1 vector runner: merces backend', () => {
     // went through them (was: SH-CLM-1 used in 01, 04, 05, 07, 17, 19 and 21 until WP3; SH-CLM-2 runner-atomic, used in
     // 09 and 23; SH-CLM-3 in 11; SH-BRN-1 in 05)
     // cause S4-SH: likewise SH-REG-2 (Stage 1's attestor registry runs directly since S4 WP5), SH-REG-3 (the verifier
-    // keys since S4 WP6), SH-PAU-2 (approve_pause since S4 WP10) and SH-AMD-1 (amend_terms since S4 WP11; was used in
-    // 05, 11 and 14)
-    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1', 'SH-REG-2', 'SH-REG-3', 'SH-PAU-2', 'SH-AMD-1']) {
+    // keys since S4 WP6), SH-PAU-2 (approve_pause since S4 WP10), SH-AMD-1 (amend_terms since S4 WP11; was used in
+    // 05, 11 and 14) and SH-EXT-1 (extinguish since S4 WP12; cause S4-EXT, was used in 11 and 25)
+    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1', 'SH-REG-2', 'SH-REG-3', 'SH-PAU-2', 'SH-AMD-1', 'SH-EXT-1']) {
       expect(md, id).not.toContain(id);
       for (const r of report.runs) expect(r.shims[id], `${r.vector} ${r.world}`).toBeUndefined();
     }

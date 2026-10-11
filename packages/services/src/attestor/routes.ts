@@ -4,7 +4,7 @@ import { defineRoute, type AppContext } from '@merces/api';
 import { withIdempotency } from '@merces/core';
 import { svc } from '../context.ts';
 import {
-  AttestorService, extinguishSchema, fxMessagesQuerySchema, fxSignSchema, hardshipDecideSchema, hardshipMessageQuerySchema, hardshipRequestSchema, tier3AnnualOpenSchema, tier3AnnualSignSchema, tier3MessageQuerySchema, tier3OpenSchema,
+  AttestorService, extinguishMessageQuerySchema, extinguishSchema, extinguishSignSchema, fxMessagesQuerySchema, fxSignSchema, hardshipDecideSchema, hardshipMessageQuerySchema, hardshipRequestSchema, tier3AnnualOpenSchema, tier3AnnualSignSchema, tier3MessageQuerySchema, tier3OpenSchema,
   tier3SignSchema,
 } from './service.ts';
 
@@ -103,7 +103,7 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
   });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/reporting/fx-fallback/:periodId', access: 'issuer', handler: async (req) => s.fxFallbackForSeries(sid(req), periodParam.parse(param(req, 'periodId'))) });
 
-  // ---- extinguishment (two attestors)
+  // ---- extinguishment (two attestor keys of two accounts sign Stage 1's EXTINGUISH message; the keeper relays: S4 WP12)
   defineRoute(app, ctx, {
     method: 'POST', url: '/attestor/extinguish', access: 'attestor',
     handler: async (req, reply, session) => {
@@ -114,4 +114,14 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
     },
   });
   defineRoute(app, ctx, { method: 'GET', url: '/attestor/extinguish/:requestId', access: 'attestor', handler: async (req, _r, session) => s.getExtinguishment(param(req, 'requestId'), session!) });
+  // the EXTINGUISH signing request for a named key's own device: the API never signs
+  defineRoute(app, ctx, { method: 'GET', url: '/attestor/extinguish/:requestId/message', access: 'attestor', handler: async (req, _r, session) => s.extinguishMessage(param(req, 'requestId'), session!, extinguishMessageQuerySchema.parse(req.query)) });
+  defineRoute(app, ctx, {
+    method: 'POST', url: '/attestor/extinguish/:requestId/sign', access: 'attestor',
+    handler: async (req, _r, session) => {
+      const b = extinguishSignSchema.parse(req.body);
+      const id = param(req, 'requestId');
+      return (await withIdempotency(ctx.pool, `extinguish-sign:${session!.accountId}`, idem(req), { id, ...b }, async () => ({ status: 200, response: await s.signExtinguishment(id, session!, b) }))).response;
+    },
+  });
 }

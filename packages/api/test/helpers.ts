@@ -23,6 +23,8 @@ export const SECRET = 'test-secret';
  *    `signFxFallback` signs a period's rate for every covered series as the attestor's device would;
  *  - S4-AMD: an amendment is attested with the key's Stage 1 AMEND signature (S4 WP11); `signAmendment` signs the API's
  *    signing request as the attestor's device would.
+ *  - S4-EXT: an extinguishment request collects two keys' Stage 1 EXTINGUISH signatures (S4 WP12); `signExtinguish` signs
+ *    the API's signing request for one named key as its device would.
  */
 
 /** Test rig: one schema, two simulator harnesses, an indexer and the app with every route registered. */
@@ -113,6 +115,18 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
     const sig = await key.attest('AMEND', r.domain, r.seriesKey, r.fields);
     return post(`/attestor/amendments/${amendmentId}/attest`, { approve: true, amendmentNonce: r.fields.amendmentNonce, attestation: { signer: sig.signer, signature: sig.signature, digest: sig.digest } }, tok);
   };
+  /**
+   * cause S4-EXT: one named key's EXTINGUISH signature through the API (S4 WP12): key `key` (linked to the account of
+   * `tok`) fetches the request's signing request and signs Stage 1's EXTINGUISH message over its typed fields, as its
+   * device would, then posts it. Returns the sign route's response (or the message's when it is refused).
+   */
+  const signExtinguish = async (requestId: string, key: { address: string; attest: SimHarness['attestors'][number]['attest'] }, tok: string) => {
+    const m = await get(`/attestor/extinguish/${requestId}/message?attestor=${key.address}`, tok);
+    if (m.statusCode !== 200) return m;
+    const r = m.json() as { domain: never; seriesKey: string; fields: { extinguishNonce: string } };
+    const sig = await key.attest('EXTINGUISH', r.domain, r.seriesKey, r.fields);
+    return post(`/attestor/extinguish/${requestId}/sign`, { extinguishNonce: r.fields.extinguishNonce, attestation: { signer: sig.signer, signature: sig.signature, digest: sig.digest } }, tok);
+  };
   /** Eligibility is checked live against the `eligibility` table, so a backer-tier token also needs a row: this seeds one and returns the token. */
   const grant = async (s: Partial<Session> & { wallets: Session['wallets'] }, kind: 'backer' | 'issuer' = 'backer') => {
     for (const w of s.wallets) await t.pool.query('insert into eligibility (chain, wallet, account_id, kind, allowlist_synced_at) values ($1,$2,$3,$4, now()) on conflict (chain, wallet) do update set revoked_at = null', [w.chain, w.address, s.accountId ?? 'acct', kind]);
@@ -122,7 +136,7 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
   const post = (url: string, body: unknown, tok?: string, extra: Record<string, string> = {}) => app.inject({ method: 'POST', url, payload: body as Record<string, unknown>, headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), ...extra } });
   const put = (url: string, body: unknown, tok?: string) => app.inject({ method: 'PUT', url, payload: body as Record<string, unknown>, headers: tok ? { authorization: `Bearer ${tok}` } : {} });
   return {
-    t, sol, mon, ctx, app, indexer, token, grant, linkKeys, attestorToken, signFxFallback, signAmendment, get, post, put, del: (url: string, tok?: string) => app.inject({ method: 'DELETE', url, headers: tok ? { authorization: `Bearer ${tok}` } : {} }), esign, identity, zktls, verifier, kms,
+    t, sol, mon, ctx, app, indexer, token, grant, linkKeys, attestorToken, signFxFallback, signAmendment, signExtinguish, get, post, put, del: (url: string, tok?: string) => app.inject({ method: 'DELETE', url, headers: tok ? { authorization: `Bearer ${tok}` } : {} }), esign, identity, zktls, verifier, kms,
     harness: (p: Personality) => (p === 'solana' ? sol : mon),
     async sync() {
       await indexer.catchUp();

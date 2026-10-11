@@ -143,7 +143,6 @@ export const userCommands = {
    * `TermsAmended{…, attestor, nonce}` with the nonce that was signed. `tier1Terms` waits for the tier-1 milestone (D16).
    */
   amendTerms: z.object({ kind: z.literal('amendTerms'), seriesId: seriesIdSchema, termsCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: signerAddressSchema, signature: signature65Schema }),
-  extinguish: z.object({ kind: z.literal('extinguish'), seriesId: seriesIdSchema, attestors: z.array(addressSchema).length(2) }),
   commitWindowOrder: z.object({ kind: z.literal('commitWindowOrder'), seriesId: seriesIdSchema, windowId: z.number().int(), side: z.enum(['buy', 'sell']), commitment: hash32Schema, deposit: moneySchema, units: unitsSchema }),
   revealWindowOrder: z.object({ kind: z.literal('revealWindowOrder'), seriesId: seriesIdSchema, windowId: z.number().int(), side: z.enum(['buy', 'sell']), pricePerUnit: moneySchema, quantity: unitsSchema, salt: hash32Schema }),
   /**
@@ -198,7 +197,7 @@ export const serviceCommands = {
 
 /**
  * Stage 1's sealed-bid settlement (SPEC §5.2), holder registration, the Retired burn, a curve's completion, proceeds and
- * census, and a signed pause approval (S4 WP10), with Stage 1's names. Anyone may send them: the keeper `submit`s them and
+ * census, a signed pause approval (S4 WP10) and a signed extinguishment (S4 WP12), with Stage 1's names. Anyone may send them: the keeper `submit`s them and
  * any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans the settlement steps.
  */
 export const permissionlessCommands = {
@@ -265,6 +264,19 @@ export const permissionlessCommands = {
    * `PauseApproved{attestor, start, until}`, then the status sync.
    */
   approvePause: z.object({ kind: z.literal('approvePause'), seriesId: seriesIdSchema, pauseEnd: z.string().regex(/^(0|[1-9]\d{0,77})$/), attestor: signerAddressSchema, signature: signature65Schema }),
+  /**
+   * Stage 1 `extinguish(attestor_a, sig_a, attestor_b, sig_b)` / `extinguish(seriesId, signatureA, signatureB)`
+   * (merces_protocol lib.rs:196-204, exit.rs:202-306; MercesVault.sol:585-612; SIM:1419-1447; S4 WP12, D8): anyone submits two attestor keys' Stage 1 EXTINGUISH
+   * signatures over `MERCES_EXTINGUISH_V1` (domain, series key, the series' live extinguish nonce; `extinguishDigest`).
+   * The sender is not a signer: each attestor signs on its own device and the keeper (or any wallet) relays both. In
+   * order: the two named keys are distinct (SameAttestor, on the supplied addresses as Solana checks them), then each
+   * signature must recover to its named key, an active attestor key (no grace; else InvalidAttestorSignature), then
+   * RaiseNotSettled, MintNotFinalized and TerminalStatus. The extinguish nonce advances. The EVM recovers both first and
+   * compares the recovered addresses (two malformed signatures, or one key's signatures named as two keys, are
+   * SameAttestor there and InvalidAttestorSignature here): an adapter note. Emits `SeriesExtinguished{attestors}` with
+   * the two keys.
+   */
+  extinguish: z.object({ kind: z.literal('extinguish'), seriesId: seriesIdSchema, attestorA: signerAddressSchema, signatureA: signature65Schema, attestorB: signerAddressSchema, signatureB: signature65Schema }),
 } as const;
 
 export const adminCommands = {
@@ -369,7 +381,7 @@ export interface UnsignedTx {
   family: 'solana' | 'evm';
   /** primary signer (fee payer on Solana, msg.sender on EVM) */
   signer: string;
-  /** additional required signers (an attestor on extinguish, until S4 WP12-WP13) */
+  /** additional required signers (none since S4 WP12: every attestation is a signature argument; the field goes in S4 WP13) */
   coSigners: string[];
   /** the transaction's command; for a transaction that carries several (`commands`), the first */
   command: Command;

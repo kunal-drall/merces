@@ -31,11 +31,15 @@ only when it recovers to the addressed key over the message the service rebuilds
 `recoverSigner`), never over a digest a caller supplies (`attestor/service.ts`: tier 3 and the FX fallback, S4 WP9; a
 hardship approval's PAUSE signature, S4 WP10, which the keeper then relays with `chain.submit(approvePause, 'keeper')`:
 keepers send only permissionless commands, and only signatures the service checked; an amendment's AMEND signature, S4
-WP11, `terms/service.ts`, which the issuer's `amendTerms` carries). The shared helpers (`signingDomainOf`, `requestFor`,
+WP11, `terms/service.ts`, which the issuer's `amendTerms` carries; an extinguishment's two EXTINGUISH signatures, S4
+WP12, by keys of two accounts, stored until both are in and never shown before the keeper relays them with
+`chain.submit(extinguish, 'keeper')`). The shared helpers (`signingDomainOf`, `requestFor`,
 `invalidAttestorSignature`) are in `signing-requests.ts`. Tests sign a pause approval with
 `h.pauseApproval(seriesId, pauseEnd, key)` (the harness key's PAUSE signature over the live nonce) and submit it as the
 keeper or from any wallet, and build an amendment with `h.amendment(seriesId, {termsCommitment, capMultipleWad}, key)`
-(the key's AMEND signature over the live nonce) for the issuer to send.
+(the key's AMEND signature over the live nonce) for the issuer to send, and an extinguishment with
+`h.extinguishment(seriesId, keyA, keyB)` (two keys' EXTINGUISH signatures over the live nonce; default the harness's two
+attestors) to submit as the keeper or from any wallet.
 
 ## Routes
 ```ts
@@ -75,8 +79,9 @@ await rig.sol.runRaise(); await rig.sol.reportAndPay(...); await rig.sync();  //
 `.sign(tx)`, `.coSign(signed)`); send a signed tx with `rig.post('/tx/send', signed, tok)`. The attestors are keys
 (`SimAttestor`: `.attest(kind, domain, seriesKey, fields)` signs a Stage 1 message); `rig.attestorToken(account, keys)`
 links them, `rig.signFxFallback(h, pair, periodId, key, rateWad)` signs a period's FX fallback for every covered
-series through the attestor routes, and `rig.signAmendment(amendmentId, key, tok)` signs an amendment's AMEND request
-and posts the approval. Run with
+series through the attestor routes, `rig.signAmendment(amendmentId, key, tok)` signs an amendment's AMEND request
+and posts the approval, and `rig.signExtinguish(requestId, key, tok)` signs one named key's EXTINGUISH request and posts
+it. Run with
 `DATABASE_URL=postgres://postgres@localhost:5432/merces pnpm vitest run packages/api/test/<module>.test.ts`.
 Register the module in `packages/services/src/index.ts` (`serviceRoutes`) only when integrating; tests pass the
 registrar through `extraRoutes` so modules can be developed independently.

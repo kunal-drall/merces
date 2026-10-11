@@ -98,11 +98,11 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
     handler: async (req, _reply, session) => {
       const signed = req.body as SignedTx;
       if (!signed?.tx?.chain || !signed.signatures) throw AppError.badRequest('signed transaction required');
-      // the signer is one of the account's wallets, or (transitional until S4 WP13, while extinguish is still sent by an
-      // attestor key's address) an attestor key linked to the account, read live
-      const own = session!.wallets.some((w) => w.address === signed.tx.signer)
-        || (typeof signed.tx.signer === 'string' && !!(await ctx.pool.query('select 1 from account_signer_keys where address = $1 and account_id = $2', [signed.tx.signer, session!.accountId])).rowCount);
-      if (!own && !session!.roles.includes('admin')) throw AppError.forbidden('signer is not one of your wallets or linked keys');
+      // the signer is one of the account's wallets. An attestor key never sends a transaction (S4 WP12: since the
+      // extinguishment carries the keys' signatures as arguments and the keeper relays it, no flow is sent from a key's
+      // address any more)
+      const own = session!.wallets.some((w) => w.address === signed.tx.signer);
+      if (!own && !session!.roles.includes('admin')) throw AppError.forbidden('signer is not one of your wallets');
       if (!ctx.chains.chains.has(signed.tx.chain)) throw AppError.badRequest(`unknown chain ${signed.tx.chain}`);
       const res = await ctx.chains.get(signed.tx.chain).send(signed);
       return { txId: res.txId, blockTime: res.blockTime, events: res.events.map((e) => ({ type: e.type, seq: e.seq, payload: e.payload })) };

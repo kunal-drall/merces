@@ -111,10 +111,16 @@ Secrets never enter the repository: `.env.example` lists names only; development
   signatures carry no nonce and are no bearer authorisation: only the series' issuer can submit a report. Since S4 WP10:
   a hardship approval's PAUSE signature, recovered over the message rebuilt with the nonce it signed, by the request's
   key, active on the chain; the nonce is read again before the keeper relays it (409 `stale-nonce` when it moved).
+  Since S4 WP12: an extinguishment request's EXTINGUISH signatures, each recovered over the message rebuilt with the
+  nonce it signed, by a key the request names, active on the chain, posted by the account holding that key; the two
+  keys must be linked to two different accounts (S4 D15, 409 `same-account`, read live), so one person holding two
+  attestor keys cannot extinguish a series through Merces alone (the chain checks only that the keys differ).
 - The keeper sends only permissionless commands (S4 D3). A pause approval is one (Stage 1's `approve_pause` takes the
   attestor's signature as an argument and anyone may submit it), and the keeper relays only a signature the attestor
   service has checked as above; it holds no attestor key and adds nothing of its own. A chain refusal at the relay is
-  returned with Stage 1's name and nothing is stored.
+  returned with Stage 1's name and nothing is stored. An extinguishment is another (S4 WP12): the keeper relays the two
+  stored signatures once both are in, after checking again that their nonce is live and both keys still active (a dead
+  one is dropped and signed again); a chain refusal leaves the request ready with Stage 1's name and is returned.
 - **Residual risks** (S4; owner question 3's default is to accept and document them):
   - The tool cannot yet check a nonce against the chain. A compromised API could collect a PAUSE signature over a future
     pause nonce (N + 1), which approves whatever request N + 1 turns out to be, or EXTINGUISH signatures (nonce 0),
@@ -127,7 +133,11 @@ Secrets never enter the repository: `.env.example` lists names only; development
     failed relay stores nothing (the attestor's tool keeps its own output). An AMEND signature is stored until the
     issuer sends it (S4 WP11), but only the issuer can use it (`amend_terms` is the issuer's transaction): it appears in
     the issuer's built `amendTerms` only, never in a list, the feed, a notification or the audit log, and it dies when
-    the amendment nonce moves or the key stops being active (the service then drops it). A leaked PAUSE signature dies when its nonce
+    the amendment nonce moves or the key stops being active (the service then drops it). An EXTINGUISH signature is
+    stored while the second key has not signed (S4 WP12): anyone holding both could extinguish the series, so no read,
+    audit row, notification or feed shows one before the relay (the request names the keys that signed, never their
+    signatures); once relayed the two are public onchain. A stored one dies when the extinguish nonce moves (only an
+    extinguishment does) or its key stops being active (the relay's check drops it). A leaked PAUSE signature dies when its nonce
     moves: the issuer withdraws the request (`build-withdraw`) or requests again; any other leaked one is withdrawn only
     by rotating the key (the RUNBOOK's attestor key rotation).
   - A raw-digest key signs any 32 bytes. The key is dedicated and never funded, and the tool signs only digests it

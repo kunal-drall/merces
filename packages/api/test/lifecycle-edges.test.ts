@@ -13,7 +13,10 @@ import { makeRig } from './helpers.ts';
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes;
  *  - S4-ID: attestors are keys linked to an account (S4 WP7): attestor access is the account's linked key, read live
- *    (`rig.attestorToken`), never a token's wallets.
+ *    (`rig.attestorToken`), never a token's wallets;
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction); the attestor service's request names the caller's key and a co-attestor key (`{attestor, coAttestor}`).
  */
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -69,7 +72,7 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
   it('extinguishing a settled series returns the unvested treasury to holders without counting it as an issuer payment', async () => {
     const h = rig.sol;
     const { seriesId } = await h.runRaise();
-    await h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!]);
+    await h.sim.submit(await h.extinguishment(seriesId), 'keeper'); // cause S4-EXT
     await rig.sync();
     const rec = await rig.get('/admin/accounting/reconcile', adminTok);
     expect(rec.json().checks.filter((c: { ok: boolean }) => !c.ok)).toEqual([]);
@@ -98,12 +101,13 @@ describe.skipIf(!dbTestsEnabled())('lifecycle edges', () => {
     await expect(h.exec(h.issuer, { kind: 'cancelRaise', seriesId })).rejects.toMatchObject({ code: 'WrongPhase', detail: { stage1: 'NotSealedBid' } });
     // nor can it be extinguished before it completes: Stage 1 extinguishes a settled raise only (M5: was the whole
     // treasury returned to the curve buyers)
-    await expect(h.exec(h.attestors[0]!, { kind: 'extinguish', seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address] }, [h.attestors[1]!])).rejects.toMatchObject({ code: 'WrongPhase', detail: { stage1: 'RaiseNotSettled' } });
-    // and the attestor service does not build the doomed transaction
+    await expect(h.sim.submit(await h.extinguishment(seriesId), 'keeper')).rejects.toMatchObject({ code: 'WrongPhase', detail: { stage1: 'RaiseNotSettled' } }); // cause S4-EXT
+    // and the attestor service does not open a request nobody could complete (cause S4-EXT: was "build the doomed transaction")
     const attTok = await rig.attestorToken('edge-att', [h.attestors[0]!]); // cause S4-ID: attestor access is the account's linked key
     const evidence = Buffer.from(randomBytes(48)).toString('base64');
-    const req = await rig.post('/attestor/extinguish', { seriesId, attestors: [h.attestors[0]!.address, h.attestors[1]!.address], evidenceCiphertext: evidence }, attTok);
+    const req = await rig.post('/attestor/extinguish', { seriesId, attestor: h.attestors[0]!.address, coAttestor: h.attestors[1]!.address, evidenceCiphertext: evidence }, attTok); // cause S4-EXT
     expect(req.statusCode, req.body).toBe(409);
+    expect(req.json().detail).toEqual({ stage1: 'RaiseNotSettled' });
     await rig.sync();
     const row = (await rig.t.pool.query('select status, extinguished_at, treasury_total::text as t, treasury_released::text as r from series where series_id = $1', [seriesId])).rows[0];
     expect(row).toMatchObject({ extinguished_at: null, t: '0', r: '0' });

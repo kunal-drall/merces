@@ -11,6 +11,9 @@ import { seriesOf } from './kit.ts';
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes.
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  */
 
 /*
@@ -266,9 +269,8 @@ describe('curve mode (solana): completion and proceeds', () => {
   // treasury and cannot be extinguished (amendment M5)
   it('refuses to extinguish a curve before its completion', async () => {
     const { h, seriesId } = await curveSeries();
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     await h.curveBuy(seriesId, h.backers[0]!, USDC(400));
-    await expectStage1Error(h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]), 'RaiseNotSettled');
+    await expectStage1Error(h.sim.submit(await h.extinguishment(seriesId), 'keeper'), 'RaiseNotSettled'); // cause S4-EXT
   });
 
   it('refuses the curve commands on a sealed-bid series (NotCurveMode)', async () => {

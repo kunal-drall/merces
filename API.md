@@ -242,7 +242,8 @@ settling, and settled series.
 
 **Attestor**: link a key (above) and have the admin propose it → `GET /attestor/queue` (work addressed to your keys on
 the chains where they are registered) → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
-attestations (Stage 1's AMEND signature by your key, S4 WP11; below), extinguishment transactions (two signers). Since S4 WP9 a tier-3
+attestations (Stage 1's AMEND signature by your key, S4 WP11; below), extinguishments (Stage 1's EXTINGUISH signatures by
+two keys of two accounts, relayed by the keeper, S4 WP12; below). Since S4 WP9 a tier-3
 case and an FX fallback rate are Stage 1's own signatures by your key, made on your device from a signing request
 (`SigningRequest`: the kind, chain, series, series key, domain, the addressed key, the typed fields, the pre-image, the
 digest and what keeps it valid; no display text): `GET /attestor/tier3/{caseId}/message?priorIncomeCommitment&
@@ -273,9 +274,23 @@ AmendmentAfterTerminal, 422 UnfavourableAmendment for a cap above the live one) 
 (the API rebuilds the message with the signed nonce and recovers the signer: 422 InvalidAttestorSignature unless it is
 your key, active on the chain; then reads the nonce again: 409 `stale-nonce` with `detail.request` when another
 amendment landed). The amendment then records your key, the nonce, the digest and the signature, which the issuer's
-`amendTerms` carries; a rejection is `{approve: false, attestor, decisionCode}`. extinguish is still co-signed at the
-key's address until S4 WP12-WP13 (`POST /tx/send` accepts a signer that is a key linked to your account); from then on
-it is Stage 1's own signatures by the keys.
+`amendTerms` carries; a rejection is `{approve: false, attestor, decisionCode}`. An extinguishment (S4 WP12): `POST
+/attestor/extinguish {seriesId, attestor, coAttestor, evidenceCiphertext, keyHint}` opens a request naming your own key
+and a second attestor key held by another account (S4 D15: 409 `same-account` when your account holds both, 422
+`co-attestor-not-linked` when no account holds it; 422 `detail.stage1` SameAttestor for one key twice; 409 with Stage
+1's name when the series cannot be extinguished now: RaiseNotSettled, MintNotFinalized, TerminalStatus; one open request
+per series); nothing is signed yet. Each named key then fetches `GET /attestor/extinguish/{requestId}/message`
+(`MERCES_EXTINGUISH_V1` over the series' live extinguish nonce, for your named key that has not signed; `?attestor` names
+one) → `merces-attestor sign` (it warns that the signature cannot be recalled) → `POST
+/attestor/extinguish/{requestId}/sign {extinguishNonce, attestation: {signer, signature, digest}}` (the API rebuilds the
+message with the signed nonce and recovers the signer: 422 InvalidAttestorSignature unless it is the named key, active
+on the chain; 409 `stale-nonce` with `detail.request` for a nonce that is not the live one). The first signature leaves
+the request `collecting` (its `signers` name your key; no read ever shows an unrelayed signature); the second makes it
+`ready`, and the keeper relays Stage 1's permissionless `extinguish` at once: the response is the `sent` request with
+`relayTx` and the two signatures. Before relaying, the service checks the nonce and both keys again: a key revoked since
+it signed answers 409 `attestor-key-inactive` and the request collects that key's signature again. A chain refusal
+leaves the request `ready` with Stage 1's name in `relayError` and comes back with it; posting a stored signature again
+retries. You send no transaction.
 
 **Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
 (`GET /admin/attestors`, with each key's registration and revocation times and its grace end) and the attestor key

@@ -101,11 +101,10 @@ export class SimSigner implements DigestSigner {
  * 20-byte address is the attestor on both personalities, registered by that address and linked to an account by its
  * own EIP-191 proof (`personalSign`). It signs Stage 1 digests (`signDigest`, `attest`).
  *
- * Transitional until S4 WP13: the flow that still takes the attestor as a co-signer of a transaction (extinguish) is
- * signed by a simulator wallet at the key's address (it extends `SimWallet(family, label, key.address)`: a `sim:`
- * co-signature, which only the simulator accepts). It moves to the keys' own Stage 1 signatures in S4 WP12 (a tier-3
- * report and the FX fallback did in S4 WP9, a pause approval in WP10, an amendment in WP11), and the wallet goes with
- * WP13.
+ * Transitional until S4 WP13: it still extends `SimWallet(family, label, key.address)` (a wallet at the key's address,
+ * whose `sim:` co-signature only the simulator accepts), although no flow takes an attestor as a co-signer any more:
+ * every one carries the key's own Stage 1 signature (a tier-3 report and the FX fallback since S4 WP9, a pause approval
+ * WP10, an amendment WP11, an extinguishment WP12). The wallet goes with `coSigners` in WP13.
  */
 export class SimAttestor extends SimWallet implements DigestSigner {
   readonly key: SimSigner;

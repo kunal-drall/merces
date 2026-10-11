@@ -171,8 +171,9 @@ export class IdentityService {
 
   /**
    * Unlink one of the account's keys. Refused (409 `open-work`) while work addressed to the key is open: a pending
-   * hardship request, an open tier-3 case or annual attestation, an extinguishment request naming it, an amendment it
-   * attested that has not landed. Unlinking ends the account's attestor access through this key at once.
+   * hardship request, an open tier-3 case or annual attestation, an open extinguishment request naming it (collecting
+   * signatures or awaiting the relay; its account is one of S4 D15's two), an amendment it attested that has not landed.
+   * Unlinking ends the account's attestor access through this key at once.
    */
   async unlinkSignerKey(session: Session, address: string): Promise<{ address: string; unlinked: true }> {
     const linked = await this.ctx.pool.query('select 1 from account_signer_keys where address = $1 and account_id = $2', [address, session.accountId]);
@@ -181,7 +182,7 @@ export class IdentityService {
       `select (select count(*)::int from hardship_requests where attestor = $1 and state = 'pending') as hardship,
               (select count(*)::int from tier3_cases where attestor = $1 and state = 'open') as tier3,
               (select count(*)::int from tier3_annual where attestor = $1 and state = 'open') as annual,
-              (select count(*)::int from extinguishment_requests where $1 = any(attestors) and state = 'built') as extinguishments,
+              (select count(*)::int from extinguishment_requests where $1 = any(attestors) and state in ('collecting', 'ready')) as extinguishments,
               (select count(*)::int from terms_amendments where attestor = $1 and state in ('attested', 'submitted')) as amendments`,
       [address],
     );

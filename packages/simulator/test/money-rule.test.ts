@@ -20,6 +20,11 @@ import { seriesOf } from './kit.ts';
  *    of a redemption appears only above 0 and burns nothing; `claimPayout` emits exactly one `PayoutClaimed`, whose
  *    `burnedUnits` are the units its `UnitsBurned` burns, on a Retired series only, the claim event first;
  *  - the units outstanding fall by exactly the units the claim's `UnitsBurned` events burn.
+ *
+ * S4 cause codes:
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  */
 
 const DAY = 86_400;
@@ -102,8 +107,7 @@ describe('the money-per-event rule of the claim family (S3 D3, D4)', () => {
   it('holds for every claim by every holder in every state: live, Retired, Redeemed with a tail, extinguished with and without a redemption', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const [b0, b1, b2, b3, b4] = h.backers as [SimWallet, SimWallet, SimWallet, SimWallet, SimWallet];
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
-    const stranger = a1;
+    const stranger = h.attestors[0]!;
     const seen: Seen = { claims: { claimPayout: 0, claimRedemption: 0, claimTail: 0, claimFinal: 0 }, refusals: new Set(), zeroOwn: new Set(), burnsOnZeroClaim: 0, splitPayouts: 0, refunds: 0 };
     // three series raised side by side; every bid processed and delivered but one per series (held back to be delivered
     // by a claim, or by a delivery after the series retired)
@@ -132,7 +136,7 @@ describe('the money-per-event rule of the claim family (S3 D3, D4)', () => {
     await h.sim.submit({ kind: 'deliverBid', seriesId: B.seriesId, bidder: b3.address }, 'keeper');
     await sweep(h, B.seriesId, [b3, b4], seen);
     // extinguished without a redemption: the final share on accrual units, the undelivered bid delivered first
-    await h.exec(a1, { kind: 'extinguish', seriesId: C.seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    await h.sim.submit(await h.extinguishment(C.seriesId), 'keeper'); // cause S4-EXT
     await sweep(h, C.seriesId, [b2, b0], seen, ['claimFinal', 'claimPayout', 'claimTail', 'claimRedemption']);
     await sweep(h, C.seriesId, [b1, b3, b4, stranger], seen);
 
@@ -153,7 +157,7 @@ describe('the money-per-event rule of the claim family (S3 D3, D4)', () => {
     await sweep(h, A.seriesId, [late], seen);
     // extinguished after the redemption: b3 has not redeemed (claimFinal redeems it first), the others weigh their
     // redeemed units
-    await h.exec(a1, { kind: 'extinguish', seriesId: A.seriesId, attestors: [a1.address, a2.address] }, [a2]);
+    await h.sim.submit(await h.extinguishment(A.seriesId), 'keeper'); // cause S4-EXT
     await sweep(h, A.seriesId, [b3], seen, ['claimFinal', 'claimTail', 'claimPayout', 'claimRedemption']);
     await sweep(h, A.seriesId, [b0, b1, b2, b4, late, stranger], seen);
 

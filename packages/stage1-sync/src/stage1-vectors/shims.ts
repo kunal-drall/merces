@@ -41,7 +41,6 @@ export const SHIMS: readonly Shim[] = [
   { id: 'SH-PAY-1', ops: ['pay'], call: 'payIn{periodId: open due period (else the next expected period), amount: the period payment due}', why: "Stage 1's pay has no amount or period", removedIn: 'S5', kind: 'shim' },
   { id: 'SH-PAU-1', ops: ['request_pause'], call: 'requestPause{until: t + maxPauseSeconds}', why: "Stage 1's request has no end", removedIn: 'S5', kind: 'shim' },
   { id: 'SH-RED-1', ops: ['redeem'], call: 'redeem{maxPricePerUnit: U64_MAX}', why: 'Stage 1 has no slippage bound', removedIn: '—', kind: 'shim' },
-  { id: 'SH-EXT-1', ops: ['extinguish'], call: 'extinguish{attestors} sent by attestors[0], attestors[1] co-signing (deduplicated)', why: 'co-signing vs signatures', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-WIN-1', ops: ['open_window'], call: 'keeper openTransferWindow{t + windowCommitDuration, + windowRevealDuration}; period kept by the runner', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-2', ops: ['commit_ask'], call: 'commitWindowOrder{side: sell, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit 0, units}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-3', ops: ['window_commit_bid'], call: 'commitWindowOrder{side: buy, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit: escrow, units 0}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },

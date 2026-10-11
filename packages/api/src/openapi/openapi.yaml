@@ -739,7 +739,7 @@ paths:
         '400': { description: Not a 20-byte address, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: The key is not linked to this account, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '409': { description: 'Work addressed to the key is open (detail.reason open-work, detail.openWork the counts: pending hardship requests, open tier-3 cases and annual attestations, extinguishment requests, attested amendments not landed)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: 'Work addressed to the key is open (detail.reason open-work, detail.openWork the counts: pending hardship requests, open tier-3 cases and annual attestations, open extinguishment requests naming it (collecting signatures or awaiting the relay; S4 WP12), attested amendments not landed)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /me/session/refresh:
     post:
       operationId: refreshSession

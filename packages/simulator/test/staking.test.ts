@@ -24,6 +24,9 @@ import { seriesOf } from './kit.ts';
  * S4 cause codes:
  *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address on both
  *    personalities (transitionally a co-signing wallet at the key's address).
+ *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
+ *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
+ *    second attestor co-signing the first one's transaction).
  */
 
 const SCALE = 1_000_000n;
@@ -63,10 +66,8 @@ async function launched() {
 }
 
 const amountOf = (evs: DomainEvent[], type: string): bigint => BigInt((evs.find((e) => e.type === type)!.payload as { amount: string }).amount);
-const extinguish = (h: SimHarness, seriesId: string) => {
-  const [k1, k2] = h.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
-  return h.exec(k1, { kind: 'extinguish', seriesId, attestors: [k1.address, k2.address] }, [k2]);
-};
+// cause S4-EXT: the harness attestors' EXTINGUISH signatures, relayed by the keeper (was k1 sending with k2 co-signing)
+const extinguish = async (h: SimHarness, seriesId: string) => h.sim.submit(await h.extinguishment(seriesId), 'keeper');
 
 describe('curve staking (solana): the lifecycle with exact amounts (CMT:186-426)', () => {
   // cause S3-ST: CMT `curve_lifecycle_activate_sync_report_claim_tender`, from the census on: registration and staking
