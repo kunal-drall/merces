@@ -483,6 +483,16 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext, keyHint: 'attestor-1 x25519 key v1' }, issuerTok, { 'idempotency-key': 'hard-1' })).json().hardshipId).toBe(hardshipId);
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(409);
 
+    const rebuildPath = `/series/${seriesId}/hardship/build-request`;
+    expect((await rig.post(rebuildPath, {}, holderTok)).statusCode).toBe(403);
+    const otherIssuer = rig.token({ accountId: 'other-issuer-account', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
+    expect((await rig.post(rebuildPath, {}, otherIssuer)).statusCode).toBe(403);
+    const refreshed = await rig.post(rebuildPath, {}, issuerTok);
+    expect(refreshed.statusCode).toBe(200);
+    expect(refreshed.json().tx.command).toEqual({ kind: 'requestPause', seriesId });
+    expect(refreshed.json()).not.toHaveProperty('ciphertext');
+    expect((await rig.t.pool.query('select count(*)::int as n from hardship_requests where series_id = $1', [seriesId])).rows[0].n).toBe(1);
+
     // the attestor can neither get a PAUSE request nor approve before the issuer's requestPause landed (Stage 1's
     // PauseNotRequested); cause S4-PAU: a decision carries the key's PAUSE signature over the nonce and the end
     const approvedUntil = until - 30 * DAY;
@@ -493,6 +503,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(early.json().detail).toEqual({ stage1: 'PauseNotRequested' });
     const sent = await rig.post('/tx/send', await h.issuer.sign(tx), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
+    expect((await rig.post(rebuildPath, {}, issuerTok)).statusCode).toBe(409);
     expect(sent.json().events[0]).toMatchObject({ type: 'PauseRequested', payload: { seriesId, nonce: '1' } }); // cause S4-PAU: with the nonce
     // the requested end is advisory: recorded beside the request, no pause yet (cause P)
     expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 0, requested: true, requestedUntil: null, current: null });
@@ -516,7 +527,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     // holders and the issuer: statuses and dates only
     const holderView = await rig.get(`/series/${seriesId}/hardship`, holderTok);
     expect(holderView.statusCode).toBe(200);
-    expect(holderView.json()).toEqual({ seriesId, seriesStatus: expect.any(String), paused: false, pausedUntil: null, requests: [{ state: 'pending', requestedUntil: until, approvedUntil: null, requestedAt: expect.any(String), decidedAt: null }] });
+    expect(holderView.json()).toEqual({ seriesId, seriesStatus: expect.any(String), requestOnchain: true, paused: false, pausedUntil: null, requests: [{ state: 'pending', requestedUntil: until, approvedUntil: null, requestedAt: expect.any(String), decidedAt: null }] });
     expect(JSON.stringify(holderView.json())).not.toMatch(/ciphertext|keyHint|decisionCode|attestor|signature|approval/);
 
     // cause S4-PAU: the PAUSE signing request (S4 WP10): Stage 1's MERCES_PAUSE_V1 over the chain's domain, the series key,

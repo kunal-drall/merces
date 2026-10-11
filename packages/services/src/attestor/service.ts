@@ -560,7 +560,7 @@ export class AttestorService {
     if (!series) throw AppError.notFound('series');
     const r = await this.ctx.pool.query('select state, requested_until, approved_until, created_at, decided_at from hardship_requests where series_id = $1 order by created_at desc', [seriesId]);
     return {
-      seriesId, seriesStatus: series.status, paused: series.status === 'Paused', pausedUntil: series.pause?.approvedUntil ?? null,
+      seriesId, seriesStatus: series.status, requestOnchain: series.pauses.requested, paused: series.status === 'Paused', pausedUntil: series.pause?.approvedUntil ?? null,
       requests: r.rows.map((x) => ({ state: x.state, requestedUntil: Number(x.requested_until), approvedUntil: num(x.approved_until), requestedAt: x.created_at, decidedAt: x.decided_at ?? null })),
     };
   }
@@ -1386,6 +1386,24 @@ export class AttestorService {
     if ('error' in outcome) throw outcome.error;
     return { ...this.extView(await this.extRow(id), false, true), relayTx: outcome.relayTx };
   }
+
+  /** Refresh an unsigned request without creating another encrypted review case. */
+  async rebuildHardship(seriesId: string, session: Session): Promise<{ seriesId: string; tx: UnsignedTx }> {
+    const { chain, series } = await this.seriesForIssuer(seriesId, session);
+    const rows = await this.ctx.pool.query("select account_id, attestor, requested_until from hardship_requests where series_id = $1 and state = 'pending'", [seriesId]);
+    if (rows.rowCount !== 1) throw AppError.conflict('no single pending hardship review exists');
+    const pending = rows.rows[0]!;
+    if (pending.account_id !== session.accountId && !session.roles.includes('admin')) throw AppError.forbidden('this hardship review belongs to another account');
+    if (series.pauses.requested) throw AppError.conflict('the pause request is already onchain');
+    if (series.phase !== 'Settled' || ['Retired', 'Redeemed', 'Extinguished', 'Paused'].includes(series.status)) throw AppError.conflict('the series cannot request a pause');
+    const now = await chain.now();
+    if (Number(pending.requested_until) <= now) throw AppError.conflict('the requested review end has passed');
+    const exhausted = noPauseApprovable(series.pauses, now);
+    if (exhausted) throw pauseRefusal(exhausted);
+    await this.requireRegisteredAttestor(chain, String(pending.attestor));
+    return { seriesId, tx: await chain.build({ kind: 'requestPause', seriesId }, series.issuer) };
+  }
+
 }
 
 /** One named key's stored Stage 1 EXTINGUISH signature (S4 WP12). */

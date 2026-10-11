@@ -40,7 +40,7 @@ components:
       description: 'A merces-e2e v1 envelope, in canonical base64 (standard alphabet, padded) of version 0x01 (1 byte) ‖ the sender''s ephemeral X25519 public key (32) ‖ the AES-GCM nonce (12) ‖ the AES-256-GCM ciphertext of the payload and its 16-byte tag. Key = HKDF-SHA256(X25519 shared secret, salt = ephemeral public key ‖ recipient public key, info = "merces/e2e/v1" ‖ 0x00 ‖ purpose); associated data = the 45 header bytes. The server holds no key and checks the shape only; anything that does not parse as an envelope of the payload''s size (the plaintext or an encoding of it included) is rejected (422). @merces/poi-device sealE2e / openE2e.'
     HardshipStatus:
       type: object
-      description: What holders and the issuer see — statuses and dates only, never ciphertext or decision codes.
+      description: What holders and the issuer see — statuses, requestOnchain boolean and dates only, never ciphertext or decision codes.
       properties:
         seriesId: { type: string }
         seriesStatus: { type: string }
@@ -229,6 +229,18 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
       responses: { '200': { description: Statuses and dates only, content: { application/json: { schema: { $ref: '#/components/schemas/HardshipStatus' } } } } }
+  /series/{seriesId}/hardship/build-request:
+    post:
+      operationId: rebuildHardshipRequest
+      x-access: issuer
+      tags: [hardship]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      description: Refresh the original issuer's unsigned request for an existing pending private review. No new case or notification is created. Refuses an already onchain request, expired review, inactive attestor or ineligible series.
+      responses:
+        '200': { description: Fresh unsigned requestPause transaction, content: { application/json: { schema: { type: object, required: [seriesId, tx], properties: { seriesId: { type: string }, tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }
+        '403': { description: Not the issuer or original review account }
+        '409': { description: Review or chain state does not permit another request }
   /series/{seriesId}/hardship/build-end:
     post:
       operationId: buildEndPause

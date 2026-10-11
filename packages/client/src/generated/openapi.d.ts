@@ -2064,6 +2064,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/series/{seriesId}/hardship/build-request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Refresh the original issuer's unsigned request for an existing pending private review. No new case or notification is created. Refuses an already onchain request, expired review, inactive attestor or ineligible series. */
+        post: operations["rebuildHardshipRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/series/{seriesId}/hardship/build-end": {
         parameters: {
             query?: never;
@@ -9453,6 +9470,46 @@ export interface operations {
             };
             /** @description Plaintext-looking payload, an attestor key not registered on the series' chain, or an end date in the past; or no pause could be approved (detail.stage1 TooManyPauses: the series has used its 16 pauses; PauseTooLong: its two years in total are used) */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rebuildHardshipRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fresh unsigned requestPause transaction */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        seriesId: string;
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            /** @description Not the issuer or original review account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Review or chain state does not permit another request */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

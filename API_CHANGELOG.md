@@ -144,3 +144,7 @@ fields the server returns; a fresh 32-byte salt per bid). Full detail: `git diff
 ## Stage 5 public forms integration — 11 October 2026
 
 Added `POST /forms/{form}` (`submitPublicForm`) for all five signed-out site forms, with strict per-form schemas, versioned Humanathon consent, server-only gateway authentication, durable idempotency and quotas. Returns only `{ok, duplicate}`; a successful response confirms durable intake and queueing, not delivery. Added `POST /forms/webhooks/resend` (`receiveFormsResendWebhook`) with exact-byte Svix verification and duplicate-event protection. Both routes remain unavailable until explicit enable/privacy flags and complete host configuration are present. No chain command or economic behavior changed.
+
+## 11 October 2026 — native hardship recovery
+
+Added issuer-only `POST /series/{seriesId}/hardship/build-request` to refresh an unsigned transaction for the existing private review. It preserves the original account, encrypted case and notification, rechecks current eligibility and attestor registration, and refuses a request already onchain. No protocol rule or pause duration changes.

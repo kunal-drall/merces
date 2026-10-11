@@ -8527,6 +8527,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HardshipStatus"
+  /series/{seriesId}/hardship/build-request:
+    post:
+      operationId: rebuildHardshipRequest
+      x-access: issuer
+      tags:
+        - hardship
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+      description: Refresh the original issuer's unsigned request for an existing pending private review. No new case or notification is created. Refuses an already onchain request, expired review, inactive attestor or ineligible series.
+      responses:
+        "200":
+          description: Fresh unsigned requestPause transaction
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - seriesId
+                  - tx
+                properties:
+                  seriesId:
+                    type: string
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+        "403":
+          description: Not the issuer or original review account
+        "409":
+          description: Review or chain state does not permit another request
   /series/{seriesId}/hardship/build-end:
     post:
       operationId: buildEndPause

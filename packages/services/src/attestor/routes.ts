@@ -46,6 +46,7 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
     },
   });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/hardship', access: 'holder-or-issuer', handler: async (req) => s.hardshipStatus(sid(req)) });
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/hardship/build-request', access: 'issuer', handler: async (req, _r, session) => s.rebuildHardship(sid(req), session!) });
   // the issuer withdraws its pending onchain request (Stage 1 withdraw_pause_request; S4 WP10)
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/hardship/build-end', access: 'issuer', handler: async (req, _r, session) => s.buildEndPause(sid(req), session!) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/hardship/build-withdraw', access: 'issuer', handler: async (req, _r, session) => s.buildWithdrawPause(sid(req), session!) });
