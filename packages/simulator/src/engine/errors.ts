@@ -53,6 +53,11 @@ export const STAGE1_CODE = {
   ContractHashMissing: 'InvalidTerms',
   NotAllowlisted: 'NotAllowlisted',
   FxMismatch: 'InvalidTerms',
+  FxPairExists: 'Duplicate',
+  UnknownFxPair: 'NotFound',
+  SnapshotAlreadyTaken: 'Duplicate',
+  StalePrice: 'TooLate',
+  ConfidenceTooWide: 'InvalidTerms',
   FxFallbackRequired: 'InvalidTerms',
   FxFallbackNotAllowed: 'InvalidTerms',
   InsufficientEscrow: 'InsufficientFunds',
@@ -84,6 +89,7 @@ export const STAGE1_CODE = {
  * `errors.test.ts`. Curve mode is Solana only, so its names live here.
  */
 export const STAGE1_SOLANA_CODE = {
+  CrosscheckRequired: 'InvalidTerms',
   TrueUpTimestampInFuture: 'InvalidTerms',
   // the registry's curve terms (create_series, lib.rs:470-485; S3 WP7)
   CurveThresholdZero: 'InvalidTerms',

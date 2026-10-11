@@ -134,7 +134,7 @@ export function submitReport(e: EngineCore, signer: string | null, cmd: SubmitRe
   }
   emit('ReportAccepted', {
     seriesId: s.seriesId, periodId: cmd.periodId, tier: cmd.tier, paymentDue: str(due), accrual: '0', priorIncomeCommitment: prior, incomeCommitment: cmd.incomeCommitment,
-    termsCommitment: s.terms.termsCommitment, fxBasis: cmd.fxBasis, fxAvgWad: cmd.fxAvgWad, liquidityEvent: cmd.liquidityEvent,
+    termsCommitment: s.terms.termsCommitment, fxBasis: cmd.fxBasis ?? (s.terms.fxPairId || s.terms.reportingCurrency !== 'USD' ? cmd.fxFallback ? 'attestor' : 'accumulator' : 'unity'), fxAvgWad: cmd.fxAvgWad, liquidityEvent: cmd.liquidityEvent,
   });
   syncStatus(e, s, now, emit);
 }
@@ -179,21 +179,22 @@ function periodPid(periodId: string): number {
  * another series, period, rate or chain recovers to another address: InvalidAttestorSignature.
  */
 function checkFx(e: EngineCore, s: SimSeries, cmd: SubmitReport, fx: bigint, now: number): void {
-  if (s.terms.reportingCurrency === 'USD') {
+  if (!s.terms.fxPairId && s.terms.reportingCurrency === 'USD') {
     // stablecoin income: no pair, the rate is 1
     if (fx !== WAD || cmd.fxBasis === 'accumulator') fail('FxMismatch', 'stablecoin income requires unity FX');
     if (cmd.fxBasis === 'attestor' || cmd.fxFallback) fail('FxFallbackNotAllowed', 'no FX fallback for stablecoin income');
     return;
   }
-  if (cmd.fxBasis === 'unity' || !cmd.pair || cmd.pair !== `${s.terms.reportingCurrency}/USD`) fail('FxMismatch', 'pair must be <reporting currency>/USD');
-  const q = quarterRate(e, cmd.pair, cmd.periodId);
+  const pair = s.terms.fxPairId ?? `${s.terms.reportingCurrency}/USD`;
+  if (cmd.fxBasis === 'unity' || (cmd.pair !== undefined && cmd.pair !== pair)) fail('FxMismatch', 'pair must match the series FX configuration');
+  const q = quarterRate(e, pair, cmd.periodId);
   const available = !!q && q.avgWad !== null && !q.needsFallback;
   if (available) {
     if (cmd.fxBasis === 'attestor' || cmd.fxFallback) fail('FxFallbackNotAllowed', 'the accumulator rate is available');
     if (fx !== q.avgWad) fail('FxMismatch', 'fxAvg does not match the accumulator');
     return;
   }
-  if (cmd.fxBasis !== 'attestor' || !cmd.fxFallback) fail('FxFallbackRequired', 'the accumulator rate is unavailable or flagged; an attestor\'s FX signature is required');
+  if ((cmd.fxBasis !== undefined && cmd.fxBasis !== 'attestor') || !cmd.fxFallback) fail('FxFallbackRequired', 'the accumulator rate is unavailable or flagged; an attestor\'s FX signature is required');
   const m = fxDigest(signingContextOf(e.state, s.seriesId), { periodId: cmd.periodId, fxRateWad: fx });
   requireSigned(e, 'attestor', m.digest, cmd.fxFallback, now, { reportPeriod: cmd.periodId });
 }

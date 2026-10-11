@@ -41,6 +41,8 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   if (violation) fail(violation.stage1, violation.message);
   if (/^0x0{64}$/.test(t.contractHash)) throw new ChainError('InvalidTerms', 'contract hash required: a raise needs a signed contract');
   if (t.tierFlags.tier4) throw new ChainError('InvalidTerms', 'tier 4 is switched off');
+  if (t.fxPairId && !e.state.rates.get(t.fxPairId)?.config) fail('UnknownFxPair');
+  if (t.fxPairId && t.tierFlags.tier1) fail('InvalidTerms', 'tier-1 income must be in the stablecoin');
   // A curve raise starts at creation here: its creation is the curve's activation (Stage 1 `activate_curve` and the
   // registry's `mark_curve_activated`), checked in their order before the series exists: P0 at least 1
   // (CurveThresholdMismatch, curve.rs:799-805), new raises not paused (NewRaisesPaused), the issuer still allowlisted
@@ -65,6 +67,7 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   const seriesId = `${e.state.config.chain}:${address}`;
   if (e.state.series.has(seriesId)) throw new ChainError('Duplicate', 'series exists');
   const terms: SimTerms = {
+    fxPairId: t.fxPairId,
     stablecoin: t.stablecoin,
     stablecoinMint: t.stablecoinMint,
     unitsOffered: big(t.unitsOffered),

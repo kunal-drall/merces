@@ -113,8 +113,9 @@ describe('the chain\'s settlement limits and the permissionless group', () => {
     // cause S3-BR: every settlement step and registration; `burnRetired` needs a Retired series (claims.test.ts), and
     // `completeCurve`, `collectCurveProceeds` and `syncCurveUnits` a curve series (curve.test.ts, census.test.ts; cause
     // S3-CV, S3-CN); `approvePause` an attestor's signature over a pending request (pause.test.ts; cause S4-PAU);
+    // `snapshotFx` is tested with raw prices in fx.test.ts (S5-FX);
     // `extinguish` two attestors' signatures (terminal.test.ts; cause S4-EXT)
-    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['retireIfCapped', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish'].includes(k)));
+    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['snapshotFx', 'retireIfCapped', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish'].includes(k)));
     for (const cmd of cmds) {
       const tx = await h.sim.build(cmd, anyone.address);
       expect(tx.command).toEqual(cmd);

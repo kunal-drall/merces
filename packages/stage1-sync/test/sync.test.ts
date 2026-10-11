@@ -381,14 +381,13 @@ describe('stage1:sync', () => {
     expect(all.find((f) => f.family === 'unclassified')).toBeUndefined();
     // cause S2-G: since S2 exactly these two families remain, each in full (the auction family is retired)
     expect(all).toEqual(INTERIM_FAMILIES);
-    expect(INTERIM_FAMILIES.map((f) => f.family)).toEqual(['FX (S5)', 'window cap (S5)']);
+    expect(INTERIM_FAMILIES.map((f) => f.family)).toEqual(['window cap (S5)']);
     expect(INTERIM_FAMILIES.flatMap((f) => f.names).filter((n, i, a) => a.indexOf(n) !== i)).toEqual([]);
     expect(Object.keys(interim)).toContain('walletCapUnits');
     // a name outside the families (a retired interim name coming back, a Stage 1 name under `interim`) is unclassified
     expect(interimRemaining(['walletCapUnits', 'pythToWad', 'min', 'requiredEscrow'])).toEqual([
-      { family: 'FX (S5)', names: ['pythToWad'] },
       { family: 'window cap (S5)', names: ['walletCapUnits'] },
-      { family: 'unclassified', names: ['min', 'requiredEscrow'] },
+      { family: 'unclassified', names: ['pythToWad', 'min', 'requiredEscrow'] },
     ]);
   });
 

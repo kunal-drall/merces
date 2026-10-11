@@ -348,7 +348,7 @@ export const fxCoverageJob: KeeperJob = {
       const now = await chain.now();
       const pairs = await ctx.pool.query<{ pair: string }>('select pair from rate_pairs where chain = $1 and enabled', [chain.chain]);
       const currencies = new Set<string>();
-      for (const s of await chain.listSeries()) if (s.terms.reportingCurrency !== 'USD') currencies.add(`${s.terms.reportingCurrency}/USD`);
+      for (const s of await chain.listSeries()) if (s.terms.fxPairId || s.terms.reportingCurrency !== 'USD') currencies.add(s.terms.fxPairId ?? `${s.terms.reportingCurrency}/USD`);
       for (const p of pairs.rows) currencies.add(p.pair);
       for (const pair of currencies) {
         // check the last 4 completed quarters

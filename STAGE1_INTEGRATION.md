@@ -1702,3 +1702,9 @@ State at @1bfc66b (the same tree as @5eafd41):
 - Meteora's DBC math: the DBC program's source is not in the checkout, so swap rounding cannot be checked here; Stage 1's
   TypeScript port of its primitives (`solana/meteora/src/math.ts`) comes in with the Meteora port (S5).
 - Devnet and testnet deployments: still missing (blockers above).
+
+### S5 FX: registered pairs and raw snapshots
+
+Stage 1 vectors 13 (281 steps) and 24 (94 steps) pass full lockstep on both personalities. They are now required targets; SH-REP-1 is removed. `setFxPair` registers `keccak(feedId || inverted)` once; `snapshotFx` uses raw price/confidence/exponent/publish time. Quarter checkpoints, trading-day coverage, deviation retention and wide inversion import Stage 1 directly. Reports derive their FX basis from the series pair. Admin pair proposals, the public pair catalogue, draft selection, indexed pair IDs and rate keepers use the same identity. The interim FX math is deleted.
+
+**DIV-S1I-5:** Solana `merces_protocol/src/fx.rs` requires its configured second Pyth update and checks freshness. EVM `MercesFxAccumulator._chainlink` ignores unavailable/stale/nonpositive answers. The reference accepts an omitted configured cross-check and has no timestamp input. The simulator follows each contract, with missing/stale regression tests; no official vector needs a waiver.

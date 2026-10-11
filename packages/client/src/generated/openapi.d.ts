@@ -2446,6 +2446,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/chains/{chain}/fx-pairs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Registered and indexed FX pairs available for draft terms. Pair identity is keccak(feedId bytes followed by one inversion byte). */
+        get: operations["listFxPairs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/fx-pairs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Prepare a write-once registry pair registration for the protocol admin to sign. No price or rate is supplied by the admin. Cross-check uses a second Pyth feed on Solana and a Chainlink aggregator on EVM. */
+        post: operations["setFxPair"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/series/{seriesId}/treasury/build-draw": {
         parameters: {
             query?: never;
@@ -3241,6 +3275,11 @@ export type components = {
             bps?: number;
         };
         SeriesTerms: {
+            /**
+             * @description Registered Stage 1 FX pair. Required for non-USD draft terms; forbidden for tier 1.
+             * @default null
+             */
+            fxPairId: string | null;
             unitsOffered?: string;
             reservePrice?: components["schemas"]["Money"];
             minimumRaise?: components["schemas"]["Money"];
@@ -4232,6 +4271,14 @@ export type components = {
             encoding?: string;
             summary?: string;
             expiresAt?: number | null;
+        };
+        FxPair: {
+            pairId: components["schemas"]["Hash32"];
+            feedId: components["schemas"]["Hash32"];
+            inverted: boolean;
+            /** @description Solana second Pyth feed id as base58; EVM Chainlink aggregator address */
+            crosscheck: string | null;
+            effectivePeriod: string;
         };
         TrueUpState: {
             nonce: string;
@@ -6261,7 +6308,10 @@ export interface operations {
             content: {
                 "application/json": {
                     chain: string;
-                    public: Record<string, never>;
+                    public: {
+                        /** @default null */
+                        fxPairId?: string | null;
+                    };
                     private?: Record<string, never> | null;
                 };
             };
@@ -6438,7 +6488,10 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    public: Record<string, never>;
+                    public: {
+                        /** @default null */
+                        fxPairId?: string | null;
+                    };
                     private: Record<string, never>;
                 };
             };
@@ -10162,6 +10215,80 @@ export interface operations {
                 content?: never;
             };
             /** @description The signature does not recover to the named key over this request's EXTINGUISH message on this chain, or the key is not active (detail.stage1 InvalidAttestorSignature); or the chain refused the relay (error Chain<code>, detail.stage1 its Stage 1 name; the request stays ready) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listFxPairs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chain: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered pairs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        chain: string;
+                        pairs: components["schemas"]["FxPair"][];
+                    };
+                };
+            };
+        };
+    };
+    setFxPair: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    chain: string;
+                    feedId: components["schemas"]["Hash32"];
+                    inverted: boolean;
+                    /** @default null */
+                    crosscheck?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Persisted request and unsigned admin transaction */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        request: components["schemas"]["AdminTxRequest"];
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            /** @description Pair already registered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid chain feed address */
             422: {
                 headers: {
                     [name: string]: unknown;

@@ -50,8 +50,8 @@ export function parseSeriesId(id: SeriesId): { chain: ChainKey; address: Address
 
 /** Period ids are calendar quarters: "2026Q3". */
 export const periodIdSchema = z.string().regex(/^\d{4}Q[1-4]$/);
-/** Currency pairs for the rate accumulator: "EUR/USD". */
-export const pairSchema = z.string().regex(/^[A-Z]{3}\/[A-Z]{3}$/);
+/** Display currency pairs or Stage 1's canonical keccak(feed_id || inverted) pair id. */
+export const pairSchema = z.string().regex(/^(?:[A-Z]{3}\/[A-Z]{3}|0x[0-9a-f]{64})$/);
 /** Hex-encoded 32-byte hashes with 0x prefix. */
 export const hash32Schema = z.string().regex(/^0x[0-9a-f]{64}$/);
 export type Hash32 = string;

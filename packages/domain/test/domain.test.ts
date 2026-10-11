@@ -349,7 +349,7 @@ describe('schemas', () => {
     // cause S3-BR, S3-CV: a curve's completion and proceeds are permissionless (Stage 1 complete_curve, collect_curve_proceeds);
     // cause S3-CN: and its census (Stage 1 sync_curve_units)
     // cause S4-PAU: and a signed pause approval (Stage 1 approve_pause); cause S4-EXT: and a signed extinguishment
-    expect(permissionlessCommandKinds).toEqual(['retireIfCapped', 'beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish']);
+    expect(permissionlessCommandKinds).toEqual(['snapshotFx', 'retireIfCapped', 'beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish']);
     // cause S3-BR: burnRetired{holder} (permissionless, above) replaces the S1 list burn crank (`holders[]`), so no service
     // command burns any more; cause S3-CV: completion is permissionless `completeCurve` (was a service graduation command)
     expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'setAllowlist']);

@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
 import { KEY_GRACE_SECONDS, type UnsignedTx } from '@merces/domain';
 import { SimSigner, SimWallet, type SimAttestor } from '@merces/simulator';
-import { IdentityService } from '@merces/services';
+import { fxPairId } from '@merces/math';
+import { IdentityService, TermsService } from '@merces/services';
 import { makeRig } from './helpers.ts';
 
 /*
@@ -434,4 +435,33 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect((await rig.get('/admin/tx-requests?limit=200', adminTok)).json().requests.every((r: { createdBy: string }) => r.createdBy === 'admin-1')).toBe(true);
     expect((await rig.get('/admin/audit-log?actor=user-1', adminTok)).json().entries).toEqual([]);
   });
+  it('registers an FX pair through an admin proposal, indexes it, and validates draft selection', async () => {
+    const body = { chain: 'solana', feedId: '0x' + '49'.repeat(32), inverted: true, crosscheck: null };
+    const pairId = '0x' + Buffer.from(fxPairId(body.feedId, true)).toString('hex');
+    expect((await rig.post('/admin/fx-pairs', body, userTok)).statusCode).toBe(403);
+    const made = await rig.post('/admin/fx-pairs', body, adminTok, { 'idempotency-key': 'fx-pair-create' });
+    expect(made.statusCode, made.body).toBe(201);
+    const { request, tx } = made.json();
+    expect(tx.command).toEqual({ kind: 'setFxPair', feedId: body.feedId, inverted: true, crosscheck: null });
+    expect((await rig.get('/chains/solana/fx-pairs')).json().pairs).toEqual([]);
+    const txId = await relay(tx);
+    await rig.sync();
+    expect((await rig.get('/chains/solana/fx-pairs')).json().pairs).toContainEqual({ pairId, feedId: body.feedId, inverted: true, crosscheck: null, effectivePeriod: '2026Q1' });
+    expect((await rig.post('/admin/fx-pairs', body, adminTok)).statusCode).toBe(409);
+    const confirmation = await rig.post(`/admin/tx-requests/${request.requestId}/sent`, { txId }, adminTok);
+    expect(confirmation.statusCode).toBe(200);
+    expect(confirmation.json().state).toBe('confirmed');
+    const terms = { stablecoin: 'USDC' as const, unitsOffered: '1000', reservePrice: '8000000', minimumRaise: '4000000000', tierFlags: { tier1: false, tier2: true, tier3: false }, reportingCurrency: 'EUR', country: 'DE', fxPairId: pairId };
+    const svc = new TermsService(rig.ctx);
+    expect((await svc.validate('solana', terms, null, 2026)).issues).toEqual([]);
+    expect((await svc.validate('solana', { ...terms, fxPairId: null }, null, 2026)).issues).toContainEqual(expect.objectContaining({ field: 'fxPairId', code: 'required' }));
+    expect((await svc.validate('solana', { ...terms, fxPairId: '0x' + '51'.repeat(32) }, null, 2026)).issues).toContainEqual(expect.objectContaining({ field: 'fxPairId', code: 'unknown-pair' }));
+    const raised = await rig.sol.runRaise({ terms: { fxPairId: pairId, reportingCurrency: 'EUR' } });
+    await rig.sync();
+    const series = await rig.get(`/series/${raised.seriesId}`);
+    expect(series.statusCode).toBe(200);
+    expect(series.json().terms.fxPairId).toBe(pairId);
+  });
+
+
 });

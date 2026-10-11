@@ -40,6 +40,7 @@ export function toSeriesState(chain: string, family: ChainFamily, x: SimSeries, 
   return {
     seriesId: x.seriesId, chain, issuer: x.issuer, unitScale: s(x.unitScale) as UnitScale,
     terms: {
+      fxPairId: t.fxPairId,
       stablecoin: t.stablecoin, stablecoinMint: t.stablecoinMint, unitsOffered: s(t.unitsOffered), reservePrice: s(t.reservePrice), minimumRaise: s(t.minimumRaise), capMultipleWad: s(t.capMultipleWad), lockupSeconds: t.lockupSeconds,
       releaseSchedule: t.releaseSchedule.map((r) => ({ ...r })), auctionFeeBps: Number(t.auctionFeeBps), payoutFeeBps: Number(t.payoutFeeBps), hurdleWad: s(t.hurdleWad), payoutMultipleK: Number(t.payoutMultipleK), walletCapBps: Number(t.walletCapBps),
       windowCommitDuration: t.windowCommitDuration, windowRevealDuration: t.windowRevealDuration, windowFeeBps: t.windowFeeBps,

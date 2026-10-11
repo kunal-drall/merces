@@ -9,6 +9,7 @@ import { reportOps } from './reports.ts';
 import { terminalOps } from './terminal.ts';
 import { unsupportedOps } from './unsupported.ts';
 import { windowOps } from './window.ts';
+import { fxOps } from './fx.ts';
 import type { OpContext, Translation, Translator, TranslatorTable } from './types.ts';
 
 export { NOT_YET } from './unsupported.ts';
@@ -24,6 +25,7 @@ export const TRANSLATORS: TranslatorTable = Object.freeze({
   ...redemptionOps,
   ...terminalOps,
   ...windowOps,
+  ...fxOps,
   ...unsupportedOps,
 });
 

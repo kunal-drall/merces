@@ -1,4 +1,4 @@
-import { interim } from '@merces/math';
+import { normalizePythPrice, invertRate } from '@merces/math';
 
 /**
  * Price-feed ports (E8, C9). Pyth: shaped after the Hermes REST API / @pythnetwork/hermes-client 3.1.0
@@ -43,11 +43,10 @@ export function pythSymbolFor(pair: string): { symbol: string; inverted: boolean
 }
 
 export function parsedToWad(p: PythParsedPrice, inverted: boolean): { rateWad: bigint; confWad: bigint } {
-  const price = interim.pythToWad(BigInt(p.price.price), p.price.expo);
-  const conf = interim.pythToWad(BigInt(p.price.conf), p.price.expo);
+  const price = normalizePythPrice(BigInt(p.price.price), p.price.expo);
+  const conf = BigInt(p.price.conf) === 0n ? 0n : normalizePythPrice(BigInt(p.price.conf), p.price.expo);
   if (!inverted) return { rateWad: price, confWad: conf };
-  const WAD = 10n ** 18n;
-  const rateWad = (WAD * WAD) / price;
+  const rateWad = invertRate(price);
   const confWad = (conf * rateWad) / price; // relative confidence carries over
   return { rateWad, confWad };
 }
@@ -79,10 +78,10 @@ export class MockPyth implements PythPort {
 
 export class MockChainlink implements ChainlinkPort {
   readonly provider = 'mock' as const;
-  constructor(public feeds: Record<string, { answer: string; decimals: number }> = {}) {}
+  constructor(public feeds: Record<string, { answer: string; decimals: number }> = {}, public now: () => number = () => Math.floor(Date.now() / 1000)) {}
   async latestRoundData(chain: string, pair: string): Promise<{ answer: bigint; decimals: number; updatedAt: number } | null> {
     const f = this.feeds[`${chain}:${pair}`];
-    return f ? { answer: BigInt(Math.round(Number(f.answer) * 10 ** f.decimals)), decimals: f.decimals, updatedAt: Math.floor(Date.now() / 1000) } : null;
+    return f ? { answer: BigInt(Math.round(Number(f.answer) * 10 ** f.decimals)), decimals: f.decimals, updatedAt: this.now() } : null;
   }
 }
 

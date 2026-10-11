@@ -1,115 +1,90 @@
 import { enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { DEFAULTS } from '@merces/domain';
-import { interim, utcDayIndex } from '@merces/math';
-import { parsedToWad, pythSymbolFor, type ChainlinkPort, type PythPort } from '@merces/ports';
-import type { ServiceContext } from '@merces/services';
-import { refused, type KeeperJob } from './jobs.ts';
+import { wallet32Of, type Command } from '@merces/domain';
+import { DEFAULT_PARAMETERS, deviates, invertRate, utcDayIndex } from '@merces/math';
+import { parsedToWad, type ChainlinkPort, type PythPort } from '@merces/ports';
+import type { KeeperJob } from './jobs.ts';
 
-/**
- * E8 — rate keeper. Once per UTC day per currency pair per chain: fetch the Pyth update, check publish time and
- * confidence, cross-check against Chainlink where a feed exists, submit `snapshotRate`, and record the check.
- * Feed ids beyond the confirmed ones are resolved from Hermes at runtime and the pair fails closed when missing.
- * Chainlink has no FX feeds on Monad (verified 2026-10-07), so there the cross-check is recorded as unavailable (A-FX-2).
- */
-/** A closed FX market (weekend, holiday) is an expected condition, not a keeper failure. */
+/** A closed FX market is routine, unlike a missing feed or a failed submission. */
 class MarketClosed extends Error {}
+export interface RateKeeperOptions { pyth: PythPort; chainlink: ChainlinkPort }
+type PairRow = { pair: string; pyth_feed_id: string; chainlink_feed: string | null; inverted: boolean; last_snapshot_day: number | null };
 
-export interface RateKeeperOptions {
-  pyth: PythPort;
-  chainlink: ChainlinkPort;
-  deviationBandBps?: number;
-}
-
+/** SPEC §6.6: registered feed identities, daily raw-price snapshots, retained prices on deviation. */
 export function rateKeeperJob(opts: RateKeeperOptions): KeeperJob {
-  const band = BigInt(opts.deviationBandBps ?? DEFAULTS.fxDeviationBandBps);
   return {
-    name: 'rate.snapshot',
-    intervalSeconds: 1800,
+    name: 'rate.snapshot', intervalSeconds: 1800,
     async run(ctx) {
       let actions = 0;
-      const details: string[] = [];
-      const errors: string[] = [];
-      // chains are independent: a chain whose RPC fails is recorded as an error and the others still snapshot
+      const details: string[] = [], errors: string[] = [];
       for (const chain of ctx.chains.chains.values()) {
         try {
-          const now = await chain.now();
+          const [now, info] = await Promise.all([chain.now(), chain.info()]);
+          // Disabled registry pairs still serve existing series. Registration, not a symbol guess, supplies identity.
+          const configured = await ctx.pool.query<PairRow>('select pair, pyth_feed_id, chainlink_feed, inverted, last_snapshot_day from rate_pairs where chain = $1 and crosscheck_effective_period is not null', [chain.chain]);
           const day = utcDayIndex(now);
-          // pairs: configured rows plus every non-USD reporting currency of a live series
-          const configured = await ctx.pool.query<{ pair: string; pyth_feed_id: string | null; chainlink_feed: string | null; last_snapshot_day: number | null }>('select pair, pyth_feed_id, chainlink_feed, last_snapshot_day from rate_pairs where chain = $1 and enabled', [chain.chain]);
-          const pairs = new Map(configured.rows.map((r) => [r.pair, r]));
-          for (const s of await chain.listSeries()) {
-            if (s.terms.reportingCurrency === 'USD' || s.phase !== 'Settled') continue;
-            const pair = `${s.terms.reportingCurrency}/USD`;
-            if (!pairs.has(pair)) {
-              await ctx.pool.query('insert into rate_pairs (chain, pair) values ($1,$2) on conflict do nothing', [chain.chain, pair]);
-              pairs.set(pair, { pair, pyth_feed_id: null, chainlink_feed: null, last_snapshot_day: null });
-            }
-          }
-          for (const [pair, row] of pairs) {
+          for (const row of configured.rows) {
+            const pair = row.pair;
             if (row.last_snapshot_day !== null && row.last_snapshot_day >= day) continue;
-            const acc = await chain.getRateAccumulator(pair);
-            if (acc?.lastDayIndex !== null && acc?.lastDayIndex !== undefined && acc.lastDayIndex >= day) {
-              await ctx.pool.query('update rate_pairs set last_snapshot_day = $3 where chain = $1 and pair = $2', [chain.chain, pair, day]);
-              continue;
-            }
             try {
-              const { symbol, inverted } = pythSymbolFor(pair);
-              let feedId = row.pyth_feed_id;
-              if (!feedId) {
-                feedId = (await opts.pyth.resolveFxFeedIds([symbol]))[symbol] ?? null;
-                if (!feedId) throw new Error(`no Pyth feed for ${symbol}; failing closed`);
-                await ctx.pool.query('update rate_pairs set pyth_feed_id = $3 where chain = $1 and pair = $2', [chain.chain, pair, feedId]);
-              }
-              const upd = await opts.pyth.getLatestPriceUpdates([feedId]);
-              const parsed = upd.parsed.find((p) => '0x' + p.id.replace(/^0x/, '') === feedId);
-              if (!parsed) throw new Error(`Hermes returned no price for ${symbol}`);
-              if (now - parsed.price.publish_time > DEFAULTS.maxRateAgeSeconds) throw new MarketClosed(`stale price for ${symbol} (published ${now - parsed.price.publish_time}s ago; FX market closed?)`);
-              const { rateWad, confWad } = parsedToWad(parsed, inverted);
-              // Chainlink cross-check where a feed exists
-              let clRate: bigint | null = null;
-              let dev: bigint | null = null;
-              const cl = await opts.chainlink.latestRoundData(chain.chain, pair);
-              if (cl) {
-                clRate = (cl.answer * 10n ** 18n) / 10n ** BigInt(cl.decimals);
-                dev = interim.deviationBps(rateWad, clRate);
-              }
-              await ctx.pool.query('insert into fx_cross_checks (chain, pair, day_index, pyth_rate_wad, chainlink_rate_wad, deviation_bps, within_band) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing', [chain.chain, pair, day, rateWad.toString(), clRate?.toString() ?? null, dev === null ? null : Number(dev), dev === null ? null : dev <= band]);
-              if (dev !== null && dev > band) {
-                // outside the band: do not snapshot; flag the quarter for an attestor rate (A-FX-2)
-                const periodId = periodIdOf(now);
-                await chain.submit({ kind: 'flagFxFallback', pair, periodId, reason: 'deviation' }, 'keeper').catch((e: unknown) => {
-                  if (!refused(e, ['Duplicate', 'TooEarly', 'InvalidTerms'])) throw e;
-                });
-                // request, notice and the day marker commit together: a crash can neither lose the notice nor repeat it
-                await withTransaction(ctx.pool, async (db) => {
-                  await db.query('insert into fx_fallback_requests (request_id, chain, pair, period_id, reason) values ($1,$2,$3,$4,$5) on conflict (chain, pair, period_id) do nothing', [ctx.newId('fxreq'), chain.chain, pair, periodId, 'deviation']);
-                  await enqueueOutbox(db, 'notification', { kind: 'fx.deviation', chain: chain.chain, pair, deviationBps: Number(dev) });
-                  await db.query('update rate_pairs set last_snapshot_day = $3, last_error = $4 where chain = $1 and pair = $2', [chain.chain, pair, day, `deviation ${dev} bps`]);
-                });
-                details.push(`${chain.chain} ${pair}: deviation ${dev} bps > ${band}`);
+              const acc = await chain.getRateAccumulator(pair);
+              if (!acc) throw new Error('registered FX pair is not available on chain');
+              if (acc.lastDayIndex !== null && acc.lastDayIndex >= day) {
+                await ctx.pool.query('update rate_pairs set last_snapshot_day = $3 where chain = $1 and pair = $2', [chain.chain, pair, day]);
                 continue;
               }
-              await chain.submit({ kind: 'snapshotRate', pair, rateWad: rateWad.toString(), confWad: confWad.toString(), publishTime: parsed.price.publish_time, update: upd.binary.data[0] ?? null }, 'keeper');
-              await ctx.pool.query('update rate_pairs set last_snapshot_day = $3, last_error = null, updated_at = now() where chain = $1 and pair = $2', [chain.chain, pair, day]);
+              if (info.mode === 'live' && opts.pyth.provider === 'mock') throw new Error('mock price feeds are refused on live chains');
+              const crossId = info.family === 'solana' && row.chainlink_feed ? '0x' + Buffer.from(wallet32Of(row.chainlink_feed, 'solana')).toString('hex') : null;
+              const upd = await opts.pyth.getLatestPriceUpdates(crossId ? [row.pyth_feed_id, crossId] : [row.pyth_feed_id]);
+              const lookup = (id: string) => upd.parsed.find((p) => '0x' + p.id.replace(/^0x/, '').toLowerCase() === id.toLowerCase());
+              const parsed = lookup(row.pyth_feed_id);
+              if (!parsed) throw new Error(`Hermes returned no price for ${row.pyth_feed_id}`);
+              if (BigInt(now - parsed.price.publish_time) > DEFAULT_PARAMETERS.fxMaxStalenessSeconds) throw new MarketClosed(`stale price (published ${now - parsed.price.publish_time}s ago; FX market closed?)`);
+              const { rateWad } = parsedToWad(parsed, row.inverted);
+              const command: Extract<Command, { kind: 'snapshotFx' }> = { kind: 'snapshotFx', pairId: pair, price: parsed.price.price, conf: parsed.price.conf, expo: parsed.price.expo, publishTime: String(parsed.price.publish_time), updates: upd.binary.data };
+              let crossRate: bigint | null = null;
+              if (crossId) {
+                const cross = lookup(crossId);
+                if (!cross) throw new Error('configured Solana cross-check update is required');
+                if (BigInt(now - cross.price.publish_time) > DEFAULT_PARAMETERS.fxMaxStalenessSeconds) throw new MarketClosed('stale cross-check price');
+                crossRate = parsedToWad(cross, row.inverted).rateWad;
+                Object.assign(command, { crosscheckPrice: cross.price.price, crosscheckExpo: cross.price.expo, crosscheckPublishTime: String(cross.price.publish_time) });
+              } else if (row.chainlink_feed) {
+                if (info.mode === 'live' && opts.chainlink.provider === 'mock') throw new Error('mock cross-check feeds are refused on live chains');
+                const cl = await opts.chainlink.latestRoundData(chain.chain, row.chainlink_feed);
+                // MercesFxAccumulator._chainlink: invalid or stale answers do not flag the period.
+                if (cl && cl.answer > 0n && cl.decimals <= 36 && BigInt(cl.updatedAt) + DEFAULT_PARAMETERS.fxMaxStalenessSeconds >= BigInt(now)) {
+                  const normalized = cl.answer * 10n ** 18n / 10n ** BigInt(cl.decimals);
+                  if (normalized > 0n) {
+                    crossRate = row.inverted ? invertRate(normalized) : normalized;
+                    Object.assign(command, { crosscheckPrice: cl.answer.toString(), crosscheckExpo: -cl.decimals, crosscheckPublishTime: String(cl.updatedAt) });
+                  }
+                }
+              }
+              const deviation = crossRate === null ? null : (rateWad > crossRate ? rateWad - crossRate : crossRate - rateWad) * 10000n / crossRate;
+              const outside = crossRate !== null && deviates(rateWad, crossRate, DEFAULT_PARAMETERS.fxDeviationBandBps);
+              // Chain verification precedes local markers; failures remain retryable. A deviating price still accumulates.
+              await chain.submit(command, 'keeper');
+              await withTransaction(ctx.pool, async (db) => {
+                await db.query('insert into fx_cross_checks (chain,pair,day_index,pyth_rate_wad,chainlink_rate_wad,deviation_bps,within_band) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing', [chain.chain, pair, day, rateWad.toString(), crossRate?.toString() ?? null, deviation === null ? null : Number(deviation), crossRate === null ? null : !outside]);
+                if (outside) {
+                  const date = new Date(now * 1000), period = `${date.getUTCFullYear()}Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
+                  await db.query('insert into fx_fallback_requests (request_id,chain,pair,period_id,reason) values ($1,$2,$3,$4,$5) on conflict (chain,pair,period_id) do nothing', [ctx.newId('fxreq'), chain.chain, pair, period, 'deviation']);
+                  await enqueueOutbox(db, 'notification', { kind: 'fx.deviation', chain: chain.chain, pair, deviationBps: Number(deviation) });
+                }
+                await db.query('update rate_pairs set last_snapshot_day = $3, last_error = null, updated_at = now() where chain = $1 and pair = $2', [chain.chain, pair, day]);
+              });
+              if (outside) details.push(`${chain.chain} ${pair}: deviation ${deviation} bps; snapshot retained, quarter flagged`);
               actions++;
             } catch (e) {
-              await ctx.pool.query('update rate_pairs set last_error = $3, updated_at = now() where chain = $1 and pair = $2', [chain.chain, pair, String((e as Error).message).slice(0, 300)]);
-              // a closed market is routine; a missing feed, a Hermes outage or a failed submit marks the run failed (A-REV-14)
-              if (e instanceof MarketClosed) details.push(`${chain.chain} ${pair}: ${(e as Error).message}`);
-              else errors.push(`${chain.chain} ${pair}: ${String((e as Error).message).slice(0, 200)}`);
+              const message = String((e as Error).message).slice(0, 300);
+              await ctx.pool.query('update rate_pairs set last_error = $3, updated_at = now() where chain = $1 and pair = $2', [chain.chain, pair, message]);
+              (e instanceof MarketClosed ? details : errors).push(`${chain.chain} ${pair}: ${message}`);
             }
           }
-        } catch (e) {
-          errors.push(`${chain.chain}: ${String((e as Error).message).slice(0, 200)}`);
-        }
+        } catch (e) { errors.push(`${chain.chain}: ${String((e as Error).message).slice(0, 200)}`); }
       }
       return { actions, detail: details.length ? details.join('; ') : undefined, errors };
     },
   };
-}
-
-function periodIdOf(ts: number): string {
-  const d = new Date(ts * 1000);
-  return `${d.getUTCFullYear()}Q${Math.floor(d.getUTCMonth() / 3) + 1}`;
 }

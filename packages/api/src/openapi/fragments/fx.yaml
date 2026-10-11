@@ -1,0 +1,46 @@
+components:
+  schemas:
+    FxPair:
+      type: object
+      required: [pairId, feedId, inverted, crosscheck, effectivePeriod]
+      properties:
+        pairId: { $ref: '#/components/schemas/Hash32' }
+        feedId: { $ref: '#/components/schemas/Hash32' }
+        inverted: { type: boolean }
+        crosscheck: { type: [string, 'null'], description: 'Solana second Pyth feed id as base58; EVM Chainlink aggregator address' }
+        effectivePeriod: { type: string }
+paths:
+  /chains/{chain}/fx-pairs:
+    get:
+      operationId: listFxPairs
+      x-access: public
+      tags: [public]
+      parameters: [{ name: chain, in: path, required: true, schema: { type: string } }]
+      description: Registered and indexed FX pairs available for draft terms. Pair identity is keccak(feedId bytes followed by one inversion byte).
+      responses:
+        '200': { description: Registered pairs, content: { application/json: { schema: { type: object, required: [chain, pairs], properties: { chain: { type: string }, pairs: { type: array, items: { $ref: '#/components/schemas/FxPair' } } } } } } }
+  /admin/fx-pairs:
+    post:
+      operationId: setFxPair
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      parameters: [{ name: Idempotency-Key, in: header, schema: { type: string } }]
+      description: Prepare a write-once registry pair registration for the protocol admin to sign. No price or rate is supplied by the admin. Cross-check uses a second Pyth feed on Solana and a Chainlink aggregator on EVM.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [chain, feedId, inverted]
+              properties:
+                chain: { type: string }
+                feedId: { $ref: '#/components/schemas/Hash32' }
+                inverted: { type: boolean }
+                crosscheck: { type: [string, 'null'], default: null }
+      responses:
+        '201': { description: Persisted request and unsigned admin transaction, content: { application/json: { schema: { type: object, required: [request, tx], properties: { request: { $ref: '#/components/schemas/AdminTxRequest' }, tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }
+        '409': { description: Pair already registered }
+        '422': { description: Invalid chain feed address }

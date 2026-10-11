@@ -34,6 +34,7 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
     phase: r.phase,
     status: r.status,
     terms: {
+      fxPairId: r.fx_pair_id ?? null,
       unitsOffered: r.units_offered,
       reservePrice: r.reserve_price,
       minimumRaise: r.minimum_raise,

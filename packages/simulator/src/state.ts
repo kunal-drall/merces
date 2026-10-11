@@ -1,5 +1,5 @@
 import type { LifecycleStatus, RaiseStateName, Stablecoin } from '@merces/domain';
-import type { FinalState, Pause, Proposal, TailState, VaultState as Stage1VaultState } from '@merces/math';
+import type { FinalState, Pause, Proposal, TailState, FxPairState, VaultState as Stage1VaultState } from '@merces/math';
 import type { PersonalityConfig } from './addresses.ts';
 
 /**
@@ -24,7 +24,7 @@ import type { PersonalityConfig } from './addresses.ts';
  * States of another version are never upgraded in place.
  */
 // S5: immutable transfer-window terms. Older snapshots cannot supply the series' committed values.
-export const SIM_STATE_VERSION = 6;
+export const SIM_STATE_VERSION = 7;
 
 /** A persisted simulator state from another layout (version 1 before S1, 2 before S2, 3 before S3, 4 before S4): never upgraded in place, reset it. */
 export class SimStateVersionError extends Error {
@@ -35,6 +35,7 @@ export class SimStateVersionError extends Error {
 }
 
 export interface SimTerms {
+  fxPairId: string | null;
   stablecoin: Stablecoin;
   stablecoinMint: string;
   unitsOffered: bigint;
@@ -437,10 +438,9 @@ export interface SimIssuer {
   seriesIds: string[];
 }
 
-export interface SimRateAccumulator {
+export interface SimRateAccumulator extends FxPairState {
   pair: string;
-  sumWad: bigint;
-  count: number;
+  config: { feedId: string; inverted: boolean; crosscheck: string | null; effectivePeriod: number } | null;
   /** per day snapshots, ascending by dayIndex */
   days: { dayIndex: number; rateWad: bigint; cumSumWad: bigint; cumCount: number }[];
 }

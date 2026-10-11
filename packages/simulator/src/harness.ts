@@ -56,6 +56,7 @@ export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & {
   const privateTerms: PrivateTerms = givenPrivate ?? { theta: 60_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), rUnits), currency: over.reportingCurrency ?? 'USD', indexingRule: 'cpi-annual', termsSalt: HARNESS_TERMS_SALT };
   const commitment = termsCommitment(privateTerms);
   const terms: SeriesTerms = {
+    fxPairId: null,
     stablecoin,
     stablecoinMint: sim.mintOf(stablecoin),
     unitsOffered,

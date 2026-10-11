@@ -24,13 +24,13 @@ frontend integration. Read §0, then the section for your job. Every claim cites
 - **Repository:** `kunal-drall/merces`; backend branch `claude/jolly-tesla-8j0s7n`, Stage 1 branch
   `claude/sweet-goodall-b7acm3`. Integration is in local branch `integrate-handoff`; the requested merge into `main`
   and pushes are still pending. Stage 1 stays under the `stage1/` submodule, now pinned at `bafe1fb` (SPEC v1.1.2).
-- **Current work:** S4 recovery/security review fixes and S5 items 2, 3, 4, 5, 7, 9, 10, 12 are implemented locally.
+- **Current work:** S4 recovery/security review fixes and S5 items 2, 3, 4, 5, 6, 7, 9, 10, 12 are implemented locally.
   Stage 1 commit `bafe1fb` fixes reference final-share weighting for redeemed units in uncleared ask escrow, with a
   regression fixture. Chain programs and all 25 official vectors are unchanged. Every new commit is kunal-drall only.
-- **Latest verification:** 749 backend tests (including 20 default conformance and 3 privacy canaries), separate Monad
-  conformance 11, Stage 1 TypeScript tests 263, sync (Rust oracle 5,883/5,883), both-personality lockstep 42/42 at the
-  configured gates (six prefix runs), reference 25/25, scenarios 82/82, 201 matching API operations, published-key
-  inventory 133 and `DEMO OK` on both personalities. The 18 target vectors pass in full; three window prefixes are
+- **Latest verification:** 751 backend tests (including 20 default conformance and 3 privacy canaries), separate Monad
+  conformance 11, Stage 1 TypeScript tests 263, sync (Rust oracle 5,883/5,883), both-personality lockstep 46/46 at the
+  configured gates (six prefix runs), reference 25/25, scenarios 82/82, 203 matching API operations, published-key
+  inventory 133 and `DEMO OK` on both personalities. The 20 target vectors pass in full; three window prefixes are
   explicitly incomplete. Rerun required gates on any later code before push. Historical numbers below describe the
   original handoff only.
 - **What the product is:** income-share series ("units") an issuer sells in a sealed-bid raise (or, on Solana, on a
@@ -74,10 +74,10 @@ frontend integration. Read §0, then the section for your job. Every claim cites
 | `demo:cycle` | `DEMO OK` on both personalities |
 
 Current parity coverage (`packages/stage1-sync/src/stage1-vectors/expected.ts`):
-- **Required full passes (18):** 01–09, 11, 14, 15, 17, 19, 20, 21, 23, 25; no waivers.
+- **Required full passes (20):** 01–09, 11, 13, 14, 15, 17, 19, 20, 21, 23, 24, 25; no waivers.
 - **Prefix gates (3):** 10 to #35, 16 to #40, 22 to #75, all waiting on multi-step windows.
-- **Not replayed (4):** 12 and 18 (router), 13 and 24 (FX).
-- **Shims left (9):** SH-REP-1, SH-WIN-1…7, SH-FLG-1. New targets are promoted only after full replay evidence.
+- **Not replayed (2):** 12 and 18 (router).
+- **Shims left (8):** SH-WIN-1…7, SH-FLG-1. New targets are promoted only after full replay evidence.
 
 ### 1.3 Repository map
 
@@ -85,7 +85,7 @@ Current parity coverage (`packages/stage1-sync/src/stage1-vectors/expected.ts`):
 | --- | --- |
 | `packages/domain` | canonical commands, events, state, port (`ChainPort`), signing (`signing.ts`), terms rules, notices |
 | `packages/math` | gateway to Stage 1's math (`@merces/reference`, `@merces/sdk`) + the segregated curve port (`interim/` for S5 leftovers) |
-| `packages/simulator` | the in-process chain (engine per area under `src/engine/`, reads, state version 6, harness, `SimWallet`, `SimSigner`) |
+| `packages/simulator` | the in-process chain (engine per area under `src/engine/`, reads, state version 7, harness, `SimWallet`, `SimSigner`) |
 | `packages/chain-solana`, `packages/chain-evm` | live adapters: **skeletons** (`wired = false`, every read/write NotImplemented; config, mainnet refusal, health) |
 | `packages/chains` | chain registry, mode selection (`mock|live|auto`), Stage 1 manifest locator |
 | `packages/indexer` | projections of canonical events into Postgres |
@@ -94,7 +94,7 @@ Current parity coverage (`packages/stage1-sync/src/stage1-vectors/expected.ts`):
 | `packages/api` | Fastify app, access tiers, public/me/dev routes, `openapi.yaml` (built from `src/openapi/` fragments) |
 | `packages/client` | generated TypeScript client (`openapi.d.ts`) for the frontend |
 | `packages/server` | process entry points: `dev-mock.ts`, `main.ts`, `openapi-check.ts` |
-| `packages/db` | migrations 001-033, CLI |
+| `packages/db` | migrations 001-034, CLI |
 | `packages/ports` | KMS (local secp256k1/ed25519; DER normaliser and provider-neutral remote adapter), zkTLS (mock), identity (mock), e-sign (mock), proof system (Groth16), wallet signature verification |
 | `packages/report-verifier` | the tier-2 report verifier service (signs Stage 1's REPORT with a KMS key) |
 | `packages/poi-device` | the issuer's report assembler and the attestor tool `merces-attestor` (keystore, request check, signing) |
@@ -208,8 +208,8 @@ requirements in `SECURITY.md`; compromised-key recovery in `RUNBOOK.md`; default
 
 ### 4.4 S5: the rest of Stage 1's surface (L)
 
-**Progress:** items **2, 3, 4, 5, 7, 9, 10 and 12 are implemented**. The table retains their original scope as a
-checklist. Still required: **1 (windows), 6 (FX), 8 (router), 11 (remaining mint gates with the router)**, then §5.
+**Progress:** items **2, 3, 4, 5, 6, 7, 9, 10 and 12 are implemented**. The table retains their original scope as a
+checklist. Still required: **1 (windows), 8 (router), 11 (remaining mint gates with the router)**, then §5.
 True-up submission/payment now includes issuer builders, signature/nonce validation, forward credit, paused lateness
 accrual, annual formal notices, chain reads and indexed annual states (`signed → recorded → paid`).
 

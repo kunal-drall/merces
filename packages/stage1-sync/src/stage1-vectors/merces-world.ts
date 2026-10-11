@@ -12,6 +12,7 @@ import { verifyReportCached } from './proofs.ts';
 import { SHIM_BY_ID, type Shim } from './shims.ts';
 import { checkUnitSupply, mercesSnapshot, seenAfter, totalStable } from './view.ts';
 import type { Applied, Attempt, FxRequest, VectorPersonality, World, WorldOptions } from './world.ts';
+import { DEFAULT_PARAMETERS, quarterAverage } from '@merces/math';
 
 /** One op in flight: the engine as the op found it, and its transactions so far (`MercesWorld.attempt`). */
 interface OpTrace {
@@ -210,9 +211,19 @@ export class MercesWorld implements World, OpContext {
     return classifyChainError(e);
   }
 
-  /** The Stage 1 `expect` view. FX accumulators are not modelled before S5, so an `fx` request is not answered. */
-  snapshot(series: string | null, _fx?: FxRequest): Record<string, unknown> {
-    return mercesSnapshot(this, series, this.now());
+  /** Stage 1's ledger and FX checkpoint view, read from the engine without changing state. */
+  snapshot(series: string | null, fx?: FxRequest): Record<string, unknown> {
+    const out = mercesSnapshot(this, series, this.now());
+    if (fx) out.fx = Object.fromEntries(Object.entries(fx).map(([pairId, periods]) => {
+      const acc = this.chain.state.rates.get(pairId);
+      if (!acc) throw new RunnerError(`unknown FX pair ${pairId}`);
+      const quarters = Object.fromEntries(periods.map((period) => {
+        const q = quarterAverage(acc, period, DEFAULT_PARAMETERS, BigInt(this.now()));
+        return [String(period), { ok: q.ok, avgWad: q.avgWad?.toString() ?? null, n: String(q.n), flagged: q.flagged }];
+      }));
+      return [pairId, { sumWad: acc.sumWad.toString(), count: String(acc.count), quarters }];
+    }));
+    return out;
   }
 
   serialize(): string {

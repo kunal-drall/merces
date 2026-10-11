@@ -2,12 +2,12 @@ import type { Groth16ProofJson, UserCommand } from '@merces/domain';
 import { U64_MAX } from '@merces/math';
 import { hex32, periodIdOf } from '../codec.ts';
 import { RunnerError } from '../errors.ts';
-import { shim, type TranslatorTable } from './types.ts';
+import { direct, type TranslatorTable } from './types.ts';
 
 type SubmitReport = Extract<UserCommand, { kind: 'submitReport' }>;
 
 /**
- * `submit_report` (shim SH-REP-1; S1 plan §5.3, §5.5).
+ * `submit_report`: direct Stage 1 report, with registry-derived FX basis (S5).
  *
  * The report carries Stage 1's own Groth16 proof and public signals (verified for real by the chain's
  * `reportProofVerifier`, the runner's cached Stage 1 verifier); the canonical command drops `termsCommitment` (the
@@ -17,14 +17,12 @@ type SubmitReport = Extract<UserCommand, { kind: 'submitReport' }>;
  * (S4 WP6 tier 2, S4 WP9 tier 3; keys.ts): the chain recovers it and checks the key is a usable key of the tier's kind
  * (04#68 names `attestor1` on tier 2: InvalidVerifierSignature on its own). A vector's `fxFallback` names the key that
  * signs Stage 1's FX message over the series key, the period and the report's `fxAvgWad` (S4 WP9). Nobody co-signs.
- * What remains of the shim (S5): the runner derives `fxBasis` and `pair` (a Stage 1 FX fallback on a series without an
- * FX pair, the only kind the runner creates, is refused FxFallbackNotAllowed, as Stage 1 does; FX pairs are S5).
  *
  * The vector's `witness` (TEST ONLY income openings) was deleted at load and is never read here.
  */
 export const reportOps: TranslatorTable = {
   submit_report: (ctx, c) =>
-    shim('SH-REP-1', async () => {
+    direct(async () => {
       const b = ctx.seriesBook(c.series);
       const periodId = periodIdOf(c.period);
       const priorIncomeCommitment = hex32(c.priorIncomeCommitment, 'priorIncomeCommitment');
@@ -61,9 +59,7 @@ export const reportOps: TranslatorTable = {
         paymentStable: c.paymentUsd,
         priorIncomeCommitment,
         incomeCommitment,
-        fxBasis: c.fxFallback ? 'attestor' : 'unity',
         fxAvgWad: c.fxAvgWad,
-        pair: null,
         fxFallback,
         proof: { system: 'groth16-bn254', proof, publicInputs: [...c.publicSignals] },
         attestation,

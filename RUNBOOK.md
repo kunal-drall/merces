@@ -543,7 +543,7 @@ question (Part J.9); until set, nothing is deleted automatically. Simulator stat
 Revocation does not erase the 45-day REPORT/FX grace for ended periods. An offchain withdrawal does not invalidate
 bearer signatures. Only Stage 1 can enforce a cancellable delay against third-party extinguishment relays.
 
-### Simulator state version 6
+### Simulator state version 7
 
 S5 records each series' immutable window durations and fee. Version 5 snapshots are refused; use the existing
 `pnpm --filter @merces/simulator sim:reset` procedure for local simulator data, then reseed. Never reset live data.

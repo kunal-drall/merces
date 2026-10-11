@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WAD, parsePeriod, ratePerUnit, wadFromDecimal } from '@merces/math';
+import { fxPairId, WAD, parsePeriod, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimHarness } from '../src/index.ts';
 import { GENESIS, expectChainError, types } from './helpers.ts';
 
@@ -44,5 +44,35 @@ describe('rate accumulator and FX fallback', () => {
     // cause S4-FX: the attestor key's FX signature for this series over the report's own rate (was the co-signed attestor rate)
     const att = await h.reportAndPay(seriesId, '2026Q2', privateTerms, terms.termsCommitment, 70_000_000_000n, 90_000_000_000n, { fxBasis: 'attestor', pair: 'EUR/USD', fxAvgWad: wadFromDecimal('1.09'), fxFallback: h.attestors[1]! });
     expect(att.paymentStable).toBe(2_180_000_000n);
+  });
+});
+
+// Stage 1 Solana fx.rs requires the configured second feed; EVM ignores an unavailable/stale answer.
+describe.each(['solana', 'monad'] as const)('registered raw FX snapshots (%s)', (personality) => {
+  it('enforces write-once identity, raw snapshots and the chain-specific cross-check rules', async () => {
+    const h = await SimHarness.create(personality, { genesis: GENESIS });
+    const feedId = '0x' + '51'.repeat(32);
+    const pairId = '0x' + Buffer.from(fxPairId(feedId, false)).toString('hex');
+    const register = { kind: 'setFxPair' as const, feedId, inverted: false, crosscheck: h.admin.address };
+    await h.exec(h.admin, register);
+    await expectChainError(h.exec(h.admin, register), 'Duplicate');
+    const cmd = { kind: 'snapshotFx' as const, pairId, price: '108000000', conf: '1000', expo: -8, publishTime: String(await h.sim.now()) };
+    await expectChainError(h.sim.submit({ kind: 'snapshotRate', pair: pairId, rateWad: '1', confWad: '0', publishTime: await h.sim.now(), update: null }, 'keeper'), 'InvalidTerms');
+    if (personality === 'solana') {
+      await expect(h.sim.submit(cmd, 'keeper')).rejects.toMatchObject({ detail: { stage1: 'CrosscheckRequired' } });
+      expect((await h.sim.getRateAccumulator(pairId))!.count).toBe(0);
+    } else {
+      await h.exec(h.backers[0]!, cmd);
+      await h.sim.advanceTime(86400);
+    }
+    await h.sim.submit({ ...cmd, publishTime: String(await h.sim.now()), crosscheckPrice: '120000000', crosscheckExpo: -8 }, 'keeper');
+    const q = h.sim.state.rates.get(pairId)!;
+    expect([...q.checkpoints.values()][0]!.flagged).toBe(true);
+    expect(q.days.at(-1)!.rateWad).toBe(wadFromDecimal('1.08'));
+    await expectChainError(h.sim.submit(cmd, 'keeper'), 'Duplicate');
+    await h.sim.advanceTime(86400);
+    const stale = { ...cmd, publishTime: String(await h.sim.now()), crosscheckPrice: '120000000', crosscheckPublishTime: String(GENESIS - 86400) };
+    if (personality === 'solana') await expectChainError(h.sim.submit(stale, 'keeper'), 'TooLate');
+    else await h.sim.submit(stale, 'keeper');
   });
 });

@@ -9,7 +9,7 @@ import { balKey, type EngineCore, type EngineOptions, type Emit, type ExecContex
 import { fail } from './errors.ts';
 import { auctionPhase, cancelRaise, commitBid, openRaise, revealBid } from './auction.ts';
 import { collectCurveProceeds, completeCurve, curveSwap, syncCurveUnits } from './curve.ts';
-import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
+import { flagFxFallback, quarterRate, snapshotRate, snapshotFx, setFxPair } from './fx.ts';
 import { burnRetired, claimPayout, payIn, postSplitReceipt, retireIfCapped } from './payments.ts';
 import { submitTrueUp, payTrueUp } from './trueup.ts';
 import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
@@ -139,6 +139,8 @@ export class SimEngine implements EngineCore {
       // Stage 1's extinguish takes the two attestors' EXTINGUISH signatures as arguments: anyone sends it (S4 WP12)
       case 'extinguish': service('any'); return extinguish(this, cmd, now, emit);
       case 'snapshotRate': service('keeper'); return snapshotRate(this, cmd, now, emit);
+      case 'snapshotFx': service('any'); return snapshotFx(this, cmd, now, emit);
+      case 'setFxPair': admin(); return setFxPair(this, cmd, now, emit);
       case 'flagFxFallback': service('keeper'); return flagFxFallback(this, cmd, now, emit);
       case 'openTransferWindow': service('any'); return openTransferWindow(this, cmd, now, emit);
       case 'commitWindowOrder': return commitWindowOrder(this, user(), cmd, now, emit);

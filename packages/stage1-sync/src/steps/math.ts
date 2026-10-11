@@ -13,7 +13,7 @@ import type { StepCtx } from './generate.ts';
  */
 export const REFERENCE_REEXPORTS = [
   // status, deadlines and accrual
-  'isTerminal', 'deadlineSeconds', 'graceSeconds', 'noticeSeconds', 'countdown', 'nextExpectedPeriod', 'earliestUnpaid', 'deriveStatus', 'isLateUnderlying', 'lateDays', 'lateAccrual', 'lateAccrualTrueup', 'trueupNoticeDue', 'formalNoticeDue', 'pauseApprovalError',
+  'isTerminal', 'deadlineSeconds', 'graceSeconds', 'noticeSeconds', 'countdown', 'nextExpectedPeriod', 'earliestUnpaid', 'deriveStatus', 'isLateUnderlying', 'lateDays', 'newFxPairState', 'validatePythPrice', 'deviates', 'snapshot', 'quarterAverage', 'snapshotsNeeded', 'normalizePythPrice', 'invertRate', 'lateAccrual', 'lateAccrualTrueup', 'trueupNoticeDue', 'formalNoticeDue', 'pauseApprovalError',
   // payout vault
   'newVaultState', 'capPerUnit', 'capEffWad', 'isCapped', 'vaultReceiveGross', 'settleHolderDelta', 'accumulate',
   // redemption, tail and extinguishment
@@ -128,7 +128,6 @@ export function checkPorted(root: string, stage1Math: Record<string, unknown>): 
  * A name outside them is reported as "unclassified".
  */
 export const INTERIM_FAMILIES: { family: string; names: string[] }[] = [
-  { family: 'FX (S5)', names: ['quarterAverageRate', 'coverageOk', 'deviationBps', 'withinBand', 'pythToWad'] },
   { family: 'window cap (S5)', names: ['walletCapUnits'] },
 ];
 

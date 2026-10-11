@@ -9,6 +9,12 @@ import { reportingRow, seriesRow } from '../serialize.ts';
 const listQuery = z.object({ chain: z.string().optional(), status: z.string().optional(), issuer: z.string().optional(), limit: z.coerce.number().int().min(1).max(200).default(50), offset: z.coerce.number().int().min(0).default(0) });
 
 export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): void {
+  defineRoute(app, ctx, { method: 'GET', url: '/chains/:chain/fx-pairs', access: 'public', handler: async (req) => {
+    const chain = (req.params as { chain: string }).chain;
+    if (!ctx.chains.chains.has(chain)) throw AppError.notFound('chain');
+    const r = await ctx.pool.query('select pair as "pairId", pyth_feed_id as "feedId", inverted, chainlink_feed as crosscheck, crosscheck_effective_period as "effectivePeriod" from rate_pairs where chain = $1 and enabled and crosscheck_effective_period is not null order by pair', [chain]);
+    return { chain, pairs: r.rows };
+  } });
   defineRoute(app, ctx, {
     method: 'GET', url: '/health', access: 'public',
     handler: async () => {

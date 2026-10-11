@@ -19,6 +19,7 @@ const WAD_DECIMAL = /^\d+(\.\d{1,18})?$/;
 const WAD_DECIMAL_MESSAGE = 'a decimal with at most 18 places';
 
 export const publicTermsSchema = z.object({
+  fxPairId: z.string().regex(/^0x[0-9a-f]{64}$/).nullable().default(null),
   stablecoin: z.enum(['USDC', 'USDG']),
   unitsOffered: z.string().regex(/^\d+$/),
   reservePrice: z.string().regex(/^\d+$/),
@@ -223,6 +224,9 @@ export class TermsService {
       unitsOffered: pub.unitsOffered, reservePrice: pub.reservePrice, minimumRaise: pub.minimumRaise, releaseSchedule: pub.releaseSchedule, raiseStyle: pub.raiseStyle,
     };
     for (const v of seriesTermsViolations(onchain)) issues.push({ field: PUBLIC_FIELD[v.field] ?? v.field, code: v.code, message: v.message });
+    if (pub.fxPairId && port && !(await port.getRateAccumulator(pub.fxPairId))) issues.push({ field: 'fxPairId', code: 'unknown-pair', message: 'select a registered FX pair on this chain' });
+    if (pub.tierFlags.tier1 && pub.fxPairId) issues.push({ field: 'fxPairId', code: 'tier1-fx', message: 'the income router requires stablecoin-denominated terms with no FX pair' });
+    if (pub.reportingCurrency !== 'USD' && !pub.fxPairId) issues.push({ field: 'fxPairId', code: 'required', message: 'non-USD reporting requires a registered FX pair' });
     if (pub.tierFlags.tier4) issues.push({ field: 'tierFlags.tier4', code: 'switched-off', message: 'tier 4 self-attestation is switched off' });
     if (!isCommitmentCurrency(pub.reportingCurrency)) issues.push({ field: 'reportingCurrency', code: 'unsupported', message: `${pub.reportingCurrency} has no ISO-4217 numeric code in Stage 1's terms commitment` });
     if (!pub.tierFlags.tier1 && !pub.tierFlags.tier2 && !pub.tierFlags.tier3) issues.push({ field: 'tierFlags', code: 'none', message: 'at least one verification tier is required' });
@@ -344,12 +348,15 @@ export class TermsService {
     const chain = this.ctx.chains.get(draft.chain);
     const info = await chain.info();
     const p = { ...draft.public_terms, ...publicTermsSchema.parse(draft.public_terms) } as z.infer<typeof publicTermsSchema> & { capMultipleWad: string; hurdleWad: string };
+    const validation = await this.validate(draft.chain, p, null, new Date((await chain.now()) * 1000).getUTCFullYear());
+    if (validation.issues.length) throw AppError.unprocessable('the draft terms are no longer valid', { issues: validation.issues });
     const coin = info.stablecoins[p.stablecoin];
     if (!coin) throw AppError.unprocessable('stablecoin no longer available on chain');
     // the fees, the wallet cap and the raise's own terms are filled in (Stage 1's 7-day commit and 2-day reveal on a
     // sealed raise; Stage 1's zeros on a curve raise, which has no auction and no wallet cap), and the owner's non-reveal
     // charge (a sealed raise is refused while it is unset)
     const terms: SeriesTerms = {
+      fxPairId: p.fxPairId,
       ...filledTerms(p.raiseStyle),
       windowCommitDuration: p.windowCommitDuration, windowRevealDuration: p.windowRevealDuration, windowFeeBps: p.windowFeeBps,
       nonRevealChargeBps: nonRevealChargeOf(p.raiseStyle, this.ctx.nonRevealChargeBps),

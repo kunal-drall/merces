@@ -315,7 +315,7 @@ describe('stage1 vector runner: expectations and the op map', () => {
   // five DIV-NRC-1 entries and its lockstep parting)
   it('targets are never NOT-YET; waivers only on blocked or n/a rows; no vector carries a divergence; prefix gates carry until; the rest are NOT-YET with a milestone', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(listVectorFiles(VECTORS).map((f) => f.split('/').at(-1)!.slice(0, 2)));
-    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20']);
+    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20', '13', '24']);
     expect([...TARGETS_S2]).toEqual(['02', '03', '15', '17']);
     expect([...TARGETS_S4]).toEqual(['21']); // cause S4-PAU: 21 in full (was gated at #40)
     expect(PREFIX_GATES).toEqual({ '10': 35, '16': 40, '22': 75 }); // S5: true-up vector 20 passed full lockstep on both personalities.
@@ -345,8 +345,8 @@ describe('stage1 vector runner: expectations and the op map', () => {
     // DIV-NRC-1 went with the non-reveal charge modelled, and 03 is PASS. Cause S3R-F: the register's first row is
     // DIV-S1I-1, which only our scenario S3l meets (was: the register empty). Cause S4-REG: DIV-S1I-2, the last-key rule,
     // which only our merces-only scenario S4d shows, as an expected revert: no entry anywhere (amendment fix 1)
-    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-4', 'DIV-S1I-2']);
-    expect(DIVERGENCE_BY_ID.size).toBe(2);
+    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-5', 'DIV-S1I-4', 'DIV-S1I-2']);
+    expect(DIVERGENCE_BY_ID.size).toBe(3);
     expect(DIVERGENCE_BY_ID.get('DIV-S1I-2')?.shownBy).toEqual(['S4d']);
     expect(Object.values(SCENARIO_EXPECTATIONS).filter((e) => e.divergences?.some((d) => d.id === 'DIV-S1I-2') || e.lockstep?.id === 'DIV-S1I-2')).toEqual([]);
     expect(EXPECTED['03']).toMatchObject({ status: 'PASS' });
@@ -455,7 +455,7 @@ describe('stage1:vectors CLI', () => {
  * The ops of the bootstrap and of the raise (Stage 1's settlement steps, `cancel_raise` and `register_holder` since S2);
  * a vector's raise prefix ends before the first other op, an expected revert counting as its call's op.
  */
-const RAISE_PREFIX_OPS = new Set(['register_attestor', 'register_verifier_key', 'allowlist', 'register_issuer', 'fund', 'create_series', 'open_raise', 'cancel_raise', 'commit_bid', 'reveal_bid', 'begin_settlement', 'finalize_settlement', 'process_bid', 'deliver_bid', 'register_holder', 'expect']);
+const RAISE_PREFIX_OPS = new Set(['set_fx_pair', 'fx_snapshot', 'fx_expect', 'register_attestor', 'register_verifier_key', 'allowlist', 'register_issuer', 'fund', 'create_series', 'open_raise', 'cancel_raise', 'commit_bid', 'reveal_bid', 'begin_settlement', 'finalize_settlement', 'process_bid', 'deliver_bid', 'register_holder', 'expect']);
 function raisePrefixEnd(v: LoadedVector): number {
   const i = v.steps.findIndex((s) => !RAISE_PREFIX_OPS.has(s.op === 'expect_revert' ? s.call.op : s.op));
   return i < 0 ? v.steps.length - 1 : i - 1;
@@ -965,11 +965,9 @@ describe('stage1 vector runner: merces backend', () => {
       expect(NOT_YET, op).not.toHaveProperty(op);
     }
     expect(SHIM_BY_ID.has('SH-REG-3')).toBe(false);
-    // cause S4-T3: SH-REP-1 stays only for the FX basis and pair the runner derives (S5); tier 3 is the named key's REPORT
-    // signature since S4 WP9 (was: co-signed by the attestor)
-    expect(SHIM_BY_ID.get('SH-REP-1')).toMatchObject({ ops: ['submit_report'], removedIn: 'S5 (FX)' });
-    expect(SHIM_BY_ID.get('SH-REP-1')!.call).toMatch(/tiers 2 and 3 the named key's REPORT signature; the FX fallback the named key's FX signature\}; fxBasis and pair derived by the runner$/);
-    expect(SHIM_BY_ID.get('SH-REP-1')!.call).not.toMatch(/co-sign/);
+    // S5-FX: registry-derived FX basis; full vectors 13 and 24 pass, no report shim.
+    expect(SHIM_BY_ID.has('SH-REP-1')).toBe(false);
+    expect(STAGE1_OP_MAP.submit_report).toMatchObject({ kind: 'direct' });
     expect(STAGE1_OP_MAP.submit_report!.canonical).not.toMatch(/co-sign/);
   });
 
@@ -1015,23 +1013,23 @@ describe('stage1 vector runner: merces backend', () => {
 
   // cause S2-NY: 42 runs, the 14 targets and the 7 prefix gates on both personalities (was: the 10 S1 targets, 20 runs).
   // Cause NRC: 42/42 PASS, 03 among them (was 36/42, 03 PASS-WITH-DIVERGENCES on its five DIV-NRC-1 fields)
-  it('every target and prefix gate is at its expected status on both personalities: 42/42 PASS, 03 in full', async () => {
+  it('every target and prefix gate is at its expected status on both personalities: 46/46 PASS, FX in full', async () => {
     const report = await fullRun();
     const ids = [...TARGETS, ...Object.keys(PREFIX_GATES)].sort();
     expect(report.runs.map((r) => `${r.id}/${r.world}`)).toEqual(ids.flatMap((id) => [`${id}/merces/solana`, `${id}/merces/monad`]));
     for (const r of report.runs) expect(r.atExpected, `${r.vector} ${r.world}: ${r.status}`).toBe(true);
     expect(report.ok).toBe(true);
-    expect(report.runs.filter((r) => r.status === 'PASS')).toHaveLength(42);
+    expect(report.runs.filter((r) => r.status === 'PASS')).toHaveLength(46);
     const statusOf = (id: string) => [...new Set(report.runs.filter((r) => r.id === id).map((r) => r.status))];
     for (const id of ['02', '03', '15', '17']) expect(statusOf(id), id).toEqual(['PASS']);
-    for (const id of ['01', '05', '08', '14', '20']) expect(statusOf(id), id).toEqual(['PASS']);
+    for (const id of ['01', '05', '08', '14', '20', '13', '24']) expect(statusOf(id), id).toEqual(['PASS']);
     for (const r of report.runs) expect(r.issues.filter((i) => i.kind === 'divergence'), `${r.vector} ${r.world}`).toEqual([]);
     for (const r of report.runs.filter((x) => x.id === '03')) expect([r.executed, r.total, r.issues], r.world).toEqual([78, 78, []]);
     for (const [id, until] of Object.entries(PREFIX_GATES)) {
       for (const r of report.runs.filter((x) => x.id === id)) expect([r.status, r.executed, r.stopped], `${id} ${r.world}`).toEqual(['PASS', until + 1, { index: until + 1, reason: 'until' }]);
     }
     // cause S2-NY: only the vectors that never reach the auction, or stop before it, are left out (was: 15 vectors)
-    expect(report.notRun.map((n) => [n.id, n.expected.status])).toEqual([['12', 'NOT-YET'], ['13', 'NOT-YET'], ['18', 'NOT-YET'], ['24', 'NOT-YET']]);
+    expect(report.notRun.map((n) => [n.id, n.expected.status])).toEqual([['12', 'NOT-YET'], ['18', 'NOT-YET']]);
     // the report proofs went through the ports' Groth16 verifier: 04#66 passes only because its pairing check fails
     // (its signals match the claimed payment), so a verifier that accepted everything would leave 04 off its status
     expect(report.proofs.verified).toBeGreaterThan(0);
@@ -1040,7 +1038,7 @@ describe('stage1 vector runner: merces backend', () => {
   it('the shim table is written into VECTOR_PARITY.md under "Shims (not parity)", with the known divergences and the prefix gates, and a merces run carries public values only', async () => {
     const report = await fullRun();
     expect(report.runs).toHaveLength((TARGETS.length + Object.keys(PREFIX_GATES).length) * 2);
-    expect(report.notRun).toHaveLength(4);
+    expect(report.notRun).toHaveLength(2);
     const md = renderParity([report], { dir: '$STAGE1_PATH/packages/vectors' });
     const section = md.slice(md.indexOf('## Shims (not parity)'));
     expect(section.length).toBeGreaterThan(0);
@@ -1058,6 +1056,7 @@ describe('stage1 vector runner: merces backend', () => {
     expect(known).not.toContain('None: the register is empty');
     // cause S4-REG: and DIV-S1I-2, the last-key rule, which our merces-only scenario S4d shows with no entries
     expect(known.match(/^### .*$/gm)).toEqual([
+      '### DIV-S1I-5: configured FX cross-check availability follows each chain',
       '### DIV-S1I-4: true-up submissions reject terminal series and future attestation times',
       '### DIV-S1I-2: the last active key of a kind cannot be revoked (Stage 1 internal, resolved toward both chains)',
     ]);

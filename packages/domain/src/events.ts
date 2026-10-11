@@ -51,6 +51,7 @@ export const tierFlagsSchema = z.object({ tier1: z.boolean(), tier2: z.boolean()
 
 /** The immutable terms recorded on a series (C4). θ and r are NOT here: only their commitment. */
 export const seriesTermsSchema = z.object({
+  fxPairId: hash32Schema.nullable().default(null),
   stablecoin: stablecoinSchema,
   stablecoinMint: addressSchema,
   unitsOffered: unitsSchema,
@@ -106,6 +107,7 @@ export type SeriesTerms = z.infer<typeof seriesTermsSchema>;
 const seriesScoped = { seriesId: seriesIdSchema };
 
 export const eventPayloads = {
+  FxPairSet: z.object({ pairId: hash32Schema, feedId: hash32Schema, inverted: z.boolean(), crosscheck: addressSchema.nullable(), effectivePeriod: periodIdSchema }),
   IssuerRegistered: z.object({ issuer: addressSchema }),
   IssuanceStopped: z.object({ issuer: addressSchema }),
   SeriesCreated: z.object({ ...seriesScoped, issuer: addressSchema, terms: seriesTermsSchema }),

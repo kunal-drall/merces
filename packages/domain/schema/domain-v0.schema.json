@@ -40,6 +40,96 @@
           },
           "type": {
             "type": "string",
+            "const": "FxPairSet"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "pairId": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
+              "feedId": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
+              "inverted": {
+                "type": "boolean"
+              },
+              "crosscheck": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "effectivePeriod": {
+                "type": "string",
+                "pattern": "^\\d{4}Q[1-4]$"
+              }
+            },
+            "required": [
+              "pairId",
+              "feedId",
+              "inverted",
+              "crosscheck",
+              "effectivePeriod"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
             "const": "IssuerRegistered"
           },
           "payload": {
@@ -185,6 +275,18 @@
               "terms": {
                 "type": "object",
                 "properties": {
+                  "fxPairId": {
+                    "default": null,
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^0x[0-9a-f]{64}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "stablecoin": {
                     "type": "string",
                     "enum": [
@@ -356,6 +458,7 @@
                   }
                 },
                 "required": [
+                  "fxPairId",
                   "stablecoin",
                   "stablecoinMint",
                   "unitsOffered",
@@ -3706,7 +3809,7 @@
             "properties": {
               "pair": {
                 "type": "string",
-                "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+                "pattern": "^(?:[A-Z]{3}\\/[A-Z]{3}|0x[0-9a-f]{64})$"
               },
               "rateWad": {
                 "type": "string",
@@ -3802,7 +3905,7 @@
             "properties": {
               "pair": {
                 "type": "string",
-                "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+                "pattern": "^(?:[A-Z]{3}\\/[A-Z]{3}|0x[0-9a-f]{64})$"
               },
               "periodId": {
                 "type": "string",
@@ -4918,6 +5021,47 @@
     ]
   },
   "events": {
+    "FxPairSet": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "pairId": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "feedId": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "inverted": {
+          "type": "boolean"
+        },
+        "crosscheck": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effectivePeriod": {
+          "type": "string",
+          "pattern": "^\\d{4}Q[1-4]$"
+        }
+      },
+      "required": [
+        "pairId",
+        "feedId",
+        "inverted",
+        "crosscheck",
+        "effectivePeriod"
+      ],
+      "additionalProperties": false
+    },
     "IssuerRegistered": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -4964,6 +5108,18 @@
         "terms": {
           "type": "object",
           "properties": {
+            "fxPairId": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^0x[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "stablecoin": {
               "type": "string",
               "enum": [
@@ -5135,6 +5291,7 @@
             }
           },
           "required": [
+            "fxPairId",
             "stablecoin",
             "stablecoinMint",
             "unitsOffered",
@@ -6427,7 +6584,7 @@
       "properties": {
         "pair": {
           "type": "string",
-          "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+          "pattern": "^(?:[A-Z]{3}\\/[A-Z]{3}|0x[0-9a-f]{64})$"
         },
         "rateWad": {
           "type": "string",
@@ -6474,7 +6631,7 @@
       "properties": {
         "pair": {
           "type": "string",
-          "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+          "pattern": "^(?:[A-Z]{3}\\/[A-Z]{3}|0x[0-9a-f]{64})$"
         },
         "periodId": {
           "type": "string",
@@ -6900,6 +7057,18 @@
         "terms": {
           "type": "object",
           "properties": {
+            "fxPairId": {
+              "default": null,
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^0x[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "stablecoin": {
               "type": "string",
               "enum": [
@@ -7071,6 +7240,7 @@
             }
           },
           "required": [
+            "fxPairId",
             "stablecoin",
             "stablecoinMint",
             "unitsOffered",
@@ -7318,7 +7488,7 @@
           "anyOf": [
             {
               "type": "string",
-              "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+              "pattern": "^(?:[A-Z]{3}\\/[A-Z]{3}|0x[0-9a-f]{64})$"
             },
             {
               "type": "null"
@@ -7495,9 +7665,7 @@
         "paymentStable",
         "priorIncomeCommitment",
         "incomeCommitment",
-        "fxBasis",
         "fxAvgWad",
-        "pair",
         "fxFallback",
         "proof",
         "attestation",
@@ -8055,7 +8223,7 @@
         },
         "pair": {
           "type": "string",
-          "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+          "pattern": "^(?:[A-Z]{3}\\/[A-Z]{3}|0x[0-9a-f]{64})$"
         },
         "rateWad": {
           "type": "string",
@@ -8191,7 +8359,7 @@
         },
         "pair": {
           "type": "string",
-          "pattern": "^[A-Z]{3}\\/[A-Z]{3}$"
+          "pattern": "^(?:[A-Z]{3}\\/[A-Z]{3}|0x[0-9a-f]{64})$"
         },
         "periodId": {
           "type": "string",
@@ -8234,6 +8402,65 @@
         "kind",
         "wallet",
         "allowed"
+      ],
+      "additionalProperties": false
+    },
+    "snapshotFx": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "snapshotFx"
+        },
+        "pairId": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "price": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9]\\d{0,18})$"
+        },
+        "conf": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d{0,19})$"
+        },
+        "expo": {
+          "type": "integer",
+          "minimum": -18,
+          "maximum": 40
+        },
+        "publishTime": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d{0,19})$"
+        },
+        "crosscheckPrice": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9]\\d{0,18})$"
+        },
+        "crosscheckExpo": {
+          "type": "integer",
+          "minimum": -36,
+          "maximum": 40
+        },
+        "crosscheckPublishTime": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d{0,19})$"
+        },
+        "updates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "pairId",
+        "price",
+        "conf",
+        "expo",
+        "publishTime"
       ],
       "additionalProperties": false
     },
@@ -8560,6 +8787,42 @@
         "signatureA",
         "attestorB",
         "signatureB"
+      ],
+      "additionalProperties": false
+    },
+    "setFxPair": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "setFxPair"
+        },
+        "feedId": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "inverted": {
+          "type": "boolean"
+        },
+        "crosscheck": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "feedId",
+        "inverted",
+        "crosscheck"
       ],
       "additionalProperties": false
     },

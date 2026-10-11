@@ -4,7 +4,7 @@ import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { makeContext } from '@merces/api';
 import { AuctionService, TEMPLATES, createServiceContext, safeData, type ServiceContext } from '@merces/services';
 import { MockChainlink, MockPyth } from '@merces/ports';
-import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
+import { fxPairId, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimulatorChain } from '@merces/simulator';
 import { ChainError, type ChainPort } from '@merces/domain';
 import type { ChainRegistry } from '@merces/chains';
@@ -37,6 +37,7 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
   let sol: SimHarness;
   let mon: SimHarness;
   let ctx: ServiceContext;
+  let eurPair: string;
   const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return silent; } } as never;
   beforeAll(async () => {
     t = await createTestSchema();
@@ -112,51 +113,48 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     expect(await burnCrankJob.run(curveCtx)).toEqual({ actions: 0, errors: [] });
   });
 
-  it('rate keeper snapshots once per day per pair per chain, resolves feed ids, cross-checks Chainlink and flags deviation', async () => {
-    const eur = await mon.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '66'.repeat(31)) }, terms: { reportingCurrency: 'EUR' } });
+  it('rate keeper uses registered pair identities and retains deviating snapshots (SPEC §6.6)', async () => {
     const pyth = new MockPyth({ 'FX.EUR/USD': { price: '1.08' }, 'FX.USD/INR': { price: '83.5' } }, () => mon.sim.clock.now());
-    const chainlink = new MockChainlink({ 'monad:EUR/USD': { answer: '1.0805', decimals: 8 } });
-    const job = rateKeeperJob({ pyth, chainlink, deviationBandBps: 100 });
-    await t.pool.query("insert into rate_pairs (chain, pair) values ('monad', 'INR/USD'), ('monad', 'JPY/USD')");
-    const sched = new KeeperScheduler(ctx, [job]);
+    const feeds = await pyth.resolveFxFeedIds(['FX.EUR/USD', 'FX.USD/INR']);
+    const clAddress = mon.admin.address;
+    const chainlink = new MockChainlink({ [`monad:${clAddress}`]: { answer: '1.0805', decimals: 8 } }, () => mon.sim.clock.now());
+    const register = async (feed: string, inverted: boolean, crosscheck: string | null) => {
+      const id = '0x' + Buffer.from(fxPairId(feed, inverted)).toString('hex');
+      await mon.exec(mon.admin, { kind: 'setFxPair', feedId: feed, inverted, crosscheck });
+      await t.pool.query('insert into rate_pairs (chain,pair,pyth_feed_id,chainlink_feed,inverted,crosscheck_effective_period) values ($1,$2,$3,$4,$5,$6)', ['monad', id, feed, crosscheck, inverted, '2026Q1']);
+      return id;
+    };
+    eurPair = await register(feeds['FX.EUR/USD']!, false, clAddress);
+    const inrPair = await register(feeds['FX.USD/INR']!, true, null);
+    const missing = await register('0x' + '77'.repeat(32), false, null);
+    await mon.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '66'.repeat(31)) }, terms: { reportingCurrency: 'EUR', fxPairId: eurPair } });
+    const sched = new KeeperScheduler(ctx, [rateKeeperJob({ pyth, chainlink })]);
     const r1 = await sched.runAll();
-    // EUR (from the live series) and INR snapshot; JPY has no feed → fails closed with an error recorded
     expect(r1['rate.snapshot']!.actions).toBe(2);
-    expect(r1['rate.snapshot']!.detail).toContain('no Pyth feed for FX.USD/JPY');
-    expect(r1['rate.snapshot']!.ok).toBe(false); // a missing feed is a failure to alert on, not a routine skip
-    const pairs = await t.pool.query("select pair, pyth_feed_id, last_error from rate_pairs where chain = 'monad' order by pair");
-    expect(pairs.rows.find((p) => p.pair === 'EUR/USD').pyth_feed_id).toBe('0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b');
-    expect(pairs.rows.find((p) => p.pair === 'JPY/USD').last_error).toContain('failing closed');
-    const acc = await mon.sim.getRateAccumulator('EUR/USD');
-    expect(acc!.count).toBe(1);
-    expect(acc!.lastRateWad).toBe(wadFromDecimal('1.08').toString());
-    const inr = await mon.sim.getRateAccumulator('INR/USD');
-    expect(BigInt(inr!.lastRateWad!)).toBe(10n ** 36n / wadFromDecimal('83.5')); // inverted EM quote
-    // same day: nothing more
+    expect(r1['rate.snapshot']!.detail).toContain('Hermes returned no price');
+    expect(r1['rate.snapshot']!.ok).toBe(false);
+    expect((await mon.sim.getRateAccumulator(eurPair))!.lastRateWad).toBe(wadFromDecimal('1.08').toString());
+    expect(BigInt((await mon.sim.getRateAccumulator(inrPair))!.lastRateWad!)).toBe(10n ** 36n / wadFromDecimal('83.5'));
     expect((await sched.runAll())['rate.snapshot']!.actions).toBe(0);
-    // next day: one more each; a cross-check row is recorded within the band
-    await mon.sim.advanceTime(86_400);
+    await mon.sim.advanceTime(DAY);
     expect((await sched.runAll())['rate.snapshot']!.actions).toBe(2);
-    const checks = await t.pool.query("select within_band, deviation_bps from fx_cross_checks where pair = 'EUR/USD' order by day_index");
+    const checks = await t.pool.query('select within_band from fx_cross_checks where pair = $1 order by day_index', [eurPair]);
     expect(checks.rows.map((c) => c.within_band)).toEqual([true, true]);
-    expect(checks.rows[0]!.deviation_bps).toBeLessThan(10);
-    // deviation beyond the band: no snapshot, quarter flagged, attestor request opened
-    chainlink.feeds['monad:EUR/USD'] = { answer: '1.20', decimals: 8 };
-    await mon.sim.advanceTime(86_400);
+    chainlink.feeds[`monad:${clAddress}`] = { answer: '1.20', decimals: 8 };
+    await mon.sim.advanceTime(DAY);
     const r3 = await sched.runAll();
+    expect(r3['rate.snapshot']!.actions).toBe(2);
     expect(r3['rate.snapshot']!.detail).toContain('deviation');
-    expect((await mon.sim.getRateAccumulator('EUR/USD'))!.count).toBe(2);
+    // S5-FX: MercesFxAccumulator.snapshot retains the price and flags the checkpoint, unlike the old keeper.
+    expect((await mon.sim.getRateAccumulator(eurPair))!.count).toBe(3);
     const req = await t.pool.query("select pair, reason, state from fx_fallback_requests where chain = 'monad'");
-    expect(req.rows).toContainEqual({ pair: 'EUR/USD', reason: 'deviation', state: 'open' });
-    // stale price (market closed): fails closed
-    chainlink.feeds['monad:EUR/USD'] = { answer: '1.08', decimals: 8 };
-    const stalePyth = new MockPyth({ 'FX.EUR/USD': { price: '1.08' } }, () => mon.sim.clock.now() - 2 * 86_400);
-    await mon.sim.advanceTime(86_400);
+    expect(req.rows).toContainEqual({ pair: eurPair, reason: 'deviation', state: 'open' });
+    const stalePyth = new MockPyth({ 'FX.EUR/USD': { price: '1.08' } }, () => mon.sim.clock.now() - 2 * DAY);
+    await mon.sim.advanceTime(DAY);
     const r4 = await new KeeperScheduler(ctx, [rateKeeperJob({ pyth: stalePyth, chainlink })]).runAll();
     expect(r4['rate.snapshot']!.detail).toContain('stale');
-    // a closed FX market is routine, not a failure (the JPY pair without a feed still is one)
     expect(r4['rate.snapshot']!.detail!.split('errors:')[1] ?? '').not.toContain('stale');
-    void eur;
+    expect((await mon.sim.getRateAccumulator(missing))!.count).toBe(0);
   });
 
   it('fx coverage flags a completed quarter with too few snapshots and routes it to attestors; outbox dispatches once', async () => {
@@ -164,13 +162,13 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     await mon.sim.setTime(parsePeriod('2026Q4').end + 86_400);
     const r = await sched.runAll();
     expect(r['fx.coverage']!.actions).toBeGreaterThan(0);
-    const q = await mon.sim.getQuarterRate('EUR/USD', '2026Q4');
+    const q = await mon.sim.getQuarterRate(eurPair, '2026Q4');
     expect(q!.needsFallback).toBe(true);
-    const reqs = await t.pool.query("select period_id, reason from fx_fallback_requests where chain = 'monad' and pair = 'EUR/USD' order by period_id");
+    const reqs = await t.pool.query("select period_id, reason from fx_fallback_requests where chain = 'monad' and pair = $1 order by period_id", [eurPair]);
     expect(reqs.rows.map((x) => x.period_id)).toContain('2026Q4');
     // cause S4-FX: the keeper opens one request per (chain, pair, period); the signatures are per series and come only
     // from an attestor's device through the attestor routes (S4 WP9, D14), never from a keeper
-    expect((await t.pool.query("select count(*)::int as n from fx_fallback_requests where chain = 'monad' and pair = 'EUR/USD' and period_id = '2026Q4'")).rows[0].n).toBe(1);
+    expect((await t.pool.query("select count(*)::int as n from fx_fallback_requests where chain = 'monad' and pair = $1 and period_id = '2026Q4'", [eurPair])).rows[0].n).toBe(1);
     expect((await t.pool.query('select count(*)::int as n from fx_fallback_signatures')).rows[0].n).toBe(0);
     expect((await sched.runAll())['fx.coverage']!.actions).toBe(0);
     const seen: string[] = [];

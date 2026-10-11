@@ -986,10 +986,10 @@ export class AttestorService {
     const base = String(req.pair).split('/')[0]!;
     const r = await this.ctx.pool.query<{ series_id: string }>(
       `select s.series_id from series s
-        where s.chain = $1 and s.reporting_currency = $2 and s.first_period is not null and s.first_period <= $3 and s.status not in ('Retired', 'Extinguished')
+        where s.chain = $1 and (s.fx_pair_id = $4 or (s.fx_pair_id is null and s.reporting_currency = $2)) and s.first_period is not null and s.first_period <= $3 and s.status not in ('Retired', 'Extinguished')
           and not exists (select 1 from periods p where p.series_id = s.series_id and p.period_id = $3 and p.report_accepted)
         order by s.series_id`,
-      [req.chain, base, req.period_id],
+      [req.chain, base, req.period_id, req.pair],
     );
     return r.rows.map((x) => x.series_id);
   }
@@ -1132,8 +1132,8 @@ export class AttestorService {
     const chain = this.chainOf(seriesId);
     const series = await chain.getSeries(seriesId);
     if (!series) throw AppError.notFound('series');
-    if (series.terms.reportingCurrency === 'USD') return { seriesId, periodId, pair: null, basis: 'unity', state: 'not-needed', rateWad: null, fxFallback: null };
-    const pair = `${series.terms.reportingCurrency}/USD`;
+    if (!series.terms.fxPairId && series.terms.reportingCurrency === 'USD') return { seriesId, periodId, pair: null, basis: 'unity', state: 'not-needed', rateWad: null, fxFallback: null };
+    const pair = series.terms.fxPairId ?? `${series.terms.reportingCurrency}/USD`;
     const r = await this.ctx.pool.query('select * from fx_fallback_requests where chain = $1 and pair = $2 and period_id = $3', [chain.chain, pair, periodId]);
     const req = r.rows[0];
     if (!req) return { seriesId, periodId, pair, basis: 'accumulator', state: 'none', rateWad: null, fxFallback: null };

@@ -161,8 +161,8 @@ describe('S4 signature scenarios: replay', () => {
       expect(r.report.runs.map((x) => [x.id, x.world, x.status, x.executed, x.total, x.issues, x.atExpected]), backend).toEqual(
         only.flatMap((id) => worlds.map((w) => [id, w, 'PASS', counts[id], counts[id], [], true])),
       );
-      // the verifier keys' registry runs directly (SH-REG-3 retired); a report still goes through SH-REP-1 (tier 3, FX)
-      if (backend !== 'reference') for (const run of r.report.runs) expect([run.shims['SH-REG-3'], run.shims['SH-REP-1']! > 0], run.world).toEqual([undefined, true]);
+      // S5-FX: the verifier registry and report both run directly; SH-REP-1 is retired.
+      if (backend !== 'reference') for (const run of r.report.runs) expect([run.shims['SH-REG-3'], run.shims['SH-REP-1']], run.world).toEqual([undefined, undefined]);
     }
   }, 300_000);
 
@@ -191,8 +191,8 @@ describe('S4 signature scenarios: replay', () => {
       expect(r.skipped, backend).toEqual([]);
       const worlds = backend === 'reference' ? ['reference'] : [`${backend}/solana`, `${backend}/monad`];
       expect(r.report.runs.map((x) => [x.id, x.world, x.status, x.executed, x.total, x.issues, x.atExpected]), backend).toEqual(worlds.map((w) => ['S4f', w, 'PASS', 63, 63, [], true]));
-      // SH-REP-1 is left with the FX basis only: the report goes through it, the attestor registry runs directly
-      if (backend !== 'reference') for (const run of r.report.runs) expect([run.shims['SH-REG-2'], run.shims['SH-REP-1']! > 0], run.world).toEqual([undefined, true]);
+      // S5-FX: the report and the attestor registry both run directly.
+      if (backend !== 'reference') for (const run of r.report.runs) expect([run.shims['SH-REG-2'], run.shims['SH-REP-1']], run.world).toEqual([undefined, undefined]);
     }
   }, 300_000);
 

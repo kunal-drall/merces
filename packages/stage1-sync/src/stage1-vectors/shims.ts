@@ -35,7 +35,6 @@ export interface Shim {
 }
 
 export const SHIMS: readonly Shim[] = [
-  { id: 'SH-REP-1', ops: ['submit_report'], call: 'submitReport{prior, income, Groth16 proof and signals; tiers 2 and 3 the named key\'s REPORT signature; the FX fallback the named key\'s FX signature}; fxBasis and pair derived by the runner', why: 'FX pairs and the accumulator are S5', removedIn: 'S5 (FX)', kind: 'shim' },
   { id: 'SH-WIN-1', ops: ['open_window'], call: 'keeper openTransferWindow{t + windowCommitDuration, + windowRevealDuration}; period kept by the runner', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-2', ops: ['commit_ask'], call: 'commitWindowOrder{side: sell, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit 0, units}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-3', ops: ['window_commit_bid'], call: 'commitWindowOrder{side: buy, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit: escrow, units 0}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },

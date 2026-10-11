@@ -84,7 +84,7 @@ export const TARGETS_S2 = ['02', '03', '15', '17'] as const;
 export const TARGETS_S4 = ['21'] as const;
 /** Every target vector: replayed in full on the merces backend. */
 // S5 lifecycle commands: full lockstep replays of 08 (64 steps) and 14 (83) pass on both personalities.
-export const TARGETS: readonly string[] = Object.freeze([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20']);
+export const TARGETS: readonly string[] = Object.freeze([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20', '13', '24']);
 
 const S2_RAISE = ['S2 WP2', 'S2 WP4a', 'S2 WP4b'];
 
@@ -104,7 +104,7 @@ export const EXPECTED: Readonly<Record<string, Expected>> = Object.freeze({
   '10': { status: 'PREFIX-PASS', until: 35, next: '#36 `expect_revert open_window` with windows disabled (no canonical windows flag to refuse with)', milestone: 'S5', reason: 'multi-step transfer windows' },
   '11': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5', 'WP6', 'WP7'] },
   '12': { status: 'NOT-YET', milestone: 'S5', reason: 'income router' },
-  '13': { status: 'NOT-YET', milestone: 'S5', reason: 'FX accumulator' },
+  '13': { status: 'PASS', needs: ['S5 FX'] },
   '14': { status: 'PASS', needs: ['S5 retire_if_capped'] },
   '15': { status: 'PASS', needs: S2_RAISE },
   '16': { status: 'PREFIX-PASS', until: 40, next: '#41 `set_flags` (no canonical windows flag)', milestone: 'S5', reason: 'multi-step transfer windows' },
@@ -118,7 +118,7 @@ export const EXPECTED: Readonly<Record<string, Expected>> = Object.freeze({
   '21': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5', ...S2_RAISE, 'S3 WP3', 'S4 WP10'] },
   '22': { status: 'PREFIX-PASS', until: 75, next: '#76 `begin_window_settlement` with a price on a live series (one-step windows)', milestone: 'S5', reason: 'multi-step windows (#76); its claim steps #88-#110 run once windows land' },
   '23': { status: 'PASS', needs: ['WP3', 'WP5', 'WP6', 'WP8'] },
-  '24': { status: 'NOT-YET', milestone: 'S5', reason: 'FX accumulator (inverted pair)' },
+  '24': { status: 'PASS', needs: ['S5 inverted FX'] },
   '25': { status: 'PASS', needs: ['WP3', 'WP5', 'WP6', 'WP7', 'WP8'] },
 });
 

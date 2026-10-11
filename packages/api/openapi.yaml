@@ -347,6 +347,13 @@ components:
     SeriesTerms:
       type: object
       properties:
+        fxPairId:
+          type:
+            - string
+            - "null"
+          pattern: ^0x[0-9a-f]{64}$
+          default: null
+          description: Registered Stage 1 FX pair. Required for non-USD draft terms; forbidden for tier 1.
         unitsOffered:
           type: string
         reservePrice:
@@ -2739,6 +2746,28 @@ components:
           type:
             - integer
             - "null"
+    FxPair:
+      type: object
+      required:
+        - pairId
+        - feedId
+        - inverted
+        - crosscheck
+        - effectivePeriod
+      properties:
+        pairId:
+          $ref: "#/components/schemas/Hash32"
+        feedId:
+          $ref: "#/components/schemas/Hash32"
+        inverted:
+          type: boolean
+        crosscheck:
+          type:
+            - string
+            - "null"
+          description: Solana second Pyth feed id as base58; EVM Chainlink aggregator address
+        effectivePeriod:
+          type: string
     TrueUpState:
       type: object
       required:
@@ -5434,6 +5463,13 @@ paths:
                   type: string
                 public:
                   type: object
+                  properties:
+                    fxPairId:
+                      type:
+                        - string
+                        - "null"
+                      pattern: ^0x[0-9a-f]{64}$
+                      default: null
                 private:
                   type:
                     - object
@@ -5638,6 +5674,13 @@ paths:
               properties:
                 public:
                   type: object
+                  properties:
+                    fxPairId:
+                      type:
+                        - string
+                        - "null"
+                      pattern: ^0x[0-9a-f]{64}$
+                      default: null
                 private:
                   type: object
       responses:
@@ -9091,6 +9134,92 @@ paths:
           description: "The request is sent or withdrawn; both keys linked to one account (detail.reason same-account); the series cannot be extinguished now (detail.stage1 RaiseNotSettled, MintNotFinalized or TerminalStatus); the signature binds a nonce that is not the live one (detail.reason stale-nonce, with detail.liveExtinguishNonce and detail.request, the fresh signing request); at the relay, a stored signature's key is no longer active (detail.reason attestor-key-inactive, detail.stage1 InvalidAttestorSignature, detail.keys: that signature is dropped and the request collects again)"
         "422":
           description: The signature does not recover to the named key over this request's EXTINGUISH message on this chain, or the key is not active (detail.stage1 InvalidAttestorSignature); or the chain refused the relay (error Chain<code>, detail.stage1 its Stage 1 name; the request stays ready)
+  /chains/{chain}/fx-pairs:
+    get:
+      operationId: listFxPairs
+      x-access: public
+      tags:
+        - public
+      parameters:
+        - name: chain
+          in: path
+          required: true
+          schema:
+            type: string
+      description: Registered and indexed FX pairs available for draft terms. Pair identity is keccak(feedId bytes followed by one inversion byte).
+      responses:
+        "200":
+          description: Registered pairs
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - chain
+                  - pairs
+                properties:
+                  chain:
+                    type: string
+                  pairs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FxPair"
+  /admin/fx-pairs:
+    post:
+      operationId: setFxPair
+      x-access: admin
+      tags:
+        - admin
+      security:
+        - session: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      description: Prepare a write-once registry pair registration for the protocol admin to sign. No price or rate is supplied by the admin. Cross-check uses a second Pyth feed on Solana and a Chainlink aggregator on EVM.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - chain
+                - feedId
+                - inverted
+              properties:
+                chain:
+                  type: string
+                feedId:
+                  $ref: "#/components/schemas/Hash32"
+                inverted:
+                  type: boolean
+                crosscheck:
+                  type:
+                    - string
+                    - "null"
+                  default: null
+      responses:
+        "201":
+          description: Persisted request and unsigned admin transaction
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - request
+                  - tx
+                properties:
+                  request:
+                    $ref: "#/components/schemas/AdminTxRequest"
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+        "409":
+          description: Pair already registered
+        "422":
+          description: Invalid chain feed address
   /series/{seriesId}/treasury/build-draw:
     post:
       operationId: buildTreasuryDraw

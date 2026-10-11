@@ -1,3 +1,4 @@
+import { addressFamily, normaliseAddress } from '@merces/domain';
 import { z } from 'zod';
 import { attestorOpenWork } from '../attestor/recovery.ts';
 import { simulatorOnly } from '@merces/ports';
@@ -7,6 +8,7 @@ import { keyGraceUntil, type AdminCommand, type ChainPort, type SignerKeyState, 
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 import { IdentityService } from '../identity/service.ts';
+import { fxPairId } from '@merces/math';
 
 /**
  * E13 — admin API with an append-only audit log.
@@ -18,6 +20,7 @@ import { IdentityService } from '../identity/service.ts';
 
 export const FLAG_NAMES = ['tier4', 'transfer_windows', 'early_draws', 'secondary_trading', 'private_payouts'] as const;
 export type FlagName = (typeof FLAG_NAMES)[number];
+export const fxPairSchema = z.object({ chain: z.string().min(1), feedId: z.string().regex(/^0x[0-9a-f]{64}$/), inverted: z.boolean(), crosscheck: z.string().min(1).max(64).nullable().default(null) }).strict();
 /** R: private payouts are "coming soon" (E15) — the flag exists but can never be switched on from the API. */
 export const LOCKED_FLAGS: ReadonlySet<FlagName> = new Set<FlagName>(['private_payouts']);
 
@@ -146,6 +149,18 @@ export class AdminService {
   }
 
   // ---------------------------------------------------------------- multisig requests
+  async setFxPair(input: z.infer<typeof fxPairSchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
+    const info = await this.port(input.chain).info();
+    if (input.crosscheck) {
+      input = { ...input, crosscheck: normaliseAddress(input.crosscheck, info.family) };
+      if (addressFamily(input.crosscheck!) !== info.family) throw AppError.unprocessable('crosscheck must be a feed address on this chain');
+    }
+    const pairId = '0x' + Buffer.from(fxPairId(input.feedId, input.inverted)).toString('hex');
+    if (await this.port(input.chain).getRateAccumulator(pairId)) throw AppError.conflict('this feed/inversion pair is already registered', { stage1: 'FxPairExists' });
+    const r = await this.propose(input.chain, { kind: 'setFxPair', feedId: input.feedId, inverted: input.inverted, crosscheck: input.crosscheck }, admin, { pairId });
+    await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'fx-pair.register', target: `${input.chain}:${pairId}`, detail: { requestId: r.request.requestId } });
+    return r;
+  }
   /** Build an admin command for the multisig and record the request. The backend never signs it. */
   private async propose(chain: string, command: AdminCommand, admin: Session, meta: Record<string, unknown> = {}): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
     const port = this.port(chain);
@@ -383,6 +398,8 @@ export class AdminService {
     const port = this.port(req.chain);
     const cmd = req.command;
     switch (cmd.kind) {
+      case 'setFxPair':
+        return !!(await port.getRateAccumulator('0x' + Buffer.from(fxPairId(cmd.feedId, cmd.inverted)).toString('hex')));
       // the registry as the chain holds it (S4 WP5): a registration shows as an active key, a revocation as a revoked one
       // with its revocation time, a rotation as both
       case 'registerIssuer':

@@ -57,9 +57,9 @@ export const userCommands = {
     priorIncomeCommitment: hash32Schema,
     incomeCommitment: hash32Schema,
     /* no termsCommitment: the chain proves against the series' live commitment (SPEC §6.2) */
-    fxBasis: fxBasisSchema,
+    fxBasis: fxBasisSchema.optional(),
     fxAvgWad: wadSchema,
-    pair: pairSchema.nullable(),
+    pair: pairSchema.nullable().optional(),
     /**
      * The FX fallback (S4 WP9, D14): an attestor key's Stage 1 signature over `MERCES_FX_V1` (domain, series key, period,
      * the report's own `fxAvgWad`; `fxDigest`), as the chains take it (Solana `fx_fallback_sig` and `fx_attestor_addr`,
@@ -205,6 +205,8 @@ export const serviceCommands = {
  * any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans the settlement steps.
  */
 export const permissionlessCommands = {
+  /** Raw Pyth fields are simulator inputs; live adapters consume the verified provider update payloads. */
+  snapshotFx: z.object({ kind: z.literal('snapshotFx'), pairId: hash32Schema, price: i64StringSchema, conf: u64StringSchema, expo: z.number().int().min(-18).max(40), publishTime: u64StringSchema, crosscheckPrice: i64StringSchema.optional(), crosscheckExpo: z.number().int().min(-36).max(40).optional(), crosscheckPublishTime: u64StringSchema.optional(), updates: z.array(z.string()).optional() }),
   /** Stage 1 retire_if_capped: after mint finalization, retire when the current cap has been met. */
   retireIfCapped: z.object({ kind: z.literal('retireIfCapped'), seriesId: seriesIdSchema }),
   /** Stage 1 `begin_settlement`: proposes a clearing price with the proposer's tally claims; starts the next round */
@@ -286,6 +288,7 @@ export const permissionlessCommands = {
 } as const;
 
 export const adminCommands = {
+  setFxPair: z.object({ kind: z.literal('setFxPair'), feedId: hash32Schema, inverted: z.boolean(), crosscheck: addressSchema.nullable() }),
   /** Stage 1 register_issuer: only the protocol admin registers a wallet. Re-registration is idempotent. */
   registerIssuer: z.object({ kind: z.literal('registerIssuer'), wallet: addressSchema }),
   /**

@@ -8,7 +8,15 @@ Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
 ## Unreleased
 
-S4 recovery and S5 lifecycle foundation (201 operations, previously 190).
+S4 recovery, S5 lifecycle and FX (203 operations, previously 190).
+
+FX additions and changes:
+- `POST /admin/fx-pairs` [admin]: `{chain,feedId,inverted,crosscheck?}` → `{request,tx}`, a write-once pair registration for the admin to sign.
+- `GET /chains/{chain}/fx-pairs` [public]: `{chain,pairs}` with `pairId,feedId,inverted,crosscheck,effectivePeriod`.
+- `SeriesTerms` and draft public terms (`POST /terms/validate`, `PUT /drafts/{draftId}/terms`) add nullable `fxPairId`; non-USD drafts require a registered pair, tier 1 forbids it. Public series and reporting reads use that identity.
+- Commands add admin `setFxPair` and permissionless `snapshotFx`; event `FxPairSet` indexes pair configuration. `submitReport.fxBasis` and `.pair` are optional checks; the chain derives the basis from the series.
+- FX coverage uses Stage 1 trading days and quarter checkpoints; deviating prices still accumulate and require attestor fallback. New schema `FxPair`.
+
 
 Added:
 - `POST /series/{seriesId}/tier3/annual/{annualId}/build-submit` [issuer]: returns `{tx}` carrying the stored
@@ -49,7 +57,7 @@ Changed:
   comes from chain-accepted reports, and previous verifier retirement times must be plausible unix seconds.
 
 New schemas: `WorkWithdrawal`, `ReaddressWork`, `ReaddressedWork`, `TrueUpState`. Client/types and domain event schema regenerated.
-Simulator snapshots move to version 6; reset/reseed local simulator data before startup (RUNBOOK.md).
+Simulator snapshots move to version 7; reset/reseed local simulator data before startup (RUNBOOK.md).
 
 
 ## S4 owner decisions, 2026-10-11 (190 operations; was 188)

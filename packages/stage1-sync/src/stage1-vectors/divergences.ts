@@ -38,6 +38,15 @@ export interface DivergenceRow {
  * guards both chains enforce and the reference omits. No official vector carries a waiver. */
 export const DIVERGENCES: readonly DivergenceRow[] = Object.freeze([
   {
+    id: 'DIV-S1I-5',
+    title: 'configured FX cross-check availability follows each chain',
+    what: 'Solana fx.rs snapshot_fx requires the configured second Pyth update and rejects stale/nonpositive cross-checks; EVM MercesFxAccumulator._chainlink ignores unavailable, stale or nonpositive Chainlink answers. The TS reference accepts an omitted cross-check even when configured and has no cross-check timestamp input.',
+    why: 'The simulator and keeper follow their chain personality; a configured Solana feed must not silently disappear from validation. Both chains retain a deviating primary price and flag the quarter.',
+    milestone: 'until the reference models chain-specific cross-check availability',
+    seen: 'packages/simulator/test/fx.test.ts tests missing and stale cross-checks on both personalities. Official FX vectors 13 and 24 still pass in full; no waiver.',
+    lift: ['Model cross-check timestamps and required Solana updates in the reference, preserving the contract behavior and these regressions.'],
+  },
+  {
     id: 'DIV-S1I-4',
     title: 'true-up submissions reject terminal series and future attestation times',
     what: 'Both chains reject terminal series and future TRUEUP attestation times (income.rs submit_trueup:770–808; MercesIncome.sol:369–394); the TS reference submitTrueup omits these guards. The backend follows both contracts, using TrueUpTimestampInFuture on Solana and AttestationInFuture on EVM.',

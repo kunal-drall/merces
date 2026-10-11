@@ -83,7 +83,7 @@ const SDK_REEXPORTS = [
   'MAGIC', 'reportAttestationMessage', 'fxFallbackMessage', 'amendmentMessage', 'pauseApprovalMessage', 'extinguishMessage', 'trueUpMessage',
   'SECP256K1_N', 'SECP256K1_HALF_N', 'isLowS', 'signDigest', 'parseSignature', 'publicKeyFromPrivate', 'addressFromPublicKey', 'addressFromPrivateKey', 'recoverAddress', 'verifySignature', 'toChecksumAddress',
   'ChainKind', 'SOLANA_CLUSTER_TAGS', 'EVM_CHAIN_IDS', 'bidCommitmentPreimage', 'computeDomain', 'seriesKeyFromId',
-  'walletFromSolanaPubkey', 'walletFromEvmAddress', 'evmAddressFromWallet', 'keccak256',
+  'walletFromSolanaPubkey', 'walletFromEvmAddress', 'evmAddressFromWallet', 'keccak256', 'fxPairId',
 ] as const;
 /**
  * Stage 1's helpers, renamed: the Poseidon commitments return the field element (`@merces/domain` returns the 0x-hex);
@@ -91,7 +91,7 @@ const SDK_REEXPORTS = [
  */
 const SDK_RENAMED = { termsCommitmentField: 'termsCommitment', incomeCommitmentField: 'incomeCommitment', routerIncomeCommitmentField: 'routerIncomeCommitment', bidCommitmentBytes: 'bidCommitment' } as const;
 const REFERENCE_REEXPORTS = [
-  'isTerminal', 'deadlineSeconds', 'graceSeconds', 'noticeSeconds', 'countdown', 'nextExpectedPeriod', 'earliestUnpaid', 'deriveStatus', 'isLateUnderlying', 'lateDays', 'lateAccrual', 'lateAccrualTrueup', 'trueupNoticeDue', 'formalNoticeDue', 'pauseApprovalError',
+  'isTerminal', 'deadlineSeconds', 'graceSeconds', 'noticeSeconds', 'countdown', 'nextExpectedPeriod', 'earliestUnpaid', 'deriveStatus', 'isLateUnderlying', 'lateDays', 'newFxPairState', 'validatePythPrice', 'deviates', 'snapshot', 'quarterAverage', 'snapshotsNeeded', 'normalizePythPrice', 'invertRate', 'lateAccrual', 'lateAccrualTrueup', 'trueupNoticeDue', 'formalNoticeDue', 'pauseApprovalError',
   'newVaultState', 'capPerUnit', 'capEffWad', 'isCapped', 'vaultReceiveGross', 'settleHolderDelta', 'accumulate',
   'hurdlePrice', 'averageAnnualGross', 'redemptionQuote', 'newTailState', 'tailReceive', 'newFinalState', 'finalDistribute',
   'MAX_RELEASE_TRANCHES', 'validateReleaseSchedule', 'trancheAmounts', 'vested', 'releasable',
@@ -141,8 +141,6 @@ describe('@merces/math gateway', () => {
     expect(Object.keys(interim).sort()).toEqual([
       // window cap (S5); cause S3-NC: no longer the curve's (a curve raise has no cap)
       'walletCapUnits',
-      // FX (S5)
-      'quarterAverageRate', 'coverageOk', 'deviationBps', 'withinBand', 'pythToWad',
     ].sort());
     // the interim cap is not Stage 1's (S5 moves the window to Stage 1's)
     expect(interim.walletCapUnits).not.toBe((ref as unknown as Record<string, unknown>).walletCapUnits);
@@ -467,17 +465,6 @@ describe('fixed point', () => {
       expect(err, bad).toBeInstanceOf(RangeError);
       expect(`${(err as Error).message}\n${(err as Error).stack}`).not.toMatch(/642642/);
     }
-  });
-});
-
-describe('C9 fx', () => {
-  it('averages the quarter and checks coverage', () => {
-    expect(interim.quarterAverageRate(300n * WAD, 100n * WAD, 200, 100)).toBe(2n * WAD);
-    expect(interim.coverageOk(72, 90)).toBe(true);
-    expect(interim.coverageOk(71, 90)).toBe(false);
-    expect(interim.deviationBps(101n, 100n)).toBe(100n);
-    expect([interim.withinBand(101n, 100n, 100n), interim.withinBand(102n, 100n, 100n)]).toEqual([true, false]);
-    expect(interim.pythToWad(108_123_456n, -8)).toBe(wadFromDecimal('1.08123456'));
   });
 });
 

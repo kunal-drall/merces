@@ -73,7 +73,7 @@ export class ProofOfIncomeService {
       ? { periodId: current.id, endsAt: current.end, dueAt: Number(projectDeadlines(toPid(current.id), running, BigInt(now), statusParamsOf(series.terms)).dueAt) }
       : null;
     return {
-      seriesId, status: series.status, now, reportingCurrency: series.terms.reportingCurrency, fxBasis: series.terms.reportingCurrency === 'USD' ? 'unity' : 'accumulator', tierFlags: series.terms.tierFlags,
+      seriesId, status: series.status, now, reportingCurrency: series.terms.reportingCurrency, fxBasis: !series.terms.fxPairId && series.terms.reportingCurrency === 'USD' ? 'unity' : 'accumulator', tierFlags: series.terms.tierFlags,
       periods: live.map((p) => {
         const step = nextStep(p, byPeriod.get(p.periodId)?.state);
         // a curve series' next report waits for a census taken after its period ended (S3 WP9)
@@ -109,8 +109,8 @@ export class ProofOfIncomeService {
     const chain = this.ctx.chainFor(seriesId);
     const s = await chain.getSeries(seriesId);
     if (!s) throw AppError.notFound('series');
-    if (s.terms.reportingCurrency === 'USD') return { basis: 'unity', pair: null, fxAvgWad: WAD.toString(), reason: null };
-    const pair = `${s.terms.reportingCurrency}/USD`;
+    if (!s.terms.fxPairId && s.terms.reportingCurrency === 'USD') return { basis: 'unity', pair: null, fxAvgWad: WAD.toString(), reason: null };
+    const pair = s.terms.fxPairId ?? `${s.terms.reportingCurrency}/USD`;
     const q = await chain.getQuarterRate(pair, periodId);
     if (q && q.avgWad && !q.needsFallback) return { basis: 'accumulator', pair, fxAvgWad: q.avgWad, reason: null };
     return { basis: 'attestor', pair, fxAvgWad: null, reason: q?.fallbackReason ?? 'coverage' };

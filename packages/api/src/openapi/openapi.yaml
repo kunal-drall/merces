@@ -97,6 +97,7 @@ components:
     SeriesTerms:
       type: object
       properties:
+        fxPairId: { type: [string, 'null'], pattern: '^0x[0-9a-f]{64}$', default: null, description: 'Registered Stage 1 FX pair. Required for non-USD draft terms; forbidden for tier 1.' }
         unitsOffered: { type: string }
         reservePrice: { $ref: '#/components/schemas/Money' }
         minimumRaise: { $ref: '#/components/schemas/Money' }
@@ -921,7 +922,7 @@ paths:
       tags: [terms]
       security: [{ session: [] }]
       description: "Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months. Both styles record windowCommitDuration (3600–1209600 seconds, default 259200), windowRevealDuration (3600–604800 seconds, default 86400), and windowFeeBps (0–1000, default 100); validation reports out-of-bounds values."
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, public], properties: { chain: { type: string }, public: { type: object }, private: { type: [object, 'null'] } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, public], properties: { chain: { type: string }, public: { type: object, properties: { fxPairId: { type: [string, 'null'], pattern: '^0x[0-9a-f]{64}$', default: null } } }, private: { type: [object, 'null'] } } } } } }
       responses: { '200': { description: Issues (empty when valid) and derived values, content: { application/json: { schema: { type: object, properties: { issues: { type: array, items: { type: object } }, derived: { type: object } } } } } } }
   /terms/commitment:
     post:
@@ -982,7 +983,7 @@ paths:
       tags: [drafts]
       security: [{ session: [] }]
       parameters: [{ name: draftId, in: path, required: true, schema: { type: string } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [public, private], properties: { public: { type: object }, private: { type: object } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [public, private], properties: { public: { type: object, properties: { fxPairId: { type: [string, 'null'], pattern: '^0x[0-9a-f]{64}$', default: null } } }, private: { type: object } } } } } }
       responses: { '200': { description: Draft with commitment; private terms encrypted in the vault, content: { application/json: { schema: { type: object } } } }, '422': { description: Validation issues } }
   /drafts/{draftId}/terms/private:
     get:

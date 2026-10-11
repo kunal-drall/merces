@@ -12,6 +12,14 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 ## Events
 
+### FxPairSet
+
+- `pairId`: hex32
+- `feedId`: hex32
+- `inverted`: boolean
+- `crosscheck`: string \| null
+- `effectivePeriod`: period id (YYYYQn)
+
 ### IssuerRegistered
 
 - `issuer`: string
@@ -24,7 +32,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 - `seriesId`: string
 - `issuer`: string
-- `terms`: object { stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }
+- `terms`: object { fxPairId: hex32 \| null, stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }
 
 ### RaiseOpened
 
@@ -306,7 +314,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 ### RateSnapshot
 
-- `pair`: pair (XXX/USD)
+- `pair`: string
 - `rateWad`: decimal string (base units / WAD / units)
 - `confWad`: decimal string (base units / WAD / units)
 - `publishTime`: integer
@@ -316,7 +324,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 ### FxFallbackFlagged
 
-- `pair`: pair (XXX/USD)
+- `pair`: string
 - `periodId`: period id (YYYYQn)
 - `reason`: `coverage` \| `deviation`
 
@@ -418,14 +426,14 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### User commands
 
-- **createSeries**: `terms`: object { stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }; `seriesAddressHint?`: string
+- **createSeries**: `terms`: object { fxPairId: hex32 \| null, stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }; `seriesAddressHint?`: string
 - **openRaise**: `seriesId`: string
 - **cancelRaise**: `seriesId`: string
 - **commitBid**: `seriesId`: string; `commitment`: hex32; `deposit`: decimal string (base units / WAD / units)
 - **revealBid**: `seriesId`: string; `pricePerUnit`: decimal string (base units / WAD / units); `quantity`: decimal string (base units / WAD / units); `salt`: hex32
 - **drawRelease**: `seriesId`: string
 - **pauseReleases**: `seriesId`: string; `paused`: boolean
-- **submitReport**: `seriesId`: string; `periodId`: period id (YYYYQn); `tier`: `1` \| `2` \| `3` \| `4`; `paymentStable`: decimal string (base units / WAD / units); `priorIncomeCommitment`: hex32; `incomeCommitment`: hex32; `fxBasis`: `accumulator` \| `attestor` \| `unity`; `fxAvgWad`: decimal string (base units / WAD / units); `pair`: pair (XXX/USD) \| null; `fxFallback`: object { signer: string, signature: string } \| null; `proof`: object { system: `groth16-bn254`, proof: object { pi_a: array of decimal string (field element), pi_b: array of array of decimal string (field element), pi_c: array of decimal string (field element), protocol: `groth16`, curve: `bn128` }, publicInputs: array of decimal string (field element) } \| object { system: `mock`, proof: string, publicInputs: array of decimal string (field element) }; `attestation`: object { signer: string, signature: string } \| null; `liquidityEvent`: boolean
+- **submitReport**: `seriesId`: string; `periodId`: period id (YYYYQn); `tier`: `1` \| `2` \| `3` \| `4`; `paymentStable`: decimal string (base units / WAD / units); `priorIncomeCommitment`: hex32; `incomeCommitment`: hex32; `fxBasis?`: `accumulator` \| `attestor` \| `unity`; `fxAvgWad`: decimal string (base units / WAD / units); `pair?`: string \| null; `fxFallback`: object { signer: string, signature: string } \| null; `proof`: object { system: `groth16-bn254`, proof: object { pi_a: array of decimal string (field element), pi_b: array of array of decimal string (field element), pi_c: array of decimal string (field element), protocol: `groth16`, curve: `bn128` }, publicInputs: array of decimal string (field element) } \| object { system: `mock`, proof: string, publicInputs: array of decimal string (field element) }; `attestation`: object { signer: string, signature: string } \| null; `liquidityEvent`: boolean
 - **payIn**: `seriesId`: string; `periodId?`: period id (YYYYQn); `amount?`: decimal string (base units / WAD / units)
 - **submitTrueUp**: `seriesId`: string; `year`: integer; `adjustment`: string; `attestationTs`: string; `attestor`: string; `signature`: string
 - **payTrueUp**: `seriesId`: string
@@ -449,16 +457,17 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### Service commands (keeper / allowlist manager)
 
-- **snapshotRate**: `pair`: pair (XXX/USD); `rateWad`: decimal string (base units / WAD / units); `confWad`: decimal string (base units / WAD / units); `publishTime`: integer; `update`: string \| null
+- **snapshotRate**: `pair`: string; `rateWad`: decimal string (base units / WAD / units); `confWad`: decimal string (base units / WAD / units); `publishTime`: integer; `update`: string \| null
 - **crankStatus**: `seriesId`: string
 - **crankPause**: `seriesId`: string
 - **openTransferWindow**: `seriesId`: string; `commitEndsAt`: integer; `revealEndsAt`: integer
 - **clearTransferWindow**: `seriesId`: string; `windowId`: integer
-- **flagFxFallback**: `pair`: pair (XXX/USD); `periodId`: period id (YYYYQn); `reason`: `coverage` \| `deviation`
+- **flagFxFallback**: `pair`: string; `periodId`: period id (YYYYQn); `reason`: `coverage` \| `deviation`
 - **setAllowlist**: `wallet`: string; `allowed`: boolean
 
 ### Permissionless commands (keeper `submit` or any wallet `build`)
 
+- **snapshotFx**: `pairId`: hex32; `price`: string; `conf`: string; `expo`: integer; `publishTime`: string; `crosscheckPrice?`: string; `crosscheckExpo?`: integer; `crosscheckPublishTime?`: string; `updates?`: array of string
 - **retireIfCapped**: `seriesId`: string
 - **beginSettlement**: `seriesId`: string; `clearingPrice`: decimal string (base units / WAD / units); `qAboveClaim`: decimal string (base units / WAD / units); `qAtClaim`: decimal string (base units / WAD / units)
 - **tallyBids**: `seriesId`: string; `maxBids?`: integer
@@ -475,6 +484,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### Admin commands (multisig)
 
+- **setFxPair**: `feedId`: hex32; `inverted`: boolean; `crosscheck`: string \| null
 - **registerIssuer**: `wallet`: string
 - **registerAttestor**: `attestor`: string
 - **revokeAttestor**: `attestor`: string

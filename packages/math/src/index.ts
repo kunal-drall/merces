@@ -21,8 +21,7 @@
  * dev seeds may import (a grep gate in `test/math.test.ts` keeps it out of every other `src`).
  *
  * The interim Merces math (Part C) survives only under `interim.*`, and since S2 only the window cap (`walletCapUnits`;
- * S5; a curve raise has no cap since S3) and the FX family (`quarterAverageRate`, `coverageOk`, `deviationBps`, `withinBand`,
- * `pythToWad`; S5). The sealed-bid auction is Stage 1's family below (S2).
+ * S5; a curve raise has no cap since S3). The FX accumulator and normalization now re-export Stage 1's functions.
  */
 export * as interim from './interim/index.ts';
 
@@ -127,6 +126,7 @@ export {
   walletFromEvmAddress,
   evmAddressFromWallet,
   keccak256,
+  fxPairId,
 } from '@merces/sdk';
 
 // ---------------------------------------------------------------- Stage 1 reference math (@merces/reference)
@@ -134,6 +134,16 @@ export {
 // Stage 1's `walletCapUnits` (the redemption-window cap, `window.ts`; S5). The auction's cap is
 // `walletCapUnitsAtAuction` below; it has no minimum of one (the creation rule keeps it ≥ 1).
 export {
+  newFxPairState,
+  validatePythPrice,
+  deviates,
+  snapshot,
+  quarterAverage,
+  snapshotsNeeded,
+  normalizePythPrice,
+  invertRate,
+  type FxPairState,
+  type FxParams,
   // status, deadlines and accrual (SPEC v1.1 §6.4)
   isTerminal,
   deadlineSeconds,
