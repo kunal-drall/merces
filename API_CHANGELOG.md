@@ -6,6 +6,23 @@ The frontend builds against this API. **Every push lists every changed or remove
 count; `API.md` is the narrative; `packages/client/src/generated/openapi.d.ts` is regenerated with `pnpm openapi:client`.
 Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
+## d845658 — native curve setup and migration, 2026-10-11 (218 operations)
+
+- Added issuer `POST /series/{seriesId}/curve/build-setup`: a single `createCurveConfig`,
+  `createCurvePool` or `openRaise` command, restricted to the linked issuer of a Draft series.
+  Public parameters are generated on the device; raw income and private keys are never accepted.
+- Added account `POST /series/{seriesId}/curve/build-migration`: a linked payer plus a
+  `migrateCurve` command naming the two fresh position mint accounts. Both new responses
+  include `CurveNoCap`, the buyer notice and an unsigned transaction.
+- `POST /series/{seriesId}/raise/build-open` also activates Draft native Solana curves;
+  sealed-bid cancellation, settlement and bid routes continue to reject curves.
+- `CurveState` adds optional `migrated` and `dammV2Pool`, read from Meteora state.
+- `UnsignedTx` retains one funding wallet. Only the exact fresh account addresses in the
+  three creation commands may add signatures. Preparation transactions remain wallet-only.
+  No backend key holds or signs for a user's funds.
+- Permissionless live keepers confirm DAMM v2 migration before collecting treasury proceeds.
+  Simulator curves do not pretend to perform a native migration.
+
 ## Stage 5 draft terms schema correction — 2026-10-11 (213 operations)
 
 `POST /terms/validate` and `PUT /drafts/{draftId}/terms` now share the complete
