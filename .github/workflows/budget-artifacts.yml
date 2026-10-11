@@ -7,6 +7,11 @@ on:
         type: choice
         default: both
         options: [both, solana, monad]
+      solana_arch:
+        description: SBF target to evaluate (verify devnet support before deployment)
+        type: choice
+        default: v0
+        options: [v0, v2]
 permissions:
   contents: read
 # Research builds only: no keys, broadcasts, automatic source pin updates or deployment manifests.
@@ -17,6 +22,7 @@ jobs:
     timeout-minutes: 45
     env:
       CARGO_PROFILE_RELEASE_OPT_LEVEL: z
+      SOLANA_ARCH: ${{ inputs.solana_arch }}
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -30,7 +36,7 @@ jobs:
         working-directory: stage1/solana
         run: |
           for program in merces_registry merces_hook merces_protocol mock_usdg_hook; do
-            cargo-build-sbf --manifest-path "programs/$program/Cargo.toml" --tools-version v1.52 --arch v0 --sbf-out-dir target/deploy
+            cargo-build-sbf --manifest-path "programs/$program/Cargo.toml" --tools-version v1.52 --arch "$SOLANA_ARCH" --sbf-out-dir target/deploy
           done
       - name: Package only program binaries and public build provenance
         run: |
@@ -38,13 +44,13 @@ jobs:
           cp stage1/solana/target/deploy/merces_{registry,hook,protocol}.so budget-solana/
           git rev-parse HEAD > budget-solana/backend-commit.txt
           git -C stage1 rev-parse HEAD > budget-solana/stage1-commit.txt
-          printf 'release opt-level=z; lto=fat; codegen-units=1; overflow-checks=true; SBF v0; platform-tools v1.52\n' > budget-solana/profile.txt
+          printf 'release opt-level=z; lto=fat configured; codegen-units=1; overflow-checks=true; SBF %s; platform-tools v1.52\n' "$SOLANA_ARCH" > budget-solana/profile.txt
           cd budget-solana
           sha256sum *.so *.txt > SHA256SUMS
           wc -c *.so
       - uses: actions/upload-artifact@v4
         with:
-          name: budget-solana-${{ github.sha }}
+          name: budget-solana-${{ inputs.solana_arch }}-${{ github.sha }}
           path: budget-solana/
           retention-days: 14
       - name: Run the pinned LiteSVM suite against these exact binaries
