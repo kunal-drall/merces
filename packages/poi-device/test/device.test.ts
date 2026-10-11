@@ -96,6 +96,23 @@ describe('poi-device: Stage 1 Groth16 reports from the device income chain', () 
       },
     };
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD }), liar, { proofs: 'mock' }))).toEqual(['verifier-refused', 'mismatch']);
+    // nor a record whose signature does not recover to its named signer over its digest (S4 WP6 fix 1, defence in depth)
+    const forger: ReportVerifierPort = {
+      publicKey: () => verifier.publicKey(),
+      attest: async (q) => {
+        const r = await verifier.attest(q);
+        return r.ok ? { ok: true, attestation: { ...r.attestation, signer: '0x' + '33'.repeat(20) } } : r;
+      },
+    };
+    expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD }), forger, { proofs: 'mock' }))).toEqual(['verifier-refused', 'mismatch']);
+    const garbled: ReportVerifierPort = {
+      publicKey: () => verifier.publicKey(),
+      attest: async (q) => {
+        const r = await verifier.attest(q);
+        return r.ok ? { ok: true, attestation: { ...r.attestation, digest: 'not-a-digest' } } : r;
+      },
+    };
+    expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD }), garbled, { proofs: 'mock' }))).toEqual(['verifier-refused', 'mismatch']);
     const q1 = await assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD }), verifier, { proofs: 'mock' });
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q3', incomeYtdNow: CANARY_YTD, prior: q1.entry }), verifier, { proofs: 'mock' }))).toEqual(['prior-mismatch', null]);
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q2', incomeYtdNow: CANARY_YTD, prior: { ...q1.entry, incomeYtd: 1n } }), verifier, { proofs: 'mock' }))).toEqual(['prior-mismatch', null]);

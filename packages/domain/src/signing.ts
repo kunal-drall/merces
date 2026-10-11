@@ -226,6 +226,27 @@ export function assertSigningNetwork(d: SigningDomain, opts: { allowLocal?: bool
 }
 
 /**
+ * True for a local dev id (Solana localnet 104, EVM 31337): the simulator's networks, nothing live. A testnet is a live
+ * network. Only the kind and id are read: `assertSigningNetwork` checks the rest.
+ */
+export function isLocalSigningDomain(d: Pick<SigningDomain, 'chainKind' | 'chainId'>): boolean {
+  if (typeof d?.chainId !== 'string' || !/^\d{1,20}$/.test(d.chainId)) return false;
+  const id = BigInt(d.chainId);
+  if (d.chainKind === ChainKind.Solana) return id === SOLANA_LOCAL_TAG;
+  return d.chainKind === ChainKind.Evm && id === BigInt(EVM_LOCAL_CHAIN_ID);
+}
+
+/**
+ * A published development or test key (the local KMS's dev seed, the simulator harness's `SimSigner`, the vector keys)
+ * signs for the simulator only (ground rule: dev and test keys are refused when any chain is live): the domain passes
+ * `assertSigningNetwork` (never mainnet, a forged domain refused) and is a local id. A testnet is refused.
+ */
+export function assertLocalSigningNetwork(d: SigningDomain): void {
+  assertSigningNetwork(d, { allowLocal: true });
+  if (!isLocalSigningDomain(d)) throw new SigningError('network-not-allowed', `a published development or test key signs for the simulator only (Solana localnet ${SOLANA_LOCAL_TAG}, EVM ${EVM_LOCAL_CHAIN_ID}), never a live network (chain id ${d.chainId})`);
+}
+
+/**
  * The series key a message binds (SPEC §1.4), from the canonical series id `"<chain>:<address>"`:
  * - Solana: the series PDA's 32 bytes (the series address, base58), as Stage 1's programs use it;
  * - EVM: `bytes32(uint256(series_id))` (Stage 1 `seriesKeyFromId`) for a numeric id; the simulator's monad series ids

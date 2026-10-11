@@ -8,8 +8,8 @@ import {
 import { deriveTestPrivateKey } from '@merces/math/testing';
 import {
   EVM_LOCAL_CHAIN_ID, EVM_MAINNET_CHAIN_IDS, EVM_TESTNET_CHAIN_IDS, KEY_GRACE_SECONDS, SIGNING_KINDS, SOLANA_LOCAL_TAG, SOLANA_MAINNET_TAGS,
-  SOLANA_SIGNING_TAGS, SigningError, amendDigest, assertNoMainnetAllowed, assertSigningNetwork, attestationSchema, checkSigningRequest,
-  extinguishDigest, fxDigest, keyGraceUntil, keyUsable, pauseDigest, personalMessageDigest, recoverSigner, reportDigest, seriesKeyOf,
+  SOLANA_SIGNING_TAGS, SigningError, amendDigest, assertLocalSigningNetwork, assertNoMainnetAllowed, assertSigningNetwork, attestationSchema, checkSigningRequest,
+  extinguishDigest, fxDigest, isLocalSigningDomain, keyGraceUntil, keyUsable, pauseDigest, personalMessageDigest, recoverSigner, reportDigest, seriesKeyOf,
   signature65Hex, signature65Schema, signedBy, signerAddressSchema, signingDigest, signingDomain, signingRequest, trueUpDigest, wallet32Of,
   type SigningDomain, type SigningFields, type SigningKind, type SigningRequest,
 } from '../src/index.ts';
@@ -245,6 +245,16 @@ describe('the network allow-list and the mainnet tripwire (cause S4-G; S4 D6)', 
     expect(code(() => assertSigningNetwork(sol(104n), { allowLocal: true }))).toBeNull();
     expect(code(() => assertSigningNetwork(evm(31337), { allowLocal: true }))).toBeNull();
     expect(code(() => assertSigningNetwork(evm(999)))).toBe('network-not-allowed');
+  });
+  it('a published dev or test key signs for the local ids only: a testnet is live (S4 WP6 fix 1, A-REV-9)', () => {
+    expect([sol(104n), evm(31337)].map(isLocalSigningDomain)).toEqual([true, true]);
+    expect([sol(102n), sol(103n), sol(101n), evm(10143), evm(143), evm(104), { chainKind: 1 as const, chainId: '31337' }].map(isLocalSigningDomain)).toEqual([false, false, false, false, false, false, false]);
+    for (const d of [sol(104n), evm(31337)]) expect(code(() => assertLocalSigningNetwork(d))).toBeNull();
+    for (const d of [sol(102n), sol(103n), evm(10143), evm(11155111)]) expect(code(() => assertLocalSigningNetwork(d))).toBe('network-not-allowed');
+    expect(() => assertLocalSigningNetwork(sol(103n))).toThrow(/simulator only/);
+    // a mainnet by name, and a forged domain, as assertSigningNetwork
+    for (const d of [sol(101n), evm(143)]) expect(code(() => assertLocalSigningNetwork(d))).toBe('mainnet');
+    expect(code(() => assertLocalSigningNetwork({ ...evm(31337), domain: sol(104n).domain }))).toBe('domain-mismatch');
   });
   it('refuses every mainnet by name, allowLocal or not', () => {
     for (const d of [sol(101n), evm(143), evm(1), evm(8453)]) {

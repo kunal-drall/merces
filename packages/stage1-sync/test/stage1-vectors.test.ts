@@ -986,6 +986,8 @@ describe('stage1 vector runner: merces backend', () => {
     expect(await new VectorKeyring(v.keys).signer('verifier1').attest('REPORT', domain, seriesKey, fields)).toEqual(att);
     // never a mainnet domain (Monad mainnet, 143), nor one off the allow-list
     await expect(a.attest('REPORT', signingDomain('evm', 143, '0x' + '11'.repeat(20)), seriesKey, fields)).rejects.toThrow(/mainnet/);
+    // nor a testnet: these are published test keys, the simulator's local ids only (S4 WP6 fix 1)
+    await expect(a.attest('REPORT', signingDomain('evm', 10143, '0x' + '11'.repeat(20)), seriesKey, fields)).rejects.toThrow(/simulator only/);
     // a key that is not Stage 1's test key for its seed, or whose address is another's, is refused before it signs
     const bad = (k: Record<string, unknown>) => () => new VectorKeyring({ ...v.keys, x: k } as never).signer('x');
     expect(bad({ ...keys.verifier1, seed: '04_zero_quarters:attestor1' })).toThrow(/not Stage 1's test key for its seed/);

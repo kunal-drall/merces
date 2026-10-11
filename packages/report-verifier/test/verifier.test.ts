@@ -3,7 +3,8 @@ import { ZERO_INCOME_COMMITMENT, incomeCommitment, recoverSigner, reportDigest, 
 import { parsePeriod } from '@merces/math';
 import { LocalKms, MockZkTls } from '@merces/ports';
 import {
-  HttpReportVerifierClient, ReportVerifier, VerifierConfigError, createVerifierServer, previousAddressesFromEnv, verifierChainsFromEnv, type AttestRequest, type VerifierChain,
+  DEV_KEY_SEED, HttpReportVerifierClient, ReportVerifier, VerifierConfigError, createVerifierServer, previousAddressesFromEnv, verifierChainsFromEnv, verifierSetupFromEnv, type AttestRequest,
+  type VerifierChain,
 } from '../src/index.ts';
 
 /*
@@ -13,7 +14,9 @@ import {
  *    domain of the series' chain from its own table and the series key (S4 WP6, D10; was ed25519 over attestation v1
  *    named by a key id); its result is a `ReportAttestationRecord`; it starts only with an allow-listed table (never
  *    mainnet) and the KMS key's address equal to its pin; a prior is its own record over the same domain, by its current
- *    address or a previous one retired at or after the prior quarter's end (amendment D10).
+ *    address or a previous one retired at or after the prior quarter's end (amendment D10). Development
+ *    (`MERCES_VERIFIER_DEV=true`: the published dev seed, no pin) is the simulator only: a table with any live chain, a
+ *    testnet included, refuses the start (S4 WP6 fix 1, A-REV-9).
  */
 
 /** Stage 1's known-answer domains (known_answers.json `domains`): Solana devnet (tag 103) and Monad testnet (10143). */
@@ -191,6 +194,48 @@ describe('report verifier (Stage 1 REPORT signature: prior, liquidity event, hig
     expect(previousAddressesFromEnv(undefined)).toEqual([]);
     expect(previousAddressesFromEnv('[{"address":"0x' + '44'.repeat(20) + '","retiredAt":1775001600}]')).toEqual([{ address: '0x' + '44'.repeat(20), retiredAt: 1775001600 }]);
     for (const bad of ['x', '[{"address":"0x44"}]', '[{"address":"0x44","retiredAt":0}]']) expect(() => previousAddressesFromEnv(bad)).toThrow(VerifierConfigError);
+  });
+
+  it('development is the simulator only: MERCES_VERIFIER_DEV=true with a live chain in the table refuses to start, whatever the seed and pin (S4-T2, A-REV-9)', async () => {
+    const entry = (chain: string, family: 'solana' | 'evm', chainId: string, registry: string) => ({ chain, family, chainKind: family === 'solana' ? 1 : 2, chainId, registry });
+    const devnet = entry('solana', 'solana', '103', 'Agp61Ua3L6amzQ3F5qZfdaPFqRKLxW6Ldvfny1uRNLcR');
+    const testnet = entry('monad', 'evm', '10143', '0x1111111111111111111111111111111111111111');
+    const localSol = entry('solana', 'solana', '104', SERIES_ADDRESS);
+    const localEvm = entry('monad', 'evm', '31337', '0x2222222222222222222222222222222222222222');
+    const secret = 'a-verifier-seed-of-at-least-32-characters';
+    const env = (table: object[], over: Record<string, string> = {}): NodeJS.ProcessEnv => ({ MERCES_VERIFIER_CHAINS: JSON.stringify(table), ...over });
+    // the finding: dev mode, the dev seed (unset: the default), Solana devnet; and with a secret seed, a pin, or a testnet beside a local id
+    for (const e of [
+      env([devnet], { MERCES_VERIFIER_DEV: 'true' }),
+      env([devnet], { MERCES_VERIFIER_DEV: 'true', MERCES_LOCAL_KEY_SEED: DEV_KEY_SEED }),
+      env([devnet], { MERCES_VERIFIER_DEV: 'true', MERCES_LOCAL_KEY_SEED: secret, REPORT_VERIFIER_ADDRESS: '0x' + '33'.repeat(20) }),
+      env([localSol, testnet], { MERCES_VERIFIER_DEV: 'true' }),
+    ]) {
+      expect(() => verifierSetupFromEnv(e)).toThrow(/MERCES_VERIFIER_DEV=true is for the simulator only/);
+    }
+    // development with local ids only: the dev seed, no pin, the local ids and nothing else (localOnly)
+    const dev = verifierSetupFromEnv(env([localSol, localEvm], { MERCES_VERIFIER_DEV: 'true' }));
+    expect(dev.seed).toBe(DEV_KEY_SEED);
+    expect(dev.config).toMatchObject({ keyId: 'report-verifier-1', address: null, previous: [], allowLocal: true, localOnly: true });
+    expect(dev.config.chains.map((c) => c.domain.chainId)).toEqual(['104', '31337']);
+    const devKms = new LocalKms(dev.seed, { [dev.config.keyId]: 'secp256k1' });
+    await expect(ReportVerifier.create(zktls, devKms, dev.config)).resolves.toBeInstanceOf(ReportVerifier);
+    // the core refuses a live domain for a dev key too, at startup (in case a caller builds the config itself)
+    await expect(ReportVerifier.create(zktls, devKms, { ...dev.config, chains: [...dev.config.chains, { chain: 'devnet', domain: SOLANA_DEVNET }] })).rejects.toThrow(/simulator only/);
+    await expect(ReportVerifier.create(zktls, devKms, { keyId: dev.config.keyId, chains: CHAINS, localOnly: true })).rejects.toThrow(VerifierConfigError);
+    // outside development: a secret seed (never the dev seed, set or defaulted) and the pin are required; the local ids are refused at startup
+    expect(() => verifierSetupFromEnv(env([devnet]))).toThrow(/MERCES_LOCAL_KEY_SEED/);
+    expect(() => verifierSetupFromEnv(env([devnet], { MERCES_LOCAL_KEY_SEED: DEV_KEY_SEED }))).toThrow(/MERCES_LOCAL_KEY_SEED/);
+    expect(() => verifierSetupFromEnv(env([devnet], { MERCES_LOCAL_KEY_SEED: secret }))).toThrow(/REPORT_VERIFIER_ADDRESS is not set/);
+    const liveKms = new LocalKms(secret, { 'report-verifier-1': 'secp256k1' });
+    const pin = await liveKms.signerAddress('report-verifier-1');
+    const live = verifierSetupFromEnv(env([devnet, testnet], { MERCES_LOCAL_KEY_SEED: secret, REPORT_VERIFIER_ADDRESS: pin, MERCES_VERIFIER_DEV: 'false' }));
+    expect(live).toEqual({ seed: secret, config: { keyId: 'report-verifier-1', address: pin, previous: [], chains: CHAINS, allowLocal: false, localOnly: false } });
+    await expect(ReportVerifier.create(zktls, liveKms, live.config)).resolves.toBeInstanceOf(ReportVerifier);
+    const localLive = verifierSetupFromEnv(env([localSol], { MERCES_LOCAL_KEY_SEED: secret, REPORT_VERIFIER_ADDRESS: pin }));
+    await expect(ReportVerifier.create(zktls, liveKms, localLive.config)).rejects.toThrow(/not on the signing allow-list/);
+    // a cloud KMS waits for the owner's choice (S4 question 1)
+    expect(() => verifierSetupFromEnv(env([localSol], { MERCES_VERIFIER_DEV: 'true', MERCES_KMS_PROVIDER: 'aws' }))).toThrow(/cloud KMS not configured/);
   });
 
   it('serves over HTTP with logs that carry only ids, routes, outcome codes and timings', async () => {

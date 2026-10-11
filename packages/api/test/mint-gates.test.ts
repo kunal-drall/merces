@@ -13,6 +13,8 @@ import { makeRig } from './helpers.ts';
 function e2e(plain: string): string {
   const key = randomBytes(32);
   const iv = randomBytes(12);
+  // never a merces-e2e v1 version byte (0x01) first: one blob in 256 would otherwise parse as an envelope (a flake)
+  if (iv[0] === 0x01) iv[0] = 0x00;
   const c = createCipheriv('aes-256-gcm', key, iv);
   const ct = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
   return Buffer.concat([iv, ct, c.getAuthTag()]).toString('base64');

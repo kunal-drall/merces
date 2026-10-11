@@ -18,7 +18,9 @@ Migrations run at process start (`migrate()`); `pnpm db:migrate` and `pnpm db:re
 32 characters once any chain is live. While every chain runs on the simulator their published development defaults are
 accepted; with a live chain a missing, short or development value stops the process at boot with the variable's name.
 The report verifier signs with the key the multisig registers onchain, so it refuses the development seed unless
-`MERCES_VERIFIER_DEV=true` is set (docker-compose sets it for local development only).
+`MERCES_VERIFIER_DEV=true` is set (docker-compose sets it for local development only), and `MERCES_VERIFIER_DEV=true`
+itself is refused at boot when its chain table `MERCES_VERIFIER_CHAINS` names any chain but a local id (Solana localnet
+104, EVM 31337): pointing the verifier at a testnet means a secret seed and `REPORT_VERIFIER_ADDRESS`.
 
 **One owner per simulated chain.** A persisted simulator chain (`sim_state`/`sim_events` under `MERCES_SIM_KEY`,
 default `sim`) is held by exactly one process through a Postgres advisory lock, and that process is the API (`dev:api`
@@ -181,8 +183,8 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   the transaction). `dev:mock` registers it on the simulators automatically. The standalone verifier
   (`pnpm dev:verifier`) signs only for the chains of its own table `MERCES_VERIFIER_CHAINS` (`.env.example` and
   `docker-compose.yml` carry the dev simulators' domains; a test keeps them current) and, in development
-  (`MERCES_VERIFIER_DEV=true`), accepts the local ids; the API's in-process verifier in mock mode derives its table from
-  each simulator's `ChainInfo.signing`.
+  (`MERCES_VERIFIER_DEV=true`), accepts the local ids and nothing else (any other chain in the table stops it at boot);
+  the API's in-process verifier in mock mode derives its table from each simulator's `ChainInfo.signing`.
 - Production: a cloud KMS behind `KmsPort`. S4 ships the provider-neutral adapter (`RemoteSecp256k1Kms` in
   `@merces/ports`: the KMS's DER signature becomes Stage 1's 65 bytes, low s, the recovery id found against the key's
   address, fail closed; the DER SPKI public key gives the address) but no provider: which one holds the report-verifier

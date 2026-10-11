@@ -1,4 +1,4 @@
-import { assertSigningNetwork, attestationOf, signature65Hex, signingDigest, type Attestation, type DigestSigner, type SigningDomain, type SigningFields, type SigningKind } from '@merces/domain';
+import { assertLocalSigningNetwork, attestationOf, signature65Hex, signingDigest, type Attestation, type DigestSigner, type SigningDomain, type SigningFields, type SigningKind } from '@merces/domain';
 import { addressFromPrivateKey, signDigest, verifySignature } from '@merces/math';
 import { deriveTestPrivateKey } from '@merces/math/testing';
 import { RunnerError } from './errors.ts';
@@ -12,8 +12,8 @@ import type { VectorKeys } from './load.ts';
  * this runner: `signer(name)` checks the key is Stage 1's published test key for its seed (`deriveTestPrivateKey(seed)`)
  * and that its address is the key's own (`addressFromPrivateKey`), then signs raw digests with Stage 1's `signDigest`.
  * `attest` builds the message over the chain's signing domain (`ChainInfo.signing`) and the series key
- * (`SeriesState.seriesKey`), refusing a domain off the allow-list or on a mainnet first (local ids allowed: the
- * simulator's), and signs it.
+ * (`SeriesState.seriesKey`), refusing any domain but the simulator's local ids first (a mainnet, and a testnet too:
+ * these are published test keys, never for a live network), and signs it.
  *
  * Wrong-key cases need no special handling: the named key signs, and the chain finds it in the wrong set (04#68 signs a
  * tier-2 report with `attestor1`, which is no verifier key: InvalidVerifierSignature).
@@ -53,7 +53,7 @@ export class VectorKeyring {
         address,
         signDigest: signDigestHex,
         attest: async (kind, domain, seriesKey, fields) => {
-          assertSigningNetwork(domain, { allowLocal: true });
+          assertLocalSigningNetwork(domain);
           const { digest } = signingDigest(kind, { domain: domain.domain, seriesKey }, fields);
           return attestationOf({ signer: address, signature: await signDigestHex(digest) });
         },

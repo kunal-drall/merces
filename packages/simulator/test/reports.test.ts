@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { verifyReport } from '@merces/circuits';
-import { ChainError, ZERO_INCOME_COMMITMENT, attestationOf, incomeCommitment, mockProve, reportDigest, reportPublicInputs, type UserCommand } from '@merces/domain';
+import { ChainError, ZERO_INCOME_COMMITMENT, attestationOf, incomeCommitment, mockProve, reportDigest, reportPublicInputs, signingDomain, type UserCommand } from '@merces/domain';
 import { WAD, parsePeriod, wadFromDecimal } from '@merces/math';
 import { SimHarness, SimSigner, SimulatorChain, defaultTerms, harnessFieldSalt, personalitySigning, serialiseState, type SimWallet } from '../src/index.ts';
 import { GENESIS, USDC } from './helpers.ts';
@@ -195,6 +195,11 @@ describe('submitReport checks, in Stage 1 order', () => {
     await refused(h, send(h, { ...command, attestation: attestationOf(elsewhere) }), 'InvalidVerifierSignature', /does not recover/);
     const otherSeries = await h.verifier.attest('REPORT', (await h.sim.info()).signing!, '0x' + '00'.repeat(12) + '11'.repeat(20), { periodId: '2026Q1', priorIncomeCommitment: command.priorIncomeCommitment, incomeCommitment: command.incomeCommitment, tier: 2, liquidityEvent: false });
     await refused(h, send(h, { ...command, attestation: attestationOf(otherSeries) }), 'InvalidVerifierSignature', /does not recover/);
+    // the harness key is a published test key: it signs for the simulator's local ids only, never a testnet or a mainnet (S4 WP6 fix 1)
+    const reportFields = { periodId: '2026Q1', priorIncomeCommitment: command.priorIncomeCommitment, incomeCommitment: command.incomeCommitment, tier: 2 as const, liquidityEvent: false };
+    await expect(h.verifier.attest('REPORT', signingDomain('evm', 10143, '0x' + '11'.repeat(20)), series.seriesKey, reportFields)).rejects.toThrow(/simulator only/);
+    await expect(h.verifier.attest('REPORT', signingDomain('solana', 103, 'Agp61Ua3L6amzQ3F5qZfdaPFqRKLxW6Ldvfny1uRNLcR'), series.seriesKey, reportFields)).rejects.toThrow(/simulator only/);
+    await expect(h.verifier.attest('REPORT', signingDomain('evm', 143, '0x' + '11'.repeat(20)), series.seriesKey, reportFields)).rejects.toThrow(/mainnet/);
     // tier 3 is still the attestor's co-signature (S4 WP9 moves it); a tier-3 report carries no attestation
     const t3 = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: h.attestors[0]!.address });
     expect(t3.command.attestation).toBeNull();

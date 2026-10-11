@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import {
-  INDEXING_RULE_CODE, ZERO_INCOME_COMMITMENT, attestationOf, currencyCodeOf, hex32ToField, incomeCommitment, mockProve, reportPublicInputs, termsCommitment,
+  INDEXING_RULE_CODE, ZERO_INCOME_COMMITMENT, attestationOf, currencyCodeOf, hex32ToField, incomeCommitment, mockProve, recoverSigner, reportPublicInputs, termsCommitment,
   type Attestation, type IndexingRule, type ReportAttestationRecord, type ReportProof, type UserCommand,
 } from '@merces/domain';
 import { BN254_FR, U64_MAX, WAD, fromPid, paymentStable, quarterIndex, ratePerUnit, toPid } from '@merces/math';
@@ -248,9 +248,17 @@ export async function assembleOnDevice(input: DeviceReportInput, verifier: Repor
       throw new DeviceError('verifier-unavailable');
     }
     if (!r.ok) throw new DeviceError('verifier-refused', r.code);
-    // the record must be for this report: the verifier signed these commitments, this period and series, tier 2
+    // the record must be for this report: the verifier signed these commitments, this period and series, tier 2; and its
+    // signature must recover to its named signer over its digest (defence in depth: the chain rebuilds the digest itself)
     const a = r.attestation;
     if (a.seriesId !== input.seriesId || a.periodId !== input.periodId || a.priorIncomeCommitment !== priorCommitment || a.incomeCommitment !== ic || a.tier !== 2 || a.liquidityEvent !== liquidityEvent) throw new DeviceError('verifier-refused', 'mismatch');
+    let recovered: string | null = null;
+    try {
+      recovered = recoverSigner(a.digest, a.signature);
+    } catch {
+      // a malformed digest: refused below
+    }
+    if (recovered === null || recovered !== a.signer) throw new DeviceError('verifier-refused', 'mismatch');
     attestation = a;
   }
   // tier 1 carries no attestation (Stage 1 binds tier 1 to the router's checkpoints); tier 3 is co-signed by the attestor

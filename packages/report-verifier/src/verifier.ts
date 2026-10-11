@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  SigningError, ZERO_INCOME_COMMITMENT, assertSigningNetwork, familyOfChainKind, incomeCommitment, parseSeriesId, recoverSigner, reportAttestationRecordSchema,
+  SigningError, ZERO_INCOME_COMMITMENT, assertLocalSigningNetwork, assertSigningNetwork, familyOfChainKind, incomeCommitment, parseSeriesId, recoverSigner, reportAttestationRecordSchema,
   reportDigest, seriesKeyOf, signerAddressSchema, signingDomain, signingDomainSchema, type ChainKey, type ChainPort, type ReportAttestationRecord, type SigningDomain,
 } from '@merces/domain';
 import { fromPid, parsePeriod, quarterIndex, toPid } from '@merces/math';
@@ -107,6 +107,12 @@ export interface ReportVerifierConfig {
   chains: readonly VerifierChain[] | (() => Promise<readonly VerifierChain[]>);
   /** accept the local dev ids (Solana localnet 104, EVM 31337): the simulator only (`MERCES_VERIFIER_DEV=true`, or a simulator-only process) */
   allowLocal?: boolean;
+  /**
+   * The key is a published development key (the dev seed, `MERCES_VERIFIER_DEV=true`): the table may hold the local ids
+   * only, and any other domain, a testnet included, is refused at startup and at every signature (ground rule: dev and
+   * test keys are refused when any chain is live). Implies `allowLocal`.
+   */
+  localOnly?: boolean;
 }
 
 /** A configuration the verifier refuses to start with. The message names no secret. */
@@ -200,7 +206,8 @@ export function previousAddressesFromEnv(json: string | undefined): PreviousVeri
  *
  * Its key is secp256k1 behind the KMS port (S4 D10; the algorithm is the KMS's configuration, never inferred). Before it
  * serves anything (`ready`) it checks every domain of its table against the signing allow-list (never mainnet; local
- * ids only with `allowLocal`) and the KMS key's address against the pin.
+ * ids only with `allowLocal`; a dev key, `localOnly`, the local ids and nothing else) and the KMS key's address against
+ * the pin. The standalone process reads all of it from its environment (`verifierSetupFromEnv`).
  *
  * What it checks, in order:
  *  0. the series' chain is in its table and the series id has a series key there (else `wrong-context`);
@@ -248,7 +255,7 @@ export class ReportVerifier implements ReportVerifierPort {
       if (chains.has(entry.chain)) throw new VerifierConfigError(`the chain table names ${entry.chain} twice`);
       if (!signingDomainSchema.safeParse(entry.domain).success) throw new VerifierConfigError(`the chain table's domain for ${entry.chain} is malformed`);
       try {
-        assertSigningNetwork(entry.domain, { allowLocal: c.allowLocal === true });
+        this.assertNetwork(entry.domain);
       } catch (e) {
         // the allow-list's own message: a mainnet named by its id, or a network not on the list (no secret in it)
         throw new VerifierConfigError(`chain ${entry.chain}: ${e instanceof SigningError ? e.message : 'the signing domain is refused'}`);
@@ -308,11 +315,20 @@ export class ReportVerifier implements ReportVerifierPort {
     if (expected !== req.incomeCommitment) return fail('commitment-mismatch');
     // the signed message names no source: the provider is checked here and stays offchain (B7)
     const fields = { periodId: req.periodId, priorIncomeCommitment: req.priorIncomeCommitment, incomeCommitment: req.incomeCommitment, tier: 2 as const, liquidityEvent: req.liquidityEvent ?? false };
-    assertSigningNetwork(context.domain, { allowLocal: this.config.allowLocal === true }); // never mainnet, checked again at the signature
+    this.assertNetwork(context.domain); // never mainnet (nor a live network for a dev key), checked again at the signature
     const { digest } = reportDigest({ domain: context.domain.domain, seriesKey: context.seriesKey }, fields);
     const signature = await this.kms.signDigest(this.config.keyId, digest);
     if (recoverSigner(digest, signature) !== r.address) throw new Error('the KMS signature does not recover to the verifier key'); // fail closed
     return { ok: true, attestation: { signer: r.address, signature, digest, chain: context.chain, seriesId: req.seriesId, ...fields } };
+  }
+
+  /**
+   * The signing allow-list for this verifier's key: never mainnet; the local ids with `allowLocal`; with `localOnly` (a
+   * published dev key) the local ids only, a testnet refused.
+   */
+  private assertNetwork(domain: SigningDomain): void {
+    if (this.config.localOnly === true) assertLocalSigningNetwork(domain);
+    else assertSigningNetwork(domain, { allowLocal: this.config.allowLocal === true });
   }
 
   /** The chain, its domain and the series key of a series id, or null when the chain is not in the table. */

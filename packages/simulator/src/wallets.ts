@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
-  assertSigningNetwork, signature65Hex, signingDigest, type Attestation, type ChainFamily, type DigestSigner, type SignedTx, type SigningDomain, type SigningFields,
+  assertLocalSigningNetwork, signature65Hex, signingDigest, type Attestation, type ChainFamily, type DigestSigner, type SignedTx, type SigningDomain, type SigningFields,
   type SigningKind, type UnsignedTx, type WalletSigner,
 } from '@merces/domain';
 import { addressFromPrivateKey, signDigest as stage1SignDigest, verifySignature } from '@merces/math';
@@ -44,8 +44,9 @@ export function simAdminWallet(family: ChainFamily): SimWallet {
  * knows the key: simulator and tests only, never a live chain. Signing is Stage 1's `signDigest` (RFC 6979, low `s`,
  * `v ∈ {27, 28}`), checked against the key's address before it is returned.
  *
- * `attest` is how the harness signs a message: it refuses a domain off the signing allow-list or on a mainnet (local ids
- * allowed: the simulator's) before it builds and signs the digest (S4 D6, every signer refuses mainnet).
+ * `attest` is how the harness signs a message: it refuses any domain but the simulator's local ids (Solana localnet 104,
+ * EVM 31337) before it builds and signs the digest: a mainnet (S4 D6, every signer refuses mainnet) and a testnet too,
+ * since a published test key never signs for a live network.
  */
 export class SimSigner implements DigestSigner {
   readonly address: string;
@@ -69,11 +70,11 @@ export class SimSigner implements DigestSigner {
   }
 
   /**
-   * Builds Stage 1's message of `kind` over `fields` for `domain` and `seriesKey`, and signs its digest. Refuses a
-   * domain off the allow-list or on a mainnet first (`assertSigningNetwork`, local ids allowed).
+   * Builds Stage 1's message of `kind` over `fields` for `domain` and `seriesKey`, and signs its digest. Refuses any
+   * domain but a local id first (`assertLocalSigningNetwork`: a mainnet, a testnet, a forged domain).
    */
   async attest<K extends SigningKind>(kind: K, domain: SigningDomain, seriesKey: string, fields: SigningFields[K]): Promise<Attestation & { digest: string }> {
-    assertSigningNetwork(domain, { allowLocal: true });
+    assertLocalSigningNetwork(domain);
     const { digest } = signingDigest(kind, { domain: domain.domain, seriesKey }, fields);
     return { signer: this.address, signature: await this.signDigest(digest), digest };
   }

@@ -981,8 +981,9 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    address registered as a verifier key (`registerVerifierKey`, `revokeVerifierKey`, `rotateVerifierKey`: the attestor
    keys' registry, grace and last-key rule, A-SIG-4) and pinned in the verifier (`REPORT_VERIFIER_ADDRESS`). The
    verifier signs `MERCES_REPORT_V1` (tier 2) over the domain of the series' chain from its own table
-   (`MERCES_VERIFIER_CHAINS`, allow-listed, never mainnet; in development each simulator's `ChainInfo.signing`) and the
-   series key, and returns a `ReportAttestationRecord`; `submitReport.attestation` is `{signer, signature}`, which the
+   (`MERCES_VERIFIER_CHAINS`, allow-listed, never mainnet; in development each simulator's `ChainInfo.signing`, and the
+   standalone verifier's `MERCES_VERIFIER_DEV=true` with its dev seed only over local ids: any other chain, a testnet
+   included, stops it at boot, A-REV-9) and the series key, and returns a `ReportAttestationRecord`; `submitReport.attestation` is `{signer, signature}`, which the
    simulated chains recover as both chains do (InvalidVerifierSignature for a malformed signature, another signer or a
    key not usable for the period) and the API checks the same way before it builds. Priors are accepted from the
    current address or a previous one only for quarters that ended by its retirement (amendment D10). Our scenarios
