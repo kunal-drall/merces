@@ -10,3 +10,5 @@ if (!existsSync('stage1/packages/reference/package.json')) {
   process.exit(1);
 }
 execFileSync('pnpm', ['-r', '--filter', '@merces/reference...', 'run', 'build'], { stdio: 'inherit' });
+// The live adapters import the pinned clients statically. Generate them before typecheck/server startup on a fresh clone.
+execFileSync('pnpm', ['exec', 'tsx', 'scripts/generate-stage1-clients.ts'], { stdio: 'inherit' });

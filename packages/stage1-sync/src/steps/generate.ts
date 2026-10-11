@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Stage1Location } from '@merces/chains';
-import { stage1Path } from '@merces/chains';
+// Bootstrap must not import the chains barrel: live adapters consume the clients generated here.
+import { stage1Path, type Stage1Location } from '../../../chains/src/manifest.ts';
 import type { StepReport } from '../report.ts';
 
 export interface StepCtx {
