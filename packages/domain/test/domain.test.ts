@@ -23,6 +23,9 @@ import * as domainModule from '../src/index.ts';
  *    (S4 WP10; was a user command `{until}` sent by the attestor); `PauseRequested` carries the nonce, `PauseApproved` the
  *    start;
  *  - S4-WD: `withdrawPauseRequest` (Stage 1 `withdraw_pause_request`) is a user command; `PauseRequestWithdrawn{nonce}`.
+ *  - S4-AMD: `amendTerms` is Stage 1's `amend_terms(termsCommitment, capMultipleWad, attestor, signature)`, still the
+ *    issuer's user command (S4 WP11; was `{attestor}` with the attestor co-signing); `TermsAmended` carries the signed
+ *    nonce and a 20-byte attestor key.
  *
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
@@ -242,6 +245,25 @@ describe('hashing', () => {
     expect(() => parseDomainEvent({ ...env, type: 'PauseApproved', payload: { seriesId: sid, attestor: 'w', start: 1, until: 5 } })).toThrow();
     expect(parseDomainEvent({ ...env, type: 'PauseRequestWithdrawn', payload: { seriesId: sid, nonce: '4' } }).payload).toEqual({ seriesId: sid, nonce: '4' });
     for (const t of ['PauseRequested', 'PauseApproved', 'PauseRequestWithdrawn'] as const) expect(amountBearingEvents.has(t as never)).toBe(false);
+  });
+  it('an amendment is the issuer\'s Stage 1 amend_terms with an attestor key\'s signature; TermsAmended carries the signed nonce (cause S4-AMD)', () => {
+    const sid = 'solana:abc';
+    const amend = { kind: 'amendTerms', seriesId: sid, termsCommitment: '0x' + '22'.repeat(32), capMultipleWad: '2400000000000000000', attestor: '0x' + 'ab'.repeat(20), signature: '0x' + '11'.repeat(65) };
+    expect(userCommandSchema.parse(amend)).toEqual(amend);
+    expect(() => permissionlessCommandSchema.parse(amend)).toThrow();
+    // the cap is a decimal string, so one above u64 parses (the chain refuses it AmountOutOfRange, before the signature)
+    expect(userCommandSchema.parse({ ...amend, capMultipleWad: (1n << 64n).toString() })).toMatchObject({ capMultipleWad: '18446744073709551616' });
+    const { signature: _s, ...unsigned } = amend;
+    for (const bad of [unsigned, { ...amend, signature: 'sim:x' }, { ...amend, signature: '0x' + '11'.repeat(64) }, { ...amend, attestor: 'w' }, { ...amend, attestor: '0x' + 'AB'.repeat(20) }, { ...amend, capMultipleWad: 2 }]) {
+      expect(() => userCommandSchema.parse(bad), JSON.stringify(bad)).toThrow();
+    }
+    const env = { chain: 'solana', cursor: '1', seq: 1, blockTime: 1, blockRef: '1', txId: 't', finality: 'finalized' as const };
+    const payload = { seriesId: sid, termsCommitment: amend.termsCommitment, previousCommitment: '0x' + '33'.repeat(32), capMultipleWad: amend.capMultipleWad, attestor: amend.attestor, nonce: '0' };
+    expect(parseDomainEvent({ ...env, type: 'TermsAmended', payload }).payload).toEqual(payload);
+    const { nonce: _n, ...noNonce } = payload;
+    expect(() => parseDomainEvent({ ...env, type: 'TermsAmended', payload: noNonce })).toThrow();
+    expect(() => parseDomainEvent({ ...env, type: 'TermsAmended', payload: { ...payload, attestor: 'w' } })).toThrow();
+    expect(amountBearingEvents.has('TermsAmended' as never)).toBe(false);
   });
   it('mock proofs are a digest over the six public inputs only', () => {
     const pub = ['1', '2', '3', '4', '5', '6'];

@@ -265,7 +265,14 @@ export const eventPayloads = {
   PauseEnded: z.object({ ...seriesScoped, pausedSeconds: z.number().int() }),
   StatusChanged: z.object({ ...seriesScoped, from: lifecycleStatusSchema, to: lifecycleStatusSchema }),
   FormalNoticeDue: z.object({ ...seriesScoped, periodId: periodIdSchema }),
-  TermsAmended: z.object({ ...seriesScoped, termsCommitment: hash32Schema, previousCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: addressSchema }),
+  /**
+   * Stage 1's `TermsAmended{series, nonce, new_terms_commitment, new_cap_multiple_wad, attestor}` (merces_registry
+   * lib.rs:820-830; MercesRegistry.sol:660): the new terms commitment (with ours, the one it replaced), the new cap
+   * multiple, the attestor key whose AMEND signature approved it and `nonce`, the amendment nonce that signature bound (the
+   * value before the increment, as both chains emit it; Stage 1's reference prints the value after it, SIM:863-864, which
+   * lockstep never compares: S4 amendment fix 7), a u64 decimal string.
+   */
+  TermsAmended: z.object({ ...seriesScoped, termsCommitment: hash32Schema, previousCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: signerAddressSchema, nonce: z.string().regex(/^\d+$/) }),
   SeriesExtinguished: z.object({ ...seriesScoped, attestors: z.array(addressSchema).length(2), returnedToHolders: moneySchema }),
   RateSnapshot: z.object({ pair: pairSchema, rateWad: wadSchema, confWad: wadSchema, publishTime: z.number().int(), dayIndex: z.number().int(), sumWad: wadSchema, count: z.number().int() }),
   FxFallbackFlagged: z.object({ pair: pairSchema, periodId: periodIdSchema, reason: z.enum(['coverage', 'deviation']) }),

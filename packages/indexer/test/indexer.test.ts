@@ -10,8 +10,12 @@ import { Indexer, project } from '../src/index.ts';
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes;
  *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address on both
- *    personalities (transitionally a co-signing wallet at the key's address).
+ *    personalities (transitionally a co-signing wallet at the key's address);
+ *  - S4-AMD: the issuer's amendTerms carries the attestor key's AMEND signature over the live nonce (`h.amendment`; S4
+ *    WP11; was the attestor co-signing), and `TermsAmended` carries that nonce.
  * S4 cause codes on new checks:
+ *  - S4-AMD: an indexed `TermsAmended` sends the series' amendments signed over the nonce it consumed (or an older one)
+ *    back to awaiting an attestor (S4 WP11, migration 028);
  *  - S4-REG: Stage 1's key registry (S4 WP5, migration 023): `AttestorRegistered` and `AttestorRevoked` with their times,
  *    guarded by `updated_seq`; not in the public feed;
  *  - S4-T2: the report verifier's keys likewise (S4 WP6, migration 024): `VerifierKeyRegistered` and `VerifierKeyRevoked`
@@ -354,12 +358,47 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     // m × P0 / 1e18 = 21,600,000.500000004: Stage 1 floors to 21,600,000; a numeric(38,0) division rounds it up to 21,600,001
     const m = 2_400_000_055_555_555_556n;
     expect(a.clearingPrice).toBe(USDC(9));
-    await h.exec(h.issuer, { kind: 'amendTerms', seriesId: a.seriesId, termsCommitment: a.terms.termsCommitment, capMultipleWad: m.toString(), attestor: h.attestors[0]!.address }, [h.attestors[0]!]);
+    await h.exec(h.issuer, await h.amendment(a.seriesId, { termsCommitment: a.terms.termsCommitment, capMultipleWad: m })); // cause S4-AMD
     await idx.catchUp();
     expect((await h.sim.getSeries(a.seriesId))!.capPerUnit).toBe('21600000');
     expect(await cap()).toEqual({ cap_multiple_wad: m.toString(), cap_per_unit: '21600000' });
+    // cause S4-AMD: the indexed TermsAmended carries the signing key and the nonce it signed (before the increment)
+    const ev = (await t.pool.query("select payload from events where series_id = $1 and type = 'TermsAmended'", [a.seriesId])).rows[0].payload;
+    expect(ev).toMatchObject({ attestor: h.attestors[0]!.address, nonce: '0', capMultipleWad: m.toString() });
     const sql = (await t.pool.query('select ($1::numeric * $2::numeric / 1000000000000000000)::numeric(38,0)::text as v', [m.toString(), USDC(9).toString()])).rows[0].v;
     expect(sql).toBe('21600001'); // what the old SQL projection stored
+  });
+
+  // cause S4-AMD (S4 WP11): a TermsAmended consumes the amendment nonce it carries, so an amendment of the series attested
+  // or built over that nonce or an older one is dead onchain and goes back to awaiting an attestor (stale-nonce); one
+  // signed over a newer nonce, and one that landed, keep their record
+  it('sends amendments signed over a consumed amendment nonce back to an attestor, never one that landed or one signed over a newer nonce', async () => {
+    const h = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ personality: 'monad', chainKey: 'amend-stale', genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
+    const a = await h.runRaise();
+    await idx.catchUp();
+    const c = (n: number) => '0x' + n.toString(16).padStart(64, '0');
+    const SIG = '0x' + '11'.repeat(65);
+    const seed = (id: string, state: string, nonce: string, commitment: string) =>
+      t.pool.query("insert into terms_amendments (amendment_id, series_id, draft_id, kind, new_commitment, new_cap_multiple_wad, ciphertext, version, state, attestor, amendment_nonce, digest, attestor_signature, rationale_code) values ($1, $2, 'd', 'inflation-index', $3, 2500000000000000000, 'c', 2, $4, $5, $6, $7, $8, 'r')",
+        [id, a.seriesId, commitment, state, h.attestors[0]!.address, nonce, c(99), SIG]);
+    const state = async (id: string) => (await t.pool.query('select state, attestor, amendment_nonce::text as nonce, attestor_signature, decision_code from terms_amendments where amendment_id = $1', [id])).rows[0];
+    await seed('ix-landed', 'submitted', '0', c(1));
+    await seed('ix-dead', 'attested', '0', c(2));
+    await seed('ix-newer', 'attested', '1', c(3));
+    await h.exec(h.issuer, await h.amendment(a.seriesId, { termsCommitment: c(1), capMultipleWad: a.terms.capMultipleWad }));
+    await idx.catchUp();
+    expect(await state('ix-dead')).toEqual({ state: 'proposed', attestor: null, nonce: null, attestor_signature: null, decision_code: 'stale-nonce' });
+    expect(await state('ix-landed')).toMatchObject({ state: 'submitted', nonce: '0', attestor_signature: SIG });
+    expect(await state('ix-newer')).toMatchObject({ state: 'attested', nonce: '1', attestor_signature: SIG });
+    // the next amendment (nonce 1) lands with another commitment: the one signed over nonce 1 is dead now; the one that
+    // landed before (its commitment in an indexed TermsAmended) still keeps its record
+    await h.exec(h.issuer, await h.amendment(a.seriesId, { termsCommitment: c(4), capMultipleWad: a.terms.capMultipleWad }));
+    await idx.catchUp();
+    expect(await state('ix-newer')).toMatchObject({ state: 'proposed', attestor_signature: null, decision_code: 'stale-nonce' });
+    expect(await state('ix-landed')).toMatchObject({ state: 'submitted', nonce: '0' });
+    // nothing about an amendment in the public feed beyond its summary
+    expect((await t.pool.query("select summary from activity where series_id = $1 and kind = 'TermsAmended'", [a.seriesId])).rows.map((r) => r.summary)).toEqual(['Terms amended (issuer-favourable)', 'Terms amended (issuer-favourable)']);
   });
 
   // S1 review: a curve's issue price and its cap per unit must be projected (the statement's C_remaining, the holdings'
@@ -398,7 +437,7 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     // m × P0 / 1e18 just past 2·P0 + ½, where rounding (a SQL numeric cast) would store one more than the chain
     const p0 = BigInt(chain.issuePrice!);
     const m = 2n * WAD + (WAD / 2n + p0 - 1n) / p0;
-    await h.exec(h.issuer, { kind: 'amendTerms', seriesId, termsCommitment: terms.termsCommitment, capMultipleWad: m.toString(), attestor: h.attestors[0]!.address }, [h.attestors[0]!]);
+    await h.exec(h.issuer, await h.amendment(seriesId, { termsCommitment: terms.termsCommitment, capMultipleWad: m })); // cause S4-AMD
     await idx.catchUp();
     const amended = (await h.sim.getSeries(seriesId))!.capPerUnit;
     expect(amended).toBe((2n * p0).toString());

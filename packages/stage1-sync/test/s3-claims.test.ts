@@ -35,7 +35,8 @@ import {
  *
  * S4 cause codes: S4-BID (S4 WP2: `commit_bid` runs directly with Stage 1's keccak commitment; SH-AUC-2 retired); S4-SH
  * (S4 WP5: `register_attestor` and `revoke_attestor` run directly; SH-REG-2 retired); S4-REG (S4 WP5: the scenario
- * runner loads every set by default, S3's and S4's; these tests name the S3 set).
+ * runner loads every set by default, S3's and S4's; these tests name the S3 set); S4-AMD (S4 WP11: `amend_terms` runs
+ * directly with the named key's AMEND signature; SH-AMD-1 retired).
  */
 const VECTORS = fileURLToPath(new URL('../../../stage1/packages/vectors', import.meta.url));
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
@@ -176,7 +177,8 @@ describe('S3 claim scenarios: replay', () => {
       // cause S4-BID: SH-AUC-2 is no longer allowed (retired in S4 WP2)
       // cause S4-SH: SH-REG-2 is no longer allowed (retired in S4 WP5)
       // cause S4-SH: SH-REG-3 is gone (the verifier keys run directly since S4 WP6)
-      for (const id of Object.keys(run.shims)) expect(['SH-REG-1', 'SH-REG-4', 'SH-REP-1', 'SH-PAY-1', 'SH-RED-1', 'SH-EXT-1', 'SH-AMD-1', ...windows], `${run.vector} ${id}`).toContain(id);
+      // cause S4-AMD: SH-AMD-1 is gone (amend_terms runs directly since S4 WP11)
+      for (const id of Object.keys(run.shims)) expect(['SH-REG-1', 'SH-REG-4', 'SH-REP-1', 'SH-PAY-1', 'SH-RED-1', 'SH-EXT-1', ...windows], `${run.vector} ${id}`).toContain(id);
       if (run.id === 'S3l') expect(Object.keys(run.shims).filter((id) => id.startsWith('SH-WIN-')).sort()).toEqual(windows);
     }
     expect(r.report.ok).toBe(true);

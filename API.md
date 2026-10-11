@@ -79,7 +79,12 @@ report was assembled → hardship (`POST /series/{id}/hardship`, then send its `
 approves it, relayed by the keeper; `POST /series/{id}/hardship/build-withdraw` builds Stage 1's `withdrawPauseRequest`
 for a pending onchain request, which advances the pause nonce so a signature collected for it is dead, and the request
 reads `withdrawn` once indexed; 409 PauseNotRequested when none is pending) or redemption (`GET
-/series/{id}/redemption/quote`, `POST …/redemption/build-redeem`).
+/series/{id}/redemption/quote`, `POST …/redemption/build-redeem`). Yearly, an indexed series' inflation amendment (`POST
+/series/{id}/amendments/inflation`) → an attestor key signs Stage 1's AMEND message for it (below) → `POST
+/amendments/{amendmentId}/build` (S4 WP11: `amendTerms` carrying the attestor key's signature; you sign it alone, nobody
+co-signs; 409 `stale-nonce` or `attestor-key-inactive` when the signature died since, another amendment having landed
+or the key revoked, and the amendment awaits an attestor again; 409 `already-amended` once it landed) → `POST /tx/send`
+→ `POST /amendments/{amendmentId}/apply` (the vault rotates to the new terms).
 
 **Backer**: apply → `GET /arena`, `GET /series/{id}`, `GET /series/{id}/terms` (eligible backers only, logged) →
 `POST /series/{id}/bids/precheck` → compute the commitment client-side (or `POST …/bids/commitment`): Stage 1's
@@ -237,7 +242,7 @@ settling, and settled series.
 
 **Attestor**: link a key (above) and have the admin propose it → `GET /attestor/queue` (work addressed to your keys on
 the chains where they are registered) → hardship decisions, tier-3 case sign-off, fallback FX rates, amendment
-attestations (`{attestor, approve}`, naming your key), extinguishment transactions (two signers). Since S4 WP9 a tier-3
+attestations (Stage 1's AMEND signature by your key, S4 WP11; below), extinguishment transactions (two signers). Since S4 WP9 a tier-3
 case and an FX fallback rate are Stage 1's own signatures by your key, made on your device from a signing request
 (`SigningRequest`: the kind, chain, series, series key, domain, the addressed key, the typed fields, the pre-image, the
 digest and what keeps it valid; no display text): `GET /attestor/tier3/{caseId}/message?priorIncomeCommitment&
@@ -260,9 +265,17 @@ signed nonce and recovers the signer: 422 InvalidAttestorSignature unless it is 
 then reads the nonce again: 409 `stale-nonce` with `detail.request`, the fresh signing request, when the issuer requested
 again or withdrew; then the keeper relays Stage 1's permissionless `approvePause` and the decision returns `relayTx`: you
 send nothing. A chain refusal at the relay comes back with its Stage 1 name and leaves the request pending); a rejection
-is `{approve: false, decisionCode}`, no signature. amendTerms and extinguish are still co-signed at the key's address
-until S4 WP11-WP13 (`POST /tx/send` accepts a signer that is a key linked to your account); from then on each is Stage
-1's own signature by the key.
+is `{approve: false, decisionCode}`, no signature. `GET /attestor/amendments/{amendmentId}/message?attestor` (S4 WP11:
+`MERCES_AMEND_V1` over the series' live amendment nonce, the new terms commitment and the new cap, for your key; only for
+a proposed amendment that is issuer-favourable on the private terms, 422, and that the chain would take now: 409
+AmendmentAfterTerminal, 422 UnfavourableAmendment for a cap above the live one) → `merces-attestor sign` → `POST
+/attestor/amendments/{amendmentId}/attest {approve: true, amendmentNonce, attestation: {signer, signature, digest}}`
+(the API rebuilds the message with the signed nonce and recovers the signer: 422 InvalidAttestorSignature unless it is
+your key, active on the chain; then reads the nonce again: 409 `stale-nonce` with `detail.request` when another
+amendment landed). The amendment then records your key, the nonce, the digest and the signature, which the issuer's
+`amendTerms` carries; a rejection is `{approve: false, attestor, decisionCode}`. extinguish is still co-signed at the
+key's address until S4 WP12-WP13 (`POST /tx/send` accepts a signer that is a key linked to your account); from then on
+it is Stage 1's own signatures by the keys.
 
 **Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
 (`GET /admin/attestors`, with each key's registration and revocation times and its grace end) and the attestor key

@@ -1,14 +1,15 @@
 import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import {
-  E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, SigningError, expectedPrior, fxDigest, hex32ToField, keyUsable, noPauseApprovable, parseE2eEnvelope, pauseApprovalRefusal, pauseDigest, readsAsText,
-  recoverSigner, reportDigest, reportProofSchema, signingRequest, type ChainPort, type PauseApprovalRule, type SeriesState, type SigningDomain, type SigningFields, type SigningKind, type SigningRequest, type UnsignedTx,
+  E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, expectedPrior, fxDigest, hex32ToField, keyUsable, noPauseApprovable, parseE2eEnvelope, pauseApprovalRefusal, pauseDigest, readsAsText,
+  recoverSigner, reportDigest, reportProofSchema, type ChainPort, type PauseApprovalRule, type SeriesState, type SigningRequest, type UnsignedTx,
 } from '@merces/domain';
 import { U64_MAX, parsePeriod, periodFrom, toPid } from '@merces/math';
 import { withTransaction } from '@merces/db';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 import { curveRegularReport, reportUnits, requireCensusFor, requireCensusUnchanged } from '../curve-census.ts';
+import { invalidAttestorSignature, requestFor, signingDomainOf } from '../signing-requests.ts';
 
 /**
  * E10 — attestor service (R10, R16, R26, C8.5–6, C11.6).
@@ -118,31 +119,6 @@ export const extinguishSchema = z.object({ seriesId: z.string().regex(/^[a-z0-9-
  */
 function pauseRefusal(rule: PauseApprovalRule): AppError {
   return new AppError(rule === 'AlreadyPaused' ? 409 : 422, rule === 'AlreadyPaused' ? 'Conflict' : 'Unprocessable', PAUSE_APPROVAL_MESSAGE[rule], { stage1: rule });
-}
-
-/** The chain's signing domain, or 409 `signing-domain-unknown` (a live adapter before S5 cannot read it yet). */
-async function signingDomainOf(chain: ChainPort): Promise<SigningDomain> {
-  const signing = (await chain.info()).signing;
-  if (!signing) throw new AppError(409, 'Conflict', `the signing domain of chain ${chain.chain} is not known yet: nothing can be signed for it`, { reason: 'signing-domain-unknown' });
-  return signing;
-}
-
-/**
- * A signing request for the attestor's device (S4 D2), from the chain's own domain and series key. The domain is
- * allow-listed and never mainnet (`signingRequest` refuses it: 409 `signing-network-refused`, value-free).
- */
-function requestFor<K extends SigningKind>(input: { kind: K; chain: string; seriesId: string; seriesKey: string; domain: SigningDomain; signer: string; fields: SigningFields[K] }): SigningRequest<K> {
-  try {
-    return signingRequest(input);
-  } catch (e) {
-    if (e instanceof SigningError) throw new AppError(409, 'Conflict', `no signing request can be issued for this chain: ${e.message}`, { reason: 'signing-network-refused', code: e.code });
-    throw e;
-  }
-}
-
-/** A refusal of a signature the chain would refuse: 422 with Stage 1's error name (value-free). */
-function invalidAttestorSignature(message: string, detail: Record<string, unknown> = {}): AppError {
-  return AppError.unprocessable(message, { stage1: 'InvalidAttestorSignature', ...detail });
 }
 
 /** Days the issuer has to settle an annual underpayment (C8: "true up within 60 days"). No accrual (A-C8-3). */

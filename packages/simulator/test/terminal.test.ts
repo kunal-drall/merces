@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { orderCommitment, termsCommitment } from '@merces/domain';
+import { ChainError, KEY_GRACE_SECONDS, orderCommitment, termsCommitment, type UserCommand } from '@merces/domain';
 import { WAD, parsePeriod, wadFromDecimal } from '@merces/math';
-import { SimHarness, defaultTerms } from '../src/index.ts';
+import { SimHarness, SimSigner, defaultTerms, personalitySigning, serialiseState } from '../src/index.ts';
 import { GENESIS, USDC, expectStage1Error, types } from './helpers.ts';
 import { seriesOf } from './kit.ts';
 
@@ -12,7 +12,11 @@ import { seriesOf } from './kit.ts';
  *  - S4-CTX: the series read carries Stage 1's signing nonces as `nonces {pause, amendment, extinguish, trueup}`, u64
  *    decimal strings (S4 D7; were `amendmentNonce` / `extinguishNonce` numbers);
  *  - S4-REG: Stage 1's key registry: `registerAttestor{attestor}` and `revokeAttestor{attestor}` (forward-only, with the
- *    45-day grace and the last-key rule; S4 WP5; was `registerAttestor{attestor, active}`).
+ *    45-day grace and the last-key rule; S4 WP5; was `registerAttestor{attestor, active}`);
+ *  - S4-AMD: `amendTerms` is Stage 1's `amend_terms`: the issuer sends it carrying an attestor key's AMEND signature over
+ *    the domain, the series key, the live amendment nonce, the new commitment and the new cap (`h.amendment`; S4 WP11,
+ *    D8), in the EVM's order (NotIssuer, AmendmentAfterTerminal, the cap a u64, the signature, UnfavourableAmendment);
+ *    `TermsAmended` carries the nonce that was signed. Was the attestor co-signing the issuer's transaction.
  */
 
 /**
@@ -54,14 +58,18 @@ describe('amendments and extinguishment', () => {
     const { h, seriesId, terms, privateTerms } = await settled();
     const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
     const newCommitment = termsCommitment({ ...privateTerms, theta: privateTerms.theta * 103n / 100n });
-    const amend = (cap: string, signer = h.issuer, coSigners = [a1]) => h.exec(signer, { kind: 'amendTerms', seriesId, termsCommitment: newCommitment, capMultipleWad: wadFromDecimal(cap).toString(), attestor: a1.address }, coSigners);
+    // cause S4-AMD: the issuer's amendTerms carries a1's AMEND signature over the live nonce (was a1 co-signing)
+    const amend = async (cap: string, signer = h.issuer) => h.exec(signer, await h.amendment(seriesId, { termsCommitment: newCommitment, capMultipleWad: wadFromDecimal(cap) }, a1));
     // Stage 1 order: the issuer, then the terminal check, then the attestor, then the cap (E; the attestor came first)
     await expectStage1Error(amend('2.4', h.backers[0]!), 'NotIssuer');
-    await expectStage1Error(amend('2.4', h.issuer, []), 'InvalidAttestorSignature'); // E: was Unauthorized
+    // E: was Unauthorized; cause S4-AMD: a signature that recovers to nobody (was: no co-signer)
+    await expectStage1Error(h.exec(h.issuer, { ...(await h.amendment(seriesId, { termsCommitment: newCommitment, capMultipleWad: wadFromDecimal('2.4') }, a1)), signature: '0x' + '00'.repeat(65) }), 'InvalidAttestorSignature');
     await expectStage1Error(amend('2.6'), 'UnfavourableAmendment'); // E: was InvalidTerms
     await expectStage1Error(amend('1.9'), 'UnfavourableAmendment'); // below Stage 1's bound 2·WAD
     const ok = await amend('2.4');
     expect(types(ok.events)).toEqual(['TermsAmended']);
+    // cause S4-AMD: the event names the key that signed and the nonce it signed (0, before the increment, as both chains)
+    expect(ok.events[0]!.payload).toEqual({ seriesId, termsCommitment: newCommitment, previousCommitment: terms.termsCommitment, capMultipleWad: wadFromDecimal('2.4').toString(), attestor: a1.address, nonce: '0' });
     const s = (await h.sim.getSeries(seriesId))!;
     expect(s.terms.termsCommitment).toBe(newCommitment);
     expect(s.capPerUnit).toBe((USDC(9) * 24n / 10n).toString());
@@ -238,5 +246,115 @@ describe('amendments and extinguishment', () => {
     }
     expect((await h.sim.getSeries(seriesId))!.unitsOutstanding).toBe('0');
     expect(seriesOf(h.sim, seriesId).vaultBalance).toBe(0n);
+  });
+});
+
+/** The transaction is refused with Stage 1 error `name`, leaving the chain's state and event log as they were. */
+async function refused(h: SimHarness, tx: Promise<unknown>, name: string, message?: RegExp): Promise<void> {
+  const before = serialiseState(h.sim.state);
+  const events = h.sim.engine.events.length;
+  const e = await tx.then(() => null, (x: unknown) => x);
+  expect(e, `expected ${name}`).toBeInstanceOf(ChainError);
+  expect((e as ChainError).detail?.stage1, (e as ChainError).message).toBe(name);
+  if (message) expect((e as ChainError).message).toMatch(message);
+  expect(serialiseState(h.sim.state)).toBe(before);
+  expect(h.sim.engine.events.length).toBe(events);
+}
+
+type Amend = Extract<UserCommand, { kind: 'amendTerms' }>;
+const ZERO_SIG = '0x' + '00'.repeat(65);
+
+// cause S4-AMD (S4 WP11, D8): the AMEND signature binds the domain, the series key, the live amendment nonce, the new
+// commitment and the new cap; the issuer sends it. Each refusal leaves the state and the event log as they were.
+describe('signed amendments (Stage 1 amend_terms)', () => {
+  it('the issuer sends the attestor key\'s AMEND signature: the cap a u64 first, then the signature over the live nonce, then the cap\'s bounds', async () => {
+    for (const personality of ['solana', 'monad'] as const) {
+      const h = await SimHarness.create(personality, { genesis: GENESIS });
+      const { seriesId, terms, privateTerms } = await h.runRaise();
+      const other = (await h.runRaise()).seriesId;
+      const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
+      const commitment = termsCommitment({ ...privateTerms, theta: privateTerms.theta * 103n / 100n });
+      const cap = wadFromDecimal('2.4');
+      const f = { termsCommitment: commitment, capMultipleWad: cap };
+      const good = await h.amendment(seriesId, f);
+      const series = (await h.sim.getSeries(seriesId))!;
+      expect(series.nonces.amendment).toBe('0');
+      // the issuer check and the terminal check come before the signature is read
+      await refused(h, h.exec(h.backers[0]!, { ...good, signature: ZERO_SIG }), 'NotIssuer');
+      // a cap above u64 is AmountOutOfRange before any recovery (the EVM's toU64 first; no AMEND message encodes it): with a
+      // placeholder signature, and with a valid signature for another cap
+      await refused(h, h.exec(h.issuer, { ...good, capMultipleWad: (1n << 64n).toString(), signature: ZERO_SIG }), 'AmountOutOfRange');
+      await refused(h, h.exec(h.issuer, { ...good, capMultipleWad: (1n << 64n).toString() }), 'AmountOutOfRange');
+      // the signature binds the cap and the commitment
+      await refused(h, h.exec(h.issuer, { ...good, capMultipleWad: wadFromDecimal('2.3').toString() }), 'InvalidAttestorSignature', /does not recover/);
+      await refused(h, h.exec(h.issuer, { ...good, termsCommitment: terms.termsCommitment }), 'InvalidAttestorSignature', /does not recover/);
+      // another series' signature (the same issuer's other series, also at nonce 0): no replay across series
+      await refused(h, h.exec(h.issuer, { ...(await h.amendment(other, f)), seriesId }), 'InvalidAttestorSignature', /does not recover/);
+      // another chain's domain (the other personality's simulator)
+      const foreign = personalitySigning(personality === 'solana' ? 'monad' : 'solana', personality === 'solana' ? 'monad' : 'solana');
+      const elsewhere = await a1.attest('AMEND', foreign, series.seriesKey, { amendmentNonce: series.nonces.amendment, termsCommitment: commitment, capMultipleWad: cap.toString() });
+      await refused(h, h.exec(h.issuer, { ...good, signature: elsewhere.signature }), 'InvalidAttestorSignature', /does not recover/);
+      // another nonce (a signature made for an amendment nonce that is not the live one)
+      await refused(h, h.exec(h.issuer, await h.amendment(seriesId, f, a1, { amendmentNonce: '1' })), 'InvalidAttestorSignature', /does not recover/);
+      // the named attestor must be the signer; the report verifier's key is no attestor (14#52); an unregistered key; a
+      // non-canonical (high-s) signature
+      await refused(h, h.exec(h.issuer, { ...good, attestor: a2.address }), 'InvalidAttestorSignature', /does not recover/);
+      await refused(h, h.exec(h.issuer, await h.amendment(seriesId, f, h.verifier)), 'InvalidAttestorSignature', /not a usable attestor key/);
+      await refused(h, h.exec(h.issuer, await h.amendment(seriesId, f, SimSigner.attestor('never-registered'))), 'InvalidAttestorSignature', /not a usable attestor key/);
+      const n = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
+      const sHigh = (n - BigInt('0x' + good.signature.slice(66, 130))).toString(16).padStart(64, '0');
+      const flipV = good.signature.slice(130) === '1b' ? '1c' : '1b';
+      await refused(h, h.exec(h.issuer, { ...good, signature: good.signature.slice(0, 66) + sHigh + flipV }), 'InvalidAttestorSignature', /does not recover/);
+      // the signature is read before the cap's bounds: an unfavourable cap with a bad signature is InvalidAttestorSignature,
+      // with the key's signature over it UnfavourableAmendment
+      const up = { termsCommitment: commitment, capMultipleWad: wadFromDecimal('2.6') };
+      await refused(h, h.exec(h.issuer, { ...(await h.amendment(seriesId, up)), signature: ZERO_SIG }), 'InvalidAttestorSignature');
+      await refused(h, h.exec(h.issuer, await h.amendment(seriesId, up)), 'UnfavourableAmendment');
+      // the schema takes a 65-byte hex signature and a lowercase 20-byte attestor key (a wallet of another form is no key)
+      for (const bad of [{ ...good, signature: 'sim:' + a1.address }, { ...good, signature: undefined }, { ...good, attestor: h.backers[0]!.address }, { ...good, attestor: a1.address.toUpperCase().replace('0X', '0x') }]) {
+        await expect(h.exec(h.issuer, bad as unknown as Amend)).rejects.toThrow();
+      }
+      // the issuer sends it alone (nobody co-signs); the event carries the key and the nonce it signed (0)
+      const ok = await h.exec(h.issuer, good);
+      expect(ok.events.map((e) => [e.type, e.payload])).toEqual([['TermsAmended', { seriesId, termsCommitment: commitment, previousCommitment: terms.termsCommitment, capMultipleWad: cap.toString(), attestor: a1.address, nonce: '0' }]]);
+      expect((await h.sim.getSeries(seriesId))!.nonces).toEqual({ pause: '0', amendment: '1', extinguish: '0', trueup: '0' });
+      expect(seriesOf(h.sim, seriesId).amendments).toEqual([{ at: await h.sim.now(), termsCommitment: commitment, capMultipleWad: cap, attestor: a1.address }]);
+      expect(h.sim.stage1View(seriesId).ledger.amendmentNonce).toBe('1');
+      // a replay of the same signature is dead: the nonce moved
+      await refused(h, h.exec(h.issuer, good), 'InvalidAttestorSignature', /does not recover/);
+      // the other series' nonce is its own
+      expect((await h.sim.getSeries(other))!.nonces.amendment).toBe('0');
+    }
+  });
+
+  it('a second amendment advances the nonce: a signature collected before it is dead (stale nonce)', async () => {
+    const h = await SimHarness.create('solana', { genesis: GENESIS });
+    const { seriesId, privateTerms } = await h.runRaise();
+    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
+    const c1 = termsCommitment({ ...privateTerms, theta: privateTerms.theta * 103n / 100n });
+    const c2 = termsCommitment({ ...privateTerms, theta: privateTerms.theta * 106n / 100n });
+    // two signatures collected at nonce 0, by two keys, for two amendments
+    const first = await h.amendment(seriesId, { termsCommitment: c1, capMultipleWad: wadFromDecimal('2.4') }, a1);
+    const second = await h.amendment(seriesId, { termsCommitment: c2, capMultipleWad: wadFromDecimal('2.3') }, a2);
+    expect((await h.exec(h.issuer, first)).events[0]!.payload).toMatchObject({ attestor: a1.address, nonce: '0' });
+    // the second was signed over nonce 0; the live nonce is 1
+    await refused(h, h.exec(h.issuer, second), 'InvalidAttestorSignature', /does not recover/);
+    // signed again over the live nonce it lands, and its event carries nonce 1
+    const again = await h.amendment(seriesId, { termsCommitment: c2, capMultipleWad: wadFromDecimal('2.3') }, a2);
+    expect((await h.exec(h.issuer, again)).events[0]!.payload).toMatchObject({ termsCommitment: c2, previousCommitment: c1, attestor: a2.address, nonce: '1' });
+    expect((await h.sim.getSeries(seriesId))!.nonces.amendment).toBe('2');
+  });
+
+  it('a revoked attestor key cannot sign an amendment, inside the report grace or not: an AMEND needs an active key', async () => {
+    const h = await SimHarness.create('monad', { genesis: GENESIS });
+    const { seriesId, privateTerms } = await h.runRaise();
+    const f = { termsCommitment: termsCommitment({ ...privateTerms, theta: privateTerms.theta * 103n / 100n }), capMultipleWad: wadFromDecimal('2.4') };
+    const signed = await h.amendment(seriesId, f);
+    const now = await h.sim.now();
+    await h.exec(h.admin, { kind: 'revokeAttestor', attestor: h.attestors[0]!.address });
+    await h.sim.setTime(now + 1);
+    expect(now + 1).toBeLessThan(now + KEY_GRACE_SECONDS);
+    await refused(h, h.exec(h.issuer, signed), 'InvalidAttestorSignature', /not a usable attestor key/);
+    expect(types((await h.exec(h.issuer, await h.amendment(seriesId, f, h.attestors[1]!))).events)).toEqual(['TermsAmended']);
   });
 });

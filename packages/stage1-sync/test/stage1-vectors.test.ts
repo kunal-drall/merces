@@ -97,6 +97,8 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *  - S4-PAU / S4-WD: `approve_pause` runs directly, the named key's PAUSE signature over the live pause nonce sent by the
  *    keeper (S4 WP10; shim SH-PAU-2 retired), and `withdraw_pause_request` runs directly (no longer NOT-YET): 21 is a
  *    target, PASS in full (was gated at #40), and 08's gate moves from #33 to #57 (its next step #58 `end_pause`, S5).
+ *  - S4-AMD: `amend_terms` runs directly, the actor's `amendTerms` carrying the named key's AMEND signature over the
+ *    live amendment nonce (S4 WP11; shim SH-AMD-1 retired): 05#44, 11#45 and 14#51-#55 (14 replays to #61) count no shim.
  */
 afterAll(shutdown);
 
@@ -653,11 +655,11 @@ describe('stage1 vector runner: merces backend', () => {
     }
   }, 120_000);
 
-  it('lockstep counts the shims of passing reverts (11: amend_terms at #45 and redeem at #43 run only inside expect_revert)', async () => {
+  it('lockstep counts the shims of passing reverts (11: redeem at #43 runs only inside expect_revert; amend_terms at #45 is direct)', async () => {
     const r = (await runStage1Vectors({ dir: VECTORS, backend: 'lockstep', only: ['11'], personalities: ['solana'] })).runs[0]!;
     expect(r.issues).toEqual([]);
     expect(r.status).toBe('PASS');
-    expect(r.shims['SH-AMD-1']).toBe(1);
+    expect(r.shims['SH-AMD-1']).toBeUndefined(); // cause S4-AMD: was 1
     expect(r.shims['SH-RED-1']).toBe(1);
     expect(r.runnerAtomic).toEqual([]);
   }, 60_000);
@@ -1082,18 +1084,17 @@ describe('stage1 vector runner: merces backend', () => {
     expect(md).toContain('| 21_entry_rules | PASS 61/61 | PASS 61/61 | PASS |');
     expect(md).toContain('## Not replayed on the merces backend\n\n- 12_multi_series_router: NOT-YET (S5: income router)');
     // review finding "VECTOR_PARITY.md 'Used in' leaves out shims exercised by expect_revert steps": the calls of
-    // passing reverts went through their shims too (amend_terms at 05#44 and 11#45, redeem at 01#33, 05#43, 11#43)
-    for (const id of ['05', '11']) for (const r of report.runs.filter((x) => x.id === id)) expect(r.shims['SH-AMD-1'], `${id} ${r.world}`).toBe(1);
-    for (const r of report.runs.filter((x) => x.id === '01')) expect(r.shims['SH-RED-1'], r.world).toBe(1);
-    // cause S2-NY: 14's prefix amends its terms too (was: 05, 11)
-    expect(section).toMatch(/\| SH-AMD-1 \| `amend_terms` \|[^\n]*\| S4 \| 05, 11, 14 \|/);
+    // passing reverts went through their shims too (redeem at 01#33, 05#43, 11#43; cause S4-AMD: amend_terms at 05#44
+    // and 11#45 is direct since S4 WP11, was SH-AMD-1)
+    for (const id of ['01', '05', '11']) for (const r of report.runs.filter((x) => x.id === id)) expect(r.shims['SH-RED-1'], `${id} ${r.world}`).toBe(1);
     expect(section).toMatch(/\| SH-RED-1 \| `redeem` \|[^\n]*\| — \| 01, 05, 06, 09, 11, 23, 25 \|/);
     // cause S3-SH: the claim family runs directly; its rows (SH-CLM-1, SH-CLM-2, SH-CLM-3, SH-BRN-1) are gone and no run
     // went through them (was: SH-CLM-1 used in 01, 04, 05, 07, 17, 19 and 21 until WP3; SH-CLM-2 runner-atomic, used in
     // 09 and 23; SH-CLM-3 in 11; SH-BRN-1 in 05)
     // cause S4-SH: likewise SH-REG-2 (Stage 1's attestor registry runs directly since S4 WP5), SH-REG-3 (the verifier
-    // keys since S4 WP6) and SH-PAU-2 (approve_pause since S4 WP10)
-    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1', 'SH-REG-2', 'SH-REG-3', 'SH-PAU-2']) {
+    // keys since S4 WP6), SH-PAU-2 (approve_pause since S4 WP10) and SH-AMD-1 (amend_terms since S4 WP11; was used in
+    // 05, 11 and 14)
+    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1', 'SH-REG-2', 'SH-REG-3', 'SH-PAU-2', 'SH-AMD-1']) {
       expect(md, id).not.toContain(id);
       for (const r of report.runs) expect(r.shims[id], `${r.vector} ${r.world}`).toBeUndefined();
     }

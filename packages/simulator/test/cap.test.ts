@@ -9,6 +9,10 @@ import { GENESIS, USDC, expectStage1Error, types } from './helpers.ts';
  *  - S3-BR: `burnRetired{holder}`, one holder per call, replaces the S1 list burn crank (`holders[]`);
  *  - S3-Z: the zero-amount rule: a claim of nothing emits `PayoutClaimed` with zeros, a burn of nothing `UnitsBurned(0)`;
  *  - S3-BU: `PayoutClaimed.burnedUnits`.
+ *
+ * S4 cause codes:
+ *  - S4-AMD: the issuer's amendTerms carries the attestor key's AMEND signature over the live nonce (`h.amendment`; S4
+ *    WP11; was the attestor co-signing).
  */
 describe('cap, retirement and burn', () => {
   it('accepts only up to the cap, refunds the issuer, retires and burns on claim or crank', async () => {
@@ -58,7 +62,7 @@ describe('cap, retirement and burn', () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const { seriesId, terms, privateTerms } = await h.runRaise();
     // amend the cap multiple 2.5 → 2.0 (the floor): 18 per unit × 500 = 9,000 gross lifetime
-    await h.exec(h.issuer, { kind: 'amendTerms', seriesId, termsCommitment: terms.termsCommitment, capMultipleWad: wadFromDecimal('2.0').toString(), attestor: h.attestors[0]!.address }, [h.attestors[0]!]);
+    await h.exec(h.issuer, await h.amendment(seriesId, { termsCommitment: terms.termsCommitment, capMultipleWad: wadFromDecimal('2.0') })); // cause S4-AMD
     expect((await h.sim.getSeries(seriesId))!.capPerUnit).toBe(USDC(18).toString());
     expect(h.sim.stage1View(seriesId).ledger.capPerUnit).toBe(USDC(18).toString());
     await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);

@@ -1000,6 +1000,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/attestor/amendments/{amendmentId}/message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The signing request for the amendment's AMEND signature (S4 WP11): Stage 1's MERCES_AMEND_V1 over the chain's signing domain (ChainInfo.signing), the series key (SeriesState.seriesKey), the series' live amendment nonce (SeriesState.nonces.amendment), the new terms commitment and the new cap multiple, addressed to the key, only for a proposed amendment that is issuer-favourable on the private terms and that the chain would take now (not terminal; the cap a u64, not above the live cap, within [2, 3]). The attestor signs it on their own device with the Merces attestor tool, which rebuilds and checks it first; the API never signs. An admin may read it (public data only: the domain, the series key, the nonce, the commitment and the cap) but never decides. */
+        get: operations["amendmentSigningRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/attestor/amendments/{amendmentId}/attest": {
         parameters: {
             query?: never;
@@ -1009,6 +1026,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description Only the account holding an attestor key registered on the series' chain decides (an admin never does; A-M5-3). An approval carries the key's Stage 1 AMEND signature, made on the attestor's own device from GET /attestor/amendments/{amendmentId}/message (S4 WP11; was {attestor, approve} with the key co-signing the issuer's transaction). The API checks, in order: the amendment is proposed and the key (attestation.signer) acts for the caller; the new private terms are issuer-favourable (θ rises, r does not); the chain's own checks on the live series (not terminal; the cap a u64, not above the live cap and within [2, 3]); the signature over the AMEND message it rebuilds from the chain's reads with the signed nonce (a digest sent must equal it) recovers to the key, an active attestor key (no grace); the series' amendment nonce read again is still the one signed. The amendment then records the key, the nonce, the digest and the signature for the issuer's amendTerms; the signature appears in the issuer's built transaction only (never in a list, the feed, a notification or the audit log). A rejection needs no signature. */
         post: operations["attestAmendment"];
         delete?: never;
         options?: never;
@@ -1025,6 +1043,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description The issuer's amendTerms for an attested amendment (S4 WP11): Stage 1's amend_terms carrying the attestor key's AMEND signature as an argument; the issuer signs it alone (nobody co-signs). Built again while it is built and not yet landed. Before building it reads the chain: an amendment that already landed is 409 already-amended; a terminal series 409 AmendmentAfterTerminal; a series' amendment nonce that moved since the signature (another amendment landed) or a key no longer active makes the signature dead, and the amendment goes back to awaiting an attestor (state proposed, decisionCode stale-nonce or attestor-key-inactive). */
         post: operations["buildAmendTerms"];
         delete?: never;
         options?: never;
@@ -6225,6 +6244,66 @@ export interface operations {
             };
         };
     };
+    amendmentSigningRequest: {
+        parameters: {
+            query: {
+                /** @description the attestor key that will sign (a secp256k1 key's 20-byte address, linked to the caller's account and active on the series' chain) */
+                attestor: string;
+            };
+            header?: never;
+            path: {
+                amendmentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The AMEND signing request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningRequest"];
+                };
+            };
+            /** @description A missing or malformed query field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The key is not linked to the caller's account (an admin reads any) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown amendment or series */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The amendment is not proposed (attested, built, applied or rejected); the series is terminal (detail.stage1 AmendmentAfterTerminal); the chain's signing domain is not known yet (detail.reason signing-domain-unknown) or is not one a signer may sign for (detail.reason signing-network-refused) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not issuer-favourable; the key is not a registered attestor on the series' chain; the cap above the live cap or outside [2, 3] (detail.stage1 UnfavourableAmendment) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     attestAmendment: {
         parameters: {
             query?: never;
@@ -6237,14 +6316,23 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description the attestor key the attestor acts with (a secp256k1 key's 20-byte address, linked to the caller's account; S4 WP7, was attestorWallet). The issuer's amendTerms carries it as co-signer until S4 WP11 (Stage 1's AMEND signature) */
+                    /** @enum {boolean} */
+                    approve: true;
+                    /** @description the nonce the signature binds: the signing request's fields.amendmentNonce */
+                    amendmentNonce: string;
+                    attestation: components["schemas"]["DeviceSignature"];
+                } | {
+                    /** @enum {boolean} */
+                    approve: false;
+                    /** @description the attestor key the attestor acts with (linked to the caller's account and active on the series' chain) */
                     attestor: string;
-                    approve: boolean;
+                    /** @description rejection code (never free text) */
+                    decisionCode?: string;
                 };
             };
         };
         responses: {
-            /** @description Attested or rejected (only issuer-favourable changes can be attested) */
+            /** @description Attested: {amendmentId, state attested, favourable, attestor, amendmentNonce, digest}. Rejected: {amendmentId, state rejected, favourable, attestor, decisionCode} */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6253,7 +6341,7 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
-            /** @description Malformed body: an attestor that is not a 20-byte key, or the old attestorWallet field */
+            /** @description Malformed or unknown fields (the earlier {attestor, approve} approval and the attestorWallet field included) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -6267,7 +6355,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Not issuer-favourable, or the key is not a registered attestor on the series' chain */
+            /** @description Already decided; the series is terminal (detail.stage1 AmendmentAfterTerminal); the series' amendment nonce moved since the signature was made, by another amendment (detail.reason stale-nonce, with detail.liveAmendmentNonce and detail.request, the fresh signing request); the chain's signing domain unknown (detail.reason signing-domain-unknown) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not issuer-favourable, or the key is not a registered attestor on the series' chain; the cap above the live cap or outside [2, 3] (detail.stage1 UnfavourableAmendment); the signature not the key's AMEND signature over this nonce, commitment and cap on this chain, or the key not active (detail.stage1 InvalidAttestorSignature) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -6287,7 +6382,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Unsigned amendTerms transaction (issuer signs */
+            /** @description Unsigned amendTerms transaction (the issuer signs; its command carries the attestor key and its AMEND signature) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6295,6 +6390,20 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
+            };
+            /** @description Not the issuer's amendment */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not attested yet; already landed (detail.reason already-amended: apply it); the series is terminal (detail.stage1 AmendmentAfterTerminal); the signature is dead: detail.reason stale-nonce (with detail.liveAmendmentNonce) or attestor-key-inactive (detail.stage1 InvalidAttestorSignature), and the amendment awaits an attestor again */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

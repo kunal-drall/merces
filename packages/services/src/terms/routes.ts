@@ -5,7 +5,7 @@ import { AppError, withIdempotency } from '@merces/core';
 import type { SignedTx } from '@merces/domain';
 import { svc } from '../context.ts';
 import { thresholdPublicView } from '../threshold/service.ts';
-import { TERMS_SCHEME, TermsService, commitTerms, privateTermsSchema, publicTermsSchema } from './service.ts';
+import { TERMS_SCHEME, TermsService, amendmentAttestSchema, amendmentMessageQuerySchema, commitTerms, privateTermsSchema, publicTermsSchema } from './service.ts';
 
 export function registerTermsRoutes(app: FastifyInstance, base: AppContext): void {
   const ctx = svc(base);
@@ -73,12 +73,17 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
     },
   });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/amendments', access: 'issuer-or-attestor', handler: async (req) => ({ amendments: await s.listAmendments((req.params as { seriesId: string }).seriesId) }) });
+  // the AMEND signing request for an attestor key (S4 WP11): the key's holder, or an admin (read only)
+  defineRoute(app, ctx, {
+    method: 'GET', url: '/attestor/amendments/:amendmentId/message', access: 'attestor',
+    handler: async (req, _reply, session) => s.amendmentMessage((req.params as { amendmentId: string }).amendmentId, session!, amendmentMessageQuerySchema.parse(req.query).attestor),
+  });
   defineRoute(app, ctx, {
     method: 'POST', url: '/attestor/amendments/:amendmentId/attest', access: 'attestor',
     handler: async (req, _reply, session) => {
-      // the attestor key the attestor acts with (S4 WP7): a secp256k1 key's 20-byte address, any case
-      const b = z.object({ attestor: z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((x) => x.toLowerCase()), approve: z.boolean() }).strict().parse(req.body);
-      return s.attestAmendment((req.params as { amendmentId: string }).amendmentId, session!, b.attestor, b.approve);
+      // an approval carries the key's AMEND signature (S4 WP11); a rejection names the key the attestor acts with (S4 WP7)
+      const b = amendmentAttestSchema.parse(req.body);
+      return s.attestAmendment((req.params as { amendmentId: string }).amendmentId, session!, b);
     },
   });
   defineRoute(app, ctx, { method: 'POST', url: '/amendments/:amendmentId/build', access: 'issuer', handler: async (req, _reply, session) => s.buildAmendTerms((req.params as { amendmentId: string }).amendmentId, session!) });

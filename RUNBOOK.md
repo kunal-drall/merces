@@ -144,6 +144,19 @@ chain refuses (another copy of the approval landing first, a pause starting mean
 nothing stored; when the chain shows the pause approved another way (anyone may relay the signature), the attestor
 closes the request with a rejection code (e.g. `approved-elsewhere`).
 
+S4 WP11 changes no simulator state layout (still version 5; no reset): an amendment is the issuer's `amendTerms` carrying
+the attestor key's Stage 1 AMEND signature over the series' amendment nonce (nobody co-signs). Migration 028:
+- adds `terms_amendments.amendment_nonce` and `digest` beside `attestor_signature` (unused until now): the AMEND
+  signature, the nonce it binds and its digest, all three or none, on an attested, built or applied row with its key;
+- sends back to awaiting an attestor (`proposed`, `decision_code = 'resign-s4'`, no attestor) the rows attested by a key
+  before WP11 (they carry no signature, and `amendTerms` now needs one) and the rows built before WP11 that the chain does
+  not carry (their co-signed transaction can no longer land); the attestor signs them again from `GET
+  /attestor/amendments/{amendmentId}/message`. Rows that landed keep their record and are applied as before.
+An amendment whose build answers 409 `stale-nonce` (another amendment landed after the attestor signed) or
+`attestor-key-inactive` (the key was revoked since) is back to `proposed` with that decision code: an attestor signs it
+again over the live nonce. The indexer does the same for every amendment a landed `TermsAmended` made stale. 409
+`already-amended` means the chain carries it: apply it (`POST /amendments/{amendmentId}/apply`).
+
 Before version 5:
 
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final

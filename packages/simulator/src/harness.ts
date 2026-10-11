@@ -203,8 +203,9 @@ export class SimHarness {
   /**
    * the attestors: published secp256k1 test keys (seeds `sim-attestor:attestor-1/2`), registered by their 20-byte
    * addresses on both personalities (S4 WP7); a tier-3 report and the FX fallback carry their Stage 1 signatures (S4
-   * WP9) and a pause approval carries a key's PAUSE signature, sent by anyone (S4 WP10: `pauseApproval`); the flows that
-   * still co-sign (amendTerms, extinguish) use a wallet at the key's address until S4 WP11-WP13
+   * WP9), a pause approval carries a key's PAUSE signature, sent by anyone (S4 WP10: `pauseApproval`), and the issuer's
+   * amendTerms carries a key's AMEND signature (S4 WP11: `amendment`); extinguish still co-signs with a wallet at the
+   * key's address until S4 WP12-WP13
    */
   readonly attestors: SimAttestor[];
   /** the report verifier's key (a published secp256k1 test key, seed `sim-verifier:verifier-1`; S4 WP6) */
@@ -355,6 +356,26 @@ export class SimHarness {
   async pauseApproval(seriesId: string, pauseEnd: number | bigint | string, key: HarnessKey = this.attestors[0]!, opts: { pauseNonce?: bigint | string } = {}): Promise<Extract<PermissionlessCommand, { kind: 'approvePause' }>> {
     const a = await this.attestPause(seriesId, pauseEnd, key, opts);
     return { kind: 'approvePause', seriesId, pauseEnd: pauseEnd.toString(), attestor: a.signer, signature: a.signature };
+  }
+
+  /**
+   * An AMEND signature (S4 WP11, D8): Stage 1's `MERCES_AMEND_V1` over the chain's signing domain, the series key, the
+   * series' amendment nonce (default the live one, `SeriesState.nonces.amendment`), the new terms commitment and the new
+   * cap multiple, by attestor key `key` (default the harness's first attestor).
+   */
+  async attestAmend(seriesId: string, f: { termsCommitment: string; capMultipleWad: bigint | string }, key: HarnessKey = this.attestors[0]!, opts: { amendmentNonce?: bigint | string } = {}): Promise<{ signer: string; signature: string; digest: string }> {
+    const [info, series] = await Promise.all([this.sim.info(), this.sim.getSeries(seriesId)]);
+    if (!info.signing || !series) throw new Error(`harness: no signing context for ${seriesId}`);
+    return key.attest('AMEND', info.signing, series.seriesKey, { amendmentNonce: (opts.amendmentNonce ?? series.nonces.amendment).toString(), termsCommitment: f.termsCommitment, capMultipleWad: f.capMultipleWad.toString() });
+  }
+
+  /**
+   * The issuer's `amendTerms` command carrying `key`'s AMEND signature over the live nonce (`attestAmend`): the issuer
+   * sends it (`exec(h.issuer, …)`), the attestor never co-signs.
+   */
+  async amendment(seriesId: string, f: { termsCommitment: string; capMultipleWad: bigint | string }, key: HarnessKey = this.attestors[0]!, opts: { amendmentNonce?: bigint | string } = {}): Promise<Extract<UserCommand, { kind: 'amendTerms' }>> {
+    const a = await this.attestAmend(seriesId, f, key, opts);
+    return { kind: 'amendTerms', seriesId, termsCommitment: f.termsCommitment, capMultipleWad: f.capMultipleWad.toString(), attestor: a.signer, signature: a.signature };
   }
 
   /** The prior opening the chain will expect for period `pid` (SPEC §6.2 step 5; Stage 1 builder `priorFor`). */

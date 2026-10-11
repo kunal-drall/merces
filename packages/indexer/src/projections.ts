@@ -402,6 +402,16 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       const issuePrice = s.rows[0]?.issue_price ?? null;
       const cap = issuePrice === null ? null : capPerUnit(BigInt(p.capMultipleWad), BigInt(issuePrice)).toString();
       await client.query('update series set terms_commitment = $2, cap_multiple_wad = $3, cap_per_unit = $4, last_event_seq = $5 where series_id = $1', [p.seriesId, p.termsCommitment, p.capMultipleWad, cap, e.seq]);
+      // S4 WP11: the amendment consumed nonce `p.nonce` (the value its AMEND signature bound), so every other amendment of
+      // the series signed over that nonce or an older one is dead onchain: it goes back to awaiting an attestor (decision
+      // code stale-nonce), its signature dropped. One that landed (this event's commitment, or an earlier indexed
+      // TermsAmended's) keeps its record for `apply`; a replayed older event never touches a row signed over a newer nonce
+      await client.query(
+        `update terms_amendments a set state = 'proposed', attestor = null, amendment_nonce = null, digest = null, attestor_signature = null, decision_code = 'stale-nonce'
+          where a.series_id = $1 and a.state in ('attested', 'submitted') and a.amendment_nonce is not null and a.amendment_nonce <= $2::numeric and a.new_commitment <> $3
+            and not exists (select 1 from events ev where ev.series_id = a.series_id and ev.type = 'TermsAmended' and ev.payload->>'termsCommitment' = a.new_commitment)`,
+        [p.seriesId, p.nonce, p.termsCommitment],
+      );
       break;
     }
     case 'SeriesExtinguished': {

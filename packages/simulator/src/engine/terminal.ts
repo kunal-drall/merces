@@ -1,5 +1,5 @@
-import { ChainError, type Command } from '@merces/domain';
-import { PARAMETER_BOUNDS, finalDistribute, settleHolderDelta, vested } from '@merces/math';
+import { ChainError, amendDigest, type Command } from '@merces/domain';
+import { PARAMETER_BOUNDS, U64_MAX, finalDistribute, settleHolderDelta, vested } from '@merces/math';
 import type { SimPosition, SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail } from './errors.ts';
@@ -8,6 +8,7 @@ import { liveCapPerUnit, mintFinalized, setStatus } from './ledger.ts';
 import { redeemBody, redeemableUnits } from './redemption.ts';
 import { deliverPending } from './settlement.ts';
 import { syncReleaseBlock, syncStatus } from './status.ts';
+import { requireSigned, signingContextOf } from './keys.ts';
 
 /**
  * Amendments, extinguishment and the final pool on Stage 1 (SPEC v1.1 §6.9; Stage 1 simulator SIM:853-865,
@@ -22,31 +23,45 @@ function requireCoSigningAttestor(e: EngineCore, signers: string[], attestor: st
 
 // ------------------------------------------------------------------ amendments
 /**
- * Stage 1 `amend_terms` (SIM:853-865). Checks, in order:
+ * Stage 1 `amend_terms` (SIM:853-865; MercesRegistry.sol:634-661; merces_registry lib.rs:752-832; S4 WP11, D8). Checks,
+ * in the EVM's order (the plan's D8; MercesRegistry.sol:643-650):
  *
- *  1. the issuer signs (NotIssuer);
+ *  1. the issuer sends it (NotIssuer);
  *  2. the stored status is not terminal (AmendmentAfterTerminal); Paused and Late are allowed, and there is no raise check;
- *  3. the attestor is active and co-signs (InvalidAttestorSignature);
- *  4. the new cap multiple is not above the current one and within Stage 1's bounds [2, 3]·WAD (UnfavourableAmendment).
+ *  3. the new cap multiple is a u64 (AmountOutOfRange; the EVM's `toU64` before the signature is read: no AMEND message
+ *     encodes a larger cap);
+ *  4. the attestor's signature over `MERCES_AMEND_V1(domain, series key, the live amendment nonce, termsCommitment,
+ *     capMultipleWad)` recovers to `cmd.attestor`, an active attestor key (no grace: an amendment needs an active key;
+ *     else InvalidAttestorSignature);
+ *  5. the new cap multiple is not above the current one and within Stage 1's bounds [2, 3]·WAD (UnfavourableAmendment).
  *
- * Effects: the live terms commitment and cap multiple, `amendmentNonce += 1`. Nothing retires here: a cap lowered below
- * what was paid retires on the next receipt (Stage 1's `retire_if_capped` arrives in S5).
+ * Stage 1's reference checks the attestor by name before the cap (SIM:857-860) and has no u64 step; Solana checks the
+ * key's activity, then the cap, then the signature (lib.rs:762-785): the adapter notes (S4 WP13). The sender is the
+ * issuer, never the attestor: the attestor signs on its own device.
+ *
+ * Effects: the live terms commitment and cap multiple, `amendmentNonce += 1` (every AMEND signature over the old nonce is
+ * dead). Nothing retires here: a cap lowered below what was paid retires on the next receipt (Stage 1's
+ * `retire_if_capped` arrives in S5). Emits `TermsAmended` with the nonce that was signed (the pre-increment value, as
+ * both chains emit it).
  */
-export function amendTerms(e: EngineCore, signers: string[], cmd: Extract<Command, { kind: 'amendTerms' }>, now: number, emit: Emit): void {
+export function amendTerms(e: EngineCore, signer: string | null, cmd: Extract<Command, { kind: 'amendTerms' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
-  if (signers[0] !== s.issuer) fail('NotIssuer', 'only the issuer may amend the terms');
+  if (signer !== s.issuer) fail('NotIssuer', 'only the issuer may amend the terms');
   if (TERMINAL.has(s.status)) fail('AmendmentAfterTerminal', `series is ${s.status}`);
-  requireCoSigningAttestor(e, signers, cmd.attestor, now, 'an amendment');
   const newCap = big(cmd.capMultipleWad);
+  if (newCap > U64_MAX) fail('AmountOutOfRange', 'the cap multiple is out of the u64 range');
+  const nonce = s.ledger.amendmentNonce;
+  const m = amendDigest(signingContextOf(e.state, s.seriesId), { amendmentNonce: nonce, termsCommitment: cmd.termsCommitment, capMultipleWad: newCap });
+  const attestor = requireSigned(e, 'attestor', m.digest, { signer: cmd.attestor, signature: cmd.signature }, now); // active only: no grace
   const b = PARAMETER_BOUNDS.capMultipleWad;
   if (newCap > s.terms.capMultipleWad || newCap < b.min || newCap > b.max) fail('UnfavourableAmendment', 'the cap multiple may only decrease, within [2, 3]');
   const previous = s.terms.termsCommitment;
   s.terms.termsCommitment = cmd.termsCommitment;
   s.terms.capMultipleWad = newCap;
-  s.ledger.amendmentNonce += 1n;
+  s.ledger.amendmentNonce = nonce + 1n;
   if (s.issuePrice !== null) s.capPerUnit = liveCapPerUnit(s);
-  s.amendments.push({ at: now, termsCommitment: cmd.termsCommitment, capMultipleWad: newCap, attestor: cmd.attestor });
-  emit('TermsAmended', { seriesId: s.seriesId, termsCommitment: cmd.termsCommitment, previousCommitment: previous, capMultipleWad: cmd.capMultipleWad, attestor: cmd.attestor });
+  s.amendments.push({ at: now, termsCommitment: cmd.termsCommitment, capMultipleWad: newCap, attestor });
+  emit('TermsAmended', { seriesId: s.seriesId, termsCommitment: cmd.termsCommitment, previousCommitment: previous, capMultipleWad: cmd.capMultipleWad, attestor, nonce: nonce.toString() });
 }
 
 // ------------------------------------------------------------------ extinguishment

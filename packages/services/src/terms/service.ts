@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { AppError, audit } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { CURVE_TERMS_ZEROS, DEFAULTS, INDEXING_RULE_CODE, NON_REVEAL_CHARGE_BOUNDS, NON_REVEAL_CHARGE_SETTING, currencyCodeOf, normaliseAddress, randomFieldSalt, rateUnits, seriesTermsViolations, termsCommitment, type BoundedTerms, type SeriesTerms, type UnsignedTx } from '@merces/domain';
-import { U64_MAX, WAD, ratePerUnit, wadFromDecimal, wadToDecimal } from '@merces/math';
+import { CURVE_TERMS_ZEROS, DEFAULTS, INDEXING_RULE_CODE, NON_REVEAL_CHARGE_BOUNDS, NON_REVEAL_CHARGE_SETTING, amendDigest, currencyCodeOf, keyUsable, normaliseAddress, randomFieldSalt, rateUnits, recoverSigner, seriesTermsViolations, termsCommitment, type BoundedTerms, type ChainPort, type SeriesState, type SeriesTerms, type SigningRequest, type UnsignedTx } from '@merces/domain';
+import { PARAMETER_BOUNDS, U64_MAX, WAD, ratePerUnit, wadFromDecimal, wadToDecimal } from '@merces/math';
 import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
+import { invalidAttestorSignature, requestFor, signingDomainOf } from '../signing-requests.ts';
 
 /**
  * E4 — terms vault and disclosure.
@@ -48,6 +49,29 @@ export const privateTermsSchema = z.object({
   shareRate: z.string().regex(/^0?\.\d{1,18}$|^1(\.0{1,18})?$/, 'a decimal between 0 and 1 with at most 18 places'),
   indexingRule: z.enum(['cpi-annual', 'none']).default('cpi-annual'),
 });
+
+/** An attestor key: a secp256k1 key's 20-byte address, any case (stored lowercase). */
+const attestorKeySchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'an attestor key: a secp256k1 key\'s 20-byte address (0x + 40 hex)').transform((a) => a.toLowerCase());
+/** A u64 nonce as a canonical decimal string (`SeriesState.nonces`). */
+const nonceSchema = z.string().regex(/^(0|[1-9]\d{0,19})$/, 'a nonce: a u64 as a decimal string').refine((x) => BigInt(x) <= U64_MAX, 'out of the u64 range');
+/**
+ * A 65-byte secp256k1 signature `r ‖ s ‖ v`, 0x hex in any case (stored lowercase). Shape only (S4 D8): a non-canonical
+ * one recovers to nobody and is refused 422 with Stage 1's error name, as the chain would refuse it.
+ */
+const signature65Schema = z.string().regex(/^0x[0-9a-fA-F]{130}$/, 'a 65-byte signature (0x + 130 hex)').transform((x) => x.toLowerCase());
+/** The query of `GET /attestor/amendments/{amendmentId}/message`: the attestor key that will sign (S4 WP11). */
+export const amendmentMessageQuerySchema = z.object({ attestor: attestorKeySchema }).strict();
+/**
+ * An attestor's decision on an amendment (S4 WP11). An approval carries the attestor key's Stage 1 AMEND signature over
+ * the series' amendment nonce, the new terms commitment and the new cap multiple, made on the attestor's own device from
+ * `GET .../message` and posted as the attestor tool prints it (`attestation: {signer, signature, digest?}`), with the
+ * nonce it signed (`amendmentNonce`, the request's `fields.amendmentNonce`). A rejection needs no signature: the key the
+ * attestor acts with and a code.
+ */
+export const amendmentAttestSchema = z.discriminatedUnion('approve', [
+  z.object({ approve: z.literal(true), amendmentNonce: nonceSchema, attestation: z.object({ signer: attestorKeySchema, signature: signature65Schema, digest: z.string().regex(/^0x[0-9a-f]{64}$/).optional() }).strict() }).strict(),
+  z.object({ approve: z.literal(false), attestor: attestorKeySchema, decisionCode: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'a lowercase code such as not-favourable').optional() }).strict(),
+]);
 
 /** The terms commitment scheme the vault payload records (Stage 1, SPEC §1.5). */
 export const TERMS_SCHEME = 'poseidon5-v1';
@@ -381,52 +405,183 @@ export class TermsService {
       'insert into terms_amendments (amendment_id, series_id, draft_id, kind, new_commitment, new_cap_multiple_wad, ciphertext, version, rationale_code) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
       [amendmentId, seriesId, row.draft_id, 'inflation-index', newCommitment, series.terms.capMultipleWad, this.ctx.vault.encrypt(JSON.stringify(newPlain), `terms:${row.draft_id}`), Number(row.version) + 1, `cpi-${year}-${ix.inflation_index_bps}bps`],
     );
-    return { amendmentId, seriesId, kind: 'inflation-index', year, inflationBps: ix.inflation_index_bps, placeholderIndex: ix.placeholder, newCommitment, state: 'proposed', note: 'A registered attestor must attest the amendment is issuer-favourable (θ rises → owed falls); then build the amendTerms transaction with the attestor as co-signer.' };
+    return { amendmentId, seriesId, kind: 'inflation-index', year, inflationBps: ix.inflation_index_bps, placeholderIndex: ix.placeholder, newCommitment, state: 'proposed', note: 'A registered attestor key reviews the amendment (θ rises → owed falls) and signs Stage 1\'s AMEND message for it on its own device (GET /attestor/amendments/{amendmentId}/message, then POST /attestor/amendments/{amendmentId}/attest); then build the amendTerms transaction, which carries that signature.' };
   }
 
   async listAmendments(seriesId: string): Promise<Record<string, unknown>[]> {
-    const r = await this.ctx.pool.query('select amendment_id, kind, new_commitment, new_cap_multiple_wad, version, state, decision_code, attestor, rationale_code, created_at, applied_at from terms_amendments where series_id = $1 order by created_at', [seriesId]);
-    return r.rows.map((x) => ({ amendmentId: x.amendment_id, kind: x.kind, newCommitment: x.new_commitment, newCapMultipleWad: x.new_cap_multiple_wad, version: x.version, state: x.state, decisionCode: x.decision_code ?? null, attestor: x.attestor, rationaleCode: x.rationale_code, createdAt: x.created_at, appliedAt: x.applied_at }));
+    const r = await this.ctx.pool.query('select amendment_id, kind, new_commitment, new_cap_multiple_wad, version, state, decision_code, attestor, amendment_nonce::text, digest, rationale_code, created_at, applied_at from terms_amendments where series_id = $1 order by created_at', [seriesId]);
+    // the AMEND signature itself is never listed: until the chain accepted it, it appears in the issuer's built
+    // transaction only (S4 amendment D2)
+    return r.rows.map((x) => ({ amendmentId: x.amendment_id, kind: x.kind, newCommitment: x.new_commitment, newCapMultipleWad: x.new_cap_multiple_wad, version: x.version, state: x.state, decisionCode: x.decision_code ?? null, attestor: x.attestor, amendmentNonce: x.amendment_nonce ?? null, digest: x.digest ?? null, rationaleCode: x.rationale_code, createdAt: x.created_at, appliedAt: x.applied_at }));
+  }
+
+  /** The amendment with the series' vault (the private terms it replaces) and the draft's chain and issuer. */
+  private async amendmentRow(amendmentId: string): Promise<Record<string, any>> {
+    const r = await this.ctx.pool.query('select a.*, a.amendment_nonce::text as amendment_nonce, v.ciphertext as old_ciphertext, v.draft_id as vdraft, d.chain, d.account_id, d.issuer from terms_amendments a join terms_vault v on v.series_id = a.series_id join series_drafts d on d.draft_id = a.draft_id where a.amendment_id = $1', [amendmentId]);
+    const a = r.rows[0];
+    if (!a) throw AppError.notFound('amendment');
+    return a;
   }
 
   /**
-   * Attestor review: the attestor reads old and new private terms and attests favourability (θ non-decreasing, r
-   * non-increasing, cap non-increasing), naming the attestor key it acts with (S4 WP7: a key linked to the account and
-   * active and indexed on the series' chain). The issuer's amendTerms then carries that key as co-signer, transitionally
-   * until S4 WP11 makes it Stage 1's AMEND signature.
+   * An attestor acts only with a key linked to their account (its own EIP-191 proof, read live) whose registration on the
+   * series' chain is onchain AND indexed (A-M5-2, S4 WP7; the same registry every attestor path uses); the admin role
+   * does not stand in for it.
    */
-  async attestAmendment(amendmentId: string, attestor: Session, attestorKey: string, approve: boolean): Promise<Record<string, unknown>> {
-    const r = await this.ctx.pool.query('select a.*, v.ciphertext as old_ciphertext, v.draft_id as vdraft, d.chain from terms_amendments a join terms_vault v on v.series_id = a.series_id join series_drafts d on d.draft_id = a.draft_id where a.amendment_id = $1', [amendmentId]);
-    const a = r.rows[0];
-    if (!a) throw AppError.notFound('amendment');
-    if (a.state !== 'proposed') throw AppError.conflict(`amendment is ${a.state}`);
-    // A-M5-2 (S4 WP7): an attestor acts only with a key linked to their account (its own EIP-191 proof, read live) whose
-    // registration on the series' chain is onchain AND indexed (the same registry every attestor path uses); the admin
-    // role does not stand in for it
-    if (!this.ctx.chains.chains.get(a.chain)) throw AppError.unprocessable(`unknown chain ${a.chain}`);
-    const key = attestorKey;
-    const linked = await this.ctx.pool.query('select 1 from account_signer_keys where address = $1 and account_id = $2', [key, attestor.accountId]);
+  private async requireActingKey(chain: string, key: string, session: Session): Promise<void> {
+    if (!this.ctx.chains.chains.get(chain)) throw AppError.unprocessable(`unknown chain ${chain}`);
+    const linked = await this.ctx.pool.query('select 1 from account_signer_keys where address = $1 and account_id = $2', [key, session.accountId]);
     if (!linked.rowCount) throw AppError.forbidden('the attestor key must be linked to your account');
-    const indexed = await this.ctx.pool.query('select 1 from attestors where chain = $1 and attestor = $2 and active', [a.chain, key]);
-    if (!indexed.rowCount) throw AppError.unprocessable(`${key} is not a registered attestor key on ${a.chain}`);
-    const oldT = JSON.parse(this.ctx.vault.decrypt(a.old_ciphertext, `terms:${a.vdraft}`)) as Record<string, string>;
-    const newT = JSON.parse(this.ctx.vault.decrypt(a.ciphertext, `terms:${a.draft_id}`)) as Record<string, string>;
-    const favourable = BigInt(newT.threshold!) >= BigInt(oldT.threshold!) && BigInt(newT.ratePerUnitWad!) <= BigInt(oldT.ratePerUnitWad!);
-    if (approve && !favourable) throw AppError.unprocessable('amendment is not issuer-favourable; refusing to attest');
-    const upd = await this.ctx.pool.query("update terms_amendments set state = $2, attestor = $3 where amendment_id = $1 and state = 'proposed'", [amendmentId, approve ? 'attested' : 'rejected', key]);
-    if (!upd.rowCount) throw AppError.conflict('amendment was decided concurrently');
-    await audit(this.ctx.pool, { actor: attestor.accountId, actorRole: 'attestor', action: approve ? 'amendment.attest' : 'amendment.reject', target: amendmentId, detail: { favourable } });
-    return { amendmentId, state: approve ? 'attested' : 'rejected', favourable };
+    const indexed = await this.ctx.pool.query('select 1 from attestors where chain = $1 and attestor = $2 and active', [chain, key]);
+    if (!indexed.rowCount) throw AppError.unprocessable(`${key} is not a registered attestor key on ${chain}`);
   }
 
+  /** Favourability on the private terms (the attestor's review): θ non-decreasing, r non-increasing. */
+  private favourable(a: Record<string, any>): boolean {
+    const oldT = JSON.parse(this.ctx.vault.decrypt(a.old_ciphertext, `terms:${a.vdraft}`)) as Record<string, string>;
+    const newT = JSON.parse(this.ctx.vault.decrypt(a.ciphertext, `terms:${a.draft_id}`)) as Record<string, string>;
+    return BigInt(newT.threshold!) >= BigInt(oldT.threshold!) && BigInt(newT.ratePerUnitWad!) <= BigInt(oldT.ratePerUnitWad!);
+  }
+
+  /**
+   * What the chain's `amend_terms` would refuse besides the signature, on the live series (S4 D8, the EVM's order;
+   * MercesRegistry.sol:643-650): a terminal series (409 AmendmentAfterTerminal), a cap beyond u64 (422
+   * AmountOutOfRange), and a cap above the live one or outside [2, 3] (422 UnfavourableAmendment; the chain checks it
+   * after the signature, the service before any signature is asked for or kept).
+   */
+  private async amendableOnChain(a: Record<string, any>): Promise<{ chain: ChainPort; series: SeriesState; now: number }> {
+    const chain = this.ctx.chains.get(String(a.chain));
+    const [now, series] = await Promise.all([chain.now(), chain.getSeries(String(a.series_id))]);
+    if (!series) throw AppError.notFound('series');
+    if (['Retired', 'Redeemed', 'Extinguished'].includes(series.status)) throw new AppError(409, 'Conflict', `the series is ${series.status}: its terms can no longer be amended`, { stage1: 'AmendmentAfterTerminal' });
+    const cap = BigInt(a.new_cap_multiple_wad);
+    if (cap > U64_MAX) throw AppError.unprocessable('the cap multiple is out of the u64 range', { stage1: 'AmountOutOfRange' });
+    const b = PARAMETER_BOUNDS.capMultipleWad;
+    if (cap > BigInt(series.terms.capMultipleWad) || cap < b.min || cap > b.max) throw AppError.unprocessable('the cap multiple may only decrease, within [2, 3]: another amendment changed the series\' cap since this one was proposed', { stage1: 'UnfavourableAmendment' });
+    return { chain, series, now };
+  }
+
+  private async amendRequestFor(chain: ChainPort, series: SeriesState, signer: string, a: Record<string, any>): Promise<SigningRequest<'AMEND'>> {
+    const domain = await signingDomainOf(chain);
+    return requestFor({ kind: 'AMEND', chain: chain.chain, seriesId: series.seriesId, seriesKey: series.seriesKey, domain, signer, fields: { amendmentNonce: series.nonces.amendment, termsCommitment: String(a.new_commitment), capMultipleWad: String(a.new_cap_multiple_wad) } });
+  }
+
+  /**
+   * Attestor (a key linked to the caller's account and active on the series' chain, or an admin, read only): the signing
+   * request for the amendment's AMEND signature (S4 WP11, D2): Stage 1's `MERCES_AMEND_V1` over the chain's signing
+   * domain, the series key, the series' live amendment nonce, the new terms commitment and the new cap multiple, for
+   * `attestor`. Only for a proposed amendment that is issuer-favourable on the private terms (422) and that the chain
+   * would take now (`amendableOnChain`). The device rebuilds the message from the typed fields and signs it; the API never
+   * signs. Public data only: the domain, the series key, the nonce, the commitment and the cap.
+   */
+  async amendmentMessage(amendmentId: string, session: Session, attestorKey: string): Promise<SigningRequest<'AMEND'>> {
+    const a = await this.amendmentRow(amendmentId);
+    if (a.state !== 'proposed') throw AppError.conflict(`amendment is ${a.state}`);
+    if (session.roles.includes('admin')) {
+      if (!this.ctx.chains.chains.get(a.chain)) throw AppError.unprocessable(`unknown chain ${a.chain}`);
+    } else await this.requireActingKey(a.chain, attestorKey, session);
+    if (!this.favourable(a)) throw AppError.unprocessable('amendment is not issuer-favourable; refusing to attest');
+    const { chain, series } = await this.amendableOnChain(a);
+    return this.amendRequestFor(chain, series, attestorKey, a);
+  }
+
+  /**
+   * Attestor decision on a proposed amendment (A-M5-3: only the account holding the key, while the key is registered).
+   *
+   * Reject: the acting key and a code, no signature.
+   *
+   * Approve (S4 WP11, D2, D8): the key's Stage 1 AMEND signature, made on its own device. In order:
+   *  1. the amendment is proposed, and the key (`attestation.signer`) acts for the caller (`requireActingKey`);
+   *  2. the attestor's review: the new private terms are issuer-favourable (θ rises, r does not; 422 otherwise);
+   *  3. the chain's checks before the signature (`amendableOnChain`: AmendmentAfterTerminal, the cap's range and bounds);
+   *  4. the signature: the AMEND message rebuilt here from the chain's domain and series key with the nonce the attestor
+   *     signed (`amendmentNonce`; a digest sent must equal it) recovers to the key, and the key is active on the chain
+   *     (no grace for an AMEND): 422 `detail.stage1` InvalidAttestorSignature otherwise;
+   *  5. the nonce read again from the chain must still be the one signed: 409 `stale-nonce` with a fresh signing request
+   *     (`detail.request`) otherwise (another amendment landed; the signature is dead on the chain).
+   * The row records the key, the nonce, the digest and the signature (`attested`), for the issuer's `amendTerms`. The
+   * signature is an authorisation only the issuer can use (`amend_terms` is the issuer's): until the chain accepts it, it
+   * appears in the issuer's built transaction only, never in a list, the activity feed, a notification or the audit log
+   * (S4 amendment D2); the response names the key, the nonce and the digest.
+   */
+  async attestAmendment(amendmentId: string, attestor: Session, input: z.infer<typeof amendmentAttestSchema>): Promise<Record<string, unknown>> {
+    const a = await this.amendmentRow(amendmentId);
+    if (a.state !== 'proposed') throw AppError.conflict(`amendment is ${a.state}`);
+    const key = input.approve ? input.attestation.signer : input.attestor;
+    await this.requireActingKey(a.chain, key, attestor);
+    const favourable = this.favourable(a);
+    if (!input.approve) {
+      const decisionCode = input.decisionCode ?? 'declined';
+      const upd = await this.ctx.pool.query("update terms_amendments set state = 'rejected', attestor = $2, decision_code = $3 where amendment_id = $1 and state = 'proposed'", [amendmentId, key, decisionCode]);
+      if (!upd.rowCount) throw AppError.conflict('amendment was decided concurrently');
+      await audit(this.ctx.pool, { actor: attestor.accountId, actorRole: 'attestor', action: 'amendment.reject', target: amendmentId, detail: { favourable, attestor: key, decisionCode } });
+      return { amendmentId, state: 'rejected', favourable, attestor: key, decisionCode };
+    }
+    if (!favourable) throw AppError.unprocessable('amendment is not issuer-favourable; refusing to attest');
+    const { chain, series, now } = await this.amendableOnChain(a);
+    // Stage 1's AMEND message, rebuilt here from the chain's own domain and series key (never the caller's digest)
+    const domain = await signingDomainOf(chain);
+    const { digest } = amendDigest({ domain: domain.domain, seriesKey: series.seriesKey }, { amendmentNonce: input.amendmentNonce, termsCommitment: String(a.new_commitment), capMultipleWad: String(a.new_cap_multiple_wad) });
+    if (input.attestation.digest !== undefined && input.attestation.digest !== digest) throw invalidAttestorSignature('the attestation\'s digest is not this amendment\'s AMEND message on this chain (another series, chain, nonce, commitment or cap)');
+    if (recoverSigner(digest, input.attestation.signature) !== key) throw invalidAttestorSignature('the signature does not recover to the named attestor key over Stage 1\'s AMEND message for this nonce, commitment and cap on this chain');
+    const k = await chain.getSignerKey('attestor', key);
+    if (!k || !keyUsable(k, now)) throw invalidAttestorSignature('the attestor key is not active on this chain: an amendment needs an active key');
+    // the nonce read again: another amendment landed since the signing request, and the chain would refuse the signature
+    const again = await chain.getSeries(String(a.series_id));
+    if (!again) throw AppError.notFound('series');
+    if (again.nonces.amendment !== input.amendmentNonce) {
+      const fresh = await this.amendRequestFor(chain, again, key, a).catch(() => null);
+      throw new AppError(409, 'Conflict', 'the series\' amendment nonce moved since this was signed (another amendment landed): the signature is dead; sign the fresh request', { reason: 'stale-nonce', liveAmendmentNonce: again.nonces.amendment, request: fresh });
+    }
+    const upd = await this.ctx.pool.query(
+      "update terms_amendments set state = 'attested', attestor = $2, amendment_nonce = $3, digest = $4, attestor_signature = $5, decision_code = null where amendment_id = $1 and state = 'proposed'",
+      [amendmentId, key, input.amendmentNonce, digest, input.attestation.signature],
+    );
+    if (!upd.rowCount) throw AppError.conflict('amendment was decided concurrently');
+    await audit(this.ctx.pool, { actor: attestor.accountId, actorRole: 'attestor', action: 'amendment.attest', target: amendmentId, detail: { favourable, signer: key, amendmentNonce: input.amendmentNonce, digest } });
+    return { amendmentId, state: 'attested', favourable, attestor: key, amendmentNonce: input.amendmentNonce, digest };
+  }
+
+  /** An attested amendment whose signature died onchain goes back to awaiting an attestor (S4 WP11), with the reason. */
+  private async backToProposed(amendmentId: string, reason: string): Promise<void> {
+    await this.ctx.pool.query(
+      "update terms_amendments set state = 'proposed', attestor = null, amendment_nonce = null, digest = null, attestor_signature = null, decision_code = $2 where amendment_id = $1 and state in ('attested', 'submitted')",
+      [amendmentId, reason],
+    );
+  }
+
+  /**
+   * Issuer: Stage 1's `amendTerms` for an attested amendment, carrying the attestor key's AMEND signature (S4 WP11; nobody
+   * co-signs). Built again while it is `submitted` and not yet amended onchain (an unsigned transaction is idempotent).
+   * Before building it reads the chain: an amendment that already landed is 409 `already-amended` (apply it); a terminal
+   * series is 409 AmendmentAfterTerminal; a nonce that moved since the signature (another amendment landed) is
+   * 409 `stale-nonce`, and a key no longer active is 409 `attestor-key-inactive`: either way the signature is dead, and
+   * the amendment goes back to awaiting an attestor (`proposed`, with the reason as its decision code).
+   */
   async buildAmendTerms(amendmentId: string, session: Session): Promise<{ tx: UnsignedTx }> {
-    const r = await this.ctx.pool.query('select a.*, d.account_id, d.chain, d.issuer from terms_amendments a join series_drafts d on d.draft_id = a.draft_id where a.amendment_id = $1', [amendmentId]);
-    const a = r.rows[0];
-    if (!a) throw AppError.notFound('amendment');
+    const a = await this.amendmentRow(amendmentId);
     if (a.account_id !== session.accountId) throw AppError.forbidden();
-    if (a.state !== 'attested') throw AppError.conflict(`amendment is ${a.state}; it needs an attestor first`);
-    const tx = await this.ctx.chains.get(a.chain).build({ kind: 'amendTerms', seriesId: a.series_id, termsCommitment: a.new_commitment, capMultipleWad: a.new_cap_multiple_wad, attestor: a.attestor }, a.issuer, [a.attestor]);
-    await this.ctx.pool.query("update terms_amendments set state = 'submitted' where amendment_id = $1", [amendmentId]);
+    if (a.state !== 'attested' && a.state !== 'submitted') throw AppError.conflict(`amendment is ${a.state}; it needs an attestor first`);
+    if (!a.attestor_signature || a.amendment_nonce === null) throw AppError.conflict('amendment has no AMEND signature: an attestor key must sign it first');
+    const chain = this.ctx.chains.get(String(a.chain));
+    const [now, series] = await Promise.all([chain.now(), chain.getSeries(String(a.series_id))]);
+    if (!series) throw AppError.notFound('series');
+    // an amendment that landed (the chain's live commitment, or an indexed TermsAmended carrying it) is never sent back
+    const landed = series.terms.termsCommitment === a.new_commitment
+      || !!(await this.ctx.pool.query("select 1 from events where series_id = $1 and type = 'TermsAmended' and payload->>'termsCommitment' = $2 limit 1", [a.series_id, a.new_commitment])).rowCount;
+    if (landed) throw new AppError(409, 'Conflict', 'the chain already carries this amendment: apply it', { reason: 'already-amended' });
+    if (['Retired', 'Redeemed', 'Extinguished'].includes(series.status)) throw new AppError(409, 'Conflict', `the series is ${series.status}: its terms can no longer be amended`, { stage1: 'AmendmentAfterTerminal' });
+    if (series.nonces.amendment !== a.amendment_nonce) {
+      await this.backToProposed(amendmentId, 'stale-nonce');
+      throw new AppError(409, 'Conflict', 'another amendment landed since the attestor signed: the AMEND signature is dead; the amendment awaits an attestor again', { reason: 'stale-nonce', liveAmendmentNonce: series.nonces.amendment });
+    }
+    const k = await chain.getSignerKey('attestor', String(a.attestor));
+    if (!k || !keyUsable(k, now)) {
+      await this.backToProposed(amendmentId, 'attestor-key-inactive');
+      throw new AppError(409, 'Conflict', 'the attestor key that signed is no longer active on this chain: the AMEND signature is dead; the amendment awaits an attestor again', { reason: 'attestor-key-inactive', stage1: 'InvalidAttestorSignature' });
+    }
+    const tx = await chain.build({ kind: 'amendTerms', seriesId: String(a.series_id), termsCommitment: String(a.new_commitment), capMultipleWad: String(a.new_cap_multiple_wad), attestor: String(a.attestor), signature: String(a.attestor_signature) }, String(a.issuer));
+    await this.ctx.pool.query("update terms_amendments set state = 'submitted' where amendment_id = $1 and state in ('attested', 'submitted')", [amendmentId]);
     return { tx };
   }
 

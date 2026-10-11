@@ -18,8 +18,9 @@ const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return 
  *
  * Cause code on the HTTP pins that moved (S1 WP12): E, Stage 1's error names and their codes: a payIn with no open due
  * is NothingDue (code WrongStatus, HTTP 422), whether nothing was reported or the due was paid.
- * S4 cause code: S4-PAU, a pause approval is the attestor key's PAUSE signature over the live nonce, relayed by the
- * keeper (S4 WP10; was the attestor's wallet sending it).
+ * S4 cause codes: S4-PAU, a pause approval is the attestor key's PAUSE signature over the live nonce, relayed by the
+ * keeper (S4 WP10; was the attestor's wallet sending it); S4-AMD, the issuer's amendTerms carries the attestor key's AMEND
+ * signature over the live nonce (S4 WP11; was the attestor co-signing).
  */
 describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -151,7 +152,7 @@ describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () =>
     expect(qt.terms.capRemaining).toBe('2499999');
     expect(qt.outcome).toBe('redeem');
     // an issuer-favourable amendment lowers the cap below what was paid: nothing is left of it
-    await h.exec(h.issuer, { kind: 'amendTerms', seriesId, termsCommitment: raise.terms.termsCommitment, capMultipleWad: (2n * WAD).toString(), attestor: h.attestors[0]!.address }, [h.attestors[0]!]);
+    await h.exec(h.issuer, await h.amendment(seriesId, { termsCommitment: raise.terms.termsCommitment, capMultipleWad: 2n * WAD })); // cause S4-AMD
     qt = (await rig.get(`/series/${seriesId}/redemption/quote`, issuerTok)).json();
     expect(qt).toMatchObject({ outcome: 'retire', decidedBy: 'cap_remaining', boundBy: 'cap', pricePerUnit: '0', deposit: '0', tailCapPerUnit: '0', redeemable: true, blockedBy: [] });
     expect(qt.terms.capRemaining).toBe('0');

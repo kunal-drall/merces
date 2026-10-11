@@ -3322,8 +3322,11 @@
               },
               "attestor": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 64
+                "pattern": "^0x[0-9a-f]{40}$"
+              },
+              "nonce": {
+                "type": "string",
+                "pattern": "^\\d+$"
               }
             },
             "required": [
@@ -3331,7 +3334,8 @@
               "termsCommitment",
               "previousCommitment",
               "capMultipleWad",
-              "attestor"
+              "attestor",
+              "nonce"
             ],
             "additionalProperties": false
           }
@@ -6051,8 +6055,11 @@
         },
         "attestor": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+          "pattern": "^0x[0-9a-f]{40}$"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^\\d+$"
         }
       },
       "required": [
@@ -6060,7 +6067,8 @@
         "termsCommitment",
         "previousCommitment",
         "capMultipleWad",
-        "attestor"
+        "attestor",
+        "nonce"
       ],
       "additionalProperties": false
     },
@@ -7369,8 +7377,11 @@
         },
         "attestor": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+          "pattern": "^0x[0-9a-f]{40}$"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{130}$"
         }
       },
       "required": [
@@ -7378,7 +7389,8 @@
         "seriesId",
         "termsCommitment",
         "capMultipleWad",
-        "attestor"
+        "attestor",
+        "signature"
       ],
       "additionalProperties": false
     },

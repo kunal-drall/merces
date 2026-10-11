@@ -124,7 +124,8 @@ export class SimEngine implements EngineCore {
       case 'claimRedemption': return claimRedemption(this, user(), cmd, emit);
       case 'claimTail': return claimTail(this, user(), cmd, emit);
       case 'claimFinal': return claimFinal(this, user(), cmd, emit);
-      case 'amendTerms': return amendTerms(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit);
+      // the issuer sends Stage 1's amend_terms with the attestor's AMEND signature as an argument (S4 WP11)
+      case 'amendTerms': return amendTerms(this, actor.kind === 'user' ? (actor.signers[0] ?? null) : null, cmd, now, emit);
       case 'extinguish': return extinguish(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit);
       case 'snapshotRate': service('keeper'); return snapshotRate(this, cmd, now, emit);
       case 'flagFxFallback': service('keeper'); return flagFxFallback(this, cmd, now, emit);

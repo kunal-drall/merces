@@ -28,6 +28,8 @@ async function withFreshSchema(fn: (schema: string) => Promise<void>): Promise<v
  *    fx_fallback, no co-signer column, the cases and requests signed with an EIP-191 text opened again once).
  *  - S4-PAU / S4-WD: 027, a hardship approval is the key's relayed PAUSE signature (the request's pause nonce, the relayed
  *    approval and its transaction) and a withdrawn request has its own state.
+ *  - S4-AMD: 028, an amendment carries the attestor key's AMEND signature with its nonce and digest; rows attested or
+ *    built before it without one await an attestor again (resign-s4).
  */
 describe.skipIf(!dbTestsEnabled())('migrate', () => {
   it('serialises concurrent processes: three migrate() calls on a fresh schema all succeed, each file applied once', async () => {
@@ -450,6 +452,67 @@ describe.skipIf(!dbTestsEnabled())('migrate', () => {
         await expect(hard('h-x5', 'pending', { nonce: '-1' })).rejects.toThrow(/hardship_requests_pause_nonce_check/);
         await expect(hard('h-x6', 'pending', { nonce: '18446744073709551616' })).rejects.toThrow(/hardship_requests_pause_nonce_check/);
         await expect(hard('h-x7', 'cancelled')).rejects.toThrow(/hardship_requests_state_check/);
+        // migrating again changes nothing
+        expect(await migrate(pool, dir)).toEqual([]);
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+
+  // S4 WP11 (cause S4-AMD): migration 028 on a database seeded at 027. An amendment gains the AMEND signature's nonce and
+  // digest beside `attestor_signature` (all three or none, on an attested, submitted or applied row with an attestor; an
+  // attested row has them). Rows attested by a key, or built and not landed, before S4 WP11 have no signature: they go back
+  // to `proposed` (decision code resign-s4, no attestor); a row that landed, an applied one, a proposed one and one 025
+  // closed keep their record.
+  it('028_amendment_signatures on a database seeded at 027: the AMEND signature, its nonce and digest; unsigned rows await an attestor again', async () => {
+    await withFreshSchema(async (schema) => {
+      const pool = createPool(databaseUrl(), schema);
+      try {
+        const dir = mkdtempSync(join(tmpdir(), 'merces-mig028-'));
+        for (const f of files.filter((x) => x < '028')) copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+        await migrate(pool, dir);
+        const KEY = '0x' + 'ab'.repeat(20);
+        const q = (sql: string, params: unknown[] = []) => pool.query(sql, params);
+        await q(
+          `insert into series (series_id, chain, issuer, stablecoin, stablecoin_mint, raise_style, units_offered, reserve_price, minimum_raise, cap_multiple_wad, lockup_seconds, release_schedule,
+                               auction_fee_bps, payout_fee_bps, hurdle_wad, payout_multiple_k, wallet_cap_bps, due_days, grace_days, formal_notice_days, contract_hash, terms_commitment, tier_flags, reporting_currency, created_at)
+           values ('solana:s1', 'solana', 'iss', 'USDC', 'mint', 'sealed', 1, 1, 1, 1, 0, '[]', 0, 0, 0, 1, 0, 30, 15, 30, '0x00', '0xlanded', '{}', 'USD', 0)`,
+        );
+        const amend = (id: string, state: string, attestor: string | null, commitment: string, sig: { nonce: string; digest: string | null; signature: string | null } | null = null, decisionCode: string | null = null) =>
+          q('insert into terms_amendments (amendment_id, series_id, draft_id, kind, new_commitment, new_cap_multiple_wad, ciphertext, version, state, attestor, decision_code, rationale_code' + (sig ? ', amendment_nonce, digest, attestor_signature' : '') + ") values ($1, 'solana:s1', 'd', 'inflation-index', $2, 1, 'c', 2, $3, $4, $5, 'r'" + (sig ? ', $6, $7, $8' : '') + ')',
+            [id, commitment, state, attestor, decisionCode, ...(sig ? [sig.nonce, sig.digest, sig.signature] : [])]);
+        await amend('m-proposed', 'proposed', null, '0xnew1');
+        await amend('m-attested', 'attested', KEY, '0xnew2');
+        await amend('m-submitted', 'submitted', KEY, '0xnew3');
+        await amend('m-landed', 'submitted', KEY, '0xlanded');
+        await amend('m-applied', 'applied', KEY, '0xold');
+        await amend('m-closed', 'rejected', '0xwallet', '0xnew4', null, 'superseded-s4');
+
+        copyFileSync(join(MIGRATIONS_DIR, '028_amendment_signatures.sql'), join(dir, '028_amendment_signatures.sql'));
+        expect(await migrate(pool, dir)).toEqual(['028_amendment_signatures.sql']);
+        expect((await q('select amendment_id, state, attestor, decision_code, amendment_nonce, digest, attestor_signature from terms_amendments order by amendment_id')).rows).toEqual([
+          { amendment_id: 'm-applied', state: 'applied', attestor: KEY, decision_code: null, amendment_nonce: null, digest: null, attestor_signature: null },
+          { amendment_id: 'm-attested', state: 'proposed', attestor: null, decision_code: 'resign-s4', amendment_nonce: null, digest: null, attestor_signature: null },
+          { amendment_id: 'm-closed', state: 'rejected', attestor: '0xwallet', decision_code: 'superseded-s4', amendment_nonce: null, digest: null, attestor_signature: null },
+          { amendment_id: 'm-landed', state: 'submitted', attestor: KEY, decision_code: null, amendment_nonce: null, digest: null, attestor_signature: null },
+          { amendment_id: 'm-proposed', state: 'proposed', attestor: null, decision_code: null, amendment_nonce: null, digest: null, attestor_signature: null },
+          { amendment_id: 'm-submitted', state: 'proposed', attestor: null, decision_code: 'resign-s4', amendment_nonce: null, digest: null, attestor_signature: null },
+        ]);
+        const sig = { nonce: '3', digest: '0x' + '22'.repeat(32), signature: '0x' + '11'.repeat(65) };
+        await amend('m-signed', 'attested', KEY, '0xnew5', sig);
+        expect((await q("select amendment_nonce::text, digest, attestor_signature from terms_amendments where amendment_id = 'm-signed'")).rows[0]).toEqual({ amendment_nonce: '3', digest: sig.digest, attestor_signature: sig.signature });
+        await amend('m-built', 'submitted', KEY, '0xnew6', sig);
+        // an attested row has its signature; all three go together, with an attestor, never on a proposed or rejected row
+        await expect(amend('m-x1', 'attested', KEY, '0xnew7')).rejects.toThrow(/terms_amendments_signature_check/);
+        await expect(amend('m-x2', 'attested', KEY, '0xnew7', { ...sig, digest: null })).rejects.toThrow(/terms_amendments_signature_check/);
+        await expect(amend('m-x3', 'attested', KEY, '0xnew7', { ...sig, signature: null })).rejects.toThrow(/terms_amendments_signature_check/);
+        await expect(amend('m-x4', 'proposed', KEY, '0xnew7', sig)).rejects.toThrow(/terms_amendments_signature_check/);
+        await expect(amend('m-x5', 'attested', null, '0xnew7', sig)).rejects.toThrow(/terms_amendments_signature_check/);
+        // in their shapes
+        await expect(amend('m-x6', 'attested', KEY, '0xnew7', { ...sig, signature: 'sim:x' })).rejects.toThrow(/terms_amendments_attestor_signature_check/);
+        await expect(amend('m-x7', 'attested', KEY, '0xnew7', { ...sig, digest: '0x01' })).rejects.toThrow(/terms_amendments_digest_check/);
+        await expect(amend('m-x8', 'attested', KEY, '0xnew7', { ...sig, nonce: '18446744073709551616' })).rejects.toThrow(/terms_amendments_amendment_nonce_check/);
         // migrating again changes nothing
         expect(await migrate(pool, dir)).toEqual([]);
       } finally {

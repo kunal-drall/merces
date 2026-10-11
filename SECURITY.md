@@ -124,7 +124,10 @@ Secrets never enter the repository: `.env.example` lists names only; development
     submit it. Stored ones are readable only by the signer's account, the series' issuer where the flow needs it
     (AMEND) and admins, never in a public read, the activity feed or a notification (S4 WP10-WP12). A PAUSE signature is
     never stored unrelayed (S4 WP10): the service keeps an approval only once the chain accepted it, and a refused or
-    failed relay stores nothing (the attestor's tool keeps its own output). A leaked PAUSE signature dies when its nonce
+    failed relay stores nothing (the attestor's tool keeps its own output). An AMEND signature is stored until the
+    issuer sends it (S4 WP11), but only the issuer can use it (`amend_terms` is the issuer's transaction): it appears in
+    the issuer's built `amendTerms` only, never in a list, the feed, a notification or the audit log, and it dies when
+    the amendment nonce moves or the key stops being active (the service then drops it). A leaked PAUSE signature dies when its nonce
     moves: the issuer withdraws the request (`build-withdraw`) or requests again; any other leaked one is withdrawn only
     by rotating the key (the RUNBOOK's attestor key rotation).
   - A raw-digest key signs any 32 bytes. The key is dedicated and never funded, and the tool signs only digests it

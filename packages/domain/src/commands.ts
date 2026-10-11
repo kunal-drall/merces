@@ -130,7 +130,19 @@ export const userCommands = {
   withdrawPauseRequest: z.object({ kind: z.literal('withdrawPauseRequest'), seriesId: seriesIdSchema }),
   redeem: z.object({ kind: z.literal('redeem'), seriesId: seriesIdSchema, maxPricePerUnit: moneySchema }),
   claimRedemption: z.object({ kind: z.literal('claimRedemption'), seriesId: seriesIdSchema }),
-  amendTerms: z.object({ kind: z.literal('amendTerms'), seriesId: seriesIdSchema, termsCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: addressSchema }),
+  /**
+   * Stage 1 `amend_terms` / `amendTerms(seriesId, newTermsCommitment, newCapMultipleWad, attestorSignature, tier1Terms)`
+   * (merces_registry lib.rs:752-832; MercesRegistry.sol:634-661; SIM:853-865; S4 WP11, D8): the issuer sends an
+   * issuer-favourable amendment carrying an attestor key's Stage 1 AMEND signature over `MERCES_AMEND_V1` (domain, series
+   * key, the series' live amendment nonce, `termsCommitment`, `capMultipleWad`; `amendDigest`). The attestor signs on its
+   * own device; the issuer's transaction carries the signature as an argument (no co-signer). `capMultipleWad` is a
+   * decimal string: the EVM takes a uint256 and refuses one above u64 before it reads the signature (AmountOutOfRange,
+   * MercesRegistry.sol:645; a message cannot encode it). In the EVM's order: NotIssuer, AmendmentAfterTerminal, the cap a
+   * u64, then the signature must recover to `attestor`, an active attestor key (no grace; else InvalidAttestorSignature),
+   * then UnfavourableAmendment. The amendment nonce advances, so every AMEND signature over the old nonce is dead. Emits
+   * `TermsAmended{…, attestor, nonce}` with the nonce that was signed. `tier1Terms` waits for the tier-1 milestone (D16).
+   */
+  amendTerms: z.object({ kind: z.literal('amendTerms'), seriesId: seriesIdSchema, termsCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: signerAddressSchema, signature: signature65Schema }),
   extinguish: z.object({ kind: z.literal('extinguish'), seriesId: seriesIdSchema, attestors: z.array(addressSchema).length(2) }),
   commitWindowOrder: z.object({ kind: z.literal('commitWindowOrder'), seriesId: seriesIdSchema, windowId: z.number().int(), side: z.enum(['buy', 'sell']), commitment: hash32Schema, deposit: moneySchema, units: unitsSchema }),
   revealWindowOrder: z.object({ kind: z.literal('revealWindowOrder'), seriesId: seriesIdSchema, windowId: z.number().int(), side: z.enum(['buy', 'sell']), pricePerUnit: moneySchema, quantity: unitsSchema, salt: hash32Schema }),
@@ -357,7 +369,7 @@ export interface UnsignedTx {
   family: 'solana' | 'evm';
   /** primary signer (fee payer on Solana, msg.sender on EVM) */
   signer: string;
-  /** additional required signers (e.g. an attestor on amendTerms or extinguish, until S4 WP11-WP13) */
+  /** additional required signers (an attestor on extinguish, until S4 WP12-WP13) */
   coSigners: string[];
   /** the transaction's command; for a transaction that carries several (`commands`), the first */
   command: Command;

@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { termsCommitment, type SignedTx, type UnsignedTx } from '@merces/domain';
+import { amendDigest, recoverSigner, termsCommitment, type SignedTx, type SigningRequest, type UnsignedTx } from '@merces/domain';
+import { deriveTestPrivateKey } from '@merces/math/testing';
+import { AttestorKey, checkRequest, describeSigningRequest, pinNetworks, signRequest } from '@merces/poi-device';
 import { SimSigner, SimWallet } from '@merces/simulator';
 import { makeRig } from './helpers.ts';
 
@@ -16,6 +18,9 @@ import { makeRig } from './helpers.ts';
  * S4 cause codes:
  *  - S4-ID: attestors are keys linked to an account (S4 WP7): an amendment is attested with `attestor` (a key linked to
  *    the caller's account and active and indexed on the series' chain; was `attestorWallet`, a wallet of the session).
+ *  - S4-AMD: an approval is the key's Stage 1 AMEND signature over the series' live amendment nonce, made on the
+ *    attestor's device from `GET /attestor/amendments/{id}/message` (S4 WP11; was `{attestor, approve}` with the key
+ *    co-signing the issuer's transaction); the issuer's amendTerms carries it and nobody co-signs.
  */
 
 /** Sign in a simulator wallet through the real nonce/verify flow. */
@@ -211,13 +216,17 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     const log = await rig.get(`/series/${seriesId}/terms/access-log`, issuerTok);
     expect(log.json().accesses.map((a: { purpose: string }) => a.purpose)).toEqual(['backer-disclosure']);
 
-    // inflation amendment: propose → attestor attests favourability → build with co-signer → send → apply
+    // inflation amendment: propose → an attestor key signs Stage 1's AMEND message on its device → the issuer builds
+    // amendTerms carrying the signature → send → apply (cause S4-AMD: was attest {attestor, approve}, then the key
+    // co-signing the issuer's transaction)
     const attestor = rig.sol.attestors[0]!;
     const attTok = await rig.attestorToken('att-1', [attestor]); // cause S4-ID: the key is linked to the account
     const prop = await rig.post(`/series/${seriesId}/amendments/inflation`, { year: 2026 }, issuerTok, { 'idempotency-key': 'k-amend' });
     expect(prop.statusCode).toBe(200);
     expect(prop.json().inflationBps).toBe(300);
+    expect(prop.json().note).toContain('AMEND message');
     const amendmentId = prop.json().amendmentId as string;
+    const newCommitment = prop.json().newCommitment as string;
     // a retried proposal with the same key replays the first one instead of creating a second amendment
     const retry = await rig.post(`/series/${seriesId}/amendments/inflation`, { year: 2026 }, issuerTok, { 'idempotency-key': 'k-amend' });
     expect(retry.statusCode).toBe(200);
@@ -225,40 +234,93 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     expect((await rig.post(`/series/${seriesId}/amendments/inflation`, { year: 2027 }, issuerTok, { 'idempotency-key': 'k-amend' })).statusCode).toBe(409);
     expect((await rig.get(`/series/${seriesId}/amendments`, issuerTok)).json().amendments.map((a: { amendmentId: string }) => a.amendmentId)).toEqual([amendmentId]);
     expect((await rig.post(`/amendments/${amendmentId}/build`, {}, issuerTok)).statusCode).toBe(409);
+    const cap = (await rig.sol.sim.getSeries(seriesId))!.terms.capMultipleWad;
     // cause S4-ID: only a key linked to the caller's account that the series' chain has registered (and the indexer shows)
-    // may attest. A key registered on monad only is refused for a solana series (the tier passes on monad)
+    // may sign or decide. A key registered on monad only is refused for a solana series (the tier passes on monad)
     const monOnly = SimSigner.attestor('pp-monad-only');
     await rig.mon.exec(rig.mon.admin, { kind: 'registerAttestor', attestor: monOnly.address });
     const second = SimSigner.attestor('pp-second');
     await rig.sol.exec(rig.sol.admin, { kind: 'registerAttestor', attestor: second.address });
     await rig.sync();
     const wrongChain = await rig.attestorToken('att-2', [monOnly]);
-    const onMonad = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: monOnly.address, approve: true }, wrongChain);
+    const onMonad = await rig.get(`/attestor/amendments/${amendmentId}/message?attestor=${monOnly.address}`, wrongChain);
     expect([onMonad.statusCode, onMonad.json().message]).toEqual([422, `${monOnly.address} is not a registered attestor key on solana`]);
+    // cause S4-AMD: its signature, made over the series' real message, is refused before it is read
+    const monSig = await rig.sol.attestAmend(seriesId, { termsCommitment: newCommitment, capMultipleWad: cap }, monOnly);
+    const monBody = { approve: true, amendmentNonce: '0', attestation: monSig };
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, monBody, wrongChain)).json().message).toBe(`${monOnly.address} is not a registered attestor key on solana`);
     const unreg = SimSigner.attestor('attestor-unregistered');
     const unregTok = await rig.attestorToken('att-3', [unreg]);
     // an unregistered key never reaches the attestor routes, whatever role its token claims (A-M5-2)
-    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: unreg.address, approve: true }, unregTok)).statusCode).toBe(403);
-    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: attestor.address, approve: true }, unregTok)).statusCode).toBe(403);
+    expect((await rig.get(`/attestor/amendments/${amendmentId}/message?attestor=${unreg.address}`, unregTok)).statusCode).toBe(403);
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { approve: false, attestor: attestor.address }, unregTok)).statusCode).toBe(403);
     // a registered attestor naming a linked key the chain has not registered is refused by the service, and naming a
     // registered key linked to another account is forbidden
     const unreg2 = SimSigner.attestor('attestor-unregistered-2');
     const twoKeys = await rig.attestorToken('att-4', [second, unreg2]);
-    const refused = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: unreg2.address, approve: true }, twoKeys);
+    const refused = await rig.get(`/attestor/amendments/${amendmentId}/message?attestor=${unreg2.address}`, twoKeys);
     expect(refused.statusCode).toBe(422);
     expect(refused.json().message).toContain('not a registered attestor');
-    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: attestor.address, approve: true }, twoKeys)).statusCode).toBe(403);
+    expect((await rig.get(`/attestor/amendments/${amendmentId}/message?attestor=${attestor.address}`, twoKeys)).statusCode).toBe(403);
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, { approve: false, attestor: attestor.address }, twoKeys)).statusCode).toBe(403);
     expect((await rig.get(`/series/${seriesId}/amendments`, issuerTok)).json().amendments[0].state).toBe('proposed');
-    const att = await rig.post(`/attestor/amendments/${amendmentId}/attest`, { attestor: attestor.address, approve: true }, attTok);
-    expect(att.json()).toMatchObject({ state: 'attested', favourable: true });
+
+    // cause S4-AMD: the signing request: Stage 1's AMEND message over the chain's signing domain, the series key, the live
+    // amendment nonce, the new commitment and the cap; public data only, also for an admin (who never decides)
+    const msg = await rig.get(`/attestor/amendments/${amendmentId}/message?attestor=${attestor.address}`, attTok);
+    expect(msg.statusCode, msg.body).toBe(200);
+    const signing = (await rig.sol.sim.info()).signing!;
+    const seriesKey = (await rig.sol.sim.getSeries(seriesId))!.seriesKey;
+    expect(msg.json()).toMatchObject({ kind: 'AMEND', chain: 'solana', seriesId, seriesKey, domain: signing, signer: attestor.address, fields: { amendmentNonce: '0', termsCommitment: newCommitment, capMultipleWad: cap }, validWhile: 'amendment nonce 0' });
+    expect(msg.json().digest).toBe(amendDigest({ domain: signing.domain, seriesKey }, { amendmentNonce: 0n, termsCommitment: newCommitment, capMultipleWad: cap }).digest);
+    expect((await rig.get(`/attestor/amendments/${amendmentId}/message?attestor=${attestor.address}`, adminTok)).statusCode).toBe(200);
+    expect((await rig.get(`/attestor/amendments/${amendmentId}/message`, attTok)).statusCode).toBe(400);
+    // the attestor's device: its own pinned networks and key; it shows what is authorised from the typed fields and
+    // refuses a request whose cap was changed under the digest
+    const request = msg.json() as SigningRequest<'AMEND'>;
+    const pinned = pinNetworks({ solana: signing }, { allowLocal: true });
+    const device = AttestorKey.fromPrivateKey(deriveTestPrivateKey(attestor.key.seed));
+    expect(() => signRequest({ ...request, fields: { ...request.fields, capMultipleWad: '2000000000000000000' } }, device, pinned, { allowLocal: true })).toThrow();
+    expect(describeSigningRequest(checkRequest(request, pinned, { allowLocal: true })).join('\n')).toMatch(/^Terms amendment \(MERCES_AMEND_V1\) at amendment nonce 0/);
+    const sig = signRequest(request, device, pinned, { allowLocal: true });
+    device.wipe();
+    expect(recoverSigner(sig.digest, sig.signature)).toBe(attestor.address);
+    const body = { approve: true, amendmentNonce: request.fields.amendmentNonce, attestation: sig };
+    // the body's shape: the old {attestor, approve}, no signature, a sim co-signature, extra fields
+    for (const bad of [{ attestor: attestor.address, approve: true }, { approve: true }, { ...body, attestation: { ...sig, signature: 'sim:' + attestor.address } }, { ...body, extra: 1 }, { approve: false }]) {
+      expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, bad, attTok)).statusCode, JSON.stringify(bad)).toBe(400);
+    }
+    // the API recovers the signer over the AMEND message it rebuilds from the chain's reads (never the caller's digest):
+    // another key's signature, a digest that is not this message, a signature over another nonce: 422
+    // InvalidAttestorSignature, nothing recorded
+    const refusedSig = async (b: unknown) => {
+      const r = await rig.post(`/attestor/amendments/${amendmentId}/attest`, b, attTok);
+      expect(r.statusCode, r.body).toBe(422);
+      expect(r.json().detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+    };
+    const otherKey = await rig.sol.attestAmend(seriesId, { termsCommitment: newCommitment, capMultipleWad: cap }, rig.sol.attestors[1]!);
+    await refusedSig({ ...body, attestation: { signer: attestor.address, signature: otherKey.signature } });
+    await refusedSig({ ...body, attestation: { ...sig, digest: '0x' + '00'.repeat(32) } });
+    await refusedSig({ ...body, amendmentNonce: '1' });
+    expect((await rig.get(`/series/${seriesId}/amendments`, issuerTok)).json().amendments[0].state).toBe('proposed');
+    const att = await rig.post(`/attestor/amendments/${amendmentId}/attest`, body, attTok);
+    expect(att.statusCode, att.body).toBe(200);
+    expect(att.json()).toEqual({ amendmentId, state: 'attested', favourable: true, attestor: attestor.address, amendmentNonce: '0', digest: sig.digest });
+    expect((await rig.post(`/attestor/amendments/${amendmentId}/attest`, body, attTok)).statusCode).toBe(409);
+    // the unrelayed signature is never listed (S4 amendment D2): the nonce and digest are
+    const listed = await rig.get(`/series/${seriesId}/amendments`, issuerTok);
+    expect(listed.json().amendments[0]).toMatchObject({ state: 'attested', attestor: attestor.address, amendmentNonce: '0', digest: sig.digest });
+    expect(listed.body).not.toContain(sig.signature.slice(2));
     const b2 = await rig.post(`/amendments/${amendmentId}/build`, {}, issuerTok);
+    expect(b2.statusCode, b2.body).toBe(200);
     const atx = b2.json().tx as UnsignedTx;
-    expect(atx.coSigners).toEqual([attestor.address]);
-    const s1 = await issuer.sign(atx);
-    const s2 = await attestor.coSign(s1);
-    const res = await rig.post('/tx/send', s2, issuerTok);
+    // cause S4-AMD: the issuer's transaction carries the AMEND signature; nobody co-signs
+    expect(atx.coSigners).toEqual([]);
+    expect(atx.command).toEqual({ kind: 'amendTerms', seriesId, termsCommitment: newCommitment, capMultipleWad: cap, attestor: attestor.address, signature: sig.signature });
+    const res = await rig.post('/tx/send', await issuer.sign(atx), issuerTok);
     expect(res.statusCode).toBe(200);
     expect(res.json().events[0].type).toBe('TermsAmended');
+    expect(res.json().events[0].payload).toMatchObject({ attestor: attestor.address, nonce: '0' });
     await rig.sync();
     expect((await rig.post(`/amendments/${amendmentId}/apply`, {}, issuerTok)).statusCode).toBe(200);
     const after = (await rig.get(`/series/${seriesId}/terms`, bTok2)).json();

@@ -104,6 +104,7 @@ document file (A-PRIV-4).
 | Signed HEU contract and charter | `contract_sessions.signed_document_encrypted` | vault | the signer, admin (every read audited) | legal retention |
 | Contract hash | `contract_sessions.signed_hash`, `series.contract_hash`, onchain | hash | public | — |
 | Rendered (unsigned) documents | returned once to the signer; not stored | none | — | — |
+| An amendment's AMEND signature (S4 WP11: the attestor key's Stage 1 signature over the series' amendment nonce, the new terms commitment and the new cap; no term in plain, no figure) with its nonce and digest | `terms_amendments.attestor_signature`, `.amendment_nonce`, `.digest` (migration 028), `audit_log` (signer, nonce, digest; never the signature), onchain once it lands (`amend_terms`'s arguments) | plain (only the issuer can submit it: `amend_terms` is the issuer's transaction) | the issuer, in its built `amendTerms` only, until it lands; the nonce and digest in the amendment list (issuer, the series' chain's attestors, admins); never in the activity feed or a notification (S4 amendment D2) | dropped when the signature dies (the nonce moved or the key is no longer active: the amendment awaits an attestor again) |
 
 ## Bids and holdings
 
