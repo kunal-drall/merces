@@ -1454,10 +1454,12 @@ export class Simulator {
     let h = this.settleHolder(s, c.actor);
     let weight: bigint;
     if (l.redemptionTs !== 0n) {
-      // an unredeemed balance is redeemed first (pays P_redeem × balance), then weight = redeemed units
+      // Redeem any wallet balance first, then include the units still held in an unprocessed window ask.
+      // Both chains do this (MercesVault.sol:654-658; Solana claims.rs:486-490). Otherwise finalClaimed
+      // permanently excludes the escrow's share when the window returns those units later (DIV-S1I-1).
       if (this.unitsOf(c.actor, s.id) > 0n) this.claimRedemptionBody(s, c.actor);
       h = s.holders.get(c.actor)!;
-      weight = h.redeemedUnits;
+      weight = h.redeemedUnits + this.accrualUnits(s, c.actor);
     } else {
       weight = this.accrualUnits(s, c.actor);
     }

@@ -31,3 +31,5 @@ circuits/build/*_0000.zkey
 .DS_Store
 keys/*.json
 !keys/README.md
+# macOS resource forks on external volumes are metadata, never source files.
+._*

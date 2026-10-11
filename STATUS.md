@@ -1,5 +1,12 @@
 # Stage 1 status
 
+Integration correction (2026-10-11): the TypeScript reference's redeemed final claim now includes units still held
+in an uncleared ask, matching Solana `claims.rs` and EVM `MercesVault.sol`. The regression fixture
+`packages/reference/test/fixtures/26_final_share_open_ask.json` runs 88 steps and proves the vault reaches zero.
+The original 25 protocol vectors and all chain sources are unchanged. The backend integration's `pnpm test:stage1`
+passes 263 SDK/reference/circuit tests, including this regression. No network deployment is part of this correction.
+
+
 9 October 2026. Everything below is on branch `claude/sweet-goodall-b7acm3`. Devnet and testnet only; nothing here deploys to a mainnet.
 
 ## Done
