@@ -1,0 +1,50 @@
+name: Testnet deployment artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [stage1, '.github/workflows/testnet-artifacts.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testnet-artifacts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  solana:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Install pinned Agave
+        run: |
+          curl --fail --silent --show-error --location https://release.anza.xyz/v3.1.10/install --output /tmp/install-agave.sh
+          sh /tmp/install-agave.sh
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Compile the pinned programs, without wallets or deployment
+        working-directory: stage1/solana
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/testnet-artifacts"
+          for program in merces_registry merces_hook merces_protocol; do
+            cargo-build-sbf --manifest-path "programs/$program/Cargo.toml" --tools-version v1.52 --arch v0 --sbf-out-dir "$GITHUB_WORKSPACE/testnet-artifacts"
+          done
+      - name: Record source and binary digests
+        run: |
+          # cargo-build-sbf may generate disposable keypair files. Never upload them.
+          git rev-parse HEAD > testnet-artifacts/backend-commit.txt
+          git -C stage1 rev-parse HEAD > testnet-artifacts/stage1-commit.txt
+          cd testnet-artifacts
+          sha256sum merces_registry.so merces_hook.so merces_protocol.so > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: solana-sbf-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            testnet-artifacts/*.so
+            testnet-artifacts/*-commit.txt
+            testnet-artifacts/SHA256SUMS
