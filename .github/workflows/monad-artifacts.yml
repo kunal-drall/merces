@@ -1,6 +1,11 @@
 name: Monad testnet deployment artifacts
 on:
   workflow_dispatch:
+    inputs:
+      prepare_deployment:
+        description: Simulate the authorized Stage 5 testnet deployment and export unsigned transactions
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths: [stage1, '.github/workflows/monad-artifacts.yml']
@@ -39,6 +44,22 @@ jobs:
         env:
           FOUNDRY_PROFILE: default
         run: forge build --sizes
+      - name: Prepare unsigned Stage 5 deployment transactions
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_deployment
+        working-directory: stage1/evm
+        env:
+          FOUNDRY_PROFILE: default
+          MERCES_ADMIN: '0x05478199526A3D40428492bea389fe5A625F0d3F'
+          MERCES_TIMELOCK_PROPOSER: '0x05478199526A3D40428492bea389fe5A625F0d3F'
+          MERCES_ALLOWLIST_MANAGER: '0x50E2244ee5fcDF3E15433dd4ADb0Eb5F6b7C01b6'
+          MERCES_TIMELOCK_DELAY: '60'
+          MERCES_NETWORK: monad-testnet
+        # No signing key, --broadcast, or remote signer: the exported transactions are reviewed and signed locally.
+        run: |
+          forge script script/DeployMonadTestnet.s.sol:DeployMonadTestnet \
+            --rpc-url https://testnet-rpc.monad.xyz \
+            --sender 0x62A7e92ba8F36860b54c43e39b3c4BC20eA8cCeE \
+            --gas-estimate-multiplier 120 --non-interactive
       - name: Package artifacts and source provenance
         run: |
           mkdir monad-artifacts
@@ -46,8 +67,13 @@ jobs:
           git -C stage1 rev-parse HEAD > monad-artifacts/stage1-commit.txt
           forge --version > monad-artifacts/foundry-version.txt
           tar -czf monad-artifacts/evm-out.tar.gz -C stage1/evm out
+          if [ -f stage1/evm/broadcast/DeployMonadTestnet.s.sol/10143/dry-run/run-latest.json ]; then
+            cp stage1/evm/broadcast/DeployMonadTestnet.s.sol/10143/dry-run/run-latest.json monad-artifacts/unsigned-deployment.json
+            cp stage1/evm/deployments/monad-testnet.json monad-artifacts/planned-deployment.json
+          fi
           cd monad-artifacts
-          sha256sum evm-out.tar.gz > SHA256SUMS
+          sha256sum *.tar.gz *.txt > SHA256SUMS
+          if [ -f unsigned-deployment.json ]; then sha256sum *.json >> SHA256SUMS; fi
       - uses: actions/upload-artifact@v4
         with:
           name: monad-bytecode-${{ github.sha }}
