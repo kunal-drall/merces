@@ -20,7 +20,7 @@ there), and `submit(command, role)` for the backend's two low-privilege roles. T
 
 ## The canonical model
 
-`@merces/domain` defines the vocabulary once: 56 events, 53 commands (schema 0.4.0; S4 WP5 added Stage 1's `revokeAttestor`, `rotateAttestor` and `AttestorRevoked`, S4 WP6 `revokeVerifierKey`, `rotateVerifierKey` and `VerifierKeyRevoked`), the state shapes, the commitments (Stage 1's
+`@merces/domain` defines the vocabulary once: 57 events, 54 commands (schema 0.4.0; S4 WP5 added Stage 1's `revokeAttestor`, `rotateAttestor` and `AttestorRevoked`, S4 WP6 `revokeVerifierKey`, `rotateVerifierKey` and `VerifierKeyRevoked`, S4 WP10 `withdrawPauseRequest` and `PauseRequestWithdrawn`), the state shapes, the commitments (Stage 1's
 Poseidon terms and income commitments; since S4 its keccak bid and order commitments), Stage 1's signed messages
 (`MERCES_*_V1`, signing.ts; the verifier attestation is its REPORT message since S4 WP6, a tier-3 attestation its REPORT
 message with tier 3 and the FX fallback its FX message per series since S4 WP9) and Stage 1's six report public
@@ -48,8 +48,9 @@ all or nothing, S3) with snapshot-and-rollback, and exactly the canonical events
 synchronous engine runs; the engine takes the verdict and checks the six public signals itself. Its commands live in one module per area under
 `packages/simulator/src/engine/` (registry, auction, settlement, treasury, reports, payments, holders, status,
 redemption, terminal, fx, window, curve, stake), each a set of functions over the shared `EngineCore`; the `ChainPort` read
-mappers live in `src/reads/`. State is a plain object, version 4 (S3), carrying Stage 1's own series ledger, payout
-vault, tail and final pool, Stage 1's auction record and bids, and each series' unit scale and curve stakes; every
+mappers live in `src/reads/`. State is a plain object, version 5 (S4 WP5; 4 in S3), carrying Stage 1's own series ledger,
+payout vault, tail and final pool, Stage 1's auction record and bids, each series' unit scale and curve stakes, and
+Stage 1's attestor and verifier key registries (each key with its revocation time, for the grace); every
 money path passes the unit scale to `@merces/math`'s scale-aware family, which is Stage 1's own function at scale 1
 (serialisable for the Postgres persistent mode; another version is refused, and `sim:reset` clears it). Two
 personalities differ only in address format and stablecoin catalogue. Time is a controllable clock (`advanceTime`,
@@ -119,7 +120,10 @@ Storage v3 keystore on the attestor's machine, checks each signing request again
 rebuilds Stage 1's digest from the typed fields and signs only that; only the signature leaves it. Since S4 WP9 the
 attestor service hands it the tier-3 REPORT and the per-series FX signing requests, since S4 WP10 a hardship
 approval's PAUSE request, whose signature the keeper relays (Stage 1's `approve_pause` is permissionless), and since S4
-WP11 the terms service an amendment's AMEND request, whose signature the issuer's `amendTerms` carries.
+WP11 the terms service an amendment's AMEND request, whose signature the issuer's `amendTerms` carries, since S4 WP12
+an extinguishment's EXTINGUISH request for each of its two keys, whose signatures the keeper relays once both are in,
+and since S4 WP13 an annual attestation's TRUEUP request, whose signature is stored for the issuer's `submit_trueup`
+(S5).
 
 ## Stage 1 catch-up
 

@@ -12,11 +12,12 @@ a lender or a broker, and it is **never a custodian**:
   transaction and refuses one whose signer is not one of the caller's linked wallets.
 - Its own keys are low-privilege: a **keeper** fee payer that can only call permissionless functions (settlement and
   delivery, the Retired burn, a curve's completion, proceeds collection and census, cranks, snapshots; never a holder's
-  stake, unstake, tender or claim), and an **allowlist manager** that can only add or remove eligibility. Neither can touch terms,
+  stake, unstake, tender or claim; since S4 also the relay of a pause approval or an extinguishment, whose attestor
+  signatures authorise it and which the attestor service has checked first), and an **allowlist manager** that can only add or remove eligibility. Neither can touch terms,
   move treasury or vault funds, or block claims, redemption or releases (C12). Removal from the allowlist never strands
   value: the chain keeps claims, redemption and window sells open (on a curve also unstaking and the tender of a
   registered holder; only a new registration or stake needs the allowlist).
-- Admin actions (register attestors and verifier keys, pause new raises, fee collector, templates, flags) are built
+- Admin actions (register, revoke and rotate attestor and verifier keys, pause new raises, fee collector, templates, flags) are built
   for the **protocol multisig**; the backend records the request and never signs it. The simulator stands in for the
   multisig with one admin address in mock mode only.
 - `private_payouts` can never be enabled through the admin API; it is "coming soon" and the claim builder sits behind
@@ -27,8 +28,8 @@ a lender or a broker, and it is **never a custodian**:
 | Key | Where | Can | Cannot |
 | --- | --- | --- | --- |
 | Report-verifier secp256k1 (S4 WP6, D10) | KMS port, algorithm configured (`LocalKms` for development; a cloud KMS in production once the owner chooses AWS or GCP, S4 owner question 1; until then the standalone verifier refuses any other provider). Its 20-byte address is registered onchain as a verifier key by the multisig (`registerVerifierKey`), and pinned in the verifier's configuration (`REPORT_VERIFIER_ADDRESS`): the verifier refuses to start when the KMS key's address differs. | Sign Stage 1's `MERCES_REPORT_V1` with tier 2 (the series' chain's signing domain from the verifier's own table `MERCES_VERIFIER_CHAINS`, the series key, period, prior and income commitments, liquidity flag) after verifying a zkTLS proof and the prior opening. It builds every digest itself from typed fields: no route signs a digest a caller supplies. Every domain of its table is checked against the signing allow-list at startup and again before each signature (never mainnet; local ids only in development). Development (`MERCES_VERIFIER_DEV=true`: the published dev seed, no address pin) is the simulator only: the verifier refuses to start when its table holds any chain but a local id (Solana localnet 104, EVM 31337), a testnet included, and a dev verifier refuses a non-local domain at every signature. The proof's source is checked against the request but is not signed (A-REV-1, B7); the liquidity flag is the one the device declares (owner question 1 open since S1) | Sign anything else; sign for a chain off its table or a mainnet; the verifier has no database and no payload logs |
-| Attestor keys (S4 WP7, WP8, D2, D4) | never in the backend: each attestor's own machine, in the Merces attestor tool (`merces-attestor`, S4 WP8: a Web3 Secret Storage v3 keystore at scrypt n ≥ 2^18, "Attestor signing" below; a hardware wallet can make the EIP-191 link proof but cannot sign Stage 1's raw digests). The backend stores the key's 20-byte address and its link to an account (`account_signer_keys`), never key material; dev and test attestor keys are published simulator keys (seeds `sim-attestor:*`, `merces-dev-attestor:*`), linked only while every chain is the simulator | Prove control of the key (EIP-191 link challenge) and, through S4 WP9-WP13, sign Stage 1's attestor messages on the device, each over a digest the device rebuilt from typed fields under its own pinned network table | Be held, used or rebuilt by the server, an admin or the keeper; act on a chain that has not registered it; sign for a mainnet or a network the device has not pinned |
-| Keeper fee payer (per chain) | KMS port | Submit permissionless cranks | Any user action |
+| Attestor keys (S4 WP7, WP8, D2, D4) | never in the backend: each attestor's own machine, in the Merces attestor tool (`merces-attestor`, S4 WP8: a Web3 Secret Storage v3 keystore at scrypt n ≥ 2^18, "Attestor signing" below; a hardware wallet can make the EIP-191 link proof but cannot sign Stage 1's raw digests). The backend stores the key's 20-byte address and its link to an account (`account_signer_keys`), never key material; dev and test attestor keys are published simulator keys (seeds `sim-attestor:*`, `merces-dev-attestor:*`), linked only while every chain is the simulator | Prove control of the key (EIP-191 link challenge) and sign Stage 1's attestor messages on the device (REPORT with tier 3 and FX since S4 WP9, PAUSE since WP10, AMEND since WP11, EXTINGUISH since WP12, TRUEUP since WP13), each over a digest the device rebuilt from typed fields under its own pinned network table | Be held, used or rebuilt by the server, an admin or the keeper; act on a chain that has not registered it; sign for a mainnet or a network the device has not pinned |
+| Keeper fee payer (per chain) | KMS port | Submit permissionless cranks; relay the permissionless `approvePause` and `extinguish` with the attestor signatures the attestor service checked (S4 D3) | Any user action; make, alter or add an attestation (it holds no attestor key) |
 | Allowlist manager (per chain) | KMS port | `setAllowlist` | Freeze or seize units, block claims |
 | Session HMAC secret | environment | Sign API session tokens | — |
 | Vault key (AES-256-GCM) | environment / KMS | Encrypt private terms, application notes, signed contracts | Decrypt end-to-end attestor documents (the server never holds those keys) |
@@ -83,6 +84,26 @@ Secrets never enter the repository: `.env.example` lists names only; development
   local ids only.
 - Backer-tier access is decided by a live read of the `eligibility` table on every request, never by the session
   token's `eligible` flag: a revoke takes effect on the next request. Private terms have no admin bypass.
+
+## Signers (S4)
+
+Who signs Stage 1's messages (`MERCES_*_V1`, SPEC §1.4: a raw keccak digest, no EIP-191 prefix), and what stops each one
+from signing something else. The encodings are Stage 1's own functions through `@merces/math` (A-SIG-1).
+
+| Signer | Signs | Builds the digest from | Never |
+| --- | --- | --- | --- |
+| The report verifier (KMS key, pinned by address) | REPORT with tier 2 | the typed fields of a verified zkTLS proof, the domain of the series' chain from its own table, the series key | a digest a caller supplies; another kind; a chain off its table; a mainnet |
+| An attestor's device (`merces-attestor`) | REPORT with tier 3, FX, PAUSE, AMEND, EXTINGUISH, TRUEUP; EIP-191 text only for its own key-link challenge | the signing request's typed fields, rebuilt and compared with Stage 1's builders under the device's own pinned network table | the request's digest unchecked; a tier-2 REPORT; a network it has not pinned; a mainnet |
+| Published test keys (the simulator harness's `SimSigner`, which the dev seeds use, and the vector runner's keys) | any kind, for tests and the simulator | the caller's typed fields | a domain off the local ids (Solana 104, EVM 31337): `assertLocalSigningNetwork` |
+| `LocalKms` (development; a secret seed elsewhere) | what its user asks: the report verifier's REPORT digests | its user, which checks the domain first (`assertSigningNetwork`) | its published dev seed with any live chain configured (A-REV-9) |
+
+- The API and the services sign no Stage 1 message: they issue signing requests from the chain's own reads, rebuild each
+  message themselves and recover the signer from the signature alone (a digest sent beside it must equal the rebuilt
+  one). No route signs a digest a caller supplies.
+- The keeper signs transactions only, with its fee payer, for permissionless commands; the two that carry attestations
+  (`approvePause`, `extinguish`) carry signatures the attestor service checked, and the keeper adds none of its own.
+- Every signer refuses a mainnet domain and any network off the signing allow-list (`assertSigningNetwork`; the list and
+  its mainnet tripwire in `@merces/domain` signing.ts, seeded from Stage 1's `EVM_CHAIN_IDS` and `SOLANA_CLUSTER_TAGS`).
 
 ## Attestor signing (S4 WP8, no custody)
 

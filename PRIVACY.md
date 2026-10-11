@@ -136,6 +136,45 @@ document file (A-PRIV-4).
 | Keeper runs, reconciliation runs | `keeper_runs`, `reconciliation_runs` | plain | admin | 90 days |
 | Delivery retries (series, bidder, attempts, next attempt, Stage 1 error name or code; never a message) | `auction_deliveries` | plain | admin | when the bid is delivered |
 
+## Signatures and keys (S4)
+
+Stage 1's signed messages (`MERCES_*_V1`) and the keys that sign them. The rows above give each stored signature's
+table and readers; what holds for all of them:
+
+1. **A signed message carries no income.** It binds commitments (income, prior, terms), the tier, the liquidity flag,
+   the period, an FX rate, a cap, a pause end, a nonce, a year, the true-up adjustment and a time, under the chain's
+   domain and the series key. The true-up adjustment is a payment figure (the attested total less what was paid on
+   estimate) that Stage 1 publishes onchain with `submit_trueup`, not income. No source, θ, r, salt or year-to-date figure
+   enters a message or a signing request, and a signing request carries no display text: the attestor's tool shows what
+   it rebuilt from the typed fields.
+2. **Report and FX signatures** (tier 2, tier 3, the FX fallback) are stored in plain: only the series' issuer can
+   submit a report, so an unsubmitted one authorises nothing, and once submitted they are public onchain.
+3. **PAUSE, AMEND, EXTINGUISH and TRUEUP signatures are bearer authorisations until they are onchain** (S4 amendment D2):
+   not public data. An unrelayed PAUSE signature is never stored (the approval is recorded only once the chain accepted
+   it). A stored AMEND signature reaches only the issuer, inside its built `amendTerms`; a stored EXTINGUISH or TRUEUP
+   signature is shown by no read before it is onchain (the request names the keys that signed). None appears in a
+   public read, the activity feed, a notification or the audit log, which keeps the signer, the nonce and the digest.
+   Each dies when its nonce moves or its key stops being active, and is then dropped.
+4. **No private key on the server.** Attestor keys stay on the attestor's machine (the attestor tool's keystore; the
+   tool prints no key and posts only signatures and the link proof); the report verifier's key sits behind the KMS port;
+   the published test and development keys (the simulator's, the vector runner's, the local KMS's dev seed, the dev
+   attestor keys) sign for the simulator's local ids only, and the services refuse the dev seeds when any chain is
+   live.
+5. **Who holds which key** is visible to the account and admins only (`account_signer_keys`); a key's address and its
+   registration are public onchain, with no account (`GET /chains/{chain}/signer-keys`).
+6. **Bid and order commitments no longer bind the series** (A-SIG-8), so every builder draws a fresh salt (`randomSalt`):
+   equal bids in two series do not link.
+7. **The report verifier** still sees the figure in memory only and signs commitments only (A-PRIV-1).
+8. **The canary** scans every base table of the schema (read from `information_schema`), so the S4 tables and columns
+   (migrations 023 to 030) are covered with no list to update; keeper and relay errors carry codes and Stage 1 names
+   only.
+
+| Field | Where | Storage | Readers | Deleted when |
+| --- | --- | --- | --- | --- |
+| The attestor and verifier key registry (20-byte addresses, active, registration and revocation times) | `attestors`, `verifier_keys` (indexed from the chain; migrations 023, 024), onchain | plain (public onchain) | public (`GET /chains/{chain}/signer-keys`: address, `active`, `revokedAt`, `graceUntil`; no account); admin (`GET /admin/attestors`, `GET /admin/verifier-keys`) | — |
+| Attestor proposals (a chain, a key, the account it was proposed for, register or revoke) | `attestor_proposals`, `admin_tx_requests`, `audit_log` | plain | admin | — |
+| A signing request (S4 WP9-WP13: kind, chain, series, series key, domain, the addressed key, the typed fields, pre-image, digest, validity) | API response only; never stored | none | the addressed key's account, admins (the routes' tiers) | — |
+
 ## What is onchain (C11.2)
 
 Series parameters, the terms commitment, payment amounts, statuses and events. Nothing about health, location,

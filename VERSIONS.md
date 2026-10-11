@@ -35,6 +35,7 @@ from the build environment and the fact must be re-verified before going live.
 | `@merces/sdk` | 0.1.0 from the submodule (`stage1/packages/sdk`) | fixed point, periods, Poseidon/keccak commitments, signed messages, canonical error names |
 | `@merces/circuits` | 0.1.0 from the submodule (`stage1/circuits`) | the ProofOfIncome circuit, its development verifying key and prover (development trusted setup, Stage 1 A37) |
 | merces-common (Rust) | 0.1.0 from the submodule (`stage1/solana/crates/merces-common`) | the only dependency of `tools/stage1-oracle` (a path dependency; no registry crate, so it builds offline and keeps no `Cargo.lock`), which answers for `@merces/math`'s ported curve family in the curve-port gate |
+| Stage 1's signing known answers | `stage1/packages/vectors/known_answers.json` at `1bfc66b`: 20 signed messages (pre-image, digest, signature, signer), 2 domains, 2 series keys, 2 bid commitments, 5 test keys and 4 wallets | `stage1:sync`'s signatures step reproduces every one byte for byte on each sync through `@merces/math`, `@merces/domain` and the KMS DER normaliser (S4 WP1, WP3; A-SIG-1); the 25 vectors' own keys are `deriveTestPrivateKey("<vector>:<name>")`, which the vector runner checks before it signs |
 | build | `scripts/stage1-build.mjs` (root `postinstall`) compiles the three with this repository's TypeScript 5.9.3 | they ship TypeScript with `exports` pointing at `dist` |
 
 ## Chain tooling (verified from official repos / npm)

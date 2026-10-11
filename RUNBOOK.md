@@ -249,33 +249,60 @@ commands above after deploying the WP2 build (no environment holds simulator dat
 version 5, above), WP6 and WP7 reset them again. Clients compute the new commitment themselves (or through `POST /series/{id}/bids/commitment`) with a
 fresh 32-byte salt per bid: the commitment no longer binds the series.
 
+### Deploying S4 in one step
+
+An environment that takes all of S4 at once (from the S3 build) does the per-WP steps above together:
+
+1. Stop the API, `dev:mock`, the keepers and the standalone verifier; deploy the S4 build.
+2. Migrations 023 to 030 run at process start, in order and each once (`schema_migrations`; `pnpm db:migrate` runs
+   them by hand). None converts a row twice: 025 closes the open work addressed to an attestor that is not a key
+   (`superseded-s4`), and 026 to 030 convert only the rows 025 left (`superseded-s4` or `resign-s4` per table, above).
+3. Reset the simulated chains once, with the commands under "Simulator state version 5: reset" (the resets after S4
+   WP2, WP5, WP6 and WP7 collapse into one: the state is version 5). Then register again what lived in the chains: the
+   allowlist, the issuers, the report verifier's 20-byte address (`registerVerifierKey`) and each attestor key (its
+   holder links it first, `POST /me/signer-keys`; then `POST /admin/attestors` and the multisig). `dev:mock` does all of
+   this itself.
+4. The standalone verifier needs `REPORT_VERIFIER_ADDRESS` (its KMS key's address; refused at start on a mismatch),
+   `MERCES_VERIFIER_CHAINS` (each chain's signing domain, as `GET /chains` shows it; `.env.example` carries the dev
+   simulators') and, for the simulator only, `MERCES_VERIFIER_DEV=true`; `REPORT_VERIFIER_PREVIOUS_ADDRESSES` stays
+   empty until a rotation ("Keys" below).
+5. Each attestor sets up the attestor tool ("Attestor key setup" below) and links a key. Issuers open again the work
+   025 closed (`superseded-s4`: it was addressed to a wallet), now addressed to a registered key; attestors sign again
+   the items marked `resign-s4` from their signing requests.
+
 ### Checks before a deploy
 
-The gate (S1, kept through S2 and S3), all from the repository root with Postgres up:
+The gate (S1, kept through S2, S3 and S4), all from the repository root with Postgres up:
 
 ```
 pnpm typecheck
-DATABASE_URL=postgres://postgres@localhost:5432/merces pnpm vitest run          # unit + DB suites
+DATABASE_URL=postgres://postgres@localhost:5432/merces pnpm vitest run          # unit + DB suites (the S4 grep gates included)
 MERCES_TEST_DB=1 pnpm vitest run --project canary                               # the privacy canary
 CONFORMANCE_CHAIN=simulator pnpm vitest run --project conformance               # also simulator:monad
-pnpm stage1:vectors --personality solana,monad                                  # 14 targets + 7 prefix gates on our simulator
+pnpm stage1:vectors --personality solana,monad                                  # 15 targets + 6 prefix gates on our simulator
 pnpm stage1:vectors --backend reference                                         # all 25 on Stage 1's own simulator
 pnpm stage1:vectors --backend lockstep --personality solana                     # both side by side, every step
-pnpm stage1:vectors --scenarios                                                 # our S3 claim scenarios, in lockstep
-pnpm stage1:sync --no-conformance                                               # pin, drift, math, curve port, vectors
+pnpm stage1:vectors --scenarios                                                 # our S3 and S4 scenarios, in lockstep (S4d on ours only)
+pnpm stage1:sync --no-conformance                                               # pin, drift, math, curve port, signatures, vectors
 pnpm openapi:check                                                              # routes, openapi.yaml, access tiers
 pnpm demo:cycle                                                                 # raise to payout on both personalities
 ```
 
-`stage1:vectors` must exit 0 with `OK: 38/42 PASS, 42/42 at expected status (14 prefix runs)` (the 14 targets in full
-and the 7 prefix gates to their gate, on both personalities; 01 and 05 PASS-WITH-WAIVERS; 03 PASS in full since the
-non-reveal charge is modelled, with no accepted divergence, in lockstep too) and the reference backend with
-`OK: 25/25 PASS`;
-`stage1:vectors --scenarios` (the paths of the claim family no vector takes, built on Stage 1 vector prefixes) with
-`OK: 22/24 PASS, 24/24 at expected status (2 runs with accepted divergences)` (twelve scenarios, (a)–(l), on both personalities; (l) is PASS-WITH-DIVERGENCES on DIV-S1I-1, a Stage 1-internal difference resolved toward both chains); `stage1:sync` must report the math, curve-port and vectors steps `OK` (the diff step stays
-`WARN` until the adapters are wired, and conformance needs live deployments). The curve-port step needs cargo with Stage 1's
-toolchain (`rustup toolchain install 1.97.1 --profile minimal`, the channel of `stage1/solana/rust-toolchain.toml`):
-without it the step, and the sync, fails; it must print `55/55 figures, 5,883/5,883 oracle cases` at @1bfc66b. `openapi:check` prints `openapi.yaml matches 170 operations` (after S3) and `demo:cycle` ends with `DEMO OK`. The vector runner verifies every
+`stage1:vectors` must exit 0 with `OK: 38/42 PASS, 42/42 at expected status (12 prefix runs)` (since S4 WP10: the 15
+targets in full, 21 among them, and the 6 prefix gates to their gate, on both personalities; 01 and 05
+PASS-WITH-WAIVERS; 03 PASS in full since the non-reveal charge is modelled, with no accepted divergence, in lockstep
+too) and the reference backend with `OK: 25/25 PASS`; `stage1:vectors --scenarios` (the paths no vector takes, built on
+Stage 1 vector prefixes) with `OK: 30/32 PASS, 32/32 at expected status (2 runs with accepted divergences)` in lockstep
+(the twelve S3 claim scenarios, (a)–(l), and the S4 signature scenarios S4a, S4b, S4c and S4f, on both personalities;
+S3l is PASS-WITH-DIVERGENCES on DIV-S1I-1, a Stage 1-internal difference resolved toward both chains; S4d, the last
+attestor key, runs on our backend only: `--backend merces` prints `OK: 32/34 PASS, 34/34 at expected status (2 runs with
+accepted divergences)` and `--backend reference` `OK: 16/16 PASS`); `stage1:sync` must report the math, curve-port,
+signatures and vectors steps `OK` (the diff step stays `WARN` until the adapters are wired, and conformance needs live
+deployments). The curve-port step needs cargo with Stage 1's toolchain (`rustup toolchain install 1.97.1 --profile
+minimal`, the channel of `stage1/solana/rust-toolchain.toml`): without it the step, and the sync, fails; it must print
+`55/55 figures, 5,883/5,883 oracle cases` at @1bfc66b. The signatures step must print `signatures: ok (20 messages, 2
+domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets, DER path 20/20)`. `openapi:check` prints `openapi.yaml
+matches 188 operations` (after S4; 170 after S3) and `demo:cycle` ends with `DEMO OK`. The vector runner verifies every
 embedded report proof with the ports' Groth16 verifier and never persists anything.
 
 ## Keys
@@ -317,7 +344,8 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   it if it is there): the verifier then refuses its priors (`prior-unattested`), so an issuer affected has the previous
   quarter attested again by the new key (from a fresh zkTLS proof of that quarter), or, where the chain accepts any
   prior (a series' first report outside Q1, A25), reports from the ZERO prior (the least favourable to it); and check
-  the reports the chain accepted under the revoked key in its grace window, as for attestor keys.
+  the reports the chain accepted under the revoked key in its grace window ("Reports accepted under a revoked key"
+  below), as for attestor keys.
 - Attestor keys (S4 WP5, A-SIG-4; by key since S4 WP7): an attestor is a secp256k1 key held on the attestor's own
   device (never by the backend; the Merces attestor tool since S4 WP8, "Attestor key setup" below), its 20-byte address the attestor on every chain that registers it. Onboarding: the
   attestor links the key to their account (`POST /me/signer-keys/challenge`, sign the text with the key, `POST
@@ -333,8 +361,8 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   An attestor unlinks a key with `DELETE /me/signer-keys/{address}` (409 `open-work` while work addressed to it is open). Attestor access ends as soon as the revocation is indexed; report (tier 3) and
   FX signatures the old key made for periods that ended by its revocation stay valid onchain until `revokedAt` + 45
   days (`GET /admin/attestors` shows `revokedAt` and `graceUntil`), so a compromised key's in-flight signatures stay
-  usable for that long: check the reports accepted under a revoked key in that window. Pause approvals, amendments and
-  extinguishments need an active key.
+  usable for that long: check the reports accepted under a revoked key in that window ("Reports accepted under a revoked
+  key" below). Pause approvals, amendments, extinguishments and true-ups need an active key.
 - Vault key: `MERCES_VAULT_KEY_HEX` (32 bytes). Rotation re-encrypts `terms_vault`, `applications.notes_encrypted` and
   `contract_sessions.signed_document_encrypted`; the key id is stored beside each ciphertext.
 - Keeper fee payer: fund it with devnet SOL / testnet MON only; it never holds stablecoins. On Solana the settle and
@@ -342,6 +370,33 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   stablecoin and unit token accounts at `deliverBid` when missing; Stage 1 `raise.rs`), and the fee collector's token
   account must exist before the first `processBid` (a deployment step). Set a compute-unit limit on `processBid`: it
   can exceed Solana's 200k default (A-AUC-10; rent is not measured in the simulator).
+
+### Reports accepted under a revoked key
+
+Stage 1's grace keeps a revoked key's report (tier 2 and 3) and FX signatures for periods that ended by its revocation
+valid until `revokedAt` + 45 days, so a compromised key's in-flight signatures stay usable that long (S4 owner question
+3's default: accepted and checked). After revoking a key, and again when its grace ends, list the reports the chain
+accepted under it from the revocation on (read-only; the indexed events give the chain's time; it covers reports
+assembled through Merces, whose rows hold the signatures):
+
+```sql
+select r.series_id, r.period_id, r.tier, k.kind, k.address, k.revoked_at, e.block_time as accepted_at, e.tx_id
+from periods p
+join events e on e.chain = split_part(p.series_id, ':', 1) and e.seq = p.accepted_seq
+join reports r on r.series_id = p.series_id and r.period_id = p.period_id and r.income_commitment = p.income_commitment
+  and r.state not in ('rejected', 'superseded')
+join (select chain, 'attestor' as kind, attestor as address, revoked_at from attestors
+      union all select chain, 'verifier', address, revoked_at from verifier_keys) k
+  on k.chain = e.chain and k.revoked_at is not null and k.address in (r.attestation->>'signer', r.fx_fallback->>'signer')
+where p.report_accepted and e.block_time >= k.revoked_at
+order by e.block_time;
+```
+
+Each row is a report the chain took on the revoked key's signature. If the key was compromised, have the period's
+figures checked again (tier 3 by an active attestor, tier 2 from a fresh zkTLS proof through the verifier's new key)
+and escalate any mismatch to the owner: Stage 1 has no instruction that reverses an accepted report (none in
+`merces_protocol`'s `lib.rs` at 1bfc66b), so the remedy is offchain. A report submitted outside Merces has no row here;
+its signer is in the `submit_report` transaction's arguments.
 
 ### Attestor key setup
 
@@ -374,27 +429,29 @@ the attestor's machine, never on a server.
    account, the key and the nonce, asks, signs the challenge with EIP-191 (it signs no text but a key-link challenge
    built for this key) and prints `{address, nonce, signature}`, the body of `POST /me/signer-keys`. An admin then
    proposes the key per chain and the multisig registers it ("Attestor keys" above).
-4. **Sign a work item.** Save the item's signing request (one, or a list such as an FX rate's per-series requests;
-   the S4 WP9-WP13 routes return them: since WP9 a tier-3 case's `GET /attestor/tier3/{caseId}/message?…` and an FX
-   request's `GET /attestor/fx-requests/{requestId}/messages?rateWad=…`, whose `requests` list is the file to sign; since
-   WP10 a hardship request's `GET /attestor/hardship/{hardshipId}/message?pauseEnd=…`) as
-   `request.json` and run `pnpm -s attestor sign request.json`. The tool checks
-   the request against the pinned table (the chain, its domain, the series key), rebuilds Stage 1's pre-image and digest
-   from the typed fields and refuses any difference, then shows what you authorise, built from those fields alone (a
-   request carries no text of the server's; one that does is refused). Before a PAUSE or an EXTINGUISH it says that the
-   signature cannot be recalled: anyone holding it can submit it until it is used or the key is revoked. Once you
-   confirm and give the password it signs the digest it rebuilt and prints `{kind, chain, seriesId, signer,
-   signature, digest}` (`--out <file>` writes it 0600); post the signature to the item's route (a tier-3 case takes
-   `{signer, signature, digest}` as its `attestation`; an FX request takes `{rateWad, signer, sourceNote, signatures:
-   [{seriesId, signature}]}`, one per request in the list; a hardship approval takes `{approve: true, pauseEnd,
-   pauseNonce, attestation: {signer, signature, digest}}`, the request's `fields.pauseNonce` and the end you signed, and
-   the keeper relays it; since WP12 an extinguishment request's `GET /attestor/extinguish/{requestId}/message` for your
-   named key, posted to `POST /attestor/extinguish/{requestId}/sign` as `{extinguishNonce, attestation: {signer,
-   signature, digest}}`, and the keeper relays both once the second key has signed). Limits in S4: the nonce
-   of a PAUSE, AMEND, EXTINGUISH or TRUEUP request comes from the server and the tool cannot check it against the chain
-   yet (S5 reads it from a public RPC), so sign only a request you expect; an unrelayed EXTINGUISH signature that leaks
-   is withdrawn only by rotating the key, a PAUSE one also dies when the issuer withdraws or renews its request (the
-   nonce moves).
+4. **Sign a work item.** Save the item's signing request (one, or a list such as an FX rate's per-series requests) as
+   `request.json` and run `pnpm -s attestor sign request.json`. The tool checks the request against the pinned table
+   (the chain, its domain, the series key), rebuilds Stage 1's pre-image and digest from the typed fields and refuses
+   any difference, then shows what you authorise, built from those fields alone (a request carries no text of the
+   server's; one that does is refused). Before a PAUSE or an EXTINGUISH it says that the signature cannot be recalled:
+   anyone holding it can submit it until it is used or the key is revoked. Once you confirm and give the password it
+   signs the digest it rebuilt and prints `{kind, chain, seriesId, signer, signature, digest}` (`--out <file>` writes it
+   0600). Post the signature to the item's route; the nonce and time you post are the request's own `fields`:
+
+   | Item | Signing request | Post the signature to |
+   | --- | --- | --- |
+   | tier-3 case (REPORT, tier 3; S4 WP9) | `GET /attestor/tier3/{caseId}/message?priorIncomeCommitment&incomeCommitment&liquidityEvent` | `POST /attestor/tier3/{caseId}/sign`, `{…, proof, attestation: {signer, signature, digest}}` |
+   | FX fallback rate (FX, one per covered series; WP9) | `GET /attestor/fx-requests/{requestId}/messages?rateWad` (its `requests` list is the file to sign) | `POST /attestor/fx-requests/{requestId}/sign`, `{rateWad, signer, sourceNote, signatures: [{seriesId, signature}]}` |
+   | hardship approval (PAUSE; WP10) | `GET /attestor/hardship/{hardshipId}/message?pauseEnd` | `POST /attestor/hardship/{hardshipId}/decide`, `{approve: true, pauseEnd, pauseNonce, attestation}`; the keeper relays it |
+   | amendment (AMEND; WP11) | `GET /attestor/amendments/{amendmentId}/message?attestor` | `POST /attestor/amendments/{amendmentId}/attest`, `{approve: true, amendmentNonce, attestation}`; the issuer's `amendTerms` carries it |
+   | extinguishment (EXTINGUISH, each named key; WP12) | `GET /attestor/extinguish/{requestId}/message` | `POST /attestor/extinguish/{requestId}/sign`, `{extinguishNonce, attestation}`; the keeper relays both once the second key has signed |
+   | annual true-up (TRUEUP; WP13) | `GET /attestor/tier3/annual/{annualId}/message?totalPaymentStable` | `POST /attestor/tier3/annual/{annualId}/sign`, `{totalPaymentStable, trueupNonce, attestationTs, attestation}`; stored for the issuer's `submit_trueup` (S5) |
+
+   A 409 `stale-nonce` carries the fresh request in `detail.request`: sign that one. Limits in S4: the nonce of a
+   PAUSE, AMEND, EXTINGUISH or TRUEUP request comes from the server and the tool cannot check it against the chain yet
+   (S5 reads it from a public RPC), so sign only a request you expect; an unrelayed EXTINGUISH signature that leaks is
+   withdrawn only by rotating the key, a PAUSE one also dies when the issuer withdraws or renews its request (the nonce
+   moves).
 5. **Passwords.** The terminal is the default. `--password-env NAME` (and `--source-password-env NAME` for `import`)
    read a password from an environment variable, for scripted tests: a password there is readable through
    `/proc/<pid>/environ` by the same user and by root, and lands in shell history when it is set on the command line.

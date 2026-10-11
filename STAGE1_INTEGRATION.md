@@ -3,7 +3,7 @@
 How Stage 2 works without Stage 1 today, how it catches Stage 1 the moment it appears, and what happens then.
 This file is updated at each catch-up with what matched, what changed and what is still open.
 
-## Status (2026-10-10): Stage 1 @1bfc66b pinned, S1, S2 and S3 done; the non-reveal charge modelled (NRC); the curve-port gate (GATE); the S3 review fixes
+## Status (2026-10-11): Stage 1 @1bfc66b pinned, S1, S2, S3 and S4 done; the non-reveal charge modelled (NRC); the curve-port gate (GATE); the S3 review fixes
 
 Stage 1 is the `stage1` git submodule, pinned at `1bfc66b` (branch `claude/sweet-goodall-b7acm3`, SPEC v1.1.2; its
 tree is identical to `5eafd41`, the commit the handoff named). Its TypeScript packages (`@merces/sdk`,
@@ -18,9 +18,15 @@ Stage 1's own parity vectors against our simulator. S2 applied the sealed-bid ra
 the owner until the S3 follow-up NRC modelled it as Stage 1's code does (the rate is the owner's setting). S3 applied
 Stage 1's claim family (B.3) and brought curve mode's staking forward as a first-class flow at the owner's direction
 (B.11, all of it but the live adapter and Meteora's venue): Stage 1's curve lifecycle, census, staking and tender, in
-base lamports, with no wallet cap. "S1 results", "S2 results", "S3 results", "S3 follow-up: the non-reveal charge
-(NRC)", "S3 follow-up: the curve-port gate (GATE)" and "S3 review fixes" say what changed; "Owner decisions and
-questions" says what was decided and what is still open.
+base lamports, with no wallet cap. S4 applied Stage 1's signatures (the rest of B.4, the key revocation of B.6, the
+extinguishment of B.5 and `withdraw_pause_request`): attestor and report-verifier keys are secp256k1 20-byte addresses
+in Stage 1's registry (forward-only revocation with the 45-day grace, rotation, the last-key rule); the six
+`MERCES_*_V1` messages, built by Stage 1's own SDK over the chain's signing domain, the series key and the live nonces,
+travel as instruction arguments and nobody co-signs; attestors sign on their own device with the Merces attestor tool
+and the backend never holds an attestor key; bid and order commitments are Stage 1's keccak. "S1 results", "S2
+results", "S3 results", "S3 follow-up: the non-reveal charge (NRC)", "S3 follow-up: the curve-port gate (GATE)", "S3
+review fixes" and "S4 results" say what changed; "Owner decisions and questions" says what was decided and what is
+still open.
 
 **What the handoff was missing** (unchanged at 1bfc66b). Stage 1 ships no `handoff/manifest.json`, so
 `stage1.map.json` at this repository's root describes it by hand (A-SYNC-2). Missing (also listed in the map's
@@ -39,16 +45,16 @@ Reports: `INTERFACE_DRIFT.md` (repository root) and snapshots of the two gitigno
 (`MATH_PARITY.md`, `VECTOR_PARITY.md`; regenerate with `pnpm stage1:sync --no-conformance`, which writes them to
 `packages/stage1-sync/out`).
 
-| D6 step | Result at @1bfc66b (after S3, NRC and GATE) |
+| D6 step | Result at @1bfc66b (after S4) |
 | --- | --- |
 | 1. `stage1:sync` | runs end to end with `--no-conformance` |
 | detect | ok: `stage1.map.json` (hand-written) over the pinned submodule |
 | generate | ok: 4 Anchor IDLs and 28 ABIs rendered to `packages/stage1-sync/generated` |
-| diff | drift: **Solana** 3 canonical items without a counterpart, 220 field mismatches, 64 extra Stage 1 items; **Monad testnet** 1 / 207 / 84 (`INTERFACE_DRIFT.md`; after S3: 3 / 220 / 65 and 1 / 207 / 85; after S2: 4 / 249 / 79 and 2 / 210 / 89; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range). S3: the claim family (`claimPayout` = `claim`, `claimTail`, `claimFinal`, `burnRetired`, `PayoutClaimed.burnedUnits`, `TailClaimed`, `FinalClaimed`) matches Stage 1 exactly on both chains (WP1, WP3: 4 / 247 / 75 and 2 / 208 / 85); the curve's buy command and mint event are gone (a curve trade is `curveSwap`, a Meteora DBC `swap2`, which has no Merces counterpart by design) and `completeCurve`, `collectCurveProceeds`, `CurveActivated` and `CurveProceedsCollected` match Stage 1 by name, `issuePrice` and `settledAt` reading Stage 1's `clearing_price` and `settlement_ts` (WP8: 3 / 219 / 72 and 1 / 206 / 85); the census, `syncCurveUnits` and `CurveUnitsSynced`, matches `sync_curve_units` by name and field (WP9: 3 / 219 / 70); staking, `stakeUnits`, `unstakeUnits`, `tenderUnits{fromStake, fromWallet}`, `UnitsStaked` and `UnitsUnstaked`, matches `stake_units`, `unstake_units`, `tender_units`, `UnitsStaked` and `UnitsUnstaked` by name and field, and the one new mismatch on each chain is ours, `RedemptionClaimed.fromStake` (a curve tender's staked part, which the Solana adapter derives from the tender's arguments) (WP10: 3 / 220 / 65 and 1 / 207 / 85; unchanged by WP11-WP13). NRC: the canonical `NonRevealCharged{seriesId, bidder, charge}` matches Stage 1's `NonRevealCharged` by name and field on both chains (3 / 220 / 64 and 1 / 207 / 84). The rest is left to the adapters' mappers (D6.2) and the rest of section B (S4, S5) |
-| math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window cap and the FX family (both S5; S3 WP7: a curve raise has no cap). S3 WP5: beside them, 16 names ported from Stage 1's Rust (merces-common: the unit scale, the vault, tail and redemption at a scale, curve mode's arithmetic), because Stage 1's TypeScript has no `unit_scale`; at scale 1 each calls Stage 1's own function, and the step checks their merces-common items at the pin ("45/45 re-exports are Stage 1's own objects; 16 ported (curve, A-MATH-3)"). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2, A-MATH-3) |
+| diff | drift: **Solana** 5 canonical items without a counterpart, 202 field mismatches, 58 extra Stage 1 items; **Monad testnet** 1 / 195 / 76 (`INTERFACE_DRIFT.md`; after S3, NRC and GATE: 3 / 220 / 64 and 1 / 207 / 84. S4: the key registry's commands and events, the signed `approvePause`, `withdrawPauseRequest` and the pause events, `amendTerms` and `TermsAmended.nonce`, `extinguish` and the report's signature fields match Stage 1 by name and field, and Solana's two new items without a counterpart are ours, `rotateAttestor` and `rotateVerifierKey`, which its adapter sends as a register and a revoke in one transaction; WP5: 4 / 221 / 62 and 1 / 211 / 81; WP6: 5 / 221 / 60 and 1 / 207 / 78; WP9: 5 / 220 / 60 and 1 / 206 / 78; WP10: 5 / 211 / 58 and 1 / 200 / 76; WP11: 5 / 209 / 58 and 1 / 198 / 76; WP12, unchanged by WP13: 5 / 202 / 58 and 1 / 195 / 76; after S3: 3 / 220 / 65 and 1 / 207 / 85; after S2: 4 / 249 / 79 and 2 / 210 / 89; after S1: 3 / 261 / 87 and 1 / 222 / 97). S2's settlement commands and events match Stage 1's by name and field, `tallyBids` apart (Solana's accounts, the EVM's index range). S3: the claim family (`claimPayout` = `claim`, `claimTail`, `claimFinal`, `burnRetired`, `PayoutClaimed.burnedUnits`, `TailClaimed`, `FinalClaimed`) matches Stage 1 exactly on both chains (WP1, WP3: 4 / 247 / 75 and 2 / 208 / 85); the curve's buy command and mint event are gone (a curve trade is `curveSwap`, a Meteora DBC `swap2`, which has no Merces counterpart by design) and `completeCurve`, `collectCurveProceeds`, `CurveActivated` and `CurveProceedsCollected` match Stage 1 by name, `issuePrice` and `settledAt` reading Stage 1's `clearing_price` and `settlement_ts` (WP8: 3 / 219 / 72 and 1 / 206 / 85); the census, `syncCurveUnits` and `CurveUnitsSynced`, matches `sync_curve_units` by name and field (WP9: 3 / 219 / 70); staking, `stakeUnits`, `unstakeUnits`, `tenderUnits{fromStake, fromWallet}`, `UnitsStaked` and `UnitsUnstaked`, matches `stake_units`, `unstake_units`, `tender_units`, `UnitsStaked` and `UnitsUnstaked` by name and field, and the one new mismatch on each chain is ours, `RedemptionClaimed.fromStake` (a curve tender's staked part, which the Solana adapter derives from the tender's arguments) (WP10: 3 / 220 / 65 and 1 / 207 / 85; unchanged by WP11-WP13). NRC: the canonical `NonRevealCharged{seriesId, bidder, charge}` matches Stage 1's `NonRevealCharged` by name and field on both chains (3 / 220 / 64 and 1 / 207 / 84). The rest is left to the adapters' mappers (D6.2) and the rest of section B (S5) |
+| math | **ok**: Stage 1 math imported at 1bfc66b. `@merces/math` re-exports 45 `@merces/reference` names (the 11 of the auction family since S2) and `@merces/sdk`'s helpers, and all 45 are Stage 1's own function objects. The interim math is left only under `interim.*` for the window cap and the FX family (both S5; S3 WP7: a curve raise has no cap). S3 WP5: beside them, 16 names ported from Stage 1's Rust (merces-common: the unit scale, the vault, tail and redemption at a scale, curve mode's arithmetic), because Stage 1's TypeScript has no `unit_scale`; at scale 1 each calls Stage 1's own function, and the step checks their merces-common items at the pin ("45/45 re-exports are Stage 1's own objects; 16 ported (curve, A-MATH-3)"). S4 WP1: the gateway also re-exports `@merces/sdk`'s 30 signing names (the six message builders, secp256k1 signing and recovery, the domain, the series key, the keccak bid commitment, the wallet encodings), each Stage 1's own object, which the signatures step below checks ("30/30 signing names"); Stage 1's test-key derivation is only on `@merces/math/testing` (A-SIG-1). Snapshot: `docs/stage1/MATH_PARITY.md` (A-MATH-1, A-MATH-2, A-MATH-3) |
 | curve-port | **ok** (S3 follow-up GATE): the ported curve family (A-MATH-3) agrees with Stage 1 on every sync: 55/55 of Stage 1's figures (one table, a citation per row: `curve_config.json` `expected` and `pdaCreator`, `curve_reports.json`, merces-common's `curve.rs`, `vault.rs` and `redemption.rs` tests, `curve_mode.rs`), and 5,883/5,883 cases of a deterministic corpus answered by Stage 1's own Rust (merces-common built into `tools/stage1-oracle` with rustc 1.97.1, Stage 1's pin), refusals included. Any disagreement, a stale citation or a missing cargo fails the sync. Snapshot: `docs/stage1/MATH_PARITY.md` ("The curve-port gate") |
 | signatures | **ok** (S4 WP1): Stage 1's signing known answers (`packages/vectors/known_answers.json`) reproduced byte for byte on every sync through what we run, `@merces/math`'s re-exports (30/30 the SDK's own objects; the test-key derivation only on `@merces/math/testing`) and `@merces/domain`'s `signing.ts`: `signatures: ok (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets, DER path 20/20)` (pre-image, digest, RFC 6979 signature byte-equal, recovery to the signer; since S4 WP3 each known signature also comes back through the KMS DER path: a DER signature with `s` as signed and with `s` forced high, normalised by `@merces/ports`' `signature65FromDer`). A drop without the known answers, or any answer not reproduced, fails the sync |
-| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 38/42 PASS, 42/42 at expected status (12 prefix runs)` since S4 WP10 (was 14 prefix runs), on both personalities: the 15 targets in full (S1's ten, S2's 02, 03, 15, 17 and, since S4 WP10, 21): 02, 03, 04, 06, 07, 09, 11, 15, 17, 19, 21, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A); 03 PASS in full since NRC (was PASS-WITH-DIVERGENCES on DIV-NRC-1, the S2 non-reveal hold; no vector carries a divergence: the register's rows, DIV-S1I-1 since the S3 review and DIV-S1I-2 since S4 WP5, are met by our scenarios S3l and S4d only); the 6 vectors that need a later milestone, up to their prefix gate (08 #57, 10 #35, 14 #61, 16 #40, 20 #70, 22 #75: PREFIX-PASS; S4 WP10 moved 08's from #33 and lifted 21's at #40); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, 03 in full (b8's charge at #65 agrees since NRC; it parted there as recorded under the hold). 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. S4 WP6: `register_verifier_key` and `revoke_verifier_key` run directly (`registerVerifierKey` / `revokeVerifierKey` of the vector key's 20-byte address; SH-REG-3 retired) and a tier-2 report carries the named vector key's Stage 1 REPORT signature over the chain's domain and the series key (SH-REP-1 narrowed to tier 3's co-signature and the FX basis), at the same statuses: 04#68 (a tier-2 report signed by `attestor1`) fails InvalidVerifierSignature on its own. Our twelve S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) are at their expected status on Stage 1's simulator, on ours and in lockstep, 60/60 runs: (a)-(k) PASS everywhere (55 runs), and (l), added by the S3 review, PASS on Stage 1's simulator and PASS-WITH-DIVERGENCES on ours and in lockstep, on exactly its DIV-S1I-1 entries (a Stage 1-internal difference resolved toward both chains: the final share of an open ask's units, "S3 review fixes"). No shim stands in for a claim or a burn any more; the shims left are the S4 and S5 ones (registrations, report and attestor signatures, `pay`, pauses, windows). S4 WP2: `commit_bid` runs directly with Stage 1's keccak commitment (SH-AUC-2 retired), at the same statuses. S4 WP5: `register_attestor` and `revoke_attestor` run directly as Stage 1's registry (`registerAttestor` / `revokeAttestor` of the vector key's own 20-byte address, forward-only with the 45-day grace and the last-key rule, each personality under its chain's names; SH-REG-2 retired), at the same statuses; our S4 signature scenario S4d (the last active key, DIV-S1I-2) runs on the merces backend only, PASS on both personalities. S4 WP10: `approve_pause` runs directly (the named vector key's PAUSE signature over the live pause nonce, sent by the keeper; SH-PAU-2 retired) and so does `withdraw_pause_request`, so 21 passes in full (#41's 2^64 end is AmountOutOfRange before the signature is read) and 08 replays to #57. S4 WP11: `amend_terms` runs directly (the actor's `amendTerms` carrying the named vector key's AMEND signature over the live amendment nonce; SH-AMD-1 retired), at the same statuses: 05#44, 11#45 and 14#51-#55 (14#52's `verifier1` is no attestor key, InvalidAttestorSignature) count no shim. S4 WP12: `extinguish` runs directly (the two named vector keys' EXTINGUISH signatures over the live extinguish nonce, sent by the keeper; SH-EXT-1 retired), at the same statuses: 11#35-#44 and 25#86 count no shim (11#35's `[attestor1, attestor1]` names one key twice, SameAttestor before any signature is read; 11#37's revoked `attestor2` signs and the chain finds no active key, InvalidAttestorSignature). Curve mode has no Stage 1 vector (its reference simulator has no curve code): its parity is relational, every figure pinned to Stage 1's LiteSVM curve tests (`curve_mode.rs`), merces-common's unit tests and properties and the curve fixtures (`curve_config.json`, `curve_reports.json`, replayed with their own Groth16 proofs); since GATE the curve-port step checks the ported math against those figures and against merces-common itself on every sync. Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
+| vectors | **ok**: reference backend (Stage 1's own simulator) 25/25 PASS with every embedded proof verified (164 distinct, 3 invalid: the deliberate tamper cases); merces backend (our simulator) `OK: 38/42 PASS, 42/42 at expected status (12 prefix runs)` since S4 WP10 (was 14 prefix runs), on both personalities: the 15 targets in full (S1's ten, S2's 02, 03, 15, 17 and, since S4 WP10, 21): 02, 03, 04, 06, 07, 09, 11, 15, 17, 19, 21, 23 and 25 PASS, 01 and 05 PASS-WITH-WAIVERS (`retire_if_capped` BLOCKED, the direct unit transfer N/A); 03 PASS in full since NRC (was PASS-WITH-DIVERGENCES on DIV-NRC-1, the S2 non-reveal hold; no vector carries a divergence: the register's rows, DIV-S1I-1 since the S3 review and DIV-S1I-2 since S4 WP5, are met by our scenarios S3l and S4d only); the 6 vectors that need a later milestone, up to their prefix gate (08 #57, 10 #35, 14 #61, 16 #40, 20 #70, 22 #75: PREFIX-PASS; S4 WP10 moved 08's from #33 and lifted 21's at #40); 12, 13, 18 and 24 not replayed (S5). Lockstep agrees step by step on every target, mid-settlement included, 03 in full (b8's charge at #65 agrees since NRC; it parted there as recorded under the hold). 25 vectors, 2,092 steps, 143 expected reverts. S3 WP2: `claim_tail`, `claim_final` and `burn_retired` run directly (`claimTail`, `claimFinal`, `burnRetired`; shims SH-CLM-2, SH-CLM-3 and SH-BRN-1 retired), at the same statuses. S3 WP3: `claim` runs directly too (`claimPayout` is Stage 1's `claim`; SH-CLM-1 retired), at the same statuses. S4 WP6: `register_verifier_key` and `revoke_verifier_key` run directly (`registerVerifierKey` / `revokeVerifierKey` of the vector key's 20-byte address; SH-REG-3 retired) and a tier-2 report carries the named vector key's Stage 1 REPORT signature over the chain's domain and the series key (SH-REP-1 narrowed to tier 3's co-signature and the FX basis), at the same statuses: 04#68 (a tier-2 report signed by `attestor1`) fails InvalidVerifierSignature on its own. Our twelve S3 claim scenarios (the paths no vector takes, on prefixes of 05, 09, 11, 21 and 22) are at their expected status on Stage 1's simulator, on ours and in lockstep, 60/60 runs: (a)-(k) PASS everywhere (55 runs), and (l), added by the S3 review, PASS on Stage 1's simulator and PASS-WITH-DIVERGENCES on ours and in lockstep, on exactly its DIV-S1I-1 entries (a Stage 1-internal difference resolved toward both chains: the final share of an open ask's units, "S3 review fixes"). No shim stands in for a claim or a burn any more; since S4 no shim stands in for a key, a signature or a commitment either, and the shims left are S5's (SH-REG-1 `register_issuer`, SH-REG-4 `create_series`, SH-REP-1 narrowed to the FX basis and pair, SH-PAY-1 `pay`, SH-PAU-1 the pause request's end, the windows' SH-WIN-1…7 and SH-FLG-1) and SH-RED-1 (for good: Stage 1's `redeem` has no slippage bound). S4 WP2: `commit_bid` runs directly with Stage 1's keccak commitment (SH-AUC-2 retired), at the same statuses. S4 WP5: `register_attestor` and `revoke_attestor` run directly as Stage 1's registry (`registerAttestor` / `revokeAttestor` of the vector key's own 20-byte address, forward-only with the 45-day grace and the last-key rule, each personality under its chain's names; SH-REG-2 retired), at the same statuses; our S4 signature scenario S4d (the last active key, DIV-S1I-2) runs on the merces backend only, PASS on both personalities. S4 WP10: `approve_pause` runs directly (the named vector key's PAUSE signature over the live pause nonce, sent by the keeper; SH-PAU-2 retired) and so does `withdraw_pause_request`, so 21 passes in full (#41's 2^64 end is AmountOutOfRange before the signature is read) and 08 replays to #57. S4 WP11: `amend_terms` runs directly (the actor's `amendTerms` carrying the named vector key's AMEND signature over the live amendment nonce; SH-AMD-1 retired), at the same statuses: 05#44, 11#45 and 14#51-#55 (14#52's `verifier1` is no attestor key, InvalidAttestorSignature) count no shim. S4 WP12: `extinguish` runs directly (the two named vector keys' EXTINGUISH signatures over the live extinguish nonce, sent by the keeper; SH-EXT-1 retired), at the same statuses: 11#35-#44 and 25#86 count no shim (11#35's `[attestor1, attestor1]` names one key twice, SameAttestor before any signature is read; 11#37's revoked `attestor2` signs and the chain finds no active key, InvalidAttestorSignature). S4 WP9: a tier-3 report carries the named vector key's REPORT signature and the FX fallback its FX signature (SH-REP-1 narrowed to the FX basis and pair the runner derives, S5); S4 WP13: no runner op co-signs (a vector key is a key, not a wallet). Our S4 signature scenarios (`--scenarios`): S4a, S4b and S4c (the verifier key's grace, its end and a revocation before the period ended) and S4f (a tier-3 attestor key within the grace) PASS on Stage 1's simulator, on ours and in lockstep, and S4d (the last attestor key, DIV-S1I-2) on ours only, on both personalities: `OK: 30/32 PASS, 32/32 at expected status (2 runs with accepted divergences)` in lockstep with S3's twelve, 32/34 on ours, 16/16 on the reference. Curve mode has no Stage 1 vector (its reference simulator has no curve code): its parity is relational, every figure pinned to Stage 1's LiteSVM curve tests (`curve_mode.rs`), merces-common's unit tests and properties and the curve fixtures (`curve_config.json`, `curve_reports.json`, replayed with their own Groth16 proofs); since GATE the curve-port step checks the ported math against those figures and against merces-common itself on every sync. Snapshot with the shim table and the scenarios: `docs/stage1/VECTOR_PARITY.md` |
 | conformance | **blocked**: no devnet or testnet deployment |
 | verdict | both chains NOT ready (diff drift; conformance not run) |
 
@@ -532,6 +538,122 @@ The S3 review's confirmed findings, each fixed in its own commit ("S3 review fix
 | `pnpm openapi:client && pnpm openapi:check`; `pnpm docs:events` | `openapi.yaml matches 170 operations`; `DOMAIN_EVENTS.md` regenerated once (the final claim's weight), no change since |
 | `pnpm demo:cycle` | exits 0: `DEMO OK` on both personalities |
 
+### S4 results
+
+S4 ran as work packages WP1–WP14, each committed as `S4 WPn: …` (WP6 with one fix), on the S3 review fixes (base
+`9ecccbc`), following the S4 plan and its binding amendments (the planning record is not kept in the repository; "S4
+Dn" names one of its decisions, "amendment fix n" one of the amendments' fixes). Part A (WP1–WP4) brought Stage 1's
+signing primitives in, additively; Part B (WP5–WP7) made keys Stage 1's; Part C (WP8–WP13) moved every signing flow
+onto Stage 1's messages; WP14 wrote the docs and ran the gate. Stage 1 wins on signature semantics; where its reference
+and its chains disagree we follow both chains and say so in the register. What changed, by area:
+
+- **One signing primitive (WP1, A-SIG-1).** `@merces/math` re-exports `@merces/sdk`'s 30 signing names (the six
+  `MERCES_*_V1` builders, secp256k1 signing and recovery, the domain, the series key, the keccak bid commitment, the
+  wallet encodings), each Stage 1's own object; `@merces/domain` `signing.ts` wraps them hex-in, hex-out
+  (`reportDigest` … `trueUpDigest`, `recoverSigner`: null for any non-canonical signature, as the EVM's `tryRecover`);
+  the test-key derivation is only on `@merces/math/testing`, behind grep gates. The network allow-list and its mainnet
+  tripwire live there, seeded from Stage 1's constants, and every signer refuses a mainnet domain. `stage1:sync` gained
+  the signatures step: Stage 1's known answers reproduced byte for byte on every sync.
+- **Commitments (WP2, A-SIG-8).** Bid and window-order commitments are Stage 1's `keccak256(price_u64 ‖ quantity_u64 ‖
+  salt_32 ‖ wallet_32)`; they bind no series, so every bid draws a fresh salt; SH-AUC-2 retired. `sim:reset` ran on
+  dev after it.
+- **KMS (WP3).** `signDigest(keyId, digest)` returns Stage 1's `r ‖ s ‖ v` (low s, `v ∈ {27, 28}`), checked to recover
+  to the key's address, failing closed; algorithms are configured, never inferred from the key id; a cloud KMS's DER
+  signature and SPKI go through the normaliser (`signature65FromDer`, `addressFromSpki`) and the provider-neutral
+  `RemoteSecp256k1Kms`. No provider is wired (owner question 1 below); the vendor facts are pinned in VERSIONS.md.
+- **Signing context (WP4, A-SIG-3).** `ChainInfo.signing` (the domain, derived on read; the simulators' from Stage 1's
+  local ids with a registry per chain key; null on the live adapters until S5), `SeriesState.seriesKey` and
+  `SeriesState.nonces {pause, amendment, extinguish, trueup}` (replacing `amendmentNonce`, `extinguishNonce` and
+  `pauses.nonce`); `GET /chains` carries the domain and the public `GET /series/{seriesId}/signing` the series' context.
+- **Keys (WP5–WP7; A-SIG-4, A-SIG-5, A-M5-2).** Stage 1's registry for attestor and verifier keys: register,
+  forward-only revoke with the 45-day grace for report and FX signatures, rotate, the last-key rule, each personality
+  under its chain's names (S4 D9); simulator state version 5; schema 0.4.0. The report verifier signs Stage 1's REPORT
+  (tier 2) over the domain from its own chain table with a secp256k1 key behind the KMS, pinned by address, and accepts
+  a prior by a previous address only for quarters that ended by its retirement (amendment D10); its development mode is
+  the simulator only (WP6 fix 1). Attestors are 20-byte keys on every chain, linked to an account by the key's own
+  EIP-191 proof; access is per key and per chain, read live; the admin proposes, revokes and rotates; each chain's key
+  registry is public. Migrations 023–025; `sim:reset` ran on dev after WP5, WP6 and WP7.
+- **The attestor's device (WP8, A-SIG-2).** The Merces attestor tool (`merces-attestor`): a Web3 Secret Storage v3
+  keystore at go-ethereum's standard scrypt strength, a pinned network table, Stage 1's builders over the request's typed
+  fields (never its digest), a display built from those fields, the cannot-be-recalled warning before a PAUSE or an
+  EXTINGUISH, Stage 1's `signDigest`, and an EIP-191 link proof over the API's key-link challenge only. The backend never
+  holds an attestor key (S4 D2).
+- **Signing flows (WP9–WP13).** Each flow issues a `SigningRequest` from the chain's own reads, rebuilds the message
+  with the signed nonce, recovers the signer, checks the key on the item's chain and reads the nonce again (409
+  `stale-nonce` with a fresh request); nobody co-signs. Tier 3 is the attestor key's REPORT (tier 3) and the FX fallback
+  its FX signature per series, with the chains' grace (WP9, migration 026; SH-REP-1 narrowed to the FX basis and pair).
+  A pause approval is the PAUSE signature, relayed by the keeper (`approvePause` is permissionless), and the issuer's
+  `withdrawPauseRequest` moves the nonce (WP10, migration 027; SH-PAU-2 retired; 21 PASS in full, 08 to #57). An
+  amendment is the issuer's `amendTerms` carrying the AMEND signature (WP11, migration 028; SH-AMD-1 retired). An
+  extinguishment is the permissionless `extinguish` carrying two keys' EXTINGUISH signatures, two keys of two accounts
+  (S4 D15), relayed by the keeper (WP12, migration 029; SH-EXT-1 retired). The annual true-up captures the TRUEUP
+  signature, checked against Stage 1's year rules, i64 range and bound on a credit, and stores it for S5's
+  `submit_trueup` (WP13, migration 030). WP13 removed `UnsignedTx.coSigners`, `ChainPort.build`'s co-signer argument and
+  the transitional co-signing wallets, and recorded the adapter notes ("Adapter notes for signatures (S5)").
+- **Vocabulary.** Domain schema 0.4.0: 57 events and 54 commands (after S3 and NRC: 54 and 49). In: `AttestorRevoked`,
+  `VerifierKeyRevoked`, `PauseRequestWithdrawn`; `revokeAttestor`, `rotateAttestor`, `revokeVerifierKey`,
+  `rotateVerifierKey`, `withdrawPauseRequest`. Changed: `approvePause{pauseEnd, attestor, signature}` and
+  `extinguish{attestorA, signatureA, attestorB, signatureB}` are permissionless; `amendTerms.signature`;
+  `submitReport.fxFallback` (was `attestor` and `attestorRate`); keys by 20-byte address (`registerVerifierKey.key`, no
+  `keyId` or `publicKey`; no `active` flag on registration: revocation is its own command); `PauseRequested.nonce`,
+  `PauseApproved.start`, `TermsAmended.nonce`.
+- **Vector runner.** It signs with each vector's own keys (the `VectorKeyring`, checked against Stage 1's seeds), over
+  the chain's domain, the series key and the live nonce; `register_*`, `revoke_*`, `commit_bid`, `approve_pause`,
+  `withdraw_pause_request`, `amend_terms` and `extinguish` run directly. `OK: 38/42 PASS, 42/42 at expected status (12
+  prefix runs)` since WP10 (14 before: 21 became a target, PASS in full, and 08's gate moved from #33 to #57). Our S4
+  signature scenarios (S4a–S4d, S4f) are in `docs/stage1/VECTOR_PARITY.md`; S4d runs on our backend only (amendment fix
+  1).
+- **API.** 170 → 188 operations: the series' signing context (WP4); the verifier key's revoke and rotate (WP6); key
+  linking, the public key registry and the attestor revoke and rotate (WP7); the tier-3 and FX signing requests (WP9);
+  the hardship signing request and the issuer's withdrawal (WP10); the amendment signing request (WP11); the
+  extinguishment signing request and signature (WP12); the true-up signing request (WP13). API.md "Signing requests
+  (S4)".
+- **Tests.** Every moved pin names its S4 cause code (S4-G, -KAT, -BID, -KMS, -CTX, -V5, -REG, -ERR, -T2, -ID, -DEV,
+  -T3, -FX, -PAU, -WD, -AMD, -EXT, -TU, -CS, -SH), from a grep census of the call shapes each WP changed. The grep gates
+  of WP13 are a test (`packages/domain/test/s4-gates.test.ts`): no co-signer field or call, no retired attestation
+  text, no co-signed rate, no development allowance for the simulator; ed25519 verification only for Solana sign-in;
+  `@merces/math/testing` in no service, API, verifier, indexer or keeper source.
+- **Privacy and security.** A signed message carries no income; report and FX signatures are public once submitted, and
+  PAUSE, AMEND, EXTINGUISH and TRUEUP signatures are bearer authorisations until they are onchain: never in a public
+  read, the feed, a notification or the audit log, and an unrelayed PAUSE signature is never stored (S4 amendment D2;
+  PRIVACY.md "Signatures and keys (S4)", SECURITY.md "Signers (S4)" and "Attestor signing").
+
+**Departures from the plan, all recorded where they apply.** S4d is a scenario on our backend only, with each
+personality's `expect_revert`, since Stage 1's reference has no last-key rule (amendment fix 1); previous verifier
+addresses are time-bounded (amendment D10); the signing wrappers are named apart from the SDK's builders (amendment D1);
+the mainnet tripwire moved with the allow-list (amendment D6); the sign bodies carry the signed nonce and the tool's
+`{signer, signature, digest?}` so the services can tell a stale signature (409) from a wrong one (422); the TRUEUP
+request and signature also check Stage 1's year rules and the series' state, and the period read gained
+`PeriodState.paymentStable` for the bound (WP13).
+
+**Left for S5 (signatures).** The live adapters' signing context (`ProtocolConfig.domain`, `MercesRegistry.domain()`
+checked against the manifest; until then `signing: null` and 409 `signing-domain-unknown`), series keys from the EVM's
+counter ids (the simulator's monad stand-in, A-ID-1), the nonces read from the chain, and every normalisation in
+"Adapter notes for signatures (S5)" (Solana's key arguments and PDAs and its rotation as two instructions, the EVM's
+signature-only arguments behind a recovery check, the names and check orders); the attestor tool reading nonces from a
+public RPC on live chains; `submit_trueup` and `pay_trueup`; the FX accumulator (the rest of SH-REP-1); a cloud KMS
+adapter once owner question 1 is answered. Outside S5: `tier1Terms` on `amendTerms` (the tier-1 milestone) and binding
+the attestor's X25519 key to its signer key (A-PRIV-3, not in S4).
+
+**The S4 gate**, all green at the S4 WP14 commit:
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | exits 0 |
+| `DATABASE_URL=… pnpm vitest run` | 81 files, 729 tests passed (the S3 review fixes gate: 71 and 577) |
+| `MERCES_TEST_DB=1 pnpm vitest run --project canary` | 2 files, 3 tests passed |
+| `CONFORMANCE_CHAIN=simulator` / `simulator:monad` `pnpm vitest run --project conformance` | 20 and 11 tests passed |
+| `pnpm stage1:vectors --personality solana,monad` | exits 0: `OK: 38/42 PASS, 42/42 at expected status (12 prefix runs)` (14 prefix runs before S4 WP10) |
+| `pnpm stage1:vectors --backend reference` | exits 0: `OK: 25/25 PASS, 25/25 at expected status` (164 proofs verified, 3 invalid) |
+| `pnpm stage1:vectors --backend lockstep --personality solana` (and `solana,monad`) | exits 0: `OK: 19/21 PASS, 21/21 at expected status (6 prefix runs)` (both: `OK: 38/42 PASS, 42/42 at expected status (12 prefix runs)`) |
+| `pnpm stage1:vectors --scenarios` (lockstep) | exits 0: `OK: 30/32 PASS, 32/32 at expected status (2 runs with accepted divergences)`: S3's twelve at their status (S3l parts at #78 as recorded, DIV-S1I-1), S4a, S4b, S4c and S4f PASS on both personalities, S4d skipped ("runs on merces only"); `--backend merces`: `OK: 32/34 PASS, 34/34 at expected status (2 runs with accepted divergences)` (S4d PASS 42/42 on both); `--backend reference`: `OK: 16/16 PASS, 16/16 at expected status` |
+| `pnpm stage1:sync --no-conformance` | exits 0: math `OK` ("45/45 re-exports are Stage 1's own objects; 16 ported (curve, A-MATH-3)"), curve-port `OK` (55/55 figures, 5,883/5,883 oracle cases), signatures `OK` ("signatures: ok (20 messages, 2 domains, 2 series keys, 2 bid commitments, 5 keys, 4 wallets, DER path 20/20)", "30/30 signing names of @merces/math are @merces/sdk's own objects"), vectors `OK` (42/42 runs at expected status; our scenarios 82/82 runs at expected status, 78 PASS, 4 PASS-WITH-DIVERGENCES on DIV-S1I-1), diff `WARN` (solana 5 / 202 / 58, EVM 1 / 195 / 76), conformance skipped; `INTERFACE_DRIFT.md` and `docs/stage1/{MATH,VECTOR}_PARITY.md` regenerated without a change |
+| `docs/stage1/VECTOR_PARITY.md` | no SH-REG-2, SH-REG-3, SH-AUC-2, SH-PAU-2, SH-EXT-1 or SH-AMD-1 row; SH-REP-1 narrowed to the FX basis and pair (S5); the "S4 signature scenarios (ours)" section |
+| `pnpm openapi:client && pnpm openapi:check`; `pnpm docs:events` | `openapi.yaml matches 188 operations` (170 after S3); `DOMAIN_EVENTS.md` and the JSON schema regenerated without a change |
+| `pnpm demo:cycle` | exits 0: `DEMO OK` on both personalities |
+| The WP13 grep gates (`grep -rnE "\bcoSigners?\b\|\.coSign\(\|attestationMessage\|fxAttestationMessage\|tier3AttestationText\|attestorRate\|allowSimulator: this.ctx.devMode \|\| chain.mode" packages --include=*.ts --include=*.yaml \| grep -v generated`; `grep -rn "edVerify" packages --include=*.ts` outside `ports/src/wallet-verify.ts` and `ports/test/ports.test.ts`; `grep -rln "@merces/math/testing" packages/{services,api,report-verifier,indexer,keepers}/src`) | all three empty |
+| `MERCES_ALLOW_SIM_RESET=1 pnpm --filter @merces/simulator sim:reset` on dev | exits 0: no persisted simulator chain under the "sim" prefix, nothing to reset (it ran after WP2, WP5, WP6 and WP7 too) |
+
 ### Adapter notes for the auction (S5)
 
 What the live adapters normalise so the canonical settlement reads the same on both chains (from Stage 1's programs and
@@ -873,6 +995,24 @@ Asked of Stage 1 (S4 WP9):
    settle it in the SPEC and the reference, and add a vector that revokes an attestor between a period's end and its FX
    fallback.
 
+Asked of Stage 1 (S4 WP14):
+
+9. **An EIP-712 form of the six signed messages (owner question 2).** Stage 1's `MERCES_*_V1` digests are raw keccak
+   over packed bytes (SPEC §1.4), so no ordinary or hardware wallet can sign them (VERSIONS.md: MetaMask MIP-3, ERC-191,
+   Ledger's `hw-app-eth` 7.10.0). An EIP-712 typed-data form (or an EIP-191-wrapped digest) of REPORT, FX, AMEND, PAUSE,
+   EXTINGUISH and TRUEUP, accepted by both chains beside or instead of the raw form, would let attestors sign with the
+   wallets they have, with a readable display.
+10. **`approve_pause`'s check order in the TypeScript reference (low).** The EVM converts `pauseEnd` to a u64 before it
+    recovers the signature (`toU64`, MercesIncome.sol:499-504: no PAUSE message can encode 2^64) and Solana's
+    `pause_end` is a u64 argument; the reference checks the attestor first and the range after the request
+    (simulator.ts:1284-1289). 21#41 gives AmountOutOfRange under every order; please align the reference with the EVM
+    (the register's "Stage 1 internal, resolved toward the EVM" row).
+11. **Event nonces (information only).** `TermsAmended.nonce` is the nonce before the increment on both chains
+    (merces_registry lib.rs:820-830, MercesRegistry.sol:660) and after it in the reference (simulator.ts:863-864);
+    `PauseRequestWithdrawn.nonce` is the old nonce on Solana (income.rs:971-975) and the new one on the EVM and the
+    reference (MercesIncome.sol:491-492, simulator.ts:668-669). Lockstep compares the ledger, so nothing fails; one
+    meaning per event would let a vector pin it.
+
 Open since S1, with the same defaults:
 
 1. **Who attests `liquidityEvent` for tier 2?** zkTLS data cannot show a liquidity event. Default: the report
@@ -883,39 +1023,55 @@ Open since S1, with the same defaults:
    no server-side copy (PRIVACY.md). A series' first report in mid-year supplies its own prior, which only the
    attestation binds (Stage 1 A25).
 
-Open (S4), with the default S4 uses meanwhile:
+Open (S4), with the default S4 uses meanwhile (numbered as the S4 amendments number them; ASSUMPTIONS.md, SECURITY.md
+and the code cite them as "S4 owner question n"):
 
 1. **Which cloud KMS holds the report-verifier key?** Stage 1 needs a secp256k1 key that signs a 32-byte keccak digest
    as it is. AWS KMS can (key spec `ECC_SECG_P256K1`, `Sign` with `ECDSA_SHA_256` and `MessageType=DIGEST`); GCP Cloud
    KMS has `EC_SIGN_SECP256K1_SHA256` at HSM protection level only, and whether it signs a keccak digest given in
-   `digest.sha256` is unverified; HashiCorp Vault transit has no secp256k1 key type (VERSIONS.md "Signing keys and
-   KMS", each fact pinned to a vendor source and unconfirmed against the HTML docs, which this environment cannot
-   reach). Default: S4 ships the port (`signerAddress`, `signDigest`), the DER normaliser and the provider-neutral
-   adapter (`RemoteSecp256k1Kms`, S4 WP3); non-local providers stay refused until one is chosen.
-2. **Two accounts for an extinguishment (the S4 amendments' question 4).** Stage 1 extinguishes a series with any two
-   distinct active attestor keys. The attestor service also requires the two keys to be linked to two different
-   accounts (S4 D15), so one person holding two keys cannot extinguish a series through Merces alone; the chain cannot
-   enforce it (keys are not accounts), so a key holder could still relay two of its own keys' signatures directly.
-   Default: on (409 `same-account`; A-SIG-7).
+   `digest.sha256` is unverified (its proto says "Other hash functions can also be used"); HashiCorp Vault transit has
+   no secp256k1 key type (its `MANAGED_KEY`, which delegates to an external KMS, is unexamined) (VERSIONS.md "Signing
+   keys and KMS", each fact pinned to a vendor source at a release tag or commit and unconfirmed against the HTML docs,
+   which this environment cannot reach). Default: S4 ships the port (`signerAddress`, `signDigest`), the DER normaliser
+   and the provider-neutral adapter (`RemoteSecp256k1Kms`, S4 WP3); non-local providers stay refused until one is
+   chosen.
+2. **Wallet signing: ask Stage 1 for an EIP-712 form of the six messages?** Stage 1 signs the raw keccak digest of a
+   `MERCES_*_V1` pre-image with no EIP-191 prefix (SPEC §1.4), which ordinary wallets cannot produce: MetaMask removed
+   `eth_sign` (MIP-3), `personal_sign` prefixes the message, and Ledger's Ethereum app has no raw-hash method
+   (VERSIONS.md). An EIP-712 (or EIP-191-wrapped) form would let ordinary and hardware wallets sign them, with a
+   readable display. Default: attestors sign with the Merces attestor tool and a dedicated, never-funded key (A-SIG-2;
+   a raw-digest key signs any 32 bytes), Foundry's `cast wallet sign --no-hash` as the expert fallback; asked of Stage
+   1 below (9).
+3. **The residual risk of a compromised report or attestor key.** Forward-only revocation keeps report and FX
+   signatures for periods that had already ended valid for up to 45 days after the revocation (Stage 1's design: no
+   admin action may manufacture lateness), and an unrelayed PAUSE or EXTINGUISH signature stays valid until it is used,
+   its nonce moves or the key is revoked; the attestor tool cannot check a nonce against the chain until S5 reads it
+   from a public RPC. Only the issuer can submit a report, so the mitigation is offchain. Default: accepted and
+   documented (SECURITY.md "Attestor signing", residual risks), with the RUNBOOK's check of the reports accepted under a
+   revoked key ("Reports accepted under a revoked key") and every unrelayed bearer signature kept out of every read
+   but the flow that needs it (PRIVACY.md "Signatures and keys (S4)").
+4. **Two accounts for an extinguishment.** Stage 1 extinguishes a series with any two distinct active attestor keys.
+   The attestor service also requires the two keys to be linked to two different accounts (S4 D15), so one person
+   holding two keys cannot extinguish a series through Merces alone; the chain cannot enforce it (keys are not
+   accounts), so a key holder could still relay two of its own keys' signatures directly. Default: on (409
+   `same-account`; A-SIG-7).
+5. **Who attests `liquidityEvent` for tier 2?** Unchanged: S1's question ("Open since S1", 1). S4 changed only the
+   signature: the report verifier signs the flag the device declares inside Stage 1's REPORT message (A-REV-1).
 
-### Divergence register (Stage 1 behaviour knowingly not mirrored after S3 and NRC)
+### Divergence register (Stage 1 behaviour knowingly not mirrored after S4)
 
-The non-reveal charge's row ("owner hold: not modelled", DIV-NRC-1 in the vector runner) is gone: NRC models the charge
-as Stage 1's code does, and vector 03 passes in full on both personalities and in lockstep. The bid commitment's row
-(SH-AUC-2) is gone too: since S4 WP2 bid and order commitments are Stage 1's keccak (A-SIG-8). Since S4 WP5 attestor
-keys follow Stage 1's registry (register, forward-only revoke with the 45-day grace, rotate, the last-key rule), so the
-signature row no longer lists "no revocation grace" for them. Since S4 WP6 the report verifier's keys follow the same
-registry and a tier-2 report carries Stage 1's REPORT signature (secp256k1, recovered onchain), so the row lists the
-co-signing attestors only. Since S4 WP7 the attestors are 20-byte keys as on both chains; what still differs is that
-they co-sign at the key's address instead of signing Stage 1's messages. Since S4 WP9 a tier-3 report and the FX
-fallback carry the attestor key's own Stage 1 signatures (REPORT tier 3, FX per series), and since S4 WP10 a pause
-approval carries its PAUSE signature (permissionless, relayed by the keeper), and since S4 WP11 an amendment carries its
-AMEND signature (the issuer's `amendTerms`). Since S4 WP12 an extinguishment carries two keys' EXTINGUISH signatures
-(permissionless, relayed by the keeper), so the co-signing row is gone: no flow co-signs, and since S4 WP13 the
-`coSigners` field and `build`'s co-signer argument are gone too (one signer per transaction). `withdraw_pause_request`
-left the S5 row in S4 WP10. Since S4 WP13 the annual true-up carries the attestor key's TRUEUP signature, captured and
-stored for S5's `submit_trueup` (its own row below); the check orders and names of every signature instruction are in
-"Adapter notes for signatures (S5)".
+After S4 no key, signature or commitment is a divergence of ours: attestor and verifier keys are Stage 1's 20-byte
+secp256k1 keys in Stage 1's registry (forward-only revocation with the 45-day grace, rotation, the last-key rule), every
+attestation is Stage 1's `MERCES_*_V1` signature carried as an argument, and bid and order commitments are Stage 1's
+keccak. So the rows for our bid commitment (SH-AUC-2, S4 WP2) and for ed25519 attestations with co-signers and no
+revocation grace (S4 WP5-WP13) are gone, and `withdraw_pause_request` left the S5 row (S4 WP10); `UnsignedTx.coSigners`
+and `ChainPort.build`'s co-signer argument are gone too (S4 WP13: one signer per transaction). What S4 leaves are three
+Stage 1-internal differences resolved toward both chains or the EVM (DIV-S1I-2, DIV-S1I-3 and `approve_pause`'s order),
+the registry's per-chain names, our two-account rule for an extinguishment, the true-up signature captured ahead of
+`submit_trueup`, the simulator's monad series key, `amendTerms` without `tier1Terms`, and the adapters' normalisations
+of every signature instruction ("Adapter notes for signatures (S5)"). Before S4 the non-reveal charge's row
+("owner hold: not modelled", DIV-NRC-1 in the vector runner) went with NRC, which models the charge as Stage 1's code
+does.
 
 | Divergence | Milestone |
 | --- | --- |
@@ -947,6 +1103,8 @@ stored for S5's `submit_trueup` (its own row below); the check orders and names 
 | Stage 1 internal, resolved toward the EVM (S4 WP10, D8): `approve_pause` with a `pause_end` beyond u64 is AmountOutOfRange before the signature is read, as the EVM orders it (`pauseEnd.toU64()` first, MercesIncome.sol:499-504: no PAUSE message can encode 2^64); Stage 1's reference checks the attestor first and the range after the request (simulator.ts:1284-1289), and Solana's `pause_end` is a u64 argument, so 2^64 cannot be encoded at all (its adapter refuses it before sending). 21#41 is AmountOutOfRange under every order; our runner sends a placeholder signature there, which the chain never reads | reported to Stage 1 |
 | Adapter normalisations of a pause (S4 WP10; "Adapter notes for signatures", WP13): Solana's `PauseRequestWithdrawn.nonce` is the nonce before the increment (income.rs:964-977), where the EVM and Stage 1's reference emit the new one (MercesIncome.sol:491-492, simulator.ts:668-669) and so does ours: the Solana adapter adds 1. Solana names the end refusals `PauseEndInPast` and `PauseCumulativeExceeded` where the EVM and the reference say InvalidPauseEnd and PauseTooLong (Stage 1's harness maps them, vectors.rs:181, :203), checks the attestor's account and the signature before PauseNotRequested and TerminalStatus after it (income.rs:1009-1027; the EVM and ours have no TerminalStatus check there); `approve_pause` takes `attestor_addr` and the key's PDA, the EVM recovers the signer | S5 (adapters) |
 | Stage 1 internal, resolved toward both chains (DIV-S1I-3; S4 WP9, D5): the FX fallback signature of an attestor key revoked after the period ended stays valid for the report keys' grace (`revokedAt` + 45 days). Both chains apply it (Solana income.rs:340-356, `require_key` with `Some((period, now))`; EVM MercesIncome.sol:163-168, `_keyValid`); Stage 1's TS reference requires an active attestor (simulator.ts:1092 `requireActiveAttestor`), and SPEC §1.4 grants the grace to "a report attestation" only (SPEC.md:96), so the chains go beyond the SPEC's wording. Ours follows both chains (`submitReport.fxFallback`, the simulator's keys tests at the grace's last second and one past it; the attestor and poi services check the same). No vector revokes an attestor before an FX fallback (13 is S5: the runner creates no FX pair), so it has no runner entry | S5 (FX) / reported to Stage 1 |
+| The simulator's signing context (S4 WP4, D6, D7; A-SIG-3): its domains use Stage 1's local ids (Solana cluster tag 104, EVM 31337) with a registry derived per chain key, so no simulator signature is valid on a deployment; its monad series key is the series' 20-byte pseudo-address left-padded (`bytes32(uint256(uint160(addr)))`), where the EVM's is `bytes32(uint256(seriesId))` over a counter id (A-ID-1). The live adapters return `signing: null` until they read `ProtocolConfig.domain` / `MercesRegistry.domain()` and check it against the manifest (signing flows answer 409 `signing-domain-unknown` meanwhile) | S5 (adapters; EVM counter ids) |
+| `amendTerms` carries no `tier1Terms` (the EVM's new tier-1 router terms on an amendment, MercesRegistry.sol:652-656): the canonical amendment changes the terms commitment and the cap only (S4 D16) | tier-1 milestone |
 | `register_issuer` by the issuer (Stage 1: admin-only, B.7) | S5 |
 | The window durations and the window fee are not series terms, so `createSeries` cannot bound them on a sealed raise (Stage 1: ParameterOutOfBounds) nor require Stage 1's 0 on a curve series (CurveTermsNotZero); every other canonical term follows Stage 1's `create_series` rules (A-TERMS-4): since S3 WP7 a curve series takes Stage 1's zeros for the lockup, the wallet cap and the raise durations, a positive threshold and USDC, in the Solana registry's order. The non-reveal charge is a series term bounded on every series (NRC), as Stage 1 bounds the rate it records, a curve's included | S5 |
 
@@ -954,7 +1112,7 @@ stored for S5's `submit_trueup` (its own row below); the check orders and names 
 
 | Blocker | Needs |
 | --- | --- |
-| D6.2/3: resolving the remaining drift and replaying the other 11 vectors in full on our simulator (08, 10, 14, 16, 20, 21 and 22 replay up to their prefix gate; 12, 13, 18 and 24 not at all) | the rest of section B (approved): S4 signatures, S5 the rest (S2 auctions and S3 claims done; vector 22's claim steps wait for S5's windows, and 21's zero claims for its u64 pause end, both covered meanwhile by our S3 claim scenarios) |
+| D6.2/3: resolving the remaining drift and replaying the other 10 vectors in full on our simulator (08, 10, 14, 16, 20 and 22 replay up to their prefix gate; 12, 13, 18 and 24 not at all) | the rest of section B (approved): S5 (S2 auctions, S3 claims and S4 signatures done; 21 replays in full since S4 WP10; vector 22's claim steps wait for S5's windows, covered meanwhile by our S3 claim scenarios; each prefix stops where S5 starts: 08 at `end_pause` (#58), 10 and 16 at the windows flag (#36, #41), 14 at `retire_if_capped` (#62), 20 at `submit_trueup` (#71), 22 at a priced window settlement (#76)) |
 | D6.4: wiring the adapters (`wired = true`) | the adapters' mappers over the remaining drift, then program ids and addresses |
 | D6.5: conformance on Solana devnet and Monad testnet | Stage 1 deployed to both (STATUS.md: both RPCs are blocked from Stage 1's build container, U5), funded test wallets |
 | D6.6: full raise-to-payout cycle live | D6.5 |
@@ -1174,10 +1332,19 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    `SeriesState.nonces {pause, amendment, extinguish, trueup}` (the ledger's own, u64 decimal strings; they replace
    `amendmentNonce`, `extinguishNonce` and `pauses.nonce`). `GET /chains` carries the domain and the public
    `GET /series/{seriesId}/signing` reads domain, key and nonces live.
+   **S4 (summary):** applied in full ("S4 results"): every attestation is a 20-byte secp256k1 key's Stage 1 signature
+   over a `MERCES_*_V1` message built by Stage 1's SDK, carried as an instruction argument, with Stage 1's revocation
+   grace; nobody co-signs (S4 WP13 removed `UnsignedTx.coSigners`), and bid and order commitments are keccak. What
+   remains is the live adapters' share (S5, "Adapter notes for signatures") and the cloud KMS for the verifier key
+   (owner question 1).
 5. *Extinguishment.* Two distinct attestor signatures with a nonce; only **unvested** proceeds go to holders, vested
    but undrawn tranches stay with the estate (A31, H4); refused unless the raise settled.
    **S1:** applied (WP7): two distinct attestors (co-signing until S4), only the unvested proceeds, through the final
    pool, and refused unless the raise settled (amendment M5).
+   **S4 WP12:** the two signatures are Stage 1's: two attestor keys' `MERCES_EXTINGUISH_V1` signatures over the series'
+   extinguish nonce, carried by the permissionless `extinguish{seriesId, attestorA, signatureA, attestorB, signatureB}`
+   (SameAttestor on the two keys, then each signature by an active key) and relayed by the keeper; the attestor service
+   also requires the two keys to belong to two accounts (S4 D15, A-SIG-7; owner question 4). Item 4 has the detail.
 6. *Missing flows.* The tier-3 true-up is onchain (`submit_trueup`, `pay_trueup`; our A-C8-3 and A-M5-5 assumed it
    was not); the tier-1 income router (`init_router`, `route`, `close_router_period`) is permissionless and keeps θ
    and r in plaintext onchain for tier-1 series (Stage 1 A22: the issuer's choice; our events say θ never goes
@@ -1233,6 +1400,9 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    issuer's `submit_trueup`, which lands in S5; until then the signature is never shown. Nobody co-signs anything any
    more: `UnsignedTx.coSigners` and `ChainPort.build`'s co-signer argument are gone, the simulated chains check the one
    signer, the harness attestors and the vector keys are keys, not wallets ("Adapter notes for signatures (S5)").
+   **S4 (summary):** key revocation with its 45-day grace (A33) and `withdraw_pause_request` are applied (WP5, WP6,
+   WP10), and the true-up's signature is captured (WP13). The true-up itself (`submit_trueup`, `pay_trueup`), the
+   router, `retire_if_capped`, `end_pause`, `resume_issuance` and `request_early_draw` stay S5.
 7. *Actors and admin.* `register_issuer` is **admin-only** on both chains (ours is the issuer's own command); there is
    no admin router registration; timelock-only powers need `TimelockController.schedule`/`execute`; the admin
    surface adds `set_flags` (`new_raises_paused`, `windows_enabled`, `tier4_enabled`), `set_fx_pair`, `set_defaults`,
@@ -1375,7 +1545,8 @@ earlier Merces format below is still accepted as a single JSON file of `scenario
 }
 ```
 
-Actors: `issuer`, `backer-N`, `attestor-N`, `admin`, `keeper`, `allowlistManager`, `router`. `$seriesN` is the N-th
+Actors: `issuer`, `backer-N`, `admin`, `keeper`, `allowlistManager`, `router` (`attestor-N` is gone since S4 WP13:
+an attestor is a key that signs Stage 1's messages, never a wallet that signs a transaction). `$seriesN` is the N-th
 series created in the scenario. Bigint arguments are decimal strings. Every expected balance must match the simulator
 to the base unit; a mismatch means the simulator is wrong and is fixed.
 
@@ -1398,14 +1569,22 @@ to the base unit; a mismatch means the simulator is wrong and is fixed.
    Rust tests (one cited table; a stale citation fails) and a deterministic corpus of 5,883 cases answered by Stage 1's
    own Rust (`tools/stage1-oracle`, merces-common built with Stage 1's toolchain), compared exactly. Any disagreement
    fails the sync, and so does a missing cargo ("S3 follow-up: the curve-port gate (GATE)", above; A-MATH-3).
+4c. **signatures** — Stage 1's signing known answers (`known_answers.json` beside its vectors) reproduced byte for byte
+   through what we run (S4 WP1, A-SIG-1): `@merces/math`'s 30 signing re-exports are `@merces/sdk`'s own objects, and
+   `@merces/domain`'s `signing.ts` gives every message's pre-image and digest, Stage 1's RFC 6979 signature, the
+   recovered signer, both domains, both series keys, the bid commitments (also through our `bidCommitment` and
+   `orderCommitment`), the five test keys and the four wallets; each known signature also comes back through the KMS DER
+   path (`signature65FromDer`, S4 WP3). A drop without the known answers, or any answer not reproduced, fails the sync.
 5. **vectors** — Stage 1's own vector directory is replayed by the Stage 1 vector runner (`pnpm stage1:vectors`,
    `packages/stage1-sync/src/stage1-vectors`): on the reference backend (Stage 1's own simulator; all 25 must pass,
    proofs verified, or the runner or the checkout is broken) and on the merces backend (our simulator, both
-   personalities: the S1 and S2 target vectors in full, and the vectors that need a later milestone up to their prefix
-   gate, each at its expected status; the default test suite runs the same gate). Known divergences are recorded per
-   step and field (`stage1-vectors/divergences.ts`; empty since NRC, which removed DIV-NRC-1, the non-reveal hold in
-   03): a recorded difference is accepted (PASS-WITH-DIVERGENCES), another value fails, and an entry that no longer
-   occurs fails as stale. Report proofs are verified with the ports' `Groth16ReportVerifier`, the verifier the API and
+   personalities: the target vectors in full, and the vectors that need a later milestone up to their prefix gate, each
+   at its expected status; the default test suite runs the same gate), and our own scenarios on Stage 1 vector prefixes
+   (S3's claim scenarios and S4's signature scenarios, in lockstep where Stage 1's reference models the rule). Known
+   divergences are recorded per step and field (`stage1-vectors/divergences.ts`: DIV-S1I-1 since the S3 review and
+   DIV-S1I-2 since S4 WP5, both Stage 1-internal differences resolved toward both chains and met by our scenarios only;
+   NRC removed DIV-NRC-1, the non-reveal hold in 03): a recorded difference is accepted (PASS-WITH-DIVERGENCES), another
+   value fails, and an entry that no longer occurs fails as stale. Report proofs are verified with the ports' `Groth16ReportVerifier`, the verifier the API and
    the simulated chains run. `VECTOR_PARITY.md` lists the results, the findings with leaf-path diffs, the known
    divergences, the prefix gates, waived steps, runner-atomic reverts, the shims used ("not parity", the calls of
    expected reverts included) and the op inventory. A single JSON file of `scenarios` (the earlier Merces format) is
@@ -1428,11 +1607,14 @@ repository variable). Both workflows install Stage 1's pinned Rust toolchain for
    public inputs, pay-in, tier 1), A-REV-1/3/4/6/17/20 and A-C11-6 (extinguishment, still with counsel); S2 settled
    A-AUC-1/2/3/4 (the auction) and withdrew A-REV-2; S3 settled the claims (A-CLM-1/2), A-CURVE-2 (no cap, applied),
    A-CURVE-3 (where curve buyers' money sits, implemented) and Stage 1's curve mode but its venue (A-CURVE-1, -4…-7);
-   still open: A-FX-1/2 (weekends, Chainlink, S5).
+   S4 settled the signatures and keys (A-SIG-1…8; A-REV-1's attestation, A-M5-2, A-M5-3 and A-M5-5 revised; A-REV-9
+   extended to the signers); still open: A-FX-1/2 (weekends, Chainlink, S5).
 4. Wire the adapters' reads, event decoding and transaction builders to the generated clients, then set the adapter's
    `wired` flag to `true` (until then `auto` keeps the simulator; explicit `live` is what conformance uses). The
    conformance env for live chains needs funded devnet/testnet wallets (`CONFORMANCE_ISSUER_KEY`, `CONFORMANCE_BACKER_KEYS`,
-   `CONFORMANCE_ATTESTOR_KEYS`, `CONFORMANCE_ADMIN_KEY`) and short durations in Stage 1's test deployment.
+   `CONFORMANCE_ADMIN_KEY`), the attestor keys (`CONFORMANCE_ATTESTOR_KEYS`: secp256k1 signing keys registered on the
+   deployment, never funded, since attestors sign Stage 1's messages and send no transaction since S4) and short
+   durations in Stage 1's test deployment.
 5. Get the conformance suite green on Solana devnet and Monad testnet.
 6. Run the full raise-to-payout cycle on both live chains (`pnpm demo:cycle` against `MERCES_CHAIN_*_MODE=live`).
 7. Flip both chains to `live` in the staging configuration; keep `mock` for local development and Stage 3.
@@ -1451,6 +1633,12 @@ State at @1bfc66b (the same tree as @5eafd41):
   CAD, CHF, BRL, MXN and SGD are still unverified (Stage 1 U3).
 - Report-verifier signatures: Stage 1 verifies **secp256k1** report attestations onchain (SPEC §1.4), not ed25519;
   B.4 of the review: applied in S4 WP6 (A-SIG-5); the cloud KMS for the key waits for the owner (S4 question 1).
+- Wallet signing of Stage 1's messages (S4): the six `MERCES_*_V1` digests are raw keccak with no EIP-191 prefix, so no
+  ordinary or hardware wallet can sign them and attestors use the Merces attestor tool (A-SIG-2). Asked: an EIP-712 form
+  ("Asked of Stage 1 (S4 WP14)", 9; S4 owner question 2).
+- The signing domain and nonces on a live deployment (S4): the attestor tool and the API take the domain from the
+  deployment manifest and the registry's own `domain()` (S5); a published manifest naming each deployment's registry is
+  still missing (see "What the handoff was missing").
 - Curve buyers' money and the wallet cap: answered (see "The two curve questions" above).
 - Scale-aware TypeScript math (S3, A-MATH-3): Stage 1's reference math has no `unit_scale`, so `vaultReceiveGross`,
   `tailReceive`, `redemptionQuote` and `isCapped` cannot account a curve series per base lamport, and curve mode's

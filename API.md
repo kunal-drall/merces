@@ -51,6 +51,40 @@ explains how to use the API; the spec is the source of truth for shapes.
 - **Mock mode** adds `/dev/time`, `/dev/advance-time`, `/dev/faucet`, `/dev/esign/complete` so Stage 3 can drive the whole
   lifecycle without waiting for quarters to pass.
 
+## Signing requests (S4)
+
+Stage 1's attestations are signatures by a 20-byte secp256k1 key over a `MERCES_*_V1` message (a raw keccak digest, no
+EIP-191 prefix), carried by a command as an argument: nobody co-signs a transaction. The API never signs one and never
+signs a digest a caller supplies. For each work item it returns a `SigningRequest`:
+
+`{kind, chain, seriesId, seriesKey, domain: {chainKind, chainId, registry, domain}, signer, fields, preimage, digest, validWhile}`
+
+`kind` is one of Stage 1's six messages, `signer` the addressed key, `fields` the typed fields (u64 and i64 values as
+decimal strings), `validWhile` what keeps a signature usable. There is no display text: the attestor's device rebuilds
+the pre-image and digest from `seriesId`, `domain` and `fields` under its own pinned network table, refuses any
+difference and shows what it rebuilt (RUNBOOK "Attestor key setup"). The answer carries `{signer, signature}` (an FX rate
+one signature per covered series; with the digest for the record, which must equal the one the service rebuilds); the service recovers the signer over the message
+it rebuilds from the chain's own reads, so a signature by another key, a malformed or non-canonical one, or one over
+other fields is 422 with Stage 1's name in `detail.stage1`. A signature over a nonce that has moved is 409 `stale-nonce`
+with the fresh request in `detail.request`.
+
+| Kind | Work item | Request | Answer | Who submits it | Valid while |
+| --- | --- | --- | --- | --- | --- |
+| REPORT (tier 2) | a tier-2 report | the report verifier signs it itself, after verifying the zkTLS proof | — | the issuer (`submitReport`) | one per series and period; the verifier key usable for the period (grace) |
+| REPORT (tier 3) | a tier-3 case | `GET /attestor/tier3/{caseId}/message` | `POST /attestor/tier3/{caseId}/sign` | the issuer (`submitReport`) | one per series and period; the key usable for the period (grace) |
+| FX | an FX fallback rate, one per covered series | `GET /attestor/fx-requests/{requestId}/messages` | `POST /attestor/fx-requests/{requestId}/sign` | the issuer (`submitReport.fxFallback`) | one per series and period; the key usable for the period (grace) |
+| PAUSE | a hardship approval | `GET /attestor/hardship/{hardshipId}/message` | `POST /attestor/hardship/{hardshipId}/decide` | the keeper, at once (`approvePause`, permissionless) | the pause nonce; an active key |
+| AMEND | an amendment | `GET /attestor/amendments/{amendmentId}/message` | `POST /attestor/amendments/{amendmentId}/attest` | the issuer (`amendTerms`) | the amendment nonce; an active key |
+| EXTINGUISH | an extinguishment, two keys of two accounts | `GET /attestor/extinguish/{requestId}/message` | `POST /attestor/extinguish/{requestId}/sign` | the keeper, once both are in (`extinguish`, permissionless) | the extinguish nonce; active keys |
+| TRUEUP | an annual true-up | `GET /attestor/tier3/annual/{annualId}/message` | `POST /attestor/tier3/annual/{annualId}/sign` | the issuer (`submitTrueUp`, S5); stored meanwhile | the true-up nonce; an active key |
+
+Every request and answer route is `attestor` tier and checks the addressed key itself: linked to the caller's account,
+registered, active and indexed on the item's chain (admins may read a request, never answer one). The public
+`GET /series/{seriesId}/signing` gives the domain, series key and four nonces; `GET /chains/{chain}/signer-keys` the
+chain's key registry. PAUSE, AMEND, EXTINGUISH and TRUEUP signatures that are not yet onchain are bearer
+authorisations, and no read shows one to anyone but the flow that needs it (PRIVACY.md "Signatures and keys"). The
+flows are under **Attestor** below.
+
 ## Flows
 
 **Issuer**: apply (`POST /applications`, `…/identity/start`, `…/submit`; admin decides) → create a draft (`POST /drafts`)

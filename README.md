@@ -60,6 +60,7 @@ external facts the code relies on, with sources), `docs/milestones/` (what each 
 ## Ground rules this code keeps
 
 Never mainnet, never real funds or personal data. No custody: the backend builds unsigned transactions and holds only
-keeper and allowlist-manager keys. No raw income at rest, in logs, in queues or in error reports (a canary test proves
+keeper and allowlist-manager keys (the report verifier's key sits behind the KMS port; attestor keys never leave the
+attestors' own machines, and nobody co-signs: S4). No raw income at rest, in logs, in queues or in error reports (a canary test proves
 it). A chain-neutral API. Money and charter semantics come from the brief; every ambiguity that could change who gets
 paid is recorded in `ASSUMPTIONS.md` and flagged for Kunal.
