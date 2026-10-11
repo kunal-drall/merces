@@ -53,6 +53,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     const w = SimSigner.attestor('attestor-new');
     await new IdentityService(rig.ctx).seedAccount({ accountId: 'att-new', wallets: [], roles: ['backer'], eligible: false });
     await rig.linkKeys('att-new', [w]);
+    await rig.verifyAttestor('att-new'); // A-SIG-7: registration needs the account's passed attestor identity check (attestor-identity.test.ts)
     expect(await rig.sol.sim.getSignerKey('attestor', w.address)).toBeNull(); // cause S4-REG (was listAttestors)
 
     // unknown account → 404; a wallet address that is no key, or the old body, → 400
@@ -158,6 +159,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     await rig.sol.exec(rig.sol.admin, { kind: 'registerAttestor', attestor: r1.address });
     await rig.sync();
     const attTok = await rig.attestorToken('att-rot', [r1]);
+    await rig.verifyAttestor('att-rot'); // A-SIG-7: a rotation needs the account's passed attestor identity check too
     expect((await rig.get('/attestor/queue', attTok)).statusCode).toBe(200);
     // the new key must be linked to the account holding the old one
     const rotate = (to: string, from = r1.address) => rig.post('/admin/attestors/rotate', { chain: 'solana', from, to }, adminTok);

@@ -844,13 +844,16 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(again.json()).toMatchObject({ state: 'sent', relayError: null, relayTx: expect.any(String) });
     expect((await h.sim.getSeries(s2))!.status).toBe('Extinguished');
 
-    // S4 D15 is read live: a key relinked to the other named key's account cannot sign (409 same-account)
+    // S4 D15 is read live: a key relinked to the other named key's account cannot sign (409 same-account). Registration
+    // already guarantees two separately verified accounts (A-SIG-7, the owner's decision): this is the defence in depth
+    // that still fires when the link table is tampered with, and its message says so
     const s3 = (await h.runRaise()).seriesId;
     await rig.sync();
     const id3 = await openFor(s3, k6, k7, t6);
     await rig.t.pool.query("update account_signer_keys set account_id = 'att-k6' where address = $1", [k7.address]);
     const both = await rig.signExtinguish(id3, k6, t6);
     expect([both.statusCode, both.json().detail]).toEqual([409, { reason: 'same-account' }]);
+    expect(both.json().message).toMatch(/registration already guarantees two separately verified accounts/);
     await rig.t.pool.query("update account_signer_keys set account_id = 'att-k7' where address = $1", [k7.address]);
     expect((await rig.signExtinguish(id3, k6, t6)).json()).toMatchObject({ state: 'collecting', signers: [k6.address] });
     // a key an open request names cannot be unlinked (its account is one of the two)

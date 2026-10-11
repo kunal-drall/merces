@@ -90,6 +90,7 @@ document file (A-PRIV-4).
 | Display name, country | `accounts`, `applications.country` | plain | owner, admin | account deletion |
 | Identity documents | never (the identity-check provider holds them) | none | — | provider's policy |
 | Identity check id and status | `applications.identity_check_id`, `identity_status` | plain | owner, admin | application retention |
+| Attestor identity check id and status (A-SIG-7, migration 031) | `attestor_identity_checks` (the provider's check id, its status, when started); one row per account | plain | owner (`GET /me/attestor/identity-check`), admin (the status only, `GET /admin/attestors` `identityStatus`); never public, never in a notification or the activity feed | account deletion (the provider holds the documents, under its policy) |
 | Application notes | `applications.notes_encrypted` | vault | owner, admin | application retention |
 | Persona | `applications.persona` | plain | owner, admin | — |
 | Readiness report | `applications.readiness` | plain | owner, admin | — |

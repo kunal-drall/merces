@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import { addressFamily, keyGraceUntil, normaliseAddress, type ChainFamily } from '@merces/domain';
-import { signInMessage, signerKeyLinkMessage, simulatorOnly, verifyKeyPersonalSignature, verifyWalletSignature } from '@merces/ports';
+import { signInMessage, signerKeyLinkMessage, simulatorOnly, verifyKeyPersonalSignature, verifyWalletSignature, type IdentityCheckStatus } from '@merces/ports';
 import { issueSession, type Role, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -203,6 +203,54 @@ export class IdentityService {
       if (!/^0x[0-9a-f]{40}$/.test(a)) throw new Error(`seedSignerKeys: ${a} is not a 20-byte lowercase key address`);
       await this.ctx.pool.query('insert into account_signer_keys (address, account_id) values ($1, $2) on conflict (address) do nothing', [a, accountId]);
     }
+  }
+
+  // ---- the attestor identity check (owner decision, A-SIG-7: two separately verified accounts, enforced at registration)
+  /**
+   * Start the account's attestor identity check with the provider, or return the one it has: a passed check is final
+   * and a pending one is refreshed from the provider instead of being started again; a failed one starts again in place.
+   * Stores only the provider's check id and status (migration 031), never documents or extracted data. An admin's
+   * `registerAttestor` / `rotateAttestor` of a key linked to the account is refused until the status is `passed`
+   * (`attestorIdentityPassed`). The mock provider passes at once; the real one (Part J.1) must also give a stable
+   * reference to the verified person, so a second account of one person can be refused at registration.
+   */
+  async startAttestorIdentityCheck(accountId: string): Promise<{ provider: string; checkId: string; redirectUrl: string | null; status: IdentityCheckStatus; startedAt: Date; updatedAt: Date }> {
+    const acc = await this.ctx.pool.query<{ country: string | null }>('select country from accounts where account_id = $1', [accountId]);
+    if (!acc.rows[0]) throw AppError.notFound('account');
+    const current = await this.attestorIdentityCheck(accountId);
+    if (current.status === 'passed' || current.status === 'pending') return { ...current, redirectUrl: null };
+    const r = await this.ctx.identity.start({ applicationId: null, accountId, kind: 'attestor', country: acc.rows[0].country });
+    const status = await this.ctx.identity.status(r.checkId);
+    const row = await this.ctx.pool.query<{ started_at: Date; updated_at: Date }>(
+      `insert into attestor_identity_checks (account_id, provider, check_id, status) values ($1, $2, $3, $4)
+       on conflict (account_id) do update set provider = excluded.provider, check_id = excluded.check_id, status = excluded.status, started_at = now(), updated_at = now()
+       returning started_at, updated_at`,
+      [accountId, this.ctx.identity.provider, r.checkId, status],
+    );
+    return { provider: this.ctx.identity.provider, checkId: r.checkId, redirectUrl: r.redirectUrl, status, startedAt: row.rows[0]!.started_at, updatedAt: row.rows[0]!.updated_at };
+  }
+
+  /**
+   * The account's attestor identity check as the provider reports it now: a pending one is refreshed from the provider
+   * (the application checks' refresh path, `refreshIdentity`) and the stored status updated; `not_started` when the
+   * account has none. The account and admins read it (an admin sees the status in `GET /admin/attestors`).
+   */
+  async attestorIdentityCheck(accountId: string): Promise<{ provider: string; checkId: string; status: IdentityCheckStatus; startedAt: Date; updatedAt: Date } | { provider: null; checkId: null; status: 'not_started'; startedAt: null; updatedAt: null }> {
+    const r = await this.ctx.pool.query<{ provider: string; check_id: string; status: IdentityCheckStatus; started_at: Date; updated_at: Date }>('select provider, check_id, status, started_at, updated_at from attestor_identity_checks where account_id = $1', [accountId]);
+    const row = r.rows[0];
+    if (!row) return { provider: null, checkId: null, status: 'not_started', startedAt: null, updatedAt: null };
+    let status = row.status;
+    let updatedAt = row.updated_at;
+    if (status === 'pending') {
+      status = await this.ctx.identity.status(row.check_id);
+      if (status !== row.status) updatedAt = (await this.ctx.pool.query<{ updated_at: Date }>('update attestor_identity_checks set status = $2, updated_at = now() where account_id = $1 returning updated_at', [accountId, status])).rows[0]!.updated_at;
+    }
+    return { provider: row.provider, checkId: row.check_id, status, startedAt: row.started_at, updatedAt };
+  }
+
+  /** Whether the account's attestor identity check has passed (read as stored; a pending one is refreshed first). */
+  async attestorIdentityPassed(accountId: string): Promise<boolean> {
+    return (await this.attestorIdentityCheck(accountId)).status === 'passed';
   }
 
   // ---- applications

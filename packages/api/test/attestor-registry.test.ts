@@ -67,8 +67,10 @@ describe.skipIf(!dbTestsEnabled())('attestor access follows the indexed registry
     const r = await rig.post('/admin/attestors', { chain: 'solana', attestor: k.address, accountId: 'acct-a' }, adminTok);
     expect([r.statusCode, r.json().detail]).toEqual([422, { reason: 'key-not-linked' }]);
     expect(r.json().message).toMatch(/not linked/);
-    // linked to another account: refused for the named one; accepted for its own (the account defaults to the holder's)
+    // linked to another account: refused for the named one; accepted for its own (the account defaults to the holder's;
+    // A-SIG-7: the holder has passed the attestor identity check)
     await rig.linkKeys('acct-other', [k]);
+    await rig.verifyAttestor('acct-other');
     expect((await rig.post('/admin/attestors', { chain: 'solana', attestor: k.address, accountId: 'acct-a' }, adminTok)).json().detail).toEqual({ reason: 'key-not-linked' });
     const ok = await rig.post('/admin/attestors', { chain: 'solana', attestor: k.address }, adminTok);
     expect([ok.statusCode, ok.json().request.meta.accountId]).toEqual([201, 'acct-other']);

@@ -502,6 +502,24 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/me/attestor/identity-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's attestor identity check as the provider reports it now (a pending one is refreshed on read), or status not_started with every other field null. Visible to the account; an admin sees the status beside each key in GET /admin/attestors. */
+        get: operations["getAttestorIdentityCheck"];
+        put?: never;
+        /** @description Start the caller's attestor identity check with the identity provider (the owner's decision, A-SIG-7: an attestor key is registered only for a separately verified account). Returns the provider's check id, the URL to complete it at and its status. Idempotent: an account with a passed check gets it back (redirectUrl null), one with a pending check gets its refreshed status (redirectUrl null), one with a failed check starts again. Only the provider's check id and status are stored, never documents or extracted data. The admin's POST /admin/attestors and /admin/attestors/rotate of a key linked to the account answer 409 identity-not-verified until the status is passed. */
+        post: operations["startAttestorIdentityCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/session/refresh": {
         parameters: {
             query?: never;
@@ -1704,7 +1722,7 @@ export type paths = {
         /** Attestor key proposals beside the indexed onchain registry, by key; only an indexed active registration of a key linked to an account gives that account attestor access */
         get: operations["adminListAttestors"];
         put?: never;
-        /** Build Stage 1's registerAttestor of a key linked to the account for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); the registry's rules are checked against the chain first; audited */
+        /** Build Stage 1's registerAttestor of a key linked to a separately verified account for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); the registry's rules are checked against the chain first, then the owner's rule (A-SIG-7); audited */
         post: operations["adminRegisterAttestor"];
         delete?: never;
         options?: never;
@@ -3465,6 +3483,20 @@ export type components = {
             created: boolean;
             /** @description a refreshed session token (its roles are informational; access is read live) */
             token: string;
+        };
+        /** @description The account's attestor identity check (A-SIG-7): the provider's check id and status only, never documents or extracted data. Every field but status is null while the account has none (status not_started). */
+        AttestorIdentityCheck: {
+            /** @description the identity provider */
+            provider: string | null;
+            /** @description the provider's reference for the check */
+            checkId: string | null;
+            /** @description where the account completes a check just started (POST only); null when an existing check is returned */
+            redirectUrl?: string | null;
+            /** @enum {string} */
+            status: "not_started" | "pending" | "passed" | "failed";
+            startedAt: string | null;
+            /** @description when the stored status last changed */
+            updatedAt: string | null;
         };
         /** @description The report verifier a device talks to (S4 WP6): its URL, the 20-byte address of its secp256k1 key (the address each chain registers as a verifier key; GET /chains and the chains' registries are public) and the chains it signs for, each with the signing domain it holds (the device can compare it with GET /chains). Public data. */
         ReportVerifierInfo: {
@@ -5460,6 +5492,57 @@ export interface operations {
             };
             /** @description Work addressed to the key is open (detail.reason open-work, detail.openWork the counts: pending hardship requests, open tier-3 cases and annual attestations, open extinguishment requests naming it (collecting signatures or awaiting the relay; S4 WP12), attested amendments not landed) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getAttestorIdentityCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The check */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttestorIdentityCheck"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    startAttestorIdentityCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The check (status passed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttestorIdentityCheck"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description The session's account does not exist */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7834,6 +7917,11 @@ export interface operations {
                             attestor: string;
                             /** @description the account the key is linked to now (the one that gets access); admin views only */
                             accountId?: string | null;
+                            /**
+                             * @description that account's attestor identity check as stored (A-SIG-7; registration needs passed); null when no account holds the key
+                             * @enum {string|null}
+                             */
+                            identityStatus?: "not_started" | "pending" | "passed" | "failed" | null;
                             /** @enum {string} */
                             status: "registered" | "pending-onchain" | "deactivation-pending" | "inactive";
                             onchainActive: boolean;
@@ -7897,7 +7985,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The registry refuses it on this chain, before anything is built (detail.reason key-already-active: the EVM reverts KeyAlreadyActive, Solana would re-emit), or the idempotency key was reused with a different body */
+            /** @description Refused before anything is built, value-free: the registry refuses it on this chain (detail.reason key-already-active: the EVM reverts KeyAlreadyActive, Solana would re-emit); the key's account has not passed the attestor identity check (identity-not-verified: it completes POST /me/attestor/identity-check first; A-SIG-7); another key linked to the account is active or proposed on this chain (account-already-attestor: one attestor key per verified account and chain, rotate instead); or the idempotency key was reused with a different body */
             409: {
                 headers: {
                     [name: string]: unknown;

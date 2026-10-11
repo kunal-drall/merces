@@ -67,6 +67,9 @@ for (const n of [1, 2]) {
   }
   await ids.seedAccount({ accountId: `acct-attestor-${n}`, wallets: [{ chain: 'monad', address: key.address, family: 'evm' }], roles: [], eligible: false });
   await ids.seedSignerKeys(`acct-attestor-${n}`, [key.address]);
+  // each dev attestor account passes the mock attestor identity check (A-SIG-7), so an admin's registration or rotation
+  // of its key through the API is not refused `identity-not-verified` (the mock provider passes at once; idempotent)
+  await ids.startAttestorIdentityCheck(`acct-attestor-${n}`);
 }
 await ids.seedAccount({ accountId: 'acct-admin', wallets: [{ chain: 'solana', address: simAdminWallet('solana').address, family: 'solana' }, { chain: 'monad', address: simAdminWallet('evm').address, family: 'evm' }], roles: ['admin'], eligible: false });
 const app = await buildApp(ctx, serviceRoutes);

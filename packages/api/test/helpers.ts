@@ -3,7 +3,7 @@ import type { ChainRegistry } from '@merces/chains';
 import { Indexer } from '@merces/indexer';
 import { SimHarness, SimulatorChain, type Personality } from '@merces/simulator';
 import { buildApp, issueSession, makeContext, type Session } from '../src/index.ts';
-import { createServiceContext, serviceRoutes } from '@merces/services';
+import { IdentityService, createServiceContext, serviceRoutes } from '@merces/services';
 import { Groth16ReportVerifier, LocalKms, MockESign, MockIdentityCheck, MockZkTls, reportProofVerifier, shutdownProofSystem } from '@merces/ports';
 import { ReportVerifier, verifierChainsFromPorts } from '@merces/report-verifier';
 
@@ -84,6 +84,17 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
     return token({ accountId, roles: ['attestor'], ...s });
   };
   /**
+   * The owner's rule (A-SIG-7): an admin registers (or rotates to) a key only for an account that passed the attestor
+   * identity check. This passes `accountId` through the account's own flow under the rig's auto-pass mock provider
+   * (creating the account if needed), as dev:mock does for its seeded attestor accounts. Tests that register a key
+   * through `POST /admin/attestors` call it first; a test of the refusal does not.
+   */
+  const verifyAttestor = async (accountId: string): Promise<void> => {
+    await t.pool.query('insert into accounts (account_id) values ($1) on conflict (account_id) do nothing', [accountId]);
+    const r = await new IdentityService(ctx).startAttestorIdentityCheck(accountId);
+    if (r.status !== 'passed') throw new Error(`test rig: the mock attestor identity check of ${accountId} is ${r.status}, not passed`);
+  };
+  /**
    * cause S4-FX: an FX fallback signed through the API (S4 WP9, D14). Opens the keeper's request for (chain, pair, period)
    * when there is none, then attestor key `key` (linked to its account, or to a new one) fetches the signing requests and
    * signs Stage 1's FX message for every covered series over each request's typed fields, as its device would. Returns
@@ -136,7 +147,7 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
   const post = (url: string, body: unknown, tok?: string, extra: Record<string, string> = {}) => app.inject({ method: 'POST', url, payload: body as Record<string, unknown>, headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), ...extra } });
   const put = (url: string, body: unknown, tok?: string) => app.inject({ method: 'PUT', url, payload: body as Record<string, unknown>, headers: tok ? { authorization: `Bearer ${tok}` } : {} });
   return {
-    t, sol, mon, ctx, app, indexer, token, grant, linkKeys, attestorToken, signFxFallback, signAmendment, signExtinguish, get, post, put, del: (url: string, tok?: string) => app.inject({ method: 'DELETE', url, headers: tok ? { authorization: `Bearer ${tok}` } : {} }), esign, identity, zktls, verifier, kms,
+    t, sol, mon, ctx, app, indexer, token, grant, linkKeys, attestorToken, verifyAttestor, signFxFallback, signAmendment, signExtinguish, get, post, put, del: (url: string, tok?: string) => app.inject({ method: 'DELETE', url, headers: tok ? { authorization: `Bearer ${tok}` } : {} }), esign, identity, zktls, verifier, kms,
     harness: (p: Personality) => (p === 'solana' ? sol : mon),
     async sync() {
       await indexer.catchUp();

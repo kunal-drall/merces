@@ -3,6 +3,7 @@ import { AppError, audit, getFlag, listFlags, setFlag } from '@merces/core';
 import { keyGraceUntil, type AdminCommand, type ChainPort, type SignerKeyState, type UnsignedTx } from '@merces/domain';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
+import { IdentityService } from '../identity/service.ts';
 
 /**
  * E13 — admin API with an append-only audit log.
@@ -154,6 +155,32 @@ export class AdminService {
     return r.rows[0]?.account_id ?? null;
   }
 
+  /**
+   * The owner's decision (A-SIG-7): "Extinguishment: two separately verified accounts, enforced at registration". A key
+   * is registered for an account (`registerAttestor`), or rotated to (`rotateAttestor`), only when (1) the account's
+   * attestor identity check has passed (409 `identity-not-verified`: the account completes `POST
+   * /me/attestor/identity-check` first) and (2) no other key linked to the account, apart from `except` (the key
+   * itself, and the key a rotation replaces), is active on the chain (read live) or proposed for it (a registration
+   * proposal whose multisig request is not confirmed yet): 409 `account-already-attestor`. One verified account holds
+   * one attestor key per chain, so the two keys Stage 1's extinguish takes are two separately verified accounts; the
+   * extinguish-time same-account check (S4 D15) stays as defence in depth. Neither refusal names a key or an account.
+   */
+  private async requireVerifiedAttestorAccount(port: ChainPort, chain: string, accountId: string, except: string[]): Promise<void> {
+    if (!(await new IdentityService(this.ctx).attestorIdentityPassed(accountId))) {
+      throw AppError.conflict("the key's account has not passed the attestor identity check: the attestor completes it first (POST /me/attestor/identity-check)", { reason: 'identity-not-verified' });
+    }
+    const others = (await this.ctx.pool.query<{ address: string }>('select address from account_signer_keys where account_id = $1 and not (address = any($2::text[]))', [accountId, except])).rows.map((r) => r.address);
+    if (!others.length) return;
+    const active = new Set((await port.listSignerKeys('attestor')).filter((k) => k.active).map((k) => k.address));
+    const proposed = await this.ctx.pool.query(
+      "select 1 from attestor_proposals p left join admin_tx_requests r on r.request_id = p.request_id where p.chain = $1 and p.active and p.address = any($2::text[]) and coalesce(r.state, 'proposed') <> 'confirmed' limit 1",
+      [chain, others],
+    );
+    if (others.some((a) => active.has(a)) || proposed.rowCount) {
+      throw AppError.conflict('another attestor key linked to this account is active or proposed on this chain: one attestor key per verified account and chain (rotate the key instead)', { reason: 'account-already-attestor' });
+    }
+  }
+
   /** Record what was proposed for a key (A-M5-2: a proposal grants nothing; access follows the indexed registry). */
   private async recordProposal(chain: string, address: string, accountId: string | null, active: boolean, requestId: string, admin: Session): Promise<void> {
     await this.ctx.pool.query(
@@ -169,7 +196,9 @@ export class AdminService {
    * attestor access to whoever links the key later (422). The registry's rules are checked against the chain first, one
    * 409 per case on every chain (S4 D9): a key already active (`detail.reason: key-already-active`; the EVM reverts
    * KeyAlreadyActive, Solana would re-emit). The chain itself is read (`getSignerKey`), not the read model, so a
-   * registration the indexer has not caught up with still counts.
+   * registration the indexer has not caught up with still counts. Then the owner's rule (A-SIG-7,
+   * `requireVerifiedAttestorAccount`): the account has passed the attestor identity check (409 `identity-not-verified`)
+   * and holds no other attestor key active or proposed on this chain (409 `account-already-attestor`).
    */
   async registerAttestor(input: z.infer<typeof registerAttestorSchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
     const port = this.port(input.chain);
@@ -181,6 +210,7 @@ export class AdminService {
     if (!holder) throw AppError.unprocessable('the key is not linked to any account: the attestor links it first (POST /me/signer-keys, an EIP-191 proof made with the key)', { reason: 'key-not-linked' });
     if (input.accountId && holder !== input.accountId) throw AppError.unprocessable('the key is linked to another account than the one proposed', { reason: 'key-not-linked' });
     if ((await port.getSignerKey('attestor', input.attestor))?.active) throw AppError.conflict('the attestor key is already active on this chain', { reason: 'key-already-active' });
+    await this.requireVerifiedAttestorAccount(port, input.chain, holder, [input.attestor]);
     const meta = { accountId: holder, jurisdiction: input.jurisdiction ?? null, kind: input.kind ?? null };
     const r = await this.propose(input.chain, { kind: 'registerAttestor', attestor: input.attestor }, admin, meta);
     // A proposal grants nothing (A-M5-2): attestor access starts when the multisig's registerAttestor is onchain and
@@ -213,7 +243,9 @@ export class AdminService {
    * `from` is linked to (422 otherwise). Pre-checks against the chain: the same key (422), `to` already active
    * (`key-already-active`), `from` not active (`key-not-active`); after it `to` is active, so it never revokes the last
    * key. PAUSE, AMEND, EXTINGUISH and TRUEUP signatures collected from `from` are dead once it lands and are signed
-   * again with `to`; report and FX signatures of ended periods stay valid within the grace.
+   * again with `to`; report and FX signatures of ended periods stay valid within the grace. The account must have
+   * passed the attestor identity check and hold no third key active or proposed on the chain (A-SIG-7; the key being
+   * replaced is expected to be active).
    */
   async rotateAttestor(input: z.infer<typeof rotateAttestorSchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
     if (input.from === input.to) throw AppError.unprocessable('a rotation replaces one key with another: from and to are the same key');
@@ -223,6 +255,7 @@ export class AdminService {
     const [from, to] = await Promise.all([port.getSignerKey('attestor', input.from), port.getSignerKey('attestor', input.to)]);
     if (to?.active) throw AppError.conflict('the new attestor key is already active on this chain', { reason: 'key-already-active' });
     if (!from?.active) throw AppError.conflict('the attestor key to replace is not active on this chain', { reason: 'key-not-active' });
+    await this.requireVerifiedAttestorAccount(port, input.chain, holder, [input.from, input.to]);
     const r = await this.propose(input.chain, { kind: 'rotateAttestor', from: input.from, to: input.to }, admin, { accountId: holder });
     await this.recordProposal(input.chain, input.to, holder, true, r.request.requestId, admin);
     await this.recordProposal(input.chain, input.from, holder, false, r.request.requestId, admin);
@@ -235,15 +268,18 @@ export class AdminService {
    * 'pending-onchain' (proposed active, not yet indexed as active), 'deactivation-pending' (proposed inactive, still
    * active onchain) or 'inactive'. `accountId` is the account the key is linked to now (the one that gets access), and
    * `proposedAccountId` the one it was linked to when proposed. Only an indexed active registration gives access.
+   * `identityStatus` is that account's attestor identity check as stored (A-SIG-7; `not_started` without one, null when
+   * no account holds the key): a status, never the provider's data.
    */
   async listAttestors(): Promise<Record<string, unknown>[]> {
     const r = await this.ctx.pool.query(
       `select x.chain, x.address, k.account_id, x.proposed_account_id, x.proposed_active, x.request_id, x.proposed_by, x.proposed_at, x.onchain_active,
-              x.registered_at, x.revoked_at
+              x.registered_at, x.revoked_at, ic.status as identity_status
          from (select coalesce(p.chain, a.chain) as chain, coalesce(p.address, a.attestor) as address, p.account_id as proposed_account_id, p.active as proposed_active,
                       p.request_id, p.proposed_by, p.proposed_at, a.active as onchain_active, a.registered_at, a.revoked_at
                  from attestor_proposals p full outer join attestors a on a.chain = p.chain and a.attestor = p.address) x
          left join account_signer_keys k on k.address = x.address
+         left join attestor_identity_checks ic on ic.account_id = k.account_id
         order by 1, 2`,
     );
     return r.rows.map((x) => {
@@ -254,7 +290,7 @@ export class AdminService {
       const registeredAt = x.registered_at === null || x.registered_at === undefined ? null : Number(x.registered_at);
       const revokedAt = x.revoked_at === null || x.revoked_at === undefined ? null : Number(x.revoked_at);
       return {
-        chain: x.chain, attestor: x.address, accountId: x.account_id ?? null, status, onchainActive: onchain, registeredAt, revokedAt, graceUntil: keyGraceUntil(revokedAt),
+        chain: x.chain, attestor: x.address, accountId: x.account_id ?? null, identityStatus: x.account_id ? (x.identity_status ?? 'not_started') : null, status, onchainActive: onchain, registeredAt, revokedAt, graceUntil: keyGraceUntil(revokedAt),
         proposal: x.proposed_by ? { active: x.proposed_active, accountId: x.proposed_account_id ?? null, requestId: x.request_id, proposedBy: x.proposed_by, proposedAt: x.proposed_at } : null,
       };
     });

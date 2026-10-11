@@ -48,6 +48,9 @@ export function registerIdentityRoutes(app: FastifyInstance, base: AppContext): 
   });
   defineRoute(app, ctx, { method: 'GET', url: '/me/signer-keys', access: 'account', handler: async (_req, _reply, session) => ({ keys: await s.signerKeys(session!.accountId) }) });
   defineRoute(app, ctx, { method: 'DELETE', url: '/me/signer-keys/:address', access: 'account', handler: async (req, _reply, session) => s.unlinkSignerKey(session!, signerKeyAddressSchema.parse((req.params as { address: string }).address)) });
+  // the account's attestor identity check (A-SIG-7): an admin's registration of a key linked to the account needs it passed
+  defineRoute(app, ctx, { method: 'POST', url: '/me/attestor/identity-check', access: 'account', handler: async (_req, _reply, session) => s.startAttestorIdentityCheck(session!.accountId) });
+  defineRoute(app, ctx, { method: 'GET', url: '/me/attestor/identity-check', access: 'account', handler: async (_req, _reply, session) => s.attestorIdentityCheck(session!.accountId) });
 
   defineRoute(app, ctx, {
     method: 'POST', url: '/applications', access: 'account',

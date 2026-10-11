@@ -455,6 +455,17 @@ components:
         key: { $ref: '#/components/schemas/SignerKeyLink' }
         created: { type: boolean }
         token: { type: string, description: a refreshed session token (its roles are informational; access is read live) }
+    AttestorIdentityCheck:
+      type: object
+      description: "The account's attestor identity check (A-SIG-7): the provider's check id and status only, never documents or extracted data. Every field but status is null while the account has none (status not_started)."
+      required: [provider, checkId, status, startedAt, updatedAt]
+      properties:
+        provider: { type: [string, 'null'], description: the identity provider }
+        checkId: { type: [string, 'null'], description: "the provider's reference for the check" }
+        redirectUrl: { type: [string, 'null'], description: "where the account completes a check just started (POST only); null when an existing check is returned" }
+        status: { type: string, enum: [not_started, pending, passed, failed] }
+        startedAt: { type: [string, 'null'] }
+        updatedAt: { type: [string, 'null'], description: when the stored status last changed }
     ReportVerifierInfo:
       type: object
       description: "The report verifier a device talks to (S4 WP6): its URL, the 20-byte address of its secp256k1 key (the address each chain registers as a verifier key; GET /chains and the chains' registries are public) and the chains it signs for, each with the signing domain it holds (the device can compare it with GET /chains). Public data."
@@ -741,6 +752,26 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: The key is not linked to this account, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '409': { description: 'Work addressed to the key is open (detail.reason open-work, detail.openWork the counts: pending hardship requests, open tier-3 cases and annual attestations, open extinguishment requests naming it (collecting signatures or awaiting the relay; S4 WP12), attested amendments not landed)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /me/attestor/identity-check:
+    post:
+      operationId: startAttestorIdentityCheck
+      x-access: account
+      tags: [auth]
+      security: [{ session: [] }]
+      description: "Start the caller's attestor identity check with the identity provider (the owner's decision, A-SIG-7: an attestor key is registered only for a separately verified account). Returns the provider's check id, the URL to complete it at and its status. Idempotent: an account with a passed check gets it back (redirectUrl null), one with a pending check gets its refreshed status (redirectUrl null), one with a failed check starts again. Only the provider's check id and status are stored, never documents or extracted data. The admin's POST /admin/attestors and /admin/attestors/rotate of a key linked to the account answer 409 identity-not-verified until the status is passed."
+      responses:
+        '200': { description: The check (status passed, pending or failed), content: { application/json: { schema: { $ref: '#/components/schemas/AttestorIdentityCheck' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: The session's account does not exist, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    get:
+      operationId: getAttestorIdentityCheck
+      x-access: account
+      tags: [auth]
+      security: [{ session: [] }]
+      description: "The caller's attestor identity check as the provider reports it now (a pending one is refreshed on read), or status not_started with every other field null. Visible to the account; an admin sees the status beside each key in GET /admin/attestors."
+      responses:
+        '200': { description: The check, or not_started, content: { application/json: { schema: { $ref: '#/components/schemas/AttestorIdentityCheck' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /me/session/refresh:
     post:
       operationId: refreshSession

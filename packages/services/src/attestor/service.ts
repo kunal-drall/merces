@@ -1120,11 +1120,14 @@ export class AttestorService {
   /**
    * S4 D15 (ours, stricter than Stage 1, which checks keys only): the two named keys must be linked to two different
    * accounts, read live, so one person holding two attestor keys cannot extinguish a series alone. 409 `same-account`.
+   * Since the owner's decision (A-SIG-7) registration already guarantees it: a key is registered only for an account
+   * that passed the attestor identity check and holds no other attestor key on the chain (admin service), so two
+   * registered keys are two separately verified accounts. This check stays as defence in depth (a tampered link table).
    */
   private async requireDistinctAccounts(e: Record<string, unknown>): Promise<void> {
     const [a, b] = e.attestors as [string, string];
     const [x, y] = await Promise.all([this.accountOf(a), this.accountOf(b)]);
-    if (x !== null && x === y) throw AppError.conflict('both attestor keys of this request are linked to one account: an extinguishment needs two attestors holding their own keys', { reason: 'same-account' });
+    if (x !== null && x === y) throw AppError.conflict('both attestor keys of this request are linked to one account: an extinguishment needs two attestors holding their own keys (registration already guarantees two separately verified accounts; this check is defence in depth)', { reason: 'same-account' });
   }
 
   /**
@@ -1160,7 +1163,7 @@ export class AttestorService {
     if (!(await this.actsAs(session, chain.chain, input.attestor))) throw AppError.forbidden('`attestor` must be a key linked to your account and registered on the series\' chain');
     await this.requireRegisteredAttestor(chain, input.coAttestor);
     const coAccount = await this.accountOf(input.coAttestor);
-    if (coAccount === session.accountId) throw AppError.conflict('the co-attestor key is linked to your own account: an extinguishment needs two attestors holding their own keys', { reason: 'same-account' });
+    if (coAccount === session.accountId) throw AppError.conflict('the co-attestor key is linked to your own account: an extinguishment needs two attestors holding their own keys (registration already guarantees two separately verified accounts; this check is defence in depth)', { reason: 'same-account' });
     if (coAccount === null) throw AppError.unprocessable('the co-attestor key is not linked to any account: nobody could sign this request for it', { reason: 'co-attestor-not-linked' });
     assertOpaqueCiphertext(input.evidenceCiphertext, 'evidenceCiphertext');
     const id = this.ctx.newId('ext');

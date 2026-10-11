@@ -34,6 +34,14 @@ explains how to use the API; the spec is the source of truth for shapes.
   it is open). A sign-in never links a key, even with an EVM wallet at the key's address. Links are visible to the
   account and admins only; each chain's key registry is public: `GET /chains/{chain}/signer-keys?kind=attestor|verifier`
   (address, `active`, `revokedAt`, `graceUntil`).
+- **Attestor identity check** (A-SIG-7, the owner's rule "two separately verified accounts, enforced at registration"):
+  before an admin can register a linked key, its account passes its own identity check: `POST /me/attestor/identity-check`
+  starts it with the provider (or returns the passed or pending one; a failed one starts again) and answers the provider's
+  `redirectUrl`, `checkId` and `status`; `GET /me/attestor/identity-check` reads it back (`not_started` without one; a
+  pending status is refreshed from the provider). Only the check id and the status are stored. `POST /admin/attestors`
+  and `/admin/attestors/rotate` answer 409 `identity-not-verified` until it has passed, and 409 `account-already-attestor`
+  when another key linked to the account is already active or proposed on that chain (one attestor key per verified
+  account and chain); `GET /admin/attestors` shows each key's account `identityStatus`.
 - **Access tiers** (`x-access` on every operation): `public`, `account` (signed in), `backer` (passed eligibility),
   `holder` (holds or held units of that series), `issuer` (the series' issuer), `attestor` (a key linked to the account
   that is registered onchain and indexed; a proposal alone gets 403 "pending"; read live on every request, so an indexed

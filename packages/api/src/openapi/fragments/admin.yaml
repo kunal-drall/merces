@@ -291,6 +291,7 @@ paths:
                         chain: { type: string }
                         attestor: { type: string, pattern: '^0x[0-9a-f]{40}$', description: "the attestor key's 20-byte address (S4 WP7; was `wallet`)" }
                         accountId: { type: [string, 'null'], description: 'the account the key is linked to now (the one that gets access); admin views only' }
+                        identityStatus: { type: [string, 'null'], enum: [not_started, pending, passed, failed, null], description: "that account's attestor identity check as stored (A-SIG-7; registration needs passed); null when no account holds the key" }
                         status: { type: string, enum: [registered, pending-onchain, deactivation-pending, inactive] }
                         onchainActive: { type: boolean }
                         registeredAt: { type: [integer, 'null'], description: unix seconds the key last became active (indexed AttestorRegistered); null before it was indexed or for rows indexed before S4 }
@@ -304,7 +305,7 @@ paths:
       x-access: admin
       tags: [admin]
       security: [{ session: [] }]
-      summary: Build Stage 1's registerAttestor of a key linked to the account for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); the registry's rules are checked against the chain first; audited
+      summary: Build Stage 1's registerAttestor of a key linked to a separately verified account for the multisig and open a tx request; records the proposal but grants nothing (access starts when the registration is indexed, A-M5-2); the registry's rules are checked against the chain first, then the owner's rule (A-SIG-7); audited
       parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRegisterAttestor' } } } }
       responses:
@@ -313,7 +314,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: The account does not exist, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '409': { description: "The registry refuses it on this chain, before anything is built (detail.reason key-already-active: the EVM reverts KeyAlreadyActive, Solana would re-emit), or the idempotency key was reused with a different body", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: "Refused before anything is built, value-free: the registry refuses it on this chain (detail.reason key-already-active: the EVM reverts KeyAlreadyActive, Solana would re-emit); the key's account has not passed the attestor identity check (identity-not-verified: it completes POST /me/attestor/identity-check first; A-SIG-7); another key linked to the account is active or proposed on this chain (account-already-attestor: one attestor key per verified account and chain, rotate instead); or the idempotency key was reused with a different body", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '422': { description: 'The key is linked to no account, or to another account than the one named (detail.reason key-not-linked)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /admin/attestors/revoke:
     post:
