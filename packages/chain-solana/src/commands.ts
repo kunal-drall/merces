@@ -174,7 +174,7 @@ export async function planSolCommand(ctx:SolCommandContext,cmd:Command,signer:st
       return {instructions,...(!await transport.account(pair,'FxPair')?{preparations:[{summary:'Initialize FX accumulator',instructions:[await ix('protocol','init_fx_pair',{pair_id:cmd.pairId})]}]}:{})};
     }
     case 'crankStatus':case 'crankPause':return one('protocol','crank_status');
-    case 'curveSwap':case 'stakeUnits':case 'unstakeUnits':case 'tenderUnits':case 'completeCurve':case 'collectCurveProceeds':case 'syncCurveUnits':return ctx.curve.instructions(cmd,signer);
+    case 'createCurveConfig':case 'createCurvePool':case 'migrateCurve':case 'curveSwap':case 'stakeUnits':case 'unstakeUnits':case 'tenderUnits':case 'completeCurve':case 'collectCurveProceeds':case 'syncCurveUnits':return ctx.curve.instructions(cmd,signer);
     case 'snapshotRate':case 'flagFxFallback':case 'openTransferWindow':case 'clearTransferWindow':case 'registerSplitRouter':case 'postSplitReceipt':throw new ChainError('NotPermitted',`${cmd.kind} is a simulator convenience; use the Stage 1 canonical command`);
   }
 }

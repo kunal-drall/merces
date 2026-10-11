@@ -9075,11 +9075,80 @@
         "seriesId": {
           "type": "string",
           "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "curvePool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
         }
       },
       "required": [
         "kind",
         "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "createCurveConfig": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "createCurveConfig"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "config": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "parameters": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "config",
+        "parameters"
+      ],
+      "additionalProperties": false
+    },
+    "createCurvePool": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "createCurvePool"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "config": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "baseMint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "config",
+        "baseMint"
       ],
       "additionalProperties": false
     },
@@ -10730,6 +10799,37 @@
       "required": [
         "kind",
         "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "migrateCurve": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "migrateCurve"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "firstPositionMint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "secondPositionMint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "firstPositionMint",
+        "secondPositionMint"
       ],
       "additionalProperties": false
     },

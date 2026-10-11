@@ -1468,7 +1468,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Builds the issuer's openRaise (Stage 1 open_raise). The chain sets the commit end to now + the series' commit duration and the reveal end to the commit end + its reveal duration. Stage 1's checks run first, in its order. */
+        /** @description Builds the issuer's openRaise (Stage 1 open_raise, or activate_curve for a native Solana curve with a configured pool). The chain sets the commit end to now + the series' commit duration and the reveal end to the commit end + its reveal duration. Stage 1's checks run first, in its order. */
         post: operations["buildOpenRaise"];
         delete?: never;
         options?: never;
@@ -2918,6 +2918,39 @@ export type paths = {
         get?: never;
         put?: never;
         post: operations["configureCurve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve/build-setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Builds one native config creation, pool creation or activation step for the linked issuer. Public curve parameters are generated on the issuer device; raw income and private account keys are never submitted. New account signatures are supplied locally by the issuer device. */
+        post: operations["buildCurveSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/curve/build-migration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildCurveMigration"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4489,7 +4522,7 @@ export type components = {
             }[];
             evidenceCiphertext?: components["schemas"]["Ciphertext"];
         };
-        /** @description A transaction for one wallet (a user, a holder or the admin multisig) to sign; the backend never signs. It has one signer: nobody co-signs (S4 WP13). An attestor's or the report verifier's approval is a Stage 1 signature the command carries as an argument, never a transaction signature. */
+        /** @description A transaction for one wallet (a user, a holder or the admin multisig) to sign; the backend never signs. It has one funding wallet. Native Meteora setup additionally requires signatures from the exact fresh config, base mint or position mint accounts named in the reviewed command; their private keys stay on the signing device. An attestor's or the report verifier's approval is a Stage 1 signature the command carries as an argument, never a transaction signature. */
         UnsignedTx: {
             chain?: string;
             /** @enum {string} */
@@ -4775,6 +4808,10 @@ export type components = {
             /** @description when the curve filled (the settlement time) */
             finishCurveTimestamp: number | null;
             poolComplete: boolean;
+            /** @description Confirmed DAMM v2 migration; distinct from reaching the DBC threshold */
+            migrated?: boolean;
+            /** @description Derived DAMM v2 pool address; existence requires migrated true */
+            dammV2Pool?: string;
             /** @description completeCurve ran */
             settled: boolean;
             /** @description P0 per whole unit, fixed at activation */
@@ -8057,7 +8094,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-            /** @description Refused, with detail.stage1: NotSealedBid (a curve-mode series runs no sealed-bid raise: its curve opens at creation), RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused */
+            /** @description Refused, with detail.stage1: RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11669,6 +11706,109 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CurveNoCap"];
                 };
+            };
+        };
+    };
+    buildCurveSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    kind: "createCurveConfig";
+                    seriesId: string;
+                    config: string;
+                    /** @description Public Stage 1 DBC configuration parameters; bigint fields are decimal strings */
+                    parameters: {
+                        [key: string]: unknown;
+                    };
+                } | {
+                    /** @constant */
+                    kind: "createCurvePool";
+                    seriesId: string;
+                    config: string;
+                    baseMint: string;
+                } | {
+                    /** @constant */
+                    kind: "openRaise";
+                    seriesId: string;
+                    curvePool: string;
+                };
+            };
+        };
+        responses: {
+            /** @description One unsigned native setup step with the curve notice */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurveNoCap"] & {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description Curve already activated */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildCurveMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    signer: string;
+                    command: {
+                        /** @constant */
+                        kind: "migrateCurve";
+                        seriesId: string;
+                        firstPositionMint: string;
+                        secondPositionMint: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Permissionless DAMM v2 migration for a filled curve; fresh position accounts sign locally */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurveNoCap"] & {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description Curve not complete or already migrated */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

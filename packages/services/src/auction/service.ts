@@ -217,14 +217,16 @@ export class AuctionService {
 
   /**
    * The issuer's `openRaise` (Stage 1 `open_raise`), with Stage 1's checks in its order so a refusal comes before the
-   * wallet signs: a sealed-bid series (NotSealedBid: a curve's raise opens at its creation), a Draft raise
+   * wallet signs: a Draft raise (including native Solana curves awaiting activation),
    * (RaiseNotDraft), a contract hash (ContractHashMissing), the issuer still allowlisted (NotAllowlisted), new raises not
    * paused (NewRaisesPaused). The chain sets the phase ends from the series' durations when it executes. 409 on a
    * refusal, with the Stage 1 name where Stage 1 has one.
    */
   async buildOpenRaise(seriesId: string): Promise<{ tx: UnsignedTx; commitDurationSeconds: number; revealDurationSeconds: number }> {
     const chain = this.ctx.chainFor(seriesId);
-    const s = await this.sealedSeries(chain, seriesId);
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    if (s.terms.raiseStyle === 'curve' && chain.family !== 'solana') throw AppError.unprocessable('curve raises require Solana');
     if (s.phase !== 'Draft') throw AppError.conflict(`the raise is ${s.phase}`, { stage1: 'RaiseNotDraft' });
     if (/^0x0*$/.test(s.terms.contractHash)) throw AppError.conflict('the series has no contract hash', { stage1: 'ContractHashMissing' });
     if (!(await chain.isAllowlisted(s.issuer))) throw AppError.conflict('the issuer is not allowlisted', { stage1: 'NotAllowlisted' });

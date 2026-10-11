@@ -473,6 +473,9 @@ export interface CurveState {
   finishCurveTimestamp: number | null;
   /** the pool reached its target: no more trades on the curve */
   poolComplete: boolean;
+  /** Actual DAMM v2 migration is distinct from a filled bonding curve. */
+  migrated?: boolean;
+  dammV2Pool?: Address;
   /** `completeCurve` ran: the raise is Settled at `finishCurveTimestamp` */
   settled: boolean;
   /** P0 per whole unit, fixed at activation (Stage 1 `clearing_price`) */

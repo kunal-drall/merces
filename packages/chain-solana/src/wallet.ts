@@ -1,3 +1,4 @@
+import {creationSigners} from './creation-signers.ts';
 import {createPrivateKey,createPublicKey,sign} from 'node:crypto';
 import {Connection,Message,PublicKey} from '@solana/web3.js';
 import {ChainError,isPublishedTestKey,type WalletSigner} from '@merces/domain';
@@ -13,7 +14,7 @@ export function solanaServiceWallet(config:SolanaChainConfig,seed:Uint8Array):Wa
   return {family:'solana',address,
     async sign(tx){
       if(tx.chain!==config.chain||tx.family!=='solana'||tx.encoding!=='solana-base64'||tx.signer!==address)throw new ChainError('Unauthorized','service transaction belongs to another wallet or chain');
-      let raw:Buffer;try{raw=Buffer.from(tx.payload,'base64');const message=Message.from(raw);if(message.header.numRequiredSignatures!==1||message.accountKeys[0]!.toBase58()!==address)throw new Error();}catch{throw new ChainError('Unauthorized','transaction must have exactly this service signer');}
+      let raw:Buffer;try{raw=Buffer.from(tx.payload,'base64');const message=Message.from(raw);const required=message.accountKeys.slice(0,message.header.numRequiredSignatures).map(k=>k.toBase58()),expected=[address,...(required.length===1?[]:creationSigners(tx.commands??[tx.command],address))];if(required[0]!==address||required.length!==expected.length||required.some(k=>!expected.includes(k)))throw new Error();}catch{throw new ChainError('Unauthorized','transaction must have exactly this service signer');}
       try{await network();return {tx,signatures:{[address]:`0x${sign(null,raw,privateKey).toString('hex')}`}};}catch(e){throw solanaError(e);}
     },
     async signMessage(message){await network();return `0x${sign(null,message,privateKey).toString('hex')}`;},

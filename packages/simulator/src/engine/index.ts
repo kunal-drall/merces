@@ -165,6 +165,7 @@ export class SimEngine implements EngineCore {
       case 'revealWindowOrder': return revealWindowOrder(this, user(), cmd, now, emit);
       case 'clearTransferWindow': service('any'); return clearTransferWindow(this, cmd, now, emit);
       // a trade on the curve's venue (Meteora's DBC on live chains; the stand-in pool here)
+      case 'createCurveConfig':case 'createCurvePool':case 'migrateCurve': throw new ChainError('NotPermitted', 'Meteora account creation and migration require the native Solana adapter');
       case 'curveSwap': return curveSwap(this, user(), cmd, now, emit);
       // curve staking and tender (Stage 1 curve mode): the holder signs
       case 'stakeUnits': return stakeUnits(this, user(), cmd, emit);

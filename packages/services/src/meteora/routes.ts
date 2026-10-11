@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import {userCommands,permissionlessCommands} from '@merces/domain';
 import { defineRoute, type AppContext } from '@merces/api';
 import { MockDex, MockMeteora, type DexPort, type MeteoraPort } from '@merces/ports';
 import { svc } from '../context.ts';
@@ -21,6 +22,12 @@ export function registerMeteoraRoutes(app: FastifyInstance, base: AppContext): v
   const sid = (req: { params: unknown }) => (req.params as { seriesId: string }).seriesId;
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/curve', access: 'public', handler: async (req) => s.status(sid(req)) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/curve/configure', access: 'issuer', handler: async (req, _r, session) => s.configure(sid(req), session!) });
+  defineRoute(app, ctx, {method:'POST',url:'/series/:seriesId/curve/build-setup',access:'issuer',handler:async(req,_r,session)=>
+    s.buildSetup(sid(req),session!,z.discriminatedUnion('kind',[userCommands.createCurveConfig,userCommands.createCurvePool,userCommands.openRaise]).parse(req.body))});
+  defineRoute(app, ctx, {method:'POST',url:'/series/:seriesId/curve/build-migration',access:'account',handler:async(req,_r,session)=>{
+    const body=z.object({signer:z.string().min(1),command:permissionlessCommands.migrateCurve}).parse(req.body);
+    return s.buildMigration(sid(req),session!,body.signer,body.command);
+  }});
   const swapInput = {
     wallet: z.string().min(1),
     side: z.enum(['buy', 'sell']),

@@ -1369,12 +1369,12 @@ paths:
       tags: [bids]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      description: "Builds the issuer's openRaise (Stage 1 open_raise). The chain sets the commit end to now + the series' commit duration and the reveal end to the commit end + its reveal duration. Stage 1's checks run first, in its order."
+      description: "Builds the issuer's openRaise (Stage 1 open_raise, or activate_curve for a native Solana curve with a configured pool). The chain sets the commit end to now + the series' commit duration and the reveal end to the commit end + its reveal duration. Stage 1's checks run first, in its order."
       responses:
         '200': { description: The unsigned openRaise and the phase durations it will apply, content: { application/json: { schema: { type: object, properties: { tx: { $ref: '#/components/schemas/UnsignedTx' }, commitDurationSeconds: { type: integer }, revealDurationSeconds: { type: integer } } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { description: 'Refused, with detail.stage1: NotSealedBid (a curve-mode series runs no sealed-bid raise: its curve opens at creation), RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: 'Refused, with detail.stage1: RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /series/{seriesId}/raise/build-cancel:
     post:
       operationId: buildCancelRaise

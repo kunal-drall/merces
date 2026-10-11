@@ -1,4 +1,6 @@
-import { Connection, PublicKey, Transaction, ComputeBudgetProgram, type TransactionInstruction } from '@solana/web3.js';
+import {createPrivateKey,sign} from 'node:crypto';
+import {creationSigners} from './creation-signers.ts';
+import { Connection, PublicKey, Transaction, Keypair, ComputeBudgetProgram, type TransactionInstruction } from '@solana/web3.js';
 import {
   ChainError, FinalizedEvents, signingDomain, isPublishedTestKey, userCommandSchema, permissionlessCommandSchema, adminCommandSchema, serviceCommandSchema, type Command, type BuildableCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
   type TxResult, type UnsignedTx,
@@ -170,14 +172,15 @@ export class SolanaChain implements ChainPort {
     const now=await this.now(),plans=[];
     for(const command of commands)plans.push(await planSolCommand({config:this.config,transport:this.transport,reads:this,curve:this.curve,now},command,signer));
     const latest=await this.connection.getLatestBlockhash('finalized');
-    const payload=(instructions:TransactionInstruction[])=>{
+    const payload=(instructions:TransactionInstruction[],extra=creationSigners(commands,signer))=>{
       const tx=new Transaction({feePayer:new PublicKey(signer),recentBlockhash:latest.blockhash});
       tx.add(ComputeBudgetProgram.setComputeUnitLimit({units:1400000}),...instructions);
-      const message=tx.compileMessage();if(message.header.numRequiredSignatures!==1||message.accountKeys[0]!.toBase58()!==signer)throw new ChainError('NotPermitted','transaction requires an additional signer');
+      const message=tx.compileMessage(),actual=message.accountKeys.slice(0,message.header.numRequiredSignatures).map(k=>k.toBase58()),expected=[signer,...extra];
+      if(actual[0]!==signer||actual.length!==expected.length||actual.some(k=>!expected.includes(k)))throw new ChainError('NotPermitted','transaction requires an unexpected signer');
       let serialized:Buffer;try{serialized=tx.serializeMessage();}catch{throw new ChainError('NotPermitted','transaction exceeds the Solana message size; reduce the requested batch');}
-      if(serialized.length+65>1232)throw new ChainError('NotPermitted','transaction exceeds the Solana packet size; reduce the requested batch');return serialized.toString('base64');
+      if(serialized.length+1+64*message.header.numRequiredSignatures>1232)throw new ChainError('NotPermitted','transaction exceeds the Solana packet size; reduce the requested batch');return serialized.toString('base64');
     };
-    const preparations=plans.flatMap((p)=>p.preparations??[]).map((p)=>({summary:p.summary,payload:payload(p.instructions),encoding:'solana-base64' as const}));
+    const preparations=plans.flatMap((p)=>p.preparations??[]).map((p)=>({summary:p.summary,payload:payload(p.instructions,[]),encoding:'solana-base64' as const}));
     return {chain:this.chain,family:this.family,signer,command:commands[0]!,...(commands.length>1?{commands:[...commands]}:{}),payload:payload(plans.flatMap((p)=>p.instructions)),encoding:'solana-base64',summary:commands.map((c)=>c.kind).join(' + '),expiresAt:now+60,...(preparations.length?{preparations}:{})};
   }
   async build(command:BuildableCommand|readonly BuildableCommand[],signer:string):Promise<UnsignedTx>{
@@ -191,6 +194,27 @@ export class SolanaChain implements ChainPort {
     await this.finalizedEvents.update(await this.transport.history());
     return {...result,events:this.finalizedEvents.transaction(result.txId)};
   }catch(e){throw solanaError(e);}}
+  /** Position account keys exist only for this attempt; no funds or reusable authority belong to them. */
+  async migrateCurve(seriesId:string):Promise<TxResult>{
+    const run=()=>this.performCurveMigration(seriesId);
+    const result=(this.serviceQueues.get('keeper')??Promise.resolve()).catch(()=>{}).then(run);
+    this.serviceQueues.set('keeper',result);
+    return result;
+  }
+  private async performCurveMigration(seriesId:string):Promise<TxResult>{
+    const signer=this.config.serviceSigners?.keeper;
+    if(!signer||signer.family!=='solana'||signer.address!==this.config.keeperPublicKey||isPublishedTestKey(signer.address))throw new ChainError('Unauthorized','keeper signer is unavailable or uses a published test key');
+    const keys=[Keypair.generate(),Keypair.generate()];
+    const command:ServiceCommand={kind:'migrateCurve',seriesId,firstPositionMint:keys[0]!.publicKey.toBase58(),secondPositionMint:keys[1]!.publicKey.toBase58()};
+    for(let step=0;step<4;step++){
+      const tx=await this.build(command,signer.address),preparation=tx.preparations?.[0];
+      if(preparation){await this.send(await signer.sign({...tx,payload:preparation.payload,preparations:undefined}));continue;}
+      const signed=await signer.sign(tx),message=Buffer.from(tx.payload,'base64');
+      for(const key of keys){const privateKey=createPrivateKey({format:'der',type:'pkcs8',key:Buffer.concat([Buffer.from('302e020100300506032b657004220420','hex'),Buffer.from(key.secretKey.subarray(0,32))])});signed.signatures[key.publicKey.toBase58()]=sign(null,message,privateKey).toString('base64');}
+      return this.send(signed);
+    }
+    throw new ChainError('ChainSpecific','migration prerequisites exceeded their bound');
+  }
   async submit(command:ServiceCommand,role:ServiceRole):Promise<TxResult>{
     if(!serviceCommandSchema.safeParse(command).success||(command.kind==='setAllowlist')!==(role==='allowlistManager'))throw new ChainError('Unauthorized','command is not permitted for this service role');
     const signer=this.config.serviceSigners?.[role],expected=role==='keeper'?this.config.keeperPublicKey:this.config.allowlistManagerPublicKey;

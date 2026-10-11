@@ -7,6 +7,7 @@ import type { ServiceContext } from '../context.ts';
  * (`POST /admin/curves/monitor`) runs on demand. Stage 1's lifecycle steps are permissionless (curve.rs:861-906,
  * :1112-1214), so the keeper sends them with its own fee payer:
  *  - `completeCurve` once the pool filled while the raise is Open (the raise settles at the pool's finish time);
+ *  - `migrateCurve` on live Solana once filled, before collecting migration proceeds;
  *  - `collectCurveProceeds` right after, once: the partner's migration fee and surplus into the treasury (the release
  *    tranches start from them) and the partner's trading fee to the fee collector;
  *  - `collectCurveProceeds` at most once a week (chain time) while the partner's trading fees wait in the pool: every
@@ -72,9 +73,9 @@ export function collectionDue(c: CurveState, now: number, done: CurveCollections
 }
 
 async function checkCurve(ctx: ServiceContext, chain: ChainPort, s: SeriesState, now: number, out: CurveLifecyclePass): Promise<void> {
-  const c = await chain.getCurve(s.seriesId);
+  let c = await chain.getCurve(s.seriesId);
   if (!c) return;
-  const actions: LifecycleStep[] = [];
+  const actions: (LifecycleStep | 'migrateCurve')[] = [];
   const step = async (kind: LifecycleStep): Promise<boolean> => {
     try {
       await chain.submit({ kind, seriesId: s.seriesId }, 'keeper');
@@ -87,6 +88,14 @@ async function checkCurve(ctx: ServiceContext, chain: ChainPort, s: SeriesState,
   };
   try {
     if (c.poolComplete && s.phase === 'Open' && (await step('completeCurve'))) out.completed.push(s.seriesId);
+    if (chain.mode === 'live' && c.poolComplete && !c.migrated) {
+      if (!chain.migrateCurve) throw new ChainError('NotImplemented', 'native curve migration is unavailable');
+      await chain.migrateCurve(s.seriesId);
+      actions.push('migrateCurve');
+      const migrated = await chain.getCurve(s.seriesId);
+      if (!migrated?.migrated) throw new ChainError('ChainSpecific', 'curve migration is not confirmed');
+      c = migrated;
+    }
     if (collectionDue(c, now, await collections(ctx, s.seriesId)) && (await step('collectCurveProceeds'))) out.collected.push(s.seriesId);
   } finally {
     // the steps that landed are recorded even when a later one failed

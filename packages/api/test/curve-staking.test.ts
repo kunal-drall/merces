@@ -346,10 +346,12 @@ describe.skipIf(!dbTestsEnabled())('curve staking through the API (S3 WP12)', ()
   });
 
   // cause S3R-N: every curve route of the OpenAPI document was walked above, each carrying no cap and the notice
-  it('every curve read and builder carries no cap and the buyer notice: the walk covers every curve route of the OpenAPI document', () => {
+  it('walks every simulator curve route; native setup and migration are covered by curve-setup.test.ts', () => {
     const doc = readFileSync(new URL('../openapi.yaml', import.meta.url), 'utf8');
     const routes = [...doc.matchAll(/^ {2}(\/series\/\{seriesId\}\/curve[^:]*):$/gm)].map((m) => m[1]!);
-    expect(routes).toHaveLength(9);
-    expect([...walked].sort()).toEqual(routes.sort());
+    expect(routes).toHaveLength(11);
+    const native = ['/series/{seriesId}/curve/build-setup', '/series/{seriesId}/curve/build-migration'];
+    expect(routes).toEqual(expect.arrayContaining(native));
+    expect([...walked].sort()).toEqual(routes.filter(route => !native.includes(route)).sort());
   });
 });

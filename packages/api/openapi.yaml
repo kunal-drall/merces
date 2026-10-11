@@ -2723,7 +2723,7 @@ components:
           $ref: "#/components/schemas/Ciphertext"
     UnsignedTx:
       type: object
-      description: "A transaction for one wallet (a user, a holder or the admin multisig) to sign; the backend never signs. It has one signer: nobody co-signs (S4 WP13). An attestor's or the report verifier's approval is a Stage 1 signature the command carries as an argument, never a transaction signature."
+      description: A transaction for one wallet (a user, a holder or the admin multisig) to sign; the backend never signs. It has one funding wallet. Native Meteora setup additionally requires signatures from the exact fresh config, base mint or position mint accounts named in the reviewed command; their private keys stay on the signing device. An attestor's or the report verifier's approval is a Stage 1 signature the command carries as an argument, never a transaction signature.
       properties:
         chain:
           type: string
@@ -3435,6 +3435,12 @@ components:
           description: when the curve filled (the settlement time)
         poolComplete:
           type: boolean
+        migrated:
+          type: boolean
+          description: Confirmed DAMM v2 migration; distinct from reaching the DBC threshold
+        dammV2Pool:
+          type: string
+          description: Derived DAMM v2 pool address; existence requires migrated true
         settled:
           type: boolean
           description: completeCurve ran
@@ -7122,7 +7128,7 @@ paths:
         - session: []
       parameters:
         - $ref: "#/components/parameters/seriesId"
-      description: Builds the issuer's openRaise (Stage 1 open_raise). The chain sets the commit end to now + the series' commit duration and the reveal end to the commit end + its reveal duration. Stage 1's checks run first, in its order.
+      description: Builds the issuer's openRaise (Stage 1 open_raise, or activate_curve for a native Solana curve with a configured pool). The chain sets the commit end to now + the series' commit duration and the reveal end to the commit end + its reveal duration. Stage 1's checks run first, in its order.
       responses:
         "200":
           description: The unsigned openRaise and the phase durations it will apply
@@ -7142,7 +7148,7 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
-          description: "Refused, with detail.stage1: NotSealedBid (a curve-mode series runs no sealed-bid raise: its curve opens at creation), RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused"
+          description: "Refused, with detail.stage1: RaiseNotDraft, ContractHashMissing, NotAllowlisted (the issuer) or NewRaisesPaused"
           content:
             application/json:
               schema:
@@ -10528,6 +10534,146 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CurveNoCap"
+  /series/{seriesId}/curve/build-setup:
+    post:
+      operationId: buildCurveSetup
+      x-access: issuer
+      tags:
+        - curve
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+      description: Builds one native config creation, pool creation or activation step for the linked issuer. Public curve parameters are generated on the issuer device; raw income and private account keys are never submitted. New account signatures are supplied locally by the issuer device.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required:
+                    - kind
+                    - seriesId
+                    - config
+                    - parameters
+                  properties:
+                    kind:
+                      type: string
+                      const: createCurveConfig
+                    seriesId:
+                      type: string
+                    config:
+                      type: string
+                    parameters:
+                      type: object
+                      additionalProperties: true
+                      description: Public Stage 1 DBC configuration parameters; bigint fields are decimal strings
+                - type: object
+                  required:
+                    - kind
+                    - seriesId
+                    - config
+                    - baseMint
+                  properties:
+                    kind:
+                      type: string
+                      const: createCurvePool
+                    seriesId:
+                      type: string
+                    config:
+                      type: string
+                    baseMint:
+                      type: string
+                - type: object
+                  required:
+                    - kind
+                    - seriesId
+                    - curvePool
+                  properties:
+                    kind:
+                      type: string
+                      const: openRaise
+                    seriesId:
+                      type: string
+                    curvePool:
+                      type: string
+      responses:
+        "200":
+          description: One unsigned native setup step with the curve notice
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/CurveNoCap"
+                  - type: object
+                    required:
+                      - tx
+                    properties:
+                      tx:
+                        $ref: "#/components/schemas/UnsignedTx"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Curve already activated
+          configuration unavailable or native test network not configured: null
+  /series/{seriesId}/curve/build-migration:
+    post:
+      operationId: buildCurveMigration
+      x-access: account
+      tags:
+        - curve
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - signer
+                - command
+              properties:
+                signer:
+                  type: string
+                command:
+                  type: object
+                  required:
+                    - kind
+                    - seriesId
+                    - firstPositionMint
+                    - secondPositionMint
+                  properties:
+                    kind:
+                      type: string
+                      const: migrateCurve
+                    seriesId:
+                      type: string
+                    firstPositionMint:
+                      type: string
+                    secondPositionMint:
+                      type: string
+      responses:
+        "200":
+          description: Permissionless DAMM v2 migration for a filled curve; fresh position accounts sign locally
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/CurveNoCap"
+                  - type: object
+                    required:
+                      - tx
+                    properties:
+                      tx:
+                        $ref: "#/components/schemas/UnsignedTx"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Curve not complete or already migrated
   /series/{seriesId}/curve/quote:
     get:
       operationId: quoteCurveSwap

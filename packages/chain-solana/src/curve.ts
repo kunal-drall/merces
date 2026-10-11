@@ -1,7 +1,8 @@
+import {planCurveSetup,planCurveMigration} from './curve-setup.ts';
 import {PublicKey} from '@solana/web3.js';
 import {unpackMint} from '@solana/spl-token';
 import BN from 'bn.js';
-import {DynamicBondingCurveClient,SwapMode,deriveDammV2TokenVaultAddress,deriveEscrow,deriveBaseKeyForLocker,PROTOCOL_FEE_PERCENT,getBaseFeeHandler,getTotalFeeNumerator,TradeDirection} from '@meteora-ag/dynamic-bonding-curve-sdk';
+import {DynamicBondingCurveClient,SwapMode,deriveDammV2TokenVaultAddress,deriveEscrow,deriveBaseKeyForLocker,PROTOCOL_FEE_PERCENT,getBaseFeeHandler,getTotalFeeNumerator,TradeDirection,DYNAMIC_BONDING_CURVE_PROGRAM_ID} from '@meteora-ag/dynamic-bonding-curve-sdk';
 import {projectPoolProgress} from '@merces/meteora/src/state.ts';
 import {ChainError,type ChainPort,type Command,type CurveState} from '@merces/domain';
 import {pda,programOf,ata,TOKEN_2022,SYSTEM,resolveAccounts,createAta,meta} from './accounts.ts';
@@ -15,14 +16,20 @@ import type {SolPlan} from './commands.ts';
 export class SolanaCurve {
   readonly client:DynamicBondingCurveClient;
   constructor(readonly config:SolanaChainConfig,readonly transport:SolanaTransport){this.client=new DynamicBondingCurveClient(transport.connection,'finalized');}
-  async pool(sid:string){
+  async pool(sid:string, pendingPool?:string){
     await this.transport.verifyNetwork();const reads=new SolanaReads(this.config,this.transport,(await this.transport.head()).time),s=await reads.s(sid);
     if(!s||n(s.mode)!==1)return null;
-    const address=String(s.dbc_pool)===SYSTEM?this.config.curvePools?.[sid]:String(s.dbc_pool);if(!address)return null;
+    const address=String(s.dbc_pool)===SYSTEM?pendingPool??this.config.curvePools?.[sid]:String(s.dbc_pool);if(!address)return null;
     const key=new PublicKey(address),pool=await this.client.state.getPool(key);if(!pool)throw new ChainError('NotFound','configured Meteora pool is missing');
     const cfg=await this.client.state.getPoolConfig(pool.poolState.config);if(!cfg)throw new ChainError('NotFound','Meteora pool configuration is missing');
+    const accounts=await Promise.all([this.transport.raw(address),this.transport.raw(pool.poolState.config.toBase58())]);
+    if(accounts.some(account=>!account?.owner.equals(DYNAMIC_BONDING_CURVE_PROGRAM_ID)))throw new ChainError('InvalidTerms','Meteora account owner differs from the pinned program');
     const progress=projectPoolProgress(key,pool,cfg),authority=pda(reads.protocol,'curve_authority',reads.address(sid));
     if(progress.quoteMint!==s.stablecoin||progress.feeClaimer!==authority||progress.leftoverReceiver!==authority||progress.migrationQuoteThreshold!==b(s.min_raise)||progress.swapBaseAmount!==b(s.units_offered)*1000000n)throw new ChainError('InvalidTerms','Meteora pool differs from the series terms or treasury authorities');
+    if(cfg.migrationOption!==1||cfg.tokenType!==1||cfg.tokenDecimal!==6||cfg.fixedTokenSupplyFlag!==1)throw new ChainError('InvalidTerms','Meteora token or migration configuration is incompatible with Merces');
+    if(progress.creator===s.issuer){
+      if(cfg.creatorMigrationFeePercentage!==0||cfg.creatorLiquidityPercentage!==0||cfg.creatorLiquidityVestingInfo.vestingPercentage!==0)throw new ChainError('InvalidTerms','creator proceeds would bypass the series treasury');
+    }else if(progress.creator!==authority||!cfg.lockedVestingConfig.cliffUnlockAmount.isZero()||!cfg.lockedVestingConfig.amountPerPeriod.isZero())throw new ChainError('InvalidTerms','Meteora creator is incompatible with Merces treasury custody');
     return {reads,s,pool,cfg,progress};
   }
   censusAccounts(series:string,p:NonNullable<Awaited<ReturnType<SolanaCurve['pool']>>>['progress']){
@@ -38,7 +45,7 @@ export class SolanaCurve {
     const head=await this.transport.head(),point=new BN(String(cfg.activationType===0?head.slot:head.time));
     const base=getBaseFeeHandler(cfg.poolFees.baseFee.cliffFeeNumerator,cfg.poolFees.baseFee.firstFactor,cfg.poolFees.baseFee.secondFactor,cfg.poolFees.baseFee.thirdFactor,cfg.poolFees.baseFee.baseFeeMode).getBaseFeeNumeratorFromIncludedFeeAmount(point,pool.poolState.activationPoint,TradeDirection.QuoteToBase,new BN(1000000));
     const fee=getTotalFeeNumerator(base,cfg.poolFees.dynamicFee,pool.poolState.volatilityTracker),protocol=PROTOCOL_FEE_PERCENT*100,creator=(10000-protocol)*cfg.creatorTradingFeePercentage/100;
-    return {seriesId:sid,venue:'meteora-dbc',dbcConfig:p.config,dbcPool:p.pool,baseMint:p.baseMint,quoteStablecoin:'USDC',migrationQuoteThreshold:String(p.migrationQuoteThreshold),quoteReserve:String(p.quoteReserve),progressBps:p.progressBps,finishCurveTimestamp:Number(p.finishCurveTimestamp)||null,poolComplete:p.curveComplete||p.isMigrated,settled:n(s.raise_state)===4,issuePrice:String(s.clearing_price),unitsSold:String(s.units_sold),baseSold:String(p.baseSold),baseSupply:String(mint.supply),spotPrice:String(p.pricePerUnit.current),tradingFeeBps:Number(BigInt(fee.toString())*10000n/1000000000n),tradingFeeSplitBps:{protocol,partner:10000-protocol-creator,creator},migrationFeePercentage:cfg.migrationFeePercentage,tradingFeeUncollected:String(p.unclaimedFees.partnerQuote),collected:{migrationFee:String(collected('migration_fee')),surplus:String(collected('surplus')),tradingFee:String(collected('trading_fee')),proceeds:String(collected('proceeds'))},census:{supply:String(mint.supply),protocolHeld:String(held),unitsOutstanding:String(outstanding),redemptionUnits:String(outstanding+balances[1]!),stakedTotal:String(l.staked_total??0),synced:b(l.units_synced_at)?{unitsOutstanding:String(l.units_outstanding),at:n(l.units_synced_at)}:null,changedSinceSync:!b(l.units_synced_at)||outstanding!==b(l.units_outstanding)}};
+    return {seriesId:sid,venue:'meteora-dbc',dbcConfig:p.config,dbcPool:p.pool,baseMint:p.baseMint,quoteStablecoin:'USDC',migrationQuoteThreshold:String(p.migrationQuoteThreshold),quoteReserve:String(p.quoteReserve),progressBps:p.progressBps,finishCurveTimestamp:Number(p.finishCurveTimestamp)||null,poolComplete:p.curveComplete||p.isMigrated,migrated:p.isMigrated,dammV2Pool:p.dammV2Pool,settled:n(s.raise_state)===4,issuePrice:String(s.clearing_price),unitsSold:String(s.units_sold),baseSold:String(p.baseSold),baseSupply:String(mint.supply),spotPrice:String(p.pricePerUnit.current),tradingFeeBps:Number(BigInt(fee.toString())*10000n/1000000000n),tradingFeeSplitBps:{protocol,partner:10000-protocol-creator,creator},migrationFeePercentage:cfg.migrationFeePercentage,tradingFeeUncollected:String(p.unclaimedFees.partnerQuote),collected:{migrationFee:String(collected('migration_fee')),surplus:String(collected('surplus')),tradingFee:String(collected('trading_fee')),proceeds:String(collected('proceeds'))},census:{supply:String(mint.supply),protocolHeld:String(held),unitsOutstanding:String(outstanding),redemptionUnits:String(outstanding+balances[1]!),stakedTotal:String(l.staked_total??0),synced:b(l.units_synced_at)?{unitsOutstanding:String(l.units_outstanding),at:n(l.units_synced_at)}:null,changedSinceSync:!b(l.units_synced_at)||outstanding!==b(l.units_outstanding)}};
   }
   async quoteCurveSwap(sid:string,side:'buy'|'sell',amount:string):ReturnType<ChainPort['quoteCurveSwap']>{
     if(!/^\d+$/.test(amount)||BigInt(amount)<=0n)throw new ChainError('InvalidTerms','swap amount must be positive');
@@ -49,8 +56,10 @@ export class SolanaCurve {
     return {seriesId:sid,side,amountIn:amount,amountUsed:q.includedFeeInputAmount.toString(),amountOut:q.outputAmount.toString(),fee:q.tradingFee.add(q.protocolFee).add(q.referralFee).toString(),fillsCurve:side==='buy'&&q.nextSqrtPrice.gte(cfg.migrationSqrtPrice)};
   }
   async instructions(cmd:Command,signer:string):Promise<SolPlan>{
+    if(cmd.kind==='createCurveConfig'||cmd.kind==='createCurvePool')return planCurveSetup(this,cmd,signer);
+    if(cmd.kind==='migrateCurve')return planCurveMigration(this,cmd,signer);
     if(!('seriesId' in cmd))throw new ChainError('InvalidTerms','curve command requires a series');
-    const data=await this.pool(cmd.seriesId);if(!data)throw new ChainError('NotFound','create a Stage 1 compatible Meteora pool and configure its address before activating the curve');
+    const data=await this.pool(cmd.seriesId,cmd.kind==='openRaise'?cmd.curvePool:undefined);if(!data)throw new ChainError('NotFound','create a Stage 1 compatible Meteora pool and configure its address before activating the curve');
     const {reads,s,progress:p}=data,series=reads.address(cmd.seriesId),protocol=reads.protocol,registry=reads.registry;
     const cfg=(await this.transport.account(pda(registry,'config'),'ProtocolConfig'))!.value,l=await reads.row('ledger',series,'Ledger');
     const known:Record<string,string|null>={series,issuer:String(s.issuer),owner:signer,payer:signer,config:pda(registry,'config'),dbc_config:p.config,dbc_quote_vault:p.quoteVault,stablecoin_mint:String(s.stablecoin),stablecoin_program:String(s.stablecoin_program),issuer_stable:ata(String(s.issuer),String(s.stablecoin),String(s.stablecoin_program)),owner_stable_ata:ata(signer,String(s.stablecoin),String(s.stablecoin_program)),owner_base_ata:ata(signer,p.baseMint,TOKEN_2022),stake_vault:ata(pda(protocol,'curve_stake',series),p.baseMint,TOKEN_2022),fee_collector_token:ata(String(cfg.fee_collector),String(s.stablecoin),String(s.stablecoin_program)),...this.censusAccounts(series,p)};

@@ -1,5 +1,5 @@
 import { AppError, audit } from '@merces/core';
-import { ChainError, curveBeforeYouBuy, curveNoticeFigures, type CurveBeforeYouBuy, type CurveState, type UnsignedTx } from '@merces/domain';
+import { ChainError, curveBeforeYouBuy, curveNoticeFigures, type CurveBeforeYouBuy, type CurveState, type UnsignedTx, type UserCommand, type PermissionlessCommand } from '@merces/domain';
 import type { DexPort, MeteoraPort } from '@merces/ports';
 import { isEligible, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -47,6 +47,23 @@ export class MeteoraService {
     if (!s) throw AppError.notFound('series');
     if (s.terms.raiseStyle !== 'curve') throw AppError.conflict('not a curve-mode series');
     return { chain, series: s };
+  }
+
+  /** Only public curve parameters and fresh account addresses enter these builders; income stays on the device. */
+  async buildSetup(seriesId: string, session: Session, command: Extract<UserCommand, {kind:'createCurveConfig'|'createCurvePool'|'openRaise'}>) {
+    const {chain,series} = await this.curveSeries(seriesId);
+    if (command.seriesId !== seriesId || !session.wallets.some(w => w.chain === chain.chain && w.address === series.issuer)) throw AppError.forbidden('not the issuer');
+    if (chain.mode !== 'live') throw AppError.conflict('native Meteora setup requires a live Solana test network');
+    if (series.phase !== 'Draft') throw AppError.conflict('the curve is already activated');
+    if (!await chain.isAllowlisted(series.issuer)) throw AppError.forbidden('issuer wallet is not approved');
+    if ((await chain.info()).newRaisesPaused) throw AppError.conflict('new raises are paused');
+    return {tx:await chain.build(command,series.issuer),...NO_CAP,notice:curveNotice(await chain.getCurve(seriesId))};
+  }
+
+  async buildMigration(seriesId: string, session: Session, signer: string, command: Extract<PermissionlessCommand,{kind:'migrateCurve'}>) {
+    const {chain} = await this.curveSeries(seriesId);
+    if (command.seriesId !== seriesId || !session.wallets.some(w=>w.chain===chain.chain&&w.address===signer)) throw AppError.forbidden('wallet is not linked');
+    return {tx:await chain.build(command,signer),...NO_CAP,notice:curveNotice(await chain.getCurve(seriesId))};
   }
 
   /** Run the config generator and persist the config for the series (issuer). */

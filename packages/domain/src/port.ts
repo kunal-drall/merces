@@ -53,6 +53,8 @@ export interface ChainPort {
   listSignerKeys(kind: SignerKind): Promise<SignerKeyState[]>;
   getTransferWindow(seriesId: string, windowId?: number): Promise<TransferWindowState | null>;
   getCurve(seriesId: string): Promise<CurveState | null>;
+  /** Optional native DBC migration crank; account-creation keys are generated and signed locally by the adapter. */
+  migrateCurve?(seriesId: string): Promise<TxResult>;
   /**
    * Quote a `curveSwap` on a curve series at the current state (moves nothing): the simulator's stand-in pool; the live
    * adapters quote Meteora's pool from S5 (NotImplemented until then).
@@ -76,7 +78,8 @@ export interface ChainPort {
    * per transaction until a bundle is needed there (curve mode, the bundle's first user, is Solana only): a list of
    * more than one is NotImplemented on an EVM chain.
    *
-   * `signer` is the transaction's one signer: nobody co-signs (S4 D3, WP13). An attestor's or the report verifier's
+   * `signer` is the one funding wallet. Native Meteora creation also needs the exact fresh account keys named by its
+   * reviewed command. Those private keys remain on the signing device. An attestor's or the report verifier's
    * approval is a Stage 1 signature inside the command, never a transaction signature.
    */
   build(command: BuildableCommand | readonly BuildableCommand[], signer: Address): Promise<UnsignedTx>;

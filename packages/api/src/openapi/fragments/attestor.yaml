@@ -78,7 +78,7 @@ components:
         evidenceCiphertext: { $ref: '#/components/schemas/Ciphertext' }
     UnsignedTx:
       type: object
-      description: "A transaction for one wallet (a user, a holder or the admin multisig) to sign; the backend never signs. It has one signer: nobody co-signs (S4 WP13). An attestor's or the report verifier's approval is a Stage 1 signature the command carries as an argument, never a transaction signature."
+      description: "A transaction for one wallet (a user, a holder or the admin multisig) to sign; the backend never signs. It has one funding wallet. Native Meteora setup additionally requires signatures from the exact fresh config, base mint or position mint accounts named in the reviewed command; their private keys stay on the signing device. An attestor's or the report verifier's approval is a Stage 1 signature the command carries as an argument, never a transaction signature."
       properties:
         chain: { type: string }
         family: { type: string, enum: [solana, evm] }

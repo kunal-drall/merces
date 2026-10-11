@@ -97,7 +97,7 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
 
   // cause S3-CV (amendment M7): every auction builder refuses a curve series with 409 NotSealedBid, as the chain does (was:
   // open 409 without a name, the settlement step 409 'curve', and a cancel built while no curve units existed)
-  it('a curve-mode series runs no sealed-bid raise: every auction builder is 409 NotSealedBid', async () => {
+  it('a curve-mode series cannot reopen or use sealed-bid auction builders', async () => {
     const h = rig.sol;
     const { seriesId } = await h.createCurve();
     await rig.sync();
@@ -109,7 +109,6 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
     // cause S4-BID: Stage 1's keccak commitment, over no series or window
     const commitment = bidCommitment({ bidder, pricePerUnit: USDC(10), quantity: 1n, salt });
     for (const [url, body, tok] of [
-      [`/series/${seriesId}/raise/build-open`, {}, issuerTok],
       [`/series/${seriesId}/raise/build-cancel`, {}, issuerTok],
       [`/series/${seriesId}/auction/build-step`, { signer: h.issuer.address }, issuerTok],
       [`/series/${seriesId}/bids/precheck`, { bidder, pricePerUnit: USDC(10).toString(), quantity: '1' }, bidderTok],
@@ -120,6 +119,8 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
       const r = await rig.post(url, body, tok);
       expect([r.statusCode, r.json().detail], url).toEqual(notSealed);
     }
+    const reopen = await rig.post(`/series/${seriesId}/raise/build-open`, {}, issuerTok);
+    expect([reopen.statusCode, reopen.json().detail]).toEqual([409, {stage1:'RaiseNotDraft'}]);
     const preview = await rig.get(`/series/${seriesId}/auction/preview`);
     expect([preview.statusCode, preview.json().detail]).toEqual(notSealed);
     await h.curveBuy(seriesId, h.backers[0]!, USDC(100));

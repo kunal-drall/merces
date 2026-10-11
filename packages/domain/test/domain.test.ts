@@ -349,12 +349,12 @@ describe('schemas', () => {
     // cause S3-BR, S3-CV: a curve's completion and proceeds are permissionless (Stage 1 complete_curve, collect_curve_proceeds);
     // cause S3-CN: and its census (Stage 1 sync_curve_units)
     // cause S4-PAU: and a signed pause approval (Stage 1 approve_pause); cause S4-EXT: and a signed extinguishment
-    expect(permissionlessCommandKinds).toEqual(['sweepRouter', 'closeRouterPeriod', 'openWindow', 'beginWindowSettlement', 'tallyWindow', 'finalizeWindow', 'processOrder', 'deliverOrder', 'snapshotFx', 'retireIfCapped', 'beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish']);
+    expect(permissionlessCommandKinds).toEqual(['sweepRouter', 'closeRouterPeriod', 'openWindow', 'beginWindowSettlement', 'tallyWindow', 'finalizeWindow', 'processOrder', 'deliverOrder', 'snapshotFx', 'retireIfCapped', 'beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'migrateCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish']);
     // cause S3-BR: burnRetired{holder} (permissionless, above) replaces the S1 list burn crank (`holders[]`), so no service
     // command burns any more; cause S3-CV: completion is permissionless `completeCurve` (was a service graduation command)
     expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'setAllowlist']);
     // cause S3-CV: a curve trade is `curveSwap` (a Meteora DBC swap; was the toy curve's buy command), buy or sell
-    expect(userCommandKinds.filter((k) => /[Cc]urve/.test(k))).toEqual(['curveSwap']);
+    expect(userCommandKinds.filter((k) => /[Cc]urve/.test(k))).toEqual(['createCurveConfig', 'createCurvePool', 'curveSwap']);
     expect(userCommandSchema.parse({ kind: 'curveSwap', seriesId: 'solana:abc', side: 'sell', amountIn: '1', minimumAmountOut: '0' }).kind).toBe('curveSwap');
     // submit takes both groups, each command once (the union's head is the first service command)
     expect(serviceCommandSchema.parse({ kind: 'deliverBid', seriesId: 'solana:abc', bidder: 'b' }).kind).toBe('deliverBid');

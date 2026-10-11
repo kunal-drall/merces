@@ -43,7 +43,10 @@ export const userCommands = {
   routeIncome: z.object({ kind: z.literal('routeIncome'), seriesId: seriesIdSchema, amount: moneySchema }),
   createSeries: z.object({ kind: z.literal('createSeries'), terms: seriesTermsSchema, /** simulator/testing only: fixed address for deterministic ids */ seriesAddressHint: z.string().optional() }),
   /** Stage 1 `open_raise`: the chain sets the commit end to now + `commitDurationSeconds` and the reveal end to the commit end + `revealDurationSeconds` (the series' terms) */
-  openRaise: z.object({ kind: z.literal('openRaise'), seriesId: seriesIdSchema }),
+  openRaise: z.object({ kind: z.literal('openRaise'), seriesId: seriesIdSchema, curvePool: addressSchema.optional() }),
+  /** New Meteora accounts sign only their own creation; the issuer remains the sole funding/authority wallet. */
+  createCurveConfig: z.object({ kind: z.literal('createCurveConfig'), seriesId: seriesIdSchema, config: addressSchema, parameters: z.record(z.string(), z.unknown()).refine(p => JSON.stringify(p).length <= 16384, 'curve configuration is too large') }),
+  createCurvePool: z.object({ kind: z.literal('createCurvePool'), seriesId: seriesIdSchema, config: addressSchema, baseMint: addressSchema }),
   cancelRaise: z.object({ kind: z.literal('cancelRaise'), seriesId: seriesIdSchema }),
   commitBid: z.object({ kind: z.literal('commitBid'), seriesId: seriesIdSchema, commitment: hash32Schema, deposit: moneySchema }),
   revealBid: z.object({ kind: z.literal('revealBid'), seriesId: seriesIdSchema, pricePerUnit: moneySchema, quantity: unitsSchema, salt: hash32Schema }),
@@ -253,6 +256,8 @@ export const permissionlessCommands = {
    * Emits `CurveGraduated` (Stage 1 `RaiseSettled`, proceeds 0) and `RaiseMintFinalized{proceeds: 0}`.
    */
   completeCurve: z.object({ kind: z.literal('completeCurve'), seriesId: seriesIdSchema }),
+  /** Permissionless DBC migration. The two fresh position NFT mints sign account creation, not custody. */
+  migrateCurve: z.object({ kind: z.literal('migrateCurve'), seriesId: seriesIdSchema, firstPositionMint: addressSchema, secondPositionMint: addressSchema }),
   /**
    * Stage 1 `collect_curve_proceeds` (curve.rs:1112-1214), idempotent: once the pool has filled, the partner migration
    * fee and the partner surplus move into the series treasury (each once); at any time the partner trading fee moves to
@@ -404,7 +409,8 @@ export interface UnsignedTx {
   chain: string;
   family: 'solana' | 'evm';
   /**
-   * The one signer (the fee payer on Solana, msg.sender on the EVM). Nobody co-signs (S4 D3, WP13): every attestation
+   * The funding wallet (fee payer on Solana, msg.sender on the EVM). Meteora account creation also requires the exact
+   * fresh account keys named in the reviewed command; those keys stay on the signing device. Every attestation
    * is a Stage 1 signature the command carries as an argument (`approvePause`, `amendTerms`, `extinguish`, a tier-2 or
    * tier-3 `submitReport`), checked by the chain against the registered key.
    */

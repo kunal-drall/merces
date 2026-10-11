@@ -1,4 +1,5 @@
 import {createPublicKey,verify} from 'node:crypto';
+import {creationSigners} from './creation-signers.ts';
 import {Connection,Message,PublicKey,Transaction,type AccountInfo} from '@solana/web3.js';
 import bs58 from 'bs58';
 import {ChainError,stage1ChainError,type SignedTx,type TxResult} from '@merces/domain';
@@ -97,14 +98,23 @@ export class SolanaTransport {
   async send(signed:SignedTx):Promise<TxResult>{
     await this.verifyNetwork();const tx=signed.tx;
     if(tx.chain!==this.config.chain||tx.family!=='solana'||tx.encoding!=='solana-base64')throw new ChainError('Unauthorized','transaction belongs to another chain');
-    if(Object.keys(signed.signatures).length!==1)throw new ChainError('Unauthorized','exactly one wallet signature is required');
-    let message:Message,raw:Buffer,signature:Buffer;
-    try{raw=Buffer.from(tx.payload,'base64');message=Message.from(raw);const value=signed.signatures[tx.signer]!;signature=/^(?:0x)?[a-f0-9]{128}$/i.test(value)?Buffer.from(value.replace(/^0x/,''),'hex'):value.length<=90?Buffer.from(bs58.decode(value)):Buffer.from(value,'base64');}catch{throw new ChainError('Unauthorized','invalid wallet signature or message');}
-    if(message.header.numRequiredSignatures!==1||message.accountKeys[0]!.toBase58()!==tx.signer||signature.length!==64)throw new ChainError('Unauthorized','transaction must have exactly its requested wallet signer');
-    const key=createPublicKey({format:'der',type:'spki',key:Buffer.concat([Buffer.from('302a300506032b6570032100','hex'),new PublicKey(tx.signer).toBuffer()])});
-    if(!verify(null,raw,key,signature))throw new ChainError('Unauthorized','wallet signature does not match the transaction message');
+    let message:Message,raw:Buffer;
+    try { raw=Buffer.from(tx.payload,'base64');message=Message.from(raw); }
+    catch { throw new ChainError('Unauthorized','invalid transaction message'); }
+    const required=message.accountKeys.slice(0,message.header.numRequiredSignatures).map(k=>k.toBase58());
+    const expected=[tx.signer,...(required.length===1?[]:creationSigners(tx.commands??[tx.command],tx.signer))];
+    if(required[0]!==tx.signer||required.length!==expected.length||required.some(k=>!expected.includes(k))
+      ||Object.keys(signed.signatures).length!==required.length)throw new ChainError('Unauthorized','transaction has unexpected signing accounts');
+    const signatures=required.map(address=>{
+      let signature:Buffer;
+      try { const value=signed.signatures[address]!;signature=/^(?:0x)?[a-f0-9]{128}$/i.test(value)?Buffer.from(value.replace(/^0x/,''),'hex'):value.length<=90?Buffer.from(bs58.decode(value)):Buffer.from(value,'base64'); }
+      catch { throw new ChainError('Unauthorized','invalid transaction signature'); }
+      const key=createPublicKey({format:'der',type:'spki',key:Buffer.concat([Buffer.from('302a300506032b6570032100','hex'),new PublicKey(address).toBuffer()])});
+      if(signature.length!==64||!verify(null,raw,key,signature))throw new ChainError('Unauthorized','signature does not match the transaction message');
+      return bs58.encode(signature);
+    });
     if(!(await this.connection.isBlockhashValid(message.recentBlockhash,{commitment:'finalized'})).value)throw new ChainError('TooLate','blockhash expired; rebuild the transaction');
-    const transaction=Transaction.populate(message,[bs58.encode(signature)]),txId=await this.connection.sendRawTransaction(transaction.serialize(),{preflightCommitment:'finalized',skipPreflight:false,maxRetries:3});
+    const transaction=Transaction.populate(message,signatures),txId=await this.connection.sendRawTransaction(transaction.serialize(),{preflightCommitment:'finalized',skipPreflight:false,maxRetries:3});
     const deadline=Date.now()+120_000;
     for(;;){
       const status=(await this.connection.getSignatureStatuses([txId],{searchTransactionHistory:true})).value[0];

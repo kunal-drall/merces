@@ -43,6 +43,18 @@ describe('Solana binary and transport boundaries',()=>{
   await expect(transport.send({...s,signatures:{...s.signatures,[key(2)]:'bad'}})).rejects.toMatchObject({code:'Unauthorized'});
   connection.isBlockhashValid.mockResolvedValue({value:false});await expect(transport.send(s)).rejects.toMatchObject({code:'TooLate'});expect(connection.sendRawTransaction).not.toHaveBeenCalled();
  });
+ it('accepts exactly the two signatures required to create a reviewed Meteora account',async()=>{
+  const {transport,connection}=setup();
+  const pair=()=>{const k=generateKeyPairSync('ed25519');return {...k,address:new PublicKey(k.publicKey.export({format:'der',type:'spki'}).subarray(-32))};};
+  const wallet=pair(),account=pair();
+  const raw=new Transaction({feePayer:wallet.address,recentBlockhash:key(8)}).add(SystemProgram.createAccount({fromPubkey:wallet.address,newAccountPubkey:account.address,lamports:1,space:1,programId:new PublicKey(key(9))})).serializeMessage();
+  const tx:UnsignedTx={chain:'solana',family:'solana',signer:wallet.address.toBase58(),command:{kind:'createCurveConfig',seriesId:`solana:${key(10)}`,config:account.address.toBase58(),parameters:{}},payload:raw.toString('base64'),encoding:'solana-base64',summary:'create',expiresAt:null};
+  const signatures=Object.fromEntries([wallet,account].map(k=>[k.address.toBase58(),sign(null,raw,k.privateKey).toString('hex')]));
+  await expect(transport.send({tx,signatures:{[tx.signer]:signatures[tx.signer]!}})).rejects.toMatchObject({code:'Unauthorized'});
+  await expect(transport.send({tx:{...tx,command:{kind:'crankStatus',seriesId:`solana:${key(10)}`}},signatures})).rejects.toMatchObject({code:'Unauthorized'});
+  expect(connection.sendRawTransaction).not.toHaveBeenCalled();
+  await expect(transport.send({tx,signatures})).resolves.toMatchObject({blockRef:'10'});
+ });
  it('checks token account ownership and mint, and never leaks RPC errors or logs',async()=>{
   const data=Buffer.alloc(165);new PublicKey(key(7)).toBuffer().copy(data);data.writeBigUInt64LE(99n,64);
   const {transport}=setup({getAccountInfo:async()=>({owner:new PublicKey(TOKEN),data})});expect(await transport.tokenBalance(key(1),key(7))).toBe(99n);

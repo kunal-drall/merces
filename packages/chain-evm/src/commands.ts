@@ -36,6 +36,7 @@ export async function planEvmCommand(ctx:EvmCommandContext,cmd:Command):Promise<
   const core=async()=>row(await ctx.read('Registry','getSeriesCore',[id]));
   const spend=async(plan:EvmCall,amount:bigint)=>({...plan,approval:{token:String((await core()).stablecoin),module:plan.module,amount}});
   switch(cmd.kind) {
+    case 'createCurveConfig':case 'createCurvePool':case 'migrateCurve':throw new ChainError('NotPermitted','Meteora account creation and migration are Solana-only');
     case 'createSeries': {
       const t=cmd.terms;
       if(t.raiseStyle==='curve')throw new ChainError('NotPermitted','curve mode is Solana only',{stage1:'CurveModeUnsupported'});
