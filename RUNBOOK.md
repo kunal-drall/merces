@@ -233,7 +233,7 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   prior (a series' first report outside Q1, A25), reports from the ZERO prior (the least favourable to it); and check
   the reports the chain accepted under the revoked key in its grace window, as for attestor keys.
 - Attestor keys (S4 WP5, A-SIG-4; by key since S4 WP7): an attestor is a secp256k1 key held on the attestor's own
-  device (never by the backend), its 20-byte address the attestor on every chain that registers it. Onboarding: the
+  device (never by the backend; the Merces attestor tool since S4 WP8, "Attestor key setup" below), its 20-byte address the attestor on every chain that registers it. Onboarding: the
   attestor links the key to their account (`POST /me/signer-keys/challenge`, sign the text with the key, `POST
   /me/signer-keys`), then an admin proposes it per chain (`POST /admin/attestors {chain, attestor, accountId?}`: 422
   `key-not-linked` until the account has linked it) and the multisig signs `registerAttestor`; access starts once it is
@@ -256,6 +256,57 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   stablecoin and unit token accounts at `deliverBid` when missing; Stage 1 `raise.rs`), and the fee collector's token
   account must exist before the first `processBid` (a deployment step). Set a compute-unit limit on `processBid`: it
   can exceed Solana's 200k default (A-AUC-10; rent is not measured in the simulator).
+
+### Attestor key setup
+
+An attestor signs Stage 1's messages with a dedicated secp256k1 key that never leaves their own machine (S4 D2,
+A-SIG-2). The Merces attestor tool keeps it: `merces-attestor`, the `bin` of `@merces/poi-device`; from a checkout of
+this repository it runs as `pnpm -s attestor <command>` (`-s` keeps pnpm's banner off the JSON it prints). It belongs on
+the attestor's machine, never on a server.
+
+1. **Make the key.** `pnpm -s attestor keygen` asks for a password twice on the terminal (no echo; at least 8
+   characters) and writes `~/.merces/attestor/keystore.json` (`--keystore <path>` for another file; mode 0600 in a
+   0700 directory; it never overwrites a file): a Web3 Secret Storage v3 keystore at go-ethereum's standard strength
+   (scrypt n = 2^18, r = 8, p = 1; AES-128-CTR; VERSIONS.md "Attestor device tool"). It prints the key's address,
+   never the key, and no command of the tool prints a key. To bring an existing key, `pnpm -s attestor import <file>`
+   (a v3 keystore of any strength, scrypt or PBKDF2, or a file holding a `0x`-hex key, which you then delete) writes a
+   new keystore at full strength. The tool signs only with a keystore at that strength: import a lighter one first
+   (another tool's default, `geth --lightkdf`). Back up the keystore file and its password, separately: nobody can
+   recover the key without both. The key attests and does nothing else: never fund it and never import it into a
+   wallet (it signs raw digests, and a raw-digest signer signs any 32 bytes, a transaction hash included).
+2. **Pin the networks.** Write `~/.merces/attestor/networks.json` (`--networks <path>` for another file): for each chain
+   key you attest on, `{"<chain>": {"family": "evm" | "solana", "chainId": …, "registry": "<the Merces registry's
+   address>"}}` (the tool computes the signing domain with Stage 1's `computeDomain`; a full `{chainKind, chainId,
+   registry, domain}` is accepted too and must hash to itself). Take the values from the deployment manifest Merces
+   publishes, never from the API the requests come from: the table is what stops a compromised API from pointing the
+   key at another deployment. The live deployments and their manifest come with S5. The tool refuses the whole table
+   when any entry is a mainnet (Solana cluster tag 101, an EVM mainnet such as Monad's 143), a network off the signing
+   allow-list or a domain that is not the hash of its own fields. Development against the simulator: copy each chain's
+   `signing` from `GET /chains` and pass `--allow-local` to `sign` (the local ids 104 and 31337, nothing else).
+3. **Link the key to your account.** `POST /me/signer-keys/challenge {"address": "0x…"}`; save the response's
+   `message` exactly (`jq -r .message > challenge.txt`); `pnpm -s attestor link challenge.txt` shows the host, the
+   account, the key and the nonce, asks, signs the challenge with EIP-191 (it signs no text but a key-link challenge
+   built for this key) and prints `{address, nonce, signature}`, the body of `POST /me/signer-keys`. An admin then
+   proposes the key per chain and the multisig registers it ("Attestor keys" above).
+4. **Sign a work item.** Save the item's signing request (one, or a list such as an FX rate's per-series requests;
+   the S4 WP9-WP13 routes return them) as `request.json` and run `pnpm -s attestor sign request.json`. The tool checks
+   the request against the pinned table (the chain, its domain, the series key), rebuilds Stage 1's pre-image and digest
+   from the typed fields and refuses any difference, then shows what you authorise, built from those fields alone (a
+   request carries no text of the server's; one that does is refused). Before a PAUSE or an EXTINGUISH it says that the
+   signature cannot be recalled: anyone holding it can submit it until it is used or the key is revoked. Once you
+   confirm and give the password it signs the digest it rebuilt and prints `{kind, chain, seriesId, signer,
+   signature, digest}` (`--out <file>` writes it 0600); post the signature to the item's route. Limits in S4: the nonce
+   of a PAUSE, AMEND, EXTINGUISH or TRUEUP request comes from the server and the tool cannot check it against the chain
+   yet (S5 reads it from a public RPC), so sign only a request you expect; an unrelayed PAUSE or EXTINGUISH signature
+   that leaks is withdrawn only by rotating the key.
+5. **Passwords.** The terminal is the default. `--password-env NAME` (and `--source-password-env NAME` for `import`)
+   read a password from an environment variable, for scripted tests: a password there is readable through
+   `/proc/<pid>/environ` by the same user and by root, and lands in shell history when it is set on the command line.
+   Do not use it for a real key. `MERCES_ATTESTOR_TEST_SCRYPT_N` (a weak keystore, for tests) is refused outside the
+   test harness (`VITEST=true` or `NODE_ENV=test`).
+6. **Expert fallback.** Foundry's `cast wallet sign --no-hash <digest>` signs a raw digest from a local keystore. It
+   signs blind: rebuild and check the digest first (`sign` prints the one it rebuilt). Its output format is unverified
+   (VERSIONS.md); the API refuses a non-canonical signature.
 
 ## Keepers
 

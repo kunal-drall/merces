@@ -1032,6 +1032,12 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    (`GET /chains/{chain}/signer-keys`). Until S4 WP9-WP13 the flows that still co-sign (tier 3, the FX fallback,
    `approvePause`, `amendTerms`, `extinguish`) sign at the key's address in the simulator, and the tier-3 and FX texts
    are the key's EIP-191 signatures: transitional, removed flow by flow.
+   **S4 WP8:** the attestor's signer (A-SIG-2): Stage 1 signs raw keccak digests with no EIP-191 prefix, which ordinary
+   wallets cannot produce, so attestors sign with the Merces attestor tool (`merces-attestor` in `@merces/poi-device`)
+   on their own machine: a Web3 Secret Storage v3 keystore at go-ethereum's standard scrypt strength, a pinned network
+   table (never mainnet), Stage 1's builders over the request's typed fields (the request's digest is never trusted),
+   Stage 1's `signDigest`, and an EIP-191 link proof over the API's key-link challenge only. The flows that hand it
+   requests follow in S4 WP9-WP13; reading a nonce from a public RPC on live chains waits for S5's adapters.
 7. *Actors and admin.* `register_issuer` is **admin-only** on both chains (ours is the issuer's own command); there is
    no admin router registration; timelock-only powers need `TimelockController.schedule`/`execute`; the admin
    surface adds `set_flags` (`new_raises_paused`, `windows_enabled`, `tier4_enabled`), `set_fx_pair`, `set_defaults`,

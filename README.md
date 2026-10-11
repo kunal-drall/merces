@@ -45,7 +45,7 @@ pnpm openapi:check                       # routes ⇄ openapi.yaml ⇄ access ti
 | Services | `@merces/services`: identity & onboarding (E2), contracts (E3), terms vault (E4), ProofOfIncome (E5), auction (E6), lifecycle (treasury, Stage 1's claims, redemption, windows), Meteora (E14: curve mode, staking and tender), threshold data (E9), attestor (E10), accounting (E11), notifications (E12), admin (E13) |
 | Clockwork | `@merces/keepers` (E7 cranks, reminders, outbox; E8 rate keeper) |
 | The sensitive one | `@merces/report-verifier` — isolated, no database, no payload logs |
-| Device side | `@merces/poi-device` — what runs on the issuer's device for a report (income chain, Stage 1 payment, Groth16 proof) |
+| Device side | `@merces/poi-device` — what runs on the issuer's device for a report (income chain, Stage 1 payment, Groth16 proof), and the attestor's tool `merces-attestor` (`pnpm -s attestor`): a keystore that never leaves the attestor's machine, the signing-request check and Stage 1 signatures (S4 WP8; RUNBOOK "Attestor key setup") |
 | Ports | `@merces/ports` — KMS, vault crypto, wallet verification, identity check, e-sign, zkTLS (Reclaim-shaped), proof system, Pyth/Chainlink, Meteora, DEX; every one with a mock |
 | Stage 1 catch-up | `@merces/stage1-sync`, `@merces/conformance` |
 | Tests and demos | `@merces/privacy-tests`, `@merces/scenarios`, `@merces/fixtures` |

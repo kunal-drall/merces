@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "What runs on the issuer's device for a quarterly ProofOfIncome report: zkTLS session, income commitment, proof generation, attestation request, report assembly. Income never leaves the device except as a zkTLS proof sent straight to the report verifier.",
+  "description": "What runs on the issuer's and the attestor's own device. The issuer's: a quarterly ProofOfIncome report (zkTLS session, income commitment, proof generation, attestation request, report assembly); income never leaves the device except as a zkTLS proof sent straight to the report verifier. The attestor's (S4 D2, no custody): the Merces attestor tool, a dedicated secp256k1 key in a Web3 Secret Storage v3 keystore that never leaves the machine, which checks a signing request against its own pinned network table, rebuilds Stage 1's digest from the typed fields, signs only that digest and proves the key to an account with an EIP-191 link proof.",
   "exports": { ".": "./src/index.ts" },
+  "bin": { "merces-attestor": "./src/attestor-cli.ts" },
   "dependencies": {
     "@merces/circuits": "workspace:*",
     "@merces/domain": "workspace:*",
     "@merces/math": "workspace:*",
     "@merces/ports": "workspace:*",
-    "@merces/report-verifier": "workspace:*"
+    "@merces/report-verifier": "workspace:*",
+    "@noble/hashes": "2.4.0"
   },
   "devDependencies": { "@merces/simulator": "workspace:*" }
 }

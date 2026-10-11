@@ -89,6 +89,7 @@ document file (A-PRIV-4).
 | Readiness report | `applications.readiness` | plain | owner, admin | — |
 | Decision reason | `applications.decision_reason_code`, `audit_log` | codes only | admin (owner sees the code) | — |
 | Attestor key links (S4 WP7) | `account_signer_keys` (a key's 20-byte address, the account, when linked); `audit_log` (`signer-key.link` / `.unlink`) | plain | owner, admin (`GET /admin/attestors`); never public, never in a notification, the activity feed or another account's view. The key's address and its registration are public onchain (`GET /chains/{chain}/signer-keys` shows no account) | unlink (409 while work addressed to the key is open) / account deletion |
+| Attestor private key (S4 WP8) | the attestor's own machine only: the Merces attestor tool's Web3 Secret Storage v3 keystore (`~/.merces/attestor/keystore.json`, mode 0600; scrypt n ≥ 2^18, AES-128-CTR) | encrypted under the attestor's password; never sent, stored or logged by Merces (the tool posts only signatures and the link proof, and prints no key) | the attestor only | the attestor deletes the file (a lost keystore or password is a lost key: rotate it) |
 | Sign-in nonces and key-link challenges | `auth_nonces` (`purpose` sign-in or link-signer-key; a link challenge names the account and the key and no chain) | plain | nobody (consumed) | 10 minutes (expiry); purge weekly |
 | Session token | client only (HMAC) | none | — | 24 h expiry |
 

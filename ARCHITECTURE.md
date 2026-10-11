@@ -112,7 +112,10 @@ table, the series key, period, prior and income commitments, tier 2, liquidity f
 no database, logs no payloads, and keeps its secp256k1 key behind the KMS port, pinned by address (S4 WP6, A-SIG-5). Devices call it directly; the API never sees a zkTLS
 proof or a salt. `@merces/poi-device` is the device-side counterpart: it keeps the income chain (each quarter's
 opening, salts derived from a device secret), computes the payment with Stage 1's formula and proves Stage 1's
-ProofOfIncome circuit (Groth16) on the device; only commitments, the payment and the proof leave it.
+ProofOfIncome circuit (Groth16) on the device; only commitments, the payment and the proof leave it. The same package
+holds the attestor's side (S4 WP8, A-SIG-2): `merces-attestor` keeps the attestor's secp256k1 key in a Web3 Secret
+Storage v3 keystore on the attestor's machine, checks each signing request against its own pinned network table,
+rebuilds Stage 1's digest from the typed fields and signs only that; only the signature leaves it.
 
 ## Stage 1 catch-up
 

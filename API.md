@@ -26,8 +26,8 @@ explains how to use the API; the spec is the source of truth for shapes.
 - **Attestor keys** (S4 WP7): an attestor is a secp256k1 key, its 20-byte address the attestor on every chain that
   registers it. An account links a key with the key's own EIP-191 proof: `POST /me/signer-keys/challenge {address}`
   returns a one-time text bound to the host, the account, the key and a nonce, saying it links a key and is not an
-  attestation and moves no funds; `personal_sign` it with the key (the Merces attestor tool, MetaMask, a hardware wallet
-  or `cast wallet sign`) and `POST /me/signer-keys {address, nonce, signature}` (a simulator `sim:` signature is never
+  attestation and moves no funds; `personal_sign` it with the key (the Merces attestor tool's `merces-attestor link`,
+  which signs only this challenge, MetaMask, a hardware wallet or `cast wallet sign`) and `POST /me/signer-keys {address, nonce, signature}` (a simulator `sim:` signature is never
   accepted; 409 `challenge-used` for a replay, `key-linked-to-another-account`; 422 `unknown-challenge` for a sign-in
   nonce or another account's challenge, `challenge-expired`, `bad-signature`). `GET /me/signer-keys` lists the account's
   keys with their registrations; `DELETE /me/signer-keys/{address}` unlinks one (409 `open-work` while work addressed to

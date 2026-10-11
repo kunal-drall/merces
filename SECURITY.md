@@ -27,7 +27,7 @@ a lender or a broker, and it is **never a custodian**:
 | Key | Where | Can | Cannot |
 | --- | --- | --- | --- |
 | Report-verifier secp256k1 (S4 WP6, D10) | KMS port, algorithm configured (`LocalKms` for development; a cloud KMS in production once the owner chooses AWS or GCP, S4 owner question 1; until then the standalone verifier refuses any other provider). Its 20-byte address is registered onchain as a verifier key by the multisig (`registerVerifierKey`), and pinned in the verifier's configuration (`REPORT_VERIFIER_ADDRESS`): the verifier refuses to start when the KMS key's address differs. | Sign Stage 1's `MERCES_REPORT_V1` with tier 2 (the series' chain's signing domain from the verifier's own table `MERCES_VERIFIER_CHAINS`, the series key, period, prior and income commitments, liquidity flag) after verifying a zkTLS proof and the prior opening. It builds every digest itself from typed fields: no route signs a digest a caller supplies. Every domain of its table is checked against the signing allow-list at startup and again before each signature (never mainnet; local ids only in development). Development (`MERCES_VERIFIER_DEV=true`: the published dev seed, no address pin) is the simulator only: the verifier refuses to start when its table holds any chain but a local id (Solana localnet 104, EVM 31337), a testnet included, and a dev verifier refuses a non-local domain at every signature. The proof's source is checked against the request but is not signed (A-REV-1, B7); the liquidity flag is the one the device declares (owner question 1 open since S1) | Sign anything else; sign for a chain off its table or a mainnet; the verifier has no database and no payload logs |
-| Attestor keys (S4 WP7, D2, D4) | never in the backend: each attestor's own device (the Merces attestor tool, a hardware wallet). The backend stores the key's 20-byte address and its link to an account (`account_signer_keys`), never key material; dev and test attestor keys are published simulator keys (seeds `sim-attestor:*`, `merces-dev-attestor:*`), linked only while every chain is the simulator | Prove control of the key (EIP-191 link challenge) and, through S4 WP9-WP13, sign Stage 1's attestor messages on the device | Be held, used or rebuilt by the server, an admin or the keeper; act on a chain that has not registered it |
+| Attestor keys (S4 WP7, WP8, D2, D4) | never in the backend: each attestor's own machine, in the Merces attestor tool (`merces-attestor`, S4 WP8: a Web3 Secret Storage v3 keystore at scrypt n ≥ 2^18, "Attestor signing" below; a hardware wallet can make the EIP-191 link proof but cannot sign Stage 1's raw digests). The backend stores the key's 20-byte address and its link to an account (`account_signer_keys`), never key material; dev and test attestor keys are published simulator keys (seeds `sim-attestor:*`, `merces-dev-attestor:*`), linked only while every chain is the simulator | Prove control of the key (EIP-191 link challenge) and, through S4 WP9-WP13, sign Stage 1's attestor messages on the device, each over a digest the device rebuilt from typed fields under its own pinned network table | Be held, used or rebuilt by the server, an admin or the keeper; act on a chain that has not registered it; sign for a mainnet or a network the device has not pinned |
 | Keeper fee payer (per chain) | KMS port | Submit permissionless cranks | Any user action |
 | Allowlist manager (per chain) | KMS port | `setAllowlist` | Freeze or seize units, block claims |
 | Session HMAC secret | environment | Sign API session tokens | — |
@@ -83,6 +83,37 @@ Secrets never enter the repository: `.env.example` lists names only; development
   local ids only.
 - Backer-tier access is decided by a live read of the `eligibility` table on every request, never by the session
   token's `eligible` flag: a revoke takes effect on the next request. Private terms have no admin bypass.
+
+## Attestor signing (S4 WP8, no custody)
+
+- The attestor's key never leaves the attestor's machine (S4 D2, A-SIG-2): the Merces attestor tool
+  (`@merces/poi-device`, bin `merces-attestor`) keeps it in a Web3 Secret Storage v3 keystore. Every keystore it writes
+  uses go-ethereum's standard scrypt strength (n = 2^18, r = 8, p = 1); a lower n is refused outside the test harness
+  (`VITEST=true` or `NODE_ENV=test`), and the tool signs only with a keystore at that strength (a lighter one is
+  re-encrypted by `import`). The MAC is checked in constant time before decryption. The password is read from the
+  terminal with echo off; `--password-env` exists for scripted tests and is documented as exposed through
+  `/proc/<pid>/environ` and shell history. No command prints the key, errors name no value, and the in-memory key
+  object prints its address only.
+- The tool never trusts a signing request: the request's chain must be in the device's own pinned network table with
+  exactly the pinned domain (the table itself refuses any mainnet, any network off the signing allow-list and any domain
+  that is not the hash of its fields; the simulator's local ids only with `--allow-local`), the series key is recomputed
+  from the series id, Stage 1's pre-image and digest are rebuilt from the typed fields and any difference is refused, and
+  only the rebuilt digest is signed (a structural rule: only an object the check returned can be signed). It never
+  signs a tier-2 REPORT (the report verifier's key) and signs EIP-191 text only when it is exactly the API's key-link
+  challenge for that key. What the attestor reads is built from the typed fields alone: a request carries no display
+  text of the server's, and a request with any extra field is refused. Before a PAUSE or an EXTINGUISH it states that the
+  signature cannot be recalled.
+- **Residual risks** (S4; owner question 3's default is to accept and document them):
+  - The tool cannot yet check a nonce against the chain. A compromised API could collect a PAUSE signature over a future
+    pause nonce (N + 1), which approves whatever request N + 1 turns out to be, or EXTINGUISH signatures (nonce 0),
+    which stay valid until used or the key is revoked. The tool shows the nonce and says it cannot check it; on live
+    chains it is to read the nonce from a public RPC itself (S5, with the live adapters).
+  - Unrelayed PAUSE, AMEND and EXTINGUISH signatures are bearer authorisations (S4 amendment D2): anyone holding one can
+    submit it. Stored ones are readable only by the signer's account, the series' issuer where the flow needs it
+    (AMEND) and admins, never in a public read, the activity feed or a notification (S4 WP10-WP12). A leaked one is
+    withdrawn only by rotating the key (the RUNBOOK's attestor key rotation).
+  - A raw-digest key signs any 32 bytes. The key is dedicated and never funded, and the tool signs only digests it
+    rebuilt; the expert fallback (`cast wallet sign --no-hash`) signs blind and is documented as such.
 
 ## Report proofs
 

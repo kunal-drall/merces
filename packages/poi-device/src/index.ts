@@ -11,6 +11,12 @@ import type { Tier3Opening } from './attestor.ts';
 
 export * from './attestor.ts';
 export * from './e2e.ts';
+// the attestor tool (S4 WP8): the keystore (without its internal signing helper) and the request signer
+export {
+  AttestorKey, KEYSTORE_DKLEN, KEYSTORE_SCRYPT_N, KEYSTORE_SCRYPT_P, KEYSTORE_SCRYPT_R, KeystoreError, MIN_KEYSTORE_SCRYPT_N, MIN_PASSWORD_LENGTH,
+  createKeystore, decryptKeystore, isTestHarness, keystoreKdf, type KeystoreErrorCode, type KeystoreKdf, type KeystoreV3, type Pbkdf2Params, type ScryptParams,
+} from './attestor-keys.ts';
+export * from './attestor-signer.ts';
 
 /**
  * What runs on the issuer's device for a quarterly ProofOfIncome report (SPEC v1.1.2 §1.5, §6.2, §8):
