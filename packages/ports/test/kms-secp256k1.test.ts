@@ -157,7 +157,6 @@ describe('RemoteSecp256k1Kms, the provider-neutral adapter (cause S4-KMS)', () =
     expect(await signer.signDigest(KA.messages[0]!.digest)).toBe(hex(signDigest(KA.messages[0]!.digest, remote.priv).bytes));
     // ed25519 calls are refused: the adapter holds secp256k1 keys only
     await refused(kms.sign('rv'), 'wrong-algorithm');
-    await refused(kms.spkiHex('rv'), 'wrong-algorithm');
     await refused(kms.signDigest('rv', '0x00'), 'malformed-digest');
   });
 

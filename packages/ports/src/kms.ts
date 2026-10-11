@@ -10,8 +10,9 @@ import { KmsKeyError, digestBytes } from './kms-secp256k1.ts';
  * `resolveSecret`, A-REV-9).
  *
  * Two algorithms, each with its own methods (S4 WP3):
- * - **ed25519** (`sign`, `spkiHex`): Solana transaction signers, and the report verifier's key until S4 WP6 moves it to
- *   secp256k1. `sign` signs the message bytes as ed25519 does (no prehash) and refuses a secp256k1 key.
+ * - **ed25519** (`sign`): Solana transaction signers (the keeper's fee payer). `sign` signs the message bytes as ed25519
+ *   does (no prehash) and refuses a secp256k1 key. (The report verifier's key moved to secp256k1 in S4 WP6, and with it
+ *   the SPKI export its ed25519 key needed.)
  * - **secp256k1** (`signerAddress`, `signDigest`): Stage 1's signature keys (SPEC v1.1.2 §1.4). `signDigest` signs a
  *   32-byte digest as it is (no hashing, no EIP-191 prefix) and returns Stage 1's 65 bytes `r ‖ s ‖ v` (low `s`,
  *   `v ∈ {27, 28}`) as lowercase `0x` + 130 hex, after checking that the signature recovers to `signerAddress`
@@ -38,8 +39,6 @@ export interface KmsPort {
    * throws (`KmsKeyError`) otherwise, and on an ed25519 key or a malformed digest
    */
   signDigest(keyId: string, digest: string | Uint8Array): Promise<string>;
-  /** ed25519 only: the public key as SPKI DER hex (what the simulator registers for report verifiers until S4 WP6) */
-  spkiHex(keyId: string): Promise<string>;
 }
 
 /** A secp256k1 key behind a `KmsPort` as a `DigestSigner` (`@merces/domain`): its address is read once, here. */
@@ -48,10 +47,9 @@ export async function kmsDigestSigner(kms: KmsPort, keyId: string): Promise<Dige
   return { address, signDigest: (digest: string) => kms.signDigest(keyId, digest) };
 }
 
-export const SPKI_ED25519_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-
+/** A raw 32-byte ed25519 public key as DER SubjectPublicKeyInfo (RFC 8410), what node:crypto imports (Solana wallet sign-in). */
 export function ed25519RawToSpki(raw: Uint8Array): Buffer {
-  return Buffer.concat([SPKI_ED25519_PREFIX, Buffer.from(raw)]);
+  return Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(raw)]);
 }
 
 const ALGORITHMS: readonly KeyAlgorithm[] = ['ed25519', 'secp256k1'];
@@ -118,12 +116,6 @@ export class LocalKms implements KmsPort {
       return { algorithm: 'ed25519', publicKeyHex: spki.subarray(spki.length - 32).toString('hex') };
     }
     return { algorithm: 'secp256k1', publicKeyHex: Buffer.from(publicKeyFromPrivate(m.secp)).toString('hex') };
-  }
-
-  async spkiHex(keyId: string): Promise<string> {
-    this.ed(keyId, 'spkiHex()');
-    const { publicKeyHex } = await this.publicKey(keyId);
-    return ed25519RawToSpki(Buffer.from(publicKeyHex, 'hex')).toString('hex');
   }
 
   async sign(keyId: string, message: Uint8Array): Promise<string> {

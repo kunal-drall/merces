@@ -24,14 +24,14 @@ import type { Pool } from 'pg';
 /** Read-model and per-chain tables whose rows carry the chain key in a `chain` column. */
 export const SIM_RESET_CHAIN_TABLES = [
   'indexer_cursors', 'events', 'events_pending', 'issuers', 'series', 'money_events', 'fees_ledger', 'status_history', 'rate_snapshots', 'fx_fallbacks',
-  'allowlist', 'attestors', 'activity', 'attestor_proposals', 'fx_fallback_requests',
+  'allowlist', 'attestors', 'verifier_keys', 'activity', 'attestor_proposals', 'fx_fallback_requests',
 ] as const;
 
 /** What has to be redone on each reset chain, printed by the CLI. */
 export const SIM_RESET_REAPPLY = [
   'allowlist entries (setAllowlist for every approved wallet)',
   'attestor keys (registerAttestor; revoked keys and their revocation times are gone too)',
-  'report-verifier keys (registerVerifierKey)',
+  'report-verifier keys (registerVerifierKey of the verifier\'s 20-byte address; revoked keys and their revocation times are gone too)',
   'issuer registrations (registerIssuer)',
 ] as const;
 

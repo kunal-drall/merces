@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestSchema, dbTestsEnabled } from '@merces/db';
 import { WAD, capPerUnit, parsePeriod, requiredEscrow } from '@merces/math';
-import { PgSimPersistence, SimHarness, SimWallet, SimulatorChain, defaultTerms } from '@merces/simulator';
+import { PgSimPersistence, SimHarness, SimSigner, SimWallet, SimulatorChain, defaultTerms } from '@merces/simulator';
 import { ZERO_INCOME_COMMITMENT, bidCommitment, runSettlement, type ChainPort, type DomainEvent, type EventPayload, type EventType } from '@merces/domain';
 import { Indexer, project } from '../src/index.ts';
 
@@ -11,7 +11,9 @@ import { Indexer, project } from '../src/index.ts';
  *    the builders take no series, window or side, and the salt is 32 bytes.
  * S4 cause codes on new checks:
  *  - S4-REG: Stage 1's key registry (S4 WP5, migration 023): `AttestorRegistered` and `AttestorRevoked` with their times,
- *    guarded by `updated_seq`; not in the public feed.
+ *    guarded by `updated_seq`; not in the public feed;
+ *  - S4-T2: the report verifier's keys likewise (S4 WP6, migration 024): `VerifierKeyRegistered` and `VerifierKeyRevoked`
+ *    into `verifier_keys` (they were ignored).
  */
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -180,6 +182,33 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     expect((await row(a1.address)).active).toBe(true);
     // registrations and revocations are not in the public feed
     expect((await t.pool.query("select count(*)::int as n from activity where chain = $1 and kind like 'Attestor%'", [key])).rows[0].n).toBe(0);
+  });
+
+  // cause S4-T2 (S4 WP6, migration 024): the verifier keys projected as the attestor keys are; not in the feed
+  it('projects the verifier keys: registration, rotation and forward-only revocation with their times; an older event never undoes a later one', async () => {
+    const key = 'solana-vkeys-test';
+    const h = await SimHarness.create('solana', { genesis: GENESIS, sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
+    const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
+    const v1 = h.verifier.address;
+    const v2 = SimSigner.verifier('verifier-2').address;
+    const row = async (a: string) => (await t.pool.query('select active, registered_at::int as registered_at, revoked_at::int as revoked_at, updated_seq::int as updated_seq from verifier_keys where chain = $1 and address = $2', [key, a])).rows[0];
+    await idx.catchUp();
+    expect(await row(v1)).toMatchObject({ active: true, registered_at: GENESIS, revoked_at: null });
+    await h.sim.setTime(GENESIS + 86_400);
+    await h.exec(h.admin, { kind: 'rotateVerifierKey', from: v1, to: v2 });
+    await idx.catchUp();
+    expect(await row(v2)).toMatchObject({ active: true, registered_at: GENESIS + 86_400, revoked_at: null });
+    expect(await row(v1)).toMatchObject({ active: false, registered_at: GENESIS, revoked_at: GENESIS + 86_400 });
+    // a replayed older event (v1's registration) changes nothing
+    const registered = (await h.sim.readEvents(null, 1000)).events.find((e) => e.type === 'VerifierKeyRegistered' && (e.payload as { verifierKey: string }).verifierKey === v1)!;
+    const c = await t.pool.connect();
+    try {
+      await project(c, registered);
+    } finally {
+      c.release();
+    }
+    expect(await row(v1)).toMatchObject({ active: false, revoked_at: GENESIS + 86_400 });
+    expect((await t.pool.query("select count(*)::int as n from activity where chain = $1 and kind like 'VerifierKey%'", [key])).rows[0].n).toBe(0);
   });
 
   it('enqueues chain notices in the projection transaction, one per event, so repeated transitions each notify', async () => {

@@ -105,4 +105,57 @@ describe.skipIf(!dbTestsEnabled())('migrate', () => {
       }
     });
   });
+
+  // S4 WP6 (cause S4-T2): migration 024 on a database seeded at 023: the verifier keys' read model, the ed25519 verifier
+  // key requests no chain can carry removed, and the reports holding a retired ed25519 attestation that were not yet
+  // submitted superseded (no other report touched)
+  it('024_verifier_keys on a database seeded at 023: the read model, the legacy verifier-key requests and the unsubmitted ed25519 reports', async () => {
+    await withFreshSchema(async (schema) => {
+      const pool = createPool(databaseUrl(), schema);
+      try {
+        const dir = mkdtempSync(join(tmpdir(), 'merces-mig024-'));
+        for (const f of files.filter((x) => x < '024')) copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+        await migrate(pool, dir);
+        const req = (id: string, command: Record<string, unknown>, state: string) =>
+          pool.query("insert into admin_tx_requests (request_id, kind, chain, command, state, created_by) values ($1, $2, 'solana', $3, $4, 'adm')", [id, command.kind, JSON.stringify(command), state]);
+        await req('vk-old-proposed', { kind: 'registerVerifierKey', keyId: 'k', publicKey: 'aa', active: true }, 'proposed');
+        await req('vk-old-confirmed', { kind: 'registerVerifierKey', keyId: 'k', publicKey: 'aa', active: true }, 'confirmed');
+        await req('vk-new', { kind: 'registerVerifierKey', key: '0x' + '11'.repeat(20) }, 'proposed');
+        await req('att', { kind: 'registerAttestor', attestor: 'a' }, 'confirmed');
+        const ed = { keyId: 'k', seriesId: 'solana:x', periodId: '2026Q1', priorIncomeCommitment: '0x00', incomeCommitment: '0x01', tier: 2, liquidityEvent: false, signature: '0x22' };
+        const rep = (id: string, state: string, tier: number, attestation: unknown) =>
+          pool.query(
+            "insert into reports (report_id, series_id, period_id, account_id, tier, source, state, payment_stable, income_commitment, terms_commitment, fx_basis, fx_avg_wad, proof, attestation) values ($1, 'solana:x', '2026Q1', 'acct', $2, 'stripe', $3, 0, '0x01', '0x02', 'unity', 1, '{}', $4)",
+            [id, tier, state, attestation === null ? null : JSON.stringify(attestation)],
+          );
+        await rep('r-assembled', 'assembled', 2, ed);
+        await rep('r-rejected', 'rejected', 2, ed);
+        await rep('r-accepted', 'accepted', 2, ed);
+        await rep('r-paid', 'paid', 2, ed);
+        await rep('r-new', 'assembled', 2, { signer: '0x' + '11'.repeat(20), signature: '0x' + '22'.repeat(65) });
+        await rep('r-tier3', 'assembled', 3, null);
+
+        copyFileSync(join(MIGRATIONS_DIR, '024_verifier_keys.sql'), join(dir, '024_verifier_keys.sql'));
+        expect(await migrate(pool, dir)).toEqual(['024_verifier_keys.sql']);
+        expect((await pool.query('select request_id from admin_tx_requests order by request_id')).rows.map((r) => r.request_id)).toEqual(['att', 'vk-new']);
+        const states = await pool.query('select report_id, state from reports order by report_id');
+        expect(states.rows).toEqual([
+          { report_id: 'r-accepted', state: 'accepted' },
+          { report_id: 'r-assembled', state: 'superseded' },
+          { report_id: 'r-new', state: 'assembled' },
+          { report_id: 'r-paid', state: 'paid' },
+          { report_id: 'r-rejected', state: 'superseded' },
+          { report_id: 'r-tier3', state: 'assembled' },
+        ]);
+        // the read model: a 20-byte lowercase address per chain, updated_seq defaulting to 0
+        await pool.query("insert into verifier_keys (chain, address, active) values ('solana', $1, true)", ['0x' + 'ab'.repeat(20)]);
+        expect((await pool.query('select updated_seq::int as s, registered_at, revoked_at from verifier_keys')).rows).toEqual([{ s: 0, registered_at: null, revoked_at: null }]);
+        for (const bad of ['0x' + 'AB'.repeat(20), '0x' + 'ab'.repeat(19), 'k']) {
+          await expect(pool.query("insert into verifier_keys (chain, address, active) values ('monad', $1, true)", [bad])).rejects.toThrow(/verifier_keys_address_check/);
+        }
+      } finally {
+        await pool.end();
+      }
+    });
+  });
 });

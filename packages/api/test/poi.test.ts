@@ -5,6 +5,7 @@ import { parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math
 import { MemoryIncomeChain, assembleOnDevice, choosePrior } from '@merces/poi-device';
 import { ZERO_INCOME_COMMITMENT, mockProve, type UnsignedTx } from '@merces/domain';
 import { createServiceContext, serviceRoutes } from '@merces/services';
+import { SimSigner } from '@merces/simulator';
 import { buildApp, makeContext } from '../src/index.ts';
 import { SECRET, makeRig } from './helpers.ts';
 
@@ -17,6 +18,11 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *    simulator-only and started with MERCES_PROOF_SYSTEM=mock (H3); the test rig opts into mock proofs as well;
  *  - R: Stage 1's report rules: reports are sequential (WrongPeriod), and each report proves against the prior the
  *    chain expects (SIM:1096-1103): ZERO at a year start, else the last accepted report's income commitment.
+ *
+ * S4 cause codes:
+ *  - S4-T2: tier 2 carries the report verifier key's Stage 1 REPORT signature `{signer, signature}` (S4 WP6); the service
+ *    recomputes the digest from the chain's signing domain and the series key, recovers the signer and reads the
+ *    chain's verifier key record (422 otherwise); `/reporting/verifier` serves the verifier's address and chains.
  */
 
 describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with Stripe test data', () => {
@@ -150,6 +156,16 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     });
   }
 
+  it('cause S4-T2: /reporting/verifier serves the verifier\'s address and the chains it signs for, each with the chain\'s own signing domain', async () => {
+    const r = await rig.get('/reporting/verifier');
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toEqual({
+      url: 'http://verifier.test',
+      address: await rig.kms.signerAddress('report-verifier-test'),
+      chains: [{ chain: rig.sol.sim.chain, domain: (await rig.sol.sim.info()).signing }, { chain: rig.mon.sim.chain, domain: (await rig.mon.sim.info()).signing }],
+    });
+  });
+
   it('rejects bad attestations, wrong public inputs, tier 4, and demands an attestor rate when FX is flagged', async () => {
     const h = rig.harness('solana');
     const raise = await h.runRaise({ privateTerms: { theta: 50_000_000_000n, rWad: ratePerUnit(wadFromDecimal('0.10'), 500n), currency: 'EUR', indexingRule: 'cpi-annual', termsSalt: BigInt('0x' + '55'.repeat(31)) }, terms: { reportingCurrency: 'EUR' } });
@@ -173,15 +189,60 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     // wrong public inputs (payment tampered)
     const tampered = { ...assembled, paymentStable: '1', attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } };
     expect((await rig.post(`/series/${seriesId}/reports`, tampered, issuerTok)).statusCode).toBe(422);
-    // forged attestation
-    const forged = { ...assembled, attestation: { ...assembled.attestation!, signature: '0x' + '11'.repeat(64) }, attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } };
-    expect((await rig.post(`/series/${seriesId}/reports`, forged, issuerTok)).json().message).toContain('attestation signature');
+    // cause S4-T2: a forged attestation (65 bytes that recover to no one, or to another key), a malformed one (400), the
+    // signature of a key that is not a verifier key, and another report's signature: each 422 InvalidVerifierSignature
+    const rateBody = { attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } };
+    const refuse = async (attestation: unknown, status = 422) => {
+      const r = await rig.post(`/series/${seriesId}/reports`, { ...assembled, ...rateBody, attestation }, issuerTok);
+      expect(r.statusCode, JSON.stringify(r.json())).toBe(status);
+      return r.json();
+    };
+    expect((await refuse({ ...assembled.attestation!, signature: '0x' + '11'.repeat(65) })).detail).toEqual({ stage1: 'InvalidVerifierSignature' });
+    await refuse({ ...assembled.attestation!, signature: '0x' + '11'.repeat(64) }, 400);
+    await refuse({ keyId: 'report-verifier-test', ...assembled.attestation! }, 400);
+    expect((await refuse({ ...assembled.attestation!, signer: '0x' + '5e'.repeat(20) })).message).toMatch(/not the report verifier's signature/);
+    const series = (await h.sim.getSeries(seriesId))!;
+    const fields = { periodId: q, priorIncomeCommitment: assembled.priorIncomeCommitment, incomeCommitment: assembled.incomeCommitment, tier: 2 as const, liquidityEvent: false };
+    const stranger = await new SimSigner('sim-verifier:not-registered').attest('REPORT', (await h.sim.info()).signing!, series.seriesKey, fields);
+    expect((await refuse({ signer: stranger.signer, signature: stranger.signature })).message).toMatch(/not a verifier key usable/);
+    const otherReport = await h.verifier.attest('REPORT', (await h.sim.info()).signing!, series.seriesKey, { ...fields, liquidityEvent: true });
+    expect((await refuse({ signer: otherReport.signer, signature: otherReport.signature })).message).toMatch(/not the report verifier's signature/);
+    // cause S4-T2: a chain whose signing domain is not known yet (a live adapter before S5) cannot have a tier-2 report
+    // checked: 409 signing-domain-unknown, nothing stored
+    {
+      const blind = new Proxy(h.sim, {
+        get(target, k) {
+          if (k === 'info') return async () => ({ ...(await target.info()), signing: null });
+          const v = Reflect.get(target, k);
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+      const chains = { ...rig.ctx.chains, chains: new Map([...rig.ctx.chains.chains].map(([k, v]) => [k, k === h.sim.chain ? blind : v])), get: (c: string) => (c === h.sim.chain ? blind : rig.ctx.chains.get(c)) };
+      const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return silent; } } as never;
+      const ctx = createServiceContext(makeContext({ pool: rig.t.pool, chains: chains as never, log: silent, sessionSecret: SECRET, devMode: true }), { esign: rig.esign, identity: rig.identity, zktls: rig.zktls, kms: rig.kms, verifier: rig.verifier, reportVerifierUrl: 'http://verifier.test', proofVerifier: rig.ctx.proofVerifier });
+      const app = await buildApp(ctx, serviceRoutes);
+      await app.ready();
+      try {
+        const r = await app.inject({ method: 'POST', url: `/series/${seriesId}/reports`, payload: { ...assembled, ...rateBody } as never, headers: { authorization: `Bearer ${issuerTok}` } });
+        expect([r.statusCode, r.json().detail]).toEqual([409, { reason: 'signing-domain-unknown' }]);
+      } finally {
+        await app.close();
+      }
+    }
     // tier 4 is off
     expect((await rig.post(`/series/${seriesId}/reports`, { ...assembled, tier: 4, attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } }, issuerTok)).statusCode).toBe(403);
     // with the attestor rate: assembled, and the tx carries the attestor as co-signer
     const ok = await rig.post(`/series/${seriesId}/reports`, { ...assembled, attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } }, issuerTok);
     expect(ok.statusCode, JSON.stringify(ok.json())).toBe(201);
     expect(ok.json().fxBasis).toBe('attestor');
+    // cause S4-T2: the stored attestation is the command's {signer, signature}; a row still holding the retired ed25519
+    // attestation v1 (assembled before S4 WP6) cannot be built: 409 attestation-superseded (assemble it again)
+    const stored = (await rig.t.pool.query('select attestation from reports where report_id = $1', [ok.json().reportId])).rows[0].attestation;
+    expect(stored).toEqual(assembled.attestation);
+    await rig.t.pool.query('update reports set attestation = $2 where report_id = $1', [ok.json().reportId, JSON.stringify({ keyId: 'report-verifier-test', seriesId, periodId: q, signature: '0x' + '11'.repeat(64) })]);
+    const legacy = await rig.post(`/reports/${ok.json().reportId}/build-submit`, {}, issuerTok);
+    expect([legacy.statusCode, legacy.json().detail]).toEqual([409, { reason: 'attestation-superseded' }]);
+    await rig.t.pool.query('update reports set attestation = $2 where report_id = $1', [ok.json().reportId, JSON.stringify(stored)]);
     const tx = ok.json().tx as UnsignedTx;
     expect(tx.coSigners).toEqual([h.attestors[1]!.address]);
     const signed = await h.attestors[1]!.coSign(await h.issuer.sign(tx));

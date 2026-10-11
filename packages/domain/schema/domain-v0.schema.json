@@ -4009,20 +4009,82 @@
           "payload": {
             "type": "object",
             "properties": {
-              "keyId": {
-                "type": "string"
-              },
-              "publicKey": {
-                "type": "string"
-              },
-              "active": {
-                "type": "boolean"
+              "verifierKey": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{40}$"
               }
             },
             "required": [
-              "keyId",
-              "publicKey",
-              "active"
+              "verifierKey"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "VerifierKeyRevoked"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "verifierKey": {
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{40}$"
+              },
+              "revokedAt": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "verifierKey",
+              "revokedAt"
             ],
             "additionalProperties": false
           }
@@ -6159,20 +6221,33 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "properties": {
-        "keyId": {
-          "type": "string"
-        },
-        "publicKey": {
-          "type": "string"
-        },
-        "active": {
-          "type": "boolean"
+        "verifierKey": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
         }
       },
       "required": [
-        "keyId",
-        "publicKey",
-        "active"
+        "verifierKey"
+      ],
+      "additionalProperties": false
+    },
+    "VerifierKeyRevoked": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "verifierKey": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
+        },
+        "revokedAt": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "verifierKey",
+        "revokedAt"
       ],
       "additionalProperties": false
     },
@@ -6960,60 +7035,17 @@
             {
               "type": "object",
               "properties": {
-                "keyId": {
-                  "type": "string"
-                },
-                "seriesId": {
+                "signer": {
                   "type": "string",
-                  "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-                },
-                "periodId": {
-                  "type": "string",
-                  "pattern": "^\\d{4}Q[1-4]$"
-                },
-                "priorIncomeCommitment": {
-                  "type": "string",
-                  "pattern": "^0x[0-9a-f]{64}$"
-                },
-                "incomeCommitment": {
-                  "type": "string",
-                  "pattern": "^0x[0-9a-f]{64}$"
-                },
-                "tier": {
-                  "anyOf": [
-                    {
-                      "type": "number",
-                      "const": 1
-                    },
-                    {
-                      "type": "number",
-                      "const": 2
-                    },
-                    {
-                      "type": "number",
-                      "const": 3
-                    },
-                    {
-                      "type": "number",
-                      "const": 4
-                    }
-                  ]
-                },
-                "liquidityEvent": {
-                  "type": "boolean"
+                  "pattern": "^0x[0-9a-f]{40}$"
                 },
                 "signature": {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^0x[0-9a-f]{130}$"
                 }
               },
               "required": [
-                "keyId",
-                "seriesId",
-                "periodId",
-                "priorIncomeCommitment",
-                "incomeCommitment",
-                "tier",
-                "liquidityEvent",
+                "signer",
                 "signature"
               ],
               "additionalProperties": false
@@ -8026,21 +8058,57 @@
           "type": "string",
           "const": "registerVerifierKey"
         },
-        "keyId": {
-          "type": "string"
-        },
-        "publicKey": {
-          "type": "string"
-        },
-        "active": {
-          "type": "boolean"
+        "key": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
         }
       },
       "required": [
         "kind",
-        "keyId",
-        "publicKey",
-        "active"
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "revokeVerifierKey": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "revokeVerifierKey"
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "rotateVerifierKey": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "rotateVerifierKey"
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "kind",
+        "from",
+        "to"
       ],
       "additionalProperties": false
     },

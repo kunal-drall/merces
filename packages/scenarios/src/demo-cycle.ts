@@ -8,7 +8,7 @@ import { buildApp, issueSession, makeContext } from '@merces/api';
 import { createServiceContext, serviceRoutes } from '@merces/services';
 import { Indexer } from '@merces/indexer';
 import { Groth16ReportVerifier, LocalKms, MockESign, MockIdentityCheck, MockZkTls, shutdownProofSystem } from '@merces/ports';
-import { ReportVerifier } from '@merces/report-verifier';
+import { ReportVerifier, verifierChainsFromPorts } from '@merces/report-verifier';
 import { MemoryIncomeChain, assembleOnDevice, choosePrior } from '@merces/poi-device';
 import { stripeFixtureFor, stripeGrossUntil } from '@merces/fixtures';
 import { parsePeriod } from '@merces/math';
@@ -32,10 +32,11 @@ const mon = await SimHarness.create('monad', { sim: SimulatorChain.createSync({ 
 const chains: ChainRegistry = { chains: new Map([['solana', sol.sim], ['monad', mon.sim]]), decisions: [], stage1: null, get: (c: string) => (c === 'solana' ? sol.sim : mon.sim), byFamily: (f: string) => (f === 'solana' ? sol.sim : mon.sim), close: async () => undefined };
 const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return silent; } } as never;
 const zktls = new MockZkTls();
-const kms = new LocalKms('demo-seed', { 'report-verifier-demo': 'ed25519' });
-const verifier = new ReportVerifier(zktls, kms, 'report-verifier-demo');
-const spki = await kms.spkiHex('report-verifier-demo');
-for (const h of [sol, mon]) await h.exec(h.admin, { kind: 'registerVerifierKey', keyId: 'report-verifier-demo', publicKey: spki, active: true });
+// the report verifier's secp256k1 key (S4 WP6), registered by address on both chains; its chain table is each
+// simulator's own signing domain (S4 amendment D10)
+const kms = new LocalKms('demo-seed', { 'report-verifier-demo': 'secp256k1' });
+const verifier = await ReportVerifier.create(zktls, kms, { keyId: 'report-verifier-demo', chains: () => verifierChainsFromPorts([sol.sim, mon.sim]), allowLocal: true });
+for (const h of [sol, mon]) await h.exec(h.admin, { kind: 'registerVerifierKey', key: await kms.signerAddress('report-verifier-demo') });
 const ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: 'demo', devMode: true }), { esign: new MockESign(), identity: new MockIdentityCheck(), zktls, kms, verifier, reportVerifierUrl: 'in-process' });
 const app = await buildApp(ctx, serviceRoutes);
 await app.ready();

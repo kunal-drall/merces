@@ -1,5 +1,5 @@
-import type { VerifierAttestation } from '@merces/domain';
-import type { AttestFailure, AttestRequest, AttestResult, ReportVerifierPort } from './verifier.ts';
+import type { ReportAttestationRecord } from '@merces/domain';
+import type { AttestFailure, AttestRequest, AttestResult, ReportVerifierPort, VerifierKeyInfo } from './verifier.ts';
 
 /** HTTP client used by devices (and by tests through the in-process port). */
 export class HttpReportVerifierClient implements ReportVerifierPort {
@@ -12,10 +12,11 @@ export class HttpReportVerifierClient implements ReportVerifierPort {
     const body = (await res.json()) as AttestResult | AttestFailure;
     return body;
   }
-  async publicKey(): Promise<{ keyId: string; spkiHex: string; rawHex: string }> {
+  /** The verifier's address, public key, chain table (chain → signing domain) and retired addresses (`GET /keys`). */
+  async publicKey(): Promise<VerifierKeyInfo> {
     const res = await this.fetchImpl(new URL('/keys', this.baseUrl));
-    return (await res.json()) as { keyId: string; spkiHex: string; rawHex: string };
+    return (await res.json()) as VerifierKeyInfo;
   }
 }
 
-export type { VerifierAttestation };
+export type { ReportAttestationRecord };

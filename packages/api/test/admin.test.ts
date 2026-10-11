@@ -8,7 +8,11 @@ import { makeRig } from './helpers.ts';
 /*
  * S4 cause codes:
  *  - S4-REG: Stage 1's key registry (S4 WP5): an attestor's deactivation is `revokeAttestor` (forward-only, with its
- *    revocation time), the chain read is `getSignerKey`, and the registry's rules are checked first (one 409 per case).
+ *    revocation time), the chain read is `getSignerKey`, and the registry's rules are checked first (one 409 per case);
+ *  - S4-T2: the report verifier's keys are secp256k1 20-byte addresses (S4 WP6): `POST /admin/verifier-keys`
+ *    `{chain, address}` builds `registerVerifierKey{key}` (was `{keyId, publicKeySpkiHex, active}`), with revoke and
+ *    rotate routes and the same pre-checks; `GET /admin/verifier-keys` reads the chain's key records and the verifier's
+ *    own address.
  */
 
 /**
@@ -157,20 +161,56 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     }
   });
 
-  it('registers a verifier key and pauses/resumes new raises through tracked multisig requests', async () => {
-    const spki = await rig.kms.spkiHex('second-verifier');
-    expect((await rig.post('/admin/verifier-keys', { chain: 'solana', keyId: 'rv-2', publicKeySpkiHex: 'zz', active: true }, adminTok)).statusCode).toBe(400);
-    const key = await rig.post('/admin/verifier-keys', { chain: 'solana', keyId: 'rv-2', publicKeySpkiHex: `0x${spki}`, active: true }, adminTok, { 'idempotency-key': 'vk-1' });
+  it('registers, rotates and revokes verifier keys, and pauses/resumes new raises, through tracked multisig requests (cause S4-T2)', async () => {
+    const v1 = await rig.kms.signerAddress('report-verifier-test');
+    const v2 = await rig.kms.signerAddress('second-verifier');
+    const v3 = '0x' + '3c'.repeat(20);
+    // a 20-byte address (any case), nothing else
+    for (const bad of [{ chain: 'solana', address: 'zz' }, { chain: 'solana', keyId: 'rv-2', publicKeySpkiHex: '00'.repeat(44), active: true }, { chain: 'solana', address: v2, active: true }]) {
+      expect((await rig.post('/admin/verifier-keys', bad, adminTok)).statusCode, JSON.stringify(bad)).toBe(400);
+    }
+    // the registry's rules first, one 409 per case: v1 is active already; v2 is not registered, so not revocable
+    expect([(await rig.post('/admin/verifier-keys', { chain: 'solana', address: v1 }, adminTok)).json().detail]).toEqual([{ reason: 'key-already-active' }]);
+    expect((await rig.post('/admin/verifier-keys/revoke', { chain: 'solana', address: v2 }, adminTok)).json().detail).toEqual({ reason: 'key-not-active' });
+    const key = await rig.post('/admin/verifier-keys', { chain: 'solana', address: v2.toUpperCase().replace('0X', '0x') }, adminTok, { 'idempotency-key': 'vk-1' });
     expect(key.statusCode).toBe(201);
-    expect(key.json().tx.command).toEqual({ kind: 'registerVerifierKey', keyId: 'rv-2', publicKey: spki.toLowerCase(), active: true });
+    expect(key.json().tx.command).toEqual({ kind: 'registerVerifierKey', key: v2 });
     const txId = await relay(key.json().tx);
     const confirmed = await rig.post(`/admin/tx-requests/${key.json().request.requestId}/sent`, { txId }, adminTok);
     expect(confirmed.json().state).toBe('confirmed');
     const keys = await rig.get('/admin/verifier-keys?chain=solana', adminTok);
+    expect(keys.json().verifier).toEqual({ address: v1 });
     expect(keys.json().chains).toHaveLength(1);
-    expect(keys.json().chains[0].keys.map((k: { keyId: string }) => k.keyId)).toContain('rv-2');
+    expect(keys.json().chains[0].keys.find((k: { address: string }) => k.address === v2)).toEqual({ kind: 'verifier', address: v2, active: true, revokedAt: null, graceUntil: null });
     expect((await rig.get('/admin/verifier-keys', adminTok)).json().chains.map((c: { chain: string }) => c.chain).sort()).toEqual(['monad', 'solana']);
     expect((await rig.get('/admin/verifier-keys?chain=nowhere', adminTok)).statusCode).toBe(400);
+    // rotate v2 → v3: one transaction; 422 for the same key, 409 for an active `to` or an inactive `from`
+    expect((await rig.post('/admin/verifier-keys/rotate', { chain: 'solana', from: v2, to: v2 }, adminTok)).statusCode).toBe(422);
+    expect((await rig.post('/admin/verifier-keys/rotate', { chain: 'solana', from: v2, to: v1 }, adminTok)).json().detail).toEqual({ reason: 'key-already-active' });
+    expect((await rig.post('/admin/verifier-keys/rotate', { chain: 'solana', from: v3, to: '0x' + '4d'.repeat(20) }, adminTok)).json().detail).toEqual({ reason: 'key-not-active' });
+    const rot = await rig.post('/admin/verifier-keys/rotate', { chain: 'solana', from: v2, to: v3 }, adminTok);
+    expect([rot.statusCode, rot.json().tx.command]).toEqual([201, { kind: 'rotateVerifierKey', from: v2, to: v3 }]);
+    expect((await rig.post(`/admin/tx-requests/${rot.json().request.requestId}/sent`, { txId: await relay(rot.json().tx) }, adminTok)).json().state).toBe('confirmed');
+    const revokedAt = (await rig.sol.sim.getSignerKey('verifier', v2))!.revokedAt!;
+    expect(await rig.sol.sim.getSignerKey('verifier', v3)).toMatchObject({ active: true });
+    // revoke v3: forward-only, confirmed from the chain's key record; the indexer projects both kinds of event
+    const rv = await rig.post('/admin/verifier-keys/revoke', { chain: 'solana', address: v3 }, adminTok);
+    expect(rv.json().tx.command).toEqual({ kind: 'revokeVerifierKey', key: v3 });
+    expect((await rig.post(`/admin/tx-requests/${rv.json().request.requestId}/sent`, { txId: await relay(rv.json().tx) }, adminTok)).json().state).toBe('confirmed');
+    await rig.sync();
+    const rows = await rig.t.pool.query("select address, active, revoked_at from verifier_keys where chain = 'solana' order by address");
+    expect(rows.rows.find((r) => r.address === v2)).toMatchObject({ active: false, revoked_at: String(revokedAt) });
+    expect(rows.rows.find((r) => r.address === v3)).toMatchObject({ active: false });
+    expect(rows.rows.find((r) => r.address === v1)).toMatchObject({ active: true, revoked_at: null });
+    // the last active verifier keys: v1 and the harness's own are left; revoking both is refused at the second
+    const harnessKey = rig.sol.verifier.address;
+    const r1 = await rig.post('/admin/verifier-keys/revoke', { chain: 'solana', address: harnessKey }, adminTok);
+    await relay(r1.json().tx);
+    const last = await rig.post('/admin/verifier-keys/revoke', { chain: 'solana', address: v1 }, adminTok);
+    expect([last.statusCode, last.json().detail]).toEqual([409, { reason: 'last-active-key' }]);
+    await rig.sol.exec(rig.sol.admin, { kind: 'registerVerifierKey', key: harnessKey });
+    const vkActions = (await rig.get('/admin/audit-log?action=verifier-key', adminTok)).json().entries.map((e: { action: string }) => e.action);
+    expect(vkActions).toEqual(['verifier-key.revoke', 'verifier-key.revoke', 'verifier-key.rotate', 'verifier-key.register']);
 
     // pause new raises on monad with the monad multisig stand-in; the simulator then refuses openRaise (Stage 1 NewRaisesPaused)
     const pause = await rig.post('/admin/raises/pause', { chain: 'monad', paused: true }, adminTok, { 'idempotency-key': 'pause-1' });
@@ -321,7 +361,9 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
       ['POST', '/admin/attestors', { chain: 'solana', wallet: rig.sol.attestors[1]!.address, accountId: 'user-1', active: true }],
       ['GET', '/admin/tx-requests', undefined],
       ['POST', '/admin/tx-requests/x/sent', { txId: 'x' }],
-      ['POST', '/admin/verifier-keys', { chain: 'solana', keyId: 'k', publicKeySpkiHex: '00'.repeat(44), active: true }],
+      ['POST', '/admin/verifier-keys', { chain: 'solana', address: '0x' + '11'.repeat(20) }],
+      ['POST', '/admin/verifier-keys/revoke', { chain: 'solana', address: '0x' + '11'.repeat(20) }],
+      ['POST', '/admin/verifier-keys/rotate', { chain: 'solana', from: '0x' + '11'.repeat(20), to: '0x' + '22'.repeat(20) }],
       ['GET', '/admin/verifier-keys', undefined],
       ['POST', '/admin/raises/pause', { chain: 'solana', paused: true }],
       ['GET', '/admin/eligibility', undefined],

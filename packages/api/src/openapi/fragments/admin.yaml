@@ -39,7 +39,7 @@ components:
       required: [requestId, kind, chain, command, state, txId, createdBy, meta, createdAt]
       properties:
         requestId: { type: string }
-        kind: { type: string, enum: [registerAttestor, revokeAttestor, rotateAttestor, registerVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] }
+        kind: { type: string, enum: [registerAttestor, revokeAttestor, rotateAttestor, registerVerifierKey, revokeVerifierKey, rotateVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] }
         chain: { type: string }
         command: { type: object, description: the canonical AdminCommand as built }
         state: { type: string, enum: [proposed, sent, confirmed] }
@@ -71,12 +71,21 @@ components:
         kind: { type: string, enum: [CA, CPA] }
     AdminRegisterVerifierKey:
       type: object
-      required: [chain, keyId, publicKeySpkiHex, active]
+      description: "A report verifier key: a secp256k1 key's 20-byte address (S4 WP6), the address of the report verifier's own key (REPORT_VERIFIER_ADDRESS, which the verifier checks at startup). Registering builds Stage 1's registerVerifierKey; revoking (POST /admin/verifier-keys/revoke) its revokeVerifierKey (forward-only: tier-2 attestations of periods that ended by the revocation stay valid onchain for 45 days)."
+      required: [chain, address]
+      additionalProperties: false
       properties:
         chain: { type: string }
-        keyId: { type: string }
-        publicKeySpkiHex: { type: string, pattern: '^(0x)?([0-9a-fA-F]{2}){32,128}$', description: DER SubjectPublicKeyInfo of the report verifier's ed25519 key, hex }
-        active: { type: boolean }
+        address: { type: string, pattern: '^0x[0-9a-fA-F]{40}$', description: 'any case; stored lowercase' }
+    AdminRotateVerifierKey:
+      type: object
+      description: "Stage 1's rotateVerifierKey: register `to` and revoke `from` in one transaction (the EVM's own call; two instructions of one transaction on Solana)."
+      required: [chain, from, to]
+      additionalProperties: false
+      properties:
+        chain: { type: string }
+        from: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+        to: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
     AdminPauseRaises:
       type: object
       required: [chain, paused]
@@ -86,7 +95,18 @@ components:
       required: [chain, keys]
       properties:
         chain: { type: string }
-        keys: { type: array, items: { type: object, required: [keyId, publicKey], properties: { keyId: { type: string }, publicKey: { type: string } } } }
+        keys:
+          type: array
+          description: "the chain's verifier key records (Stage 1 VerifierKey / EVM KeyInfo), active and revoked"
+          items:
+            type: object
+            required: [kind, address, active, revokedAt, graceUntil]
+            properties:
+              kind: { type: string, const: verifier }
+              address: { type: string, pattern: '^0x[0-9a-f]{40}$' }
+              active: { type: boolean }
+              revokedAt: { type: [integer, 'null'], description: unix seconds of the forward-only revocation }
+              graceUntil: { type: [integer, 'null'], description: 'revokedAt + 3,888,000 s: tier-2 attestations of periods that ended by revokedAt stay valid onchain until then' }
     AdminEligibilityRow:
       type: object
       required: [chain, wallet, accountId, kind, approvedAt, revokedAt, expectedAllowed, allowlistSyncedAt, allowlistTx, indexedAllowed, syncState]
@@ -286,7 +306,7 @@ paths:
       summary: Multisig requests, newest first
       parameters:
         - { name: chain, in: query, schema: { type: string } }
-        - { name: kind, in: query, schema: { type: string, enum: [registerAttestor, revokeAttestor, rotateAttestor, registerVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] } }
+        - { name: kind, in: query, schema: { type: string, enum: [registerAttestor, revokeAttestor, rotateAttestor, registerVerifierKey, revokeVerifierKey, rotateVerifierKey, pauseNewRaises, setFeeCollector, registerSplitRouter] } }
         - { name: state, in: query, schema: { type: string, enum: [proposed, sent, confirmed] } }
         - $ref: '#/components/parameters/adminLimit'
       responses:
@@ -299,7 +319,7 @@ paths:
       x-access: admin
       tags: [admin]
       security: [{ session: [] }]
-      summary: Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (getSignerKey, listVerifierKeys, info); audited
+      summary: Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (getSignerKey for both key kinds, info); audited
       parameters: [{ $ref: '#/components/parameters/adminRequestId' }, { $ref: '#/components/parameters/adminIdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxSent' } } } }
       responses:
@@ -314,27 +334,58 @@ paths:
       x-access: admin
       tags: [admin]
       security: [{ session: [] }]
-      summary: Build registerVerifierKey for the multisig and open a tx request; audited
+      summary: Build Stage 1's registerVerifierKey of a 20-byte address for the multisig and open a tx request; audited
       parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRegisterVerifierKey' } } } }
       responses:
         '201': { description: The tracked request and the UnsignedTx for the multisig, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxProposal' } } } }
-        '400': { description: Unknown chain or malformed key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '400': { description: Unknown chain or malformed address, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { description: Idempotency key reused with a different body, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: 'The key is already active on the chain (detail.reason key-already-active), or the idempotency key was reused with a different body', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     get:
       operationId: adminListVerifierKeys
       x-access: admin
       tags: [admin]
       security: [{ session: [] }]
-      summary: Active report-verifier keys per chain, read from the chain
+      summary: "The report verifier's keys per chain (the chain's own key records, active and revoked) and the address the report verifier signs with"
       parameters: [{ name: chain, in: query, schema: { type: string } }]
       responses:
-        '200': { description: Keys per chain, content: { application/json: { schema: { type: object, required: [chains], properties: { chains: { type: array, items: { $ref: '#/components/schemas/AdminVerifierKeys' } } } } } } }
+        '200': { description: Keys per chain, content: { application/json: { schema: { type: object, required: [verifier, chains], properties: { verifier: { type: object, required: [address], properties: { address: { type: [string, 'null'], description: "the report verifier key's address; null when the verifier cannot be reached" } } }, chains: { type: array, items: { $ref: '#/components/schemas/AdminVerifierKeys' } } } } } } }
         '400': { description: Unknown chain, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/verifier-keys/revoke:
+    post:
+      operationId: adminRevokeVerifierKey
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: "Build Stage 1's revokeVerifierKey for the multisig (forward-only) and open a tx request; audited"
+      parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRegisterVerifierKey' } } } }
+      responses:
+        '201': { description: The tracked request and the UnsignedTx for the multisig, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxProposal' } } } }
+        '400': { description: Unknown chain or malformed address, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 'The key is not active on the chain (detail.reason key-not-active), it is the last active verifier key (detail.reason last-active-key: rotate instead; Solana LastKeyOfKind, EVM LastActiveKey), or the idempotency key was reused with a different body', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /admin/verifier-keys/rotate:
+    post:
+      operationId: adminRotateVerifierKey
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      summary: "Build Stage 1's rotateVerifierKey{from, to} for the multisig (register to, then revoke from, in one transaction) and open a tx request; audited"
+      parameters: [{ $ref: '#/components/parameters/adminIdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminRotateVerifierKey' } } } }
+      responses:
+        '201': { description: The tracked request and the UnsignedTx for the multisig, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTxProposal' } } } }
+        '400': { description: Unknown chain or malformed address, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 'The new key is already active (detail.reason key-already-active), the old one is not active (detail.reason key-not-active), or the idempotency key was reused with a different body', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: from and to are the same key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /admin/raises/pause:
     post:
       operationId: adminPauseRaises

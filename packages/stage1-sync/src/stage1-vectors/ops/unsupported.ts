@@ -10,10 +10,9 @@ import { blocked, notApplicable, type Translation, type TranslatorTable } from '
  *   transfer to refuse, so the step has no meaning here.
  * - The ops only the vectors that are not targets use (NOT-YET): BLOCKED, naming the milestone that brings them. The
  *   same milestones are in `steps/vectors.ts` `STAGE1_OP_MAP` (a test keeps them equal). S2 brought `cancel_raise` and
- *   `register_holder` (now in `raise.ts`).
+ *   `register_holder` (now in `raise.ts`); S4 WP6 `revoke_verifier_key` (now in `registry.ts`).
  */
 export const NOT_YET: Readonly<Partial<Record<CallOp, string>>> = Object.freeze({
-  revoke_verifier_key: 'S4',
   withdraw_pause_request: 'S5',
   end_pause: 'S5',
   fx_snapshot: 'S5',

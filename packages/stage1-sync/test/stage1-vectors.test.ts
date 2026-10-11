@@ -84,8 +84,13 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *  - S4-BID: `commit_bid` runs directly with Stage 1's keccak commitment (S4 D11; shim SH-AUC-2 retired), so no row of
  *    the raise is a shim any more; the window rows SH-WIN-2/3 hash their orders the same way;
  *  - S4-SH: `register_attestor` and `revoke_attestor` run directly as Stage 1's registry (`registerAttestor` /
- *    `revokeAttestor` of the vector key's 20-byte address; S4 WP5; shim SH-REG-2 retired);
- *  - S4-REG: the register gains DIV-S1I-2 (the last-key rule), shown by our merces-only scenario S4d with no entries.
+ *    `revokeAttestor` of the vector key's 20-byte address; S4 WP5; shim SH-REG-2 retired), and so do
+ *    `register_verifier_key` and `revoke_verifier_key` (S4 WP6; shim SH-REG-3 retired, and `revoke_verifier_key` is no
+ *    longer NOT-YET); SH-REP-1 is narrowed to tier 3 and the FX basis;
+ *  - S4-REG: the register gains DIV-S1I-2 (the last-key rule), shown by our merces-only scenario S4d with no entries;
+ *  - S4-T2: the runner signs a tier-2 report's REPORT message with the named vector key (secp256k1, after checking it is
+ *    Stage 1's test key for its seed) over the chain's signing domain and the series key (was an ed25519 key derived from
+ *    the vector key).
  */
 afterAll(shutdown);
 
@@ -450,8 +455,10 @@ describe('stage1 vector runner: merces backend', () => {
       expect(run.stopped).toEqual({ index: 32, reason: 'until' });
       // cause S2-MS, S4-BID: the whole raise runs directly, the commitment included (SH-AUC-2 retired in S4 WP2)
       expect(Object.keys(run.shims).filter((id) => id.startsWith('SH-AUC-'))).toEqual([]);
-      // cause S4-SH: the attestor registrations of the bootstrap run directly (SH-REG-2 retired in S4 WP5)
+      // cause S4-SH: the attestor and verifier key registrations of the bootstrap run directly (SH-REG-2 retired in S4
+      // WP5, SH-REG-3 in WP6)
       expect(run.shims['SH-REG-2']).toBeUndefined();
+      expect(run.shims['SH-REG-3']).toBeUndefined();
     }
     expect(r.ok).toBe(true);
   }, 120_000);
@@ -948,22 +955,48 @@ describe('stage1 vector runner: merces backend', () => {
       expect(SHIMS.some((r) => r.ops.includes(op)), op).toBe(false);
     }
     expect(SHIM_BY_ID.has('SH-REG-2')).toBe(false);
+    // cause S4-SH: the verifier keys likewise since S4 WP6 (was: shim SH-REG-3, an ed25519 key; revoke_verifier_key NOT-YET)
+    for (const op of ['register_verifier_key', 'revoke_verifier_key']) {
+      expect(STAGE1_OP_MAP[op], op).toMatchObject({ kind: 'direct' });
+      expect(STAGE1_OP_MAP[op], op).not.toHaveProperty('shim');
+      expect(SHIMS.some((r) => r.ops.includes(op)), op).toBe(false);
+      expect(NOT_YET, op).not.toHaveProperty(op);
+    }
+    expect(SHIM_BY_ID.has('SH-REG-3')).toBe(false);
+    // SH-REP-1 stays for tier 3's co-signature (S4 WP9) and the FX basis the runner derives (S5)
+    expect(SHIM_BY_ID.get('SH-REP-1')).toMatchObject({ ops: ['submit_report'], removedIn: 'S4 (tier 3), S5 (FX)' });
+    expect(SHIM_BY_ID.get('SH-REP-1')!.call).toMatch(/tier 3 co-signed by the attestor; fxBasis and pair derived by the runner/);
   });
 
-  it('vector keys become stable ed25519 verifier keys whose attestations verify', async () => {
+  it('cause S4-T2: the vector keys sign Stage 1\'s messages: each checked against its seed, its address its own, its signature recovering to it', async () => {
     const { VectorKeyring } = await import('../src/stage1-vectors/keys.ts');
-    const { attestationMessage } = await import('@merces/domain');
-    const { createPublicKey, verify } = await import('node:crypto');
+    const { recoverSigner, reportDigest, signingDomain } = await import('@merces/domain');
     const v = loadVector(join(VECTORS, '04_zero_quarters.json'));
-    const a = new VectorKeyring(v.keys).ed25519('verifier1');
-    const b = new VectorKeyring(v.keys).ed25519('verifier1');
-    expect(a.publicKeyHex).toBe(b.publicKeyHex);
-    expect(new VectorKeyring(v.keys).ed25519('attestor1').publicKeyHex).not.toBe(a.publicKeyHex);
-    const fields = { seriesId: 'monad:0x' + '11'.repeat(20), periodId: '2026Q1', priorIncomeCommitment: '0x' + '00'.repeat(32), incomeCommitment: '0x' + '01'.repeat(32), tier: 2 as const, liquidityEvent: false };
-    const att = a.attest(fields);
-    expect(att.keyId).toBe('verifier1');
-    const pub = createPublicKey({ key: Buffer.from(a.publicKeyHex, 'hex'), format: 'der', type: 'spki' });
-    expect(verify(null, Buffer.from(attestationMessage(fields)), pub, Buffer.from(att.signature.slice(2), 'hex'))).toBe(true);
+    const keys = v.keys as Record<string, { address: string; privateKey: string; seed: string }>;
+    const a = new VectorKeyring(v.keys).signer('verifier1');
+    expect(a.address).toBe(keys.verifier1!.address.toLowerCase());
+    expect(new VectorKeyring(v.keys).signer('attestor1').address).toBe(keys.attestor1!.address.toLowerCase());
+    // the REPORT message over a domain and a series key: Stage 1's digest, signed by the key (RFC 6979: the same bytes again)
+    const domain = signingDomain('evm', 31337, '0x' + '11'.repeat(20));
+    const seriesKey = '0x' + '00'.repeat(12) + '22'.repeat(20);
+    const fields = { periodId: '2026Q1', priorIncomeCommitment: '0x' + '00'.repeat(32), incomeCommitment: '0x' + '01'.repeat(32), tier: 2 as const, liquidityEvent: false };
+    const att = await a.attest('REPORT', domain, seriesKey, fields);
+    expect(att.signer).toBe(a.address);
+    expect(recoverSigner(reportDigest({ domain: domain.domain, seriesKey }, fields).digest, att.signature)).toBe(a.address);
+    expect(await new VectorKeyring(v.keys).signer('verifier1').attest('REPORT', domain, seriesKey, fields)).toEqual(att);
+    // never a mainnet domain (Monad mainnet, 143), nor one off the allow-list
+    await expect(a.attest('REPORT', signingDomain('evm', 143, '0x' + '11'.repeat(20)), seriesKey, fields)).rejects.toThrow(/mainnet/);
+    // a key that is not Stage 1's test key for its seed, or whose address is another's, is refused before it signs
+    const bad = (k: Record<string, unknown>) => () => new VectorKeyring({ ...v.keys, x: k } as never).signer('x');
+    expect(bad({ ...keys.verifier1, seed: '04_zero_quarters:attestor1' })).toThrow(/not Stage 1's test key for its seed/);
+    expect(bad({ ...keys.verifier1, address: keys.attestor1!.address })).toThrow(/another key's address/);
+    expect(() => new VectorKeyring(v.keys).signer('nobody')).toThrow(/no usable key named nobody/);
+    // the error names the key, never its value
+    try {
+      bad({ ...keys.verifier1, seed: 'other' })();
+    } catch (e) {
+      expect((e as Error).message).not.toContain(keys.verifier1!.privateKey.slice(2));
+    }
   });
 
   // the S2 gate (S2 plan WP5): one default run (every target in full, every prefix gate to its gate) on both
@@ -1041,8 +1074,9 @@ describe('stage1 vector runner: merces backend', () => {
     // cause S3-SH: the claim family runs directly; its rows (SH-CLM-1, SH-CLM-2, SH-CLM-3, SH-BRN-1) are gone and no run
     // went through them (was: SH-CLM-1 used in 01, 04, 05, 07, 17, 19 and 21 until WP3; SH-CLM-2 runner-atomic, used in
     // 09 and 23; SH-CLM-3 in 11; SH-BRN-1 in 05)
-    // cause S4-SH: likewise SH-REG-2 (Stage 1's attestor registry runs directly since S4 WP5)
-    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1', 'SH-REG-2']) {
+    // cause S4-SH: likewise SH-REG-2 (Stage 1's attestor registry runs directly since S4 WP5) and SH-REG-3 (the verifier
+    // keys since S4 WP6)
+    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1', 'SH-REG-2', 'SH-REG-3']) {
       expect(md, id).not.toContain(id);
       for (const r of report.runs) expect(r.shims[id], `${r.vector} ${r.world}`).toBeUndefined();
     }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { addressSchema, hash32Schema, pairSchema, periodIdSchema, seriesIdSchema, stablecoinSchema } from './ids.ts';
 import { moneySchema, unitsSchema, wadSchema } from './money.ts';
+import { signerAddressSchema } from './signing.ts';
 
 /**
  * Canonical domain events (provisional interface v0, Part D2). Every live adapter maps what Stage 1 actually
@@ -265,7 +266,17 @@ export const eventPayloads = {
    * `revokedAt + KEY_GRACE_SECONDS`.
    */
   AttestorRevoked: z.object({ attestor: addressSchema, revokedAt: z.number().int() }),
-  VerifierKeyRegistered: z.object({ keyId: z.string(), publicKey: z.string(), active: z.boolean() }),
+  /**
+   * Stage 1's `VerifierKeyRegistered` (EVM `verifierKey`, IMercesRegistry.sol:37, emitted at MercesRegistry.sol:327;
+   * Solana `addr`, lib.rs:276): the report verifier key (a secp256k1 key's 20-byte address) is active, `revokedAt` 0.
+   */
+  VerifierKeyRegistered: z.object({ verifierKey: signerAddressSchema }),
+  /**
+   * Stage 1's `VerifierKeyRevoked` (EVM `verifierKey, revokedAt`, IMercesRegistry.sol:38, MercesRegistry.sol:343; Solana
+   * `addr, revoked_at`, lib.rs:296-299): revoked at `revokedAt`; tier-2 report attestations of periods that ended by
+   * then stay valid until `revokedAt + KEY_GRACE_SECONDS`.
+   */
+  VerifierKeyRevoked: z.object({ verifierKey: signerAddressSchema, revokedAt: z.number().int() }),
   /**
    * Stage 1's registry `CurveActivated` (registry events.rs:172-180): a curve series is created and activated at once
    * here (its creation is the activation, S3). `dbcConfig` and `dbcPool` are the curve's pool, `baseMint` its unit mint

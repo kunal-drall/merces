@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { WAD, ratePerUnit } from '@merces/math';
-import { E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, ZERO_INCOME_COMMITMENT, incomeCommitment, parseE2eEnvelope, reportPublicInputs, termsCommitment } from '@merces/domain';
+import { E2E_HEADER_BYTES, E2E_TAG_BYTES, E2E_TIER3_OPENING, ZERO_INCOME_COMMITMENT, incomeCommitment, parseE2eEnvelope, reportDigest, reportPublicInputs, seriesKeyOf, termsCommitment } from '@merces/domain';
 import { Groth16ReportVerifier, LocalKms, MockZkTls, shutdownProofSystem } from '@merces/ports';
-import { ReportVerifier } from '@merces/report-verifier';
+import { ReportVerifier, verifierChainsFromPorts, type ReportVerifierPort } from '@merces/report-verifier';
+import { SimulatorChain, deriveAddress } from '@merces/simulator';
 import { DeviceError, E2eError, MemoryIncomeChain, assembleOnDevice, checkTier3Opening, choosePrior, deriveIncomeSalt, generateE2eKeyPair, openE2e, openTier3Opening, sealE2e, sealTier3Opening, type DeviceReportInput, type DevicePrivateTerms } from '../src/index.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -10,17 +11,23 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  * S3 cause codes:
  *  - S3-UL: a curve series' r is per base lamport (unit scale 10^6; S3 WP8).
  * S4 cause codes:
- *  - S4-KMS: a local KMS key id names its algorithm explicitly (S4 WP3; the verifier key stays ed25519 until S4 WP6).
+ *  - S4-KMS: a local KMS key id names its algorithm explicitly (S4 WP3).
+ *  - S4-T2: the verifier's key is secp256k1 and it signs Stage 1's REPORT message under the series' chain's domain, from
+ *    a chain table that tests derive from the simulator's `ChainInfo.signing` (S4 amendment D10), for a series id with a
+ *    series key there; the device keeps the verifier's record and sends `{signer, signature}` with the report.
  */
 const CANARY_YTD = 7_317_317_317n;
 const rWad = ratePerUnit(10n ** 17n, 500n);
 const privateTerms: DevicePrivateTerms = { threshold: USDC(5_000).toString(), ratePerUnitWad: rWad.toString(), reportingCurrency: 'USD', indexingRule: 'cpi-annual', termsSalt: '123456789123456789123456789' };
 const terms = termsCommitment({ theta: privateTerms.threshold, rWad, currency: 'USD', indexingRule: 'cpi-annual', termsSalt: privateTerms.termsSalt });
-const seriesId = 'solana:device-series';
+// cause S4-T2: a series address of the chain's family (it has a series key), on a simulator chain whose domain the verifier holds
+const sim = SimulatorChain.createSync({ personality: 'solana' });
+const seriesId = `${sim.chain}:${deriveAddress('solana', 'series:device-series')}`;
 const secret = 'device-secret-not-for-production';
 
 const zktls = new MockZkTls();
-const verifier = new ReportVerifier(zktls, new LocalKms('device-test', { 'rv-device': 'ed25519' }), 'rv-device'); // cause S4-KMS: explicit algorithm
+const verifierKms = new LocalKms('device-test', { 'rv-device': 'secp256k1' }); // cause S4-KMS, S4-T2: explicit algorithm, secp256k1
+const verifier = new ReportVerifier(zktls, verifierKms, { keyId: 'rv-device', chains: () => verifierChainsFromPorts([sim]), allowLocal: true }); // cause S4-T2
 const proofFor = (periodId: string, figure: bigint) => zktls.prove({ source: 'stripe', seriesId, periodId, figure, currency: 'USD', coversUntil: 1_000, owner: 'issuer' });
 const input = (over: Partial<DeviceReportInput> & Pick<DeviceReportInput, 'periodId' | 'incomeYtdNow'>): DeviceReportInput => ({
   seriesId, termsCommitment: terms, unitsOutstanding: '500', privateTerms, prior: null, fxAvgWad: WAD, tier: 2, source: 'stripe', deviceSecret: secret, zktlsProof: proofFor(over.periodId, over.incomeYtdNow), ...over,
@@ -36,7 +43,10 @@ describe('poi-device: Stage 1 Groth16 reports from the device income chain', () 
     expect(a.priorIncomeCommitment).toBe(ZERO_INCOME_COMMITMENT);
     expect(a.proof.publicInputs).toEqual(reportPublicInputs({ termsCommitment: terms, unitsOutstanding: 500n, fxAvgWad: WAD, priorIncomeCommitment: ZERO_INCOME_COMMITMENT, incomeCommitment: a.incomeCommitment, paymentStable: a.paymentStable }));
     expect(await new Groth16ReportVerifier().verify(a.proof.proof, a.proof.publicInputs)).toBe(true);
-    expect(a.attestation).toMatchObject({ seriesId, periodId: '2026Q1', tier: 2, incomeCommitment: a.incomeCommitment, priorIncomeCommitment: ZERO_INCOME_COMMITMENT });
+    // cause S4-T2: the report carries the verifier key's signature only; the device keeps the verifier's record for the next prior
+    expect(a.attestation).toEqual({ signer: await verifierKms.signerAddress('rv-device'), signature: r.entry.attestation!.signature });
+    expect(r.entry.attestation).toMatchObject({ chain: sim.chain, seriesId, periodId: '2026Q1', tier: 2, incomeCommitment: a.incomeCommitment, priorIncomeCommitment: ZERO_INCOME_COMMITMENT });
+    expect(r.entry.attestation!.digest).toBe(reportDigest({ domain: (await sim.info()).signing!.domain, seriesKey: seriesKeyOf(seriesId, 'solana') }, { periodId: '2026Q1', priorIncomeCommitment: ZERO_INCOME_COMMITMENT, incomeCommitment: a.incomeCommitment, tier: 2, liquidityEvent: false }).digest);
     // the salt comes from the device secret, so a reinstalled device rebuilds the opening from its own records
     expect(r.entry.incomeSalt).toBe(deriveIncomeSalt(secret, seriesId, '2026Q1'));
     expect(r.entry.incomeSalt).not.toBe(deriveIncomeSalt('another-device', seriesId, '2026Q1'));
@@ -77,6 +87,15 @@ describe('poi-device: Stage 1 Groth16 reports from the device income chain', () 
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD, privateTerms: { ...privateTerms, threshold: (1n << 64n).toString() } }), verifier))).toEqual(['out-of-range', null]);
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD, zktlsProof: null }), verifier))).toEqual(['needs-zktls', null]);
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD, zktlsProof: proofFor('2026Q1', CANARY_YTD + 1n) }), verifier, { proofs: 'mock' }))).toEqual(['verifier-refused', 'commitment-mismatch']);
+    // cause S4-T2: a verifier record for anything but this report (here another liquidity flag) is refused, never kept
+    const liar: ReportVerifierPort = {
+      publicKey: () => verifier.publicKey(),
+      attest: async (q) => {
+        const r = await verifier.attest(q);
+        return r.ok ? { ok: true, attestation: { ...r.attestation, liquidityEvent: !r.attestation.liquidityEvent } } : r;
+      },
+    };
+    expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD }), liar, { proofs: 'mock' }))).toEqual(['verifier-refused', 'mismatch']);
     const q1 = await assembleOnDevice(input({ periodId: '2026Q1', incomeYtdNow: CANARY_YTD }), verifier, { proofs: 'mock' });
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q3', incomeYtdNow: CANARY_YTD, prior: q1.entry }), verifier, { proofs: 'mock' }))).toEqual(['prior-mismatch', null]);
     expect(await codeOf(assembleOnDevice(input({ periodId: '2026Q2', incomeYtdNow: CANARY_YTD, prior: { ...q1.entry, incomeYtd: 1n } }), verifier, { proofs: 'mock' }))).toEqual(['prior-mismatch', null]);

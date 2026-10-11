@@ -1,7 +1,7 @@
 import type { AppContext } from '@merces/api';
 import { checkNonRevealCharge, nonRevealChargeSetting } from '@merces/domain';
 import { LocalKms, MockESign, MockIdentityCheck, MockZkTls, reportProofSystemFromEnv, reportProofVerifier, resolveSecret, simulatorOnly, vaultFromEnv, type ESignPort, type IdentityCheckPort, type KmsPort, type ProofVerifierPort, type VaultCrypto, type ZkTlsPort } from '@merces/ports';
-import { HttpReportVerifierClient, ReportVerifier, type ReportVerifierPort } from '@merces/report-verifier';
+import { HttpReportVerifierClient, ReportVerifier, verifierChainsFromPorts, type ReportVerifierPort } from '@merces/report-verifier';
 import type { ServiceContext } from './context.ts';
 import { newId } from './ids.ts';
 import { registerIdentityRoutes } from './identity/routes.ts';
@@ -57,10 +57,10 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   const ctx = base as ServiceContext;
   // dev seeds and keys are accepted only while every chain is the simulator (resolveSecret refuses otherwise)
   const simOnly = simulatorOnly(base.chains);
-  // the in-process report verifier's key is the only local key the services hold; its algorithm is configuration (S4 WP3:
-  // ed25519 until S4 WP6 moves the verifier to Stage 1's secp256k1 key)
+  // the in-process report verifier's key is the only local key the services hold; its algorithm is configuration (S4 WP3),
+  // Stage 1's secp256k1 (S4 WP6, D10)
   const verifierKeyId = process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1';
-  ctx.kms = over.kms ?? new LocalKms(resolveSecret(process.env, 'MERCES_LOCAL_KEY_SEED', { simulatorOnly: simOnly, devDefault: 'dev-seed-not-for-production' }), { [verifierKeyId]: 'ed25519' });
+  ctx.kms = over.kms ?? new LocalKms(resolveSecret(process.env, 'MERCES_LOCAL_KEY_SEED', { simulatorOnly: simOnly, devDefault: 'dev-seed-not-for-production' }), { [verifierKeyId]: 'secp256k1' });
   ctx.vault = over.vault ?? vaultFromEnv(process.env, { simulatorOnly: simOnly });
   ctx.identity = over.identity ?? new MockIdentityCheck();
   ctx.esign = over.esign ?? new MockESign();
@@ -69,8 +69,13 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   // the chain registry logs the warning and refuses the setting next to a live chain)
   ctx.proofVerifier = over.proofVerifier ?? reportProofVerifier({ acceptMock: reportProofSystemFromEnv(process.env, { simulatorOnly: simOnly }) === 'mock' });
   ctx.reportVerifierUrl = over.reportVerifierUrl ?? process.env.REPORT_VERIFIER_URL ?? 'http://localhost:3100';
-  // In mock mode the verifier runs in-process with the same local key the standalone service derives (dev seed); live mode talks to the isolated service.
-  ctx.verifier = over.verifier ?? (base.devMode ? new ReportVerifier(ctx.zktls, ctx.kms, verifierKeyId) : new HttpReportVerifierClient(ctx.reportVerifierUrl));
+  // In mock mode the verifier runs in-process with the same local key the standalone service derives (dev seed); live
+  // mode talks to the isolated service. Its chain table is each chain's own signing domain (`ChainInfo.signing`: the
+  // simulators' derived local domains, S4 amendment D10), local ids allowed only in a simulator-only process; the pin
+  // `REPORT_VERIFIER_ADDRESS` is checked when set.
+  ctx.verifier = over.verifier ?? (base.devMode
+    ? new ReportVerifier(ctx.zktls, ctx.kms, { keyId: verifierKeyId, address: process.env.REPORT_VERIFIER_ADDRESS?.trim() || null, chains: () => verifierChainsFromPorts(base.chains.chains.values()), allowLocal: simOnly })
+    : new HttpReportVerifierClient(ctx.reportVerifierUrl));
   ctx.signInDomain = over.signInDomain ?? process.env.MERCES_SIGNIN_DOMAIN ?? 'merces.local';
   // the owner's decision, never a built-in rate: a malformed or out-of-bounds setting stops the process here
   ctx.nonRevealChargeBps = over.nonRevealChargeBps !== undefined ? (over.nonRevealChargeBps === null ? null : checkNonRevealCharge(over.nonRevealChargeBps)) : nonRevealChargeSetting(process.env);

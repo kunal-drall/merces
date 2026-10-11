@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AppError, audit, getFlag, listFlags, setFlag } from '@merces/core';
-import { addressFamily, keyGraceUntil, normaliseAddress, type AdminCommand, type ChainPort, type UnsignedTx } from '@merces/domain';
+import { addressFamily, keyGraceUntil, normaliseAddress, type AdminCommand, type ChainPort, type SignerKeyState, type UnsignedTx } from '@merces/domain';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -26,13 +26,11 @@ export const registerAttestorSchema = z.object({
   jurisdiction: z.string().length(2).optional(),
   kind: z.enum(['CA', 'CPA']).optional(),
 });
-export const registerVerifierKeySchema = z.object({
-  chain: z.string().min(1),
-  keyId: z.string().min(1).max(128),
-  /** DER SubjectPublicKeyInfo, hex (ed25519 SPKI is 44 bytes) */
-  publicKeySpkiHex: z.string().regex(/^(0x)?([0-9a-fA-F]{2}){32,128}$/),
-  active: z.boolean(),
-});
+/** A report verifier key: a secp256k1 key's 20-byte address (S4 WP6, D10), any case; the canonical form is lowercase. */
+const verifierAddressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((a) => a.toLowerCase());
+export const registerVerifierKeySchema = z.object({ chain: z.string().min(1), address: verifierAddressSchema }).strict();
+export const revokeVerifierKeySchema = registerVerifierKeySchema;
+export const rotateVerifierKeySchema = z.object({ chain: z.string().min(1), from: verifierAddressSchema, to: verifierAddressSchema }).strict();
 export const pauseRaisesSchema = z.object({ chain: z.string().min(1), paused: z.boolean() });
 export const auditSamplesSchema = z.object({ count: z.number().int().min(1).max(100) });
 export const txRequestsQuerySchema = z.object({ chain: z.string().optional(), kind: z.string().optional(), state: z.enum(['proposed', 'sent', 'confirmed']).optional(), limit: z.coerce.number().int().min(1).max(200).default(50) });
@@ -212,10 +210,42 @@ export class AdminService {
     });
   }
 
+  /**
+   * The report verifier's keys (S4 WP6, D10): Stage 1's `registerVerifierKey`, `revokeVerifierKey` and
+   * `rotateVerifierKey` of a secp256k1 key's 20-byte address, built for the multisig, with the attestor keys' pre-checks
+   * against the chain's registry, one 409 per case on every chain (S4 D9): registering an active key
+   * (`key-already-active`), revoking a key that is not active (`key-not-active`), revoking the last active verifier key
+   * (`last-active-key`: rotate instead). A rotation needs `to` not active and `from` active (after it `to` is active, so
+   * it never revokes the last key). A verifier key grants no account anything, so no account link is involved. The
+   * registered address must be the report verifier's own (`REPORT_VERIFIER_ADDRESS`, which it checks at startup).
+   */
   async registerVerifierKey(input: z.infer<typeof registerVerifierKeySchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
-    const publicKey = input.publicKeySpkiHex.replace(/^0x/, '').toLowerCase();
-    const r = await this.propose(input.chain, { kind: 'registerVerifierKey', keyId: input.keyId, publicKey, active: input.active }, admin);
-    await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'verifier-key.register', target: `${input.chain}:${input.keyId}`, detail: { requestId: r.request.requestId, active: input.active } });
+    const port = this.port(input.chain);
+    if ((await port.getSignerKey('verifier', input.address))?.active) throw AppError.conflict('the verifier key is already active on this chain', { reason: 'key-already-active' });
+    const r = await this.propose(input.chain, { kind: 'registerVerifierKey', key: input.address }, admin);
+    await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'verifier-key.register', target: `${input.chain}:${input.address}`, detail: { requestId: r.request.requestId } });
+    return r;
+  }
+
+  /** `revokeVerifierKey` (forward-only, SPEC §1.4): tier-2 attestations of periods ended by then stay valid for 45 days. */
+  async revokeVerifierKey(input: z.infer<typeof revokeVerifierKeySchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
+    const port = this.port(input.chain);
+    if (!(await port.getSignerKey('verifier', input.address))?.active) throw AppError.conflict('the verifier key is not active on this chain: there is nothing to revoke', { reason: 'key-not-active' });
+    if ((await port.listSignerKeys('verifier')).filter((k) => k.active).length <= 1) throw AppError.conflict('the last active verifier key of a chain cannot be revoked: rotate it to a new key instead', { reason: 'last-active-key' });
+    const r = await this.propose(input.chain, { kind: 'revokeVerifierKey', key: input.address }, admin);
+    await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'verifier-key.revoke', target: `${input.chain}:${input.address}`, detail: { requestId: r.request.requestId } });
+    return r;
+  }
+
+  /** `rotateVerifierKey{from, to}`: register `to` and revoke `from` in one transaction (EVM; two instructions on Solana, S5). */
+  async rotateVerifierKey(input: z.infer<typeof rotateVerifierKeySchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
+    if (input.from === input.to) throw AppError.unprocessable('a rotation replaces one key with another: from and to are the same key');
+    const port = this.port(input.chain);
+    const [from, to] = await Promise.all([port.getSignerKey('verifier', input.from), port.getSignerKey('verifier', input.to)]);
+    if (to?.active) throw AppError.conflict('the new verifier key is already active on this chain', { reason: 'key-already-active' });
+    if (!from?.active) throw AppError.conflict('the verifier key to replace is not active on this chain', { reason: 'key-not-active' });
+    const r = await this.propose(input.chain, { kind: 'rotateVerifierKey', from: input.from, to: input.to }, admin);
+    await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'verifier-key.rotate', target: `${input.chain}:${input.from}`, detail: { requestId: r.request.requestId, to: input.to } });
     return r;
   }
 
@@ -268,9 +298,16 @@ export class AdminService {
         const [from, to] = await Promise.all([port.getSignerKey('attestor', cmd.from), port.getSignerKey('attestor', cmd.to)]);
         return to?.active === true && !!from && !from.active && from.revokedAt !== null;
       }
-      case 'registerVerifierKey': {
-        const key = (await port.listVerifierKeys()).find((k) => k.keyId === cmd.keyId);
-        return cmd.active ? !!key && key.publicKey.toLowerCase() === cmd.publicKey.toLowerCase() : !key;
+      // the report verifier's keys likewise (S4 WP6)
+      case 'registerVerifierKey':
+        return (await port.getSignerKey('verifier', cmd.key))?.active === true;
+      case 'revokeVerifierKey': {
+        const k = await port.getSignerKey('verifier', cmd.key);
+        return !!k && !k.active && k.revokedAt !== null;
+      }
+      case 'rotateVerifierKey': {
+        const [from, to] = await Promise.all([port.getSignerKey('verifier', cmd.from), port.getSignerKey('verifier', cmd.to)]);
+        return to?.active === true && !!from && !from.active && from.revokedAt !== null;
       }
       case 'pauseNewRaises':
         return (await port.info()).newRaisesPaused === cmd.paused;
@@ -282,9 +319,15 @@ export class AdminService {
   }
 
   // ---------------------------------------------------------------- read views
-  async verifierKeys(chain?: string): Promise<{ chain: string; keys: { keyId: string; publicKey: string }[] }[]> {
+  /**
+   * The report verifier's keys as each chain's registry holds them (S4 WP6: Stage 1's key records, active and revoked,
+   * with `revokedAt` and `graceUntil`), and the address the report verifier signs with, so an operator sees at once
+   * whether the verifier's key is the one registered.
+   */
+  async verifierKeys(chain?: string): Promise<{ verifier: { address: string | null }; chains: { chain: string; keys: SignerKeyState[] }[] }> {
     const ports = chain ? [this.port(chain)] : [...this.ctx.chains.chains.values()];
-    return Promise.all(ports.map(async (p) => ({ chain: p.chain, keys: await p.listVerifierKeys() })));
+    const address = await this.ctx.verifier.publicKey().then((k) => k.address, () => null);
+    return { verifier: { address }, chains: await Promise.all(ports.map(async (p) => ({ chain: p.chain, keys: await p.listSignerKeys('verifier') }))) };
   }
 
   async eligibility(chain?: string): Promise<Record<string, unknown>[]> {

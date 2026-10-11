@@ -1,10 +1,10 @@
-import { createPublicKey, verify as edVerify } from 'node:crypto';
-import { DEFAULTS, attestationMessage, expectedPrior, hex32ToField, mockVerify, reportPublicInputs, type Command } from '@merces/domain';
+import { DEFAULTS, expectedPrior, hex32ToField, mockVerify, reportDigest, reportPublicInputs, type Command } from '@merces/domain';
 import { WAD, nextExpectedPeriod, periodEnd, periodStart } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { str, u64, type EngineCore, type Emit, type ExecContext } from './core.ts';
 import { fail } from './errors.ts';
 import { quarterRate } from './fx.ts';
+import { requireSigned, signingContextOf } from './keys.ts';
 import { derivedStatus, ledgerClock, mintFinalized, periodIdOf, pidOf } from './ledger.ts';
 import { periodRecord, syncStatus } from './status.ts';
 
@@ -25,9 +25,9 @@ type SubmitReport = Extract<Command, { kind: 'submitReport' }>;
  *  8. no open due (PaymentOutstanding)                      13. the prior chain (InvalidProof)
  *                                                           14. the six public signals (InvalidProof)
  *                                                           15. the proof (InvalidProof)
- *                                                           16. source binding: tier 2 verifier attestation
- *                                                               (InvalidVerifierSignature), tier 3 attestor
- *                                                               co-signature (InvalidAttestorSignature)
+ *                                                           16. source binding: tier 2 the verifier key's
+ *                                                               REPORT signature (InvalidVerifierSignature), tier 3
+ *                                                               attestor co-signature (InvalidAttestorSignature)
  *
  * Step 9a is Solana's curve-mode gate (`require_units_synced_for`, curve.rs:1532-1541, called from income.rs:228-233
  * before the tail block): the census is the proof's public input and the vault's N, so it must be counted after the
@@ -35,7 +35,8 @@ type SubmitReport = Extract<Command, { kind: 'submitReport' }>;
  * no curve mode, so the step sits where Solana runs it, after its due and period checks.
  *
  * Divergences (S1 plan §6): tier 1 is not bound to a router year-to-date checkpoint; split receipts of the period
- * stand in for Stage 1's router credit; the verifier attestation is ed25519 over attestation v1 (S4 moves it).
+ * stand in for Stage 1's router credit; tier 3 is the attestor's co-signature until S4 WP9 (tier 2 is Stage 1's REPORT
+ * signature since S4 WP6).
  * Error messages carry public facts only (period ids, tiers), never a submitted value.
  */
 export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport, now: number, emit: Emit, ctx: ExecContext = {}): void {
@@ -96,7 +97,12 @@ export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport
     fail('InvalidProof', 'unknown proof system');
   }
   // 16. source binding, after the proof
-  if (cmd.tier === 2) verifyVerifierAttestation(e, cmd, prior);
+  // tier 2: Stage 1's REPORT signature by a report verifier key, usable for the period (active, or revoked after the
+  // period ended and within the 45-day grace: SIM:1116 reportKeyValid; income.rs:396-424; MercesIncome.sol:207-228)
+  if (cmd.tier === 2) {
+    const m = reportDigest(signingContextOf(e.state, s.seriesId), { periodId: cmd.periodId, priorIncomeCommitment: cmd.priorIncomeCommitment, incomeCommitment: cmd.incomeCommitment, tier: 2, liquidityEvent: cmd.liquidityEvent });
+    requireSigned(e, 'verifier', m.digest, cmd.attestation, now, { reportPeriod: cmd.periodId });
+  }
   else if (cmd.tier === 3) {
     // an active key, or one revoked after the period ended within Stage 1's grace (SPEC §1.4; SIM:332-338 reportKeyValid)
     if (!cmd.attestor || !signers.includes(cmd.attestor) || !e.attestorUsable(cmd.attestor, now, { reportPeriod: cmd.periodId })) fail('InvalidAttestorSignature', 'tier 3 needs a usable attestor as co-signer');
@@ -186,24 +192,4 @@ function checkFx(e: EngineCore, s: SimSeries, signers: string[], cmd: SubmitRepo
   // Stage 1's reference does not, SIM:1092: DIV-S1I-3)
   if (!signers.includes(a.attestor) || !e.attestorUsable(a.attestor, now, { reportPeriod: cmd.periodId })) fail('InvalidAttestorSignature', 'the FX rate needs a usable attestor as co-signer');
   if (BigInt(a.rateWad) !== fx || a.pair !== cmd.pair) fail('FxMismatch', 'attestor rate does not match the report');
-}
-
-/** Tier 2: an active registered verifier key signed attestation v1 over exactly this report's fields. */
-function verifyVerifierAttestation(e: EngineCore, cmd: SubmitReport, prior: string): void {
-  const a = cmd.attestation;
-  if (!a) return fail('InvalidVerifierSignature', 'tier 2 needs a verifier attestation');
-  const key = e.state.verifierKeys.get(a.keyId);
-  if (!key || !key.active) fail('InvalidVerifierSignature', 'verifier key is not registered');
-  if (a.seriesId !== cmd.seriesId || a.periodId !== cmd.periodId || a.priorIncomeCommitment !== prior || a.incomeCommitment !== cmd.incomeCommitment || a.tier !== cmd.tier || a.liquidityEvent !== cmd.liquidityEvent) {
-    fail('InvalidVerifierSignature', 'attestation fields do not match the report');
-  }
-  const msg = attestationMessage({ seriesId: a.seriesId, periodId: a.periodId, priorIncomeCommitment: a.priorIncomeCommitment, incomeCommitment: a.incomeCommitment, tier: a.tier, liquidityEvent: a.liquidityEvent });
-  let ok = false;
-  try {
-    const pub = createPublicKey({ key: Buffer.from(key!.publicKey, 'hex'), format: 'der', type: 'spki' });
-    ok = edVerify(null, Buffer.from(msg), pub, Buffer.from(a.signature.replace(/^0x/, ''), 'hex'));
-  } catch {
-    ok = false;
-  }
-  if (!ok) fail('InvalidVerifierSignature', 'bad verifier signature');
 }

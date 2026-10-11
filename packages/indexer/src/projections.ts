@@ -58,7 +58,7 @@ function summary(e: DomainEvent): string | null {
     case 'UnitsStaked': return `${p.units} base units staked`;
     case 'UnitsUnstaked': return `${p.units} base units unstaked`;
     case 'FxFallbackFlagged': return `FX fallback flagged for ${p.pair} ${p.periodId}`;
-    default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, AttestorRevoked, VerifierKeyRegistered, HolderRegistered, FeeTaken, refunds, treasury, splits, curve proceeds: not in the public feed
+    default: return null; // RateSnapshot, AllowlistUpdated, AttestorRegistered, AttestorRevoked, VerifierKeyRegistered, VerifierKeyRevoked, HolderRegistered, FeeTaken, refunds, treasury, splits, curve proceeds: not in the public feed
   }
 }
 
@@ -518,8 +518,31 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
     case 'PauseRequested':
     case 'PauseApproved':
     case 'PauseEnded':
-    case 'VerifierKeyRegistered':
       break;
+    case 'VerifierKeyRegistered': {
+      // the report verifier's keys (S4 WP6, D10), projected as the attestor keys are: active again with its revocation
+      // cleared; `registered_at` kept on a Solana re-emit for an active key; `updated_seq` against replays
+      const p = e.payload as P<'VerifierKeyRegistered'>;
+      await client.query(
+        `insert into verifier_keys (chain, address, active, registered_at, revoked_at, updated_seq) values ($1,$2,true,$3,null,$4)
+         on conflict (chain, address) do update set active = true, revoked_at = null,
+           registered_at = case when verifier_keys.active then verifier_keys.registered_at else excluded.registered_at end, updated_seq = excluded.updated_seq
+         where verifier_keys.updated_seq < excluded.updated_seq`,
+        [e.chain, p.verifierKey, e.blockTime, e.seq],
+      );
+      break;
+    }
+    case 'VerifierKeyRevoked': {
+      // forward-only: tier-2 attestations of periods that ended by `revoked_at` stay valid on the chain for 45 days
+      const p = e.payload as P<'VerifierKeyRevoked'>;
+      await client.query(
+        `insert into verifier_keys (chain, address, active, revoked_at, updated_seq) values ($1,$2,false,$3,$4)
+         on conflict (chain, address) do update set active = false, revoked_at = excluded.revoked_at, updated_seq = excluded.updated_seq
+         where verifier_keys.updated_seq < excluded.updated_seq`,
+        [e.chain, p.verifierKey, p.revokedAt, e.seq],
+      );
+      break;
+    }
     default: {
       const never: never = e.type;
       void never;

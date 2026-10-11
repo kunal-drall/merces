@@ -274,6 +274,10 @@ importers:
       '@merces/report-verifier':
         specifier: workspace:*
         version: link:../report-verifier
+    devDependencies:
+      '@merces/simulator':
+        specifier: workspace:*
+        version: link:../simulator
 
   packages/ports:
     dependencies:

@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { ChainError, KEY_GRACE_SECONDS, type UserCommand } from '@merces/domain';
 import { parsePeriod, wadFromDecimal } from '@merces/math';
-import { SimHarness, SimWallet, serialiseState } from '../src/index.ts';
+import { SimHarness, SimSigner, SimWallet, serialiseState } from '../src/index.ts';
 import { GENESIS, USDC, expectChainError, types } from './helpers.ts';
 
 /*
- * Stage 1's key registry for attestor keys on the simulator (S4 WP5; S4 D5, D9). Cause codes:
+ * Stage 1's key registry on the simulator: attestor keys (S4 WP5) and the report verifier's keys (S4 WP6); S4 D5, D9,
+ * D10. Cause codes:
  *  - S4-REG: register, revoke and rotate; forward-only revocation with its 45-day grace on report and FX signatures;
- *    the last-key rule (merces_registry lib.rs:218-260; MercesRegistry.sol:287-345; SIM:332-338, :535-546);
- *  - S4-ERR: each personality raises its own chain's names, with one chain-neutral code per case.
+ *    the last-key rule (merces_registry lib.rs:218-302; MercesRegistry.sol:287-345; SIM:332-338, :535-546);
+ *  - S4-ERR: each personality raises its own chain's names, with one chain-neutral code per case;
+ *  - S4-T2: verifier keys are 20-byte addresses with the attestor keys' rules, and a tier-2 report is Stage 1's REPORT
+ *    signature by one, with the same grace.
  */
 
 type Report = Extract<UserCommand, { kind: 'submitReport' }>;
@@ -112,11 +115,56 @@ describe('the attestor key registry, per personality (S4-REG, S4-ERR)', () => {
     });
   }
 
-  it('verifier keys by address arrive with S4 WP6: kind verifier is NotImplemented until then', async () => {
-    const h = await SimHarness.create('solana', { genesis: GENESIS });
-    await expectChainError(h.sim.getSignerKey('verifier', '0x' + '11'.repeat(20)), 'NotImplemented');
-    await expectChainError(h.sim.listSignerKeys('verifier'), 'NotImplemented');
-  });
+});
+
+describe('the report verifier key registry, per personality (S4-T2, S4-REG, S4-ERR)', () => {
+  const CASES = {
+    zero: ['ZeroAttestorAddress', 'ZeroAddress', 'InvalidTerms'],
+    revokeRevoked: ['KeyAlreadyRevoked', 'KeyNotRegistered', 'WrongStatus'],
+    revokeUnknown: ['AccountNotInitialized', 'KeyNotRegistered', 'WrongStatus'],
+    lastKey: ['LastKeyOfKind', 'LastActiveKey', 'NotPermitted'],
+  } as const;
+
+  for (const personality of ['solana', 'monad'] as const) {
+    const name = (c: keyof typeof CASES) => CASES[c][personality === 'solana' ? 0 : 1];
+    const code = (c: keyof typeof CASES) => CASES[c][2];
+
+    it(`${personality}: verifier keys by 20-byte address, their own count; register, revoke, rotate and every refusal as the attestor keys'`, async () => {
+      const h = await SimHarness.create(personality, { genesis: GENESIS });
+      const v1 = h.verifier.address;
+      const v2 = SimSigner.verifier('verifier-2').address;
+      const v3 = SimSigner.verifier('verifier-3').address;
+      // the harness registered one verifier key (Stage 1 VerifierKey record); attestor keys are a separate set
+      expect(await h.sim.listSignerKeys('verifier')).toEqual([{ kind: 'verifier', address: v1, active: true, revokedAt: null, graceUntil: null }]);
+      expect(await h.sim.getSignerKey('verifier', v2)).toBeNull();
+      expect(await h.sim.getSignerKey('attestor', v1)).toBeNull();
+      await refused(h, h.exec(h.admin, { kind: 'registerVerifierKey', key: '0x' + '0'.repeat(40) }), name('zero'), code('zero'));
+      for (const cmd of [{ kind: 'registerVerifierKey', key: v2 }, { kind: 'revokeVerifierKey', key: v1 }, { kind: 'rotateVerifierKey', from: v1, to: v2 }] as const) {
+        await expectChainError(h.exec(h.issuer, cmd), 'Unauthorized');
+      }
+      // the one verifier key is the last of its kind, though two attestor keys are active (each kind counts its own)
+      await refused(h, h.exec(h.admin, { kind: 'revokeVerifierKey', key: v1 }), name('lastKey'), code('lastKey'));
+      await refused(h, h.exec(h.admin, { kind: 'revokeVerifierKey', key: v2 }), name('revokeUnknown'), code('revokeUnknown'));
+      const reg = await h.exec(h.admin, { kind: 'registerVerifierKey', key: v2 });
+      expect(reg.events.map((e) => [e.type, e.payload])).toEqual([['VerifierKeyRegistered', { verifierKey: v2 }]]);
+      const t = await h.sim.now();
+      const rv = await h.exec(h.admin, { kind: 'revokeVerifierKey', key: v1 });
+      expect(rv.events.map((e) => [e.type, e.payload])).toEqual([['VerifierKeyRevoked', { verifierKey: v1, revokedAt: t }]]);
+      expect(await h.sim.getSignerKey('verifier', v1)).toEqual({ kind: 'verifier', address: v1, active: false, revokedAt: t, graceUntil: t + KEY_GRACE_SECONDS });
+      await refused(h, h.exec(h.admin, { kind: 'revokeVerifierKey', key: v1 }), name('revokeRevoked'), code('revokeRevoked'));
+      await refused(h, h.exec(h.admin, { kind: 'revokeVerifierKey', key: v2 }), name('lastKey'), code('lastKey'));
+      // rotate v2 → v3: one transaction, registration then revocation; a refused revoke undoes the registration
+      const rot = await h.exec(h.admin, { kind: 'rotateVerifierKey', from: v2, to: v3 });
+      expect(rot.events.map((e) => [e.type, e.payload])).toEqual([['VerifierKeyRegistered', { verifierKey: v3 }], ['VerifierKeyRevoked', { verifierKey: v2, revokedAt: await h.sim.now() }]]);
+      await refused(h, h.exec(h.admin, { kind: 'rotateVerifierKey', from: v2, to: v1 }), name('revokeRevoked'), code('revokeRevoked'));
+      expect((await h.sim.getSignerKey('verifier', v1))!.active).toBe(false);
+      // re-registering a revoked key clears its revocation; an active one: Solana re-emits, the EVM refuses
+      await h.exec(h.admin, { kind: 'registerVerifierKey', key: v1 });
+      expect(await h.sim.getSignerKey('verifier', v1)).toEqual({ kind: 'verifier', address: v1, active: true, revokedAt: null, graceUntil: null });
+      if (personality === 'solana') expect((await h.exec(h.admin, { kind: 'registerVerifierKey', key: v1 })).events.map((e) => e.type)).toEqual(['VerifierKeyRegistered']);
+      else await refused(h, h.exec(h.admin, { kind: 'registerVerifierKey', key: v1 }), 'KeyAlreadyActive', 'Duplicate');
+    });
+  }
 });
 
 describe('revocation grace on the co-signed paths (S4-REG; Stage 1 SPEC §1.4, SIM:332-338)', () => {
@@ -158,6 +206,26 @@ describe('revocation grace on the co-signed paths (S4-REG; Stage 1 SPEC §1.4, S
       await h.sim.setTime(q1.end + DAY);
       const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: a.address });
       await refused(h, h.exec(h.issuer, command, [a]), 'InvalidAttestorSignature', 'InvalidAttestation');
+    }
+  });
+
+  it('tier 2: a verifier key revoked after the period ended still signs its report until revokedAt + 45 days; one revoked before may not (S4-T2)', async () => {
+    const q1 = parsePeriod('2026Q1');
+    for (const [revokeAt, sendAt, ok] of [[q1.end, q1.end + KEY_GRACE_SECONDS, true], [q1.end, q1.end + KEY_GRACE_SECONDS + 1, false], [q1.end - 1, q1.end + DAY, false]] as const) {
+      const { h, seriesId, privateTerms } = await settled();
+      await h.exec(h.admin, { kind: 'registerVerifierKey', key: SimSigner.verifier('verifier-2').address });
+      await h.sim.setTime(revokeAt);
+      await h.exec(h.admin, { kind: 'revokeVerifierKey', key: h.verifier.address });
+      await h.sim.setTime(sendAt);
+      const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000) });
+      expect(command.attestation!.signer).toBe(h.verifier.address);
+      if (ok) expect(types((await h.exec(h.issuer, command)).events)).toContain('ReportAccepted');
+      else {
+        await refused(h, h.exec(h.issuer, command), 'InvalidVerifierSignature', 'InvalidAttestation');
+        // the other, active key signs the same report
+        const { command: again } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), verifier: SimSigner.verifier('verifier-2') });
+        expect(types((await h.exec(h.issuer, again)).events)).toContain('ReportAccepted');
+      }
     }
   });
 

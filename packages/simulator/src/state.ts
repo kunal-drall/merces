@@ -19,7 +19,9 @@ import type { PersonalityConfig } from './addresses.ts';
  *
  * Version 5 (S4) holds Stage 1's key registry: each attestor key is a `SimKey` (`{active, revokedAt}`, Stage 1's
  * `AttestorKey` / EVM `KeyInfo`), so a revoked key keeps its revocation time for Stage 1's 45-day grace on report and
- * FX signatures (was a boolean). States of another version are never upgraded in place.
+ * FX signatures (was a boolean). The report verifier's keys are the same records by 20-byte address (S4 WP6; they were
+ * ed25519 keys by key id), completed under the same version before anything was deployed, as S3 WP8 completed version 4.
+ * States of another version are never upgraded in place.
  */
 export const SIM_STATE_VERSION = 5;
 
@@ -462,7 +464,8 @@ export interface SimState {
   allowlist: Set<string>;
   /** Stage 1's attestor registry by address: active keys and revoked ones (with their revocation time) */
   attestors: Map<string, SimKey>;
-  verifierKeys: Map<string, { publicKey: string; active: boolean }>;
+  /** Stage 1's report-verifier key registry by 20-byte address (S4 WP6), the same records as the attestors' */
+  verifierKeys: Map<string, SimKey>;
   issuers: Map<string, SimIssuer>;
   series: Map<string, SimSeries>;
   rates: Map<string, SimRateAccumulator>;

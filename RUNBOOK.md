@@ -85,7 +85,16 @@ report and FX signatures. Migration 023 adds the registry times to the read mode
 (`registered_at`, `revoked_at`, `updated_seq`; rows indexed before it keep their state, with no times, and the next
 event about the key overwrites them) and re-expresses the admin requests stored before S4 (`registerAttestor{active:
 false}` becomes the `revokeAttestor` it now is). Reset the simulated chains **after deploying the WP5 build** with
-the commands below; S4 WP6 and WP7 reset them again. Before version 5:
+the commands below; S4 WP6 and WP7 reset them again.
+
+S4 WP6 completes version 5 (no new number: nothing was deployed in between): the report verifier's keys are Stage 1's
+key records by 20-byte address too (they were ed25519 keys by key id), and a tier-2 report carries the verifier key's
+Stage 1 REPORT signature. A version-5 chain saved before WP6 still holds the old verifier keys, so **reset the simulated
+chains after deploying the WP6 build**. Migration 024 adds the read model's `verifier_keys` table (projected from
+`VerifierKeyRegistered` / `VerifierKeyRevoked`, as `attestors`), removes the stored multisig requests for an ed25519
+verifier key (no chain can carry them; the audit log keeps their proposal) and supersedes the reports assembled with the
+retired ed25519 attestation that were never submitted (assemble them again; one built from such a row answers 409
+`attestation-superseded`). Before version 5:
 
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final
 pool (version 2, S1), the raise's own terms and Stage 1's multi-step auction settlement (version 3, S2), it carries each
@@ -119,9 +128,9 @@ MERCES_ALLOW_SIM_RESET=1 pnpm --filter @merces/simulator sim:reset --chain solan
 - It keeps people, paper and audit records not tied to a series (accounts, wallets, applications, eligibility,
   contract sessions, drafts that never created a series, `audit_log`).
 - It prints the rows deleted per table. The chain's registrations lived in the simulator state and are gone: re-apply
-  the allowlist (`setAllowlist`), the attestors (`registerAttestor`), the report-verifier key (`registerVerifierKey`)
-  and the issuer registrations (`registerIssuer`). `dev:mock` does this itself: it registers the verifier key at boot
-  and re-seeds its synthetic cohort on an empty chain.
+  the allowlist (`setAllowlist`), the attestors (`registerAttestor`), the report-verifier key (`registerVerifierKey` of
+  its 20-byte address) and the issuer registrations (`registerIssuer`). `dev:mock` does this itself: it registers the
+  verifier key at boot and re-seeds its synthetic cohort on an empty chain.
 
 ### S4 resets: bid and order commitments (WP2)
 
@@ -167,9 +176,13 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   configured with its algorithm (since S4 WP3 nothing is inferred from the id, and an unconfigured id is an error);
   a secp256k1 key is Stage 1's test-key derivation of `merces-local-kms:<seed>:<keyId>` and signs a digest as Stage 1
   does (`signDigest`: `r ‖ s ‖ v`, low s, `v ∈ {27, 28}`, checked against the key's address before it is returned).
-  The report verifier's key id is `REPORT_VERIFIER_KEY_ID` (default `report-verifier-1`, ed25519 until S4 WP6 moves it
-  to Stage 1's secp256k1 key); its public key must be registered onchain by the multisig (`POST /admin/verifier-keys`
-  builds the transaction). `dev:mock` registers it on the simulators automatically.
+  The report verifier's key id is `REPORT_VERIFIER_KEY_ID` (default `report-verifier-1`), a secp256k1 key since S4 WP6;
+  its 20-byte address must be registered onchain by the multisig (`POST /admin/verifier-keys` `{chain, address}` builds
+  the transaction). `dev:mock` registers it on the simulators automatically. The standalone verifier
+  (`pnpm dev:verifier`) signs only for the chains of its own table `MERCES_VERIFIER_CHAINS` (`.env.example` and
+  `docker-compose.yml` carry the dev simulators' domains; a test keeps them current) and, in development
+  (`MERCES_VERIFIER_DEV=true`), accepts the local ids; the API's in-process verifier in mock mode derives its table from
+  each simulator's `ChainInfo.signing`.
 - Production: a cloud KMS behind `KmsPort`. S4 ships the provider-neutral adapter (`RemoteSecp256k1Kms` in
   `@merces/ports`: the KMS's DER signature becomes Stage 1's 65 bytes, low s, the recovery id found against the key's
   address, fail closed; the DER SPKI public key gives the address) but no provider: which one holds the report-verifier
@@ -177,8 +190,26 @@ embedded report proof with the ports' Groth16 verifier and never persists anythi
   verifier refuses any `MERCES_KMS_PROVIDER` but `local` until it is answered. Setup facts, each pinned to its source:
   VERSIONS.md "Signing keys and KMS" (AWS: key spec `ECC_SECG_P256K1`, usage `SIGN_VERIFY`, `Sign` with
   `ECDSA_SHA_256` and `MessageType=DIGEST`; GCP: `EC_SIGN_SECP256K1_SHA256` at HSM protection level, the digest in
-  `digest.sha256` unverified; HashiCorp Vault transit has no secp256k1 key). Rotation = register the new verifier key
-  (keep the old one active until in-flight reports land), switch `REPORT_VERIFIER_KEY_ID`, then deactivate the old key.
+  `digest.sha256` unverified; HashiCorp Vault transit has no secp256k1 key).
+- Report verifier key (S4 WP6, D10, amendment D10). The verifier starts only when its KMS key's address equals
+  `REPORT_VERIFIER_ADDRESS` (required outside development) and every domain of `MERCES_VERIFIER_CHAINS` is on the
+  signing allow-list (never mainnet). Each chain's registry holds it as a verifier key (`GET /admin/verifier-keys`
+  shows the chain's records and the verifier's own address side by side). Rotation, on every chain:
+  1. create the new key in the KMS and register its address (`POST /admin/verifier-keys`, or `POST
+     /admin/verifier-keys/rotate` `{from, to}`, which registers the new key and revokes the old one in one transaction:
+     the EVM's own `rotateVerifierKey`, two instructions of one transaction on Solana);
+  2. switch `REPORT_VERIFIER_KEY_ID` and `REPORT_VERIFIER_ADDRESS` to the new key, and add the old address with its
+     retirement time to `REPORT_VERIFIER_PREVIOUS_ADDRESSES` (`[{"address": "0x…", "retiredAt": <unix seconds>}]`), so a
+     device's prior-quarter attestation by the old key stays acceptable, only for quarters that ended at or before
+     `retiredAt`;
+  3. revoke the old key (`POST /admin/verifier-keys/revoke`; refused for the chain's last active verifier key: 409
+     `last-active-key`, rotate instead). Its tier-2 attestations of periods that ended by the revocation stay valid
+     onchain until `revokedAt` + 45 days (Stage 1's grace), so reports already attested can still be submitted.
+  A **compromised** verifier key is revoked at once and never listed in `REPORT_VERIFIER_PREVIOUS_ADDRESSES` (remove
+  it if it is there): the verifier then refuses its priors (`prior-unattested`), so an issuer affected has the previous
+  quarter attested again by the new key (from a fresh zkTLS proof of that quarter), or, where the chain accepts any
+  prior (a series' first report outside Q1, A25), reports from the ZERO prior (the least favourable to it); and check
+  the reports the chain accepted under the revoked key in its grace window, as for attestor keys.
 - Attestor keys (S4 WP5, A-SIG-4): the multisig registers, revokes and rotates them on each chain (Stage 1's
   registry). `POST /admin/attestors` with `active: true` builds `registerAttestor`, with `active: false` the
   forward-only `revokeAttestor`; the admin service reads the chain's registry first and refuses with 409 (nothing

@@ -19,6 +19,8 @@ import { resolveSecret } from '../src/secrets.ts';
  *  - S4-KMS: the KMS port signs a secp256k1 digest as Stage 1 does (`signDigest`: `r ‖ s ‖ v`, low s, v ∈ {27, 28},
  *    self-verified) and `sign` is ed25519 only; a local key id names its algorithm (no inference from the id, an unknown
  *    id is an error); the local secp256k1 key is Stage 1's test-key derivation of `merces-local-kms:<seed>:<keyId>`.
+ *  - S4-T2: the report verifier's key is secp256k1 (S4 WP6), so the ed25519 SPKI export it needed is gone; ed25519 keys
+ *    stay for Solana fee payers.
  */
 
 /** A raised KmsKeyError with this code (and no seed in its message). */
@@ -41,7 +43,6 @@ describe('LocalKms', () => {
     const sig = await kms.sign('verifier-1', msg);
     const pub = createPublicKey({ key: ed25519RawToSpki(Buffer.from(a.publicKeyHex, 'hex')), format: 'der', type: 'spki' });
     expect(edVerify(null, Buffer.from(msg), pub, Buffer.from(sig, 'hex'))).toBe(true);
-    expect((await kms.spkiHex('verifier-1')).length).toBe(88);
     // the secp256k1 methods refuse an ed25519 key
     await refused(kms.signerAddress('verifier-1'), 'wrong-algorithm');
     await refused(kms.signDigest('verifier-1', '0x' + '11'.repeat(32)), 'wrong-algorithm');
@@ -71,9 +72,8 @@ describe('LocalKms', () => {
     await refused(kms.signDigest('keeper-evm', '0x' + '11'.repeat(31)), 'malformed-digest');
     await refused(kms.signDigest('keeper-evm', new Uint8Array(33)), 'malformed-digest');
     await refused(kms.signDigest('keeper-evm', '11'.repeat(32)), 'malformed-digest');
-    // sign() and spkiHex() are ed25519 only: a secp256k1 key never signs a message it hashes itself
+    // sign() is ed25519 only: a secp256k1 key never signs a message it hashes itself
     await refused(kms.sign('keeper-evm', new Uint8Array([1, 2, 3])), 'wrong-algorithm');
-    await refused(kms.spkiHex('keeper-evm'), 'wrong-algorithm');
     // a DigestSigner over the key
     const signer = await kmsDigestSigner(kms, 'keeper-evm');
     expect(signer.address).toBe(address);
@@ -85,7 +85,7 @@ describe('LocalKms', () => {
     const kms = new LocalKms('seed-not-in-errors', { 'secp-looking-but-ed': 'ed25519', 'plain-name': 'secp256k1' });
     expect((await kms.publicKey('secp-looking-but-ed')).algorithm).toBe('ed25519');
     expect((await kms.publicKey('plain-name')).algorithm).toBe('secp256k1');
-    for (const call of [kms.publicKey('keeper-evm'), kms.sign('keeper-evm', new Uint8Array(1)), kms.signerAddress('keeper-evm'), kms.signDigest('keeper-evm', '0x' + '00'.repeat(32)), kms.spkiHex('keeper-evm')]) {
+    for (const call of [kms.publicKey('keeper-evm'), kms.sign('keeper-evm', new Uint8Array(1)), kms.signerAddress('keeper-evm'), kms.signDigest('keeper-evm', '0x' + '00'.repeat(32))]) { // cause S4-T2: no SPKI export (its only user was the ed25519 verifier key)
       await refused(call, 'unknown-key', 'seed-not-in-errors');
     }
     expect(() => new LocalKms('seed', { k: 'p256' as never })).toThrow(KmsKeyError);

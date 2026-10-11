@@ -124,7 +124,6 @@ export class EvmChain implements ChainPort {
    */
   async getSignerKey(): Promise<never> { return this.notReady('getSignerKey'); }
   async listSignerKeys(): Promise<never> { return this.notReady('listSignerKeys'); }
-  async listVerifierKeys(): Promise<never> { return this.notReady('listVerifierKeys'); }
   async getTransferWindow(): Promise<never> { return this.notReady('getTransferWindow'); }
   async getCurve(): Promise<null> { return null; } // curve mode is Solana-only
   async quoteCurveSwap(): Promise<never> { throw new ChainError('NotPermitted', 'curve mode is Solana only: the EVM refuses a curve series (CurveModeUnsupported)'); }

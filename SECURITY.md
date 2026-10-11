@@ -26,7 +26,7 @@ a lender or a broker, and it is **never a custodian**:
 
 | Key | Where | Can | Cannot |
 | --- | --- | --- | --- |
-| Report-verifier ed25519 | KMS port (`LocalKms` for development; cloud KMS in production, Part J.2). Public key registered onchain by the multisig. | Sign attestation v1 `{series, period, prior_income_commitment, income_commitment, tier, liquidity_event}` after verifying a zkTLS proof and the prior opening. The proof's source is checked against the request but is not signed (A-REV-1, B7); the liquidity flag is the one the device declares (owner question 1 open since S1). S4 moves it to Stage 1's secp256k1 key and `MERCES_REPORT_V1` bytes | Sign anything else; the verifier has no database and no payload logs |
+| Report-verifier secp256k1 (S4 WP6, D10) | KMS port, algorithm configured (`LocalKms` for development; a cloud KMS in production once the owner chooses AWS or GCP, S4 owner question 1; until then the standalone verifier refuses any other provider). Its 20-byte address is registered onchain as a verifier key by the multisig (`registerVerifierKey`), and pinned in the verifier's configuration (`REPORT_VERIFIER_ADDRESS`): the verifier refuses to start when the KMS key's address differs. | Sign Stage 1's `MERCES_REPORT_V1` with tier 2 (the series' chain's signing domain from the verifier's own table `MERCES_VERIFIER_CHAINS`, the series key, period, prior and income commitments, liquidity flag) after verifying a zkTLS proof and the prior opening. It builds every digest itself from typed fields: no route signs a digest a caller supplies. Every domain of its table is checked against the signing allow-list at startup and again before each signature (never mainnet; local ids only with `MERCES_VERIFIER_DEV=true`). The proof's source is checked against the request but is not signed (A-REV-1, B7); the liquidity flag is the one the device declares (owner question 1 open since S1) | Sign anything else; sign for a chain off its table or a mainnet; the verifier has no database and no payload logs |
 | Keeper fee payer (per chain) | KMS port | Submit permissionless cranks | Any user action |
 | Allowlist manager (per chain) | KMS port | `setAllowlist` | Freeze or seize units, block claims |
 | Session HMAC secret | environment | Sign API session tokens | — |
@@ -60,6 +60,9 @@ Secrets never enter the repository: `.env.example` lists names only; development
   key's in-flight report and FX signatures therefore stay usable for that window: the residual risk is accepted as
   Stage 1 designed it (S4 owner question 3's default), and the RUNBOOK's key section says to check the reports accepted
   under a revoked key. The last active attestor key of a chain cannot be revoked (both chains): rotate instead.
+  The report verifier's keys follow the same registry (S4 WP6): a revoked verifier key's tier-2 attestations of periods
+  that ended by its revocation stay valid onchain for 45 days, so a compromised verifier key is the same residual risk
+  (only the issuer can submit a report, and the RUNBOOK's check of reports accepted under a revoked key covers both).
 - The `holder` tier means holding or having held units of the series (a position row, so a seller can still claim what
   accrued); a bid alone never grants it, so losing or refunded bidders do not see the holder list or payment amounts.
 - Session tokens are HMAC-signed with `MERCES_SESSION_SECRET`. The published development default is accepted only
@@ -96,7 +99,7 @@ Secrets never enter the repository: `.env.example` lists names only; development
 
 It unavoidably sees the attested income figure in memory, and for tier 2 the prior quarter's opening. Controls: a separate process and port; no database; logs
 carry request id, route, outcome code and duration only; the input schema is validated before any processing; the
-only output is a signature over the attestation fields (commitments, tier, liquidity flag; never a figure); the signing key lives behind the KMS port. Devices send proofs
+only output is Stage 1's REPORT signature over the attestation fields (commitments, tier, liquidity flag; never a figure), over a digest it builds itself for a chain of its own table; the secp256k1 signing key lives behind the KMS port, pinned by address. A prior attestation is accepted from its current address, or from a previous one (`REPORT_VERIFIER_PREVIOUS_ADDRESSES`) only for a quarter that ended at or before that address was retired, so a rotated-out key cannot vouch for later quarters; a compromised key is never listed (RUNBOOK "Report verifier key"). Devices send proofs
 to it directly, never through the API, so the API process never sees income or salts. If Reclaim's hash-attesting
 providers (`responseRedactions[].hash`) are adopted (Part J.3), the verifier can stop seeing figures entirely.
 

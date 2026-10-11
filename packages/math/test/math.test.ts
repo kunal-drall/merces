@@ -166,6 +166,10 @@ const TESTING_IMPORTERS = new Set([
   // S4 WP5 (cause S4-REG): the vector runner's scenario loader checks a scenario's own keys are Stage 1's published test
   // keys for their seeds (`<scenario id>:<name>`)
   'packages/stage1-sync/src/stage1-vectors/scenarios.ts',
+  // S4 WP6 (cause S4-T2): the simulator harness's report verifier key (`SimSigner`, seed `sim-verifier:<label>`), and the
+  // vector runner's keyring, which checks each vector key is Stage 1's published test key for its seed before it signs
+  'packages/simulator/src/wallets.ts',
+  'packages/stage1-sync/src/stage1-vectors/keys.ts',
 ]);
 
 /** True when the code (comments stripped: the gateway's own JSDoc names the subpath) names the derivation or the subpath. */

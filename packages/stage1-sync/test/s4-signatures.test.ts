@@ -27,10 +27,12 @@ import {
 } from '../src/stage1-vectors/index.ts';
 
 /*
- * Our S4 signature scenarios (S4 plan §4; S4 WP5) and the scenario runner's S4 additions. Cause codes:
+ * Our S4 signature scenarios (S4 plan §4; S4 WP5, WP6) and the scenario runner's S4 additions. Cause codes:
  *  - S4-REG: Stage 1's key registry on the vector runner: `register_attestor` / `revoke_attestor` of the vector key's
  *    20-byte address, each personality with its chain's names; S4d, the last-key rule, merces-only (amendment fix 1);
- *  - S4-SH: shim SH-REG-2 retired (the registry runs directly).
+ *  - S4-SH: shims SH-REG-2 (S4 WP5) and SH-REG-3 (S4 WP6) retired (the registry runs directly);
+ *  - S4-T2: S4a-S4c, the report verifier key's forward-only revocation and its 45-day grace on tier-2 reports, on the
+ *    reference, the merces backend and in lockstep (Stage 1's reference models the grace, SIM:332-338).
  */
 const VECTORS = fileURLToPath(new URL('../../../stage1/packages/vectors', import.meta.url));
 const S4D = join(S4_SIGNATURE_SCENARIOS, 'S4d_last_attestor_key.json');
@@ -39,20 +41,27 @@ const json = (x: unknown) => JSON.stringify(x, (_k, v: unknown) => (typeof v ===
 afterAll(shutdown);
 
 describe('S4 signature scenarios: load', () => {
-  it('the S4 set is its own section, after the S3 set; S4d runs on the merces backend only', () => {
+  it('the S4 set is its own section, after the S3 set; S4a-S4c run on every backend, S4d on the merces backend only', () => {
     expect(SCENARIO_SETS.map((s) => [s.id, s.dir, s.title])).toEqual([
       ['S3', S3_CLAIM_SCENARIOS, "S3 claim scenarios (ours, lockstep against Stage 1's Simulator)"],
       ['S4', S4_SIGNATURE_SCENARIOS, 'S4 signature scenarios (ours)'],
     ]);
     const all = loadScenarios(S4_SIGNATURE_SCENARIOS, VECTORS);
+    const every3 = ['reference', 'merces', 'lockstep'];
+    // cause S4-T2: S4a-S4c reuse 01 without #32 and #34 (the direct transfer and retire_if_capped refusals the merces
+    // backend does not run) and add the verifier key's register and revoke, and reports of their own
     expect(all.map((s) => [s.vector.id, s.vector.name, s.base, s.covers, s.backends, s.parts, s.own])).toEqual([
+      ['S4a', 'S4a_verifier_grace', '01_happy_path', ['a'], every3, ['01 #0-#31 as #0-#31', '01 #33 as #32', '01 #35-#38 as #33-#36', 'ours as #37-#38', '01 #39-#43 as #39-#43', 'ours as #44-#45', '01 #45-#50 as #46-#51'], 4],
+      ['S4b', 'S4b_verifier_grace_ended', '01_happy_path', ['b'], every3, ['01 #0-#31 as #0-#31', '01 #33 as #32', '01 #35-#38 as #33-#36', 'ours as #37-#40'], 4],
+      ['S4c', 'S4c_verifier_revoked_before_period_end', '01_happy_path', ['c'], every3, ['01 #0-#31 as #0-#31', '01 #33 as #32', '01 #35-#37 as #33-#35', 'ours as #36-#37', '01 #38 as #38', 'ours as #39-#40', '01 #40-#43 as #41-#44', 'ours as #45', '01 #45-#50 as #46-#51'], 5],
       ['S4d', 'S4d_last_attestor_key', '11_extinguishment', ['d'], ['merces'], ['11 #0-#34 as #0-#34', 'ours as #35-#41'], 7],
     ]);
     // the default loads every set, ids unique across them
     const every = loadScenarios(undefined, VECTORS);
-    expect(every.map((s) => s.vector.id)).toEqual([...loadScenarios(S3_CLAIM_SCENARIOS, VECTORS).map((s) => s.vector.id), 'S4d']);
-    expect(readdirSync(S4_SIGNATURE_SCENARIOS).filter((f) => f.endsWith('.json'))).toEqual(['S4d_last_attestor_key.json']);
-    // its expectation is PASS wherever it runs (no divergence entry: DIV-S1I-2 is shown by its expect_reverts)
+    expect(every.map((s) => s.vector.id)).toEqual([...loadScenarios(S3_CLAIM_SCENARIOS, VECTORS).map((s) => s.vector.id), 'S4a', 'S4b', 'S4c', 'S4d']);
+    expect(readdirSync(S4_SIGNATURE_SCENARIOS).filter((f) => f.endsWith('.json'))).toEqual(['S4a_verifier_grace.json', 'S4b_verifier_grace_ended.json', 'S4c_verifier_revoked_before_period_end.json', 'S4d_last_attestor_key.json']);
+    // their expectation is PASS wherever they run (no divergence entry: DIV-S1I-2 is shown by S4d's expect_reverts)
+    for (const id of ['S4a', 'S4b', 'S4c']) for (const b of ['reference', 'merces', 'lockstep'] as const) expect(scenarioExpected(id, b), `${id} ${b}`).toEqual(SCENARIO_EXPECTED);
     expect(scenarioExpected('S4d', 'merces')).toEqual(SCENARIO_EXPECTED);
     expect(DIVERGENCE_BY_ID.get('DIV-S1I-2')?.shownBy).toEqual(['S4d']);
   });
@@ -136,6 +145,33 @@ describe('S4 signature scenarios: replay', () => {
     expect(r.report.ok).toBe(true);
   }, 180_000);
 
+  it('cause S4-T2: S4a-S4c pass on the reference, the merces backend and in lockstep, on both personalities', async () => {
+    const only = ['S4a', 'S4b', 'S4c'];
+    const counts: Record<string, number> = { S4a: 52, S4b: 41, S4c: 52 };
+    for (const backend of ['reference', 'merces', 'lockstep'] as const) {
+      const r = await runScenarios({ vectorsDir: VECTORS, backend, only });
+      expect(r.skipped, backend).toEqual([]);
+      const worlds = backend === 'reference' ? ['reference'] : [`${backend}/solana`, `${backend}/monad`];
+      expect(r.report.runs.map((x) => [x.id, x.world, x.status, x.executed, x.total, x.issues, x.atExpected]), backend).toEqual(
+        only.flatMap((id) => worlds.map((w) => [id, w, 'PASS', counts[id], counts[id], [], true])),
+      );
+      // the verifier keys' registry runs directly (SH-REG-3 retired); a report still goes through SH-REP-1 (tier 3, FX)
+      if (backend !== 'reference') for (const run of r.report.runs) expect([run.shims['SH-REG-3'], run.shims['SH-REP-1']! > 0], run.world).toEqual([undefined, true]);
+    }
+  }, 300_000);
+
+  it('cause S4-T2: S4a checks something: with verifier1 revoked before 2026Q1 ended instead, its 2026Q1 report is refused', async () => {
+    const s = loadScenario(join(S4_SIGNATURE_SCENARIOS, 'S4a_verifier_grace.json'), VECTORS);
+    const steps = structuredClone(s.vector.steps) as unknown as Record<string, unknown>[];
+    // the revocation (#38) one second before 2026Q1 ends: #39, verifier1's report, has no grace
+    steps[37]!.t = steps[38]!.t = '1775001599';
+    const v = fromJson({ schema: 2, specVersion: '1.1', config: JSON.parse(readFileSync(join(VECTORS, '01_happy_path.json'), 'utf8')).config, keys: s.vector.keys, steps }, '99_s4a_early');
+    for (const backend of ['reference', 'merces'] as const) {
+      const r = await runStage1Vectors({ vectors: [v], backend, personalities: ['solana'] });
+      expect(r.runs[0]!.issues[0], backend).toMatchObject({ index: 39, kind: 'fail', message: 'unexpected revert InvalidVerifierSignature' });
+    }
+  }, 180_000);
+
   it('S4d is not run on the reference or in lockstep: named as skipped', async () => {
     for (const backend of ['reference', 'lockstep'] as const) {
       const r = await runScenarios({ vectorsDir: VECTORS, backend, only: ['S4d'] });
@@ -204,7 +240,7 @@ describe('S4 signature scenarios: replay', () => {
     // with a lockstep world in the reports, its column reads "not run"
     const lockstepRun = { ...reports.merces!, backend: 'lockstep' as const, runs: [{ ...reports.merces!.runs[0]!, world: 'lockstep/solana', backend: 'lockstep' as const, vector: 'S3a_tail_before_redeem' }] };
     expect(renderScenarios(scenarios, [reports.merces!, lockstepRun]).join('\n')).toContain('| S4d_last_attestor_key | (d) | 11 #0-#34 as #0-#34; ours as #35-#41 | PASS 42/42 | PASS 42/42 | not run (merces only) |');
-    expect(md).toContain(`- S4d_last_attestor_key: ${scenarios[0]!.vector.description}`);
+    expect(md).toContain(`- S4d_last_attestor_key: ${scenarios.find((x) => x.vector.id === 'S4d')!.vector.description}`);
     expect(md).not.toContain('### Scenario findings');
   });
 });

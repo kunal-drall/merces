@@ -1149,7 +1149,7 @@ export type paths = {
         };
         get: operations["listReports"];
         put?: never;
-        /** @description The device's assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, on a curve series a census taken after the period ended (the proof is over it), the prior chain, the six public inputs against the series' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (v1, with the prior and the liquidity flag), or for tier 3 the chosen attestor's signed case. */
+        /** @description The device's assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, on a curve series a census taken after the period ended (the proof is over it), the prior chain, the six public inputs against the series' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (Stage 1's REPORT signature rebuilt from the chain's signing domain and the series key, recovered to its signer, a verifier key the chain holds usable for the period: active, or revoked after the period ended within the 45-day grace; S4 WP6), or for tier 3 the chosen attestor's signed case. */
         post: operations["assembleReport"];
         delete?: never;
         options?: never;
@@ -1650,7 +1650,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (getSignerKey, listVerifierKeys, info); audited */
+        /** Record the multisig's tx id; the request becomes confirmed only when the chain shows the effect (getSignerKey for both key kinds, info); audited */
         post: operations["adminTxRequestSent"];
         delete?: never;
         options?: never;
@@ -1665,11 +1665,45 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Active report-verifier keys per chain, read from the chain */
+        /** The report verifier's keys per chain (the chain's own key records, active and revoked) and the address the report verifier signs with */
         get: operations["adminListVerifierKeys"];
         put?: never;
-        /** Build registerVerifierKey for the multisig and open a tx request; audited */
+        /** Build Stage 1's registerVerifierKey of a 20-byte address for the multisig and open a tx request; audited */
         post: operations["adminRegisterVerifierKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/verifier-keys/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build Stage 1's revokeVerifierKey for the multisig (forward-only) and open a tx request; audited */
+        post: operations["adminRevokeVerifierKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/verifier-keys/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build Stage 1's rotateVerifierKey{from, to} for the multisig (register to, then revoke from, in one transaction) and open a tx request; audited */
+        post: operations["adminRotateVerifierKey"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3140,17 +3174,33 @@ export type components = {
             proof: string;
             publicInputs: components["schemas"]["ReportPublicInputs"];
         };
-        /** @description The report verifier's ed25519 signature over attestation v1: "merces/attestation/v1\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier}. Names no income source. */
-        VerifierAttestation: {
-            keyId: string;
+        /** @description One key's Stage 1 signature over one MERCES_*_V1 message, as a command carries it (S4: nobody co-signs). `signer` is the key's 20-byte address; `signature` is 65 bytes r ‖ s ‖ v (low s, v 27 or 28) over the raw keccak256 digest of the message (no EIP-191 prefix). The digest is never supplied: whoever checks it rebuilds it from the chain's signing domain, the series key and the command's own fields. */
+        Attestation: {
+            signer: string;
+            signature: string;
+        };
+        /** @description What the report verifier's POST /attest returns for a tier-2 report (served by the isolated report verifier, not this API; S4 WP6): its secp256k1 key's Stage 1 signature over MERCES_REPORT_V1 (the series' chain's signing domain, the series key, the period, the prior and income commitments, tier 2, the liquidity flag), the fields it signed and the digest. The device sends its signer and signature as the report's `attestation` and keeps the whole record as the next quarter's prior attestation. Names no income source and carries no figure. */
+        ReportAttestationRecord: {
+            signer: string;
+            signature: string;
+            digest: components["schemas"]["Hash32"];
+            chain: string;
             seriesId: string;
             periodId: string;
             priorIncomeCommitment: components["schemas"]["Hash32"];
             incomeCommitment: components["schemas"]["Hash32"];
-            /** @enum {integer} */
-            tier: 1 | 2 | 3 | 4;
+            /** @constant */
+            tier: 2;
             liquidityEvent: boolean;
-            signature: string;
+        };
+        /** @description The report verifier a device talks to (S4 WP6): its URL, the 20-byte address of its secp256k1 key (the address each chain registers as a verifier key; GET /chains and the chains' registries are public) and the chains it signs for, each with the signing domain it holds (the device can compare it with GET /chains). Public data. */
+        ReportVerifierInfo: {
+            url: string;
+            address: string;
+            chains: {
+                chain: string;
+                domain: components["schemas"]["SigningDomain"];
+            }[];
         };
         AccountingFeeRow: {
             chain: string;
@@ -3397,7 +3447,7 @@ export type components = {
         AdminTxRequest: {
             requestId: string;
             /** @enum {string} */
-            kind: "registerAttestor" | "revokeAttestor" | "rotateAttestor" | "registerVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
+            kind: "registerAttestor" | "revokeAttestor" | "rotateAttestor" | "registerVerifierKey" | "revokeVerifierKey" | "rotateVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
             chain: string;
             /** @description the canonical AdminCommand as built */
             command: Record<string, never>;
@@ -3436,12 +3486,17 @@ export type components = {
             /** @enum {string} */
             kind?: "CA" | "CPA";
         };
+        /** @description A report verifier key: a secp256k1 key's 20-byte address (S4 WP6), the address of the report verifier's own key (REPORT_VERIFIER_ADDRESS, which the verifier checks at startup). Registering builds Stage 1's registerVerifierKey; revoking (POST /admin/verifier-keys/revoke) its revokeVerifierKey (forward-only: tier-2 attestations of periods that ended by the revocation stay valid onchain for 45 days). */
         AdminRegisterVerifierKey: {
             chain: string;
-            keyId: string;
-            /** @description DER SubjectPublicKeyInfo of the report verifier's ed25519 key */
-            publicKeySpkiHex: string;
-            active: boolean;
+            /** @description any case; stored lowercase */
+            address: string;
+        };
+        /** @description Stage 1's rotateVerifierKey: register `to` and revoke `from` in one transaction (the EVM's own call; two instructions of one transaction on Solana). */
+        AdminRotateVerifierKey: {
+            chain: string;
+            from: string;
+            to: string;
         };
         AdminPauseRaises: {
             chain: string;
@@ -3449,9 +3504,16 @@ export type components = {
         };
         AdminVerifierKeys: {
             chain: string;
+            /** @description the chain's verifier key records (Stage 1 VerifierKey / EVM KeyInfo), active and revoked */
             keys: {
-                keyId: string;
-                publicKey: string;
+                /** @constant */
+                kind: "verifier";
+                address: string;
+                active: boolean;
+                /** @description unix seconds of the forward-only revocation */
+                revokedAt: number | null;
+                /** @description revokedAt + 3,888,000 s: tier-2 attestations of periods that ended by revokedAt stay valid onchain until then */
+                graceUntil: number | null;
             }[];
         };
         AdminEligibilityRow: {
@@ -5899,13 +5961,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Where devices send zkTLS proofs */
+            /** @description Where devices send zkTLS proofs, the verifier key's address and the chains it signs for */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["ReportVerifierInfo"];
                 };
             };
         };
@@ -6081,7 +6143,8 @@ export interface operations {
                     priorIncomeCommitment: components["schemas"]["Hash32"];
                     incomeCommitment: components["schemas"]["Hash32"];
                     proof: components["schemas"]["ReportProof"];
-                    attestation?: components["schemas"]["VerifierAttestation"] | null;
+                    /** @description tier 2: the signer and signature of the report verifier's record (ReportAttestationRecord); null otherwise */
+                    attestation?: components["schemas"]["Attestation"] | null;
                     attestorRate?: {
                         attestor?: string;
                         rateWad?: components["schemas"]["Wad"];
@@ -6109,14 +6172,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod), a previous due unpaid (detail.stage1 PaymentOutstanding); on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step) or a proof over another count than the census (detail.reason census-changed: prove again) */
+            /** @description Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod), a previous due unpaid (detail.stage1 PaymentOutstanding); on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step) or a proof over another count than the census (detail.reason census-changed: prove again); a tier-2 report on a chain whose signing domain is not known yet (detail.reason signing-domain-unknown) */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Proof */
+            /** @description Proof, attestation (detail.stage1 InvalidVerifierSignature), prior, public inputs or FX basis rejected */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -6192,7 +6255,7 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
-            /** @description On a curve series the census is older than the period end (detail.stage1 CurveUnitsNotSynced: sync first) or changed since the report was assembled (detail.reason census-changed: prove again and re-assemble); the chain would refuse the transaction */
+            /** @description On a curve series the census is older than the period end (detail.stage1 CurveUnitsNotSynced: sync first) or changed since the report was assembled (detail.reason census-changed: prove again and re-assemble); the chain would refuse the transaction; a report assembled before S4 WP6 with the retired ed25519 attestation (detail.reason attestation-superseded: assemble it again) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -7176,7 +7239,7 @@ export interface operations {
         parameters: {
             query?: {
                 chain?: string;
-                kind?: "registerAttestor" | "revokeAttestor" | "rotateAttestor" | "registerVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
+                kind?: "registerAttestor" | "revokeAttestor" | "rotateAttestor" | "registerVerifierKey" | "revokeVerifierKey" | "rotateVerifierKey" | "pauseNewRaises" | "setFeeCollector" | "registerSplitRouter";
                 state?: "proposed" | "sent" | "confirmed";
                 limit?: components["parameters"]["adminLimit"];
             };
@@ -7259,6 +7322,10 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        verifier: {
+                            /** @description the report verifier key's address; null when the verifier cannot be reached */
+                            address: string | null;
+                        };
                         chains: components["schemas"]["AdminVerifierKeys"][];
                     };
                 };
@@ -7300,7 +7367,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminTxProposal"];
                 };
             };
-            /** @description Unknown chain or malformed key */
+            /** @description Unknown chain or malformed address */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7311,8 +7378,109 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-            /** @description Idempotency key reused with a different body */
+            /** @description The key is already active on the chain (detail.reason key-already-active), or the idempotency key was reused with a different body */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminRevokeVerifierKey: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["adminIdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRegisterVerifierKey"];
+            };
+        };
+        responses: {
+            /** @description The tracked request and the UnsignedTx for the multisig */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTxProposal"];
+                };
+            };
+            /** @description Unknown chain or malformed address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description The key is not active on the chain (detail.reason key-not-active), it is the last active verifier key (detail.reason last-active-key: rotate instead; Solana LastKeyOfKind, EVM LastActiveKey), or the idempotency key was reused with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    adminRotateVerifierKey: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["adminIdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRotateVerifierKey"];
+            };
+        };
+        responses: {
+            /** @description The tracked request and the UnsignedTx for the multisig */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTxProposal"];
+                };
+            };
+            /** @description Unknown chain or malformed address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description The new key is already active (detail.reason key-already-active), the old one is not active (detail.reason key-not-active), or the idempotency key was reused with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description from and to are the same key */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -5,14 +5,16 @@ import { SimHarness, SimulatorChain, type Personality } from '@merces/simulator'
 import { buildApp, issueSession, makeContext, type Session } from '../src/index.ts';
 import { createServiceContext, serviceRoutes } from '@merces/services';
 import { Groth16ReportVerifier, LocalKms, MockESign, MockIdentityCheck, MockZkTls, reportProofVerifier, shutdownProofSystem } from '@merces/ports';
-import { ReportVerifier } from '@merces/report-verifier';
+import { ReportVerifier, verifierChainsFromPorts } from '@merces/report-verifier';
 
 const GENESIS = Date.UTC(2026, 0, 1) / 1000;
 export const SECRET = 'test-secret';
 
 /*
  * S4 cause codes:
- *  - S4-KMS: a local KMS key id names its algorithm explicitly (S4 WP3; the verifier keys stay ed25519 until S4 WP6).
+ *  - S4-KMS: a local KMS key id names its algorithm explicitly (S4 WP3);
+ *  - S4-T2: the verifier keys are secp256k1, registered by address, and the in-process verifier's chain table is each
+ *    simulator's own signing domain (S4 WP6, amendment D10).
  */
 
 /** Test rig: one schema, two simulator harnesses, an indexer and the app with every route registered. */
@@ -43,11 +45,11 @@ export async function makeRig(opts: { genesis?: number; keyPrefix?: string; extr
   const esign = new MockESign();
   const identity = new MockIdentityCheck();
   const zktls = new MockZkTls();
-  // cause S4-KMS: each local key id names its algorithm (the verifier keys stay ed25519 until S4 WP6)
-  const kms = new LocalKms('test-seed', { 'report-verifier-test': 'ed25519', 'second-verifier': 'ed25519' });
-  const verifier = new ReportVerifier(zktls, kms, 'report-verifier-test');
-  const spki = await kms.spkiHex('report-verifier-test');
-  for (const h of [sol, mon]) await h.exec(h.admin, { kind: 'registerVerifierKey', keyId: 'report-verifier-test', publicKey: spki, active: true });
+  // cause S4-KMS: each local key id names its algorithm; cause S4-T2: the verifier keys are secp256k1, registered by
+  // address, and the verifier's chain table is each simulator's own signing domain (S4 amendment D10)
+  const kms = new LocalKms('test-seed', { 'report-verifier-test': 'secp256k1', 'second-verifier': 'secp256k1' });
+  const verifier = new ReportVerifier(zktls, kms, { keyId: 'report-verifier-test', chains: () => verifierChainsFromPorts([sol.sim, mon.sim]), allowLocal: true });
+  for (const h of [sol, mon]) await h.exec(h.admin, { kind: 'registerVerifierKey', key: await kms.signerAddress('report-verifier-test') });
   const ctx = createServiceContext(makeContext({ pool: t.pool, chains, log: silent, sessionSecret: SECRET, devMode: true }), { esign, identity, zktls, kms, verifier, reportVerifierUrl: 'http://verifier.test', proofVerifier: reportProofVerifier({ acceptMock: true, groth16 }), nonRevealChargeBps: 100 });
   const app = await buildApp(ctx, [...serviceRoutes, ...(opts.extraRoutes ?? [])]);
   await app.ready();

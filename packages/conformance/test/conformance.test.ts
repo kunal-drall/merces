@@ -8,7 +8,9 @@ import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes;
  *  - S4-REG: Stage 1's key registry (S4 WP5): `registerAttestor{attestor}` (the boolean `active` is gone; a revocation is
- *    `revokeAttestor`).
+ *    `revokeAttestor`);
+ *  - S4-T2: a tier-2 report carries the verifier key's Stage 1 REPORT signature `{signer, signature}` (65 bytes; S4 WP6;
+ *    was an ed25519 attestation v1 by key id).
  * S4 cause codes on new checks:
  *  - S4-CTX: the signing context (S4 D6, D7): a chain's signing domain is null or one a signer may sign for (local ids on
  *    a mock chain only, never a mainnet); a new series reads its Stage 1 series key and four nonces at 0.
@@ -194,7 +196,9 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     // termsCommitment, refused InvalidTerms; the command no longer carries one)
     const otherTerms = await e.buildReport({ seriesId, periodId: q2.id, unitsOutstanding: 500n, privateTerms: { ...e.privateTerms, termsSalt: e.privateTerms.termsSalt + 1n }, incomeYtdNow: USDC(75_000) });
     await expectChainError(exec(e, e.issuer, otherTerms.command), 'InvalidProof');
-    const forged = { ...good.command, attestation: { ...good.command.attestation!, signature: '0x' + '22'.repeat(64) } };
+    // cause S4-T2: a 65-byte signature that recovers to no verifier key (was a 64-byte ed25519 signature)
+    expect(good.command.attestation!.signer).toBe(e.verifierAddress);
+    const forged = { ...good.command, attestation: { ...good.command.attestation!, signature: '0x' + '22'.repeat(64) + '1b' } };
     await expectChainError(exec(e, e.issuer, forged), 'InvalidAttestation');
     const acc = await exec(e, e.issuer, good.command);
     const due = (acc.events[0]!.payload as { paymentDue: string }).paymentDue;

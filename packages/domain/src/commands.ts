@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { addressSchema, hash32Schema, pairSchema, periodIdSchema, seriesIdSchema, stablecoinSchema } from './ids.ts';
 import { moneySchema, unitsSchema, wadSchema } from './money.ts';
 import { seriesTermsSchema, tierSchema, fxBasisSchema } from './events.ts';
+import { attestationSchema, signerAddressSchema } from './signing.ts';
 
 /**
  * Canonical commands (Part D2). User commands are built into unsigned transactions for the user's wallet.
@@ -37,23 +38,6 @@ export const reportProofSchema = z.discriminatedUnion('system', [
 ]);
 export type ReportProof = z.infer<typeof reportProofSchema>;
 
-/**
- * Signed by the report verifier over `attestationMessage()`: Stage 1's report-attestation fields (series, period,
- * prior and income commitments, tier, liquidity event). The income source never goes onchain (B7).
- */
-export const verifierAttestationSchema = z.object({
-  keyId: z.string(),
-  seriesId: seriesIdSchema,
-  periodId: periodIdSchema,
-  priorIncomeCommitment: hash32Schema,
-  incomeCommitment: hash32Schema,
-  tier: tierSchema,
-  liquidityEvent: z.boolean(),
-  /** hex ed25519 signature over attestationMessage() */
-  signature: z.string(),
-});
-export type VerifierAttestation = z.infer<typeof verifierAttestationSchema>;
-
 /** An attestor-signed fallback rate (C9) — the attestor is a co-signer of the report transaction. */
 export const attestorRateSchema = z.object({ attestor: addressSchema, rateWad: wadSchema, pair: pairSchema });
 
@@ -82,8 +66,17 @@ export const userCommands = {
     pair: pairSchema.nullable(),
     attestorRate: attestorRateSchema.nullable(),
     proof: reportProofSchema,
-    attestation: verifierAttestationSchema.nullable(),
-    /** tier 3: attestor co-signs instead of the verifier attesting */
+    /**
+     * Tier 2: the report verifier key's Stage 1 signature over `MERCES_REPORT_V1` (domain, series key, period, prior and
+     * income commitments, tier 2, liquidity flag; `reportDigest`), as the chains take it (Solana `attestation_sig` and
+     * `attestation_addr`, income.rs:396-424; EVM `attestationSignature`, MercesIncome.sol:207-228): `signer` must be the
+     * address the signature recovers to and a verifier key usable for the period (active, or revoked after the period
+     * ended and within the 45-day grace), else InvalidVerifierSignature. The fields are the report's own, never a
+     * second copy. Tiers 1 and 4 ignore it, as both chains do; tier 3 is still the attestor's co-signature (`attestor`)
+     * until S4 WP9. Builders send null outside tier 2.
+     */
+    attestation: attestationSchema.nullable(),
+    /** tier 3: attestor co-signs instead of the verifier attesting (until S4 WP9 moves it to the REPORT signature) */
     attestor: addressSchema.nullable(),
     liquidityEvent: z.boolean(),
   }),
@@ -257,7 +250,29 @@ export const adminCommands = {
    * undoes the registration. Each step keeps its chain's rules (the EVM refuses a `to` that is already active).
    */
   rotateAttestor: z.object({ kind: z.literal('rotateAttestor'), from: addressSchema, to: addressSchema }),
-  registerVerifierKey: z.object({ kind: z.literal('registerVerifierKey'), keyId: z.string(), publicKey: z.string(), active: z.boolean() }),
+  /**
+   * Stage 1 `register_verifier_key` / `registerVerifierKey` (merces_registry lib.rs:262-279; MercesRegistry.sol:302-304,
+   * :315-329; SIM:541-542): the admin registers (or re-activates) a report verifier key, a secp256k1 key's 20-byte
+   * address (S4 D10); `revokedAt` returns to 0. The attestor key's rules, each personality as its chain (S4 D9): a zero
+   * address is `ZeroAttestorAddress` on Solana (its verifier path reuses the attestor's name) and `ZeroAddress` on the
+   * EVM; an active key re-emits `VerifierKeyRegistered` on Solana and reverts `KeyAlreadyActive` on the EVM. Emits
+   * `VerifierKeyRegistered`.
+   */
+  registerVerifierKey: z.object({ kind: z.literal('registerVerifierKey'), key: signerAddressSchema }),
+  /**
+   * Stage 1 `revoke_verifier_key` / `revokeVerifierKey` (lib.rs:281-302; MercesRegistry.sol:306-308, :331-345;
+   * SIM:544-545): forward-only (SPEC §1.4). A tier-2 report attestation of a period that ended at or before `revokedAt`
+   * stays valid until `revokedAt + KEY_GRACE_SECONDS`. Refused for a key that is not active (`KeyAlreadyRevoked` or
+   * `AccountNotInitialized` on Solana, `KeyNotRegistered` on the EVM) and for the last active verifier key
+   * (`LastKeyOfKind` / `LastActiveKey`; Stage 1's reference has no such rule, DIV-S1I-2). Emits `VerifierKeyRevoked`.
+   */
+  revokeVerifierKey: z.object({ kind: z.literal('revokeVerifierKey'), key: signerAddressSchema }),
+  /**
+   * Replace one verifier key with another in one transaction: register `to`, then revoke `from` (EVM
+   * `rotateVerifierKey`, MercesRegistry.sol:310-313; Solana sends the two instructions in one transaction, S5). Either
+   * both apply or neither.
+   */
+  rotateVerifierKey: z.object({ kind: z.literal('rotateVerifierKey'), from: signerAddressSchema, to: signerAddressSchema }),
   pauseNewRaises: z.object({ kind: z.literal('pauseNewRaises'), paused: z.boolean() }),
   setFeeCollector: z.object({ kind: z.literal('setFeeCollector'), feeCollector: addressSchema }),
   /** tier-1 router registration: which router address may post SplitReceipts for a series */

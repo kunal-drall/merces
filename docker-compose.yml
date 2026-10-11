@@ -36,8 +36,10 @@ services:
     environment:
       REPORT_VERIFIER_PORT: 3100
       MERCES_KMS_PROVIDER: local
-      # development only: accept the published dev seed (the verifier refuses it otherwise)
+      # development only: accept the published dev seed and the local chain ids (the verifier refuses both otherwise)
       MERCES_VERIFIER_DEV: 'true'
+      # its own chain table: the dev simulators' signing domains (as .env.example; a test keeps them current)
+      MERCES_VERIFIER_CHAINS: '[{"chain":"solana","family":"solana","chainKind":1,"chainId":"104","registry":"62zg7zUPCY4at8HpJphApKhdNqREGFEWhvmGmLAZraWS"},{"chain":"monad","family":"evm","chainKind":2,"chainId":"31337","registry":"0xac2f2c7f7e0c0f6d49b1f85778169a2b667b5016"}]'
     ports: ['3100:3100']
 
 volumes:

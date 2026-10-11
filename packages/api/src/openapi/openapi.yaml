@@ -395,19 +395,38 @@ components:
           additionalProperties: false
           properties: { system: { type: string, const: mock }, proof: { type: string }, publicInputs: { $ref: '#/components/schemas/ReportPublicInputs' } }
       discriminator: { propertyName: system }
-    VerifierAttestation:
+    Attestation:
       type: object
-      description: 'The report verifier''s ed25519 signature over attestation v1: "merces/attestation/v1\n" + canonical JSON {incomeCommitment, liquidityEvent, periodId, priorIncomeCommitment, seriesId, tier}. Names no income source.'
-      required: [keyId, seriesId, periodId, priorIncomeCommitment, incomeCommitment, tier, liquidityEvent, signature]
+      description: "One key's Stage 1 signature over one MERCES_*_V1 message, as a command carries it (S4: nobody co-signs). `signer` is the key's 20-byte address; `signature` is 65 bytes r ‖ s ‖ v (low s, v 27 or 28) over the raw keccak256 digest of the message (no EIP-191 prefix). The digest is never supplied: whoever checks it rebuilds it from the chain's signing domain, the series key and the command's own fields."
+      required: [signer, signature]
+      additionalProperties: false
       properties:
-        keyId: { type: string }
+        signer: { type: string, pattern: '^0x[0-9a-f]{40}$' }
+        signature: { type: string, pattern: '^0x[0-9a-f]{130}$' }
+    ReportAttestationRecord:
+      type: object
+      description: "What the report verifier's POST /attest returns for a tier-2 report (served by the isolated report verifier, not this API; S4 WP6): its secp256k1 key's Stage 1 signature over MERCES_REPORT_V1 (the series' chain's signing domain, the series key, the period, the prior and income commitments, tier 2, the liquidity flag), the fields it signed and the digest. The device sends its signer and signature as the report's `attestation` and keeps the whole record as the next quarter's prior attestation. Names no income source and carries no figure."
+      required: [signer, signature, digest, chain, seriesId, periodId, priorIncomeCommitment, incomeCommitment, tier, liquidityEvent]
+      additionalProperties: false
+      properties:
+        signer: { type: string, pattern: '^0x[0-9a-f]{40}$' }
+        signature: { type: string, pattern: '^0x[0-9a-f]{130}$' }
+        digest: { $ref: '#/components/schemas/Hash32' }
+        chain: { type: string }
         seriesId: { type: string }
         periodId: { type: string, pattern: '^\d{4}Q[1-4]$' }
         priorIncomeCommitment: { $ref: '#/components/schemas/Hash32' }
         incomeCommitment: { $ref: '#/components/schemas/Hash32' }
-        tier: { type: integer, enum: [1, 2, 3, 4] }
+        tier: { type: integer, const: 2 }
         liquidityEvent: { type: boolean }
-        signature: { type: string }
+    ReportVerifierInfo:
+      type: object
+      description: "The report verifier a device talks to (S4 WP6): its URL, the 20-byte address of its secp256k1 key (the address each chain registers as a verifier key; GET /chains and the chains' registries are public) and the chains it signs for, each with the signing domain it holds (the device can compare it with GET /chains). Public data."
+      required: [url, address, chains]
+      properties:
+        url: { type: string }
+        address: { type: string, pattern: '^0x[0-9a-f]{40}$' }
+        chains: { type: array, items: { type: object, required: [chain, domain], properties: { chain: { type: string }, domain: { $ref: '#/components/schemas/SigningDomain' } } } }
   responses:
     Unauthorized: { description: No or invalid session, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Forbidden: { description: Session lacks the required tier, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -941,7 +960,7 @@ paths:
       operationId: getReportVerifier
       x-access: public
       tags: [reporting]
-      responses: { '200': { description: Where devices send zkTLS proofs, and the verifier's public key, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: "Where devices send zkTLS proofs, the verifier key's address and the chains it signs for", content: { application/json: { schema: { $ref: '#/components/schemas/ReportVerifierInfo' } } } } }
   /series/{seriesId}/reporting/schedule:
     get:
       operationId: getReportingSchedule
@@ -999,7 +1018,7 @@ paths:
       tags: [reporting]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: Idempotency-Key, in: header, schema: { type: string } }]
-      description: 'The device''s assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, on a curve series a census taken after the period ended (the proof is over it), the prior chain, the six public inputs against the series'' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (v1, with the prior and the liquidity flag), or for tier 3 the chosen attestor''s signed case.'
+      description: 'The device''s assembled report: commitments, the payment and the proof (never an income figure, a salt or an opening; unknown fields are refused). The API checks what the chain will check: the next expected period, no unpaid due, on a curve series a census taken after the period ended (the proof is over it), the prior chain, the six public inputs against the series'' live terms commitment, units and FX basis, the proof (Stage 1 Groth16), the tier-2 verifier attestation (Stage 1''s REPORT signature rebuilt from the chain''s signing domain and the series key, recovered to its signer, a verifier key the chain holds usable for the period: active, or revoked after the period ended within the 45-day grace; S4 WP6), or for tier 3 the chosen attestor''s signed case.'
       requestBody:
         required: true
         content:
@@ -1017,11 +1036,11 @@ paths:
                 priorIncomeCommitment: { $ref: '#/components/schemas/Hash32' }
                 incomeCommitment: { $ref: '#/components/schemas/Hash32' }
                 proof: { $ref: '#/components/schemas/ReportProof' }
-                attestation: { oneOf: [{ $ref: '#/components/schemas/VerifierAttestation' }, { type: 'null' }] }
+                attestation: { oneOf: [{ $ref: '#/components/schemas/Attestation' }, { type: 'null' }], description: "tier 2: the signer and signature of the report verifier's record (ReportAttestationRecord); null otherwise" }
                 attestorRate: { type: [object, 'null'], properties: { attestor: { type: string }, rateWad: { $ref: '#/components/schemas/Wad' } } }
                 attestor: { type: [string, 'null'], description: tier 3 co-signer }
                 liquidityEvent: { type: boolean }
-      responses: { '201': { description: Report verified offchain and stored (commitments, amounts, proof), with the unsigned submitReport transaction, content: { application/json: { schema: { type: object } } } }, '400': { description: Malformed or unknown fields }, '409': { description: 'Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod), a previous due unpaid (detail.stage1 PaymentOutstanding); on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step) or a proof over another count than the census (detail.reason census-changed: prove again)' }, '422': { description: Proof, attestation, prior, public inputs or FX basis rejected } }
+      responses: { '201': { description: Report verified offchain and stored (commitments, amounts, proof), with the unsigned submitReport transaction, content: { application/json: { schema: { type: object } } } }, '400': { description: Malformed or unknown fields }, '409': { description: 'Period not ended, already reported, not the next expected period (detail.stage1 WrongPeriod), a previous due unpaid (detail.stage1 PaymentOutstanding); on a curve series a census older than the period end (detail.stage1 CurveUnitsNotSynced, detail.next the sync step) or a proof over another count than the census (detail.reason census-changed: prove again); a tier-2 report on a chain whose signing domain is not known yet (detail.reason signing-domain-unknown)' }, '422': { description: 'Proof, attestation (detail.stage1 InvalidVerifierSignature), prior, public inputs or FX basis rejected' } }
     get:
       operationId: listReports
       x-access: holder-or-issuer
@@ -1052,7 +1071,7 @@ paths:
       tags: [reporting]
       security: [{ session: [] }]
       parameters: [{ name: reportId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: Unsigned submitReport transaction (attestor co-signs for tier 3 or a fallback rate), content: { application/json: { schema: { type: object } } } }, '409': { description: 'On a curve series the census is older than the period end (detail.stage1 CurveUnitsNotSynced: sync first) or changed since the report was assembled (detail.reason census-changed: prove again and re-assemble); the chain would refuse the transaction' } }
+      responses: { '200': { description: Unsigned submitReport transaction (attestor co-signs for tier 3 or a fallback rate), content: { application/json: { schema: { type: object } } } }, '409': { description: 'On a curve series the census is older than the period end (detail.stage1 CurveUnitsNotSynced: sync first) or changed since the report was assembled (detail.reason census-changed: prove again and re-assemble); the chain would refuse the transaction; a report assembled before S4 WP6 with the retired ed25519 attestation (detail.reason attestation-superseded: assemble it again)' } }
   /reports/{reportId}/submitted:
     post:
       operationId: markReportSubmitted

@@ -46,7 +46,11 @@ commit duration and the reveal end after its reveal duration; 409 with `detail.s
 NotAllowlisted or NewRaisesPaused) or cancel it while it has no bid (`POST /series/{id}/raise/build-cancel`, at any time,
 also after the reveal end; 409 RaiseNotOpen or BidsExist) → draw treasury (`POST /series/{id}/treasury/build-draw`) → each quarter: `GET
 /series/{id}/reporting/schedule`, `POST …/reporting/zktls-session`, the device proves and gets an attestation from the
-report verifier (`GET /reporting/verifier`), `POST /series/{id}/reports` (returns the `submitReport` tx), `POST
+report verifier (`GET /reporting/verifier`: its URL, the 20-byte address of its secp256k1 key and the chains it signs
+for with each signing domain; since S4 WP6 the attestation is Stage 1's REPORT signature, and the report body carries
+its `{signer, signature}` as `attestation`, which the API recovers over the chain's domain and the series key and checks
+against the chain's verifier key record: 422 `detail.stage1` InvalidVerifierSignature, 409 `signing-domain-unknown`
+on a chain without a domain yet), `POST /series/{id}/reports` (returns the `submitReport` tx), `POST
 /reports/{id}/build-payin` (the exact remaining due: a late period accrues per day, so a pay-in built on one day of
 lateness is refused onchain after the next day boundary; rebuild it). On a curve series a regular report proves over the
 curve's census (S3 WP9, A-CURVE-5): assembling (and opening or signing a tier-3 case) is 409 `detail.stage1`
@@ -218,7 +222,11 @@ attestations, extinguishment transactions (two signers).
 registry (`POST /admin/attestors`: `active: true` builds Stage 1's `registerAttestor`, `active: false` its forward-only
 `revokeAttestor`, for the multisig; the chain's registry is checked first and a key already active, a revoke of a key
 that is not active, or of the chain's last active attestor key, answers 409 with `detail.reason` `key-already-active`,
-`key-not-active` or `last-active-key`, nothing built), verifier-key registration (multisig transactions), accounting and reconciliation (the fee
+`key-not-active` or `last-active-key`, nothing built), the report verifier's keys by 20-byte address (S4 WP6: `POST
+/admin/verifier-keys` `{chain, address}` builds `registerVerifierKey`, `POST /admin/verifier-keys/revoke` the forward-only
+`revokeVerifierKey`, `POST /admin/verifier-keys/rotate` `{chain, from, to}` the one-transaction `rotateVerifierKey`, with
+the same 409 reasons; `GET /admin/verifier-keys` reads each chain's key records beside the verifier's own address),
+accounting and reconciliation (the fee
 ledger's kinds: `auction`, `payout`, `curveTrading`, and `nonReveal` for the non-reveal charge, paid by the bidder),
 notification backlog, keeper runs, audit log.
 

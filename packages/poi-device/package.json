@@ -11,5 +11,6 @@
     "@merces/math": "workspace:*",
     "@merces/ports": "workspace:*",
     "@merces/report-verifier": "workspace:*"
-  }
+  },
+  "devDependencies": { "@merces/simulator": "workspace:*" }
 }

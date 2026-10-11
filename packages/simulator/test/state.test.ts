@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { orderCommitment } from '@merces/domain';
 import { WAD, ZERO_INCOME_COMMITMENT, toPid, type LedgerExpect } from '@merces/math';
-import { SimHarness, SimStateVersionError, balanceUnits, defaultTerms, deserialiseState, pendingRefundOf, serialiseState } from '../src/index.ts';
+import { SimHarness, SimSigner, SimStateVersionError, balanceUnits, defaultTerms, deserialiseState, pendingRefundOf, serialiseState } from '../src/index.ts';
 import { ZERO_INCOME_COMMITMENT_HEX, derivedStatus, ledgerClock } from '../src/engine/ledger.ts';
 import { GENESIS, USDC } from './helpers.ts';
 import { seedFinal, seedHolder, seedLedger, seedPause, seedTail, seedVault, seriesOf } from './kit.ts';
@@ -14,7 +14,8 @@ import { seedFinal, seedHolder, seedLedger, seedPause, seedTail, seedVault, seri
  *  - S4-CTX: the series read carries the series key and Stage 1's four signing nonces as u64 decimal strings (S4 D7;
  *    the pause nonce was `pauses.nonce`, a number);
  *  - S4-V5: simulator state version 5 (S4 WP5: each attestor key is `{active, revokedAt}`, Stage 1's key record; was a
- *    boolean); versions 1 to 4 are refused, never upgraded.
+ *    boolean); versions 1 to 4 are refused, never upgraded;
+ *  - S4-T2: the report verifier's keys are the same records by 20-byte address (S4 WP6; were ed25519 keys by key id).
  */
 
 const VECTOR_01 = new URL('../../../stage1/packages/vectors/01_happy_path.json', import.meta.url);
@@ -91,6 +92,17 @@ describe('simulator state version 5', () => { // cause S4-V5 (was version 4)
     const back = deserialiseState(serialiseState(h.sim.state));
     expect(back.attestors).toEqual(h.sim.state.attestors);
     expect([...back.attestors.entries()]).toEqual([[a1!.address, { active: true, revokedAt: null }], [a2!.address, { active: false, revokedAt: at }]]);
+  });
+
+  it('round-trips the verifier keys: 20-byte addresses with Stage 1\'s key record (S4-T2)', async () => {
+    const h = await SimHarness.create('monad', { genesis: GENESIS });
+    const v2 = SimSigner.verifier('verifier-2').address;
+    await h.exec(h.admin, { kind: 'registerVerifierKey', key: v2 });
+    await h.exec(h.admin, { kind: 'revokeVerifierKey', key: h.verifier.address });
+    const at = await h.sim.now();
+    const back = deserialiseState(serialiseState(h.sim.state));
+    expect([...back.verifierKeys.entries()]).toEqual([[h.verifier.address, { active: false, revokedAt: at }], [v2, { active: true, revokedAt: null }]]);
+    expect(h.verifier.address).toMatch(/^0x[0-9a-f]{40}$/);
   });
 
   it('a new series has its scale (1, or 10^6 on a curve), no stake, no tender and no census; a new holder has no stake (S3-V4)', async () => {

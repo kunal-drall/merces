@@ -11,10 +11,13 @@ type SubmitReport = Extract<UserCommand, { kind: 'submitReport' }>;
  *
  * The report carries Stage 1's own Groth16 proof and public signals (verified for real by the chain's
  * `reportProofVerifier`, the runner's cached Stage 1 verifier); the canonical command drops `termsCommitment` (the
- * chain proves against the live one) and takes the prior and income commitments as they are. The source binding is the
- * shim: a tier-2 report's `attestation` names a vector key, and the runner signs attestation v1 with the ed25519 key
- * derived from it (keys.ts); a tier-3 report's attestor co-signs the transaction. A Stage 1 FX fallback on a series
- * without an FX pair (the only kind S1 creates) becomes an attestor rate the chain refuses, as Stage 1 does.
+ * chain proves against the live one) and takes the prior and income commitments as they are. A tier-2 report's
+ * `attestation` names a vector key, which signs Stage 1's REPORT message (tier 2) over the chain's signing domain
+ * (`ChainInfo.signing`) and the series key (`SeriesState.seriesKey`), as Stage 1's harnesses do (S4 WP6; keys.ts): the
+ * chain recovers it and checks the key is a usable verifier key (04#68 names `attestor1`: InvalidVerifierSignature on
+ * its own). What remains of the shim: a tier-3 report's attestor co-signs the transaction (S4 WP9), and the runner
+ * derives `fxBasis` and `pair` (a Stage 1 FX fallback on a series without an FX pair, the only kind the runner creates,
+ * becomes an attestor rate the chain refuses, as Stage 1 does; FX is S5).
  *
  * The vector's `witness` (TEST ONLY income openings) was deleted at load and is never read here.
  */
@@ -43,7 +46,13 @@ export const reportOps: TranslatorTable = {
         if (!coSigners.includes(w)) coSigners.push(w);
       }
       const liquidityEvent = c.liquidityEvent === true;
-      const attestation = tier === 2 && c.attestation ? ctx.keyring.ed25519(c.attestation).attest({ seriesId: b.seriesId, periodId, priorIncomeCommitment, incomeCommitment, tier, liquidityEvent }) : null;
+      let attestation: SubmitReport['attestation'] = null;
+      if (tier === 2 && c.attestation) {
+        // the named vector key signs Stage 1's REPORT message over the chain's domain and the series key (S4 WP6)
+        const [info, series] = await Promise.all([ctx.chain.info(), ctx.chain.getSeries(b.seriesId)]);
+        if (!info.signing || !series) throw new RunnerError(`submit_report ${c.series}: the chain has no signing context`);
+        attestation = await ctx.keyring.signer(c.attestation).attest('REPORT', info.signing, series.seriesKey, { periodId, priorIncomeCommitment, incomeCommitment, tier: 2, liquidityEvent });
+      }
       const cmd: SubmitReport = {
         kind: 'submitReport',
         seriesId: b.seriesId,

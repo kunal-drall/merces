@@ -20,9 +20,10 @@ there), and `submit(command, role)` for the backend's two low-privilege roles. T
 
 ## The canonical model
 
-`@merces/domain` defines the vocabulary once: 55 events, 51 commands (schema 0.4.0; S4 WP5 added Stage 1's `revokeAttestor`, `rotateAttestor` and `AttestorRevoked`), the state shapes, the commitments (Stage 1's
-Poseidon terms and income commitments; since S4 its keccak bid and order commitments), the verifier attestation
-message (Stage 1's report field set) and Stage 1's six report public inputs. The sealed raise uses Stage 1's names for
+`@merces/domain` defines the vocabulary once: 56 events, 53 commands (schema 0.4.0; S4 WP5 added Stage 1's `revokeAttestor`, `rotateAttestor` and `AttestorRevoked`, S4 WP6 `revokeVerifierKey`, `rotateVerifierKey` and `VerifierKeyRevoked`), the state shapes, the commitments (Stage 1's
+Poseidon terms and income commitments; since S4 its keccak bid and order commitments), Stage 1's signed messages
+(`MERCES_*_V1`, signing.ts; the verifier attestation is its REPORT message since S4 WP6) and Stage 1's six report public
+inputs. The sealed raise uses Stage 1's names for
 its multi-step settlement (S2): the permissionless commands `beginSettlement`, `tallyBids`, `finalizeSettlement`,
 `processBid`, `deliverBid` and `registerHolder`, which the keepers submit and any wallet may build, and their events.
 One planner plans them for every caller (`nextSettlementStep` and the driver `runSettlement`, `settlement.ts`): the
@@ -96,7 +97,7 @@ Nothing in the backend signs for a user. Services return `UnsignedTx` objects (`
 | attestor | attestor queue, hardship review (end-to-end encrypted), tier-3 cases and annual true-up, fallback FX signing, two-attestor extinguishment |
 | accounting | fee ledger, per-series statements, reconciliation of indexed totals against onchain balances, CSV export |
 | notifications | outbox dispatcher → inbox rows + email channel (mock), preferences; statuses only |
-| admin | overview, flags, audit log, attestor/verifier-key registration (multisig transactions), tier-4 audit sampling scaffolding |
+| admin | overview, flags, audit log, attestor and verifier-key registration, revocation and rotation (multisig transactions), tier-4 audit sampling scaffolding |
 
 Keepers (`@merces/keepers`) run idempotent jobs on intervals and record every run. The rate keeper takes one Pyth
 snapshot per UTC day per pair per chain with a Chainlink cross-check where a feed exists. The curve jobs (S3) complete
@@ -106,8 +107,9 @@ and remind linked wallets holding unstaked units to stake and, after a redemptio
 ## The report verifier
 
 A separate process with one job: verify a zkTLS proof and the prior quarter's opening, recompute the income
-commitments, sign the attestation (series, period, prior and income commitments, tier, liquidity flag). It has no
-database, logs no payloads, and keeps its key behind the KMS port. Devices call it directly; the API never sees a zkTLS
+commitments, sign the attestation: Stage 1's `MERCES_REPORT_V1` (the series' chain's signing domain from its own chain
+table, the series key, period, prior and income commitments, tier 2, liquidity flag), a digest it builds itself. It has
+no database, logs no payloads, and keeps its secp256k1 key behind the KMS port, pinned by address (S4 WP6, A-SIG-5). Devices call it directly; the API never sees a zkTLS
 proof or a salt. `@merces/poi-device` is the device-side counterpart: it keeps the income chain (each quarter's
 opening, salts derived from a device secret), computes the payment with Stage 1's formula and proves Stage 1's
 ProofOfIncome circuit (Groth16) on the device; only commitments, the payment and the proof leave it.

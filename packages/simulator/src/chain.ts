@@ -16,7 +16,7 @@ import { toAuctionState, toBid } from './reads/auction.ts';
 import { toCurveState, toCurveSwapQuote } from './reads/curve.ts';
 import { curveOf, dammTrade, migrateCurve, releaseLockedUnits } from './engine/curve.ts';
 import { balKey } from './engine/core.ts';
-import { attestorKeyState } from './engine/keys.ts';
+import { getSignerKey, listSignerKeys } from './engine/keys.ts';
 import { toQuarterRate, toRateAccumulator } from './reads/fx.ts';
 import { listPeriodStates, toPeriodState } from './reads/periods.ts';
 import { getPositionState, listPositionStates } from './reads/positions.ts';
@@ -293,16 +293,10 @@ export class SimulatorChain implements ChainPort {
     return this.state.allowlist.has(wallet);
   }
   async getSignerKey(kind: SignerKind, address: string): Promise<SignerKeyState | null> {
-    if (kind !== 'attestor') throw new ChainError('NotImplemented', 'verifier keys by address arrive with S4 WP6 (listVerifierKeys until then)');
-    const k = this.state.attestors.get(address);
-    return k ? attestorKeyState(address, k) : null;
+    return getSignerKey(this.state, kind, address);
   }
   async listSignerKeys(kind: SignerKind): Promise<SignerKeyState[]> {
-    if (kind !== 'attestor') throw new ChainError('NotImplemented', 'verifier keys by address arrive with S4 WP6 (listVerifierKeys until then)');
-    return [...this.state.attestors.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([a, k]) => attestorKeyState(a, k));
-  }
-  async listVerifierKeys(): Promise<{ keyId: string; publicKey: string }[]> {
-    return [...this.state.verifierKeys.entries()].filter(([, v]) => v.active).map(([keyId, v]) => ({ keyId, publicKey: v.publicKey }));
+    return listSignerKeys(this.state, kind);
   }
   async getTransferWindow(seriesId: string): Promise<TransferWindowState | null> {
     const w = this.state.series.get(seriesId)?.transferWindows.at(-1);

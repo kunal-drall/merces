@@ -385,6 +385,45 @@ export function signature65Hex(sig: Signature65): string {
   return hex(sig.bytes);
 }
 
+// ---------------------------------------------------------------- the report verifier's record (tier 2)
+
+/**
+ * What the report verifier returns for a tier-2 report (S4 WP6, D10), and what the issuer's device keeps as the next
+ * quarter's `priorAttestation`: its Stage 1 signature over `MERCES_REPORT_V1`, the fields it signed (tier 2), the chain
+ * whose signing domain it signed under and the digest. Only `{signer, signature}` (`attestationOf`) goes into
+ * `submitReport.attestation`: the chain, the API and the verifier itself recompute the digest from the domain and the
+ * series key they hold, never from this record. Public data: commitments and flags, no income figure, no source.
+ */
+export interface ReportAttestationRecord extends Attestation {
+  /** the REPORT digest signed (`reportDigest`), for the holder's information */
+  digest: string;
+  /** the chain whose signing domain the verifier signed under (the series id's chain) */
+  chain: ChainKey;
+  seriesId: string;
+  periodId: string;
+  priorIncomeCommitment: string;
+  incomeCommitment: string;
+  tier: 2;
+  liquidityEvent: boolean;
+}
+export const reportAttestationRecordSchema = z.object({
+  signer: signerAddressSchema,
+  signature: signature65Schema,
+  digest: hash32Schema,
+  chain: z.string().regex(/^[a-z0-9-]+$/),
+  seriesId: seriesIdSchema,
+  periodId: periodIdSchema,
+  priorIncomeCommitment: hash32Schema,
+  incomeCommitment: hash32Schema,
+  tier: z.literal(2),
+  liquidityEvent: z.boolean(),
+}).strict();
+
+/** The command form of an attestation record: `{signer, signature}`, what `submitReport.attestation` carries. */
+export function attestationOf(r: Attestation): Attestation {
+  return { signer: r.signer, signature: r.signature };
+}
+
 // ---------------------------------------------------------------- revocation grace
 
 /**

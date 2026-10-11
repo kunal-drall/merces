@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
 import {
-  INDEXING_RULE_CODE, ZERO_INCOME_COMMITMENT, currencyCodeOf, hex32ToField, incomeCommitment, mockProve, reportPublicInputs, termsCommitment,
-  type IndexingRule, type ReportProof, type UserCommand, type VerifierAttestation,
+  INDEXING_RULE_CODE, ZERO_INCOME_COMMITMENT, attestationOf, currencyCodeOf, hex32ToField, incomeCommitment, mockProve, reportPublicInputs, termsCommitment,
+  type Attestation, type IndexingRule, type ReportAttestationRecord, type ReportProof, type UserCommand,
 } from '@merces/domain';
 import { BN254_FR, U64_MAX, WAD, fromPid, paymentStable, quarterIndex, ratePerUnit, toPid } from '@merces/math';
 import type { IncomeSourceKind, ZkTlsProof } from '@merces/ports';
@@ -49,8 +49,11 @@ export interface IncomeChainEntry extends IncomeOpening {
   seriesId: string;
   periodId: string;
   incomeCommitment: string;
-  /** the report verifier's attestation of this quarter (tier 2): it authenticates the entry as the next quarter's prior */
-  attestation: VerifierAttestation | null;
+  /**
+   * The report verifier's record of this quarter (tier 2; S4 WP6): its Stage 1 REPORT signature with the fields and the
+   * chain it signed for. It authenticates the entry as the next quarter's prior (`priorAttestation`). Public data.
+   */
+  attestation: ReportAttestationRecord | null;
 }
 
 /** Device-local storage of the income chain (a real device persists it locally, never to the API). */
@@ -167,7 +170,8 @@ export interface AssembledReport {
   priorIncomeCommitment: string;
   incomeCommitment: string;
   proof: ReportProof;
-  attestation: VerifierAttestation | null;
+  /** tier 2: the verifier key's signature as `submitReport.attestation` carries it (`{signer, signature}`); else null */
+  attestation: Attestation | null;
   liquidityEvent: boolean;
 }
 
@@ -230,7 +234,7 @@ export async function assembleOnDevice(input: DeviceReportInput, verifier: Repor
   }
 
   const liquidityEvent = !!input.liquidityEvent;
-  let attestation: VerifierAttestation | null = null;
+  let attestation: ReportAttestationRecord | null = null;
   if (input.tier === 2) {
     if (!verifier || !input.zktlsProof) throw new DeviceError('needs-zktls');
     let r: Awaited<ReturnType<ReportVerifierPort['attest']>>;
@@ -244,13 +248,16 @@ export async function assembleOnDevice(input: DeviceReportInput, verifier: Repor
       throw new DeviceError('verifier-unavailable');
     }
     if (!r.ok) throw new DeviceError('verifier-refused', r.code);
-    attestation = r.attestation;
+    // the record must be for this report: the verifier signed these commitments, this period and series, tier 2
+    const a = r.attestation;
+    if (a.seriesId !== input.seriesId || a.periodId !== input.periodId || a.priorIncomeCommitment !== priorCommitment || a.incomeCommitment !== ic || a.tier !== 2 || a.liquidityEvent !== liquidityEvent) throw new DeviceError('verifier-refused', 'mismatch');
+    attestation = a;
   }
   // tier 1 carries no attestation (Stage 1 binds tier 1 to the router's checkpoints); tier 3 is co-signed by the attestor
   const entry: IncomeChainEntry = { seriesId: input.seriesId, periodId: input.periodId, incomeYtd, incomeSalt, incomeCommitment: ic, attestation };
   return {
     entry,
-    assembled: { seriesId: input.seriesId, periodId: input.periodId, tier: input.tier, source: input.source, paymentStable: payment.toString(), priorIncomeCommitment: priorCommitment, incomeCommitment: ic, proof, attestation, liquidityEvent },
+    assembled: { seriesId: input.seriesId, periodId: input.periodId, tier: input.tier, source: input.source, paymentStable: payment.toString(), priorIncomeCommitment: priorCommitment, incomeCommitment: ic, proof, attestation: attestation ? attestationOf(attestation) : null, liquidityEvent },
     tier3Opening: input.tier === 3
       ? { version: 'merces/tier3-opening/v1', seriesId: input.seriesId, periodId: input.periodId, incomeYtd: incomeYtd.toString(), incomeSalt: incomeSalt.toString(), priorIncomeYtd: priorYtd.toString(), priorSalt: priorSalt.toString(), priorIncomeCommitment: priorCommitment, incomeCommitment: ic }
       : null,

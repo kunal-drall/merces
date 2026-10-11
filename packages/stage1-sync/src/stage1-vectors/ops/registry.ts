@@ -13,7 +13,10 @@ import { direct, eventOf, shim, type OpContext, type TranslatorTable } from './t
  *   address (direct since S4 WP5; was SH-REG-2): Stage 1's registry with forward-only revocation, the 45-day grace on
  *   report and FX signatures and the last-key rule, each personality with its chain's names. A name without a vector
  *   key is a runner error.
- * - `register_verifier_key` (SH-REG-3): admin `registerVerifierKey` with the ed25519 key derived from the vector key.
+ * - `register_verifier_key` / `revoke_verifier_key`: admin `registerVerifierKey` / `revokeVerifierKey` of the vector key's
+ *   own 20-byte address (direct since S4 WP6; was SH-REG-3, an ed25519 key derived from the vector key): the report
+ *   verifier's keys follow the attestor keys' rules (forward-only revocation, the grace on tier-2 reports, the last-key
+ *   rule).
  * - `create_series` (SH-REG-4): `createSeries` in USDC with USD income, sealed; due, grace and notice days from
  *   `config.parameters`; the raise durations and the non-reveal bps are canonical terms (S2), so the engine bounds them
  *   as Stage 1 does (SIM:759-777); the window durations and the window fee are held by the runner (S5; their Stage 1
@@ -56,11 +59,19 @@ export const registryOps: TranslatorTable = {
     });
   },
 
-  register_verifier_key: (ctx, c) =>
-    shim('SH-REG-3', async () => {
-      const k = ctx.keyring.ed25519(c.key);
-      await ctx.send(ctx.actors.admin, { kind: 'registerVerifierKey', keyId: k.keyId, publicKey: k.publicKeyHex, active: true });
-    }),
+  register_verifier_key: (ctx, c) => {
+    const key = keyAddressOf(ctx, c.key);
+    return direct(async () => {
+      await ctx.send(ctx.actors.admin, { kind: 'registerVerifierKey', key });
+    });
+  },
+
+  revoke_verifier_key: (ctx, c) => {
+    const key = keyAddressOf(ctx, c.key);
+    return direct(async () => {
+      await ctx.send(ctx.actors.admin, { kind: 'revokeVerifierKey', key });
+    });
+  },
 
   create_series: (ctx, c) => {
     // FX income and tier-1 routers are S5 and the tier-1 milestone: the canonical terms cannot carry them yet

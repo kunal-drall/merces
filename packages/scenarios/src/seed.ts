@@ -3,7 +3,7 @@ import { PILOT_COHORT, stripeFixtureFor, stripeGrossUntil, type SyntheticIssuer 
 import { WAD, parsePeriod, periodsBetween, ratePerUnit, requiredEscrow, wadFromDecimal } from '@merces/math';
 import { MemoryIncomeChain, assembleOnDevice, submitReportCommand } from '@merces/poi-device';
 import { LocalKms, MockZkTls, type IncomeSourceKind } from '@merces/ports';
-import { ReportVerifier } from '@merces/report-verifier';
+import { ReportVerifier, verifierChainsFromPorts } from '@merces/report-verifier';
 import { SimHarness, SimWallet, SimulatorChain, defaultTerms, harnessFieldSalt, type PrivateTerms } from '@merces/simulator';
 
 export interface SeededIssuer {
@@ -107,11 +107,12 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
   // an in-process report verifier whose key both simulators register)
   const quarters = Math.min(4, Math.max(0, opts.quarters ?? 0));
   const zktls = new MockZkTls();
-  const verifierKms = new LocalKms('seed-report-verifier', { [SEED_VERIFIER_KEY_ID]: 'ed25519' });
-  const verifier = new ReportVerifier(zktls, verifierKms, SEED_VERIFIER_KEY_ID);
+  // the seed verifier's secp256k1 key (S4 WP6), registered by address; its chain table is each simulator's signing domain
+  const verifierKms = new LocalKms('seed-report-verifier', { [SEED_VERIFIER_KEY_ID]: 'secp256k1' });
+  const verifier = new ReportVerifier(zktls, verifierKms, { keyId: SEED_VERIFIER_KEY_ID, chains: () => verifierChainsFromPorts(Object.values(sims)), allowLocal: true });
   if (quarters > 0) {
-    const spki = await verifierKms.spkiHex(SEED_VERIFIER_KEY_ID);
-    for (const h of Object.values(harnesses)) if (!(await h.sim.listVerifierKeys()).some((k) => k.keyId === SEED_VERIFIER_KEY_ID)) await h.exec(h.admin, { kind: 'registerVerifierKey', keyId: SEED_VERIFIER_KEY_ID, publicKey: spki, active: true });
+    const address = await verifierKms.signerAddress(SEED_VERIFIER_KEY_ID);
+    for (const h of Object.values(harnesses)) if (!(await h.sim.getSignerKey('verifier', address))?.active) await h.exec(h.admin, { kind: 'registerVerifierKey', key: address });
   }
   const incomeChain = new MemoryIncomeChain();
   for (let q = 1; q <= quarters; q++) {

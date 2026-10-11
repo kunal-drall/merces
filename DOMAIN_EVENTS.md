@@ -333,9 +333,12 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 ### VerifierKeyRegistered
 
-- `keyId`: string
-- `publicKey`: string
-- `active`: boolean
+- `verifierKey`: string
+
+### VerifierKeyRevoked
+
+- `verifierKey`: string
+- `revokedAt`: integer
 
 ### CurveActivated (amount-bearing)
 
@@ -398,7 +401,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **revealBid**: `seriesId`: string; `pricePerUnit`: decimal string (base units / WAD / units); `quantity`: decimal string (base units / WAD / units); `salt`: hex32
 - **drawRelease**: `seriesId`: string
 - **pauseReleases**: `seriesId`: string; `paused`: boolean
-- **submitReport**: `seriesId`: string; `periodId`: period id (YYYYQn); `tier`: `1` \| `2` \| `3` \| `4`; `paymentStable`: decimal string (base units / WAD / units); `priorIncomeCommitment`: hex32; `incomeCommitment`: hex32; `fxBasis`: `accumulator` \| `attestor` \| `unity`; `fxAvgWad`: decimal string (base units / WAD / units); `pair`: pair (XXX/USD) \| null; `attestorRate`: object { attestor: string, rateWad: decimal string (base units / WAD / units), pair: pair (XXX/USD) } \| null; `proof`: object { system: `groth16-bn254`, proof: object { pi_a: array of decimal string (field element), pi_b: array of array of decimal string (field element), pi_c: array of decimal string (field element), protocol: `groth16`, curve: `bn128` }, publicInputs: array of decimal string (field element) } \| object { system: `mock`, proof: string, publicInputs: array of decimal string (field element) }; `attestation`: object { keyId: string, seriesId: string, periodId: period id (YYYYQn), priorIncomeCommitment: hex32, incomeCommitment: hex32, tier: `1` \| `2` \| `3` \| `4`, liquidityEvent: boolean, signature: string } \| null; `attestor`: string \| null; `liquidityEvent`: boolean
+- **submitReport**: `seriesId`: string; `periodId`: period id (YYYYQn); `tier`: `1` \| `2` \| `3` \| `4`; `paymentStable`: decimal string (base units / WAD / units); `priorIncomeCommitment`: hex32; `incomeCommitment`: hex32; `fxBasis`: `accumulator` \| `attestor` \| `unity`; `fxAvgWad`: decimal string (base units / WAD / units); `pair`: pair (XXX/USD) \| null; `attestorRate`: object { attestor: string, rateWad: decimal string (base units / WAD / units), pair: pair (XXX/USD) } \| null; `proof`: object { system: `groth16-bn254`, proof: object { pi_a: array of decimal string (field element), pi_b: array of array of decimal string (field element), pi_c: array of decimal string (field element), protocol: `groth16`, curve: `bn128` }, publicInputs: array of decimal string (field element) } \| object { system: `mock`, proof: string, publicInputs: array of decimal string (field element) }; `attestation`: object { signer: string, signature: string } \| null; `attestor`: string \| null; `liquidityEvent`: boolean
 - **payIn**: `seriesId`: string; `periodId`: period id (YYYYQn); `amount`: decimal string (base units / WAD / units)
 - **claimPayout**: `seriesId`: string
 - **claimTail**: `seriesId`: string
@@ -445,7 +448,9 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **registerAttestor**: `attestor`: string
 - **revokeAttestor**: `attestor`: string
 - **rotateAttestor**: `from`: string; `to`: string
-- **registerVerifierKey**: `keyId`: string; `publicKey`: string; `active`: boolean
+- **registerVerifierKey**: `key`: string
+- **revokeVerifierKey**: `key`: string
+- **rotateVerifierKey**: `from`: string; `to`: string
 - **pauseNewRaises**: `paused`: boolean
 - **setFeeCollector**: `feeCollector`: string
 - **registerSplitRouter**: `seriesId`: string; `router`: string
@@ -456,8 +461,8 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ## Additions beyond the Part D2 list
 
-- Events: `IssuanceStopped` (C11.5), `VerifierKeyRegistered` (admin registers report-verifier keys); Stage 1's settlement events with Stage 1's names (S2): `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`, `HolderRegistered`; Stage 1's claim events (S3): `TailClaimed`, `FinalClaimed`; Stage 1's curve events (S3): `CurveActivated`, `CurveProceedsCollected`, `CurveUnitsSynced`, `UnitsStaked`, `UnitsUnstaked`.
-- Commands: `registerIssuer`, `stopIssuance`, `pauseReleases` (the issuer's own pause, C11.1), `crankPause`, `flagFxFallback`, `clearTransferWindow`, `commitWindowOrder`, `revealWindowOrder`, `curveSwap` (a Meteora DBC swap on live chains, not a Merces instruction), `registerVerifierKey`, `pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`, `postSplitReceipt`; the permissionless group with Stage 1's names (S2); Stage 1's claims `claimTail` and `claimFinal`, the permissionless `burnRetired`, a curve's permissionless `completeCurve`, `collectCurveProceeds` and `syncCurveUnits`, and its holders' `stakeUnits`, `unstakeUnits` and `tenderUnits` (S3).
+- Events: `IssuanceStopped` (C11.5), `VerifierKeyRegistered` (admin registers report-verifier keys); Stage 1's settlement events with Stage 1's names (S2): `SettlementProposed`, `SettlementRejected`, `UnitsAllocated`, `BidDelivered`, `RaiseMintFinalized`, `HolderRegistered`; Stage 1's claim events (S3): `TailClaimed`, `FinalClaimed`; Stage 1's curve events (S3): `CurveActivated`, `CurveProceedsCollected`, `CurveUnitsSynced`, `UnitsStaked`, `UnitsUnstaked`; Stage 1's key registry (S4): `AttestorRevoked`, `VerifierKeyRevoked`.
+- Commands: `registerIssuer`, `stopIssuance`, `pauseReleases` (the issuer's own pause, C11.1), `crankPause`, `flagFxFallback`, `clearTransferWindow`, `commitWindowOrder`, `revealWindowOrder`, `curveSwap` (a Meteora DBC swap on live chains, not a Merces instruction), `registerVerifierKey`, `pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`, `postSplitReceipt`; the permissionless group with Stage 1's names (S2); Stage 1's claims `claimTail` and `claimFinal`, the permissionless `burnRetired`, a curve's permissionless `completeCurve`, `collectCurveProceeds` and `syncCurveUnits`, and its holders' `stakeUnits`, `unstakeUnits` and `tenderUnits` (S3); Stage 1's key registry (S4): `revokeAttestor`, `rotateAttestor`, `revokeVerifierKey`, `rotateVerifierKey` (rotation is one EVM call; on Solana two instructions in one transaction).
 - Each addition closes a gap between the D2 list and Part C; Stage 1 wins on names and shapes, recorded in `INTERFACE_DRIFT.md`.
 
 ## Meanings on Stage 1 (since S1)
@@ -469,7 +474,7 @@ The shapes above are generated; these meanings changed in S1, when the simulator
 - **Raise phases and `openRaise` (S2).** `commitDurationSeconds` and `revealDurationSeconds` are series terms (Stage 1 bounds a sealed raise to 1 hour–30 days and 1 hour–7 days); `openRaise` takes the series only and sets the commit end to now + the commit duration and the reveal end to the commit end + the reveal duration (Stage 1 `open_raise`). `nonRevealChargeBps` is the series' own non-reveal charge, frozen at creation and bounded to 0–1,000 bps (Stage 1); there is no built-in rate: series built through the terms service take the owner's setting (`MERCES_NON_REVEAL_CHARGE_BPS`), which issuers cannot change, and no sealed series is built while it is unset (S3 follow-up NRC).
 - **`SeriesTerms` deadlines.** Counted in unpaused time from the period end: OnTime while the countdown is ≤ `dueDays`, InGrace while ≤ `dueDays + graceDays`, then Late (inclusive bounds). `formalNoticeDays` counts from the **period end** (Stage 1 `formalNoticeDue`; 90 = period end + 90 days).
 - **`submitReport`.** Reports are strictly sequential (the next expected period, once ended, with no unpaid due). `priorIncomeCommitment` is the income commitment the report chains from (the previous quarter's in the same year; ZERO at a year start; a series' first report outside Q1 supplies its own, bound only by the attestation, Stage 1 A25); the chain checks the proof against the series' live terms commitment, so the command carries none. `proof` is Stage 1's Groth16 proof (`groth16-bn254`) or, only on a simulator configured for it, the mock digest; either way with Stage 1's six public inputs `[terms_commitment, units_outstanding, fx_avg_wad, prior_income_commitment, income_commitment, payment_usd]`. Commitments are Stage 1's Poseidon: terms over (θ, r, currency code, indexing rule, salt), income over (year-to-date figure, salt).
-- **Verifier attestation (tier 2).** Attestation v1 over series, period, prior and income commitments, tier and `liquidityEvent`; never the income source.
+- **Verifier attestation (tier 2).** Since S4 WP6, Stage 1's REPORT signature: the report verifier's secp256k1 key signs `MERCES_REPORT_V1` (the chain's signing domain, the series key, the period, the prior and income commitments, tier 2, `liquidityEvent`; never the income source), and `submitReport.attestation` carries `{signer, signature}` only: the chain rebuilds the digest from its own domain and the series key, recovers the signer and requires a verifier key usable for the period (active, or revoked after the period ended within the 45-day grace), else `InvalidVerifierSignature`. Verifier keys are 20-byte addresses (`registerVerifierKey`, `revokeVerifierKey`, `rotateVerifierKey`).
 - **`ReportAccepted`.** `paymentDue` is the due the report opened (the payment less tier-1 split credit; 0 for a tail report that is not a liquidity event), without accrual; `accrual` is always "0"; `priorIncomeCommitment` is the commitment it chained from.
 - **`payIn` and `PaymentReceived`.** `payIn` pays the open due in full: `periodId` names the open due period and `amount` is the due plus Stage 1's lateness accrual when the payment lands; anyone may pay (NothingDue when nothing is open). `PaymentReceived.gross` is what the vault accepted; from a pay-in it carries the final `paymentDue` (due + accrual) and `accrual`; `source: 'tail'` is a tail payment (its own accumulator, outside the payout vault totals); `source: 'extinguishment'` is the unvested treasury returned through the final pool (fee 0, not an issuer payment).
 - **Pauses.** `requestPause.until` and `PauseRequested.until` are advisory (Stage 1's request has no end); `approvePause` sets the pause end within Stage 1's bounds, and a pause ends by itself at that end.

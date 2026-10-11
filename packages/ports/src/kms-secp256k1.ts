@@ -165,7 +165,7 @@ export interface RemoteSecp256k1Provider {
  * D10). It reads each key's public key once and caches its address; `signDigest` asks the KMS for a DER signature,
  * normalises it to Stage 1's format and checks that it recovers to that address. If neither recovery id fits it asks
  * once more (a cloud KMS's `k` is not documented as deterministic, so a second signature can differ), then fails
- * closed. `sign` and `spkiHex` (ed25519 only) always throw: this adapter holds no ed25519 key.
+ * closed. `sign` (ed25519 only) always throws: this adapter holds no ed25519 key.
  */
 export class RemoteSecp256k1Kms implements KmsPort {
   readonly provider: string;
@@ -211,9 +211,5 @@ export class RemoteSecp256k1Kms implements KmsPort {
 
   async sign(keyId: string): Promise<string> {
     throw new KmsKeyError('wrong-algorithm', `key "${keyId}" is secp256k1: sign() is ed25519 only (use signDigest)`);
-  }
-
-  async spkiHex(keyId: string): Promise<string> {
-    throw new KmsKeyError('wrong-algorithm', `key "${keyId}" is secp256k1: spkiHex() is ed25519 only`);
   }
 }

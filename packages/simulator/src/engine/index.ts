@@ -13,7 +13,7 @@ import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
 import { burnRetired, claimPayout, payIn, postSplitReceipt } from './payments.ts';
 import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
-import { attestorUsable, registerAttestor, revokeAttestor, rotateAttestor } from './keys.ts';
+import { attestorUsable, registerKey, revokeKey, rotateKey } from './keys.ts';
 import { submitReport } from './reports.ts';
 import { stakeUnits, tenderUnits, unstakeUnits } from './stake.ts';
 import { beginSettlement, deliverBid, finalizeSettlement, processBid, registerHolder, tallyBids } from './settlement.ts';
@@ -137,11 +137,13 @@ export class SimEngine implements EngineCore {
       case 'unstakeUnits': return unstakeUnits(this, user(), cmd, emit);
       case 'tenderUnits': return tenderUnits(this, user(), cmd, emit);
       case 'setAllowlist': service('allowlistManager'); return setAllowlist(this, cmd, emit);
-      // Stage 1's key registry (S4 WP5): each personality's rules and names (keys.ts)
-      case 'registerAttestor': admin(); return registerAttestor(this, cmd.attestor, emit);
-      case 'revokeAttestor': admin(); return revokeAttestor(this, cmd.attestor, now, emit);
-      case 'rotateAttestor': admin(); return rotateAttestor(this, cmd, now, emit);
-      case 'registerVerifierKey': admin(); this.state.verifierKeys.set(cmd.keyId, { publicKey: cmd.publicKey, active: cmd.active }); emit('VerifierKeyRegistered', { keyId: cmd.keyId, publicKey: cmd.publicKey, active: cmd.active }); return;
+      // Stage 1's key registry (S4 WP5 attestor keys, WP6 verifier keys): each personality's rules and names (keys.ts)
+      case 'registerAttestor': admin(); return registerKey(this, 'attestor', cmd.attestor, emit);
+      case 'revokeAttestor': admin(); return revokeKey(this, 'attestor', cmd.attestor, now, emit);
+      case 'rotateAttestor': admin(); return rotateKey(this, 'attestor', cmd.from, cmd.to, now, emit);
+      case 'registerVerifierKey': admin(); return registerKey(this, 'verifier', cmd.key, emit);
+      case 'revokeVerifierKey': admin(); return revokeKey(this, 'verifier', cmd.key, now, emit);
+      case 'rotateVerifierKey': admin(); return rotateKey(this, 'verifier', cmd.from, cmd.to, now, emit);
       case 'pauseNewRaises': admin(); this.state.newRaisesPaused = cmd.paused; return;
       case 'setFeeCollector': admin(); this.state.feeCollector = cmd.feeCollector; return;
       case 'registerSplitRouter': admin(); this.series(cmd.seriesId).splitRouter = cmd.router; return;

@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { defineRoute, type AppContext } from '@merces/api';
 import { withIdempotency } from '@merces/core';
 import { svc } from '../context.ts';
-import { AdminService, auditLogQuerySchema, auditSamplesQuerySchema, auditSamplesSchema, keeperRunsQuerySchema, pauseRaisesSchema, registerAttestorSchema, registerVerifierKeySchema, txRequestsQuerySchema } from './service.ts';
+import {
+  AdminService, auditLogQuerySchema, auditSamplesQuerySchema, auditSamplesSchema, keeperRunsQuerySchema, pauseRaisesSchema, registerAttestorSchema, registerVerifierKeySchema, revokeVerifierKeySchema,
+  rotateVerifierKeySchema, txRequestsQuerySchema,
+} from './service.ts';
 
 /** E13 admin API. Every route is admin-tier; every write is audited and takes an Idempotency-Key. */
 export function registerAdminRoutes(app: FastifyInstance, base: AppContext): void {
@@ -55,7 +58,25 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
       return r.response;
     },
   });
-  defineRoute(app, ctx, { method: 'GET', url: '/admin/verifier-keys', access: 'admin', handler: async (req) => ({ chains: await s.verifierKeys(chainQuery.parse(req.query).chain) }) });
+  defineRoute(app, ctx, {
+    method: 'POST', url: '/admin/verifier-keys/revoke', access: 'admin',
+    handler: async (req, reply, session) => {
+      const b = revokeVerifierKeySchema.parse(req.body);
+      const r = await withIdempotency(ctx.pool, `admin-verifier-keys-revoke:${session!.accountId}`, idem(req), b, async () => ({ status: 201, response: await s.revokeVerifierKey(b, session!) }));
+      reply.status(r.status);
+      return r.response;
+    },
+  });
+  defineRoute(app, ctx, {
+    method: 'POST', url: '/admin/verifier-keys/rotate', access: 'admin',
+    handler: async (req, reply, session) => {
+      const b = rotateVerifierKeySchema.parse(req.body);
+      const r = await withIdempotency(ctx.pool, `admin-verifier-keys-rotate:${session!.accountId}`, idem(req), b, async () => ({ status: 201, response: await s.rotateVerifierKey(b, session!) }));
+      reply.status(r.status);
+      return r.response;
+    },
+  });
+  defineRoute(app, ctx, { method: 'GET', url: '/admin/verifier-keys', access: 'admin', handler: async (req) => s.verifierKeys(chainQuery.parse(req.query).chain) });
 
   defineRoute(app, ctx, {
     method: 'POST', url: '/admin/raises/pause', access: 'admin',

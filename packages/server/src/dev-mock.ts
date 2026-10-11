@@ -30,14 +30,14 @@ if ((await solana.listSeries()).length === 0 && process.env.MERCES_SEED !== 'fal
 const indexer = new Indexer(pool, [solana, monad], { logger: log });
 await indexer.catchUp();
 const ctx = createServiceContext(makeContext({ pool, chains, log, sessionSecret: process.env.MERCES_SESSION_SECRET ?? 'dev-session-secret-not-for-production', devMode: true }));
-// Register the dev report-verifier key on both simulators (the standalone verifier derives the same key from the dev seed).
+// Register the dev report-verifier key on both simulators by its 20-byte address (S4 WP6; the standalone verifier derives
+// the same secp256k1 key from the dev seed). Skipped when it is already registered (a restart of a persisted chain).
 {
-  const spki = await ctx.kms.spkiHex(process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1');
+  const address = await ctx.kms.signerAddress(process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1');
   for (const sim of [solana, monad]) {
-    const keys = await sim.listVerifierKeys();
-    if (!keys.some((k) => k.keyId === (process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1'))) {
+    if (!(await sim.getSignerKey('verifier', address))?.active) {
       const admin = simAdminWallet(sim.family);
-      const tx = await sim.build({ kind: 'registerVerifierKey', keyId: process.env.REPORT_VERIFIER_KEY_ID ?? 'report-verifier-1', publicKey: spki, active: true }, admin.address);
+      const tx = await sim.build({ kind: 'registerVerifierKey', key: address }, admin.address);
       await sim.send(await admin.sign(tx));
     }
   }

@@ -1,32 +1,13 @@
-import { createHash, generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
-  CURVE_TERMS_ZEROS, DEFAULTS, attestationMessage, rateUnits, bidCommitment, currencyCodeOf, hex32ToField, incomeCommitment, INDEXING_RULE_CODE, mockProve, reportPublicInputs, runSettlement, termsCommitment,
+  CURVE_TERMS_ZEROS, DEFAULTS, attestationOf, rateUnits, bidCommitment, currencyCodeOf, hex32ToField, incomeCommitment, INDEXING_RULE_CODE, mockProve, reportPublicInputs, runSettlement, termsCommitment,
   type AdminCommand, type ChainPort, type Command, type IndexingRule, type PermissionlessCommand, type RaiseFailure, type ReportProof, type SeriesTerms, type SettlementGoal, type SettlementRun,
-  type Stablecoin, type TxResult, type UserCommand, type VerifierAttestation,
+  type Stablecoin, type TxResult, type UserCommand,
 } from '@merces/domain';
 import { BN254_FR, U64_MAX, WAD, paymentStable, quarterIndex, ratePerUnit, requiredEscrow, toPid, wadFromDecimal, yearOf } from '@merces/math';
 import { SimulatorChain } from './chain.ts';
-import { SimWallet, simAdminWallet } from './wallets.ts';
+import { SimSigner, SimWallet, simAdminWallet } from './wallets.ts';
 import type { Personality } from './addresses.ts';
-
-/** A local ed25519 report-verifier key for tests and local development (production keys live behind the KMS port). */
-export class LocalVerifierKey {
-  readonly keyId: string;
-  private readonly priv: KeyObject;
-  readonly publicKeyHex: string;
-  constructor(keyId = 'verifier-dev-1') {
-    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-    this.keyId = keyId;
-    this.priv = privateKey;
-    this.publicKeyHex = (publicKey.export({ format: 'der', type: 'spki' }) as Buffer).toString('hex');
-  }
-  /** Signs attestation v1 over Stage 1's report fields. The income source is checked offchain and never signed (B7). */
-  attest(input: { seriesId: string; periodId: string; priorIncomeCommitment: string; incomeCommitment: string; tier: 1 | 2 | 3 | 4; liquidityEvent: boolean; source?: string }): VerifierAttestation {
-    const { source: _source, ...tuple } = input;
-    const sig = edSign(null, Buffer.from(attestationMessage(tuple)), this.priv).toString('hex');
-    return { keyId: this.keyId, ...tuple, signature: '0x' + sig };
-  }
-}
 
 /**
  * The opening of a series' terms commitment (SPEC §1.5): θ (the annual threshold, reporting currency at 6 decimals),
@@ -198,6 +179,8 @@ export interface BuildReportParams {
   incomeSalt?: bigint;
   /** 'mock' (default; the chain must accept mock proofs) or a real Groth16 proof from Stage 1's prover */
   proofs?: 'mock' | 'groth16';
+  /** tier 2: the key that signs the REPORT message (default the harness's registered verifier key) */
+  verifier?: SimSigner;
 }
 
 /**
@@ -209,7 +192,8 @@ export class SimHarness {
   readonly issuer: SimWallet;
   readonly backers: SimWallet[];
   readonly attestors: SimWallet[];
-  readonly verifier: LocalVerifierKey;
+  /** the report verifier's key (a published secp256k1 test key, seed `sim-verifier:verifier-1`; S4 WP6) */
+  readonly verifier: SimSigner;
   readonly router: string;
 
   private constructor(readonly sim: SimulatorChain) {
@@ -217,7 +201,7 @@ export class SimHarness {
     this.issuer = new SimWallet(sim.family, 'issuer-1');
     this.backers = ['backer-1', 'backer-2', 'backer-3', 'backer-4', 'backer-5'].map((l) => new SimWallet(sim.family, l));
     this.attestors = ['attestor-1', 'attestor-2'].map((l) => new SimWallet(sim.family, l));
-    this.verifier = new LocalVerifierKey();
+    this.verifier = SimSigner.verifier();
     this.router = sim.address('router:split-1');
   }
 
@@ -232,7 +216,7 @@ export class SimHarness {
   /** Registers attestors and the verifier key, allowlists everyone, funds wallets. */
   async bootstrap(): Promise<void> {
     for (const a of this.attestors) await this.exec(this.admin, { kind: 'registerAttestor', attestor: a.address });
-    await this.exec(this.admin, { kind: 'registerVerifierKey', keyId: this.verifier.keyId, publicKey: this.verifier.publicKeyHex, active: true });
+    await this.exec(this.admin, { kind: 'registerVerifierKey', key: this.verifier.address });
     for (const w of [this.issuer, ...this.backers]) await this.sim.submit({ kind: 'setAllowlist', wallet: w.address, allowed: true }, 'allowlistManager');
     const coins: Stablecoin[] = this.sim.personality === 'solana' ? ['USDC', 'USDG'] : ['USDC'];
     for (const c of coins) {
@@ -296,7 +280,8 @@ export class SimHarness {
     const liquidityEvent = params.liquidityEvent ?? false;
     // the income source never goes onchain (B7): it is returned beside the command for the offchain record (E5) only
     const source = params.source ?? 'stripe';
-    const attestation = tier === 2 ? this.verifier.attest({ seriesId: params.seriesId, periodId: params.periodId, priorIncomeCommitment: witness.priorIncomeCommitment, incomeCommitment: witness.incomeCommitment, tier, liquidityEvent }) : null;
+    // tier 2: the report verifier key's Stage 1 REPORT signature over the chain's signing domain and the series key
+    const attestation = tier === 2 ? attestationOf(await this.attestReport(params.seriesId, { periodId: params.periodId, priorIncomeCommitment: witness.priorIncomeCommitment, incomeCommitment: witness.incomeCommitment, liquidityEvent }, params.verifier)) : null;
     return {
       paymentStable: witness.paymentStable,
       source,
@@ -307,6 +292,17 @@ export class SimHarness {
         proof, attestation, attestor: params.attestor ?? null, liquidityEvent,
       },
     };
+  }
+
+  /**
+   * A tier-2 report attestation as the report verifier signs it (S4 WP6): Stage 1's `MERCES_REPORT_V1` with tier 2
+   * over the chain's signing domain (`ChainInfo.signing`) and the series key (`SeriesState.seriesKey`), by `key`
+   * (default the harness's registered verifier key). Returns the signer, the signature and the digest.
+   */
+  async attestReport(seriesId: string, f: { periodId: string; priorIncomeCommitment: string; incomeCommitment: string; liquidityEvent: boolean }, key: SimSigner = this.verifier): Promise<{ signer: string; signature: string; digest: string }> {
+    const [info, series] = await Promise.all([this.sim.info(), this.sim.getSeries(seriesId)]);
+    if (!info.signing || !series) throw new Error(`harness: no signing context for ${seriesId}`);
+    return key.attest('REPORT', info.signing, series.seriesKey, { ...f, tier: 2 });
   }
 
   /** The prior opening the chain will expect for period `pid` (SPEC §6.2 step 5; Stage 1 builder `priorFor`). */

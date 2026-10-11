@@ -19,10 +19,12 @@ packages/api/test/<module>.test.ts           # integration test through the HTTP
 
 Chain access goes only through `ChainPort` (`packages/domain/src/port.ts`): reads (`getSeries`, `listSeries`,
 `getPeriod`, `listPeriods`, `getVault`, `getTreasury`, `listPositions`, `getBalance(wallet, 'USDC')`,
-`getQuarterRate`, `listAttestors`, `listVerifierKeys`, `now()` …), `build(command, signer, coSigners?)` →
+`getQuarterRate`, `getSignerKey(kind, address)` and `listSignerKeys(kind)` for the attestor and verifier keys (S4),
+`now()` …), `build(command, signer, coSigners?)` →
 `UnsignedTx` for a user/multisig to sign, `submit(serviceCommand, 'keeper' | 'allowlistManager')` for the backend's
-own roles. Never sign for users; never hold funds. Admin commands (`registerAttestor`, `registerVerifierKey`,
-`pauseNewRaises`, `setFeeCollector`, `registerSplitRouter`) are *built* for the admin multisig (`info().admin`).
+own roles. Never sign for users; never hold funds. Admin commands (`registerAttestor`, `revokeAttestor`,
+`rotateAttestor`, `registerVerifierKey`, `revokeVerifierKey`, `rotateVerifierKey`, `pauseNewRaises`, `setFeeCollector`,
+`registerSplitRouter`) are *built* for the admin multisig (`info().admin`).
 
 ## Routes
 ```ts

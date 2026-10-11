@@ -141,7 +141,6 @@ export class SolanaChain implements ChainPort {
    */
   async getSignerKey(): Promise<never> { return this.notReady('getSignerKey'); }
   async listSignerKeys(): Promise<never> { return this.notReady('listSignerKeys'); }
-  async listVerifierKeys(): Promise<never> { return this.notReady('listVerifierKeys'); }
   async getTransferWindow(): Promise<never> { return this.notReady('getTransferWindow'); }
   async getCurve(): Promise<never> { return this.notReady('getCurve'); }
   /** Meteora's DBC quote (`swapQuote2` through the Meteora port) arrives with the adapter's curve work (S5). */

@@ -175,7 +175,8 @@ describe('S3 claim scenarios: replay', () => {
       const windows = run.id === 'S3l' ? ['SH-WIN-1', 'SH-WIN-2', 'SH-WIN-3', 'SH-WIN-4', 'SH-WIN-5', 'SH-WIN-6', 'SH-WIN-7'] : [];
       // cause S4-BID: SH-AUC-2 is no longer allowed (retired in S4 WP2)
       // cause S4-SH: SH-REG-2 is no longer allowed (retired in S4 WP5)
-      for (const id of Object.keys(run.shims)) expect(['SH-REG-1', 'SH-REG-3', 'SH-REG-4', 'SH-REP-1', 'SH-PAY-1', 'SH-RED-1', 'SH-EXT-1', 'SH-AMD-1', ...windows], `${run.vector} ${id}`).toContain(id);
+      // cause S4-SH: SH-REG-3 is gone (the verifier keys run directly since S4 WP6)
+      for (const id of Object.keys(run.shims)) expect(['SH-REG-1', 'SH-REG-4', 'SH-REP-1', 'SH-PAY-1', 'SH-RED-1', 'SH-EXT-1', 'SH-AMD-1', ...windows], `${run.vector} ${id}`).toContain(id);
       if (run.id === 'S3l') expect(Object.keys(run.shims).filter((id) => id.startsWith('SH-WIN-')).sort()).toEqual(windows);
     }
     expect(r.report.ok).toBe(true);

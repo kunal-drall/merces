@@ -1,13 +1,17 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { verifyReport } from '@merces/circuits';
-import { ChainError, ZERO_INCOME_COMMITMENT, incomeCommitment, mockProve, reportPublicInputs, type UserCommand } from '@merces/domain';
+import { ChainError, ZERO_INCOME_COMMITMENT, attestationOf, incomeCommitment, mockProve, reportDigest, reportPublicInputs, type UserCommand } from '@merces/domain';
 import { WAD, parsePeriod, wadFromDecimal } from '@merces/math';
-import { SimHarness, SimulatorChain, defaultTerms, harnessFieldSalt, serialiseState, type SimWallet } from '../src/index.ts';
+import { SimHarness, SimSigner, SimulatorChain, defaultTerms, harnessFieldSalt, personalitySigning, serialiseState, type SimWallet } from '../src/index.ts';
 import { GENESIS, USDC } from './helpers.ts';
 
 /**
  * `submitReport` in Stage 1's order (S1 plan WP3 table; Stage 1 simulator SIM:1050-1149): one case per check, in
  * order, each refused with Stage 1's error name and leaving the chain untouched; then the prior chain and the effects.
+ *
+ * S4 cause codes:
+ *  - S4-T2: tier 2 is Stage 1's REPORT signature (secp256k1 over `MERCES_REPORT_V1` with the chain's domain and the series
+ *    key) by a registered verifier key, recovered and checked as both chains do (was ed25519 attestation v1 by key id).
  */
 
 type Report = Extract<UserCommand, { kind: 'submitReport' }>;
@@ -157,18 +161,41 @@ describe('submitReport checks, in Stage 1 order', () => {
     await refused(h, send(h, command), 'InvalidProof', /not accepted/);
   });
 
-  it('16: source binding after the proof (verifier attestation v1, attestor co-signature)', async () => {
+  it('16: source binding after the proof (tier 2 the verifier key\'s REPORT signature, tier 3 the attestor co-signature)', async () => {
+    // cause S4-T2: a signature recovered over Stage 1's REPORT digest (was an ed25519 attestation v1 named by key id)
     const { h, seriesId, privateTerms } = await settled();
     await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
     const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000) });
     const a = command.attestation!;
-    await refused(h, send(h, { ...command, attestation: null }), 'InvalidVerifierSignature');
-    await refused(h, send(h, { ...command, attestation: { ...a, keyId: 'unknown' } }), 'InvalidVerifierSignature', /not registered/);
-    // the attestation binds the prior and the liquidity flag: changing either breaks it
-    await refused(h, send(h, { ...command, liquidityEvent: true }), 'InvalidVerifierSignature', /do not match/);
-    await refused(h, send(h, { ...command, attestation: { ...a, liquidityEvent: true }, liquidityEvent: true }), 'InvalidVerifierSignature', /bad verifier signature/);
-    const other = h.verifier.attest({ ...a, priorIncomeCommitment: incomeCommitment(1n, 1n) });
-    await refused(h, send(h, { ...command, attestation: other }), 'InvalidVerifierSignature', /do not match/);
+    // the command carries the signer and the signature only: the fields are the report's own
+    expect(Object.keys(a).sort()).toEqual(['signature', 'signer']);
+    expect(a.signer).toBe(h.verifier.address);
+    // the chain's digest: MERCES_REPORT_V1 over its signing domain and the series key, tier 2
+    const series = (await h.sim.getSeries(seriesId))!;
+    const digest = reportDigest({ domain: (await h.sim.info()).signing!.domain, seriesKey: series.seriesKey }, { periodId: '2026Q1', priorIncomeCommitment: command.priorIncomeCommitment, incomeCommitment: command.incomeCommitment, tier: 2, liquidityEvent: false }).digest;
+    expect(await h.verifier.signDigest(digest)).toBe(a.signature);
+    await refused(h, send(h, { ...command, attestation: null }), 'InvalidVerifierSignature', /required/);
+    // a key that is not a registered verifier key (04#68 signs a tier-2 report with an attestor key)
+    const stranger = new SimSigner('sim-verifier:not-registered');
+    const foreign = attestationOf(await h.attestReport(seriesId, { periodId: '2026Q1', priorIncomeCommitment: command.priorIncomeCommitment, incomeCommitment: command.incomeCommitment, liquidityEvent: false }, stranger));
+    await refused(h, send(h, { ...command, attestation: foreign }), 'InvalidVerifierSignature', /not a usable verifier key/);
+    // the named signer must be the key that signed
+    await refused(h, send(h, { ...command, attestation: { ...a, signer: stranger.address } }), 'InvalidVerifierSignature', /does not recover/);
+    // the signature binds the liquidity flag and the commitments: changing one breaks it
+    await refused(h, send(h, { ...command, liquidityEvent: true }), 'InvalidVerifierSignature', /does not recover/);
+    // non-canonical signatures recover to nobody (the EVM's tryRecover): v outside {27, 28}, and high s
+    await refused(h, send(h, { ...command, attestation: { ...a, signature: a.signature.slice(0, -2) + '1d' } }), 'InvalidVerifierSignature', /does not recover/);
+    const n = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
+    const sHigh = (n - BigInt('0x' + a.signature.slice(66, 130))).toString(16).padStart(64, '0');
+    const flipV = a.signature.slice(130) === '1b' ? '1c' : '1b';
+    await refused(h, send(h, { ...command, attestation: { ...a, signature: a.signature.slice(0, 66) + sHigh + flipV } }), 'InvalidVerifierSignature', /does not recover/);
+    // a signature over another chain's domain (a solana simulator's) or another series' key does not recover to the key
+    const otherDomain = personalitySigning('solana', 'solana');
+    const elsewhere = await h.verifier.attest('REPORT', otherDomain, series.seriesKey, { periodId: '2026Q1', priorIncomeCommitment: command.priorIncomeCommitment, incomeCommitment: command.incomeCommitment, tier: 2, liquidityEvent: false });
+    await refused(h, send(h, { ...command, attestation: attestationOf(elsewhere) }), 'InvalidVerifierSignature', /does not recover/);
+    const otherSeries = await h.verifier.attest('REPORT', (await h.sim.info()).signing!, '0x' + '00'.repeat(12) + '11'.repeat(20), { periodId: '2026Q1', priorIncomeCommitment: command.priorIncomeCommitment, incomeCommitment: command.incomeCommitment, tier: 2, liquidityEvent: false });
+    await refused(h, send(h, { ...command, attestation: attestationOf(otherSeries) }), 'InvalidVerifierSignature', /does not recover/);
+    // tier 3 is still the attestor's co-signature (S4 WP9 moves it); a tier-3 report carries no attestation
     const t3 = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000), tier: 3, attestor: h.attestors[0]!.address });
     expect(t3.command.attestation).toBeNull();
     await refused(h, send(h, t3.command), 'InvalidAttestorSignature');

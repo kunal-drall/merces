@@ -14,9 +14,8 @@ export interface ConformanceEnv {
   backers: (WalletSigner & { coSign?(signed: SignedTx): Promise<SignedTx> })[];
   attestors: (WalletSigner & { coSign?(signed: SignedTx): Promise<SignedTx> })[];
   admin: WalletSigner;
-  /** ed25519 report-verifier key the chain has registered, and a way to attest */
-  verifierKeyId: string;
-  attest: SimHarness['verifier']['attest'];
+  /** the report verifier key the chain has registered (a secp256k1 key's 20-byte address; S4 WP6) */
+  verifierAddress: string;
   /** private terms matching the default terms' commitment */
   privateTerms: PrivateTerms;
   terms(over?: Partial<SeriesTerms>): SeriesTerms;
@@ -56,8 +55,7 @@ export async function simulatorEnv(personality: Personality): Promise<Conformanc
     backers: h.backers,
     attestors: h.attestors,
     admin: simAdminWallet(h.sim.family),
-    verifierKeyId: h.verifier.keyId,
-    attest: (i) => h.verifier.attest(i),
+    verifierAddress: h.verifier.address,
     privateTerms: defaultTerms(h.sim).privateTerms,
     // the raise's phases are terms: openRaise derives the ends from these durations
     terms: (over) => defaultTerms(h.sim, { commitDurationSeconds: durations.commit, revealDurationSeconds: durations.reveal, ...over }).terms,

@@ -44,13 +44,12 @@ export interface ChainPort {
    * A registered key of `kind` as the chain holds it (Stage 1 `AttestorKey` / `VerifierKey`, the EVM's `attestorKey` /
    * `verifierKey` views), active or revoked, with its `revokedAt` and `graceUntil`; null for a key never registered.
    * Usability is `keyUsable(key, now, {reportPeriod?})`: an active key, or a revoked one within Stage 1's grace for a
-   * report or FX signature of a period that ended by its revocation (S4 D5). Kind `verifier` arrives with S4 WP6
-   * (NotImplemented until then; `listVerifierKeys` serves the verifier keys meanwhile).
+   * report or FX signature of a period that ended by its revocation (S4 D5). Kind `verifier` is the report verifier's
+   * key (tier 2, S4 WP6), kind `attestor` an attestor's (tier 3, FX fallback, pause, amendment, extinguishment).
    */
   getSignerKey(kind: SignerKind, address: Address): Promise<SignerKeyState | null>;
   /** Every registered key of `kind`, active and revoked (revoked keys carry `revokedAt` and `graceUntil`). */
   listSignerKeys(kind: SignerKind): Promise<SignerKeyState[]>;
-  listVerifierKeys(): Promise<{ keyId: string; publicKey: string }[]>;
   getTransferWindow(seriesId: string): Promise<TransferWindowState | null>;
   getCurve(seriesId: string): Promise<CurveState | null>;
   /**
