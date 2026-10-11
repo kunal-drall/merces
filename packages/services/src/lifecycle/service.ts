@@ -1,6 +1,6 @@
 import { AppError, audit, getFlag } from '@merces/core';
 import { CURVE_NO_CAP, ChainError, orderCommitment, perWholeUnit, type ChainPort, type PositionState, type SeriesState, type UnsignedTx } from '@merces/domain';
-import { SeriesStatus, YEAR, capRemainingScaled, fromPid, interim, isTerminal, periodStart, pidAt, redemptionQuoteScaled, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
+import { SeriesStatus, YEAR, capRemainingScaled, fromPid, interim, isTerminal, isCappedScaled, periodStart, pidAt, redemptionQuoteScaled, toPid, type ErrorName, type YearGrossRing } from '@merces/math';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
 
@@ -44,6 +44,18 @@ export class LifecycleService {
   }
 
   // ---- R6 treasury
+  async trueUp(seriesId: string): Promise<SeriesState['trueUp']> {
+    const series = await this.ctx.chainFor(seriesId).getSeries(seriesId);
+    if (!series) throw AppError.notFound('series');
+    return series.trueUp;
+  }
+  async buildPayTrueUp(seriesId: string, session: Session, wallet: string): Promise<{ tx: UnsignedTx; total: string }> {
+    const chain = this.ctx.chainFor(seriesId);
+    this.requireWallet(session, chain.chain, wallet);
+    const state = await this.trueUp(seriesId);
+    if (state.due === '0') throw AppError.conflict('there is no outstanding true-up', { stage1: 'NothingDue' });
+    return { tx: await chain.build({ kind: 'payTrueUp', seriesId }, wallet), total: state.total };
+  }
   async buildDraw(seriesId: string, session: Session): Promise<{ tx: UnsignedTx; drawable: { index: number; amount: string }[] }> {
     const { chain, series } = await this.issuerSeries(seriesId, session);
     const t = await chain.getTreasury(seriesId);
@@ -194,7 +206,7 @@ export class LifecycleService {
    *
    * The blockers are Stage 1's `redeem` refusals in its own order (SIM:1328-1342), each with its error name in
    * `blockedBy`: TerminalStatus, SeriesLate (a Paused series may redeem), LockupActive, PaymentOutstanding,
-   * TrueUpOutstanding (not reachable until the true-up lands, S5) and UnreportedPeriods (every ended period must be
+   * TrueUpOutstanding and UnreportedPeriods (every ended period must be
    * reported). With no cap left (`C_remaining = 0`) `redeem` retires the series instead: `outcome` is `retire` and no
    * deposit is taken. 409 before settlement and while the raise is still processing its bids (MintNotFinalized, S2).
    *
@@ -232,11 +244,11 @@ export class LifecycleService {
       note: retires ? 'Nothing is left of the cap (C_remaining = 0): redeem retires the series instead; no deposit is taken and no tail follows.' : null,
     };
   }
-  async buildRedeem(seriesId: string, session: Session, maxPricePerUnit: string): Promise<{ tx: UnsignedTx; quote: Record<string, unknown> }> {
+  async buildRedeem(seriesId: string, session: Session, maxPricePerUnit?: string): Promise<{ tx: UnsignedTx; quote: Record<string, unknown> }> {
     const { chain, series } = await this.issuerSeries(seriesId, session);
     const quote = await this.quote(seriesId);
     if (!quote.redeemable) throw AppError.conflict(`cannot redeem: ${(quote.blockers as string[]).join('; ')}`);
-    if (BigInt(quote.pricePerUnit as string) > BigInt(maxPricePerUnit)) throw AppError.conflict(`quoted price ${quote.pricePerUnit} exceeds maxPricePerUnit`);
+    if (maxPricePerUnit !== undefined && BigInt(quote.pricePerUnit as string) > BigInt(maxPricePerUnit)) throw AppError.conflict(`quoted price ${quote.pricePerUnit} exceeds maxPricePerUnit`);
     return { tx: await chain.build({ kind: 'redeem', seriesId, maxPricePerUnit }, series.issuer), quote };
   }
   /**
@@ -291,6 +303,26 @@ export class LifecycleService {
   }
 
   // ---- R14 retirement
+  async buildRetire(seriesId: string, session: Session, wallet: string): Promise<{ tx: UnsignedTx }> {
+    const chain = this.ctx.chainFor(seriesId);
+    this.requireWallet(session, chain.chain, wallet);
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    if (!s.mintFinalized) throw AppError.conflict('the raise is still processing its bids', { stage1: 'MintNotFinalized' });
+    if (['Retired', 'Redeemed', 'Extinguished'].includes(s.status)) throw AppError.conflict('series is terminal', { stage1: 'TerminalStatus' });
+    if (s.capPerUnit === null || !isCappedScaled({ paidPerUnitWad: BigInt(s.paidPerUnitWad) }, BigInt(s.capPerUnit), BigInt(s.unitScale))) throw AppError.conflict('cap not met', { stage1: 'NothingDue' });
+    return { tx: await chain.build({ kind: 'retireIfCapped', seriesId }, wallet) };
+  }
+
+  async buildBurn(seriesId: string, session: Session, wallet: string, holder: string): Promise<{ tx: UnsignedTx }> {
+    const chain = this.ctx.chainFor(seriesId);
+    this.requireWallet(session, chain.chain, wallet);
+    const s = await chain.getSeries(seriesId);
+    if (!s) throw AppError.notFound('series');
+    if (s.terms.raiseStyle === 'curve') throw AppError.conflict('curve units do not burn at retirement', { stage1: 'CurveModeNoBurn' });
+    if (s.status !== 'Retired') throw AppError.conflict('series is not retired', { stage1: 'TerminalStatus' });
+    return { tx: await chain.build({ kind: 'burnRetired', seriesId, holder }, wallet) };
+  }
   /**
    * Retirement progress: the cap per whole unit, what was paid per whole unit (`paidPerUnit`, `paidPerUnitWad` floored
    * at the series' unit scale: a curve's WAD figure is per base lamport, S3 amendment M4), Stage 1's `C_remaining` at the
@@ -306,7 +338,7 @@ export class LifecycleService {
     const cap = s.capPerUnit ? BigInt(s.capPerUnit) : null;
     const paidPerUnit = perWholeUnit(s.paidPerUnitWad, s.unitScale);
     return {
-      seriesId, status: s.status, retired: s.status === 'Retired', unitScale: s.unitScale, capPerUnit: s.capPerUnit, paidPerUnit: paidPerUnit.toString(), capRemaining: cap === null ? null : capRemainingScaled(cap, BigInt(s.paidPerUnitWad), BigInt(s.unitScale)).toString(), capProgressBps: cap && cap > 0n ? Number((paidPerUnit * 10_000n) / cap) : 0,
+      seriesId, status: s.status, retired: s.status === 'Retired', retirableNow: s.mintFinalized && !['Retired', 'Redeemed', 'Extinguished'].includes(s.status) && cap !== null && isCappedScaled({ paidPerUnitWad: BigInt(s.paidPerUnitWad) }, cap, BigInt(s.unitScale)), unitScale: s.unitScale, capPerUnit: s.capPerUnit, paidPerUnit: paidPerUnit.toString(), capRemaining: cap === null ? null : capRemainingScaled(cap, BigInt(s.paidPerUnitWad), BigInt(s.unitScale)).toString(), capProgressBps: cap && cap > 0n ? Number((paidPerUnit * 10_000n) / cap) : 0,
       unitsOutstanding: s.unitsOutstanding, holdersWithUnits: unburned.length, burnable: s.status === 'Retired' && s.terms.raiseStyle === 'sealed',
       note: s.terms.raiseStyle === 'curve'
         ? 'Curve-mode units are never burned (Stage 1 CurveModeNoBurn): on a Retired curve series holders keep their units and claim what their staked units earned; a redemption burns the units tendered.'
@@ -454,6 +486,7 @@ export function redeemBlockers(s: SeriesState, now: number): { blockers: string[
   if (s.lockupEndsAt !== null && now < s.lockupEndsAt) add('LockupActive', `lockup ends at ${s.lockupEndsAt}`);
   const rep = s.reporting;
   if (BigInt(rep.openDueAmount) > 0n) add('PaymentOutstanding', `period ${rep.openDuePeriod} is reported and not paid`);
+  if (BigInt(s.trueUp.due) > 0n) add('TrueUpOutstanding', 'the annual adjustment has not been paid');
   if (rep.firstPeriod !== null) {
     const lastEnded = pidAt(BigInt(now)) - 1;
     const lastAccepted = rep.lastAcceptedPeriod === null ? null : toPid(rep.lastAcceptedPeriod);

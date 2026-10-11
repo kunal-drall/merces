@@ -9,9 +9,8 @@ import { newLedger } from './ledger.ts';
 
 // ------------------------------------------------------------------ issuers and series
 export function registerIssuer(e: EngineCore, signer: string, now: number, emit: Emit): void {
-  e.requireAllowlisted(signer);
-  if (e.state.issuers.has(signer)) throw new ChainError('Duplicate', 'issuer already registered');
-  e.state.issuers.set(signer, { issuer: signer, registeredAt: now, issuanceStopped: false, seriesIds: [] });
+  if (/^(0x0{40}|1{32})$/.test(signer)) fail('ZeroAddress', 'issuer wallet is zero');
+  if (!e.state.issuers.has(signer)) e.state.issuers.set(signer, { issuer: signer, registeredAt: now, issuanceStopped: false, seriesIds: [] });
   emit('IssuerRegistered', { issuer: signer });
 }
 export function stopIssuance(e: EngineCore, signer: string, emit: Emit): void {
@@ -82,6 +81,9 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
     nonRevealChargeBps: t.nonRevealChargeBps,
     commitDurationSeconds: t.commitDurationSeconds,
     revealDurationSeconds: t.revealDurationSeconds,
+    windowCommitDuration: t.windowCommitDuration,
+    windowRevealDuration: t.windowRevealDuration,
+    windowFeeBps: t.windowFeeBps,
     dueDays: t.dueDays,
     graceDays: t.graceDays,
     formalNoticeDays: t.formalNoticeDays,

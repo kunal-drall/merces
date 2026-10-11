@@ -84,7 +84,7 @@ with the fresh request in `detail.request`.
 | PAUSE | a hardship approval | `GET /attestor/hardship/{hardshipId}/message` | `POST /attestor/hardship/{hardshipId}/decide` | the keeper, at once (`approvePause`, permissionless) | the pause nonce; an active key |
 | AMEND | an amendment | `GET /attestor/amendments/{amendmentId}/message` | `POST /attestor/amendments/{amendmentId}/attest` | the issuer (`amendTerms`) | the amendment nonce; an active key |
 | EXTINGUISH | an extinguishment, two keys of two accounts | `GET /attestor/extinguish/{requestId}/message` | `POST /attestor/extinguish/{requestId}/sign` | the keeper, once both are in (`extinguish`, permissionless) | the extinguish nonce; active keys |
-| TRUEUP | an annual true-up | `GET /attestor/tier3/annual/{annualId}/message` | `POST /attestor/tier3/annual/{annualId}/sign` | the issuer (`submitTrueUp`, S5); stored meanwhile | the true-up nonce; an active key |
+| TRUEUP | an annual true-up | `GET /attestor/tier3/annual/{annualId}/message` | `POST /attestor/tier3/annual/{annualId}/sign` | the issuer via the annual `build-submit` route | the true-up nonce; an active key |
 
 Every request and answer route is `attestor` tier and checks the addressed key itself: linked to the caller's account,
 registered, active and indexed on the item's chain (admins may read a request, never answer one). The public
@@ -348,7 +348,17 @@ the message rebuilt with the signed nonce and time and the adjustment derived fr
 InvalidAttestorSignature unless it recovers to the attestation's key, active on the chain; 409 `stale-nonce` with
 `detail.request` when the nonce moved). The attestation is then `signed` with its amounts (an underpayment due 60 days
 after the attestation time) and `trueUp {signer, trueupNonce, attestationTs, adjustment, digest}`; the signature itself
-is stored for the issuer's `submit_trueup` (S5) and shown by no read.
+is included only in the issuer's unsigned submission from
+`POST /series/{id}/tier3/annual/{annualId}/build-submit`. The linked issuer signs and relays it; indexed
+`TrueUpRecorded` advances the annual record to `recorded`. Only one unsubmitted annual signature may be pending per
+series (`earlier-trueup-pending`), so another year cannot silently reuse its nonce.
+
+`GET /series/{id}/true-up` returns the live annual ledger to a holder or issuer, including its outstanding due,
+forward credit, lateness accrual and total at chain time. A linked wallet obtains an unsigned payment from
+`POST /series/{id}/true-up/build-pay {wallet}`; anyone may pay. Execution recomputes the total using Stage 1's
+unpaused clock: accrual after 60 days, formal notice at 105 days. Indexed `TrueUpPaid` marks the annual `paid`.
+Negative adjustments carry forward to subsequent reports; they do not cause an immediate refund. An outstanding
+positive adjustment blocks redemption. Amounts stay out of public activity summaries.
 
 **Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
 (`GET /admin/attestors`, with each key's registration and revocation times and its grace end) and the attestor key

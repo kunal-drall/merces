@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { addressSchema, hash32Schema, pairSchema, periodIdSchema, seriesIdSchema, stablecoinSchema } from './ids.ts';
 import { moneySchema, unitsSchema, wadSchema } from './money.ts';
-import { signerAddressSchema } from './signing.ts';
+import { signerAddressSchema, i64StringSchema } from './signing.ts';
 
 /**
  * Canonical domain events (provisional interface v0, Part D2). Every live adapter maps what Stage 1 actually
@@ -85,6 +85,10 @@ export const seriesTermsSchema = z.object({
    */
   commitDurationSeconds: z.number().int().nonnegative(),
   revealDurationSeconds: z.number().int().nonnegative(),
+  /** Stage 1 transfer-window terms, immutable per series and bounded by PARAMETER_BOUNDS. */
+  windowCommitDuration: z.number().int().nonnegative(),
+  windowRevealDuration: z.number().int().nonnegative(),
+  windowFeeBps: z.number().int().nonnegative().max(10_000),
   /** report due, in days of unpaused time after the period end (Stage 1: countdown ≤ due days is OnTime) */
   dueDays: z.number().int().positive(),
   /** grace after the due date (Stage 1: countdown ≤ due + grace days is InGrace, then Late) */
@@ -204,6 +208,9 @@ export const eventPayloads = {
     accrual: moneySchema.optional(),
   }),
   PaymentRefunded: z.object({ ...seriesScoped, periodId: periodIdSchema.nullable(), amount: moneySchema, reason: z.enum(['cap', 'overpayment']) }),
+  TrueUpRecorded: z.object({ ...seriesScoped, year: z.number().int(), adjustment: i64StringSchema, deadline: z.number().int().nonnegative() }),
+  TrueUpPaid: z.object({ ...seriesScoped, amount: moneySchema, accrual: moneySchema }),
+  TrueUpNoticeDue: z.object({ ...seriesScoped, year: z.number().int() }),
   FeeTaken: z.object({ ...seriesScoped, kind: feeKindSchema, amount: moneySchema, payer: addressSchema }),
   /**
    * Stage 1 `PayoutClaimed`: `amount` is the net payout the claim paid; `burnedUnits` the units the claim burns (a
@@ -247,10 +254,9 @@ export const eventPayloads = {
   TailPayout: z.object({ ...seriesScoped, periodId: periodIdSchema, perUnit: moneySchema, total: moneySchema }),
   /**
    * Stage 1's `PauseRequested{series, nonce}` (income.rs:957-960; MercesIncome.sol:480): `nonce` is the series' pause
-   * nonce after the request (a u64 decimal string), the one a PAUSE signature for this request binds. `until` is ours and
-   * advisory (Stage 1's request carries no end).
+   * nonce after the request (a u64 decimal string), the one a PAUSE signature for this request binds. No end is carried.
    */
-  PauseRequested: z.object({ ...seriesScoped, until: z.number().int(), nonce: z.string().regex(/^\d+$/) }),
+  PauseRequested: z.object({ ...seriesScoped, nonce: z.string().regex(/^\d+$/) }),
   /**
    * Stage 1's `PauseApproved{series, start, end, attestor}` (income.rs:1044-1050; MercesIncome.sol:519): the attestor key
    * whose PAUSE signature approved the pause (whoever sent it), the pause's start (the approval's time) and its end.
@@ -400,6 +406,6 @@ export function isEvent<T extends EventType>(e: DomainEvent, type: T): e is Doma
 export const amountBearingEvents: ReadonlySet<EventType> = new Set<EventType>([
   'BidCommitted', 'BidRevealed', 'AuctionSettled', 'AuctionFailed', 'SettlementProposed', 'SettlementRejected', 'UnitsAllocated',
   'BidDelivered', 'NonRevealCharged', 'RaiseMintFinalized', 'TreasuryFunded', 'FundsReleased', 'SplitReceipt', 'ReportAccepted',
-  'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'TailClaimed', 'FinalClaimed', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout',
+  'PaymentReceived', 'PaymentRefunded', 'FeeTaken', 'PayoutClaimed', 'TailClaimed', 'FinalClaimed', 'RedemptionOpened', 'RedemptionClaimed', 'TailPayout', 'TrueUpRecorded', 'TrueUpPaid',
   'SeriesExtinguished', 'TransferWindowCleared', 'CurveActivated', 'CurveGraduated', 'CurveProceedsCollected',
 ]);

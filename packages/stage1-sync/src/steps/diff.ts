@@ -39,10 +39,10 @@ export async function diffInterfaces(ctx: StepCtx): Promise<StepReport> {
   if (schemaPath && existsSync(schemaPath)) sources.push(fromSchema(schemaPath));
   else {
     const idlDir = stage1Path(ctx.location, m.solana?.idlDir);
-    if (idlDir && existsSync(idlDir) && readdirSync(idlDir).some((f) => f.endsWith('.json'))) sources.push(fromSolanaIdls(idlDir));
+    if (idlDir && existsSync(idlDir) && readdirSync(idlDir).some((f) => !f.startsWith('.') && f.endsWith('.json'))) sources.push(fromSolanaIdls(idlDir));
     for (const e of m.evm ?? []) {
       const abiDir = stage1Path(ctx.location, e.abiDir);
-      if (abiDir && existsSync(abiDir) && readdirSync(abiDir).some((f) => f.endsWith('.json'))) sources.push(fromEvmAbis(abiDir, e.chain));
+      if (abiDir && existsSync(abiDir) && readdirSync(abiDir).some((f) => !f.startsWith('.') && f.endsWith('.json'))) sources.push(fromEvmAbis(abiDir, e.chain));
     }
     if (sources.length === 0) sources.push(fromGenerated(ctx.generatedDir));
   }
@@ -205,7 +205,7 @@ function fromSchema(path: string): Source {
 /** Anchor IDL JSON: instructions with args; events whose fields live in the IDL `types` under the event's name. */
 function fromSolanaIdls(dir: string): Source {
   const src = newSource('solana', dir);
-  for (const f of readdirSync(dir).filter((x) => x.endsWith('.json')).sort()) {
+  for (const f of readdirSync(dir).filter((x) => !x.startsWith('.') && x.endsWith('.json')).sort()) {
     if (/^mock/i.test(f)) {
       src.excluded.push(`${f} (mock program)`);
       continue;
@@ -247,7 +247,7 @@ const EVM_EXCLUDE: [RegExp, string][] = [
  */
 function fromEvmAbis(dir: string, chain: string): Source {
   const src = newSource(`evm:${chain}`, dir);
-  const files = readdirSync(dir).filter((x) => x.endsWith('.json')).sort();
+  const files = readdirSync(dir).filter((x) => !x.startsWith('.') && x.endsWith('.json')).sort();
   const names = new Set(files.map((f) => f.replace(/\.json$/, '')));
   for (const f of files) {
     const n = f.replace(/\.json$/, '');

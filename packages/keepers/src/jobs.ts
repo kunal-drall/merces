@@ -1,7 +1,7 @@
 import { dispatchOutbox, enqueueOutbox, getFlag } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import { ChainError, type ChainErrorCode, type ChainPort } from '@merces/domain';
-import { parsePeriod, periodOf, periodsBetween } from '@merces/math';
+import { isCappedScaled, parsePeriod, periodOf, periodsBetween } from '@merces/math';
 import { AuctionService, heldUnits, type ServiceContext } from '@merces/services';
 import type { OutboxHandler } from '@merces/core';
 
@@ -213,6 +213,25 @@ export const pauseCrankJob: KeeperJob = {
  * pool until `claimFinal`. Nor is a curve series: its units never burn (CurveModeNoBurn). A holder the chain refuses with an expected code (a status that moved, WrongStatus; a holder
  * not registered, NotFound) is skipped and the others are still sent.
  */
+export const retireCappedJob: KeeperJob = {
+  name: 'retirement.crank',
+  intervalSeconds: 3600,
+  async run(ctx) {
+    let actions = 0;
+    const errors: string[] = [];
+    await forEachSettled(ctx, errors, async (chain, s) => {
+      if (['Retired', 'Redeemed', 'Extinguished'].includes(s.status) || s.capPerUnit === null || !isCappedScaled({ paidPerUnitWad: BigInt(s.paidPerUnitWad) }, BigInt(s.capPerUnit), BigInt(s.unitScale))) return;
+      try {
+        await chain.submit({ kind: 'retireIfCapped', seriesId: s.seriesId }, 'keeper');
+        actions++;
+      } catch (e) {
+        if (!refused(e, ['WrongStatus', 'WrongPhase'])) throw e;
+      }
+    }, { requireMintFinalized: true });
+    return { actions, errors };
+  },
+};
+
 export const burnCrankJob: KeeperJob = {
   name: 'burn.crank',
   intervalSeconds: 3600,

@@ -21,14 +21,18 @@ frontend integration. Read §0, then the section for your job. Every claim cites
 
 ## 0. Start here
 
-- **Repository:** `kunal-drall/merces`, branch **`claude/jolly-tesla-8j0s7n`**. Stage 1 (the onchain programs, the
-  reference simulator, the SDK, the circuit and the parity vectors) is the git submodule **`stage1/`**, pinned at
-  `1bfc66b` (branch `claude/sweet-goodall-b7acm3`; same tree as `5eafd41`; SPEC v1.1.2).
-- **Head:** S4 complete at `8837dba`, then `5029b6f` (attestor identity check at registration), `c82b41a` (the Stage 1
-  defect report and vector 26) and the commit that adds this file, `API_CHANGELOG.md` and `docs/handoff/`. All are
-  pushed; the full gate run (§3.3) passed on them: 736 tests, conformance 20 + 11, canary 3, vectors `OK: 38/42 PASS,
-  42/42 at expected status (12 prefix runs)`, reference 25/25, lockstep 19/21 at expected status, scenarios 30/32 at
-  expected status, vector 26 PASS on both personalities, `stage1:sync` OK, 190 operations, `DEMO OK`.
+- **Repository:** `kunal-drall/merces`; backend branch `claude/jolly-tesla-8j0s7n`, Stage 1 branch
+  `claude/sweet-goodall-b7acm3`. Integration is in local branch `integrate-handoff`; the requested merge into `main`
+  and pushes are still pending. Stage 1 stays under the `stage1/` submodule, now pinned at `bafe1fb` (SPEC v1.1.2).
+- **Current work:** S4 recovery/security review fixes and S5 items 2, 3, 4, 5, 7, 9, 10, 12 are implemented locally.
+  Stage 1 commit `bafe1fb` fixes reference final-share weighting for redeemed units in uncleared ask escrow, with a
+  regression fixture. Chain programs and all 25 official vectors are unchanged. Every new commit is kunal-drall only.
+- **Latest verification:** 749 backend tests (including 20 default conformance and 3 privacy canaries), separate Monad
+  conformance 11, Stage 1 TypeScript tests 263, sync (Rust oracle 5,883/5,883), both-personality lockstep 42/42 at the
+  configured gates (six prefix runs), reference 25/25, scenarios 82/82, 201 matching API operations, published-key
+  inventory 133 and `DEMO OK` on both personalities. The 18 target vectors pass in full; three window prefixes are
+  explicitly incomplete. Rerun required gates on any later code before push. Historical numbers below describe the
+  original handoff only.
 - **What the product is:** income-share series ("units") an issuer sells in a sealed-bid raise (or, on Solana, on a
   Meteora bonding curve); the issuer proves quarterly income with a zero-knowledge report and pays holders a share above
   a threshold, up to a cap; redemption, tail, extinguishment, hardship pauses and transfer windows ("buy-back") follow
@@ -54,7 +58,7 @@ frontend integration. Read §0, then the section for your job. Every claim cites
 | S4 | Stage 1's signatures: secp256k1 attestor and verifier keys, the six `MERCES_*_V1` messages, domain/series key/nonces, revocation grace and rotation, the attestor device tool (`merces-attestor`), keccak bid commitments, signed pause/amend/extinguish/tier-3/FX/true-up flows, no co-signers | "S4 results" |
 | S4 owner decisions (local) | attestor identity check enforced at registration (A-SIG-7); the Stage 1 defect report for the final-share weight with vector 26 | `5029b6f`, `c82b41a`, `docs/stage1/defects/` |
 
-### 1.2 Numbers at the handoff head
+### 1.2 Historical baseline at the original handoff head
 
 | Gate | Result |
 | --- | --- |
@@ -69,14 +73,11 @@ frontend integration. Read §0, then the section for your job. Every claim cites
 | OpenAPI | 190 operations (188 at `8837dba`) |
 | `demo:cycle` | `DEMO OK` on both personalities |
 
-Parity by vector (`docs/stage1/VECTOR_PARITY.md`, `packages/stage1-sync/src/stage1-vectors/expected.ts`):
-- **PASS in full (15):** 02, 03, 04, 06, 07, 09, 11, 15, 17, 19, 21, 23, 25, and 01, 05 with waivers (see below).
-- **Prefix-gated (6):** 08 to #57 (`end_pause`), 10 to #35 (windows flag), 14 to #61 (`retire_if_capped`), 16 to #40
-  (`set_flags`), 20 to #70 (`submit_trueup`), 22 to #75 (multi-step windows).
-- **Not replayed (4):** 12 (tier-1 router), 13 (FX), 18 (report before mint finalization), 24 (inverted FX).
-- **Waivers (2):** NA-1 `transfer_units` (01#32), BLK-1 `retire_if_capped` (01#34, 05#42).
-- **Shims left (14):** SH-REG-1, SH-REG-4, SH-REP-1, SH-PAY-1, SH-PAU-1, SH-RED-1, SH-WIN-1…7, SH-FLG-1
-  (table: `docs/stage1/VECTOR_PARITY.md` "Shims (not parity)").
+Current parity coverage (`packages/stage1-sync/src/stage1-vectors/expected.ts`):
+- **Required full passes (18):** 01–09, 11, 14, 15, 17, 19, 20, 21, 23, 25; no waivers.
+- **Prefix gates (3):** 10 to #35, 16 to #40, 22 to #75, all waiting on multi-step windows.
+- **Not replayed (4):** 12 and 18 (router), 13 and 24 (FX).
+- **Shims left (9):** SH-REP-1, SH-WIN-1…7, SH-FLG-1. New targets are promoted only after full replay evidence.
 
 ### 1.3 Repository map
 
@@ -84,7 +85,7 @@ Parity by vector (`docs/stage1/VECTOR_PARITY.md`, `packages/stage1-sync/src/stag
 | --- | --- |
 | `packages/domain` | canonical commands, events, state, port (`ChainPort`), signing (`signing.ts`), terms rules, notices |
 | `packages/math` | gateway to Stage 1's math (`@merces/reference`, `@merces/sdk`) + the segregated curve port (`interim/` for S5 leftovers) |
-| `packages/simulator` | the in-process chain (engine per area under `src/engine/`, reads, state version 5, harness, `SimWallet`, `SimSigner`) |
+| `packages/simulator` | the in-process chain (engine per area under `src/engine/`, reads, state version 6, harness, `SimWallet`, `SimSigner`) |
 | `packages/chain-solana`, `packages/chain-evm` | live adapters: **skeletons** (`wired = false`, every read/write NotImplemented; config, mainnet refusal, health) |
 | `packages/chains` | chain registry, mode selection (`mock|live|auto`), Stage 1 manifest locator |
 | `packages/indexer` | projections of canonical events into Postgres |
@@ -93,7 +94,7 @@ Parity by vector (`docs/stage1/VECTOR_PARITY.md`, `packages/stage1-sync/src/stag
 | `packages/api` | Fastify app, access tiers, public/me/dev routes, `openapi.yaml` (built from `src/openapi/` fragments) |
 | `packages/client` | generated TypeScript client (`openapi.d.ts`) for the frontend |
 | `packages/server` | process entry points: `dev-mock.ts`, `main.ts`, `openapi-check.ts` |
-| `packages/db` | migrations 001-031 (031 is local), CLI |
+| `packages/db` | migrations 001-033, CLI |
 | `packages/ports` | KMS (local secp256k1/ed25519; DER normaliser and provider-neutral remote adapter), zkTLS (mock), identity (mock), e-sign (mock), proof system (Groth16), wallet signature verification |
 | `packages/report-verifier` | the tier-2 report verifier service (signs Stage 1's REPORT with a KMS key) |
 | `packages/poi-device` | the issuer's report assembler and the attestor tool `merces-attestor` (keystore, request check, signing) |
@@ -127,8 +128,8 @@ From the owner; they hold for every change, in fast mode too.
    `API_CHANGELOG.md` per push.
 9. **Fast mode (owner, 2026-10-11):** no per-package verifiers or multi-reviewer reviews until one cross-cutting review at
    the very end; run independent work in parallel; do not wait for the owner: take the stated default, record it in
-   `OPEN_DECISIONS.md` (to be created, §8 is its seed) and continue; defer refactors, extra scenarios and doc polish to
-   `POLISH_LATER.md` (to be created, §9 is its seed). Full text: `docs/handoff/owner-directions-2026-10-11.md`.
+   `OPEN_DECISIONS.md` and continue; defer refactors, extra scenarios and doc polish to
+   `POLISH_LATER.md`. Full text: `docs/handoff/owner-directions-2026-10-11.md`.
 10. **Deployment last (owner, 2026-10-11):** Stage 1 and this backend are deployed to Solana devnet and Monad testnet only
     after the code of all four stages is complete. The deployment steps are in §6 for when that day comes.
 
@@ -145,7 +146,7 @@ Node 22, pnpm 10.28.0, Postgres 16, git (with submodules), and Rust via rustup w
 ```bash
 git clone https://github.com/kunal-drall/merces && cd merces
 git checkout claude/jolly-tesla-8j0s7n
-git submodule update --init --recursive          # stage1/ at 1bfc66b
+git submodule update --init --recursive          # stage1/ at the committed gitlink
 pnpm install                                     # postinstall builds @merces/sdk, @merces/reference, @merces/circuits from stage1/
 docker compose up -d postgres                    # or a local Postgres 16; createdb merces
 export DATABASE_URL=postgres://postgres@localhost:5432/merces
@@ -183,52 +184,34 @@ After a run, `git status` must be clean (regenerated files unchanged). CI (`.git
 
 Sizes: S = under a day, M = 1-3 days, L = more. Each item names its acceptance.
 
-### 4.1 Start from the pushed branch (done)
+### 4.1 Integrate both GitHub branches and push main (pending)
 
-Everything is pushed (§0). If a local clone from the previous session still has the scratch branches `wt/owner-b`,
-`wt/owner-d` or `wt/owner-e`, delete them (never push them); their commits are already on the branch.
+Start from backend `51be0e0`; preserve the Stage 1 branch as the submodule and retain both histories when integrating
+into `main`. Stage 1's fix is committed locally as `bafe1fb`; backend changes have not yet been pushed. Run every gate,
+review the final diff, verify author/committer and absence of trailers, then push the Stage 1 ref before the backend
+that references it. Verify remote refs after the push.
 
-### 4.2 S4 review fixes (M)
+### 4.2 S4 review fixes (implemented)
 
-`docs/handoff/s4-review-findings.md` lists eleven findings from the S4 cross-cutting review with locations, reproduced
-scenarios and fixes. Order: (1) stranded work after a key rotation/revocation (withdraw and re-address paths); (2) dead
-FX/tier-3/true-up signatures past the key's grace must be replaceable; (3) project `PauseApproved` onto hardship rows;
-(4) one source for the true-up basis; (5) refuse published test keys while any chain is live; (10) mock zkTLS refused on
-live chains in the standalone verifier; then (6)-(9), (11). Each fix with a test; the gates stay green.
+The eleven findings in `docs/handoff/s4-review-findings.md` are addressed: withdrawal/readdress recovery after rotation,
+replaceable expired FX work and queue visibility, third-party pause projection, chain-based true-up accounting,
+published-key rejection on live chains, repeat-revocation divergence, eager vector-key provenance validation,
+terminal hardship guards/projection, serialized annual signing, live mock-zkTLS refusal and verifier retirement units.
+Optional Solana terminal-pause cleanup remains documented in `POLISH_LATER.md`; service safety is enforced now.
 
-### 4.3 The owner-decision records still to write (S)
+### 4.3 Owner-decision records and API diff tool (implemented)
 
-The owner's answers of 2026-10-11 (verbatim in `docs/handoff/owner-directions-2026-10-11.md` §5) are applied in code
-where code was needed (`5029b6f`, `c82b41a`); these records are not written yet (`ASSUMPTIONS.md` A-SIG-7, `API.md` and
-`PRIVACY.md` already carry the registration rule):
-- `STAGE1_INTEGRATION.md` "Owner decisions and questions": the five answers verbatim with what was done (KMS: keep the
-  local dev signer, AWS KMS later unless the owner says otherwise; wallet-friendly messages: the owner asks Stage 1 for
-  an EIP-712 or EIP-191-wrapped form of the six messages, `merces-attestor` stays the fallback, signing stays behind one
-  interface, `DigestSigner` in `packages/domain/src/port.ts` and the KMS port, so a wallet signer can be added;
-  compromised keys accepted for testnet; extinguishment by two separately verified accounts enforced at registration;
-  final share follows the chains, defect report in `docs/stage1/defects/`). Add both Stage 1 asks (EIP-712 form; the
-  defect report) to "Asked of Stage 1", and a third: an onchain cancellable delay on extinguishment.
-- `SECURITY.md`: a section "Accepted for testnet" (the compromised-key residual risk: forward-only revocation keeps report
-  and FX signatures for ended periods valid up to 45 days; unrelayed PAUSE/EXTINGUISH signatures are bearer authorisations
-  until used or the key is revoked) and a section **"Required before mainnet"** with the owner's three items:
-  (a) a cancellable delay on extinguishment (must be onchain: the two signatures are bearer authorisations anyone can
-  submit; a Stage 1 ask; meanwhile the keeper can hold its own relay for a configured delay, which cannot stop a third
-  party); (b) an immediate revoke for a compromised key (today the admin builds `revokeAttestor`/`revokeVerifierKey` for
-  the multisig and the last-key rule needs a replacement first; "immediate" needs a pre-authorised path: a guardian or
-  emergency revoker in Stage 1's registry, or a pre-signed revoke held by the operator); (c) an alert on every attestor
-  signature (notify admins, and the issuer for its series, whenever a tier-3, FX, pause, amendment, extinguishment or
-  true-up signature is accepted or relayed; not built; cheap: a notification template plus a call in each accept/relay
-  path of `packages/services/src/attestor/service.ts` and `terms/service.ts`).
-- `RUNBOOK.md`: a "Compromised key" procedure honest about what is immediate today; the verifier key stays on the local
-  signer until the owner says otherwise. `ASSUMPTIONS.md` A-SIG-2 (alerts required before mainnet; EIP-712 ask), A-SIG-6
-  (relay delay note).
-- `OPEN_DECISIONS.md` and `POLISH_LATER.md` at the root, seeded from §8 and §9.
-- `scripts/api-changelog.mjs <from-rev> <to-rev>` (+ root script `api:changelog`, + a unit test): diff
-  `packages/api/openapi.yaml` between two revisions (`git show <rev>:packages/api/openapi.yaml`, parsed with the `yaml`
-  package already in `packages/api`): operations added/removed/changed, component fields added/removed/retyped, in the
-  shape of `API_CHANGELOG.md`.
+Owner answers and Stage 1 asks are recorded in `STAGE1_INTEGRATION.md`; accepted testnet risk and pre-mainnet
+requirements in `SECURITY.md`; compromised-key recovery in `RUNBOOK.md`; defaults and deferred work in
+`OPEN_DECISIONS.md` and `POLISH_LATER.md`. `DEPLOY_DAY.md` holds the deployment checklist. The tested
+`pnpm api:changelog <from-rev> <to-rev>` command reports operation and nested schema changes from git revisions.
 
 ### 4.4 S5: the rest of Stage 1's surface (L)
+
+**Progress:** items **2, 3, 4, 5, 7, 9, 10 and 12 are implemented**. The table retains their original scope as a
+checklist. Still required: **1 (windows), 6 (FX), 8 (router), 11 (remaining mint gates with the router)**, then §5.
+True-up submission/payment now includes issuer builders, signature/nonce validation, forward credit, paused lateness
+accrual, annual formal notices, chain reads and indexed annual states (`signed → recorded → paid`).
 
 **Goal:** every Stage 1 vector PASS in full on both personalities (`expected.ts` TARGETS = all 25, `PREFIX_GATES` empty,
 no waivers), `--backend reference` 25/25, lockstep agreeing, **the shim table empty**, and an API route for every flow in

@@ -29,7 +29,7 @@ export async function generateClients(ctx: StepCtx): Promise<StepReport> {
     mkdirSync(out, { recursive: true });
     const { renderAnchorIdl } = await import('../idl-render.ts');
     const names: string[] = [];
-    for (const f of readdirSync(idlDir).filter((x) => x.endsWith('.json'))) {
+    for (const f of readdirSync(idlDir).filter((x) => !x.startsWith('.') && x.endsWith('.json'))) {
       try {
         const idl = JSON.parse(readFileSync(join(idlDir, f), 'utf8'));
         const name = f.replace(/\.json$/, '');
@@ -57,7 +57,7 @@ export async function generateClients(ctx: StepCtx): Promise<StepReport> {
     const out = join(ctx.generatedDir, 'evm');
     mkdirSync(out, { recursive: true });
     const names: string[] = [];
-    for (const f of readdirSync(abiDir).filter((x) => x.endsWith('.json'))) {
+    for (const f of readdirSync(abiDir).filter((x) => !x.startsWith('.') && x.endsWith('.json'))) {
       const raw = JSON.parse(readFileSync(join(abiDir, f), 'utf8'));
       const abi = Array.isArray(raw) ? raw : raw.abi;
       if (!Array.isArray(abi)) {

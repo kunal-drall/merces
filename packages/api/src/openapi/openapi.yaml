@@ -107,6 +107,9 @@ components:
         payoutFeeBps: { type: integer }
         hurdleWad: { $ref: '#/components/schemas/Wad' }
         payoutMultipleK: { type: integer }
+        windowCommitDuration: { type: [integer, 'null'], minimum: 3600, maximum: 1209600, default: 259200 }
+        windowRevealDuration: { type: [integer, 'null'], minimum: 3600, maximum: 604800, default: 86400 }
+        windowFeeBps: { type: [integer, 'null'], minimum: 0, maximum: 1000, default: 100 }
         walletCapBps: { type: integer, description: "the sealed-bid raise's wallet cap in bps of the units offered (a bid above it is invalid at reveal). 0 on a curve-mode series, which has no wallet cap at any stage (the series' noCap): 0 there never means a cap" }
         dueDays: { type: integer }
         graceDays: { type: integer }
@@ -917,7 +920,7 @@ paths:
       x-access: account
       tags: [terms]
       security: [{ session: [] }]
-      description: "Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months."
+      description: "Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months. Both styles record windowCommitDuration (3600–1209600 seconds, default 259200), windowRevealDuration (3600–604800 seconds, default 86400), and windowFeeBps (0–1000, default 100); validation reports out-of-bounds values."
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, public], properties: { chain: { type: string }, public: { type: object }, private: { type: [object, 'null'] } } } } } }
       responses: { '200': { description: Issues (empty when valid) and derived values, content: { application/json: { schema: { type: object, properties: { issues: { type: array, items: { type: object } }, derived: { type: object } } } } } } }
   /terms/commitment:

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { addressSchema, hash32Schema, pairSchema, periodIdSchema, seriesIdSchema, stablecoinSchema } from './ids.ts';
 import { moneySchema, unitsSchema, wadSchema } from './money.ts';
 import { seriesTermsSchema, tierSchema, fxBasisSchema } from './events.ts';
-import { attestationSchema, signature65Schema, signerAddressSchema } from './signing.ts';
+import { attestationSchema, signature65Schema, signerAddressSchema, i64StringSchema, u64StringSchema } from './signing.ts';
 
 /**
  * Canonical commands (Part D2). User commands are built into unsigned transactions for the user's wallet.
@@ -39,7 +39,6 @@ export const reportProofSchema = z.discriminatedUnion('system', [
 export type ReportProof = z.infer<typeof reportProofSchema>;
 
 export const userCommands = {
-  registerIssuer: z.object({ kind: z.literal('registerIssuer') }),
   createSeries: z.object({ kind: z.literal('createSeries'), terms: seriesTermsSchema, /** simulator/testing only: fixed address for deterministic ids */ seriesAddressHint: z.string().optional() }),
   /** Stage 1 `open_raise`: the chain sets the commit end to now + `commitDurationSeconds` and the reveal end to the commit end + `revealDurationSeconds` (the series' terms) */
   openRaise: z.object({ kind: z.literal('openRaise'), seriesId: seriesIdSchema }),
@@ -84,7 +83,9 @@ export const userCommands = {
     attestation: attestationSchema.nullable(),
     liquidityEvent: z.boolean(),
   }),
-  payIn: z.object({ kind: z.literal('payIn'), seriesId: seriesIdSchema, periodId: periodIdSchema, amount: moneySchema }),
+  payIn: z.object({ kind: z.literal('payIn'), seriesId: seriesIdSchema, periodId: periodIdSchema.optional(), amount: moneySchema.optional() }),
+  submitTrueUp: z.object({ kind: z.literal('submitTrueUp'), seriesId: seriesIdSchema, year: z.number().int().min(0).max(65535), adjustment: i64StringSchema, attestationTs: u64StringSchema, attestor: signerAddressSchema, signature: signature65Schema }),
+  payTrueUp: z.object({ kind: z.literal('payTrueUp'), seriesId: seriesIdSchema }),
   /**
    * Stage 1 `claim` (SIM:1268-1282): the holder's net payout (its pending payout) and nothing else: the tail is
    * `claimTail`'s and the final-pool share `claimFinal`'s. HolderNotRegistered for a wallet that is not a registered
@@ -117,18 +118,21 @@ export const userCommands = {
    * Stage 1 `request_pause` (SIM:650-661; income.rs:939-962; MercesIncome.sol:471-481): the issuer asks for a hardship
    * pause. NotIssuer, RaiseNotSettled, TerminalStatus; not refused while paused or while a request is pending (a repeated
    * request is a new one). Advances the series' pause nonce (`SeriesState.nonces.pause`), so every PAUSE signature over an
-   * older request stops recovering to its key. `until` is ours and advisory (Stage 1's request carries no end): stored and
-   * emitted, never enforced; the attestor approves the actual end. Emits `PauseRequested{until, nonce}`.
+   * older request stops recovering to its key. The request carries no end; the private hardship review keeps the
+   * issuer's requested end offchain. Emits `PauseRequested{nonce}`.
    */
-  requestPause: z.object({ kind: z.literal('requestPause'), seriesId: seriesIdSchema, until: z.number().int() }),
+  requestPause: z.object({ kind: z.literal('requestPause'), seriesId: seriesIdSchema }),
   /**
    * Stage 1 `withdraw_pause_request` (SIM:662-670; income.rs:964-977; MercesIncome.sol:484-493; S4 WP10, D12): the issuer
    * withdraws its pending request. NotIssuer, then PauseNotRequested; the request is cleared (with its requested time and
    * our advisory end) and the pause nonce advances, so a PAUSE signature collected for the withdrawn request is dead.
    * Emits `PauseRequestWithdrawn{nonce}` with the new nonce.
    */
+  endPause: z.object({ kind: z.literal('endPause'), seriesId: seriesIdSchema }),
+  /** Direct token transfers are refused by the protocol transfer hook. */
+  transferUnits: z.object({ kind: z.literal('transferUnits'), seriesId: seriesIdSchema, to: addressSchema, units: unitsSchema }),
   withdrawPauseRequest: z.object({ kind: z.literal('withdrawPauseRequest'), seriesId: seriesIdSchema }),
-  redeem: z.object({ kind: z.literal('redeem'), seriesId: seriesIdSchema, maxPricePerUnit: moneySchema }),
+  redeem: z.object({ kind: z.literal('redeem'), seriesId: seriesIdSchema, maxPricePerUnit: moneySchema.optional() }),
   claimRedemption: z.object({ kind: z.literal('claimRedemption'), seriesId: seriesIdSchema }),
   /**
    * Stage 1 `amend_terms` / `amendTerms(seriesId, newTermsCommitment, newCapMultipleWad, attestorSignature, tier1Terms)`
@@ -201,6 +205,8 @@ export const serviceCommands = {
  * any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans the settlement steps.
  */
 export const permissionlessCommands = {
+  /** Stage 1 retire_if_capped: after mint finalization, retire when the current cap has been met. */
+  retireIfCapped: z.object({ kind: z.literal('retireIfCapped'), seriesId: seriesIdSchema }),
   /** Stage 1 `begin_settlement`: proposes a clearing price with the proposer's tally claims; starts the next round */
   beginSettlement: z.object({ kind: z.literal('beginSettlement'), seriesId: seriesIdSchema, clearingPrice: moneySchema, qAboveClaim: unitsSchema, qAtClaim: unitsSchema }),
   /**
@@ -280,6 +286,8 @@ export const permissionlessCommands = {
 } as const;
 
 export const adminCommands = {
+  /** Stage 1 register_issuer: only the protocol admin registers a wallet. Re-registration is idempotent. */
+  registerIssuer: z.object({ kind: z.literal('registerIssuer'), wallet: addressSchema }),
   /**
    * Stage 1 `register_attestor` / `registerAttestor` (merces_registry lib.rs:218-236; MercesRegistry.sol:287-289, :315-329;
    * SIM:535-536): the admin registers (or re-activates) an attestor key; `revokedAt` returns to 0. A zero address is
@@ -341,7 +349,7 @@ export const routerCommands = {
   postSplitReceipt: z.object({ kind: z.literal('postSplitReceipt'), seriesId: seriesIdSchema, amount: moneySchema }),
 } as const;
 
-export const userCommandSchema = z.discriminatedUnion('kind', Object.values(userCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'registerIssuer'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
+export const userCommandSchema = z.discriminatedUnion('kind', Object.values(userCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'createSeries'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
 export const permissionlessCommandSchema = z.discriminatedUnion('kind', Object.values(permissionlessCommands) as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'beginSettlement'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);
 /** What `ChainPort.submit` accepts: the service group and the permissionless group (each command is defined once). */
 export const serviceCommandSchema = z.discriminatedUnion('kind', [...Object.values(serviceCommands), ...Object.values(permissionlessCommands)] as unknown as [z.ZodObject<{ kind: z.ZodLiteral<'snapshotRate'> }>, ...z.ZodObject<{ kind: z.ZodLiteral<string> }>[]]);

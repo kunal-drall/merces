@@ -103,12 +103,19 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     const decided = await rig.post(`/admin/applications/${appId}/decide`, { decision: 'approved', reasonCode: 'review-ok' }, adminTok);
     expect(decided.statusCode).toBe(200);
     expect(decided.json().state).toBe('approved');
+    expect(await rig.mon.sim.getIssuer(w.address)).toBeNull();
+    const proposal = decided.json().issuerRegistration;
+    expect(proposal.tx.command).toEqual({ kind: 'registerIssuer', wallet: w.address });
+    expect(proposal.tx.signer).toBe(rig.mon.admin.address);
+    expect((await rig.post('/tx/send', await rig.mon.admin.sign(proposal.tx), adminTok)).statusCode).toBe(200);
+    expect(await rig.mon.sim.getIssuer(w.address)).not.toBeNull();
+
     expect(await rig.mon.sim.isAllowlisted(w.address)).toBe(true);
     const refreshed = await rig.post('/me/session/refresh', {}, tok);
     expect(refreshed.json().account.roles).toContain('issuer');
     expect(refreshed.json().account.eligible).toBe(true);
     const audit = await rig.t.pool.query("select action from audit_log where target = $1 or target = $2 order by id", [appId, `monad:${w.address}`]);
-    expect(audit.rows.map((r) => r.action)).toEqual(['application.approved', 'allowlist.add']);
+    expect(audit.rows.map((r) => r.action)).toEqual(['application.approved', 'issuer.register-proposed', 'allowlist.add']);
     // revocation: off the allowlist; the chain still lets the wallet claim (C10 is enforced by the simulator tests)
     expect((await rig.post(`/admin/eligibility/monad/${w.address}/revoke`, { reasonCode: 'compliance' }, adminTok)).statusCode).toBe(200);
     expect(await rig.mon.sim.isAllowlisted(w.address)).toBe(false);
@@ -189,8 +196,8 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     // non-reveal charge (the rig's 100 bps; was 0 under the S2 hold)
     expect((tx.command as { terms: Record<string, unknown> }).terms).toMatchObject({ commitDurationSeconds: 604_800, revealDurationSeconds: 172_800, nonRevealChargeBps: 100 });
     // the issuer must be registered on chain first (registerIssuer), then createSeries
-    const reg = await rig.sol.sim.build({ kind: 'registerIssuer' }, issuer.address);
-    expect((await rig.post('/tx/send', await issuer.sign(reg), issuerTok)).statusCode).toBe(200);
+    const reg = await rig.sol.sim.build({ kind: 'registerIssuer', wallet: issuer.address }, rig.sol.admin.address);
+    expect((await rig.post('/tx/send', await rig.sol.admin.sign(reg), adminTok)).statusCode).toBe(200);
     const signed: SignedTx = await issuer.sign(tx);
     // a stranger cannot relay someone else's signed tx
     expect((await rig.post('/tx/send', signed, rig.token({ accountId: 'x', wallets: [{ chain: 'solana', address: 'nobody' }] }))).statusCode).toBe(403);

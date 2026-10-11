@@ -49,7 +49,7 @@ export function quote(s: SimSeries, now: number): RedemptionQuote {
  *  2. the raise settled (RaiseNotSettled) and its last bid is processed (MintNotFinalized);
  *  3. the derived status is not terminal (TerminalStatus) and not Late (SeriesLate); **Paused is allowed**;
  *  4. the lockup has ended (LockupActive);
- *  5. nothing is due (PaymentOutstanding) and no true-up is due (TrueUpOutstanding; 0 until S5);
+ *  5. nothing is due (PaymentOutstanding) and no true-up is due (TrueUpOutstanding);
  *  6. every ended period is reported: `lastEnded = pidAt(now) − 1` is before the first period or at most the last
  *     accepted one (UnreportedPeriods);
  *  6a. curve mode (Solana `redeem`, exit.rs:80-95, B-C13): the redemption takes and stores its own census with the
@@ -81,7 +81,7 @@ export function redeem(e: EngineCore, signer: string, cmd: Extract<Command, { ki
     if (s.unitsOutstanding === 0n) fail('NoUnitsOutstanding', 'no units are outstanding');
   }
   const q = quote(s, now);
-  if (q.pRedeem > big(cmd.maxPricePerUnit)) throw new ChainError('InvalidTerms', `price ${q.pRedeem} exceeds maxPricePerUnit`);
+  if (cmd.maxPricePerUnit !== undefined && q.pRedeem > big(cmd.maxPricePerUnit)) throw new ChainError('InvalidTerms', `price ${q.pRedeem} exceeds maxPricePerUnit`);
   syncStatus(e, s, now, emit);
   if (q.cRemaining === 0n) {
     // nothing is left of the cap: the series retires instead (SIM:1353-1357)

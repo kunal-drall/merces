@@ -24,7 +24,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 - `seriesId`: string
 - `issuer`: string
-- `terms`: object { stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }
+- `terms`: object { stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }
 
 ### RaiseOpened
 
@@ -175,6 +175,24 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 - `amount`: decimal string (base units / WAD / units)
 - `reason`: `cap` \| `overpayment`
 
+### TrueUpRecorded (amount-bearing)
+
+- `seriesId`: string
+- `year`: integer
+- `adjustment`: string
+- `deadline`: integer
+
+### TrueUpPaid (amount-bearing)
+
+- `seriesId`: string
+- `amount`: decimal string (base units / WAD / units)
+- `accrual`: decimal string (base units / WAD / units)
+
+### TrueUpNoticeDue
+
+- `seriesId`: string
+- `year`: integer
+
 ### FeeTaken (amount-bearing)
 
 - `seriesId`: string
@@ -241,7 +259,6 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 ### PauseRequested
 
 - `seriesId`: string
-- `until`: integer
 - `nonce`: decimal string (base units / WAD / units)
 
 ### PauseApproved
@@ -401,8 +418,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### User commands
 
-- **registerIssuer**
-- **createSeries**: `terms`: object { stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }; `seriesAddressHint?`: string
+- **createSeries**: `terms`: object { stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }; `seriesAddressHint?`: string
 - **openRaise**: `seriesId`: string
 - **cancelRaise**: `seriesId`: string
 - **commitBid**: `seriesId`: string; `commitment`: hex32; `deposit`: decimal string (base units / WAD / units)
@@ -410,13 +426,17 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **drawRelease**: `seriesId`: string
 - **pauseReleases**: `seriesId`: string; `paused`: boolean
 - **submitReport**: `seriesId`: string; `periodId`: period id (YYYYQn); `tier`: `1` \| `2` \| `3` \| `4`; `paymentStable`: decimal string (base units / WAD / units); `priorIncomeCommitment`: hex32; `incomeCommitment`: hex32; `fxBasis`: `accumulator` \| `attestor` \| `unity`; `fxAvgWad`: decimal string (base units / WAD / units); `pair`: pair (XXX/USD) \| null; `fxFallback`: object { signer: string, signature: string } \| null; `proof`: object { system: `groth16-bn254`, proof: object { pi_a: array of decimal string (field element), pi_b: array of array of decimal string (field element), pi_c: array of decimal string (field element), protocol: `groth16`, curve: `bn128` }, publicInputs: array of decimal string (field element) } \| object { system: `mock`, proof: string, publicInputs: array of decimal string (field element) }; `attestation`: object { signer: string, signature: string } \| null; `liquidityEvent`: boolean
-- **payIn**: `seriesId`: string; `periodId`: period id (YYYYQn); `amount`: decimal string (base units / WAD / units)
+- **payIn**: `seriesId`: string; `periodId?`: period id (YYYYQn); `amount?`: decimal string (base units / WAD / units)
+- **submitTrueUp**: `seriesId`: string; `year`: integer; `adjustment`: string; `attestationTs`: string; `attestor`: string; `signature`: string
+- **payTrueUp**: `seriesId`: string
 - **claimPayout**: `seriesId`: string
 - **claimTail**: `seriesId`: string
 - **claimFinal**: `seriesId`: string
-- **requestPause**: `seriesId`: string; `until`: integer
+- **requestPause**: `seriesId`: string
+- **endPause**: `seriesId`: string
+- **transferUnits**: `seriesId`: string; `to`: string; `units`: decimal string (base units / WAD / units)
 - **withdrawPauseRequest**: `seriesId`: string
-- **redeem**: `seriesId`: string; `maxPricePerUnit`: decimal string (base units / WAD / units)
+- **redeem**: `seriesId`: string; `maxPricePerUnit?`: decimal string (base units / WAD / units)
 - **claimRedemption**: `seriesId`: string
 - **amendTerms**: `seriesId`: string; `termsCommitment`: hex32; `capMultipleWad`: decimal string (base units / WAD / units); `attestor`: string; `signature`: string
 - **commitWindowOrder**: `seriesId`: string; `windowId`: integer; `side`: `buy` \| `sell`; `commitment`: hex32; `deposit`: decimal string (base units / WAD / units); `units`: decimal string (base units / WAD / units)
@@ -439,6 +459,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### Permissionless commands (keeper `submit` or any wallet `build`)
 
+- **retireIfCapped**: `seriesId`: string
 - **beginSettlement**: `seriesId`: string; `clearingPrice`: decimal string (base units / WAD / units); `qAboveClaim`: decimal string (base units / WAD / units); `qAtClaim`: decimal string (base units / WAD / units)
 - **tallyBids**: `seriesId`: string; `maxBids?`: integer
 - **finalizeSettlement**: `seriesId`: string
@@ -454,6 +475,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### Admin commands (multisig)
 
+- **registerIssuer**: `wallet`: string
 - **registerAttestor**: `attestor`: string
 - **revokeAttestor**: `attestor`: string
 - **rotateAttestor**: `from`: string; `to`: string
@@ -487,7 +509,7 @@ The shapes above are generated; these meanings changed in S1, when the simulator
 - **Tier-3 attestation and the FX fallback (S4 WP9).** A tier-3 report carries an attestor key's Stage 1 REPORT signature with tier 3 in `submitReport.attestation` (else `InvalidAttestorSignature`), with the same 45-day grace for a key revoked after the period ended. When the accumulator has no usable average, `submitReport.fxFallback` carries an attestor key's `MERCES_FX_V1` signature over the series key, the period and the report's own `fxAvgWad` (`FxFallbackRequired` without it, `FxFallbackNotAllowed` with one when the average is usable, `InvalidAttestorSignature` for a signature that does not recover to a usable attestor key; both chains give it the report keys' grace, Stage 1's reference does not: DIV-S1I-3). The message binds the series key, so one rate is one signature per series. Nobody co-signs a report: the issuer sends it alone.
 - **`ReportAccepted`.** `paymentDue` is the due the report opened (the payment less tier-1 split credit; 0 for a tail report that is not a liquidity event), without accrual; `accrual` is always "0"; `priorIncomeCommitment` is the commitment it chained from.
 - **`payIn` and `PaymentReceived`.** `payIn` pays the open due in full: `periodId` names the open due period and `amount` is the due plus Stage 1's lateness accrual when the payment lands; anyone may pay (NothingDue when nothing is open). `PaymentReceived.gross` is what the vault accepted; from a pay-in it carries the final `paymentDue` (due + accrual) and `accrual`; `source: 'tail'` is a tail payment (its own accumulator, outside the payout vault totals); `source: 'extinguishment'` is the unvested treasury returned through the final pool (fee 0, not an issuer payment).
-- **Pauses.** `requestPause.until` and `PauseRequested.until` are advisory (Stage 1's request has no end); a pause ends by itself at its approved end. Since S4 WP10 `approvePause` is Stage 1's `approve_pause`, permissionless: it carries an attestor key's `MERCES_PAUSE_V1` signature over the chain's signing domain, the series key, the series' live pause nonce (`SeriesState.nonces.pause`) and `pauseEnd` (a decimal string), and anyone may send it (the attestor signs on its own device; the keeper relays). The chain refuses an end beyond u64 first (`AmountOutOfRange`), then a signature that does not recover to `attestor` or an attestor key that is not active (`InvalidAttestorSignature`; no grace), then `PauseNotRequested`, then Stage 1's bounds. A request (`PauseRequested{nonce}`) and the issuer's `withdrawPauseRequest` (`PauseRequestWithdrawn{nonce}`, the new nonce; it clears the request) advance the nonce, so a signature over an older request is dead; an approval leaves the nonce and clears the request, so a replay is `PauseNotRequested`. `PauseApproved` names the signing key (not the sender) and the pause's `start`.
+- **Pauses.** `requestPause` and `PauseRequested` carry no end. The private hardship review holds the requested end offchain. A pause ends at its approved end or when its issuer calls `endPause` early, returning unused duration to the lifetime allowance. Since S4 WP10 `approvePause` is Stage 1's `approve_pause`, permissionless: it carries an attestor key's `MERCES_PAUSE_V1` signature over the chain's signing domain, the series key, the series' live pause nonce (`SeriesState.nonces.pause`) and `pauseEnd` (a decimal string), and anyone may send it (the attestor signs on its own device; the keeper relays). The chain refuses an end beyond u64 first (`AmountOutOfRange`), then a signature that does not recover to `attestor` or an attestor key that is not active (`InvalidAttestorSignature`; no grace), then `PauseNotRequested`, then Stage 1's bounds. A request (`PauseRequested{nonce}`) and the issuer's `withdrawPauseRequest` (`PauseRequestWithdrawn{nonce}`, the new nonce; it clears the request) advance the nonce, so a signature over an older request is dead; an approval leaves the nonce and clears the request, so a replay is `PauseNotRequested`. `PauseApproved` names the signing key (not the sender) and the pause's `start`.
 - **Amendments (S4 WP11).** `amendTerms` is Stage 1's `amend_terms`, still the issuer's transaction: it carries an attestor key's `MERCES_AMEND_V1` signature over the chain's signing domain, the series key, the series' live amendment nonce (`SeriesState.nonces.amendment`), the new terms commitment and the new cap multiple (the attestor signs on its own device; nobody co-signs). In the EVM's order the chain refuses a sender other than the issuer (`NotIssuer`), a terminal series (`AmendmentAfterTerminal`), a cap beyond u64 (`AmountOutOfRange`, before the signature is read), a signature that does not recover to `attestor` or an attestor key that is not active (`InvalidAttestorSignature`; no grace), then a cap that rises or leaves [2, 3] (`UnfavourableAmendment`). An amendment advances the nonce, so every AMEND signature over the old one is dead. `TermsAmended{attestor, nonce}` names the signing key and the nonce it signed (the value before the increment, as both chains emit it).
 - **Claims (S3: Stage 1's claim family).** Every stablecoin amount a claim moves appears in exactly one event amount: `PayoutClaimed` (the net payout; inside a redemption, the pending payout and the tail catch-up), `RedemptionClaimed` (the redemption principal, units × price), `TailClaimed` (the tail), `FinalClaimed` (the pending payout and the final-pool share) and `BidDelivered` (a delivered refund). Claims need a registered holder (HolderNotRegistered), never current allowlist membership. A claim of nothing emits its own event with zeros (`PayoutClaimed{0, burned}`, `TailClaimed{0}`, `FinalClaimed{units, 0}`); the split-out `PayoutClaimed` inside a redemption appears only above 0. The read model never creates a position from a claim and records no money row for a zero amount.
 - **`claimPayout`.** Stage 1 `claim`: the net payout (the holder's pending payout) and nothing else, on every status; the tail is `claimTail`'s and the final-pool share `claimFinal`'s. HolderNotRegistered for a wallet that is not a registered holder. It always emits `PayoutClaimed{amount, burnedUnits}`, zeros included (SPEC's zero-amount rule: a claim of nothing succeeds and emits its event). On a Retired series the holder's balance burns, also when nothing is paid (`burnedUnits`, then `UnitsBurned{reason: cap}`); on any other status nothing burns (an Extinguished holder's units are its final-pool weight and burn at `claimFinal`). Inside a redemption, `PayoutClaimed` carries the pending payout and the tail catch-up with `burnedUnits` 0, and is emitted only above 0.

@@ -1,6 +1,6 @@
 import {
   EVM_LOCAL_CHAIN_ID, EVM_TESTNET_CHAIN_IDS, SOLANA_LOCAL_TAG, SOLANA_SIGNING_TAGS, assertSigningNetwork, checkSigningRequest,
-  chainFamilySchema, personalMessageDigest, signedBy, signingDomain, signingDomainSchema, signingRequestSchema,
+  chainFamilySchema, isLocalSigningDomain, isPublishedTestKey, personalMessageDigest, signedBy, signingDomain, signingDomainSchema, signingRequestSchema,
   type Attestation, type ChainFamily, type ChainKey, type SigningDomain, type SigningFields, type SigningKind, type SigningRequest,
 } from '@merces/domain';
 import { toChecksumAddress } from '@merces/math';
@@ -30,7 +30,7 @@ import { signDigestWith, type AttestorKey } from './attestor-keys.ts';
  */
 
 /** A refusal of the attestor's signer (the request checks themselves throw `SigningError` from `@merces/domain`). */
-export type AttestorToolErrorCode = 'networks' | 'wrong-key' | 'not-attestor-message' | 'not-link-challenge' | 'not-checked' | 'self-check';
+export type AttestorToolErrorCode = 'networks' | 'wrong-key' | 'not-attestor-message' | 'not-link-challenge' | 'not-checked' | 'self-check' | 'published-test-key';
 export class AttestorToolError extends Error {
   constructor(
     public readonly code: AttestorToolErrorCode,
@@ -241,6 +241,7 @@ export function signChecked(c: CheckedSigningRequest, key: AttestorKey): DeviceS
   if (c.signer !== key.address) {
     throw new AttestorToolError('wrong-key', `the request is addressed to key ${toChecksumAddress(c.signer)}; this keystore holds ${key.checksumAddress}`);
   }
+  if (isPublishedTestKey(key.address) && !isLocalSigningDomain(c.domain)) throw new AttestorToolError('published-test-key', 'a published test key signs only for the simulator, never a live chain');
   const signature = signDigestWith(key, Uint8Array.from(Buffer.from(c.digest.slice(2), 'hex')));
   if (!signedBy(c.digest, signature, key.address)) throw new AttestorToolError('self-check', 'the signature does not recover to the key (refused)');
   return { signer: key.address, signature, digest: c.digest };

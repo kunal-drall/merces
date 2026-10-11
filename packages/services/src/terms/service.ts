@@ -33,6 +33,9 @@ export const publicTermsSchema = z.object({
   releaseSchedule: z.array(z.object({ afterSeconds: z.number().int().nonnegative(), bps: z.number().int().positive() })).min(1).default([{ afterSeconds: 0, bps: 5000 }, { afterSeconds: 90 * 86_400, bps: 2500 }, { afterSeconds: 180 * 86_400, bps: 2500 }]),
   hurdle: z.string().regex(WAD_DECIMAL, WAD_DECIMAL_MESSAGE).default(wadToDecimal(DEFAULTS.hurdleWad)),
   payoutMultipleK: z.number().int().positive().default(DEFAULTS.payoutMultipleK),
+  windowCommitDuration: z.number().int().nonnegative().default(DEFAULTS.windowCommitDuration),
+  windowRevealDuration: z.number().int().nonnegative().default(DEFAULTS.windowRevealDuration),
+  windowFeeBps: z.number().int().nonnegative().default(DEFAULTS.windowFeeBps),
   tierFlags: z.object({ tier1: z.boolean(), tier2: z.boolean(), tier3: z.boolean(), tier4: z.boolean().default(false) }),
   reportingCurrency: z.string().regex(/^[A-Z]{3}$/),
   raiseStyle: z.enum(['sealed', 'curve']).default('sealed'),
@@ -195,7 +198,8 @@ export class TermsService {
   }
 
   /** Validate public and private terms together. Returns issues (empty = valid) and the derived onchain terms. */
-  async validate(chain: string, pub: z.infer<typeof publicTermsSchema>, priv: z.infer<typeof privateTermsSchema> | null, year: number): Promise<{ issues: ValidationIssue[]; derived: { capMultipleWad: string; hurdleWad: string; ratePerUnitWad: string | null; thresholdFloor: string | null; floorPlaceholder: boolean } }> {
+  async validate(chain: string, input: z.input<typeof publicTermsSchema>, priv: z.infer<typeof privateTermsSchema> | null, year: number): Promise<{ issues: ValidationIssue[]; derived: { capMultipleWad: string; hurdleWad: string; ratePerUnitWad: string | null; thresholdFloor: string | null; floorPlaceholder: boolean } }> {
+    const pub = publicTermsSchema.parse(input);
     const issues: ValidationIssue[] = [];
     const port = this.ctx.chains.chains.get(chain);
     if (!port) issues.push({ field: 'chain', code: 'unknown-chain', message: `unknown chain ${chain}` });
@@ -213,6 +217,7 @@ export class TermsService {
     // refuses a sealed raise (409)
     const onchain: BoundedTerms = {
       ...filledTerms(pub.raiseStyle),
+      windowCommitDuration: pub.windowCommitDuration, windowRevealDuration: pub.windowRevealDuration, windowFeeBps: pub.windowFeeBps,
       ...(this.ctx.nonRevealChargeBps !== null ? { nonRevealChargeBps: this.ctx.nonRevealChargeBps } : {}),
       capMultipleWad: capWad.toString(), hurdleWad: hurdleWad.toString(), payoutMultipleK: pub.payoutMultipleK, lockupSeconds: lockupOf(pub), stablecoin: pub.stablecoin,
       unitsOffered: pub.unitsOffered, reservePrice: pub.reservePrice, minimumRaise: pub.minimumRaise, releaseSchedule: pub.releaseSchedule, raiseStyle: pub.raiseStyle,
@@ -278,7 +283,8 @@ export class TermsService {
   }
 
   /** Set public + private terms: validate, encrypt the private half, store the commitment. */
-  async setTerms(draftId: string, session: Session, pub: z.infer<typeof publicTermsSchema>, priv: z.infer<typeof privateTermsSchema>): Promise<Record<string, unknown>> {
+  async setTerms(draftId: string, session: Session, input: z.input<typeof publicTermsSchema>, priv: z.infer<typeof privateTermsSchema>): Promise<Record<string, unknown>> {
+    const pub = publicTermsSchema.parse(input);
     const d = await this.getDraft(draftId, session);
     if (!['draft', 'terms_set'].includes(String(d.state))) throw AppError.conflict(`draft is ${d.state}; terms are locked once the contract is signed`);
     const year = new Date(this.ctx.wallClock() * 1000).getUTCFullYear();
@@ -337,7 +343,7 @@ export class TermsService {
     if (stored?.scheme !== TERMS_SCHEME) throw AppError.conflict(`the draft's terms predate the ${TERMS_SCHEME} commitment scheme and cannot be proven against; start a new draft`);
     const chain = this.ctx.chains.get(draft.chain);
     const info = await chain.info();
-    const p = draft.public_terms as z.infer<typeof publicTermsSchema> & { capMultipleWad: string; hurdleWad: string };
+    const p = { ...draft.public_terms, ...publicTermsSchema.parse(draft.public_terms) } as z.infer<typeof publicTermsSchema> & { capMultipleWad: string; hurdleWad: string };
     const coin = info.stablecoins[p.stablecoin];
     if (!coin) throw AppError.unprocessable('stablecoin no longer available on chain');
     // the fees, the wallet cap and the raise's own terms are filled in (Stage 1's 7-day commit and 2-day reveal on a
@@ -345,6 +351,7 @@ export class TermsService {
     // charge (a sealed raise is refused while it is unset)
     const terms: SeriesTerms = {
       ...filledTerms(p.raiseStyle),
+      windowCommitDuration: p.windowCommitDuration, windowRevealDuration: p.windowRevealDuration, windowFeeBps: p.windowFeeBps,
       nonRevealChargeBps: nonRevealChargeOf(p.raiseStyle, this.ctx.nonRevealChargeBps),
       stablecoin: p.stablecoin, stablecoinMint: coin.mint, unitsOffered: p.unitsOffered, reservePrice: p.reservePrice, minimumRaise: p.minimumRaise, capMultipleWad: p.capMultipleWad, lockupSeconds: lockupOf(p),
       releaseSchedule: p.releaseSchedule, hurdleWad: p.hurdleWad, payoutMultipleK: p.payoutMultipleK,

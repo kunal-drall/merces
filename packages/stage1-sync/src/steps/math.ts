@@ -13,7 +13,7 @@ import type { StepCtx } from './generate.ts';
  */
 export const REFERENCE_REEXPORTS = [
   // status, deadlines and accrual
-  'isTerminal', 'deadlineSeconds', 'graceSeconds', 'noticeSeconds', 'countdown', 'nextExpectedPeriod', 'earliestUnpaid', 'deriveStatus', 'isLateUnderlying', 'lateDays', 'lateAccrual', 'formalNoticeDue', 'pauseApprovalError',
+  'isTerminal', 'deadlineSeconds', 'graceSeconds', 'noticeSeconds', 'countdown', 'nextExpectedPeriod', 'earliestUnpaid', 'deriveStatus', 'isLateUnderlying', 'lateDays', 'lateAccrual', 'lateAccrualTrueup', 'trueupNoticeDue', 'formalNoticeDue', 'pauseApprovalError',
   // payout vault
   'newVaultState', 'capPerUnit', 'capEffWad', 'isCapped', 'vaultReceiveGross', 'settleHolderDelta', 'accumulate',
   // redemption, tail and extinguishment

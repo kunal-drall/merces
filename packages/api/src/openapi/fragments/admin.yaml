@@ -211,6 +211,17 @@ components:
     adminLimit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
     adminIdempotencyKey: { name: Idempotency-Key, in: header, schema: { type: string } }
 paths:
+  /admin/issuers:
+    post:
+      operationId: registerIssuer
+      x-access: admin
+      tags: [admin]
+      security: [{ session: [] }]
+      description: Prepare a protocol-admin registration transaction for an approved issuer wallet. Application approval prepares the same proposal. The admin signs it; the backend does not hold the admin key.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [chain, wallet], properties: { chain: { type: string }, wallet: { type: string } } } } } }
+      responses:
+        '201': { description: Persisted multisig request and unsigned transaction, content: { application/json: { schema: { type: object, required: [requestId, tx], properties: { requestId: { type: string }, tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }
+        '422': { description: Wallet has no current approved issuer eligibility }
   /admin/overview:
     get:
       operationId: adminOverview

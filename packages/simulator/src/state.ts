@@ -23,7 +23,8 @@ import type { PersonalityConfig } from './addresses.ts';
  * ed25519 keys by key id), completed under the same version before anything was deployed, as S3 WP8 completed version 4.
  * States of another version are never upgraded in place.
  */
-export const SIM_STATE_VERSION = 5;
+// S5: immutable transfer-window terms. Older snapshots cannot supply the series' committed values.
+export const SIM_STATE_VERSION = 6;
 
 /** A persisted simulator state from another layout (version 1 before S1, 2 before S2, 3 before S3, 4 before S4): never upgraded in place, reset it. */
 export class SimStateVersionError extends Error {
@@ -52,6 +53,9 @@ export interface SimTerms {
   /** `openRaise` sets the commit end to now + this, and the reveal end to the commit end + `revealDurationSeconds` */
   commitDurationSeconds: number;
   revealDurationSeconds: number;
+  windowCommitDuration: number;
+  windowRevealDuration: number;
+  windowFeeBps: number;
   dueDays: number;
   graceDays: number;
   formalNoticeDays: number;
@@ -348,12 +352,14 @@ export interface SimLedger {
   releasesBlockedLate: boolean;
   amendmentNonce: bigint;
   extinguishNonce: bigint;
-  // router and true-up (tier 1 and tier 3 annual true-up): fixed at 0 / null until S5
+  // Router credit and tier-3 annual true-up.
   routerCredit: bigint;
   trueupNonce: bigint;
   trueupDue: bigint;
   trueupAttestedAt: bigint;
   lastTrueupYear: number | null;
+  trueupYear: number | null;
+  trueupNoticeEmitted: boolean;
 }
 
 export interface SimSeries {

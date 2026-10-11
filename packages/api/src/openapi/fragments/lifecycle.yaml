@@ -2,6 +2,19 @@ tags:
   - { name: lifecycle, description: Treasury draws, payout claims, redemption and tail, retirement, transfer windows (R6, R13, R14, R15, R19) }
 components:
   schemas:
+    TrueUpState:
+      type: object
+      required: [nonce, lastYear, year, due, attestedAt, accrual, total, routerCredit, noticeEmitted]
+      properties:
+        nonce: { type: string }
+        lastYear: { type: [integer, 'null'] }
+        year: { type: [integer, 'null'] }
+        due: { $ref: '#/components/schemas/Money' }
+        attestedAt: { type: [integer, 'null'] }
+        accrual: { $ref: '#/components/schemas/Money' }
+        total: { $ref: '#/components/schemas/Money' }
+        routerCredit: { $ref: '#/components/schemas/Money' }
+        noticeEmitted: { type: boolean }
     RedemptionQuote:
       type: object
       description: "Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee; on a curve series floor(price × base lamports / 10^6) over redeem's own census)."
@@ -167,7 +180,7 @@ paths:
       tags: [lifecycle]
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [maxPricePerUnit], properties: { maxPricePerUnit: { $ref: '#/components/schemas/Money' } } } } } }
+      requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { maxPricePerUnit: { $ref: '#/components/schemas/Money' } } } } } }
       responses: { '200': { description: Unsigned redeem (deposit = price × units outstanding; no fee) with the quote it was built on, content: { application/json: { schema: { type: object, properties: { tx: { type: object }, quote: { $ref: '#/components/schemas/RedemptionQuote' } } } } } }, '409': { description: "A Stage 1 blocker (terminal or Late status, lockup, an unpaid due, an unreported ended period) or the quoted price exceeds maxPricePerUnit" } }
   /series/{seriesId}/redemption/build-claim:
     post:
@@ -212,8 +225,37 @@ paths:
                   unitsOutstanding: { type: string }
                   holdersWithUnits: { type: integer }
                   burnable: { type: boolean }
+                  retirableNow: { type: boolean, description: Mint finalized and current cap met on a nonterminal series }
                 additionalProperties: true
         '404': { $ref: '#/components/responses/NotFound' }
+  /series/{seriesId}/retirement/build-retire:
+    post:
+      operationId: buildRetireIfCapped
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      description: Retire a mint-finalized series whose current cap is met. Anyone may submit it.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet], properties: { wallet: { type: string } } } } } }
+      responses:
+        '200': { description: Transaction for a linked wallet, content: { application/json: { schema: { type: object, required: [tx], properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }
+        '403': { description: Wallet is not linked to this account }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Series does not satisfy the command preconditions; detail.stage1 names the refusal }
+  /series/{seriesId}/retirement/build-burn:
+    post:
+      operationId: buildBurnRetired
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      description: Burn a holder balance on a Retired sealed series. Pending payouts remain claimable; anyone may submit it.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet, holder], properties: { wallet: { type: string }, holder: { type: string } } } } } }
+      responses:
+        '200': { description: Transaction for a linked wallet, content: { application/json: { schema: { type: object, required: [tx], properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } } }
+        '403': { description: Wallet is not linked to this account }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Series does not satisfy the command preconditions; detail.stage1 names the refusal }
   /series/{seriesId}/retirement/crank-burn:
     post:
       operationId: burnRetiredHolders
@@ -264,3 +306,43 @@ paths:
       security: [{ session: [] }]
       parameters: [{ $ref: '#/components/parameters/seriesId' }, { name: wallet, in: path, required: true, schema: { type: string } }]
       responses: { '200': { description: The backup ciphertext, content: { application/json: { schema: { type: object } } } } }
+
+  /series/{seriesId}/true-up:
+    get:
+      operationId: getTrueUp
+      x-access: holder-or-issuer
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      responses:
+        '200':
+          description: Live annual true-up ledger including unpaused lateness accrual at chain time.
+          content: { application/json: { schema: { $ref: '#/components/schemas/TrueUpState' } } }
+  /series/{seriesId}/true-up/build-pay:
+    post:
+      operationId: buildPayTrueUp
+      x-access: account
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters: [{ $ref: '#/components/parameters/seriesId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [wallet], properties: { wallet: { type: string } } } } } }
+      responses:
+        '200':
+          description: Unsigned payment by the linked wallet. Total is indicative; the chain recomputes accrued interest when executed.
+          content: { application/json: { schema: { type: object, required: [tx, total], properties: { tx: { $ref: '#/components/schemas/UnsignedTx' }, total: { $ref: '#/components/schemas/Money' } } } } }
+        '409': { description: No outstanding annual adjustment }
+  /series/{seriesId}/tier3/annual/{annualId}/build-submit:
+    post:
+      operationId: buildSubmitTrueUp
+      x-access: issuer
+      tags: [lifecycle]
+      security: [{ session: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/seriesId' }
+        - { name: annualId, in: path, required: true, schema: { type: string } }
+      description: Builds submitTrueUp for the linked issuer wallet with the stored attestor signature after checking the live nonce, year, active key and adjustment. Signing and sending remain on the issuer device.
+      responses:
+        '200':
+          description: Unsigned issuer submission carrying the attestation
+          content: { application/json: { schema: { type: object, required: [tx], properties: { tx: { $ref: '#/components/schemas/UnsignedTx' } } } } }
+        '409': { description: Not signed, stale nonce, completed year, outstanding adjustment or changed basis }

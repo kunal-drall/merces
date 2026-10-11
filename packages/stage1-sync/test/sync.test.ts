@@ -130,7 +130,7 @@ describe('stage1:sync', () => {
     writeFileSync(join(root, 'abi', 'Series.json'), JSON.stringify({ abi: [{ type: 'event', name: 'RaiseOpened', inputs: [{ name: 'seriesId', type: 'bytes32' }, { name: 'commitEndsAt', type: 'uint64' }] }, { type: 'function', name: 'openRaise', inputs: [{ name: 'seriesId', type: 'bytes32' }] }] }));
     writeFileSync(join(root, 'vectors.json'), JSON.stringify({
       math: [{ fn: 'requiredEscrow', args: ['100000000', '1', '100'], expect: '101000000' }],
-      scenarios: [{ name: 'register-and-stop', steps: [{ at: 0, actor: 'issuer', command: { kind: 'registerIssuer' } }, { at: 1, actor: 'issuer', command: { kind: 'stopIssuance' } }, { at: 2, actor: 'issuer', command: { kind: 'registerIssuer' }, expectError: 'Duplicate' }] }],
+      scenarios: [{ name: 'register-and-stop', steps: [{ at: 0, actor: 'admin', command: { kind: 'registerIssuer', wallet: '$issuer' } }, { at: 1, actor: 'issuer', command: { kind: 'stopIssuance' } }, { at: 2, actor: 'admin', command: { kind: 'registerIssuer', wallet: '$issuer' } }] }],
     }));
     writeFileSync(join(root, 'handoff', 'manifest.json'), JSON.stringify({ version: '0.0.1', commit: 'abc', vectors: 'vectors.json', solana: { cluster: 'devnet', programs: { series: 'Ser1es1111111111111111111111111111111111111' }, idlDir: 'idl' }, evm: [{ chain: 'monad-testnet', chainId: 10143, contracts: { Series: '0x' + '22'.repeat(20) }, abiDir: 'abi' }] }));
     const outDir = mkdtempSync(join(tmpdir(), 'out-'));
@@ -229,7 +229,7 @@ describe('stage1:sync', () => {
     const md = readFileSync(join(outDir, 'MATH_PARITY.md'), 'utf8');
     // cause S2-G: the interim auction family is gone; the window cap (S5; cause S3-NC: no curve cap) and the FX family
     // (S5) remain
-    expect(md).toMatch(new RegExp(`^Stage 1 math imported at ${pinned}; interim families remaining: .*window cap \\(S5\\)`, 'm'));
+    expect(md).toMatch(new RegExp(`^Stage 1 math imported at ${pinned.slice(0, 7)}; interim families remaining: .*window cap \\(S5\\)`, 'm'));
     expect(md).not.toMatch(/auction \(S2\)/);
     expect(md).toContain('## Ported from Stage 1\'s Rust (A-MATH-3)');
     expect(md).toContain('Check at this checkout: **ok**.');

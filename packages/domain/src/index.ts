@@ -13,3 +13,4 @@ export * from './settlement.ts';
 export * from './curve.ts';
 export * from './schema.ts';
 export * from './e2e-envelope.ts';
+export { isPublishedTestKey } from './published-keys.ts';

@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { attestorOpenWork } from '../attestor/recovery.ts';
+import { simulatorOnly } from '@merces/ports';
+import { isPublishedTestKey } from '@merces/domain';
 import { AppError, audit, getFlag, listFlags, setFlag } from '@merces/core';
 import { keyGraceUntil, type AdminCommand, type ChainPort, type SignerKeyState, type UnsignedTx } from '@merces/domain';
 import type { Session } from '@merces/api';
@@ -64,6 +67,10 @@ type RequestRow = { request_id: string; kind: AdminCommand['kind']; chain: strin
 
 export class AdminService {
   constructor(private readonly ctx: ServiceContext) {}
+
+  private refusePublishedKey(address: string): void {
+    if (!simulatorOnly(this.ctx.chains) && isPublishedTestKey(address)) throw AppError.unprocessable('published test keys are refused while any chain is live', { reason: 'published-test-key' });
+  }
 
   private port(chain: string): ChainPort {
     const port = this.ctx.chains.chains.get(chain);
@@ -201,6 +208,7 @@ export class AdminService {
    * and holds no other attestor key active or proposed on this chain (409 `account-already-attestor`).
    */
   async registerAttestor(input: z.infer<typeof registerAttestorSchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
+    this.refusePublishedKey(input.attestor);
     const port = this.port(input.chain);
     if (input.accountId) {
       const acc = await this.ctx.pool.query('select 1 from accounts where account_id = $1', [input.accountId]);
@@ -231,7 +239,7 @@ export class AdminService {
     const port = this.port(input.chain);
     if (!(await port.getSignerKey('attestor', input.attestor))?.active) throw AppError.conflict('the attestor key is not active on this chain: there is nothing to revoke', { reason: 'key-not-active' });
     if ((await port.listSignerKeys('attestor')).filter((k) => k.active).length <= 1) throw AppError.conflict('the last active attestor key of a chain cannot be revoked: rotate it to a new key instead', { reason: 'last-active-key' });
-    const r = await this.propose(input.chain, { kind: 'revokeAttestor', attestor: input.attestor }, admin);
+    const r = await this.propose(input.chain, { kind: 'revokeAttestor', attestor: input.attestor }, admin, { openWork: await attestorOpenWork(this.ctx, input.chain, input.attestor) });
     await this.recordProposal(input.chain, input.attestor, await this.linkedAccount(input.attestor), false, r.request.requestId, admin);
     await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'attestor.revoke', target: `${input.chain}:${input.attestor}`, detail: { requestId: r.request.requestId } });
     return r;
@@ -248,6 +256,7 @@ export class AdminService {
    * replaced is expected to be active).
    */
   async rotateAttestor(input: z.infer<typeof rotateAttestorSchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
+    this.refusePublishedKey(input.to);
     if (input.from === input.to) throw AppError.unprocessable('a rotation replaces one key with another: from and to are the same key');
     const port = this.port(input.chain);
     const holder = await this.linkedAccount(input.from);
@@ -256,7 +265,7 @@ export class AdminService {
     if (to?.active) throw AppError.conflict('the new attestor key is already active on this chain', { reason: 'key-already-active' });
     if (!from?.active) throw AppError.conflict('the attestor key to replace is not active on this chain', { reason: 'key-not-active' });
     await this.requireVerifiedAttestorAccount(port, input.chain, holder, [input.from, input.to]);
-    const r = await this.propose(input.chain, { kind: 'rotateAttestor', from: input.from, to: input.to }, admin, { accountId: holder });
+    const r = await this.propose(input.chain, { kind: 'rotateAttestor', from: input.from, to: input.to }, admin, { accountId: holder, openWork: await attestorOpenWork(this.ctx, input.chain, input.from) });
     await this.recordProposal(input.chain, input.to, holder, true, r.request.requestId, admin);
     await this.recordProposal(input.chain, input.from, holder, false, r.request.requestId, admin);
     await audit(this.ctx.pool, { actor: admin.accountId, actorRole: 'admin', action: 'attestor.rotate', target: `${input.chain}:${input.from}`, detail: { requestId: r.request.requestId, to: input.to, accountId: holder } });
@@ -306,6 +315,7 @@ export class AdminService {
    * registered address must be the report verifier's own (`REPORT_VERIFIER_ADDRESS`, which it checks at startup).
    */
   async registerVerifierKey(input: z.infer<typeof registerVerifierKeySchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
+    this.refusePublishedKey(input.address);
     const port = this.port(input.chain);
     if ((await port.getSignerKey('verifier', input.address))?.active) throw AppError.conflict('the verifier key is already active on this chain', { reason: 'key-already-active' });
     const r = await this.propose(input.chain, { kind: 'registerVerifierKey', key: input.address }, admin);
@@ -325,6 +335,7 @@ export class AdminService {
 
   /** `rotateVerifierKey{from, to}`: register `to` and revoke `from` in one transaction (EVM; two instructions on Solana, S5). */
   async rotateVerifierKey(input: z.infer<typeof rotateVerifierKeySchema>, admin: Session): Promise<{ request: AdminTxRequest; tx: UnsignedTx }> {
+    this.refusePublishedKey(input.to);
     if (input.from === input.to) throw AppError.unprocessable('a rotation replaces one key with another: from and to are the same key');
     const port = this.port(input.chain);
     const [from, to] = await Promise.all([port.getSignerKey('verifier', input.from), port.getSignerKey('verifier', input.to)]);
@@ -374,6 +385,8 @@ export class AdminService {
     switch (cmd.kind) {
       // the registry as the chain holds it (S4 WP5): a registration shows as an active key, a revocation as a revoked one
       // with its revocation time, a rotation as both
+      case 'registerIssuer':
+        return !!(await port.getIssuer(cmd.wallet));
       case 'registerAttestor':
         return (await port.getSignerKey('attestor', cmd.attestor))?.active === true;
       case 'revokeAttestor': {

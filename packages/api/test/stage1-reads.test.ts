@@ -124,7 +124,7 @@ describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () =>
     qt = await quote();
     expect(qt).toMatchObject({ blockedBy: [], blockers: [], redeemable: true, outcome: 'redeem' });
     const until = (await h.sim.now()) + 30 * 86_400;
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     await h.sim.submit(await h.pauseApproval(seriesId, until), 'keeper'); // cause S4-PAU
     expect((await h.sim.getSeries(seriesId))!.status).toBe('Paused');
     expect((await quote()).blockedBy).toEqual([]);

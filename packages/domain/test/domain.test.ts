@@ -244,8 +244,8 @@ describe('hashing', () => {
     expect(userCommandSchema.parse({ kind: 'withdrawPauseRequest', seriesId: sid })).toEqual({ kind: 'withdrawPauseRequest', seriesId: sid });
     expect(() => permissionlessCommandSchema.parse({ kind: 'withdrawPauseRequest', seriesId: sid })).toThrow();
     const env = { chain: 'solana', cursor: '1', seq: 1, blockTime: 1, blockRef: '1', txId: 't', finality: 'finalized' as const };
-    expect(parseDomainEvent({ ...env, type: 'PauseRequested', payload: { seriesId: sid, until: 5, nonce: '3' } }).payload).toEqual({ seriesId: sid, until: 5, nonce: '3' });
-    expect(() => parseDomainEvent({ ...env, type: 'PauseRequested', payload: { seriesId: sid, until: 5 } })).toThrow();
+    expect(parseDomainEvent({ ...env, type: 'PauseRequested', payload: { seriesId: sid, nonce: '3' } }).payload).toEqual({ seriesId: sid, nonce: '3' });
+    expect(() => parseDomainEvent({ ...env, type: 'PauseRequested', payload: { seriesId: sid } })).toThrow();
     expect(parseDomainEvent({ ...env, type: 'PauseApproved', payload: { seriesId: sid, attestor: approval.attestor, start: 1, until: 5 } }).payload).toMatchObject({ start: 1 });
     expect(() => parseDomainEvent({ ...env, type: 'PauseApproved', payload: { seriesId: sid, attestor: 'w', start: 1, until: 5 } })).toThrow();
     expect(parseDomainEvent({ ...env, type: 'PauseRequestWithdrawn', payload: { seriesId: sid, nonce: '4' } }).payload).toEqual({ seriesId: sid, nonce: '4' });
@@ -349,7 +349,7 @@ describe('schemas', () => {
     // cause S3-BR, S3-CV: a curve's completion and proceeds are permissionless (Stage 1 complete_curve, collect_curve_proceeds);
     // cause S3-CN: and its census (Stage 1 sync_curve_units)
     // cause S4-PAU: and a signed pause approval (Stage 1 approve_pause); cause S4-EXT: and a signed extinguishment
-    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish']);
+    expect(permissionlessCommandKinds).toEqual(['retireIfCapped', 'beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish']);
     // cause S3-BR: burnRetired{holder} (permissionless, above) replaces the S1 list burn crank (`holders[]`), so no service
     // command burns any more; cause S3-CV: completion is permissionless `completeCurve` (was a service graduation command)
     expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'setAllowlist']);
@@ -457,6 +457,7 @@ describe('protocol defaults', () => {
 describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)', () => {
   const sealed: BoundedTerms = {
     capMultipleWad: (25n * 10n ** 17n).toString(), hurdleWad: (8n * 10n ** 16n).toString(), payoutMultipleK: 5, lockupSeconds: DEFAULTS.lockupSeconds, walletCapBps: 1000, auctionFeeBps: 100, payoutFeeBps: 500,
+    windowCommitDuration: DEFAULTS.windowCommitDuration, windowRevealDuration: DEFAULTS.windowRevealDuration, windowFeeBps: DEFAULTS.windowFeeBps,
     nonRevealChargeBps: 100, commitDurationSeconds: DEFAULTS.commitDurationSeconds, revealDurationSeconds: DEFAULTS.revealDurationSeconds,
     dueDays: 30, graceDays: 15, formalNoticeDays: 90, unitsOffered: '500', reservePrice: '8000000', minimumRaise: '4000000000', releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], raiseStyle: 'sealed',
     stablecoin: 'USDC',
@@ -514,7 +515,7 @@ describe('Stage 1 create_series rules on the terms (S2: the raise\'s own terms)'
   });
 
   it('the canonical terms accept a wallet cap of 0 (a curve series records it); r is per base lamport on a curve', () => {
-    const terms = { stablecoin: 'USDC', stablecoinMint: 'm', unitsOffered: '100', reservePrice: '1', minimumRaise: '1000000000', capMultipleWad: '2500000000000000000', lockupSeconds: 0, releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], auctionFeeBps: 100, payoutFeeBps: 500, hurdleWad: '0', payoutMultipleK: 5, walletCapBps: 0, nonRevealChargeBps: 0, commitDurationSeconds: 0, revealDurationSeconds: 0, dueDays: 30, graceDays: 15, formalNoticeDays: 90, contractHash: '0x' + 'ab'.repeat(32), termsCommitment: '0x' + 'cd'.repeat(32), tierFlags: { tier1: false, tier2: true, tier3: true, tier4: false }, reportingCurrency: 'USD', raiseStyle: 'curve' };
+    const terms = { stablecoin: 'USDC', stablecoinMint: 'm', unitsOffered: '100', reservePrice: '1', minimumRaise: '1000000000', capMultipleWad: '2500000000000000000', lockupSeconds: 0, releaseSchedule: [{ afterSeconds: 0, bps: 10_000 }], auctionFeeBps: 100, payoutFeeBps: 500, hurdleWad: '0', payoutMultipleK: 5, walletCapBps: 0, nonRevealChargeBps: 0, commitDurationSeconds: 0, revealDurationSeconds: 0, windowCommitDuration: 259200, windowRevealDuration: 86400, windowFeeBps: 100, dueDays: 30, graceDays: 15, formalNoticeDays: 90, contractHash: '0x' + 'ab'.repeat(32), termsCommitment: '0x' + 'cd'.repeat(32), tierFlags: { tier1: false, tier2: true, tier3: true, tier4: false }, reportingCurrency: 'USD', raiseStyle: 'curve' };
     expect(seriesTermsSchema.safeParse(terms).success).toBe(true);
     expect(seriesTermsSchema.safeParse({ ...terms, walletCapBps: -1 }).success).toBe(false);
     // B-C2 (registry lib.rs:594-600): units offered × 10^6 on a curve series, the units offered on a sealed one

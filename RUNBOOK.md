@@ -521,3 +521,29 @@ simulator and `GET /health` shows the refusal as the reason.
 
 Postgres holds commitments, amounts, statuses, ciphertext and audit logs — no raw income. Retention periods are an open
 question (Part J.9); until set, nothing is deleted automatically. Simulator state (`sim_*`) is development data.
+
+## Compromised key
+
+1. Identify chain, key kind and affected account from the live registry and audit log. Keep the report verifier on the
+   local signer until staging/AWS KMS is explicitly authorized; do not move custody during this procedure implicitly.
+2. Generate and verify a fresh replacement locally. For attestors link it to the same verified account. Live-chain
+   enrollment rejects published fixture/dev keys. Inspect the `openWork` counts returned with the rotation proposal.
+3. Propose `POST /admin/attestors/rotate` or `/admin/verifier-keys/rotate`. The operator signs the returned multisig
+   transaction and reports it via `/admin/tx-requests/{id}/sent`; confirm the effect from live registry reads. Separate
+   revocation proposals use `/revoke`. The last active key cannot be revoked before a replacement exists.
+4. After attestor rotation lands, `POST /me/signer-keys/readdress-work {chain,from,to}` moves pending work within the
+   same account. Usable grace-period REPORT signatures stay intact; expired unsigned/unsubmitted work is reopened.
+   Extinguishment drops both signatures and requires two fresh approvals. Requesters/admins can withdraw tier-3,
+   annual and extinguishment work through the new `/withdraw` routes even after the old key loses attestor access.
+5. Reconcile accepted reports and moved TRUEUP nonces before retrying. FX replacement keeps the original rate and signs
+   only uncovered series or signatures whose keys are no longer usable for that period.
+6. Notify the operator and affected issuers through the incident process. Automatic per-signature alerts and an
+   immediate emergency revoker are before-mainnet requirements; neither is an instantaneous facility today.
+
+Revocation does not erase the 45-day REPORT/FX grace for ended periods. An offchain withdrawal does not invalidate
+bearer signatures. Only Stage 1 can enforce a cancellable delay against third-party extinguishment relays.
+
+### Simulator state version 6
+
+S5 records each series' immutable window durations and fee. Version 5 snapshots are refused; use the existing
+`pnpm --filter @merces/simulator sim:reset` procedure for local simulator data, then reseed. Never reset live data.

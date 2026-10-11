@@ -4,11 +4,53 @@ The frontend builds against this API. **Every push lists every changed or remove
 `packages/api/openapi.yaml` (additions too, as a courtesy), newest first. A work package appends its changes under
 `## Unreleased`; whoever pushes renames that heading to the push's commit. `pnpm openapi:check` prints the operation
 count; `API.md` is the narrative; `packages/client/src/generated/openapi.d.ts` is regenerated with `pnpm openapi:client`.
-(A diff script, `scripts/api-changelog.mjs <from-rev> <to-rev>`, is planned: HANDOFF.md §5.3.)
+Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
 ## Unreleased
 
-(nothing yet)
+S4 recovery and S5 lifecycle foundation (201 operations, previously 190).
+
+Added:
+- `POST /series/{seriesId}/tier3/annual/{annualId}/build-submit` [issuer]: returns `{tx}` carrying the stored
+  attestation for the linked issuer to sign; rejects a consumed nonce, completed year, inactive key or changed basis.
+- `GET /series/{seriesId}/true-up` [holder-or-issuer]: live `TrueUpState` (`nonce,lastYear,year,due,attestedAt,accrual,total,routerCredit,noticeEmitted`).
+- `POST /series/{seriesId}/true-up/build-pay` [account]: `{wallet}` → `{tx,total}`, recomputed by the chain at execution.
+- `POST /attestor/tier3/{caseId}/withdraw`, `/attestor/tier3/annual/{annualId}/withdraw`, and
+  `/attestor/extinguish/{requestId}/withdraw` [account]: requester/admin withdrawal before chain acceptance; returns `{id,state}`.
+- `POST /me/signer-keys/readdress-work` [account]: `{chain,from,to}`, confirmed same-account attestor rotation only;
+  returns counts for hardship, tier3, annual and extinguishments. Clears unusable signatures and requires fresh approvals.
+- `POST /series/{seriesId}/hardship/build-end` [issuer]: `{seriesId,tx}` for early pause end.
+- `POST /series/{seriesId}/retirement/build-retire` and `/retirement/build-burn` [account]: `{wallet}` or
+  `{wallet,holder}` → `{tx}`; permissionless transactions signed by a linked wallet.
+- `POST /admin/issuers` [admin]: `{chain,wallet}` → `{requestId,tx}` for an approved issuer wallet.
+
+Changed:
+- Annual records add `recorded` and `paid` states after indexed `TrueUpRecorded`/`TrueUpPaid`; competing stale
+  signatures are cleared. Terminal/future-time and active-key rules follow both Stage 1 contracts.
+- Canonical commands add `submitTrueUp` and `payTrueUp`; events add `TrueUpRecorded`, `TrueUpPaid`, `TrueUpNoticeDue`.
+  SeriesState adds `trueUp`. Negative adjustments are consumed as forward credit by subsequent reports.
+- `POST /admin/applications/{applicationId}/decide`: issuer approval also returns `issuerRegistration: {requestId,tx}`.
+  Registration requires the protocol admin signature. Direct issuer self-registration is removed; repeated admin
+  registration preserves the issuer's issuance-stop state.
+- `POST /admin/attestors/revoke` and `/rotate`: proposal metadata includes `openWork` counts.
+- Tier-3/annual/extinguishment work is recoverable after rotation. Terminal hardship decisions now return 409
+  `TerminalStatus`, and third-party `PauseApproved` events close matching pending hardship rows.
+- FX queues/listing include signed requests when coverage becomes unusable or a new series needs the fixed rate.
+  Replacement signatures retain the original rate; usable grace-period signatures remain untouched.
+- `GET /series/{seriesId}/retirement`: adds `retirableNow`.
+- `POST /series/{seriesId}/redemption/build-redeem`: body and `maxPricePerUnit` become optional; an explicit bound
+  still applies. `payIn.periodId` and `.amount` are optional guards; the chain computes the open due when absent.
+- Canonical `requestPause` and `PauseRequested` remove `until`; the private hardship review retains `requestedUntil`.
+- Series/draft public terms add `windowCommitDuration`, `windowRevealDuration`, `windowFeeBps`, bounded by Stage 1.
+  Indexed historical rows return null until replayed; new drafts default to 259200 seconds, 86400 seconds and 100 bps.
+- Live enrollment and admin key proposals reject published test keys. The signing tool refuses those keys for live
+  domains even with `--allow-local`. Mock zkTLS startup is simulator-only.
+- Annual signing rejects another signed/unsubmitted year for the same series (`earlier-trueup-pending`); its basis
+  comes from chain-accepted reports, and previous verifier retirement times must be plausible unix seconds.
+
+New schemas: `WorkWithdrawal`, `ReaddressWork`, `ReaddressedWork`, `TrueUpState`. Client/types and domain event schema regenerated.
+Simulator snapshots move to version 6; reset/reseed local simulator data before startup (RUNBOOK.md).
+
 
 ## S4 owner decisions, 2026-10-11 (190 operations; was 188)
 

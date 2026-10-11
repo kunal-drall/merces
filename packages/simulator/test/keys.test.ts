@@ -268,7 +268,7 @@ describe('revocation grace on the signed paths (S4-REG; Stage 1 SPEC §1.4, SIM:
     const { h, seriesId, terms } = await settled();
     const [a1, a2] = h.attestors as [SimAttestor, SimAttestor]; // cause S4-ID: the harness attestors are keys (SimAttestor)
     const now = await h.sim.now();
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 30 * DAY });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a1.address });
     // cause S4-PAU: the revoked key's PAUSE signature, relayed by the keeper (approvePause is permissionless since S4 WP10)
     await refused(h, h.sim.submit(await h.pauseApproval(seriesId, now + 30 * DAY, a1), 'keeper'), 'InvalidAttestorSignature');

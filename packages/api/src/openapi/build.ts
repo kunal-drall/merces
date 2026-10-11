@@ -15,7 +15,7 @@ type Spec = { paths: Record<string, unknown>; components?: Record<string, Record
 
 export function buildSpec(): Spec {
   const base = parse(readFileSync(BASE, 'utf8')) as Spec;
-  const files = readdirSync(FRAGMENTS).filter((f) => f.endsWith('.yaml')).sort();
+  const files = readdirSync(FRAGMENTS).filter((f) => !f.startsWith('.') && f.endsWith('.yaml')).sort();
   for (const f of files) {
     const frag = parse(readFileSync(FRAGMENTS + f, 'utf8')) as Partial<Spec>;
     for (const [p, ops] of Object.entries(frag.paths ?? {})) {

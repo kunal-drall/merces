@@ -28,7 +28,10 @@ export interface VectorSigner extends DigestSigner {
 
 export class VectorKeyring {
   private readonly cache = new Map<string, VectorSigner>();
-  constructor(private readonly keys: VectorKeys) {}
+  constructor(private readonly keys: VectorKeys, private readonly source: string | Readonly<Record<string, string>>) {
+    // Validate even registered-only keys: a malformed key must not reach a registry before its first signature.
+    for (const name of Object.keys(keys)) this.signer(name);
+  }
 
   /** The signer of vector key `name`, after checking it is Stage 1's published test key for its seed. */
   signer(name: string): VectorSigner {
@@ -42,6 +45,8 @@ export class VectorKeyring {
       if (!Buffer.from(deriveTestPrivateKey(vk.seed)).equals(Buffer.from(priv))) throw new RunnerError(`the vector's key ${name} is not Stage 1's test key for its seed`);
       const address = '0x' + Buffer.from(addressFromPrivateKey(priv)).toString('hex');
       if (address !== vk.address.toLowerCase()) throw new RunnerError(`the vector's key ${name} has another key's address`);
+      const expectedSeed = typeof this.source === 'string' ? `${this.source}:${name}` : this.source[name];
+      if (vk.seed !== expectedSeed) throw new RunnerError(`the vector's key ${name} seed must be <vector>:<name>`);
       const signDigestHex = async (digest: string): Promise<string> => {
         if (typeof digest !== 'string' || !/^0x[0-9a-f]{64}$/.test(digest)) throw new RunnerError('a digest is 32-byte 0x-hex');
         const d = Uint8Array.from(Buffer.from(digest.slice(2), 'hex'));

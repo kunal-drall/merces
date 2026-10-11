@@ -65,9 +65,9 @@ const I64_MIN = -(1n << 63n);
 const I64_MAX = (1n << 63n) - 1n;
 
 /** A u64 as a canonical decimal string (no sign, no leading zero), at most 2^64 − 1. */
-const u64StringSchema = z.string().regex(/^(0|[1-9]\d{0,19})$/).refine((s) => BigInt(s) <= U64_MAX, 'out of the u64 range');
+export const u64StringSchema = z.string().regex(/^(0|[1-9]\d{0,19})$/).refine((s) => BigInt(s) <= U64_MAX, 'out of the u64 range');
 /** An i64 as a canonical decimal string. */
-const i64StringSchema = z.string().regex(/^(0|-?[1-9]\d{0,18})$/).refine((s) => BigInt(s) >= I64_MIN && BigInt(s) <= I64_MAX, 'out of the i64 range');
+export const i64StringSchema = z.string().regex(/^(0|-?[1-9]\d{0,18})$/).refine((s) => BigInt(s) >= I64_MIN && BigInt(s) <= I64_MAX, 'out of the i64 range');
 
 // ---------------------------------------------------------------- the network allow-list and its mainnet tripwire
 

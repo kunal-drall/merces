@@ -37,7 +37,7 @@ async function rejection(p: Promise<unknown>): Promise<ChainError> {
 
 async function issuerHarness(personality: 'solana' | 'monad' = 'solana') {
   const h = await SimHarness.create(personality, { genesis: GENESIS });
-  await h.exec(h.issuer, { kind: 'registerIssuer' });
+  await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
   return h;
 }
 
@@ -222,5 +222,26 @@ describe('openRaise on Stage 1 open_raise (S2-AD, S2-E)', () => {
     const tx = await h.sim.build({ kind: 'commitBid', seriesId, commitment: '0x' + '00'.repeat(32), deposit: '1' }, stranger);
     const e = await rejection(h.sim.send({ tx, signatures: { [stranger]: `sim:${stranger}` } }));
     expect([e.code, e.detail]).toEqual(['NotAllowlisted', { stage1: 'NotAllowlisted' }]);
+  });
+});
+
+describe('S5 issuer registration and window terms', () => {
+  for (const personality of ['solana', 'monad'] as const) it(`${personality}: only admin registers, re-registration preserves stop, and window bounds are enforced`, async () => {
+    const h = await SimHarness.create(personality, { genesis: GENESIS });
+    const command = { kind: 'registerIssuer' as const, wallet: h.issuer.address };
+    await expect(h.exec(h.issuer, command)).rejects.toMatchObject({ code: 'Unauthorized' });
+    await h.exec(h.admin, command);
+    await h.exec(h.issuer, { kind: 'stopIssuance' });
+    await h.exec(h.admin, command);
+    expect((await h.sim.getIssuer(h.issuer.address))!.issuanceStopped).toBe(true);
+    const other = h.backers[0]!;
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: other.address });
+    for (const terms of [{ windowCommitDuration: 3599 }, { windowRevealDuration: 604801 }, { windowFeeBps: 1001 }]) {
+      await expect(h.exec(other, { kind: 'createSeries', terms: defaultTerms(h.sim, terms).terms })).rejects.toMatchObject({ detail: { stage1: 'ParameterOutOfBounds' } });
+    }
+    const terms = defaultTerms(h.sim, { windowCommitDuration: 3600, windowRevealDuration: 604800, windowFeeBps: 1000 }).terms;
+    const tx = await h.exec(other, { kind: 'createSeries', terms });
+    const seriesId = (tx.events[0]!.payload as { seriesId: string }).seriesId;
+    expect((await h.sim.getSeries(seriesId))!.terms).toMatchObject({ windowCommitDuration: 3600, windowRevealDuration: 604800, windowFeeBps: 1000 });
   });
 });

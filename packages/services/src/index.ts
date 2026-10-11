@@ -65,6 +65,7 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   ctx.identity = over.identity ?? new MockIdentityCheck();
   ctx.esign = over.esign ?? new MockESign();
   ctx.zktls = over.zktls ?? new MockZkTls();
+  if (!simOnly && ctx.zktls instanceof MockZkTls) throw new Error('mock zkTLS is simulator-only: configure a real zkTLS provider before live reporting (Part J.3)');
   // Stage 1 Groth16 by default; mock proofs too only in a simulator-only process with MERCES_PROOF_SYSTEM=mock (H3;
   // the chain registry logs the warning and refuses the setting next to a live chain)
   ctx.proofVerifier = over.proofVerifier ?? reportProofVerifier({ acceptMock: reportProofSystemFromEnv(process.env, { simulatorOnly: simOnly }) === 'mock' });

@@ -98,9 +98,10 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const e = env();
     const stranger = e.backers[4]!;
     // backers are allowlisted; a brand-new wallet is not
-    const r = await exec(e, e.issuer, { kind: 'registerIssuer' });
+    const r = await exec(e, e.admin, { kind: 'registerIssuer', wallet: e.issuer.address });
     expect(types(r.events)).toEqual(['IssuerRegistered']);
-    await expectChainError(exec(e, e.issuer, { kind: 'registerIssuer' }), 'Duplicate');
+    await exec(e, e.admin, { kind: 'registerIssuer', wallet: e.issuer.address });
+    await expectChainError(exec(e, e.issuer, { kind: 'registerIssuer', wallet: e.issuer.address }), 'Unauthorized');
     const badCap = e.terms({ capMultipleWad: (35n * WAD / 10n).toString() });
     await expectChainError(exec(e, e.issuer, { kind: 'createSeries', terms: badCap }), 'InvalidTerms');
     const noContract = e.terms({ contractHash: '0x' + '00'.repeat(32) });
@@ -279,7 +280,7 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const s = (await e.chain.getSeries(seriesId))!;
     const now = await e.chain.now();
     const until = now + 10 * 86_400;
-    await exec(e, e.issuer, { kind: 'requestPause', seriesId, until });
+    await exec(e, e.issuer, { kind: 'requestPause', seriesId });
     // Stage 1 approve_pause: a signer that is not an active attestor is InvalidAttestorSignature (code InvalidAttestation;
     // cause P: was Unauthorized). Cause S4-PAU: the approval is an attestor key's PAUSE signature over the live nonce,
     // sent by anyone; a key the chain never registered, or a signature naming another key, is refused, sent by the keeper
@@ -320,7 +321,7 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
   // registries refuse a curve series right after the issuer check (MercesRegistry.sol:479-481)
   it('runs curve staking on Solana: register, census, stake, receive, claim by stake, unstake credits pending; EVM refuses a curve', async () => {
     const e = env();
-    if (!(await e.chain.getIssuer(e.issuer.address))) await exec(e, e.issuer, { kind: 'registerIssuer' });
+    if (!(await e.chain.getIssuer(e.issuer.address))) await exec(e, e.admin, { kind: 'registerIssuer', wallet: e.issuer.address });
     // Stage 1's worked curve series: 100 units, X = 1,000 USDC, r per base lamport, the curve's zeros
     const over = { raiseStyle: 'curve' as const, ...CURVE_TERMS_ZEROS, unitsOffered: '100', minimumRaise: '1000000000' };
     const privateTerms = { ...e.privateTerms, rWad: ratePerUnit(wadFromDecimal('0.10'), rateUnits(over)) };

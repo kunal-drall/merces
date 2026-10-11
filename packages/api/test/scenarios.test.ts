@@ -160,7 +160,7 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     const q = parsePeriod(`${new Date(settledAt * 1000).getUTCFullYear()}Q${Math.floor(new Date(settledAt * 1000).getUTCMonth() / 3) + 1}`);
     await h.sim.setTime(Math.max(await h.sim.now(), q.end + 10 * 86_400));
     const until = (await h.sim.now()) + 90 * 86_400;
-    await send(h.issuer, await h.sim.build({ kind: 'requestPause', seriesId, until }, h.issuer.address), issuerTok);
+    await send(h.issuer, await h.sim.build({ kind: 'requestPause', seriesId }, h.issuer.address), issuerTok);
     // cause S4-PAU: the attestor key's PAUSE signature, relayed by the keeper (approvePause is permissionless)
     await h.sim.submit(await h.pauseApproval(seriesId, until), 'keeper');
     await rig.sync();

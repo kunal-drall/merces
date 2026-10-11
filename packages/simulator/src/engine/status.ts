@@ -1,6 +1,6 @@
 import { ChainError, PAUSE_APPROVAL_MESSAGE, pauseBounds, pauseDigest, type Command } from '@merces/domain';
 import {
-  U64_MAX, earliestUnpaid, formalNoticeDue, isLateUnderlying, isPausedAt, lateAccrual, pauseApprovalError, periodsBetween, projectDeadlines, toPid,
+  U64_MAX, earliestUnpaid, formalNoticeDue, trueupNoticeDue, isLateUnderlying, isPausedAt, lateAccrual, pauseApprovalError, periodsBetween, projectDeadlines, toPid,
   type Period,
 } from '@merces/math';
 import type { SimPeriod, SimSeries } from '../state.ts';
@@ -96,8 +96,8 @@ export function syncReleaseBlock(s: SimSeries, now: number, emit: Emit): void {
 /**
  * Stage 1's `sync_status` (SIM:375-395): on a settled series, store the derived status (`StatusChanged`); unless the
  * stored status is terminal, record the formal notice of the earliest unpaid period once (`formalNoticeEmittedFor`,
- * `FormalNoticeDue`) when its countdown reached the notice bound. Then the release-block events. The true-up notice is
- * not reachable until S5 (`trueupDue` stays 0). Runs only at the sync points (`SYNC_POINTS` in ledger.ts).
+ * `FormalNoticeDue`) when its countdown reached the notice bound. The annual clock emits TrueUpNoticeDue once,
+ * followed by release-block events. Runs only at the sync points (`SYNC_POINTS` in ledger.ts).
  */
 export function syncStatus(_e: EngineCore, s: SimSeries, now: number, emit: Emit): void {
   if (s.phase !== 'Settled') return;
@@ -110,6 +110,10 @@ export function syncStatus(_e: EngineCore, s: SimSeries, now: number, emit: Emit
       l.formalNoticeEmittedFor = p;
       emit('FormalNoticeDue', { seriesId: s.seriesId, periodId: periodIdOf(p) });
     }
+    if (trueupNoticeDue(c, BigInt(now), statusParams(s)) && !l.trueupNoticeEmitted && l.trueupYear !== null) {
+      l.trueupNoticeEmitted = true;
+      emit('TrueUpNoticeDue', { seriesId: s.seriesId, year: l.trueupYear });
+    }
   }
   syncReleaseBlock(s, now, emit);
 }
@@ -118,8 +122,7 @@ export function syncStatus(_e: EngineCore, s: SimSeries, now: number, emit: Emit
 /**
  * `request_pause` (SIM:650-661): the issuer asks for a hardship pause. Not refused while paused or while a request is
  * pending. Advances the pause nonce, so a PAUSE signature over an older request no longer recovers to its key (S4 D7).
- * `cmd.until` is advisory: stored (`ledger.pauseRequestedUntil`) and emitted, never enforced onchain; the attestor service
- * holds the approval to it. Emits `PauseRequested{until, nonce}` with the new nonce.
+ * The requested end is kept in the private hardship review only. Emits `PauseRequested{nonce}` with the new nonce.
  */
 export function requestPause(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'requestPause' }>, now: number, emit: Emit): void {
   const s = e.series(cmd.seriesId);
@@ -131,8 +134,8 @@ export function requestPause(e: EngineCore, signer: string, cmd: Extract<Command
   l.pauseRequested = true;
   l.pauseRequestedAt = BigInt(now);
   l.pauseNonce += 1n;
-  l.pauseRequestedUntil = BigInt(cmd.until);
-  emit('PauseRequested', { seriesId: s.seriesId, until: cmd.until, nonce: l.pauseNonce.toString() });
+  l.pauseRequestedUntil = null;
+  emit('PauseRequested', { seriesId: s.seriesId, nonce: l.pauseNonce.toString() });
 }
 
 /**
@@ -187,6 +190,19 @@ export function approvePause(e: EngineCore, cmd: Extract<Command, { kind: 'appro
   l.pauseRequestedUntil = null;
   emit('PauseApproved', { seriesId: s.seriesId, attestor, start: now, until: Number(end) });
   syncStatus(e, s, now, emit);
+}
+
+/** Stage 1 end_pause (SIM:674): issuer ends the currently active pause, releasing unused pause allowance. */
+export function endPause(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'endPause' }>, now: number, emit: Emit): void {
+  const s = e.series(cmd.seriesId);
+  e.requireIssuer(s, signer);
+  const t = BigInt(now);
+  const open = s.ledger.pauses.find((p) => p.start <= t && t < p.end);
+  if (!open) fail('NotPaused', 'no pause is active');
+  s.ledger.pausedTotal -= open.end - t;
+  open.end = t;
+  // Announce any elapsed intervals and this shortened interval exactly once.
+  crankPause(e, { kind: 'crankPause', seriesId: s.seriesId }, now, emit);
 }
 
 /**

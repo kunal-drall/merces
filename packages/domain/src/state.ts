@@ -132,6 +132,8 @@ export interface SeriesState {
    * reports, releases, redemption, extinguishment and windows wait for it (MintNotFinalized).
    */
   mintFinalized: boolean;
+  /** Annual adjustment ledger; accrual and total are computed at the chain's current time. */
+  trueUp: { nonce: string; lastYear: number | null; year: number | null; due: Money; attestedAt: number | null; accrual: Money; total: Money; routerCredit: Money; noticeEmitted: boolean };
 }
 
 export interface SeriesReporting {

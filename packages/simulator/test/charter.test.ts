@@ -43,7 +43,7 @@ describe('autonomy charter invariants (C11)', () => {
       { kind: 'drawRelease', seriesId },
       { kind: 'redeem', seriesId, maxPricePerUnit: '1' },
       { kind: 'claimPayout', seriesId },
-      { kind: 'requestPause', seriesId, until: 9_999_999_999 },
+      { kind: 'requestPause', seriesId },
     ] as const;
     for (const cmd of forbidden) {
       const tx = await h.sim.build(cmd, h.admin.address);

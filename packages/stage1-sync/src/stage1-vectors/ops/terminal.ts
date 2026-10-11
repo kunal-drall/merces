@@ -23,6 +23,12 @@ import { direct, type TranslatorTable } from './types.ts';
  *   digest (32 zero bytes), which the chain never looks at. No Stage 1 vector has one.
  */
 export const terminalOps: TranslatorTable = {
+  retire_if_capped: (ctx, c) => direct(async () => {
+    await ctx.submit({ kind: 'retireIfCapped', seriesId: ctx.seriesBook(c.series).seriesId }, 'keeper');
+  }),
+  transfer_units: (ctx, c) => direct(async () => {
+    await ctx.send(ctx.actors.wallet(c.actor), { kind: 'transferUnits', seriesId: ctx.seriesBook(c.series).seriesId, to: ctx.actors.address(c.to), units: c.units.toString() });
+  }),
   extinguish: (ctx, c) =>
     direct(async () => {
       const seriesId = ctx.seriesBook(c.series).seriesId;

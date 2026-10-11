@@ -16,7 +16,7 @@ describe('simulator personalities', () => {
     expect(sol.admin).not.toMatch(/^0x/);
     const h = await SimHarness.create('monad');
     const { terms } = defaultTerms(sol, { stablecoin: 'USDG' });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     await expectChainError(h.exec(h.issuer, { kind: 'createSeries', terms: { ...terms, stablecoinMint: terms.stablecoinMint } }), 'InvalidTerms');
     // cause S3-CT: the EVM refuses curve mode first, as Stage 1's registry does (CurveModeUnsupported; was InvalidTerms)
     await expectChainError(h.exec(h.issuer, { kind: 'createSeries', terms: { ...defaultTerms(h.sim).terms, raiseStyle: 'curve' } }), 'NotPermitted');

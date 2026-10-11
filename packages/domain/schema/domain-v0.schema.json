@@ -281,6 +281,21 @@
                     "minimum": 0,
                     "maximum": 9007199254740991
                   },
+                  "windowCommitDuration": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "windowRevealDuration": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "windowFeeBps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
                   "dueDays": {
                     "type": "integer",
                     "exclusiveMinimum": 0,
@@ -357,6 +372,9 @@
                   "nonRevealChargeBps",
                   "commitDurationSeconds",
                   "revealDurationSeconds",
+                  "windowCommitDuration",
+                  "windowRevealDuration",
+                  "windowFeeBps",
                   "dueDays",
                   "graceDays",
                   "formalNoticeDays",
@@ -2134,6 +2152,228 @@
           },
           "type": {
             "type": "string",
+            "const": "TrueUpRecorded"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "year": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "adjustment": {
+                "type": "string",
+                "pattern": "^(0|-?[1-9]\\d{0,18})$"
+              },
+              "deadline": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "year",
+              "adjustment",
+              "deadline"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "TrueUpPaid"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "accrual": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "amount",
+              "accrual"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "TrueUpNoticeDue"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "year": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "seriesId",
+              "year"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
             "const": "FeeTaken"
           },
           "payload": {
@@ -2860,11 +3100,6 @@
                 "type": "string",
                 "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
               },
-              "until": {
-                "type": "integer",
-                "minimum": -9007199254740991,
-                "maximum": 9007199254740991
-              },
               "nonce": {
                 "type": "string",
                 "pattern": "^\\d+$"
@@ -2872,7 +3107,6 @@
             },
             "required": [
               "seriesId",
-              "until",
               "nonce"
             ],
             "additionalProperties": false
@@ -4826,6 +5060,21 @@
               "minimum": 0,
               "maximum": 9007199254740991
             },
+            "windowCommitDuration": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "windowRevealDuration": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "windowFeeBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
             "dueDays": {
               "type": "integer",
               "exclusiveMinimum": 0,
@@ -4902,6 +5151,9 @@
             "nonRevealChargeBps",
             "commitDurationSeconds",
             "revealDurationSeconds",
+            "windowCommitDuration",
+            "windowRevealDuration",
+            "windowFeeBps",
             "dueDays",
             "graceDays",
             "formalNoticeDays",
@@ -5602,6 +5854,81 @@
       ],
       "additionalProperties": false
     },
+    "TrueUpRecorded": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "year": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "adjustment": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9]\\d{0,18})$"
+        },
+        "deadline": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "year",
+        "adjustment",
+        "deadline"
+      ],
+      "additionalProperties": false
+    },
+    "TrueUpPaid": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        },
+        "accrual": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "amount",
+        "accrual"
+      ],
+      "additionalProperties": false
+    },
+    "TrueUpNoticeDue": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "year": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "seriesId",
+        "year"
+      ],
+      "additionalProperties": false
+    },
     "FeeTaken": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -5886,11 +6213,6 @@
           "type": "string",
           "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
         },
-        "until": {
-          "type": "integer",
-          "minimum": -9007199254740991,
-          "maximum": 9007199254740991
-        },
         "nonce": {
           "type": "string",
           "pattern": "^\\d+$"
@@ -5898,7 +6220,6 @@
       },
       "required": [
         "seriesId",
-        "until",
         "nonce"
       ],
       "additionalProperties": false
@@ -6568,20 +6889,6 @@
     }
   },
   "commands": {
-    "registerIssuer": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "registerIssuer"
-        }
-      },
-      "required": [
-        "kind"
-      ],
-      "additionalProperties": false
-    },
     "createSeries": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -6689,6 +6996,21 @@
               "minimum": 0,
               "maximum": 9007199254740991
             },
+            "windowCommitDuration": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "windowRevealDuration": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "windowFeeBps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
             "dueDays": {
               "type": "integer",
               "exclusiveMinimum": 0,
@@ -6765,6 +7087,9 @@
             "nonRevealChargeBps",
             "commitDurationSeconds",
             "revealDurationSeconds",
+            "windowCommitDuration",
+            "windowRevealDuration",
+            "windowFeeBps",
             "dueDays",
             "graceDays",
             "formalNoticeDays",
@@ -7203,9 +7528,71 @@
       },
       "required": [
         "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "submitTrueUp": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "submitTrueUp"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "year": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "adjustment": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9]\\d{0,18})$"
+        },
+        "attestationTs": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d{0,19})$"
+        },
+        "attestor": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{130}$"
+        }
+      },
+      "required": [
+        "kind",
         "seriesId",
-        "periodId",
-        "amount"
+        "year",
+        "adjustment",
+        "attestationTs",
+        "attestor",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
+    "payTrueUp": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "payTrueUp"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
       ],
       "additionalProperties": false
     },
@@ -7277,17 +7664,60 @@
         "seriesId": {
           "type": "string",
           "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "endPause": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "endPause"
         },
-        "until": {
-          "type": "integer",
-          "minimum": -9007199254740991,
-          "maximum": 9007199254740991
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "transferUnits": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "transferUnits"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "units": {
+          "type": "string",
+          "pattern": "^\\d+$"
         }
       },
       "required": [
         "kind",
         "seriesId",
-        "until"
+        "to",
+        "units"
       ],
       "additionalProperties": false
     },
@@ -7329,8 +7759,7 @@
       },
       "required": [
         "kind",
-        "seriesId",
-        "maxPricePerUnit"
+        "seriesId"
       ],
       "additionalProperties": false
     },
@@ -7808,6 +8237,25 @@
       ],
       "additionalProperties": false
     },
+    "retireIfCapped": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "retireIfCapped"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId"
+      ],
+      "additionalProperties": false
+    },
     "beginSettlement": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -8112,6 +8560,26 @@
         "signatureA",
         "attestorB",
         "signatureB"
+      ],
+      "additionalProperties": false
+    },
+    "registerIssuer": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "registerIssuer"
+        },
+        "wallet": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "kind",
+        "wallet"
       ],
       "additionalProperties": false
     },

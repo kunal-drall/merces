@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
-import { SigningError } from '@merces/domain';
+import { isPublishedTestKey, SigningError } from '@merces/domain';
 import { AttestorKey, KeystoreError, createKeystore, decryptKeystore, isTestHarness, keystoreKdf } from './attestor-keys.ts';
 import { AttestorToolError, checkLinkChallenge, checkRequest, describeLinkChallenge, describeSigningRequest, linkProof, pinNetworks, signChecked, type CheckedSigningRequest } from './attestor-signer.ts';
 
@@ -347,6 +347,7 @@ async function importKey(io: CliIo, opts: Options, file: string | undefined): Pr
     throw new CliError('unrecognised', `${path} is neither a Web3 Secret Storage v3 keystore nor a 0x-hex private key`);
   }
   try {
+    if (!opts.allowLocal && isPublishedTestKey(key.address)) throw new CliError('declined', 'published test keys can be imported only for the simulator (--allow-local)');
     emit(io, opts, await writeNewKeystore(io, opts, key));
   } finally {
     key.wipe();
@@ -394,6 +395,7 @@ async function sign(io: CliIo, opts: Options, file: string | undefined): Promise
   const key = await loadKey(io, opts);
   let results;
   try {
+    if (!opts.allowLocal && isPublishedTestKey(key.address)) throw new CliError('declined', 'published test keys are refused for live chains');
     results = checkedList.map((c) => ({ kind: c.kind, chain: c.chain, seriesId: c.seriesId, ...signChecked(c, key) }));
   } finally {
     key.wipe();

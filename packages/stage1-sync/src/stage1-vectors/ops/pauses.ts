@@ -1,14 +1,13 @@
 import { U64_MAX } from '@merces/math';
-import { dec, num } from '../codec.ts';
+import { dec } from '../codec.ts';
 import { RunnerError } from '../errors.ts';
-import { direct, shim, type TranslatorTable } from './types.ts';
+import { direct, type TranslatorTable } from './types.ts';
 
 /**
  * Status cranks and hardship pauses.
  *
  * - `crank_status`: keeper `crankStatus` (direct).
- * - `request_pause` (SH-PAU-1): Stage 1's request has no end; `requestPause.until` (advisory in S1) is set to
- *   `t + max_pause_seconds`, the longest pause an attestor may approve.
+ * - `request_pause`: direct `requestPause{seriesId}`, with no advisory end. `end_pause` ends an active pause early.
  * - `approve_pause` (direct since S4 WP10; was SH-PAU-2): Stage 1 passes the attestor's signature as an argument and
  *   anyone may send it, so the runner has the named vector key sign Stage 1's PAUSE message over the chain's signing
  *   domain, the series key, the series' live pause nonce (`SeriesState.nonces.pause`) and `pauseEnd`, as Stage 1's
@@ -27,10 +26,13 @@ export const pauseOps: TranslatorTable = {
     }),
 
   request_pause: (ctx, c) =>
-    shim('SH-PAU-1', async () => {
-      const until = ctx.now() + num(ctx.vector.parameters.maxPauseSeconds.toString(), 'maxPauseSeconds');
-      await ctx.send(ctx.actors.wallet(c.actor), { kind: 'requestPause', seriesId: ctx.seriesBook(c.series).seriesId, until });
+    direct( async () => {
+      await ctx.send(ctx.actors.wallet(c.actor), { kind: 'requestPause', seriesId: ctx.seriesBook(c.series).seriesId });
     }),
+
+  end_pause: (ctx, c) => direct(async () => {
+    await ctx.send(ctx.actors.wallet(c.actor), { kind: 'endPause', seriesId: ctx.seriesBook(c.series).seriesId });
+  }),
 
   withdraw_pause_request: (ctx, c) =>
     direct(async () => {

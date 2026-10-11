@@ -11,7 +11,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['packages/*/test/**/*.test.ts'],
-          exclude: ['packages/conformance/**', 'packages/privacy-tests/**'],
+          exclude: ['packages/conformance/**', 'packages/privacy-tests/**', '**/._*'],
           testTimeout: 60_000,
           hookTimeout: 60_000,
         },
@@ -19,6 +19,7 @@ export default defineConfig({
       {
         test: {
           name: 'conformance',
+          exclude: ['**/._*'],
           include: ['packages/conformance/test/**/*.test.ts'],
           testTimeout: 600_000,
           hookTimeout: 600_000,
@@ -27,6 +28,7 @@ export default defineConfig({
       {
         test: {
           name: 'canary',
+          exclude: ['**/._*'],
           include: ['packages/privacy-tests/test/**/*.test.ts'],
           testTimeout: 120_000,
           hookTimeout: 120_000,

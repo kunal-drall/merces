@@ -43,7 +43,7 @@ describe.skipIf(!dbTestsEnabled())('S2 auction builders and reads (WP7)', () => 
   it('build-open and build-cancel are the issuer\'s, with Stage 1\'s refusals as 409s', async () => {
     const h = rig.mon;
     const { terms } = defaultTerms(h.sim);
-    if (!(await h.sim.getIssuer(h.issuer.address))) await h.exec(h.issuer, { kind: 'registerIssuer' });
+    if (!(await h.sim.getIssuer(h.issuer.address))) await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events.find((e) => e.type === 'SeriesCreated')!.payload as { seriesId: string }).seriesId;
     await rig.sync();

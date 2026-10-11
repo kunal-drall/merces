@@ -174,7 +174,7 @@ describe.skipIf(!dbTestsEnabled())('E13 admin API', () => {
     expect((await rig.post('/admin/attestors/rotate', { chain: 'solana', from: r2.address, to: SimSigner.attestor('rot-3').address }, adminTok)).json().detail).toEqual({ reason: 'key-not-active' });
 
     const rot = await rotate(r2.address.toUpperCase().replace('0X', '0x'));
-    expect([rot.statusCode, rot.json().request.kind, rot.json().tx.command, rot.json().request.meta]).toEqual([201, 'rotateAttestor', { kind: 'rotateAttestor', from: r1.address, to: r2.address }, { accountId: 'att-rot' }]);
+    expect([rot.statusCode, rot.json().request.kind, rot.json().tx.command, rot.json().request.meta]).toEqual([201, 'rotateAttestor', { kind: 'rotateAttestor', from: r1.address, to: r2.address }, { accountId: 'att-rot', openWork: { hardship: 0, tier3: 0, annual: 0, extinguishments: 0 } }]);
     const listed = (await rig.get('/admin/attestors', adminTok)).json().attestors;
     expect(listed.find((a: { attestor: string }) => a.attestor === r1.address)).toMatchObject({ status: 'deactivation-pending', accountId: 'att-rot' });
     expect(listed.find((a: { attestor: string }) => a.attestor === r2.address)).toMatchObject({ status: 'pending-onchain', accountId: 'att-rot' });

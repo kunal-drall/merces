@@ -142,7 +142,7 @@ describe('amendments and extinguishment', () => {
 
   it('refuses a raise that has not settled (amendment M5)', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const { terms } = defaultTerms(h.sim);
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
@@ -430,7 +430,7 @@ describe('signed extinguishment (Stage 1 extinguish)', () => {
 
   it('the signatures are read before the raise: an unsettled raise with a bad signature is InvalidAttestorSignature, with good ones RaiseNotSettled', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     const good = await h.extinguishment(seriesId);

@@ -81,6 +81,9 @@ export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & {
      */
     commitDurationSeconds: 3 * 86_400,
     revealDurationSeconds: 86_400,
+    windowCommitDuration: DEFAULTS.windowCommitDuration,
+    windowRevealDuration: DEFAULTS.windowRevealDuration,
+    windowFeeBps: DEFAULTS.windowFeeBps,
     dueDays: DEFAULTS.dueDays,
     graceDays: DEFAULTS.graceDays,
     formalNoticeDays: DEFAULTS.formalNoticeDays,
@@ -424,7 +427,7 @@ export class SimHarness {
    */
   async runRaise(opts: { terms?: Partial<SeriesTerms>; privateTerms?: PrivateTerms; bids?: { backer: number; price: bigint; qty: bigint; reveal?: boolean }[]; settle?: 'none' | SettlementGoal } = {}): Promise<{ seriesId: string; terms: SeriesTerms; privateTerms: PrivateTerms; clearingPrice: bigint; failureReason: RaiseFailure | null }> {
     const { terms, privateTerms } = defaultTerms(this.sim, { ...(opts.terms ?? {}), privateTerms: opts.privateTerms });
-    if (!(await this.sim.getIssuer(this.issuer.address))) await this.exec(this.issuer, { kind: 'registerIssuer' });
+    if (!(await this.sim.getIssuer(this.issuer.address))) await this.exec(this.admin, { kind: 'registerIssuer', wallet: this.issuer.address });
     const created = await this.exec(this.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events.find((e) => e.type === 'SeriesCreated')!.payload as { seriesId: string }).seriesId;
     await this.exec(this.issuer, { kind: 'openRaise', seriesId });
@@ -467,7 +470,7 @@ export class SimHarness {
    */
   async createCurve(opts: { terms?: Partial<SeriesTerms>; privateTerms?: PrivateTerms } = {}): Promise<{ seriesId: string; terms: SeriesTerms; privateTerms: PrivateTerms }> {
     const { terms, privateTerms } = defaultTerms(this.sim, { unitsOffered: '100', minimumRaise: '1000000000', ...(opts.terms ?? {}), raiseStyle: 'curve', privateTerms: opts.privateTerms });
-    if (!(await this.sim.getIssuer(this.issuer.address))) await this.exec(this.issuer, { kind: 'registerIssuer' });
+    if (!(await this.sim.getIssuer(this.issuer.address))) await this.exec(this.admin, { kind: 'registerIssuer', wallet: this.issuer.address });
     const created = await this.exec(this.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events.find((e) => e.type === 'SeriesCreated')!.payload as { seriesId: string }).seriesId;
     return { seriesId, terms, privateTerms };

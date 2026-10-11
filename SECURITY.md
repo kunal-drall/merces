@@ -226,3 +226,28 @@ captured logs, the outbox and error reports, in decimal, hex and base64; finding
 
 Open a private security advisory on the repository or write to the maintainers listed in README.md. Please do not
 file public issues for security problems.
+
+## Accepted for testnet
+
+The owner accepts the compromised-key residual risk for testnet. Forward-only revocation leaves REPORT and FX
+signatures for already-ended periods usable for up to 45 days. Unrelayed PAUSE and EXTINGUISH signatures are bearer
+authorisations until used or their key is revoked. Removing a stored signature or withdrawing an offchain review
+cannot revoke copies already held elsewhere. Published test keys are refused by live-chain enrollment, admin key
+proposals and the attestor signing tool. Mock zkTLS is simulator-only.
+
+Annual TRUEUP signatures serialize per series: at most one signed, unsubmitted annual review may reserve its nonce.
+A positive true-up's 60-day clock starts at its signed `attestationTs`, not when it is submitted. Capture it near the
+intended submission and reconcile nonce movement before reopening it.
+
+## Required before mainnet
+
+- An onchain cancellable extinguishment delay (requested from Stage 1). A configurable keeper relay delay only holds
+  this service's relay and cannot stop somebody else submitting the two bearer signatures.
+- An immediate compromised-key revocation path. Today an admin proposes revocation for the multisig, and the last-key
+  rule requires a replacement first. A guardian/emergency revoker in Stage 1, or an operator-held presigned revoke,
+  requires explicit implementation and operational authorization.
+- An alert to admins and the affected issuer whenever an attestor signature is accepted or relayed: tier-3 REPORT,
+  FX, PAUSE, AMEND, EXTINGUISH and TRUEUP. This alert coverage is a prerequisite, not a claim about current behavior.
+
+Also required: a real circuit setup ceremony, external audits, real identity/zkTLS/e-sign providers and managed verifier
+key custody. Mainnet remains out of scope and refused by the chain configuration.

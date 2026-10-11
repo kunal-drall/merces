@@ -34,6 +34,9 @@ function summary(e: DomainEvent): string | null {
     case 'ReleasesResumed': return 'Treasury releases resumed';
     case 'ReportAccepted': return `Report accepted for ${p.periodId} (tier ${p.tier})`;
     case 'PaymentReceived': return `Payment received${p.periodId ? ` for ${p.periodId}` : ''}`;
+    case 'TrueUpRecorded': return `Annual true-up recorded for ${p.year}`;
+    case 'TrueUpPaid': return 'Annual true-up paid';
+    case 'TrueUpNoticeDue': return `Formal notice due for annual true-up ${p.year}`;
     case 'PayoutClaimed': return 'A holder claimed a payout';
     case 'TailClaimed': return 'A holder claimed its tail payout';
     case 'FinalClaimed': return 'A holder claimed its final-pool share';
@@ -97,10 +100,10 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       await client.query(
         `insert into series (series_id, chain, issuer, stablecoin, stablecoin_mint, raise_style, units_offered, reserve_price, minimum_raise, cap_multiple_wad, lockup_seconds, release_schedule,
            auction_fee_bps, payout_fee_bps, hurdle_wad, payout_multiple_k, wallet_cap_bps, due_days, grace_days, formal_notice_days, contract_hash, terms_commitment, tier_flags, reporting_currency, created_at, last_event_seq,
-           commit_duration_seconds, reveal_duration_seconds, non_reveal_charge_bps, unit_scale)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) on conflict (series_id) do nothing`,
+           commit_duration_seconds, reveal_duration_seconds, non_reveal_charge_bps, unit_scale, window_commit_duration, window_reveal_duration, window_fee_bps)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33) on conflict (series_id) do nothing`,
         [p.seriesId, e.chain, p.issuer, t.stablecoin, t.stablecoinMint, t.raiseStyle, t.unitsOffered, t.reservePrice, t.minimumRaise, t.capMultipleWad, t.lockupSeconds, JSON.stringify(t.releaseSchedule), t.auctionFeeBps, t.payoutFeeBps, t.hurdleWad, t.payoutMultipleK, t.walletCapBps, t.dueDays, t.graceDays, t.formalNoticeDays, t.contractHash, t.termsCommitment, JSON.stringify(t.tierFlags), t.reportingCurrency, e.blockTime, e.seq,
-          t.commitDurationSeconds, t.revealDurationSeconds, t.nonRevealChargeBps, unitScaleOf(t.raiseStyle).toString()],
+          t.commitDurationSeconds, t.revealDurationSeconds, t.nonRevealChargeBps, unitScaleOf(t.raiseStyle).toString(), t.windowCommitDuration, t.windowRevealDuration, t.windowFeeBps],
       );
       break;
     }
@@ -293,6 +296,35 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       await money(client, e, 'payment', p.gross, { periodId: p.periodId, detail: { fee: p.fee, net: p.net, source: p.source } });
       break;
     }
+    case 'TrueUpRecorded': {
+      const p = e.payload as P<'TrueUpRecorded'>;
+      const due = BigInt(p.adjustment) > 0n ? p.adjustment : '0';
+      const row = (await client.query(`update series set trueup_nonce = trueup_nonce + 1, last_trueup_year = $2::int,
+        trueup_year = case when $3::numeric > 0 then $2::int else null end, trueup_due = $3::numeric,
+        trueup_deadline = nullif($4::bigint, 0), trueup_notice_seq = null where series_id = $1 returning trueup_nonce::text`, [p.seriesId, p.year, due, p.deadline])).rows[0];
+      const usedNonce = (BigInt(row.trueup_nonce) - 1n).toString();
+      await client.query(`update tier3_annual set state = 'recorded', recorded_seq = $5, decision_code = null
+        where series_id = $1 and year = $2 and state = 'signed' and adjustment = $3::numeric and trueup_nonce = $4::numeric`, [p.seriesId, p.year, p.adjustment, usedNonce, e.seq]);
+      // An external submission consumes the nonce too. Preserve later signatures when the indexer is catching up.
+      await client.query(`update tier3_annual set state = case when year <= $2 then 'withdrawn' else 'open' end, decision_code = 'stale-nonce',
+        total_payment_stable = null, estimated_payment_stable = null, overpayment = null, underpayment = null,
+        trueup_due_at = null, credit_period_id = null, signed_at = null, trueup_nonce = null, attestation_ts = null,
+        adjustment = null, trueup_signer = null, trueup_signature = null, trueup_digest = null
+        where series_id = $1 and state = 'signed' and trueup_nonce <= $3::numeric`, [p.seriesId, p.year, usedNonce]);
+      break;
+    }
+    case 'TrueUpPaid': {
+      const p = e.payload as P<'TrueUpPaid'>;
+      await client.query(`update tier3_annual set state = 'paid', paid_seq = $2 where series_id = $1 and state = 'recorded'
+        and year = (select last_trueup_year from series where series_id = $1)`, [p.seriesId, e.seq]);
+      await client.query('update series set trueup_due = 0, trueup_year = null, trueup_deadline = null where series_id = $1', [p.seriesId]);
+      break;
+    }
+    case 'TrueUpNoticeDue': {
+      const p = e.payload as P<'TrueUpNoticeDue'>;
+      await client.query('update series set trueup_notice_seq = coalesce(trueup_notice_seq, $2) where series_id = $1', [p.seriesId, e.seq]);
+      break;
+    }
     case 'PaymentRefunded': {
       const p = e.payload as P<'PaymentRefunded'>;
       await money(client, e, 'refund', p.amount, { periodId: p.periodId, detail: { reason: p.reason } });
@@ -386,6 +418,10 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       const p = e.payload as P<'StatusChanged'>;
       await client.query('update series set status = $2, last_event_seq = $3 where series_id = $1', [p.seriesId, p.to, e.seq]);
       await client.query('insert into status_history (chain, seq, series_id, from_status, to_status, block_time) values ($1,$2,$3,$4,$5,$6) on conflict do nothing', [e.chain, e.seq, p.seriesId, p.from, p.to, e.blockTime]);
+      if (['Retired', 'Redeemed', 'Extinguished'].includes(p.to)) {
+        await client.query('update series set trueup_due = 0, trueup_year = null, trueup_deadline = null where series_id = $1', [p.seriesId]);
+        await client.query("update hardship_requests set state = 'withdrawn', decision_code = 'series-terminal', decided_at = now() where chain = $1 and series_id = $2 and state = 'pending'", [e.chain, p.seriesId]);
+      }
       break;
     }
     case 'FormalNoticeDue': {
@@ -559,7 +595,16 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       );
       break;
     }
-    case 'PauseApproved':
+    case 'PauseApproved': {
+      const p = e.payload as P<'PauseApproved'>;
+      // Approval is permissionless: a third-party relay, or a lost service transaction, must still close the
+      // matching review. Preserve the request nonce; never invent the relay's signature or its stored receipt.
+      await client.query(
+        "update hardship_requests set state = 'approved', approved_until = $3, decision_code = 'approved', decided_at = now() where chain = $1 and series_id = $2 and state = 'pending' and attestor = $4 and pause_nonce is not null",
+        [e.chain, p.seriesId, p.until, p.attestor],
+      );
+      break;
+    }
     case 'PauseEnded':
       break;
     case 'VerifierKeyRegistered': {

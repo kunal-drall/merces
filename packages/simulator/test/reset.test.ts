@@ -113,7 +113,7 @@ describe.skipIf(!dbTestsEnabled())('sim:reset (Postgres)', () => {
 
     // a reset chain starts again from an empty state of the current version
     const fresh = await persisted('solana');
-    expect(fresh.state.version).toBe(5); // cause S4-V5: simulator state version 5 (was 4; S3-V4: was 3)
+    expect(fresh.state.version).toBe(6); // cause S4-V5: simulator state version 5 (was 4; S3-V4: was 3)
     expect(await fresh.getBalance(fresh.address('wallet:x'), 'USDC')).toBe('0');
     await fresh.close();
   });

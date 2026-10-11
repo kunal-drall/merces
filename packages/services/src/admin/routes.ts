@@ -1,3 +1,4 @@
+import { proposeIssuerRegistration } from './issuer-registration.ts';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { defineRoute, type AppContext } from '@merces/api';
@@ -14,6 +15,12 @@ export function registerAdminRoutes(app: FastifyInstance, base: AppContext): voi
   const s = new AdminService(ctx);
   const idem = (req: { headers: Record<string, unknown> }) => (req.headers['idempotency-key'] as string | undefined) ?? undefined;
   const chainQuery = z.object({ chain: z.string().optional() });
+
+  defineRoute(app, ctx, { method: 'POST', url: '/admin/issuers', access: 'admin', handler: async (req, reply, session) => {
+    const b = z.object({ chain: z.string().min(1), wallet: z.string().min(1) }).strict().parse(req.body);
+    const r = await withIdempotency(ctx.pool, `issuer-register:${session!.accountId}`, idem(req), b, async () => ({ status: 201, response: await proposeIssuerRegistration(ctx, ctx.pool, session!, b.chain, b.wallet) }));
+    reply.code(r.status); return r.response;
+  } });
 
   defineRoute(app, ctx, { method: 'GET', url: '/admin/overview', access: 'admin', handler: async () => s.overview() });
 

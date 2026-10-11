@@ -160,17 +160,8 @@ describe('S3 claim scenarios: replay', () => {
     reports.merces = r.report;
     expect(r.report.runs).toHaveLength(24);
     for (const run of r.report.runs) {
-      if (run.id === 'S3l') {
-        expect(run.expected).toEqual(SCENARIO_EXPECTATIONS.S3l);
-        expect([run.status, run.executed, run.atExpected], run.world).toEqual(['PASS-WITH-DIVERGENCES', run.total, true]);
-        expect(run.issues.map((i) => [i.index, i.kind, i.divergence, i.diffs]), run.world).toEqual([
-          [79, 'divergence', 'DIV-S1I-1', [{ path: 'balances.b1.stable', expected: '69260161480', actual: '70310161480' }, { path: 'vault', expected: '54517581720', actual: '53467581720' }]],
-          [87, 'divergence', 'DIV-S1I-1', [{ path: 'balances.b1.stable', expected: '73986935800', actual: '75036935800' }, { path: 'vault', expected: '1050000000', actual: '0' }]],
-        ]);
-      } else {
-        expect(run.issues, `${run.vector} ${run.world}`).toEqual([]);
-        expect([run.status, run.executed], `${run.vector} ${run.world}`).toEqual(['PASS', run.total]);
-      }
+      expect(run.issues, `${run.vector} ${run.world}`).toEqual([]);
+      expect([run.status, run.executed, run.atExpected], run.world).toEqual(['PASS', run.total, true]);
       expect(run.runnerAtomic).toEqual([]);
       // cause S3-SH: no shim stands in for the claim family any more (SH-CLM-1, the last, retired in WP3); (l) runs 22's
       // S2 window through the one-step window rows (SH-WIN-1..7, until S5)
@@ -193,12 +184,6 @@ describe('S3 claim scenarios: replay', () => {
     expect(r.report.backend).toBe('lockstep');
     expect(r.report.runs.map((x) => `${x.id}/${x.world}`)).toEqual(scenarios.flatMap((s) => [`${s.vector.id}/lockstep/solana`, `${s.vector.id}/lockstep/monad`]));
     for (const run of r.report.runs) {
-      if (run.id === 'S3l') {
-        // the backends part on b1's balance (in every series' snapshot) and S2's vault, 1,050 USDC apart, and stop there
-        expect([run.status, run.executed, run.stopped, run.atExpected], run.world).toEqual(['PASS-WITH-DIVERGENCES', 79, { index: 79, reason: 'diverged' }, true]);
-        expect(run.issues.map((i) => [i.index, i.op, i.kind, i.divergence, i.diffs?.map((d) => d.path)]), run.world).toEqual([[78, 'claim_final', 'divergence', 'DIV-S1I-1', ['S1.balances.b1.stable', 'S2.balances.b1.stable', 'S2.vault']]]);
-        continue;
-      }
       expect(run.issues, `${run.vector} ${run.world}`).toEqual([]);
       expect([run.status, run.executed, run.atExpected], `${run.vector} ${run.world}`).toEqual(['PASS', run.total, true]);
     }
@@ -207,24 +192,14 @@ describe('S3 claim scenarios: replay', () => {
 
   // cause S3R-F (S3 review, medium): Stage 1's simulator weighs a redeemed holder's final share on its redeemed units
   // only (simulator.ts:1460); both chains add the units in its open ask's escrow (MercesVault.sol:658, claims.rs:486-490)
-  it("(l) is recorded as DIV-S1I-1: its Stage 1 values are its own expects (Stage 1's simulator's), ours are both chains' (1,050 USDC to b1, the vault at 0)", () => {
+  it('(l) has no divergence waiver after Stage 1 matches both chains on the escrow weight', () => {
     const s = loadScenario(join(S3_CLAIM_SCENARIOS, 'S3l_final_with_open_ask_after_redemption.json'), VECTORS);
-    const e = SCENARIO_EXPECTATIONS.S3l!;
-    expect(DIVERGENCE_BY_ID.get('DIV-S1I-1')?.title).toContain('Stage 1 internal, resolved toward both chains');
-    expect(Object.keys(SCENARIO_EXPECTATIONS)).toEqual(['S3l']);
-    for (const d of e.divergences!) {
-      const step = s.vector.steps[d.step] as unknown as Record<string, unknown>;
-      expect(step.op, `#${d.step}`).toBe('expect');
-      expect(d.path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], step), `#${d.step} ${d.path}`).toBe(d.stage1);
-      // ours is Stage 1's simulator's value plus (b1) or less (the vault) the 40 escrowed units' share, 40 x 26.25 USDC
-      const delta = BigInt(d.ours as string) - BigInt(d.stage1 as string);
-      expect(delta, `#${d.step} ${d.path}`).toBe(d.path === 'vault' ? -1_050_000_000n : 1_050_000_000n);
-    }
-    // the parting is b1's first claim_final, after the redemption and the extinguishment, with its 40-unit ask open
-    expect(opLabelOf(s, e.lockstep!.divergesAt)).toBe('claim_final b1');
+    expect(SCENARIO_EXPECTATIONS).toEqual({});
+    expect(DIVERGENCE_BY_ID.has('DIV-S1I-1')).toBe(false);
+    expect(opLabelOf(s, 78)).toBe('claim_final b1');
     expect(opLabelOf(s, 76)).toBe('redeem issuer');
     expect(opLabelOf(s, 72)).toBe('commit_ask b1');
-    for (const d of e.lockstep!.diffs) expect(BigInt(d.ours as string) - BigInt(d.stage1 as string), d.path).toBe(d.path.endsWith('vault') ? -1_050_000_000n : 1_050_000_000n);
+    expect(s.vector.steps[87]).toMatchObject({ op: 'expect', vault: '0', balances: { b1: { stable: '75036935800' } } });
   });
 
   it("the scenarios' figures are Stage 1's: a changed value of one of our expects fails on Stage 1's simulator and on ours", async () => {
@@ -337,8 +312,8 @@ describe('S3 claim scenarios: replay', () => {
     expect(md).toContain('| Scenario | Covers | Built from | reference | merces/solana | merces/monad | lockstep/solana | lockstep/monad |');
     expect(md).toContain('| S3f_final_after_redemption | (f) | 22 #0-#70 as #0-#70; ours as #71-#81 | PASS 82/82 | PASS 82/82 | PASS 82/82 | PASS 82/82 | PASS 82/82 |');
     // cause S3R-F: (l) carries its accepted divergences on the merces backend and its recorded parting in lockstep
-    expect(md).toContain('| S3l_final_with_open_ask_after_redemption | (l) | 22 #0-#70 as #0-#70; 22 #79-#83 as #71-#75; ours as #76-#79; 22 #84-#86 as #80-#82; ours as #83-#87 | PASS 88/88 | PASS-WITH-DIVERGENCES 88/88 (4 accepted divergences, DIV-S1I-1) | PASS-WITH-DIVERGENCES 88/88 (4 accepted divergences, DIV-S1I-1) | PASS-WITH-DIVERGENCES 79/88, diverged at #78 as recorded (DIV-S1I-1) | PASS-WITH-DIVERGENCES 79/88, diverged at #78 as recorded (DIV-S1I-1) |');
-    expect(md).toContain('Expected on the merces and lockstep backends: PASS-WITH-DIVERGENCES (DIV-S1I-1: 4 field(s) at #79, #87; lockstep parts at #78).');
+    expect(md).toContain('| S3l_final_with_open_ask_after_redemption | (l) | 22 #0-#70 as #0-#70; 22 #79-#83 as #71-#75; ours as #76-#79; 22 #84-#86 as #80-#82; ours as #83-#87 | PASS 88/88 | PASS 88/88 | PASS 88/88 | PASS 88/88 | PASS 88/88 |');
+    expect(md).not.toContain('| PASS-WITH-DIVERGENCES');
     for (const s of scenarios) expect(md).toContain(`- ${s.vector.name}: ${s.vector.description}`);
     expect(md).not.toContain('### Scenario findings');
     // a failing run is listed with its findings
@@ -353,7 +328,7 @@ describe('S3 claim scenarios: replay', () => {
   });
 
   it('every scenario file is listed in the fixtures directory and loads', () => {
-    const files = readdirSync(S3_CLAIM_SCENARIOS).filter((f) => f.endsWith('.json')).sort();
+    const files = readdirSync(S3_CLAIM_SCENARIOS).filter((f) => !f.startsWith('.') && f.endsWith('.json')).sort();
     expect(files.map((f) => f.replace(/\.json$/, ''))).toEqual(scenarios.map((s) => s.vector.name));
   });
 });

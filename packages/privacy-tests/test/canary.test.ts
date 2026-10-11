@@ -274,7 +274,7 @@ describe.skipIf(!dbTestsEnabled())('privacy canary (H3)', () => {
     httpBodies.push(set.body);
     expect(set.statusCode, set.body).toBe(200);
     // 7. a hardship pause request with a canary reason: the API accepts only ciphertext; a plaintext reason must be rejected or never stored
-    const pauseTx = await h.sim.build({ kind: 'requestPause', seriesId, until: (await h.sim.now()) + 30 * 86_400 }, h.issuer.address);
+    const pauseTx = await h.sim.build({ kind: 'requestPause', seriesId }, h.issuer.address);
     await post('/tx/send', await h.issuer.sign(pauseTx), issuerTok);
     // (S1 review: the logger also censors Stage 1's openings and private terms)
     (rig.ctx.log as { info(o: unknown, m: string): void }).info({ seriesId, reason: CANARY_REASON, incomeYtd: CANARY_INCOME_2.toString(), shareRate: CANARY_SHARE_18, theta: CANARY_THRESHOLD.toString(), opening, tier: { priorIncomeYtd: CANARY_INCOME_Q2.toString(), incomeSalt: q3.entry.incomeSalt.toString() } }, 'canary probe through the production logger');

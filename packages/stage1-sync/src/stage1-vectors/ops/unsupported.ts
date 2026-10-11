@@ -1,26 +1,19 @@
 import type { CallOp } from '@merces/reference';
-import { blocked, notApplicable, type Translation, type TranslatorTable } from './types.ts';
+import { blocked, type Translation, type TranslatorTable } from './types.ts';
 
 /**
  * Ops the merces backend does not run yet.
  *
- * - `retire_if_capped` (BLK-1): no canonical command (retirement happens inside `payIn`); BLOCKED, waived in 01#34
- *   and 05#42.
- * - `transfer_units` (NA-1): Stage 1 refuses a direct transfer (DirectTransferForbidden); the canonical model has no
- *   transfer to refuse, so the step has no meaning here.
  * - The ops only the vectors that are not targets use (NOT-YET): BLOCKED, naming the milestone that brings them. The
  *   same milestones are in `steps/vectors.ts` `STAGE1_OP_MAP` (a test keeps them equal). S2 brought `cancel_raise` and
  *   `register_holder` (now in `raise.ts`); S4 WP6 `revoke_verifier_key` (now in `registry.ts`); S4 WP10
  *   `withdraw_pause_request` (now in `pauses.ts`).
  */
 export const NOT_YET: Readonly<Partial<Record<CallOp, string>>> = Object.freeze({
-  end_pause: 'S5',
   fx_snapshot: 'S5',
   set_fx_pair: 'S5',
   route_income: 'S5',
   close_router_period: 'S5',
-  submit_trueup: 'S5',
-  pay_trueup: 'S5',
   set_flags: 'S5',
   stop_issuance: 'S5',
   resume_issuance: 'S5',
@@ -34,7 +27,5 @@ function notYet(op: CallOp): Translation {
 }
 
 export const unsupportedOps: TranslatorTable = {
-  retire_if_capped: () => blocked('BLK-1', 'retire_if_capped has no canonical command'),
-  transfer_units: () => notApplicable('NA-1', 'the canonical model has no unit transfer to refuse'),
   ...Object.fromEntries((Object.keys(NOT_YET) as CallOp[]).map((op) => [op, () => notYet(op)])),
 };

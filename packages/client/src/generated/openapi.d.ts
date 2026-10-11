@@ -801,7 +801,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months. */
+        /** @description Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months. Both styles record windowCommitDuration (3600–1209600 seconds, default 259200), windowRevealDuration (3600–604800 seconds, default 86400), and windowFeeBps (0–1000, default 100); validation reports out-of-bounds values. */
         post: operations["validateTerms"];
         delete?: never;
         options?: never;
@@ -1644,6 +1644,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/admin/issuers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Prepare a protocol-admin registration transaction for an approved issuer wallet. Application approval prepares the same proposal. The admin signs it; the backend does not hold the admin key. */
+        post: operations["registerIssuer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/overview": {
         parameters: {
             query?: never;
@@ -1919,6 +1936,86 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/attestor/tier3/{caseId}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw pending work as its requester or an admin, even after key revocation
+         * @description Drops stored signatures. Already accepted reports and submitted true-ups cannot be withdrawn. An offchain withdrawal cannot invalidate a signature already held by a third party.
+         */
+        post: operations["withdrawTier3Case"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/tier3/annual/{annualId}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw pending work as its requester or an admin, even after key revocation
+         * @description Drops stored signatures. Already accepted reports and submitted true-ups cannot be withdrawn. An offchain withdrawal cannot invalidate a signature already held by a third party.
+         */
+        post: operations["withdrawAnnualAttestation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/extinguish/{requestId}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw pending work as its requester or an admin, even after key revocation
+         * @description Drops stored signatures. Already accepted reports and submitted true-ups cannot be withdrawn. An offchain withdrawal cannot invalidate a signature already held by a third party.
+         */
+        post: operations["withdrawExtinguishment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/signer-keys/readdress-work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Readdress open work after a confirmed same-account key rotation
+         * @description The old key must be revoked and the replacement active. Preserves signed reports during their grace and reports already accepted onchain. Reopens expired unsigned work with its evidence confined to the same account. Both extinguishment signatures must be collected again.
+         */
+        post: operations["readdressAttestorWork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/attestor/me": {
         parameters: {
             query?: never;
@@ -1961,6 +2058,23 @@ export type paths = {
         get: operations["hardshipStatus"];
         put?: never;
         post: operations["requestHardship"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/hardship/build-end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description End the active approved pause early. The unused duration returns to the lifetime pause allowance. */
+        post: operations["buildEndPause"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2508,6 +2622,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/series/{seriesId}/retirement/build-retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Retire a mint-finalized series whose current cap is met. Anyone may submit it. */
+        post: operations["buildRetireIfCapped"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/retirement/build-burn": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Burn a holder balance on a Retired sealed series. Pending payouts remain claimable; anyone may submit it. */
+        post: operations["buildBurnRetired"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/series/{seriesId}/retirement/crank-burn": {
         parameters: {
             query?: never;
@@ -2598,6 +2746,55 @@ export type paths = {
         get: operations["getWindowBackup"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/true-up": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getTrueUp"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/true-up/build-pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["buildPayTrueUp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/tier3/annual/{annualId}/build-submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Builds submitTrueUp for the linked issuer wallet with the stored attestor signature after checking the live nonce, year, active key and adjustment. Signing and sending remain on the issuer device. */
+        post: operations["buildSubmitTrueUp"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3055,6 +3252,12 @@ export type components = {
             payoutFeeBps?: number;
             hurdleWad?: components["schemas"]["Wad"];
             payoutMultipleK?: number;
+            /** @default 259200 */
+            windowCommitDuration: number | null;
+            /** @default 86400 */
+            windowRevealDuration: number | null;
+            /** @default 100 */
+            windowFeeBps: number | null;
             /** @description the sealed-bid raise's wallet cap in bps of the units offered (a bid above it is invalid at reveal). 0 on a curve-mode series, which has no wallet cap at any stage (the series' noCap): 0 there never means a cap */
             walletCapBps?: number;
             dueDays?: number;
@@ -3945,6 +4148,22 @@ export type components = {
             };
             flags: components["schemas"]["AdminFlag"][];
         };
+        WorkWithdrawal: {
+            id: string;
+            /** @constant */
+            state: "withdrawn";
+        };
+        ReaddressWork: {
+            chain: string;
+            from: string;
+            to: string;
+        };
+        ReaddressedWork: {
+            hardship: number;
+            tier3: number;
+            annual: number;
+            extinguishments: number;
+        };
         /** @description End-to-end ciphertext (base64, base64url or hex) encrypted on the client for the attestor's key. Plaintext, JSON, and any hex, base64 or base64url encoding of text, JSON or a document file are rejected (422). */
         Ciphertext: string;
         /** @description A merces-e2e v1 envelope, in canonical base64 (standard alphabet, padded) of version 0x01 (1 byte) ‖ the sender's ephemeral X25519 public key (32) ‖ the AES-GCM nonce (12) ‖ the AES-256-GCM ciphertext of the payload and its 16-byte tag. Key = HKDF-SHA256(X25519 shared secret, salt = ephemeral public key ‖ recipient public key, info = "merces/e2e/v1" ‖ 0x00 ‖ purpose); associated data = the 45 header bytes. The server holds no key and checks the shape only; anything that does not parse as an envelope of the payload's size (the plaintext or an encoding of it included) is rejected (422). @merces/poi-device sealE2e / openE2e. */
@@ -4013,6 +4232,17 @@ export type components = {
             encoding?: string;
             summary?: string;
             expiresAt?: number | null;
+        };
+        TrueUpState: {
+            nonce: string;
+            lastYear: number | null;
+            year: number | null;
+            due: components["schemas"]["Money"];
+            attestedAt: number | null;
+            accrual: components["schemas"]["Money"];
+            total: components["schemas"]["Money"];
+            routerCredit: components["schemas"]["Money"];
+            noticeEmitted: boolean;
         };
         /** @description Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee; on a curve series floor(price × base lamports / 10^6) over redeem's own census). */
         RedemptionQuote: {
@@ -7761,6 +7991,43 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    registerIssuer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    chain: string;
+                    wallet: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Persisted multisig request and unsigned transaction */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        requestId: string;
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            /** @description Wallet has no current approved issuer eligibility */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     adminOverview: {
         parameters: {
             query?: never;
@@ -8543,6 +8810,152 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    withdrawTier3Case: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                caseId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkWithdrawal"];
+                };
+            };
+            /** @description Only the requester or an admin can withdraw */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already submitted or onchain nonce moved */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    withdrawAnnualAttestation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                annualId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkWithdrawal"];
+                };
+            };
+            /** @description Only the requester or an admin can withdraw */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already submitted or onchain nonce moved */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    withdrawExtinguishment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkWithdrawal"];
+                };
+            };
+            /** @description Only the requester or an admin can withdraw */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already submitted or onchain nonce moved */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    readdressAttestorWork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReaddressWork"];
+            };
+        };
+        responses: {
+            /** @description Counts of reassigned work */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReaddressedWork"];
+                };
+            };
+            /** @description Keys must belong to the same account and the caller must own it or be an admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Rotation is not confirmed onchain */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     attestorMe: {
         parameters: {
             query?: never;
@@ -8656,6 +9069,47 @@ export interface operations {
             };
             /** @description Plaintext-looking payload, an attestor key not registered on the series' chain, or an end date in the past; or no pause could be approved (detail.stage1 TooManyPauses: the series has used its 16 pauses; PauseTooLong: its two years in total are used) */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildEndPause: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unsigned endPause transaction */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        seriesId: string;
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            /** @description Not the issuer */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            /** @description No active pause (detail.stage1 NotPaused) */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9976,10 +10430,10 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": {
-                    maxPricePerUnit: components["schemas"]["Money"];
+                    maxPricePerUnit?: components["schemas"]["Money"];
                 };
             };
         };
@@ -10105,12 +10559,107 @@ export interface operations {
                         unitsOutstanding?: string;
                         holdersWithUnits?: number;
                         burnable?: boolean;
+                        /** @description Mint finalized and current cap met on a nonterminal series */
+                        retirableNow?: boolean;
                     } & {
                         [key: string]: unknown;
                     };
                 };
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    buildRetireIfCapped: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    wallet: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Transaction for a linked wallet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            /** @description Wallet is not linked to this account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            /** @description Series does not satisfy the command preconditions; detail.stage1 names the refusal */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildBurnRetired: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    wallet: string;
+                    holder: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Transaction for a linked wallet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            /** @description Wallet is not linked to this account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            /** @description Series does not satisfy the command preconditions; detail.stage1 names the refusal */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     burnRetiredHolders: {
@@ -10309,6 +10858,101 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
+            };
+        };
+    };
+    getTrueUp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live annual true-up ledger including unpaused lateness accrual at chain time. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrueUpState"];
+                };
+            };
+        };
+    };
+    buildPayTrueUp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    wallet: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned payment by the linked wallet. Total is indicative; the chain recomputes accrued interest when executed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                        total: components["schemas"]["Money"];
+                    };
+                };
+            };
+            /** @description No outstanding annual adjustment */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildSubmitTrueUp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+                annualId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unsigned issuer submission carrying the attestation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+            /** @description Not signed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -370,6 +370,27 @@ components:
           $ref: "#/components/schemas/Wad"
         payoutMultipleK:
           type: integer
+        windowCommitDuration:
+          type:
+            - integer
+            - "null"
+          minimum: 3600
+          maximum: 1209600
+          default: 259200
+        windowRevealDuration:
+          type:
+            - integer
+            - "null"
+          minimum: 3600
+          maximum: 604800
+          default: 86400
+        windowFeeBps:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          maximum: 1000
+          default: 100
         walletCapBps:
           type: integer
           description: "the sealed-bid raise's wallet cap in bps of the units offered (a bid above it is invalid at reveal). 0 on a curve-mode series, which has no wallet cap at any stage (the series' noCap): 0 there never means a cap"
@@ -2526,6 +2547,49 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AdminFlag"
+    WorkWithdrawal:
+      type: object
+      required:
+        - id
+        - state
+      properties:
+        id:
+          type: string
+        state:
+          type: string
+          const: withdrawn
+    ReaddressWork:
+      type: object
+      required:
+        - chain
+        - from
+        - to
+      additionalProperties: false
+      properties:
+        chain:
+          type: string
+        from:
+          type: string
+          pattern: ^0x[0-9a-fA-F]{40}$
+        to:
+          type: string
+          pattern: ^0x[0-9a-fA-F]{40}$
+    ReaddressedWork:
+      type: object
+      required:
+        - hardship
+        - tier3
+        - annual
+        - extinguishments
+      properties:
+        hardship:
+          type: integer
+        tier3:
+          type: integer
+        annual:
+          type: integer
+        extinguishments:
+          type: integer
     Ciphertext:
       type: string
       description: End-to-end ciphertext (base64, base64url or hex) encrypted on the client for the attestor's key. Plaintext, JSON, and any hex, base64 or base64url encoding of text, JSON or a document file are rejected (422).
@@ -2675,6 +2739,43 @@ components:
           type:
             - integer
             - "null"
+    TrueUpState:
+      type: object
+      required:
+        - nonce
+        - lastYear
+        - year
+        - due
+        - attestedAt
+        - accrual
+        - total
+        - routerCredit
+        - noticeEmitted
+      properties:
+        nonce:
+          type: string
+        lastYear:
+          type:
+            - integer
+            - "null"
+        year:
+          type:
+            - integer
+            - "null"
+        due:
+          $ref: "#/components/schemas/Money"
+        attestedAt:
+          type:
+            - integer
+            - "null"
+        accrual:
+          $ref: "#/components/schemas/Money"
+        total:
+          $ref: "#/components/schemas/Money"
+        routerCredit:
+          $ref: "#/components/schemas/Money"
+        noticeEmitted:
+          type: boolean
     RedemptionQuote:
       type: object
       description: "Stage 1's redemptionQuote at the chain's now, over the live cap, paidPerUnitWad and the tagged year ring: price = min(C_remaining, max(P_hurdle, k × D_avg)), deposit = price × units outstanding (no fee; on a curve series floor(price × base lamports / 10^6) over redeem's own census)."
@@ -5318,7 +5419,7 @@ paths:
         - terms
       security:
         - session: []
-      description: Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months.
+      description: Checks a draft's public (and private) terms against Stage 1's create_series rules, per field. A curve raise (raiseStyle curve, Solana only) records no lockup, no wallet cap and no raise phases (Stage 1's zeros; lockupSeconds defaults to 0 there, and any other value is an issue with code curve-zero, Stage 1's CurveTermsNotZero), has a positive minimum raise (its migration threshold) and is quoted in USDC; it has no wallet cap at any stage. A sealed raise's lockupSeconds defaults to Stage 1's 18 months. Both styles record windowCommitDuration (3600–1209600 seconds, default 259200), windowRevealDuration (3600–604800 seconds, default 86400), and windowFeeBps (0–1000, default 100); validation reports out-of-bounds values.
       requestBody:
         required: true
         content:
@@ -6986,6 +7087,46 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /admin/issuers:
+    post:
+      operationId: registerIssuer
+      x-access: admin
+      tags:
+        - admin
+      security:
+        - session: []
+      description: Prepare a protocol-admin registration transaction for an approved issuer wallet. Application approval prepares the same proposal. The admin signs it; the backend does not hold the admin key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - chain
+                - wallet
+              properties:
+                chain:
+                  type: string
+                wallet:
+                  type: string
+      responses:
+        "201":
+          description: Persisted multisig request and unsigned transaction
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - requestId
+                  - tx
+                properties:
+                  requestId:
+                    type: string
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+        "422":
+          description: Wallet has no current approved issuer eligibility
   /admin/overview:
     get:
       operationId: adminOverview
@@ -7811,6 +7952,106 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /attestor/tier3/{caseId}/withdraw:
+    post:
+      operationId: withdrawTier3Case
+      tags:
+        - attestor
+      x-access: account
+      summary: Withdraw pending work as its requester or an admin, even after key revocation
+      description: Drops stored signatures. Already accepted reports and submitted true-ups cannot be withdrawn. An offchain withdrawal cannot invalidate a signature already held by a third party.
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Withdrawn
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkWithdrawal"
+        "403":
+          description: Only the requester or an admin can withdraw
+        "409":
+          description: Already submitted or onchain nonce moved
+  /attestor/tier3/annual/{annualId}/withdraw:
+    post:
+      operationId: withdrawAnnualAttestation
+      tags:
+        - attestor
+      x-access: account
+      summary: Withdraw pending work as its requester or an admin, even after key revocation
+      description: Drops stored signatures. Already accepted reports and submitted true-ups cannot be withdrawn. An offchain withdrawal cannot invalidate a signature already held by a third party.
+      parameters:
+        - name: annualId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Withdrawn
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkWithdrawal"
+        "403":
+          description: Only the requester or an admin can withdraw
+        "409":
+          description: Already submitted or onchain nonce moved
+  /attestor/extinguish/{requestId}/withdraw:
+    post:
+      operationId: withdrawExtinguishment
+      tags:
+        - attestor
+      x-access: account
+      summary: Withdraw pending work as its requester or an admin, even after key revocation
+      description: Drops stored signatures. Already accepted reports and submitted true-ups cannot be withdrawn. An offchain withdrawal cannot invalidate a signature already held by a third party.
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Withdrawn
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkWithdrawal"
+        "403":
+          description: Only the requester or an admin can withdraw
+        "409":
+          description: Already submitted or onchain nonce moved
+  /me/signer-keys/readdress-work:
+    post:
+      operationId: readdressAttestorWork
+      tags:
+        - attestor
+      x-access: account
+      summary: Readdress open work after a confirmed same-account key rotation
+      description: The old key must be revoked and the replacement active. Preserves signed reports during their grace and reports already accepted onchain. Reopens expired unsigned work with its evidence confined to the same account. Both extinguishment signatures must be collected again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReaddressWork"
+      responses:
+        "200":
+          description: Counts of reassigned work
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReaddressedWork"
+        "403":
+          description: Keys must belong to the same account and the caller must own it or be an admin
+        "409":
+          description: Rotation is not confirmed onchain
   /attestor/me:
     get:
       operationId: attestorMe
@@ -7910,6 +8151,38 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HardshipStatus"
+  /series/{seriesId}/hardship/build-end:
+    post:
+      operationId: buildEndPause
+      x-access: issuer
+      tags:
+        - hardship
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+      description: End the active approved pause early. The unused duration returns to the lifetime pause allowance.
+      responses:
+        "200":
+          description: Unsigned endPause transaction
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - seriesId
+                  - tx
+                properties:
+                  seriesId:
+                    type: string
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+        "403":
+          description: Not the issuer
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: No active pause (detail.stage1 NotPaused)
   /series/{seriesId}/hardship/build-withdraw:
     post:
       operationId: buildWithdrawPauseRequest
@@ -9054,13 +9327,11 @@ paths:
       parameters:
         - $ref: "#/components/parameters/seriesId"
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required:
-                - maxPricePerUnit
               properties:
                 maxPricePerUnit:
                   $ref: "#/components/schemas/Money"
@@ -9190,9 +9461,95 @@ paths:
                     type: integer
                   burnable:
                     type: boolean
+                  retirableNow:
+                    type: boolean
+                    description: Mint finalized and current cap met on a nonterminal series
                 additionalProperties: true
         "404":
           $ref: "#/components/responses/NotFound"
+  /series/{seriesId}/retirement/build-retire:
+    post:
+      operationId: buildRetireIfCapped
+      x-access: account
+      tags:
+        - lifecycle
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+      description: Retire a mint-finalized series whose current cap is met. Anyone may submit it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - wallet
+              properties:
+                wallet:
+                  type: string
+      responses:
+        "200":
+          description: Transaction for a linked wallet
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - tx
+                properties:
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+        "403":
+          description: Wallet is not linked to this account
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Series does not satisfy the command preconditions; detail.stage1 names the refusal
+  /series/{seriesId}/retirement/build-burn:
+    post:
+      operationId: buildBurnRetired
+      x-access: account
+      tags:
+        - lifecycle
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+      description: Burn a holder balance on a Retired sealed series. Pending payouts remain claimable; anyone may submit it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - wallet
+                - holder
+              properties:
+                wallet:
+                  type: string
+                holder:
+                  type: string
+      responses:
+        "200":
+          description: Transaction for a linked wallet
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - tx
+                properties:
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+        "403":
+          description: Wallet is not linked to this account
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Series does not satisfy the command preconditions; detail.stage1 names the refusal
   /series/{seriesId}/retirement/crank-burn:
     post:
       operationId: burnRetiredHolders
@@ -9389,6 +9746,94 @@ paths:
             application/json:
               schema:
                 type: object
+  /series/{seriesId}/true-up:
+    get:
+      operationId: getTrueUp
+      x-access: holder-or-issuer
+      tags:
+        - lifecycle
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+      responses:
+        "200":
+          description: Live annual true-up ledger including unpaused lateness accrual at chain time.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrueUpState"
+  /series/{seriesId}/true-up/build-pay:
+    post:
+      operationId: buildPayTrueUp
+      x-access: account
+      tags:
+        - lifecycle
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - wallet
+              properties:
+                wallet:
+                  type: string
+      responses:
+        "200":
+          description: Unsigned payment by the linked wallet. Total is indicative; the chain recomputes accrued interest when executed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - tx
+                  - total
+                properties:
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+                  total:
+                    $ref: "#/components/schemas/Money"
+        "409":
+          description: No outstanding annual adjustment
+  /series/{seriesId}/tier3/annual/{annualId}/build-submit:
+    post:
+      operationId: buildSubmitTrueUp
+      x-access: issuer
+      tags:
+        - lifecycle
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/seriesId"
+        - name: annualId
+          in: path
+          required: true
+          schema:
+            type: string
+      description: Builds submitTrueUp for the linked issuer wallet with the stored attestor signature after checking the live nonce, year, active key and adjustment. Signing and sending remain on the issuer device.
+      responses:
+        "200":
+          description: Unsigned issuer submission carrying the attestation
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - tx
+                properties:
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+        "409":
+          description: Not signed
+          stale nonce: null
+          completed year: null
+          outstanding adjustment or changed basis: null
   /series/{seriesId}/curve:
     get:
       operationId: getCurveStatus

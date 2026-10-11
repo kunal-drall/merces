@@ -6,6 +6,13 @@ and the script that composes it from vector 22 with Stage 1's own reference simu
 (`packages/stage1-sync/scripts/compose-vector-26.mts` in the Merces repository; it runs from the Merces repository root
 with `pnpm exec tsx packages/stage1-sync/scripts/compose-vector-26.mts`).
 
+## Resolution in this integration
+
+The Stage 1 reference now adds remaining accrual units (the uncleared ask escrow after redemption) to redeemed units.
+Its regression fixture runs all 88 steps, checks the holder receives `75036935800`, and leaves the vault at zero.
+The backend's S3l and vector 26 now pass in lockstep without DIV-S1I-1. Both chain programs are unchanged. The original
+report below records the behavior at `1bfc66b`; the new submodule pin carries the fix.
+
 ## Summary
 
 Stage 1's three implementations of `claim_final` disagree on the weight of a holder's final share when the series was

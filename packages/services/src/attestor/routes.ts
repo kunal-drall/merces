@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { defineRoute, type AppContext } from '@merces/api';
 import { withIdempotency } from '@merces/core';
 import { svc } from '../context.ts';
+import { readdressAttestorWork, withdrawAttestorWork } from './recovery.ts';
 import {
   AttestorService, extinguishMessageQuerySchema, extinguishSchema, extinguishSignSchema, fxMessagesQuerySchema, fxSignSchema, hardshipDecideSchema, hardshipMessageQuerySchema, hardshipRequestSchema, tier3AnnualMessageQuerySchema, tier3AnnualOpenSchema, tier3AnnualSignSchema, tier3MessageQuerySchema, tier3OpenSchema,
   tier3SignSchema,
@@ -16,6 +17,19 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
   const idem = (req: { headers: Record<string, unknown> }) => (req.headers['idempotency-key'] as string | undefined) ?? undefined;
   const sid = (req: { params: unknown }) => (req.params as { seriesId: string }).seriesId;
   const param = (req: { params: unknown }, name: string) => (req.params as Record<string, string>)[name]!;
+
+  // Account access deliberately survives a revoked key; each recovery function checks the original owner.
+  for (const [url, kind, id] of [
+    ['/attestor/tier3/:caseId/withdraw', 'tier3', 'caseId'],
+    ['/attestor/tier3/annual/:annualId/withdraw', 'annual', 'annualId'],
+    ['/attestor/extinguish/:requestId/withdraw', 'extinguishment', 'requestId'],
+  ] as const) {
+    defineRoute(app, ctx, { method: 'POST', url, access: 'account', handler: async (req, _r, session) => withdrawAttestorWork(ctx, session!, kind, param(req, id)) });
+  }
+  defineRoute(app, ctx, {
+    method: 'POST', url: '/me/signer-keys/readdress-work', access: 'account',
+    handler: async (req, _r, session) => readdressAttestorWork(ctx, session!, z.object({ chain: z.string().min(1), from: z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((x) => x.toLowerCase()), to: z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((x) => x.toLowerCase()) }).strict().parse(req.body)),
+  });
 
   // ---- profile and queue
   defineRoute(app, ctx, { method: 'GET', url: '/attestor/me', access: 'attestor', handler: async (_req, _r, session) => s.me(session!) });
@@ -33,6 +47,7 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
   });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/hardship', access: 'holder-or-issuer', handler: async (req) => s.hardshipStatus(sid(req)) });
   // the issuer withdraws its pending onchain request (Stage 1 withdraw_pause_request; S4 WP10)
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/hardship/build-end', access: 'issuer', handler: async (req, _r, session) => s.buildEndPause(sid(req), session!) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/hardship/build-withdraw', access: 'issuer', handler: async (req, _r, session) => s.buildWithdrawPause(sid(req), session!) });
   defineRoute(app, ctx, { method: 'GET', url: '/attestor/hardship/:hardshipId', access: 'attestor', handler: async (req, _r, session) => s.getHardship(param(req, 'hardshipId'), session!) });
   // the PAUSE signing request for the attestor's own device (S4 WP10): the API never signs
@@ -47,6 +62,7 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
   });
 
   // ---- tier 3: quarterly cases and the annual true-up
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/tier3/annual/:annualId/build-submit', access: 'issuer', handler: async (req, _r, session) => s.buildAnnual(sid(req), param(req, 'annualId'), session!) });
   defineRoute(app, ctx, {
     method: 'POST', url: '/series/:seriesId/tier3/annual', access: 'issuer',
     handler: async (req, reply, session) => {

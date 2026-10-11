@@ -28,17 +28,12 @@ describe('stage1 vector runner: vector files by path (the vectors we propose to 
     expect(r.runs.every((x) => x.executed === 88 && x.total === 88)).toBe(true);
   }, 180_000);
 
-  it("26_final_share_open_ask FAILS on the reference backend at its two expects, 1,050 USDC apart on b1's balance and the vault (DIV-S1I-1)", async () => {
-    const r = await runVectorFiles([V26], { backend: 'reference' });
-    expect(r.ok).toBe(false);
-    const run = r.runs[0]!;
-    expect([run.status, run.atExpected]).toEqual(['FAIL', false]);
-    const flat = JSON.stringify(run.issues);
-    // #79: both chains pay b1 the share on 100 units; the reference on 60 (1,050,000,000 base units less, kept by the vault)
-    expect(flat).toContain('"70310161480"');
-    expect(flat).toContain('"69260161480"');
-    // #87: the chains' vault ends empty; the reference's keeps the 40 escrowed units' share for good
-    expect(flat).toContain('"1050000000"');
+  it('26_final_share_open_ask passes on the fixed Stage 1 reference and in lockstep without a waiver', async () => {
+    for (const backend of ['reference', 'lockstep'] as const) {
+      const r = await runVectorFiles([V26], { backend });
+      expect(r.ok, JSON.stringify(r.runs.map((x) => x.issues))).toBe(true);
+      for (const run of r.runs) expect([run.status, run.atExpected, run.executed, run.total]).toEqual(['PASS', true, 88, 88]);
+    }
   }, 180_000);
 
   it('a missing file is a RunnerError, and no files is one too', async () => {

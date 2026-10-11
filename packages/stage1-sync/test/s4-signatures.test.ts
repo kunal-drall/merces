@@ -65,7 +65,7 @@ describe('S4 signature scenarios: load', () => {
     // the default loads every set, ids unique across them
     const every = loadScenarios(undefined, VECTORS);
     expect(every.map((s) => s.vector.id)).toEqual([...loadScenarios(S3_CLAIM_SCENARIOS, VECTORS).map((s) => s.vector.id), 'S4a', 'S4b', 'S4c', 'S4d', 'S4f']);
-    expect(readdirSync(S4_SIGNATURE_SCENARIOS).filter((f) => f.endsWith('.json'))).toEqual(['S4a_verifier_grace.json', 'S4b_verifier_grace_ended.json', 'S4c_verifier_revoked_before_period_end.json', 'S4d_last_attestor_key.json', 'S4f_tier3_attestor_grace.json']);
+    expect(readdirSync(S4_SIGNATURE_SCENARIOS).filter((f) => !f.startsWith('.') && f.endsWith('.json'))).toEqual(['S4a_verifier_grace.json', 'S4b_verifier_grace_ended.json', 'S4c_verifier_revoked_before_period_end.json', 'S4d_last_attestor_key.json', 'S4f_tier3_attestor_grace.json']);
     // their expectation is PASS wherever they run (no divergence entry: DIV-S1I-2 is shown by S4d's expect_reverts)
     for (const id of ['S4a', 'S4b', 'S4c', 'S4f']) for (const b of ['reference', 'merces', 'lockstep'] as const) expect(scenarioExpected(id, b), `${id} ${b}`).toEqual(SCENARIO_EXPECTED);
     expect(scenarioExpected('S4d', 'merces')).toEqual(SCENARIO_EXPECTED);
@@ -172,6 +172,7 @@ describe('S4 signature scenarios: replay', () => {
     // the revocation (#38) one second before 2026Q1 ends: #39, verifier1's report, has no grace
     steps[37]!.t = steps[38]!.t = '1775001599';
     const v = fromJson({ schema: 2, specVersion: '1.1', config: JSON.parse(readFileSync(join(VECTORS, '01_happy_path.json'), 'utf8')).config, keys: s.vector.keys, steps }, '99_s4a_early');
+    Object.assign(v.keySeeds, s.vector.keySeeds); // preserve the composed scenario's key provenance
     for (const backend of ['reference', 'merces'] as const) {
       const r = await runStage1Vectors({ vectors: [v], backend, personalities: ['solana'] });
       expect(r.runs[0]!.issues[0], backend).toMatchObject({ index: 39, kind: 'fail', message: 'unexpected revert InvalidVerifierSignature' });
@@ -204,6 +205,7 @@ describe('S4 signature scenarios: replay', () => {
     steps.splice(51, 0, { ...revoke!, t: '1775001599' });
     expect([steps[50]!.t, steps[51]!.op, steps[52]!.op]).toEqual(['1769299200', 'revoke_attestor', 'expect_revert']);
     const v = fromJson({ schema: 2, specVersion: '1.1', config: JSON.parse(readFileSync(join(VECTORS, '20_tier3_trueup.json'), 'utf8')).config, keys: s.vector.keys, steps }, '99_s4f_early');
+    Object.assign(v.keySeeds, s.vector.keySeeds); // preserve the composed scenario's key provenance
     for (const backend of ['reference', 'merces'] as const) {
       const r = await runStage1Vectors({ vectors: [v], backend, personalities: ['solana'] });
       expect(r.runs[0]!.issues[0], backend).toMatchObject({ index: 53, kind: 'fail', message: 'unexpected revert InvalidAttestorSignature' });
@@ -223,6 +225,7 @@ describe('S4 signature scenarios: replay', () => {
     const steps = structuredClone(s.vector.steps) as unknown as Record<string, unknown>[];
     (steps[36]!.errorByPersonality as Record<string, string>).monad = 'LastKeyOfKind';
     const v = fromJson({ schema: 2, specVersion: '1.1', config: JSON.parse(readFileSync(join(VECTORS, '11_extinguishment.json'), 'utf8')).config, keys: s.vector.keys, steps }, '99_s4d_wrong');
+    Object.assign(v.keySeeds, s.vector.keySeeds); // preserve the composed scenario's key provenance
     const runs = await Promise.all((['solana', 'monad'] as const).map(async (personality) => {
       const w = await MercesWorld.create(v, { personality });
       try {
@@ -240,6 +243,7 @@ describe('S4 signature scenarios: replay', () => {
     const t = '1783641600';
     const steps = [...v11.steps.slice(0, 35), { t, op: 'revoke_attestor', key: 'attestor2' }, { t, op: 'revoke_attestor', key: 'attestor1' }];
     const v = fromJson({ schema: 2, specVersion: '1.1', config: JSON.parse(readFileSync(join(VECTORS, '11_extinguishment.json'), 'utf8')).config, keys: v11.keys, steps }, '11_last_key');
+    Object.assign(v.keySeeds, v11.keySeeds); // preserve the composed scenario's key provenance
     const ref = await runStage1Vectors({ vectors: [v], backend: 'reference' });
     expect(ref.runs.map((r) => [r.status, r.executed])).toEqual([['PASS', 37]]);
     const ours = await runStage1Vectors({ vectors: [v], backend: 'merces' });

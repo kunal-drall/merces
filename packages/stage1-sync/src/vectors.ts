@@ -44,7 +44,7 @@ export async function replayScenario(h: SimHarness, sc: ParityScenario): Promise
     if (b) return h.backers[Number(b[1]) - 1] ?? null;
     return null;
   };
-  const subst = (cmd: Command): Command => JSON.parse(JSON.stringify(cmd).replace(/\$series(\d+)/g, (_m, n) => seriesIds[Number(n)] ?? `$series${n}`));
+  const subst = (cmd: Command): Command => JSON.parse(JSON.stringify(cmd).replace(/\$series(\d+)/g, (_m, n) => seriesIds[Number(n)] ?? `$series${n}`).replace(/\$issuer/g, h.issuer.address));
   let n = 0;
   for (const step of sc.steps) {
     n++;

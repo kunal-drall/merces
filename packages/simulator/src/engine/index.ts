@@ -10,14 +10,15 @@ import { fail } from './errors.ts';
 import { auctionPhase, cancelRaise, commitBid, openRaise, revealBid } from './auction.ts';
 import { collectCurveProceeds, completeCurve, curveSwap, syncCurveUnits } from './curve.ts';
 import { flagFxFallback, quarterRate, snapshotRate } from './fx.ts';
-import { burnRetired, claimPayout, payIn, postSplitReceipt } from './payments.ts';
+import { burnRetired, claimPayout, payIn, postSplitReceipt, retireIfCapped } from './payments.ts';
+import { submitTrueUp, payTrueUp } from './trueup.ts';
 import { claimRedemption, claimTail, quote, redeem } from './redemption.ts';
 import { createSeries, registerIssuer, setAllowlist, stopIssuance } from './registry.ts';
 import { attestorUsable, registerKey, revokeKey, rotateKey } from './keys.ts';
 import { submitReport } from './reports.ts';
 import { stakeUnits, tenderUnits, unstakeUnits } from './stake.ts';
 import { beginSettlement, deliverBid, finalizeSettlement, processBid, registerHolder, tallyBids } from './settlement.ts';
-import { accrualNow, approvePause, crankPause, crankStatus, deadlines, reportablePeriods, requestPause, withdrawPauseRequest, type PeriodDeadlines } from './status.ts';
+import { accrualNow, approvePause, crankPause, crankStatus, endPause, deadlines, reportablePeriods, requestPause, withdrawPauseRequest, type PeriodDeadlines } from './status.ts';
 import { amendTerms, claimFinal, extinguish } from './terminal.ts';
 import { drawRelease, pauseReleases } from './treasury.ts';
 import { clearTransferWindow, commitWindowOrder, openTransferWindow, revealWindowOrder } from './window.ts';
@@ -94,7 +95,7 @@ export class SimEngine implements EngineCore {
       if (actor.kind !== 'user' || actor.signer !== this.state.admin) throw new ChainError('Unauthorized', `${cmd.kind} requires the protocol admin`);
     };
     switch (cmd.kind) {
-      case 'registerIssuer': return registerIssuer(this, user(), now, emit);
+      case 'registerIssuer': admin(); return registerIssuer(this, cmd.wallet, now, emit);
       case 'stopIssuance': return stopIssuance(this, user(), emit);
       case 'createSeries': return createSeries(this, user(), cmd, now, emit);
       case 'openRaise': return openRaise(this, user(), cmd, now, emit);
@@ -117,11 +118,16 @@ export class SimEngine implements EngineCore {
       case 'pauseReleases': return pauseReleases(this, user(), cmd, emit);
       case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signer : null, cmd, now, emit, ctx);
       case 'payIn': return payIn(this, user(), cmd, now, emit);
+      case 'submitTrueUp': return submitTrueUp(this, user(), cmd, now, emit);
+      case 'payTrueUp': return payTrueUp(this, user(), cmd, now, emit);
       case 'claimPayout': return claimPayout(this, user(), cmd, emit);
       case 'requestPause': return requestPause(this, user(), cmd, now, emit);
       case 'withdrawPauseRequest': return withdrawPauseRequest(this, user(), cmd, emit);
       // Stage 1's approve_pause takes the attestor's PAUSE signature as an argument: anyone sends it (S4 WP10)
       case 'approvePause': service('any'); return approvePause(this, cmd, now, emit);
+      case 'endPause': return endPause(this, user(), cmd, now, emit);
+      case 'retireIfCapped': service('any'); return retireIfCapped(this, cmd, now, emit);
+      case 'transferUnits': user(); this.series(cmd.seriesId); return fail('DirectTransferForbidden', 'direct unit transfers are forbidden');
       case 'crankPause': service('any'); return crankPause(this, cmd, now, emit);
       case 'crankStatus': service('any'); return crankStatus(this, cmd, now, emit);
       case 'redeem': return redeem(this, user(), cmd, now, emit);

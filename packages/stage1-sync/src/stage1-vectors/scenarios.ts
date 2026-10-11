@@ -86,31 +86,8 @@ export const SCENARIO_EXPECTED: Expected = Object.freeze({ status: 'PASS' });
  * the backends part in lockstep right after the recorded step on exactly the recorded fields. A difference anywhere else,
  * or a recorded one that no longer occurs, fails as for a vector.
  */
-export const SCENARIO_EXPECTATIONS: Readonly<Record<string, Expected>> = Object.freeze({
-  // DIV-S1I-1 (S3 review): b1's first claim_final (#78) is weighed on its 60 redeemed units plus the 40 in its open ask's
-  // escrow, as both chains weigh it (2,625 USDC at 26.25 a unit), not on the 60 (1,575 USDC) as Stage 1's simulator
-  // does; so b1 is paid 1,050 USDC more and the vault, which Stage 1's simulator leaves at 1,050 USDC once every unit
-  // is claimed (#87), ends at 0
-  S3l: {
-    status: 'PASS-WITH-DIVERGENCES',
-    divergences: [
-      { id: 'DIV-S1I-1', step: 79, path: 'balances.b1.stable', stage1: '69260161480', ours: '70310161480' },
-      { id: 'DIV-S1I-1', step: 79, path: 'vault', stage1: '54517581720', ours: '53467581720' },
-      { id: 'DIV-S1I-1', step: 87, path: 'balances.b1.stable', stage1: '73986935800', ours: '75036935800' },
-      { id: 'DIV-S1I-1', step: 87, path: 'vault', stage1: '1050000000', ours: '0' },
-    ],
-    lockstep: {
-      id: 'DIV-S1I-1',
-      divergesAt: 78,
-      // a wallet's stablecoin balance is in every series' snapshot: S1's too
-      diffs: [
-        { path: 'S1.balances.b1.stable', stage1: '69260161480', ours: '70310161480' },
-        { path: 'S2.balances.b1.stable', stage1: '69260161480', ours: '70310161480' },
-        { path: 'S2.vault', stage1: '54517581720', ours: '53467581720' },
-      ],
-    },
-  },
-});
+// DIV-S1I-1 is fixed in Stage 1's reference (claimFinal includes the open ask escrow). No waiver remains.
+export const SCENARIO_EXPECTATIONS: Readonly<Record<string, Expected>> = Object.freeze({});
 
 /** A scenario's expectation on a backend: PASS on the reference backend, else its `SCENARIO_EXPECTATIONS` entry or PASS. */
 export function scenarioExpected(id: string, backend: BackendChoice): Expected {
@@ -221,6 +198,7 @@ export function loadScenario(file: string, vectorsDir: string): Scenario {
   }
   const keys = { ...((base.keys as Record<string, unknown> | undefined) ?? {}), ...scenarioKeys(f, m[1]!, base) };
   const vector = fromJson({ ...base, description: f.description, steps, keys }, f.base, file);
+  for (const name of Object.keys(f.keys ?? {})) vector.keySeeds[name] = `${m[1]!}:${name}`;
   vector.id = m[1]!;
   vector.name = f.name;
   return { vector, base: f.base, covers: f.covers, backends: [...backends], parts, own };
@@ -271,7 +249,7 @@ export function loadScenarios(dir: string | readonly string[] = SCENARIO_SETS.ma
   for (const d of dirs) {
     if (!existsSync(d)) throw new RunnerError(`no scenarios directory ${basename(d)}`);
     const here = readdirSync(d)
-      .filter((f) => f.endsWith('.json'))
+      .filter((f) => !f.startsWith('.') && f.endsWith('.json'))
       .sort()
       .map((f) => loadScenario(join(d, f), vectorsDir));
     if (!here.length) throw new RunnerError(`no scenarios in ${basename(d)}`);

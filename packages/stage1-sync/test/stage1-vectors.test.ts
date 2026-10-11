@@ -315,10 +315,10 @@ describe('stage1 vector runner: expectations and the op map', () => {
   // five DIV-NRC-1 entries and its lockstep parting)
   it('targets are never NOT-YET; waivers only on blocked or n/a rows; no vector carries a divergence; prefix gates carry until; the rest are NOT-YET with a milestone', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(listVectorFiles(VECTORS).map((f) => f.split('/').at(-1)!.slice(0, 2)));
-    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4]);
+    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20']);
     expect([...TARGETS_S2]).toEqual(['02', '03', '15', '17']);
     expect([...TARGETS_S4]).toEqual(['21']); // cause S4-PAU: 21 in full (was gated at #40)
-    expect(PREFIX_GATES).toEqual({ '08': 57, '10': 35, '14': 61, '16': 40, '20': 70, '22': 75 }); // cause S4-PAU: 08 at #57 (was #33), 21 no gate
+    expect(PREFIX_GATES).toEqual({ '10': 35, '16': 40, '22': 75 }); // S5: true-up vector 20 passed full lockstep on both personalities.
     for (const [id, e] of Object.entries(EXPECTED)) {
       const v = loadVector(vectorFile(id));
       if (TARGETS.includes(id)) {
@@ -345,7 +345,7 @@ describe('stage1 vector runner: expectations and the op map', () => {
     // DIV-NRC-1 went with the non-reveal charge modelled, and 03 is PASS. Cause S3R-F: the register's first row is
     // DIV-S1I-1, which only our scenario S3l meets (was: the register empty). Cause S4-REG: DIV-S1I-2, the last-key rule,
     // which only our merces-only scenario S4d shows, as an expected revert: no entry anywhere (amendment fix 1)
-    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-1', 'DIV-S1I-2']);
+    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-4', 'DIV-S1I-2']);
     expect(DIVERGENCE_BY_ID.size).toBe(2);
     expect(DIVERGENCE_BY_ID.get('DIV-S1I-2')?.shownBy).toEqual(['S4d']);
     expect(Object.values(SCENARIO_EXPECTATIONS).filter((e) => e.divergences?.some((d) => d.id === 'DIV-S1I-2') || e.lockstep?.id === 'DIV-S1I-2')).toEqual([]);
@@ -389,21 +389,26 @@ describe('stage1 vector runner: expectations and the op map', () => {
   // review finding "Waivers match any shim-less BLOCKED op at a waived step index": the id was compared only when the
   // op carried a shim row, so any op outside S1 (no row) landing on 01#32, 01#34 or 05#42 was waived
   it('a waiver covers only its own step, op and row', () => {
-    const w = EXPECTED['01']!.waivers!;
+    const rows = SHIM_BY_ID as Map<string, (typeof SHIMS)[number]>;
+    rows.set('TEST-BLOCK', { id: 'TEST-BLOCK', ops: ['retire_if_capped'], kind: 'blocked', call: '', why: '', removedIn: 'test only' });
+    rows.set('TEST-NA', { id: 'TEST-NA', ops: ['transfer_units'], kind: 'n/a', call: '', why: '', removedIn: 'test only' });
+    const w = [{ step: 34, op: 'expect_revert retire_if_capped', id: 'TEST-BLOCK' }, { step: 32, op: 'expect_revert transfer_units', id: 'TEST-NA' }];
+    try {
     const step = (op: string, revert = true): Step => (revert ? { t: '0', op: 'expect_revert', call: { op }, error: 'X' } : { t: '0', op }) as unknown as Step;
-    expect(waiverFor(w, 34, step('retire_if_capped'), { kind: 'blocked', shimId: 'BLK-1' })).toEqual({ step: 34, op: 'expect_revert retire_if_capped', id: 'BLK-1' });
-    expect(waiverFor(w, 32, step('transfer_units'), { kind: 'n/a', shimId: 'NA-1' })).toEqual({ step: 32, op: 'expect_revert transfer_units', id: 'NA-1' });
+    expect(waiverFor(w, 34, step('retire_if_capped'), { kind: 'blocked', shimId: 'TEST-BLOCK' })).toEqual({ step: 34, op: 'expect_revert retire_if_capped', id: 'TEST-BLOCK' });
+    expect(waiverFor(w, 32, step('transfer_units'), { kind: 'n/a', shimId: 'TEST-NA' })).toEqual({ step: 32, op: 'expect_revert transfer_units', id: 'TEST-NA' });
     // an op outside S1 carries no row: never waived, at a waived index or anywhere
     expect(waiverFor(w, 34, step('end_pause'), { kind: 'blocked' })).toBeUndefined();
     expect(waiverFor(w, 32, step('end_pause'), { kind: 'blocked' })).toBeUndefined();
     // the same row at another index, or the op as an action instead of inside expect_revert
-    expect(waiverFor(w, 33, step('retire_if_capped'), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
-    expect(waiverFor(w, 34, step('retire_if_capped', false), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
+    expect(waiverFor(w, 33, step('retire_if_capped'), { kind: 'blocked', shimId: 'TEST-BLOCK' })).toBeUndefined();
+    expect(waiverFor(w, 34, step('retire_if_capped', false), { kind: 'blocked', shimId: 'TEST-BLOCK' })).toBeUndefined();
     // another row's waiver at the index, a row that does not stand for the op, a kind the row does not have
-    expect(waiverFor(w, 32, step('retire_if_capped'), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
-    expect(waiverFor(w, 34, step('end_pause'), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
-    expect(waiverFor(w, 34, step('retire_if_capped'), { kind: 'n/a', shimId: 'BLK-1' })).toBeUndefined();
-    expect(waiverFor(undefined, 34, step('retire_if_capped'), { kind: 'blocked', shimId: 'BLK-1' })).toBeUndefined();
+    expect(waiverFor(w, 32, step('retire_if_capped'), { kind: 'blocked', shimId: 'TEST-BLOCK' })).toBeUndefined();
+    expect(waiverFor(w, 34, step('end_pause'), { kind: 'blocked', shimId: 'TEST-BLOCK' })).toBeUndefined();
+    expect(waiverFor(w, 34, step('retire_if_capped'), { kind: 'n/a', shimId: 'TEST-BLOCK' })).toBeUndefined();
+    expect(waiverFor(undefined, 34, step('retire_if_capped'), { kind: 'blocked', shimId: 'TEST-BLOCK' })).toBeUndefined();
+    } finally { rows.delete('TEST-BLOCK'); rows.delete('TEST-NA'); }
   });
 
   it('every op the vectors use is mapped, and every shim the map names is a row for that op', () => {
@@ -618,25 +623,16 @@ describe('stage1 vector runner: merces backend', () => {
     expect(diffs).toEqual(TEST_03);
   }, 60_000);
 
-  it('prefix gates: a gated vector replays to its gate and is PREFIX-PASS; past the gate it is judged on the prefix; a finding before the gate fails', async () => {
-    const r = await runStage1Vectors({ dir: VECTORS, backend: 'merces', only: ['08'], personalities: ['solana'] });
-    const run = r.runs[0]!;
-    // cause S4-PAU: 08 replays to #57 (was #33): its withdrawals and signed approvals run since S4 WP10
-    expect([run.status, run.executed, run.stopped, run.issues, run.atExpected]).toEqual(['PASS', 58, { index: 58, reason: 'until' }, [], true]);
-    expect(run.expected.status).toBe('PREFIX-PASS');
-    // the caller's own last step replaces the gate: 08 then stops on the op it waits for (#58, S5), which lies past the gate
-    // (cause S4-PAU: BLOCKED, not FAIL: nothing past the gate fails now, #58 and #59 wait for end_pause; was #34's
-    // withdrawal, which made the approvals after it fail)
-    const past = (await runStage1Vectors({ dir: VECTORS, backend: 'merces', only: ['08'], personalities: ['solana'], until: 60 })).runs[0]!;
-    expect(past.status).toBe('BLOCKED');
-    expect(past.issues[0]).toMatchObject({ index: 58, op: 'expect_revert end_pause', kind: 'blocked' });
-    expect(past.atExpected).toBe(true);
-    // a finding at or before the gate is not at expected status: 08#32 expects approve_pause to revert PauseNotRequested
+  it('S5 pause vector runs in full; an explicit cutoff works and a wrong revert still fails', async () => {
+    const run = (await runStage1Vectors({ dir: VECTORS, backend: 'merces', only: ['08'], personalities: ['solana'] })).runs[0]!;
+    expect([run.status, run.executed, run.stopped, run.issues, run.atExpected]).toEqual(['PASS', 64, undefined, [], true]);
+    expect(run.expected.status).toBe('PASS');
+    const cut = (await runStage1Vectors({ dir: VECTORS, backend: 'merces', only: ['08'], personalities: ['solana'], until: 60 })).runs[0]!;
+    expect([cut.status, cut.executed, cut.stopped, cut.issues]).toEqual(['PASS', 61, { index: 61, reason: 'until' }, []]);
     const src = raw('08_hardship_pause');
-    expect(src.steps[32]).toMatchObject({ op: 'expect_revert', call: { op: 'approve_pause' }, error: 'PauseNotRequested' });
     src.steps[32]!.error = 'PauseTooLong';
     const broken = (await runStage1Vectors({ vectors: [fromJson(src, '08_hardship_pause')], backend: 'merces', personalities: ['solana'] })).runs[0]!;
-    expect([broken.status, broken.stopped, broken.atExpected]).toEqual(['FAIL', { index: 58, reason: 'until' }, false]); // cause S4-PAU (was #34)
+    expect([broken.status, broken.stopped, broken.atExpected]).toEqual(['FAIL', undefined, false]);
     expect(broken.issues.map((x) => [x.index, x.message])).toEqual([[32, 'expected revert PauseTooLong for approve_pause, got PauseNotRequested']]);
   }, 120_000);
 
@@ -654,7 +650,7 @@ describe('stage1 vector runner: merces backend', () => {
     const r = await runStage1Vectors({ vectors: [v], backend: 'lockstep', until: 40 });
     for (const run of r.runs) {
       expect(run.executed, run.world).toBe(41);
-      expect(run.issues, run.world).toEqual([{ index: 35, op: 'expect_revert retire_if_capped', kind: 'blocked', message: 'the merces backend does not run this call (retire_if_capped has no canonical command)', shimId: 'BLK-1' }]);
+      expect(run.issues, run.world).toEqual([]);
     }
   }, 120_000);
 
@@ -664,7 +660,7 @@ describe('stage1 vector runner: merces backend', () => {
     expect(r.status).toBe('PASS');
     expect(r.shims['SH-AMD-1']).toBeUndefined(); // cause S4-AMD: was 1
     expect(r.shims['SH-EXT-1']).toBeUndefined(); // cause S4-EXT: was 6 (#35-#39 inside expect_revert, #44)
-    expect(r.shims['SH-RED-1']).toBe(1);
+    expect(r.shims['SH-RED-1']).toBeUndefined();
     expect(r.runnerAtomic).toEqual([]);
   }, 60_000);
 
@@ -736,30 +732,19 @@ describe('stage1 vector runner: merces backend', () => {
 
   // review finding "Waivers match any shim-less BLOCKED op at a waived step index": 01#34 turned into an op outside S1
   // (no shim row) was waived by BLK-1, so the vector came out PASS-WITH-WAIVERS (ok) on both the runner and lockstep
-  it('a waived index holding another op is BLOCKED on the runner and in lockstep', async () => {
+  it('old waiver indices cannot hide an unexpected revert or an unsupported command', async () => {
     const src = raw('01_happy_path');
-    expect(src.steps[34]).toMatchObject({ op: 'expect_revert', call: { op: 'retire_if_capped' } });
-    const endPause = structuredClone(src);
-    endPause.steps[34] = { t: src.steps[34]!.t, op: 'expect_revert', call: { op: 'end_pause', actor: 'issuer', series: 'S1' }, error: 'NotPaused' };
-    // the same op as an action, not the revert check the waiver names
-    const asAction = structuredClone(src);
-    asAction.steps[34] = { t: src.steps[34]!.t, op: 'retire_if_capped', series: 'S1' };
-    for (const [mutated, op] of [[endPause, 'expect_revert end_pause'], [asAction, 'retire_if_capped']] as const) {
-      const v = fromJson(mutated, '01_happy_path');
-      const r = await runStage1Vectors({ vectors: [v], backend: 'merces', personalities: ['solana'], until: 36 });
-      const run = r.runs[0]!;
-      expect(run.status, op).toBe('BLOCKED');
-      expect(run.issues.find((i) => i.index === 34), op).toMatchObject({ op, kind: 'blocked' });
-      expect(run.issues.find((i) => i.index === 34)!.waived, op).toBeUndefined();
-      expect(run.issues.find((i) => i.index === 32)?.waived, op).toBe(true);
-      expect(run.atExpected, op).toBe(false);
-      expect(r.ok, op).toBe(false);
-    }
-    const lock = (await runStage1Vectors({ vectors: [fromJson(endPause, '01_happy_path')], backend: 'lockstep', personalities: ['solana'], until: 36 })).runs[0]!;
-    expect(lock.status).toBe('BLOCKED');
-    // cause S2-NY: was "end_pause is not in S1 (S5)"
-    expect(lock.issues.find((i) => i.index === 34)).toEqual({ index: 34, op: 'expect_revert end_pause', kind: 'blocked', message: 'the merces backend does not run this call (end_pause is not modelled yet (S5))' });
-    expect(lock.atExpected).toBe(false);
+    src.steps[34] = { t: src.steps[34]!.t, op: 'retire_if_capped', series: 'S1' };
+    const run = (await runStage1Vectors({ vectors: [fromJson(src, '01_happy_path')], backend: 'merces', personalities: ['solana'], until: 36 })).runs[0]!;
+    expect(run.status).toBe('FAIL');
+    expect(run.atExpected).toBe(false);
+    expect(run.issues.find((i) => i.index === 34)?.waived).toBeUndefined();
+    const unsupported = raw('01_happy_path');
+    unsupported.steps[34] = { t: unsupported.steps[34]!.t, op: 'set_contract_hash', actor: 'issuer', series: 'S1', contractHash: '0x' + '12'.repeat(32) };
+    const blocked = (await runStage1Vectors({ vectors: [fromJson(unsupported, '01_happy_path')], backend: 'merces', personalities: ['solana'], until: 36 })).runs[0]!;
+    expect(blocked.status).toBe('BLOCKED');
+    expect(blocked.atExpected).toBe(false);
+    expect(blocked.issues.find((i) => i.index === 34)?.waived).toBeUndefined();
   }, 120_000);
 
   // disputed review finding "The 'revert leaves state unchanged' check cannot fail on the merces backend": the world
@@ -993,9 +978,9 @@ describe('stage1 vector runner: merces backend', () => {
     const { recoverSigner, reportDigest, signingDomain } = await import('@merces/domain');
     const v = loadVector(join(VECTORS, '04_zero_quarters.json'));
     const keys = v.keys as Record<string, { address: string; privateKey: string; seed: string }>;
-    const a = new VectorKeyring(v.keys).signer('verifier1');
+    const a = new VectorKeyring(v.keys, v.name).signer('verifier1');
     expect(a.address).toBe(keys.verifier1!.address.toLowerCase());
-    expect(new VectorKeyring(v.keys).signer('attestor1').address).toBe(keys.attestor1!.address.toLowerCase());
+    expect(new VectorKeyring(v.keys, v.name).signer('attestor1').address).toBe(keys.attestor1!.address.toLowerCase());
     // the REPORT message over a domain and a series key: Stage 1's digest, signed by the key (RFC 6979: the same bytes again)
     const domain = signingDomain('evm', 31337, '0x' + '11'.repeat(20));
     const seriesKey = '0x' + '00'.repeat(12) + '22'.repeat(20);
@@ -1003,16 +988,18 @@ describe('stage1 vector runner: merces backend', () => {
     const att = await a.attest('REPORT', domain, seriesKey, fields);
     expect(att.signer).toBe(a.address);
     expect(recoverSigner(reportDigest({ domain: domain.domain, seriesKey }, fields).digest, att.signature)).toBe(a.address);
-    expect(await new VectorKeyring(v.keys).signer('verifier1').attest('REPORT', domain, seriesKey, fields)).toEqual(att);
+    expect(await new VectorKeyring(v.keys, v.name).signer('verifier1').attest('REPORT', domain, seriesKey, fields)).toEqual(att);
     // never a mainnet domain (Monad mainnet, 143), nor one off the allow-list
     await expect(a.attest('REPORT', signingDomain('evm', 143, '0x' + '11'.repeat(20)), seriesKey, fields)).rejects.toThrow(/mainnet/);
     // nor a testnet: these are published test keys, the simulator's local ids only (S4 WP6 fix 1)
     await expect(a.attest('REPORT', signingDomain('evm', 10143, '0x' + '11'.repeat(20)), seriesKey, fields)).rejects.toThrow(/simulator only/);
     // a key that is not Stage 1's test key for its seed, or whose address is another's, is refused before it signs
-    const bad = (k: Record<string, unknown>) => () => new VectorKeyring({ ...v.keys, x: k } as never).signer('x');
+    const bad = (k: Record<string, unknown>) => () => new VectorKeyring({ ...v.keys, x: k } as never, v.name).signer('x');
     expect(bad({ ...keys.verifier1, seed: '04_zero_quarters:attestor1' })).toThrow(/not Stage 1's test key for its seed/);
     expect(bad({ ...keys.verifier1, address: keys.attestor1!.address })).toThrow(/another key's address/);
-    expect(() => new VectorKeyring(v.keys).signer('nobody')).toThrow(/no usable key named nobody/);
+    expect(() => new VectorKeyring(v.keys, v.name).signer('nobody')).toThrow(/no usable key named nobody/);
+    expect(() => new VectorKeyring(v.keys, 'another-vector')).toThrow(/seed must be <vector>:<name>/);
+    expect(bad(keys.verifier1!)).toThrow(/seed must be <vector>:<name>/);
     // the error names the key, never its value
     try {
       bad({ ...keys.verifier1, seed: 'other' })();
@@ -1027,17 +1014,17 @@ describe('stage1 vector runner: merces backend', () => {
   const fullRun = async (): Promise<RunReport> => (full ??= await runStage1Vectors({ dir: VECTORS, backend: 'merces' }));
 
   // cause S2-NY: 42 runs, the 14 targets and the 7 prefix gates on both personalities (was: the 10 S1 targets, 20 runs).
-  // Cause NRC: 38/42 PASS, 03 among them (was 36/42, 03 PASS-WITH-DIVERGENCES on its five DIV-NRC-1 fields)
-  it('every target and prefix gate is at its expected status on both personalities: 38/42 PASS, 03 in full', async () => {
+  // Cause NRC: 42/42 PASS, 03 among them (was 36/42, 03 PASS-WITH-DIVERGENCES on its five DIV-NRC-1 fields)
+  it('every target and prefix gate is at its expected status on both personalities: 42/42 PASS, 03 in full', async () => {
     const report = await fullRun();
     const ids = [...TARGETS, ...Object.keys(PREFIX_GATES)].sort();
     expect(report.runs.map((r) => `${r.id}/${r.world}`)).toEqual(ids.flatMap((id) => [`${id}/merces/solana`, `${id}/merces/monad`]));
     for (const r of report.runs) expect(r.atExpected, `${r.vector} ${r.world}: ${r.status}`).toBe(true);
     expect(report.ok).toBe(true);
-    expect(report.runs.filter((r) => r.status === 'PASS')).toHaveLength(38);
+    expect(report.runs.filter((r) => r.status === 'PASS')).toHaveLength(42);
     const statusOf = (id: string) => [...new Set(report.runs.filter((r) => r.id === id).map((r) => r.status))];
     for (const id of ['02', '03', '15', '17']) expect(statusOf(id), id).toEqual(['PASS']);
-    for (const id of ['01', '05']) expect(statusOf(id), id).toEqual(['PASS-WITH-WAIVERS']);
+    for (const id of ['01', '05', '08', '14', '20']) expect(statusOf(id), id).toEqual(['PASS']);
     for (const r of report.runs) expect(r.issues.filter((i) => i.kind === 'divergence'), `${r.vector} ${r.world}`).toEqual([]);
     for (const r of report.runs.filter((x) => x.id === '03')) expect([r.executed, r.total, r.issues], r.world).toEqual([78, 78, []]);
     for (const [id, until] of Object.entries(PREFIX_GATES)) {
@@ -1062,7 +1049,7 @@ describe('stage1 vector runner: merces backend', () => {
     // SH-AUC row and the section lists none
     expect(report.runs.filter((r) => Object.keys(r.shims).some((id) => id.startsWith('SH-AUC-')))).toEqual([]);
     expect(section).not.toMatch(/SH-AUC-/);
-    expect(section).toMatch(/\| BLK-1 \(BLOCKED\) \| `retire_if_capped` \|/);
+    expect(section).not.toContain('BLK-1');
     // cause NRC: the known divergences section says no vector carries a divergence (was: the DIV-NRC-1 row, its five
     // entries, its lockstep parting and where the runs met it), and 03's row is PASS in full. Cause S3R-F: it lists the
     // register's one row, DIV-S1I-1, with the entries of the scenario that meets it (was: "the register is empty")
@@ -1071,28 +1058,24 @@ describe('stage1 vector runner: merces backend', () => {
     expect(known).not.toContain('None: the register is empty');
     // cause S4-REG: and DIV-S1I-2, the last-key rule, which our merces-only scenario S4d shows with no entries
     expect(known.match(/^### .*$/gm)).toEqual([
-      "### DIV-S1I-1: a redeemed holder's final share counts the units in its open window ask (Stage 1 internal, resolved toward both chains)",
+      '### DIV-S1I-4: true-up submissions reject terminal series and future attestation times',
       '### DIV-S1I-2: the last active key of a kind cannot be revoked (Stage 1 internal, resolved toward both chains)',
     ]);
     expect(known).toContain('No entries: not reached by a Stage 1 vector; shown by our merces-only scenario S4d, as an expected revert (see "S4 signature scenarios").');
-    expect(known).toContain('| scenario S3l | #79 | `balances.b1.stable` | "69260161480" | "70310161480" |');
-    expect(known).toContain('| scenario S3l | #87 | `vault` | "1050000000" | "0" |');
-    expect(known).toContain('| scenario S3l (lockstep) | after #78 | `S2.vault` | "54517581720" | "53467581720" |');
-    expect(known).toContain('Not reached by a Stage 1 vector; reached by our scenario S3l (see "S3 claim scenarios").');
     expect(md).not.toContain('PASS-WITH-DIVERGENCES (');
     expect(md).toContain('| 03_auction_edges | PASS 78/78 | PASS 78/78 | PASS |');
     expect(md.slice(md.indexOf('## Findings'), md.indexOf('## Known divergences'))).toContain('None: every replayed step matched.');
     const gates = md.slice(md.indexOf('## Prefix gates'), md.indexOf('## Waived steps'));
     for (const [id, until] of Object.entries(PREFIX_GATES)) expect(gates).toMatch(new RegExp(`\\| ${id}_[a-z0-9_]+ \\| #${until} \\| #${until + 1} `));
     // cause S4-PAU: 08 to #57, 21 in full
-    expect(md).toContain('| 08_hardship_pause | PASS 58/64, stopped at #58 (until) | PASS 58/64, stopped at #58 (until) | PREFIX-PASS to #57, then NOT-YET (S5: end_pause) |');
+    expect(md).toContain('| 08_hardship_pause | PASS 64/64 | PASS 64/64 | PASS |');
     expect(md).toContain('| 21_entry_rules | PASS 61/61 | PASS 61/61 | PASS |');
     expect(md).toContain('## Not replayed on the merces backend\n\n- 12_multi_series_router: NOT-YET (S5: income router)');
     // review finding "VECTOR_PARITY.md 'Used in' leaves out shims exercised by expect_revert steps": the calls of
     // passing reverts went through their shims too (redeem at 01#33, 05#43, 11#43; cause S4-AMD: amend_terms at 05#44
     // and 11#45 is direct since S4 WP11, was SH-AMD-1)
-    for (const id of ['01', '05', '11']) for (const r of report.runs.filter((x) => x.id === id)) expect(r.shims['SH-RED-1'], `${id} ${r.world}`).toBe(1);
-    expect(section).toMatch(/\| SH-RED-1 \| `redeem` \|[^\n]*\| — \| 01, 05, 06, 09, 11, 23, 25 \|/);
+    for (const id of ['01', '05', '11']) for (const r of report.runs.filter((x) => x.id === id)) expect(r.shims['SH-RED-1'], `${id} ${r.world}`).toBeUndefined();
+    expect(section).not.toContain('SH-RED-1');
     // cause S3-SH: the claim family runs directly; its rows (SH-CLM-1, SH-CLM-2, SH-CLM-3, SH-BRN-1) are gone and no run
     // went through them (was: SH-CLM-1 used in 01, 04, 05, 07, 17, 19 and 21 until WP3; SH-CLM-2 runner-atomic, used in
     // 09 and 23; SH-CLM-3 in 11; SH-BRN-1 in 05)

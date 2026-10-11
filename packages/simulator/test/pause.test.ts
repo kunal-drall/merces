@@ -39,19 +39,19 @@ async function refused(h: SimHarness, tx: Promise<unknown>, name: string, messag
 describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
   it('request: issuer only, settled and not terminal; repeatable, also while paused; `until` is advisory', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
     const draft = (created.events.find((e) => e.type === 'SeriesCreated')!.payload as { seriesId: string }).seriesId;
-    await expectStage1Error(h.exec(h.issuer, { kind: 'requestPause', seriesId: draft, until: GENESIS + 30 * DAY }), 'RaiseNotSettled');
+    await expectStage1Error(h.exec(h.issuer, { kind: 'requestPause', seriesId: draft }), 'RaiseNotSettled');
     const { seriesId } = await h.runRaise();
     const now = await h.sim.now();
-    await expectStage1Error(h.exec(h.backers[0]!, { kind: 'requestPause', seriesId, until: now + 10 * DAY }), 'NotIssuer');
-    const r1 = await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 10 * DAY });
+    await expectStage1Error(h.exec(h.backers[0]!, { kind: 'requestPause', seriesId }), 'NotIssuer');
+    const r1 = await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     expect(types(r1.events)).toEqual(['PauseRequested']);
-    expect(r1.events[0]!.payload).toEqual({ seriesId, until: now + 10 * DAY, nonce: '1' }); // cause S4-PAU: the event carries the new nonce
+    expect(r1.events[0]!.payload).toEqual({ seriesId, nonce: '1' }); // cause S4-PAU: the event carries the new nonce
     // a second request is not refused; the advisory end is replaced
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 20 * DAY });
-    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ requested: true, requestedUntil: now + 20 * DAY, count: 0, current: null });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
+    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ requested: true, requestedUntil: null, count: 0, current: null });
     expect((await h.sim.getSeries(seriesId))!.nonces.pause).toBe('2'); // cause S4-CTX: each request advances it
     expect(seriesOf(h.sim, seriesId).ledger.pauseRequestedAt).toBe(BigInt(now));
     // the chain does not hold the attestor to the advisory end (the attestor service does)
@@ -61,11 +61,11 @@ describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
     expect(seriesOf(h.sim, seriesId).ledger.pauseRequestedAt).toBe(0n); // cleared with the request, as both chains do
     expect((await h.sim.getSeries(seriesId))!.nonces.pause).toBe('2'); // cause S4-CTX: an approval does not advance it (SIM:650-670)
     // a request while paused is accepted (Stage 1 does not refuse it); approving it is AlreadyPaused
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 40 * DAY });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     await expectStage1Error(approve(h, seriesId, now + 40 * DAY), 'AlreadyPaused'); // cause S4-PAU
     // terminal (derived) status
     seriesOf(h.sim, seriesId).status = 'Retired';
-    await expectStage1Error(h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 50 * DAY }), 'TerminalStatus');
+    await expectStage1Error(h.exec(h.issuer, { kind: 'requestPause', seriesId }), 'TerminalStatus');
   });
 
   it('approve: an active attestor\'s PAUSE signature, a pending request and Stage 1 bounds; pausedTotal counts the whole pause at approval', async () => {
@@ -74,7 +74,7 @@ describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
     const now = parsePeriod('2026Q1').end + 10 * DAY;
     await h.sim.setTime(now);
     await expectStage1Error(approve(h, seriesId, now + DAY), 'PauseNotRequested'); // cause S4-PAU (here and below)
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 90 * DAY });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     // a key that is not an attestor (the report verifier's) signs: InvalidAttestorSignature (was a backer's wallet sending it)
     await expectStage1Error(approve(h, seriesId, now + DAY, h.verifier), 'InvalidAttestorSignature');
     await expectStage1Error(approve(h, seriesId, now), 'InvalidPauseEnd');
@@ -110,7 +110,7 @@ describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
     const q1 = parsePeriod('2026Q1');
     await h.sim.setTime(q1.end + 10 * DAY);
     const until = q1.end + 100 * DAY;
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     await approve(h, seriesId, until); // cause S4-PAU
     // 60 days later: without the pause Q1 would be Late; Paused instead, the period Deferred, deadlines past the pause
     await h.sim.setTime(q1.end + 70 * DAY);
@@ -149,7 +149,7 @@ describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
     expect(types(first.events)).toEqual(['FundsReleased']);
     await h.sim.setTime(q1.end + 50 * DAY);
     expect(types((await h.sim.submit({ kind: 'crankStatus', seriesId }, 'keeper')).events)).toEqual(['StatusChanged', 'ReleasesPaused']);
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: q1.end + 80 * DAY });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     const ap = await approve(h, seriesId, q1.end + 80 * DAY); // cause S4-PAU
     expect(types(ap.events)).toEqual(['PauseApproved', 'StatusChanged']); // still blocked: no release event
     expect((await h.sim.getSeries(seriesId))!.status).toBe('Paused');
@@ -177,8 +177,8 @@ describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
       const other = (await h.runRaise()).seriesId;
       const now = parsePeriod('2026Q1').end + 10 * DAY;
       await h.sim.setTime(now);
-      await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 90 * DAY });
-      await h.exec(h.issuer, { kind: 'requestPause', seriesId: other, until: now + 90 * DAY });
+      await h.exec(h.issuer, { kind: 'requestPause', seriesId });
+      await h.exec(h.issuer, { kind: 'requestPause', seriesId: other });
       const end = now + 30 * DAY;
       const good = await h.pauseApproval(seriesId, end);
       const [series] = [(await h.sim.getSeries(seriesId))!];
@@ -224,10 +224,10 @@ describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
     const { seriesId } = await h.runRaise();
     const now = parsePeriod('2026Q1').end + 10 * DAY;
     await h.sim.setTime(now);
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 90 * DAY });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     const before = await h.pauseApproval(seriesId, now + 30 * DAY);
     // the issuer requests again (nonce 1 → 2): the collected signature recovers to another address
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 60 * DAY });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     await refused(h, h.sim.submit(before, 'keeper'), 'InvalidAttestorSignature', /does not recover/);
     // cause S4-WD: the issuer withdraws (nonce 2 → 3): a signature over nonce 2 is dead too
     const atTwo = await h.pauseApproval(seriesId, now + 30 * DAY);
@@ -245,12 +245,12 @@ describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
     // nothing to withdraw now
     await refused(h, h.exec(h.issuer, { kind: 'withdrawPauseRequest', seriesId }), 'PauseNotRequested');
     // a new request (nonce 4) is approved with a signature over it
-    const r = await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 60 * DAY });
+    const r = await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     expect(r.events[0]!.payload).toMatchObject({ nonce: '4' });
     expect(types((await approve(h, seriesId, now + 30 * DAY)).events)).toEqual(['PauseApproved', 'StatusChanged']);
     expect((await h.sim.getSeries(seriesId))!.nonces.pause).toBe('4');
     // the withdrawal is the issuer's whatever the status: a pending request while paused is withdrawn too
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 90 * DAY });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     expect(types((await h.exec(h.issuer, { kind: 'withdrawPauseRequest', seriesId })).events)).toEqual(['PauseRequestWithdrawn']);
     expect((await h.sim.getSeries(seriesId))!.status).toBe('Paused');
   });
@@ -260,7 +260,7 @@ describe('hardship pause (Stage 1 request_pause / approve_pause)', () => {
     const { seriesId } = await h.runRaise();
     const now = parsePeriod('2026Q1').end + 10 * DAY;
     await h.sim.setTime(now);
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 90 * DAY });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     const signed = await h.pauseApproval(seriesId, now + 30 * DAY);
     await h.exec(h.admin, { kind: 'revokeAttestor', attestor: h.attestors[0]!.address });
     await h.sim.setTime(now + 1);

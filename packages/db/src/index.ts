@@ -39,7 +39,7 @@ export async function migrate(db: Queryable, dir: string = MIGRATIONS_DIR): Prom
     locked = true;
     await c.query('create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())');
     const applied = new Set((await c.query<{ name: string }>('select name from schema_migrations')).rows.map((r) => r.name));
-    const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+    const files = readdirSync(dir).filter((f) => !f.startsWith('.') && f.endsWith('.sql')).sort();
     const done: string[] = [];
     for (const f of files) {
       if (applied.has(f)) continue;

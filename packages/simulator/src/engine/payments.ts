@@ -1,5 +1,5 @@
 import { ChainError, type Command } from '@merces/domain';
-import { DAY, U64_MAX, lateAccrual, periodEnd, periodOf, settlementYear, vaultReceiveGrossScaled, type ReceiveResult } from '@merces/math';
+import { DAY, U64_MAX, isCappedScaled, lateAccrual, periodEnd, periodOf, settlementYear, vaultReceiveGrossScaled, type ReceiveResult } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { TERMINAL, big, str, type EngineCore, type Emit } from './core.ts';
 import { fail, guardStage1 } from './errors.ts';
@@ -68,14 +68,23 @@ export function vaultReceive(e: EngineCore, s: SimSeries, gross: bigint, anchorT
   return result;
 }
 
+/** Stage 1 SIM retire_if_capped; scaled cap matches the vault's accounting units. */
+export function retireIfCapped(e: EngineCore, cmd: Extract<Command, { kind: 'retireIfCapped' }>, now: number, emit: Emit): void {
+  const s = e.series(cmd.seriesId);
+  if (!mintFinalized(s)) fail('MintNotFinalized', 'the raise is still processing its bids');
+  if (TERMINAL.has(s.status)) fail('TerminalStatus', 'series is terminal');
+  if (!isCappedScaled(s.vault, liveCapPerUnit(s), s.unitScale)) fail('NothingDue', 'cap not met');
+  retire(e, s, 0n, now, emit);
+}
+
 // ------------------------------------------------------------------ paying in
 /**
  * Stage 1 `pay` (SIM:1151-1185): whoever signs pays the open due (no issuer check). Checks and effects, in order:
  *
  *  1. the mint is final (MintNotFinalized), something is due (NothingDue);
- *  2. ours: `cmd.periodId` names the open due period (InvalidTerms; the live adapter checks it offchain);
+ *  2. optional product guard: `cmd.periodId`, when supplied, names the open due period (InvalidTerms; the live adapter checks it offchain);
  *  3. a Redeemed series pays its tail as reported (`payTail`, Stage 1 `tailReceive`), with no accrual and no sync after it;
- *  4. otherwise `total = openDueAmount + lateAccrual(...)` at `now` (u64, AmountOutOfRange); ours: `amount` must be
+ *  4. otherwise `total = openDueAmount + lateAccrual(...)` at `now` (u64, AmountOutOfRange); optional product guard: `amount`, when supplied, must be
  *     exactly `total` (InvalidTerms; Stage 1's `pay` takes no amount);
  *  5. debit the payer (InsufficientEscrow), `vaultReceive` with the year anchored on the period's report deadline
  *     (`periodEnd + reportDueDays`, SIM:1176), record `accrualPaid`/`paidAt`, `lastPaidPeriod`, clear the open due;
@@ -88,14 +97,14 @@ export function payIn(e: EngineCore, signer: string, cmd: Extract<Command, { kin
   if (l.openDueAmount === 0n || l.openDuePeriod === null) fail('NothingDue', 'nothing is due');
   const pid = l.openDuePeriod;
   const periodId = periodIdOf(pid);
-  if (cmd.periodId !== periodId) throw new ChainError('InvalidTerms', `the open due is for ${periodId}`);
-  const amount = big(cmd.amount);
+  if (cmd.periodId !== undefined && cmd.periodId !== periodId) throw new ChainError('InvalidTerms', `the open due is for ${periodId}`);
+  const amount = cmd.amount === undefined ? undefined : big(cmd.amount);
   const p = periodRecord(s, periodId);
   if (s.status === 'Redeemed') {
     // the tail due as reported, no accrual (SIM:1157-1172): the payer pays all of it, `tailReceive` applies the tail
     // cap and the excess goes back to the issuer (`payTail`)
     const due = l.openDueAmount;
-    if (amount !== due) throw new ChainError('InvalidTerms', `payIn must equal the amount due ${due}`);
+    if (amount !== undefined && amount !== due) throw new ChainError('InvalidTerms', `payIn must equal the amount due ${due}`);
     payTail(e, s, signer, p, due, now, emit);
     settle(s, p.periodId, now);
     return; // Stage 1 does not sync after a tail payment
@@ -103,7 +112,7 @@ export function payIn(e: EngineCore, signer: string, cmd: Extract<Command, { kin
   const accrual = lateAccrual(pid, l.openDueAmount, ledgerClock(s), BigInt(now), statusParams(s));
   const total = l.openDueAmount + accrual;
   if (total > U64_MAX) fail('AmountOutOfRange', 'the due with its accrual is out of the u64 range');
-  if (amount !== total) throw new ChainError('InvalidTerms', `payIn must equal the amount due ${total}`);
+  if (amount !== undefined && amount !== total) throw new ChainError('InvalidTerms', `payIn must equal the amount due ${total}`);
   e.debit(signer, s.terms.stablecoinMint, total);
   const anchor = periodEnd(pid) + BigInt(statusParams(s).reportDueDays) * DAY;
   const r = vaultReceive(e, s, total, anchor, { periodId, source: 'payIn', payer: signer, due: { paymentDue: total, accrual } }, now, emit);
@@ -139,6 +148,8 @@ export function postSplitReceipt(e: EngineCore, router: string, cmd: Extract<Com
   e.debit(router, s.terms.stablecoinMint, amount);
   const { accepted } = vaultReceive(e, s, amount, BigInt(now), { periodId, source: 'split', payer: router }, now, emit);
   periodRecord(s, periodId).splitReceived += accepted;
+  if (s.ledger.routerCredit + accepted > U64_MAX) fail('AmountOutOfRange');
+  s.ledger.routerCredit += accepted;
   emit('SplitReceipt', { seriesId: s.seriesId, periodId, amount: str(accepted), router });
 }
 

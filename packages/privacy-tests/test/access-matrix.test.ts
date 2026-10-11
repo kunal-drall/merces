@@ -89,6 +89,8 @@ describe.skipIf(!dbTestsEnabled())('access-tier matrix (H3)', () => {
       ['POST /me/signer-keys', 'account'],
       ['GET /me/signer-keys', 'account'],
       ['DELETE /me/signer-keys/{address}', 'account'],
+      // S4 recovery only readdresses offchain work after a live registry rotation; it never signs or sends a tx.
+      ['POST /me/signer-keys/readdress-work', 'account'],
     ]);
     for (const [k, access] of keyRoutes) expect(all.find((o) => `${o.method} ${o.path}` === k), k).toMatchObject({ access });
     expect(JSON.stringify((spec as { paths: Record<string, Record<string, unknown>> }).paths['/me/signer-keys']!.post)).toMatch(/"required":\["address","nonce","signature"\]/);

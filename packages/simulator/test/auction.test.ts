@@ -51,7 +51,7 @@ describe('auction edge cases', () => {
     const h = await SimHarness.create('solana');
     // cause S2-AD: one-hour phases (Stage 1's minimum) as terms, where the test opened 100-second ones
     const { terms } = defaultTerms(h.sim, { commitDurationSeconds: HOUR, revealDurationSeconds: HOUR });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const r = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (r.events[0]!.payload as { seriesId: string }).seriesId;
     const now = await h.sim.now();
@@ -94,7 +94,7 @@ describe('auction edge cases', () => {
   });
   it('the issuer can cancel before bids and cannot open while new raises are paused', async () => {
     const h = await SimHarness.create('monad');
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const r = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
     const seriesId = (r.events[0]!.payload as { seriesId: string }).seriesId;
     // cause S2-E: Stage 1 cancels an Open raise only (RaiseNotOpen while Draft)

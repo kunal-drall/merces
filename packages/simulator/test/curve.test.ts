@@ -56,7 +56,7 @@ describe('curve mode (solana): activation', () => {
   // RaiseOpened{0, 0} (curve.rs:824-830); was SeriesCreated, the toy curve's creation event and a Draft raise
   it('fixes P0 and the units sold at creation and opens the raise; the unit mint holds its whole supply', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const { terms } = defaultTerms(h.sim, { raiseStyle: 'curve', unitsOffered: '100', minimumRaise: X.toString() });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     expect(types(created.events)).toEqual(['SeriesCreated', 'CurveActivated', 'RaiseOpened']);
@@ -78,7 +78,7 @@ describe('curve mode (solana): activation', () => {
   // cause S3-CV: P0 = floor(X × 10^6 / swap base) below 1 is CurveThresholdMismatch (curve.rs:799-805)
   it('refuses a curve whose P0 rounds to 0 (CurveThresholdMismatch)', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     await expectStage1Error(h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { raiseStyle: 'curve', unitsOffered: '100', minimumRaise: '99' }).terms }), 'CurveThresholdMismatch');
     // one base unit per 10^6 base lamports is still a P0 of 1
     const ok = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim, { raiseStyle: 'curve', unitsOffered: '100', minimumRaise: '100' }).terms });

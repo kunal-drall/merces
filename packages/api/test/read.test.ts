@@ -199,7 +199,7 @@ describe.skipIf(!dbTestsEnabled())('API read side (M1)', () => {
     expect(s.json()).toEqual({ chain: 'solana', seriesId, seriesKey: seriesKeyOf(seriesId, 'solana'), domain: sol, nonces: { pause: '0', amendment: '0', extinguish: '0', trueup: '0' } });
     expect((await rig.get(`/series/${monSeriesId}/signing`)).json()).toMatchObject({ chain: 'monad', seriesKey: seriesKeyOf(monSeriesId, 'evm'), domain: mon });
     // read live from the chain, not from the index: a pause request moves the pause nonce at once
-    await rig.mon.exec(rig.mon.issuer, { kind: 'requestPause', seriesId: monSeriesId, until: (await rig.mon.sim.now()) + 10 * 86_400 });
+    await rig.mon.exec(rig.mon.issuer, { kind: 'requestPause', seriesId: monSeriesId });
     expect((await rig.get(`/series/${monSeriesId}/signing`)).json().nonces).toEqual({ pause: '1', amendment: '0', extinguish: '0', trueup: '0' });
     expect((await rig.get('/series/monad:0x' + '00'.repeat(20) + '/signing')).statusCode).toBe(404);
     // a chain whose adapter cannot read its domain yet (the live adapters until S5): 409, value-free

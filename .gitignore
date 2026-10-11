@@ -11,3 +11,5 @@ pgdata/
 # the Stage 1 oracle of stage1:sync's curve-port gate (tools/stage1-oracle): build output, and no lockfile (no registry dependency)
 tools/stage1-oracle/target/
 tools/stage1-oracle/Cargo.lock
+# macOS resource forks on external volumes are metadata, never source files.
+._*

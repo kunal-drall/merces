@@ -108,7 +108,8 @@ export function submitReport(e: EngineCore, signer: string | null, cmd: SubmitRe
 
   // effects (SIM:1131-1148)
   const p = periodRecord(s, cmd.periodId);
-  const credit = p.splitReceived < paymentStable ? p.splitReceived : paymentStable; // stands in for Stage 1's router credit
+  const credit = l.routerCredit < paymentStable ? l.routerCredit : paymentStable;
+  l.routerCredit -= credit;
   const due = isTail && !cmd.liquidityEvent ? 0n : paymentStable - credit;
   p.reportAccepted = true;
   p.tier = cmd.tier;

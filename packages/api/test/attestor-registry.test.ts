@@ -40,13 +40,14 @@ describe.skipIf(!dbTestsEnabled())('attestor access follows the indexed registry
     const { seriesId } = await h.runRaise();
     await rig.sync();
     const issuerTok = rig.token({ accountId: 'mon-issuer', wallets: [{ chain: 'monad', address: h.issuer.address }], roles: ['issuer'] });
+    const both = await rig.attestorToken('att-multi', [h.attestors[0]!]);
     const until = (await h.sim.now()) + 30 * 86_400;
     const req = await rig.post(`/series/${seriesId}/hardship`, { until, attestor: h.attestors[0]!.address, ciphertext: e2e('medical') }, issuerTok);
     expect(req.statusCode, req.body).toBe(201);
     const hardshipId = req.json().hardshipId as string;
     // cause S4-ID: one key, the attestor on both chains (the harnesses register the same 20-byte address)
     expect(rig.sol.attestors[0]!.address).toBe(h.attestors[0]!.address);
-    const both = await rig.attestorToken('att-multi', [h.attestors[0]!]);
+
     expect((await rig.get(`/attestor/hardship/${hardshipId}`, both)).statusCode).toBe(200);
 
     // the multisig revokes the key on monad; once indexed, its monad cases close to this account

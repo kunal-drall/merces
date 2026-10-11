@@ -146,6 +146,8 @@ export {
   isLateUnderlying,
   lateDays,
   lateAccrual,
+  lateAccrualTrueup,
+  trueupNoticeDue,
   formalNoticeDue,
   pauseApprovalError,
   type StatusParams,

@@ -39,6 +39,9 @@ export function verifierSetupFromEnv(env: NodeJS.ProcessEnv): VerifierEnvSetup {
   // the address pin: outside development the verifier starts only when the KMS key is the key registered onchain
   const address = env.REPORT_VERIFIER_ADDRESS?.trim() || null;
   if (!address && !simulatorOnly) throw new VerifierConfigError('REPORT_VERIFIER_ADDRESS is not set: the verifier starts only with the address of the key registered onchain (S4 D10)');
+  const provider = env.MERCES_ZKTLS_PROVIDER ?? 'mock';
+  if (provider !== 'mock') throw new VerifierConfigError('the configured zkTLS provider is not wired yet (Part J.3)');
+  if (live.length > 0) throw new VerifierConfigError('mock zkTLS is simulator-only: a real zkTLS provider is required before live reporting (Part J.3)');
   return {
     seed,
     config: {

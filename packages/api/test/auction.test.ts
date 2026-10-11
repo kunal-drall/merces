@@ -39,7 +39,7 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
   it('prechecks, builds commit/reveal/deliver, keeps only encrypted backups, previews clearing and settles by keeper', async () => {
     const h = rig.harness('monad');
     const { terms } = (await import('@merces/simulator')).defaultTerms(h.sim, { unitsOffered: '1000', walletCapBps: 1000, ...phases });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     const now = await h.sim.now();
@@ -204,7 +204,7 @@ describe.skipIf(!dbTestsEnabled())('M4 auction service (E6)', () => {
   it('the clearing preview keeps a bidder removed from the allowlist, exactly as settlement does, and the bidder is delivered', async () => {
     const h = rig.harness('monad');
     const { terms } = (await import('@merces/simulator')).defaultTerms(h.sim, { unitsOffered: '1000', walletCapBps: 1000, ...phases });
-    await h.exec(h.issuer, { kind: 'registerIssuer' }).catch(() => undefined);
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address }).catch(() => undefined);
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     const now = await h.sim.now();

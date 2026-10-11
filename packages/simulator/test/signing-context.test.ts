@@ -76,7 +76,7 @@ describe('the signing context (S4-CTX)', () => {
     };
     expect(await fold()).toEqual({ read: { pause: '0', amendment: '0', extinguish: '0', trueup: '0' }, stage1: { pause: '0', amendment: '0', extinguish: '0', trueup: '0' } });
     const now = await h.sim.now();
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 10 * 86_400 });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     const after = await fold();
     expect(after.read).toEqual(after.stage1);
     expect(after.read.pause).toBe('1');
@@ -86,7 +86,7 @@ describe('the signing context (S4-CTX)', () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const { seriesId } = await h.runRaise();
     const now = await h.sim.now();
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 10 * 86_400 });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId });
     const [info, series] = await Promise.all([h.sim.info(), h.sim.getSeries(seriesId)]);
     const req = signingRequest({
       kind: 'PAUSE', chain: info.chain, seriesId, seriesKey: series!.seriesKey, domain: info.signing!, signer: '0x' + '11'.repeat(20),
@@ -102,7 +102,7 @@ describe('the signing context (S4-CTX)', () => {
   it('refuses a series address hint that is not an address of the chain\'s family (the series key is its bytes)', async () => {
     for (const p of ['solana', 'monad'] as const) {
       const h = await SimHarness.create(p, { genesis: GENESIS });
-      await h.exec(h.issuer, { kind: 'registerIssuer' });
+      await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
       const terms = defaultTerms(h.sim).terms;
       const foreign = p === 'solana' ? '0x' + '22'.repeat(20) : bs58.encode(new Uint8Array(32).fill(7));
       for (const hint of ['S1', foreign]) await expectChainError(h.exec(h.issuer, { kind: 'createSeries', terms, seriesAddressHint: hint }), 'InvalidTerms');

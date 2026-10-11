@@ -5,7 +5,7 @@ import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import { MIGRATIONS_DIR, createPool, databaseUrl, dbTestsEnabled, migrate } from '../src/index.ts';
 
-const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort();
+const files = readdirSync(MIGRATIONS_DIR).filter((f) => !f.startsWith('.') && f.endsWith('.sql')).sort();
 
 async function withFreshSchema(fn: (schema: string) => Promise<void>): Promise<void> {
   const schema = `t_mig_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;

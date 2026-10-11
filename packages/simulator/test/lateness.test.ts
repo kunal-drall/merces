@@ -27,7 +27,7 @@ describe('status, formal notice and lateness accrual (Stage 1 clock)', () => {
 
   it('crankStatus is a successful no-op before settlement (Stage 1 crank_status)', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
     const seriesId = (created.events.find((e) => e.type === 'SeriesCreated')!.payload as { seriesId: string }).seriesId;
     await h.sim.setTime(parsePeriod('2026Q1').end + 100 * DAY);

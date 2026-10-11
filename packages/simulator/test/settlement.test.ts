@@ -50,7 +50,7 @@ interface Bid { w: SimWallet; price: bigint; qty: bigint; reveal?: boolean; depo
  */
 async function raise(h: SimHarness, bids: Bid[], over: Partial<SeriesTerms> = {}, offset = 0): Promise<{ seriesId: string; commitEndsAt: number; revealEndsAt: number }> {
   const { terms } = defaultTerms(h.sim, over);
-  if (!(await h.sim.getIssuer(h.issuer.address))) await h.exec(h.issuer, { kind: 'registerIssuer' });
+  if (!(await h.sim.getIssuer(h.issuer.address))) await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
   const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
   const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
   await h.exec(h.issuer, { kind: 'openRaise', seriesId });
@@ -114,7 +114,7 @@ describe('the chain\'s settlement limits and the permissionless group', () => {
     // `completeCurve`, `collectCurveProceeds` and `syncCurveUnits` a curve series (curve.test.ts, census.test.ts; cause
     // S3-CV, S3-CN); `approvePause` an attestor's signature over a pending request (pause.test.ts; cause S4-PAU);
     // `extinguish` two attestors' signatures (terminal.test.ts; cause S4-EXT)
-    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish'].includes(k)));
+    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['retireIfCapped', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish'].includes(k)));
     for (const cmd of cmds) {
       const tx = await h.sim.build(cmd, anyone.address);
       expect(tx.command).toEqual(cmd);
@@ -351,7 +351,7 @@ describe('Stage 1 settlement, step by step', () => {
   it('commit and reveal refuse in Stage 1\'s order; an invalid reveal is recorded, not refused', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const { terms } = defaultTerms(h.sim);
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     const [w, v] = [h.backers[0]!, h.backers[1]!];

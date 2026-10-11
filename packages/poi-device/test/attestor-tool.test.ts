@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { createDecipheriv } from 'node:crypto';
+import { createDecipheriv, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,10 +28,11 @@ import { TEST_SCRYPT_N_ENV, main, readHiddenLine, type CliIo } from '../src/atte
 const HARNESS = { VITEST: 'true' } as const;
 const PRODUCTION = {} as const;
 const PW = 'correct horse battery staple';
-const PRIV = deriveTestPrivateKey('merces-s4-dev:attestor-1');
+// Live-domain device tests use an ephemeral key: public fixture keys are refused (S4 review finding 5).
+const PRIV = randomBytes(32);
 const PRIV_HEX = Buffer.from(PRIV).toString('hex');
 const key = AttestorKey.fromPrivateKey(PRIV);
-const other = AttestorKey.fromPrivateKey(deriveTestPrivateKey('merces-s4-dev:attestor-2'));
+const other = AttestorKey.generate();
 const hex = (b: Uint8Array) => '0x' + Buffer.from(b).toString('hex');
 const sdkSign = (digest: string) => signature65Hex(signDigest(digest, PRIV));
 
@@ -78,6 +79,13 @@ afterAll(() => {
 });
 
 // ---------------------------------------------------------------- the keystore
+
+it('published simulator keys refuse live signatures even when local networks are allowed', () => {
+  const published = AttestorKey.fromPrivateKey(deriveTestPrivateKey('sim-attestor:attestor-1'));
+  try {
+    expect(() => signRequest(request('PAUSE', { signer: published.address }), published, pinned, { allowLocal: true })).toThrow(/published test key/);
+  } finally { published.wipe(); }
+});
 
 describe('attestor keystore: Web3 Secret Storage v3 (S4-DEV)', () => {
   it('round-trips at the test strength in go-ethereum\'s v3 shape, with a fresh salt, IV and id each time, and no key in the file', async () => {

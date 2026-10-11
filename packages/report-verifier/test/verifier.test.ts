@@ -170,6 +170,9 @@ describe('report verifier (Stage 1 REPORT signature: prior, liquidity event, hig
     await expect(start({ address: address.toUpperCase().replace('0X', '0x') })).resolves.toBeInstanceOf(ReportVerifier);
     await expect(start({ address: '0x' + '33'.repeat(20) })).rejects.toThrow(/REPORT_VERIFIER_ADDRESS/);
     await expect(start({ previous: [{ address, retiredAt: 1 }] })).rejects.toThrow(/current address/);
+    for (const retiredAt of [Date.now(), Math.floor(Date.now() / 1000) + 3600]) {
+      await expect(start({ previous: [{ address: '0x' + '44'.repeat(20), retiredAt }] })).rejects.toThrow(/unix seconds.*future/);
+    }
     // the verifier key is secp256k1: an ed25519 key id refuses the start
     await expect(ReportVerifier.create(zktls, new LocalKms('x', { 'rv-1': 'ed25519' }), { keyId: 'rv-1', chains: CHAINS })).rejects.toThrow(/secp256k1/);
     // a misconfigured verifier never serves: attest and publicKey throw rather than sign
@@ -229,9 +232,11 @@ describe('report verifier (Stage 1 REPORT signature: prior, liquidity event, hig
     expect(() => verifierSetupFromEnv(env([devnet], { MERCES_LOCAL_KEY_SEED: secret }))).toThrow(/REPORT_VERIFIER_ADDRESS is not set/);
     const liveKms = new LocalKms(secret, { 'report-verifier-1': 'secp256k1' });
     const pin = await liveKms.signerAddress('report-verifier-1');
-    const live = verifierSetupFromEnv(env([devnet, testnet], { MERCES_LOCAL_KEY_SEED: secret, REPORT_VERIFIER_ADDRESS: pin, MERCES_VERIFIER_DEV: 'false' }));
-    expect(live).toEqual({ seed: secret, config: { keyId: 'report-verifier-1', address: pin, previous: [], chains: CHAINS, allowLocal: false, localOnly: false } });
-    await expect(ReportVerifier.create(zktls, liveKms, live.config)).resolves.toBeInstanceOf(ReportVerifier);
+    // Review finding 10: valid live secrets never make the published mock zkTLS proof authentic.
+    for (const table of [[devnet], [testnet], [localSol, testnet]]) {
+      expect(() => verifierSetupFromEnv(env(table, { MERCES_LOCAL_KEY_SEED: secret, REPORT_VERIFIER_ADDRESS: pin }))).toThrow(/mock zkTLS is simulator-only/);
+    }
+    expect(() => verifierSetupFromEnv(env([devnet], { MERCES_LOCAL_KEY_SEED: secret, REPORT_VERIFIER_ADDRESS: pin, MERCES_ZKTLS_PROVIDER: 'unwired' }))).toThrow(/not wired/);
     const localLive = verifierSetupFromEnv(env([localSol], { MERCES_LOCAL_KEY_SEED: secret, REPORT_VERIFIER_ADDRESS: pin }));
     await expect(ReportVerifier.create(zktls, liveKms, localLive.config)).rejects.toThrow(/not on the signing allow-list/);
     // a cloud KMS waits for the owner's choice (S4 question 1)

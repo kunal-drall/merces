@@ -115,7 +115,7 @@ describe('Stage 1 error names on simulator errors', () => {
 
   it('createSeries refuses due, grace and notice days other than Stage 1 fixed values (ParameterOutOfBounds)', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     for (const over of [{ graceDays: 14 }, { dueDays: 31 }, { formalNoticeDays: 120 }]) {
       const { terms } = defaultTerms(h.sim, over);
       const e = await rejection(h.exec(h.issuer, { kind: 'createSeries', terms }));
@@ -131,7 +131,7 @@ describe('Stage 1 error names on simulator errors', () => {
   // fixed day counts and the bps sum)
   it('createSeries refuses what Stage 1 create_series refuses, with its error name, and accepts the bounds themselves', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const WAD = 10n ** 18n;
     const YEAR = 365 * 86_400;
     const decreasing = [{ afterSeconds: 90 * 86_400, bps: 5000 }, { afterSeconds: 0, bps: 5000 }];
@@ -184,7 +184,7 @@ describe('Stage 1 error names on simulator errors', () => {
   // starts at creation, which Stage 1 refuses as the curve's activation (registry mark_curve_activated)
   it('new raises paused: a sealed series is still created and openRaise refuses NewRaisesPaused; a curve raise is refused', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     await h.exec(h.admin, { kind: 'pauseNewRaises', paused: true });
     const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
     expect(created.events[0]!.type).toBe('SeriesCreated');
@@ -208,7 +208,7 @@ describe('Stage 1 error names on simulator errors', () => {
   it('a debit beyond the balance is InsufficientFunds with Stage 1 name InsufficientEscrow', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const { seriesId } = await (async () => {
-      await h.exec(h.issuer, { kind: 'registerIssuer' });
+      await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
       const created = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
       return { seriesId: (created.events[0]!.payload as { seriesId: string }).seriesId };
     })();

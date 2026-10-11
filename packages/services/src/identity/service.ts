@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { proposeIssuerRegistration } from '../admin/issuer-registration.ts';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { addressFamily, keyGraceUntil, normaliseAddress, type ChainFamily } from '@merces/domain';
+import { addressFamily, isPublishedTestKey, keyGraceUntil, normaliseAddress, type ChainFamily } from '@merces/domain';
 import { signInMessage, signerKeyLinkMessage, simulatorOnly, verifyKeyPersonalSignature, verifyWalletSignature, type IdentityCheckStatus } from '@merces/ports';
 import { issueSession, type Role, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -137,6 +138,7 @@ export class IdentityService {
    * active and indexed on the item's chain (A-M5-2). Linking a key already linked to this account changes nothing.
    */
   async linkSignerKey(session: Session, input: z.infer<typeof signerKeyLinkSchema>): Promise<{ key: Record<string, unknown>; created: boolean; token: string }> {
+    if (!simulatorOnly(this.ctx.chains) && isPublishedTestKey(input.address)) throw AppError.unprocessable('published test keys are refused while any chain is live', { reason: 'published-test-key' });
     const n = await this.ctx.pool.query<{ address: string; purpose: string; account_id: string | null; issued_at: Date; expires_at: Date; used_at: Date | null }>('select address, purpose, account_id, issued_at, expires_at, used_at from auth_nonces where nonce = $1', [input.nonce]);
     const row = n.rows[0];
     if (!row || row.purpose !== 'link-signer-key' || row.account_id !== session.accountId || row.address !== input.address) throw linkRefusal('unknown-challenge', 'no key-link challenge with this nonce was issued to this account for this key');
@@ -353,6 +355,7 @@ export class IdentityService {
     // inside that transaction (idempotent onchain): if it fails, nothing is recorded and the admin retries. If the
     // chain call succeeded but the decision then fails to commit, the allowlist addition is undone unless the
     // wallet is eligible anyway, so a wallet is never left allowlisted without an approved decision behind it.
+    let issuerRegistration: Awaited<ReturnType<typeof proposeIssuerRegistration>> | null = null;
     let allowlistTx: string | null = null;
     try {
       await withTransaction(this.ctx.pool, async (db) => {
@@ -364,6 +367,7 @@ export class IdentityService {
         if (decision === 'approved') {
           await db.query('update accounts set roles = array(select distinct unnest(roles || $2::text[])) where account_id = $1', [a.account_id, [a.kind]]);
           await db.query('insert into eligibility (chain, wallet, account_id, kind, allowlist_synced_at, allowlist_tx) values ($1,$2,$3,$4, now(), $5) on conflict (chain, wallet) do update set revoked_at = null, approved_at = now(), kind = excluded.kind, account_id = excluded.account_id, allowlist_synced_at = now(), allowlist_tx = excluded.allowlist_tx', [a.chain, a.wallet, a.account_id, a.kind, allowlistTx]);
+          if (a.kind === 'issuer') issuerRegistration = await proposeIssuerRegistration(this.ctx, db, admin, a.chain, a.wallet);
           await audit(db, { actor: admin.accountId, actorRole: 'admin', action: 'allowlist.add', target: `${a.chain}:${a.wallet}`, detail: { txId: allowlistTx } });
         }
         await enqueueOutbox(db, 'notification', { kind: `application.${decision}`, accountId: a.account_id, applicationId: id });
@@ -372,7 +376,7 @@ export class IdentityService {
       if (allowlistTx) await this.undoAllowlist(a.chain, a.wallet, admin.accountId, allowlistTx);
       throw e;
     }
-    return this.getApplication(id, admin);
+    return { ...await this.getApplication(id, admin), ...(issuerRegistration ? { issuerRegistration } : {}) };
   }
 
   /** Compensation for a decision that did not commit after its setAllowlist landed (best effort, audited). */

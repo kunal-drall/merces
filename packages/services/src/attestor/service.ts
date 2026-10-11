@@ -185,7 +185,7 @@ function pauseRefusal(rule: PauseApprovalRule): AppError {
   return new AppError(rule === 'AlreadyPaused' ? 409 : 422, rule === 'AlreadyPaused' ? 'Conflict' : 'Unprocessable', PAUSE_APPROVAL_MESSAGE[rule], { stage1: rule });
 }
 
-/** Days the issuer has to settle an annual underpayment (C8: "true up within 60 days"). No accrual (A-C8-3). */
+/** Unpaused days before Stage 1 charges annual true-up lateness accrual. */
 export const TRUE_UP_DAYS = 60;
 
 const PLAINTEXT_WORDS = /reason|hardship|income|evidence|document|salary|diagnos|medical/i;
@@ -289,6 +289,8 @@ export class AttestorService {
 
   private async requireRegisteredAttestor(chain: ChainPort, attestor: string): Promise<void> {
     if (!(await this.activeIndexed(chain.chain, attestor))) throw AppError.unprocessable(`${attestor} is not a registered attestor key on ${chain.chain}`);
+    if (!(await chain.getSignerKey('attestor', attestor))?.active) throw AppError.unprocessable('the attestor key is no longer active on this chain', { reason: 'key-not-active' });
+    if (!(await this.accountOf(attestor))) throw AppError.unprocessable('the attestor key must be linked to an account before work can be addressed to it', { reason: 'key-not-linked' });
   }
 
   /** Key `address` is linked to the session's account (its own EIP-191 proof; read live, never from the token). */
@@ -334,7 +336,7 @@ export class AttestorService {
     const hardship = await p.query(`select hardship_id, series_id, chain, attestor, requested_until, created_at from hardship_requests where state = $3 and ${inPairs('chain', 'attestor')} order by created_at`, [pc, pk, 'pending']);
     const tier3 = await p.query(`select case_id, series_id, chain, period_id, attestor, estimate_payment_stable, created_at from tier3_cases where state = $3 and ${inPairs('chain', 'attestor')} order by created_at`, [pc, pk, 'open']);
     const annual = await p.query(`select annual_id, series_id, chain, year, attestor, created_at from tier3_annual where state = $3 and ${inPairs('chain', 'attestor')} order by created_at`, [pc, pk, 'open']);
-    const fx = await p.query('select request_id, chain, pair, period_id, reason, created_at from fx_fallback_requests where state = $2 and ($1::text[] is null or chain = any($1::text[])) order by created_at', [chains, 'open']);
+    const fx = await this.pendingFxRows(chains);
     const amendments = await p.query('select a.amendment_id, a.series_id, s.chain, a.kind, a.version, a.rationale_code, a.created_at from terms_amendments a join series s on s.series_id = a.series_id where a.state = $2 and ($1::text[] is null or s.chain = any($1::text[])) order by a.created_at', [chains, 'proposed']);
     // open extinguishments naming one of the caller's keys (collecting signatures, or ready and awaiting the relay)
     const ext = await p.query(`select request_id, series_id, chain, attestors, state, signatures, created_at from extinguishment_requests e where state = any($3::text[]) and ($1::text[] is null or exists (select 1 from unnest(e.attestors) as x(a) where ${inPairs('e.chain', 'x.a')})) order by created_at`, [pc, pk, ['collecting', 'ready']]);
@@ -342,7 +344,7 @@ export class AttestorService {
       hardship: hardship.rows.map((r) => ({ hardshipId: r.hardship_id, seriesId: r.series_id, chain: r.chain, attestor: r.attestor, requestedUntil: Number(r.requested_until), createdAt: r.created_at })),
       tier3: tier3.rows.map((r) => ({ caseId: r.case_id, seriesId: r.series_id, chain: r.chain, periodId: r.period_id, attestor: r.attestor, estimatePaymentStable: r.estimate_payment_stable, createdAt: r.created_at })),
       tier3Annual: annual.rows.map((r) => ({ annualId: r.annual_id, seriesId: r.series_id, chain: r.chain, year: r.year, attestor: r.attestor, createdAt: r.created_at })),
-      fxRequests: fx.rows.map((r) => ({ requestId: r.request_id, chain: r.chain, pair: r.pair, periodId: r.period_id, reason: r.reason, createdAt: r.created_at })),
+      fxRequests: fx.map((r) => ({ requestId: r.request_id, chain: r.chain, pair: r.pair, periodId: r.period_id, reason: r.reason, createdAt: r.created_at })),
       amendments: amendments.rows.map((r) => ({ amendmentId: r.amendment_id, seriesId: r.series_id, chain: r.chain, kind: r.kind, version: r.version, rationaleCode: r.rationale_code, createdAt: r.created_at })),
       extinguishments: ext.rows.map((r) => ({ requestId: r.request_id, seriesId: r.series_id, chain: r.chain, attestors: r.attestors, state: r.state, signers: signersOf(r.signatures), createdAt: r.created_at })),
     };
@@ -402,7 +404,7 @@ export class AttestorService {
       'insert into hardship_requests (hardship_id, series_id, chain, issuer, account_id, attestor, requested_until, ciphertext, key_hint) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
       [id, seriesId, chain.chain, series.issuer, session.accountId, attestor, input.until, input.ciphertext, input.keyHint],
     );
-    const tx = await chain.build({ kind: 'requestPause', seriesId, until: input.until }, series.issuer);
+    const tx = await chain.build({ kind: 'requestPause', seriesId }, series.issuer);
     await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'hardship.requested', seriesId, hardshipId: id, attestor });
     return { ...this.hardshipView(await this.hardshipRow(id), false), tx };
   }
@@ -418,6 +420,12 @@ export class AttestorService {
     if (!series.pauses.requested) throw new AppError(409, 'Conflict', 'no pause request is pending onchain for this series', { stage1: 'PauseNotRequested' });
     const tx = await chain.build({ kind: 'withdrawPauseRequest', seriesId }, series.issuer);
     return { seriesId, pauseNonce: series.nonces.pause, tx };
+  }
+
+  async buildEndPause(seriesId: string, session: Session): Promise<{ seriesId: string; tx: UnsignedTx }> {
+    const { chain, series } = await this.seriesForIssuer(seriesId, session);
+    if (!series.pauses.current) throw AppError.conflict('no pause is active', { stage1: 'NotPaused' });
+    return { seriesId, tx: await chain.build({ kind: 'endPause', seriesId }, series.issuer) };
   }
 
   /** Attestor (the chosen one, or an admin): the ciphertext and the series' onchain pause state. */
@@ -441,6 +449,9 @@ export class AttestorService {
     const chain = this.ctx.chains.get(String(h.chain));
     const [now, series] = await Promise.all([chain.now(), chain.getSeries(String(h.series_id))]);
     if (!series) throw AppError.notFound('series');
+    if (['Retired', 'Redeemed', 'Extinguished'].includes(series.status)) {
+      throw AppError.conflict('a terminal series cannot approve a hardship pause', { stage1: 'TerminalStatus' });
+    }
     // Stage 1's approve_pause, in its order (S4 D8; SIM:1284-1297), on the chain's pause record, before anything is signed
     // or recorded: a pending request onchain (PauseNotRequested), then pauseApprovalError (the end in the future, no
     // running pause, at most a year, two years in total, 16 pauses). A refusal leaves the request pending, so the attestor
@@ -816,24 +827,25 @@ export class AttestorService {
     if (!series.mintFinalized) throw new AppError(409, 'Conflict', 'the series\' mint is not final yet: no true-up can be recorded', { stage1: 'MintNotFinalized' });
     if (['Retired', 'Redeemed', 'Extinguished'].includes(series.status)) throw new AppError(409, 'Conflict', `the series is ${series.status}: no true-up can be recorded`, { stage1: 'TerminalStatus' });
     if (!series.terms.tierFlags.tier3) throw new AppError(409, 'Conflict', 'tier 3 is not enabled for this series', { stage1: 'TierNotEnabled' });
+    if (BigInt(series.trueUp.due) > 0n) throw AppError.conflict('pay the outstanding true-up before submitting another year', { stage1: 'TrueUpOutstanding' });
+    if (series.trueUp.lastYear !== null && series.trueUp.lastYear >= year) throw AppError.conflict('this year has already been trued up', { stage1: 'TrueUpYearInvalid' });
     if (year >= periodOf(now).year) throw new AppError(409, 'Conflict', 'the year has not ended', { stage1: name('yearNotEnded') });
     const lastOfYear = toPid(`${year}Q4`);
     const first = series.reporting.firstPeriod;
     const last = series.reporting.lastAcceptedPeriod;
     const complete = (first !== null && lastOfYear < toPid(first)) || (last !== null && toPid(last) >= lastOfYear);
     if (!complete) throw new AppError(409, 'Conflict', 'not every quarter of the year has an accepted report yet: the true-up waits for the last one', { stage1: name('yearIncomplete') });
-    const est = await this.ctx.pool.query<{ total: string }>('select coalesce(sum(payment_due - accrual + split_received), 0)::text as total from periods where series_id = $1 and report_accepted and period_id like $2', [seriesId, `${year}Q%`]);
-    const estimated = BigInt(est.rows[0]?.total ?? '0');
+    // Completeness and money must come from the same source: an indexer behind the chain can omit Q4 and
+    // manufacture an underpayment. Reuse these chain reads for Stage 1's bound on a credit as well.
+    const periods = await Promise.all(([1, 2, 3, 4] as const).map((q) => chain.getPeriod(seriesId, `${year}Q${q}`)));
+    const accepted = periods.filter((p) => p?.reportAccepted);
+    const estimated = accepted.reduce((sum, p) => sum + BigInt(p!.paymentDue) - BigInt(p!.accrual) + BigInt(p!.splitReceived), 0n);
     const total = BigInt(totalText);
     const adjustment = total - estimated;
     if (adjustment < I64_MIN || adjustment > I64_MAX) throw AppError.unprocessable('the true-up adjustment is out of Stage 1\'s i64 range', { stage1: 'AmountOutOfRange' });
     if (adjustment < 0n) {
       // Stage 1's bound on a credit: the year's accepted report payments (each report's own figure, read from the chain)
-      let yearPayments = 0n;
-      for (const q of [1, 2, 3, 4] as const) {
-        const p = await chain.getPeriod(seriesId, `${year}Q${q}`);
-        if (p?.reportAccepted) yearPayments += BigInt(p.paymentStable);
-      }
+      const yearPayments = accepted.reduce((sum, p) => sum + BigInt(p!.paymentStable), 0n);
       if (-adjustment > yearPayments) throw AppError.unprocessable('a negative true-up may not exceed the year\'s accepted report payments (Stage 1\'s bound): this credit could never be recorded onchain', { stage1: name('tooLarge') });
     }
     return { chain, series, now, year, total, estimated, adjustment };
@@ -859,6 +871,25 @@ export class AttestorService {
     if (a.state !== 'open') throw AppError.conflict(`annual attestation is ${a.state}`);
     const b = await this.trueUpBasis(a, q.totalPaymentStable);
     return this.trueUpRequestFor(b, String(a.attestor), b.now);
+  }
+
+  /** The issuer receives the stored attestation only inside their unsigned submission transaction. */
+  async buildAnnual(seriesId: string, id: string, session: Session): Promise<{ tx: UnsignedTx }> {
+    const chain = this.ctx.chainFor(seriesId);
+    const series = await chain.getSeries(seriesId);
+    if (!series) throw AppError.notFound('series');
+    if (!session.wallets.some((w) => w.chain === chain.chain && w.address === series.issuer)) throw AppError.forbidden('only the linked issuer wallet may submit this annual attestation');
+    const a = await this.annualRow(id);
+    if (a.series_id !== seriesId) throw AppError.notFound('annual attestation');
+    if (a.state !== 'signed') throw AppError.conflict(`annual attestation is ${a.state}`);
+    const b = await this.trueUpBasis(a, String(a.total_payment_stable));
+    if (b.series.nonces.trueup !== String(a.trueup_nonce)) throw AppError.conflict('the signed nonce has been consumed', { reason: 'stale-nonce' });
+    if (b.adjustment.toString() !== String(a.adjustment)) throw AppError.conflict('the annual basis changed; withdraw and request a new signature');
+    const key = await chain.getSignerKey('attestor', String(a.trueup_signer));
+    if (!key || !keyUsable(key, b.now)) throw invalidAttestorSignature('the signing key is no longer active');
+    const digest = trueUpDigest({ domain: (await signingDomainOf(chain)).domain, seriesKey: b.series.seriesKey }, { trueupNonce: String(a.trueup_nonce), year: b.year, adjustment: String(a.adjustment), attestationTs: String(a.attestation_ts) });
+    if (BigInt(String(a.attestation_ts)) > BigInt(b.now) || recoverSigner(digest.digest, String(a.trueup_signature)) !== a.trueup_signer) throw invalidAttestorSignature('the stored signature is not usable on this chain');
+    return { tx: await chain.build({ kind: 'submitTrueUp', seriesId, year: b.year, adjustment: String(a.adjustment), attestationTs: String(a.attestation_ts), attestor: String(a.trueup_signer), signature: String(a.trueup_signature) }, series.issuer) };
   }
 
   /**
@@ -909,13 +940,20 @@ export class AttestorService {
     const underpayment = adjustment > 0n ? adjustment : 0n;
     const trueUpDueAt = underpayment > 0n ? Number(ts) + TRUE_UP_DAYS * 86_400 : null;
     const creditPeriodId = overpayment > 0n ? periodFrom(year + 1, 1).id : null;
-    const upd = await this.ctx.pool.query(
+    await withTransaction(this.ctx.pool, async (db) => {
+      // Serialize signatures per series, including requests for different years. A nonce can authorize only one
+      // pending annual; a second signature would die when the first lands (review finding 9).
+      await db.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`trueup:${seriesId}`]);
+      const pending = await db.query("select annual_id from tier3_annual where series_id = $1 and state = 'signed' and annual_id <> $2", [seriesId, id]);
+      if (pending.rowCount) throw AppError.conflict('submit or withdraw the pending true-up before signing another year', { reason: 'earlier-trueup-pending' });
+      const upd = await db.query(
       `update tier3_annual set state = 'signed', total_payment_stable = $2, estimated_payment_stable = $3, overpayment = $4, underpayment = $5, trueup_due_at = $6, credit_period_id = $7, signed_at = now(),
          trueup_nonce = $8, attestation_ts = $9, adjustment = $10, trueup_signer = $11, trueup_signature = $12, trueup_digest = $13, decision_code = null
        where annual_id = $1 and state = 'open'`,
       [id, total.toString(), estimated.toString(), overpayment.toString(), underpayment.toString(), trueUpDueAt, creditPeriodId, input.trueupNonce, input.attestationTs, adjustment.toString(), attestor, input.attestation.signature, digest],
     );
-    if (!upd.rowCount) throw AppError.conflict('annual attestation was signed concurrently');
+      if (!upd.rowCount) throw AppError.conflict('annual attestation was signed concurrently');
+    });
     await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'tier3.annual-sign', target: id, detail: { seriesId, year, totalPaymentStable: total.toString(), estimatedPaymentStable: estimated.toString(), overpayment: overpayment.toString(), underpayment: underpayment.toString(), trueUpDueAt, signer: attestor, trueupNonce: input.trueupNonce, attestationTs: input.attestationTs, digest } });
     await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'tier3.annual-signed', seriesId, year, annualId: id, outcome: underpayment > 0n ? 'underpayment' : overpayment > 0n ? 'overpayment' : 'settled', trueUpDueAt });
     return this.annualView(await this.annualRow(id), false);
@@ -958,14 +996,32 @@ export class AttestorService {
 
   /** The covered series still without a signature for this request (all of them while it is open). */
   private async fxUnsigned(req: Record<string, unknown>): Promise<string[]> {
-    const signed = new Set((await this.fxSignatures(String(req.request_id))).map((x) => x.seriesId));
+    const signed = new Set((await this.usableFxSignatures(req)).map((x) => x.seriesId));
     return (await this.fxAffectedSeries(req)).filter((x) => !signed.has(x));
+  }
+
+  private async usableFxSignatures(req: Record<string, unknown>): ReturnType<AttestorService['fxSignatures']> {
+    const chain = this.ctx.chains.get(String(req.chain));
+    const now = await chain.now();
+    const usable = [];
+    for (const sig of await this.fxSignatures(String(req.request_id))) {
+      const key = await chain.getSignerKey('attestor', sig.signer);
+      if (key && keyUsable(key, now, { reportPeriod: String(req.period_id) })) usable.push(sig);
+    }
+    return usable;
   }
 
   async listFxRequests(session: Session): Promise<Record<string, unknown>[]> {
     const { chains } = await this.scope(session);
-    const r = await this.ctx.pool.query("select * from fx_fallback_requests where state = 'open' and ($1::text[] is null or chain = any($1::text[])) order by created_at", [chains]);
-    return r.rows.map((x) => this.fxView(x));
+    return (await this.pendingFxRows(chains)).map((x) => this.fxView(x));
+  }
+
+  /** Signed requests return to the queue when a key's grace expires or another series needs the fixed rate. */
+  private async pendingFxRows(chains: string[] | null): Promise<Record<string, unknown>[]> {
+    const r = await this.ctx.pool.query("select * from fx_fallback_requests where state in ('open', 'signed') and ($1::text[] is null or chain = any($1::text[])) order by created_at", [chains]);
+    const pending = [];
+    for (const row of r.rows) if (row.state === 'open' || (await this.fxUnsigned(row)).length > 0) pending.push(row);
+    return pending;
   }
 
   /**
@@ -1025,7 +1081,7 @@ export class AttestorService {
     const onchain = await chain.getSignerKey('attestor', key);
     if (!onchain || !keyUsable(onchain, await chain.now(), { reportPeriod: periodId })) throw invalidAttestorSignature('the attestor key is not usable on this chain for this period');
     const domain = await signingDomainOf(chain);
-    const already = new Set((await this.fxSignatures(id)).map((x) => x.seriesId));
+    const already = new Set((await this.usableFxSignatures(req)).map((x) => x.seriesId));
     const unsigned = (await this.fxAffectedSeries(req)).filter((x) => !already.has(x));
     const seen = new Set<string>();
     for (const x of input.signatures) {
@@ -1050,8 +1106,12 @@ export class AttestorService {
       const live = (await db.query('select state, rate_wad from fx_fallback_requests where request_id = $1 for update', [id])).rows[0];
       if (!live || live.state !== req.state || String(live.rate_wad) !== String(req.rate_wad)) throw AppError.conflict('fx fallback request was signed concurrently');
       for (const r of rows) {
-        const ins = await db.query('insert into fx_fallback_signatures (request_id, chain, series_id, signer, rate_wad, signature, digest) values ($1,$2,$3,$4,$5,$6,$7) on conflict (request_id, series_id) do nothing', [id, chain.chain, r.seriesId, key, input.rateWad, r.signature, r.digest]);
-        if (!ins.rowCount) throw AppError.conflict('fx fallback request was signed concurrently');
+        const previous = (await db.query('select signer from fx_fallback_signatures where request_id = $1 and series_id = $2 for update', [id, r.seriesId])).rows[0];
+        if (previous) {
+          const registered = await chain.getSignerKey('attestor', previous.signer);
+          if (registered && keyUsable(registered, await chain.now(), { reportPeriod: periodId })) throw AppError.conflict('fx fallback request was signed concurrently');
+        }
+        await db.query('insert into fx_fallback_signatures (request_id, chain, series_id, signer, rate_wad, signature, digest) values ($1,$2,$3,$4,$5,$6,$7) on conflict (request_id, series_id) do update set signer = excluded.signer, rate_wad = excluded.rate_wad, signature = excluded.signature, digest = excluded.digest, signed_at = now()', [id, chain.chain, r.seriesId, key, input.rateWad, r.signature, r.digest]);
       }
       if (req.state === 'open') {
         await db.query("update fx_fallback_requests set state = 'signed', attestor = $2, rate_wad = $3, source_note = $4, decision_code = null, signed_at = now() where request_id = $1", [id, key, input.rateWad, input.sourceNote]);
@@ -1077,7 +1137,7 @@ export class AttestorService {
     const r = await this.ctx.pool.query('select * from fx_fallback_requests where chain = $1 and pair = $2 and period_id = $3', [chain.chain, pair, periodId]);
     const req = r.rows[0];
     if (!req) return { seriesId, periodId, pair, basis: 'accumulator', state: 'none', rateWad: null, fxFallback: null };
-    const sig = (await this.ctx.pool.query('select signer, rate_wad, signature, digest, signed_at from fx_fallback_signatures where request_id = $1 and series_id = $2', [req.request_id, seriesId])).rows[0];
+    const sig = (await this.usableFxSignatures(req)).find((x) => x.seriesId === seriesId);
     return {
       seriesId, periodId, pair, basis: 'attestor', state: req.state, decisionCode: req.decision_code ?? null, requestId: req.request_id, reason: req.reason, sourceNote: req.source_note ?? null, signedAt: req.signed_at ?? null,
       rateWad: req.state === 'signed' ? String(req.rate_wad) : null, seriesSigned: !!sig,
@@ -1161,10 +1221,10 @@ export class AttestorService {
     this.extinguishable(series);
     if (input.attestor === input.coAttestor) throw AppError.unprocessable('two distinct attestor keys are required', { stage1: 'SameAttestor' });
     if (!(await this.actsAs(session, chain.chain, input.attestor))) throw AppError.forbidden('`attestor` must be a key linked to your account and registered on the series\' chain');
-    await this.requireRegisteredAttestor(chain, input.coAttestor);
     const coAccount = await this.accountOf(input.coAttestor);
     if (coAccount === session.accountId) throw AppError.conflict('the co-attestor key is linked to your own account: an extinguishment needs two attestors holding their own keys (registration already guarantees two separately verified accounts; this check is defence in depth)', { reason: 'same-account' });
     if (coAccount === null) throw AppError.unprocessable('the co-attestor key is not linked to any account: nobody could sign this request for it', { reason: 'co-attestor-not-linked' });
+    await this.requireRegisteredAttestor(chain, input.coAttestor);
     assertOpaqueCiphertext(input.evidenceCiphertext, 'evidenceCiphertext');
     const id = this.ctx.newId('ext');
     const attestors = [input.attestor, input.coAttestor];

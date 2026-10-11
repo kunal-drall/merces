@@ -135,7 +135,7 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const key = 'monad-reorg-test';
     const h = await SimHarness.create('monad', { genesis: GENESIS, sim: SimulatorChain.createSync({ personality: 'monad', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
     const idx = new Indexer(t.pool, [h.sim], { logger: { warn() {}, debug() {}, error() {}, info() {} } as never });
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const all = (await h.sim.readEvents(null, 1000)).events; // includes bootstrap events
     // deliver shuffled with duplicates
     const shuffled = [...all, ...all.slice(0, 3)].sort(() => Math.random() - 0.5);
@@ -563,7 +563,7 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
     const h = await SimHarness.create('solana', { sim: SimulatorChain.createSync({ personality: 'solana', chainKey: key, genesis: GENESIS, acceptMockProofs: true }) });
     const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
     const { terms } = defaultTerms(h.sim);
-    await h.exec(h.issuer, { kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: h.issuer.address });
     const seriesId = ((await h.exec(h.issuer, { kind: 'createSeries', terms })).events[0]!.payload as { seriesId: string }).seriesId;
     await h.exec(h.issuer, { kind: 'openRaise', seriesId });
     const { commitEndsAt } = (await h.sim.getAuction(seriesId))!;

@@ -69,7 +69,7 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
     });
     // the issuer wallet signs (not the harness default issuer)
     const exec = (cmd: Parameters<SimHarness['exec']>[1]) => h.exec(wallet, cmd);
-    await exec({ kind: 'registerIssuer' });
+    await h.exec(h.admin, { kind: 'registerIssuer', wallet: wallet.address });
     const created = await exec({ kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;
     await exec({ kind: 'openRaise', seriesId });
@@ -159,7 +159,7 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
   const sol = harnesses.solana!;
   const curveIssuer = new SimWallet(sol.sim.family, 'issuer:curve-cam');
   await sol.sim.submit({ kind: 'setAllowlist', wallet: curveIssuer.address, allowed: true }, 'allowlistManager');
-  await sol.exec(curveIssuer, { kind: 'registerIssuer' });
+  await sol.exec(sol.admin, { kind: 'registerIssuer', wallet: curveIssuer.address });
   // the harness gives a curve series Stage 1's zeros (no lockup, no wallet cap, no raise phases; S3 WP7)
   const curveTerms = defaultTerms(sol.sim, { raiseStyle: 'curve', minimumRaise: '2000000000', reservePrice: '5000000' }).terms;
   await sol.exec(curveIssuer, { kind: 'createSeries', terms: curveTerms });

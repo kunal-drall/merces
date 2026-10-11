@@ -8,6 +8,8 @@ export function registerLifecycleRoutes(app: FastifyInstance, base: AppContext):
   const ctx = svc(base);
   const s = new LifecycleService(ctx);
   const sid = (req: { params: unknown }) => (req.params as { seriesId: string }).seriesId;
+  defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/true-up', access: 'holder-or-issuer', handler: async (req) => s.trueUp(sid(req)) });
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/true-up/build-pay', access: 'account', handler: async (req, _r, session) => s.buildPayTrueUp(sid(req), session!, z.object({ wallet: z.string().min(1) }).parse(req.body).wallet) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/treasury/build-draw', access: 'issuer', handler: async (req, _r, session) => s.buildDraw(sid(req), session!) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/treasury/build-pause', access: 'issuer', handler: async (req, _r, session) => s.buildPauseReleases(sid(req), session!, z.object({ paused: z.boolean() }).parse(req.body).paused) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/payouts/build-claim', access: 'holder', handler: async (req, _r, session) => s.buildClaim(sid(req), session!, z.object({ holder: z.string() }).parse(req.body).holder) });
@@ -15,10 +17,15 @@ export function registerLifecycleRoutes(app: FastifyInstance, base: AppContext):
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/final/build-claim', access: 'holder', handler: async (req, _r, session) => s.buildClaimFinal(sid(req), session!, z.object({ holder: z.string().min(1) }).parse(req.body).holder) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/holders/build-register', access: 'account', handler: async (req, _r, session) => s.buildRegister(sid(req), session!, z.object({ wallet: z.string().min(1) }).parse(req.body).wallet) });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/redemption/quote', access: 'holder-or-issuer', handler: async (req) => s.quote(sid(req)) });
-  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/redemption/build-redeem', access: 'issuer', handler: async (req, _r, session) => s.buildRedeem(sid(req), session!, z.object({ maxPricePerUnit: z.string().regex(/^\d+$/) }).parse(req.body).maxPricePerUnit) });
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/redemption/build-redeem', access: 'issuer', handler: async (req, _r, session) => s.buildRedeem(sid(req), session!, z.object({ maxPricePerUnit: z.string().regex(/^\d+$/).optional() }).parse(req.body ?? {}).maxPricePerUnit) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/redemption/build-claim', access: 'holder', handler: async (req, _r, session) => s.buildClaimRedemption(sid(req), session!, z.object({ holder: z.string() }).parse(req.body).holder) });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/redemption', access: 'holder-or-issuer', handler: async (req) => s.redemption(sid(req)) });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/retirement', access: 'public', handler: async (req) => s.retirement(sid(req)) });
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/retirement/build-retire', access: 'account', handler: async (req, _r, session) => s.buildRetire(sid(req), session!, z.object({ wallet: z.string().min(1) }).parse(req.body).wallet) });
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/retirement/build-burn', access: 'account', handler: async (req, _r, session) => {
+    const b = z.object({ wallet: z.string().min(1), holder: z.string().min(1) }).parse(req.body);
+    return s.buildBurn(sid(req), session!, b.wallet, b.holder);
+  } });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/retirement/crank-burn', access: 'admin', handler: async (req, _r, session) => s.burnRetiredHolders(sid(req), session!.accountId) });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/window', access: 'public', handler: async (req) => s.window(sid(req)) });
   defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/window/build-commit', access: 'account', handler: async (req, _r, session) => s.buildWindowCommit(sid(req), session!, z.object({ wallet: z.string(), side: z.enum(['buy', 'sell']), commitment: z.string(), deposit: z.string().regex(/^\d+$/), units: z.string().regex(/^\d+$/) }).parse(req.body)) });

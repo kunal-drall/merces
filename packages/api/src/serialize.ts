@@ -57,6 +57,7 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
       commitDurationSeconds: num(r.commit_duration_seconds),
       revealDurationSeconds: num(r.reveal_duration_seconds),
       nonRevealChargeBps: num(r.non_reveal_charge_bps),
+      windowCommitDuration: num(r.window_commit_duration), windowRevealDuration: num(r.window_reveal_duration), windowFeeBps: num(r.window_fee_bps),
     },
     createdAt: Number(r.created_at),
     openedAt: r.opened_at === null ? null : Number(r.opened_at),

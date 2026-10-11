@@ -2,6 +2,7 @@ import { SimError, Simulator, type Call } from '@merces/reference';
 import { nonProtocol, RunnerError, type Raised } from './errors.ts';
 import type { LoadedVector } from './load.ts';
 import { verifyReportCached } from './proofs.ts';
+import { VectorKeyring } from './keys.ts';
 import type { Applied, Attempt, FxRequest, World } from './world.ts';
 
 /**
@@ -20,6 +21,7 @@ export class ReferenceWorld implements World {
   private readonly sim: Simulator;
 
   constructor(vector: LoadedVector) {
+    new VectorKeyring(vector.keys, vector.keySeeds);
     this.sim = new Simulator({ parameters: vector.parameters, flags: vector.flags, verifyProofs: true });
   }
 

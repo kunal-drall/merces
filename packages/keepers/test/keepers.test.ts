@@ -68,7 +68,7 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     // pay, then a hardship pause that the crank ends when due
     await sol.reportAndPay(a.seriesId, '2026Q1', a.privateTerms, a.terms.termsCommitment, 0n, USDC(10_000));
     const until = (await sol.sim.now()) + 30 * 86_400;
-    await sol.exec(sol.issuer, { kind: 'requestPause', seriesId: a.seriesId, until });
+    await sol.exec(sol.issuer, { kind: 'requestPause', seriesId: a.seriesId });
     await sol.sim.submit(await sol.pauseApproval(a.seriesId, until), 'keeper'); // cause S4-PAU
     expect((await sched.runAll())['pause.crank']!.actions).toBe(0);
     await sol.sim.setTime(until + 1);

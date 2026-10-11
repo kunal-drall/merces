@@ -29,7 +29,7 @@ export function newLedger(): SimLedger {
     lastIncomeCommitment: ZERO_INCOME_COMMITMENT_HEX, lastIncomePeriod: null,
     pauses: [], pausedTotal: 0n, pauseNonce: 0n, pauseRequested: false, pauseRequestedAt: 0n, pauseRequestedUntil: null, pauseEndedEmitted: 0,
     formalNoticeEmittedFor: null, releasesBlockedLate: false, amendmentNonce: 0n, extinguishNonce: 0n,
-    routerCredit: 0n, trueupNonce: 0n, trueupDue: 0n, trueupAttestedAt: 0n, lastTrueupYear: null,
+    routerCredit: 0n, trueupNonce: 0n, trueupDue: 0n, trueupAttestedAt: 0n, lastTrueupYear: null, trueupYear: null, trueupNoticeEmitted: false,
   };
 }
 
@@ -110,6 +110,7 @@ export function retire(_e: EngineCore, s: SimSeries, _refund: bigint, _now: numb
   l.openDueAmount = 0n;
   l.trueupDue = 0n;
   l.trueupAttestedAt = 0n;
+  l.trueupYear = null;
   emit('SeriesRetired', { seriesId: s.seriesId, paidPerUnitWad: s.vault.paidPerUnitWad.toString() });
 }
 
@@ -122,6 +123,8 @@ export const SYNC_POINTS = [
   { op: 'drawRelease (claim_release)', where: 'end, after the release', wp: 'WP4', sim: 1043 },
   { op: 'submitReport', where: 'end, after the report is recorded', wp: 'WP3', sim: 1148 },
   { op: 'payIn (non-tail)', where: 'end, after the vault receives it; never after a tail pay', wp: 'WP5', sim: 1184 },
+  { op: 'submitTrueUp', where: 'end, after the adjustment is recorded', wp: 'S5', sim: 1220 },
+  { op: 'payTrueUp', where: 'end, after the vault receives it and the annual due clears', wp: 'S5', sim: 1240 },
   { op: 'approvePause', where: 'end, after the pause is recorded', wp: 'WP4', sim: 1296 },
   { op: 'crankStatus', where: 'the whole body (a no-op before settlement)', wp: 'WP4', sim: 645 },
   { op: 'redeem', where: 'after the quote, before the deposit', wp: 'WP6', sim: 1352 },

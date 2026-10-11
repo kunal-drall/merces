@@ -278,6 +278,7 @@ export class ReportVerifier implements ReportVerifierPort {
     for (const p of c.previous ?? []) {
       const a = typeof p.address === 'string' ? p.address.toLowerCase() : '';
       if (!signerAddressSchema.safeParse(a).success || !Number.isSafeInteger(p.retiredAt) || p.retiredAt <= 0) throw new VerifierConfigError('a previous address must be {address: 20-byte address, retiredAt: unix seconds}');
+      if (p.retiredAt > Math.floor(Date.now() / 1000) + 300) throw new VerifierConfigError('a previous address retiredAt must be unix seconds, not milliseconds, and cannot be in the future (maximum clock skew: 300 seconds)');
       if (a === address) throw new VerifierConfigError('the current address cannot also be a previous address');
       if (previous.some((x) => x.address === a)) throw new VerifierConfigError(`previous address ${a} is listed twice`);
       previous.push({ address: a, retiredAt: p.retiredAt });

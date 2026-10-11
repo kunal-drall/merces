@@ -1,14 +1,14 @@
 import type { SeriesTerms } from '@merces/domain';
 import { RunnerError } from '../errors.ts';
 import { ZERO_HASH32, hex32, num, tierFlagsOf } from '../codec.ts';
-import { direct, eventOf, shim, type OpContext, type TranslatorTable } from './types.ts';
+import { direct, eventOf, type OpContext, type TranslatorTable } from './types.ts';
 
 /**
  * Registry ops: the faucet, the allowlist, issuer / attestor / verifier-key registration and series creation.
  *
  * - `fund`: the simulator faucet (direct).
  * - `allowlist`: one `setAllowlist` per wallet from the allowlist manager (direct; atomic as one step).
- * - `register_issuer` (SH-REG-1): `registerIssuer` signed by that wallet; Stage 1 registers issuers admin-only.
+ * - `register_issuer`: `registerIssuer{wallet}` signed by the protocol admin.
  * - `register_attestor` / `revoke_attestor`: admin `registerAttestor` / `revokeAttestor` of the vector key's own 20-byte
  *   address (direct since S4 WP5; was SH-REG-2): Stage 1's registry with forward-only revocation, the 45-day grace on
  *   report and FX signatures and the last-key rule, each personality with its chain's names. A name without a vector
@@ -17,10 +17,8 @@ import { direct, eventOf, shim, type OpContext, type TranslatorTable } from './t
  *   own 20-byte address (direct since S4 WP6; was SH-REG-3, an ed25519 key derived from the vector key): the report
  *   verifier's keys follow the attestor keys' rules (forward-only revocation, the grace on tier-2 reports, the last-key
  *   rule).
- * - `create_series` (SH-REG-4): `createSeries` in USDC with USD income, sealed; due, grace and notice days from
- *   `config.parameters`; the raise durations and the non-reveal bps are canonical terms (S2), so the engine bounds them
- *   as Stage 1 does (SIM:759-777); the window durations and the window fee are held by the runner (S5; their Stage 1
- *   bounds are not checked).
+ * - `create_series`: direct; every Stage 1 bounded term, including window durations and fee, is canonical.
+
  */
 /** The 20-byte address of the vector key a registry op names (Stage 1's harnesses register the key's address). */
 function keyAddressOf(ctx: OpContext, name: string): string {
@@ -41,8 +39,8 @@ export const registryOps: TranslatorTable = {
     }),
 
   register_issuer: (ctx, c) =>
-    shim('SH-REG-1', async () => {
-      await ctx.send(ctx.actors.wallet(c.wallet), { kind: 'registerIssuer' });
+    direct(async () => {
+      await ctx.send(ctx.actors.admin, { kind: 'registerIssuer', wallet: ctx.actors.address(c.wallet) });
     }),
 
   register_attestor: (ctx, c) => {
@@ -97,6 +95,9 @@ export const registryOps: TranslatorTable = {
       nonRevealChargeBps: num(t.nonRevealChargeBps, 'nonRevealChargeBps'),
       commitDurationSeconds: num(t.commitDuration, 'commitDuration'),
       revealDurationSeconds: num(t.revealDuration, 'revealDuration'),
+      windowCommitDuration: num(t.windowCommitDuration, 'windowCommitDuration'),
+      windowRevealDuration: num(t.windowRevealDuration, 'windowRevealDuration'),
+      windowFeeBps: num(t.windowFeeBps, 'windowFeeBps'),
       dueDays: p.reportDueDays,
       graceDays: p.graceDays,
       formalNoticeDays: p.formalNoticeDays,
@@ -111,7 +112,7 @@ export const registryOps: TranslatorTable = {
       windowRevealDuration: num(t.windowRevealDuration, 'windowRevealDuration'),
       windowFeeBps: num(t.windowFeeBps, 'windowFeeBps'),
     };
-    return shim('SH-REG-4', async () => {
+    return direct(async () => {
       const r = await ctx.send(ctx.actors.wallet(c.actor), { kind: 'createSeries', terms, seriesAddressHint: ctx.actors.seriesAddress(c.series) });
       const created = eventOf<{ seriesId: string }>(r, 'SeriesCreated');
       if (!created) throw new RunnerError(`create_series ${c.series}: no SeriesCreated event`);

@@ -478,7 +478,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(req.json().ciphertext).toBeUndefined();
     expect(req.json()).not.toHaveProperty('approval');
     const tx = req.json().tx as UnsignedTx;
-    expect(tx.command).toEqual({ kind: 'requestPause', seriesId, until });
+    expect(tx.command).toEqual({ kind: 'requestPause', seriesId });
     expect(tx.signer).toBe(h.issuer.address);
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext, keyHint: 'attestor-1 x25519 key v1' }, issuerTok, { 'idempotency-key': 'hard-1' })).json().hardshipId).toBe(hardshipId);
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(409);
@@ -493,9 +493,9 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(early.json().detail).toEqual({ stage1: 'PauseNotRequested' });
     const sent = await rig.post('/tx/send', await h.issuer.sign(tx), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
-    expect(sent.json().events[0]).toMatchObject({ type: 'PauseRequested', payload: { seriesId, until, nonce: '1' } }); // cause S4-PAU: with the nonce
+    expect(sent.json().events[0]).toMatchObject({ type: 'PauseRequested', payload: { seriesId, nonce: '1' } }); // cause S4-PAU: with the nonce
     // the requested end is advisory: recorded beside the request, no pause yet (cause P)
-    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 0, requested: true, requestedUntil: until, current: null });
+    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 0, requested: true, requestedUntil: null, current: null });
     // the indexer ties the pending request to its onchain request's nonce
     await rig.sync();
 
@@ -508,7 +508,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await rig.get('/attestor/queue', attTok)).json().hardship.map((x: { hardshipId: string }) => x.hardshipId)).toEqual([hardshipId]);
     const view = await rig.get(`/attestor/hardship/${hardshipId}`, attTok);
     expect(view.statusCode).toBe(200);
-    expect(view.json()).toMatchObject({ ciphertext, keyHint: 'attestor-1 x25519 key v1', state: 'pending', pauseNonce: '1', livePauseNonce: '1', approval: null, relayTx: null, pause: { requestedUntil: until, approvedUntil: null, startedAt: null } });
+    expect(view.json()).toMatchObject({ ciphertext, keyHint: 'attestor-1 x25519 key v1', state: 'pending', pauseNonce: '1', livePauseNonce: '1', approval: null, relayTx: null, pause: { requestedUntil: null, approvedUntil: null, startedAt: null } });
     const adminTok = rig.token({ accountId: 'adm', roles: ['admin'], wallets: [] });
     const adminView = await rig.get(`/attestor/hardship/${hardshipId}`, adminTok);
     expect(adminView.json().ciphertext).toBe(ciphertext);
@@ -979,7 +979,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(atOne.pauseNonce).toBe('1');
     // the issuer requests again onchain (nonce 1 → 2): the collected signature is dead on the chain; the decision reads the
     // nonce again and answers 409 stale-nonce with the fresh signing request, nothing recorded or relayed
-    await h.exec(h.issuer, { kind: 'requestPause', seriesId: s, until: now + 60 * DAY });
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId: s });
     await rig.sync();
     expect(await row(a)).toMatchObject({ state: 'pending', pause_nonce: '2' });
     const stale = await rig.post(`/attestor/hardship/${a}/decide`, atOne, attTok);
@@ -1084,6 +1084,12 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
       yearPayments += (await m.reportAndPay(sid, q, r.privateTerms, r.terms.termsCommitment, prev, ytd)).paymentStable;
     }
     await rig.sync();
+    // Review finding 4: lagging/corrupted projection totals cannot change the chain-derived adjustment.
+    await rig.t.pool.query("update periods set split_received = split_received + 1000000000 where series_id = $1 and period_id = '2026Q4'", [sid]);
+    const consistent = await rig.get(msgUrl(yearPayments), attTok);
+    expect(consistent.statusCode, consistent.body).toBe(200);
+    expect(consistent.json().fields.adjustment).toBe('0');
+    await rig.t.pool.query("update periods set split_received = split_received - 1000000000 where series_id = $1 and period_id = '2026Q4'", [sid]);
     expect(yearPayments).toBeGreaterThan(0n);
     // the period reads carry each report's own payment figure (Stage 1's payment_usd): their sum bounds a credit
     expect((await m.sim.listPeriods(sid)).filter((p) => p.periodId.startsWith('2026')).reduce((a, p) => a + BigInt(p.paymentStable), 0n)).toBe(yearPayments);
@@ -1105,7 +1111,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(credit.json().fields.adjustment).toBe((-yearPayments).toString());
     // white-box: one base unit of split receipts the reports never carried (Stage 1 counts it as router credit; our
     // estimate counts it as paid), so the full credit would exceed the year's report payments
-    const bump = (d: number) => rig.t.pool.query("update periods set split_received = split_received + $2 where series_id = $1 and period_id = '2026Q4'", [sid, d]);
+    const bump = async (d: number) => { m.sim.state.series.get(sid)!.periods.get('2026Q4')!.splitReceived += BigInt(d); };
     await bump(1);
     const over = await rig.get(msgUrl(0n), attTok);
     expect([over.statusCode, over.json().detail]).toEqual([422, { stage1: 'TrueUpAdjustmentTooLarge' }]);

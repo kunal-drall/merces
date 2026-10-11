@@ -33,6 +33,7 @@ export type BoundedTerms = Pick<
   SeriesTerms,
   | 'capMultipleWad' | 'hurdleWad' | 'payoutMultipleK' | 'lockupSeconds' | 'walletCapBps' | 'auctionFeeBps' | 'payoutFeeBps'
   | 'commitDurationSeconds' | 'revealDurationSeconds'
+  | 'windowCommitDuration' | 'windowRevealDuration' | 'windowFeeBps'
   | 'dueDays' | 'graceDays' | 'formalNoticeDays' | 'unitsOffered' | 'reservePrice' | 'minimumRaise' | 'releaseSchedule' | 'raiseStyle'
   | 'stablecoin'
 > & Partial<Pick<SeriesTerms, 'nonRevealChargeBps'>>;
@@ -41,8 +42,7 @@ type Unit = 'wad' | 'bps' | 'seconds' | 'days' | 'count';
 
 /**
  * Stage 1's bounded terms (SIM:759-772, `PARAMETER_BOUNDS`) under our field names, in Stage 1's order, then the three
- * day counts Stage 1 fixes (min = max) as protocol parameters. The window durations and the window fee are not
- * canonical terms yet (S5), so their bounds are not checked here.
+ * day counts Stage 1 fixes (min = max) as protocol parameters. Window durations and fees use the same Stage 1 bounds.
  *
  * `sealedOnly`: bounded on a sealed raise only. A curve series records 0 for the lockup, the wallet cap and the raise
  * durations (`CURVE_ZERO_TERMS`, CurveTermsNotZero), and Stage 1 bounds the protocol defaults in their place
@@ -57,11 +57,12 @@ const BOUNDED: readonly { field: keyof BoundedTerms; param: keyof Parameters; la
   { field: 'walletCapBps', param: 'walletCapBps', label: 'wallet cap', unit: 'bps', sealedOnly: true },
   { field: 'auctionFeeBps', param: 'auctionFeeBps', label: 'auction fee', unit: 'bps' },
   { field: 'payoutFeeBps', param: 'payoutFeeBps', label: 'payout fee', unit: 'bps' },
-  // Stage 1's windowFeeBps comes here (S5)
+  { field: 'windowFeeBps', param: 'windowFeeBps', label: 'window fee', unit: 'bps' },
   { field: 'nonRevealChargeBps', param: 'nonRevealChargeBps', label: 'non-reveal charge', unit: 'bps' },
   { field: 'commitDurationSeconds', param: 'commitDuration', label: 'commit duration', unit: 'seconds', sealedOnly: true },
   { field: 'revealDurationSeconds', param: 'revealDuration', label: 'reveal duration', unit: 'seconds', sealedOnly: true },
-  // Stage 1's windowCommitDuration and windowRevealDuration come here (S5)
+  { field: 'windowCommitDuration', param: 'windowCommitDuration', label: 'window commit duration', unit: 'seconds' },
+  { field: 'windowRevealDuration', param: 'windowRevealDuration', label: 'window reveal duration', unit: 'seconds' },
   { field: 'dueDays', param: 'reportDueDays', label: 'report due days', unit: 'days' },
   { field: 'graceDays', param: 'graceDays', label: 'grace days', unit: 'days' },
   { field: 'formalNoticeDays', param: 'formalNoticeDays', label: 'formal notice days', unit: 'days' },

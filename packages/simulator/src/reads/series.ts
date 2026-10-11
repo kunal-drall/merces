@@ -1,8 +1,8 @@
 import { seriesKeyOf, type ChainFamily, type IssuerState, type SeriesState, type UnitScale } from '@merces/domain';
-import { nextExpectedPeriod } from '@merces/math';
+import { nextExpectedPeriod, lateAccrualTrueup } from '@merces/math';
 import type { SimIssuer, SimSeries } from '../state.ts';
 import { str as s } from '../engine/core.ts';
-import { derivedStatus, ledgerClock, liveCapPerUnit, mintFinalized, periodIdOf } from '../engine/ledger.ts';
+import { derivedStatus, ledgerClock, liveCapPerUnit, mintFinalized, periodIdOf, statusParams } from '../engine/ledger.ts';
 import { releasesBlockedByLateness } from '../engine/status.ts';
 import { toRedemption } from './redemption.ts';
 
@@ -36,11 +36,13 @@ export function toSeriesState(chain: string, family: ChainFamily, x: SimSeries, 
   const t = x.terms;
   const l = x.ledger;
   const current = l.pauses.find((p) => p.start <= BigInt(now) && BigInt(now) < p.end) ?? null;
+  const trueupAccrual = lateAccrualTrueup(ledgerClock(x), BigInt(now), statusParams(x));
   return {
     seriesId: x.seriesId, chain, issuer: x.issuer, unitScale: s(x.unitScale) as UnitScale,
     terms: {
       stablecoin: t.stablecoin, stablecoinMint: t.stablecoinMint, unitsOffered: s(t.unitsOffered), reservePrice: s(t.reservePrice), minimumRaise: s(t.minimumRaise), capMultipleWad: s(t.capMultipleWad), lockupSeconds: t.lockupSeconds,
       releaseSchedule: t.releaseSchedule.map((r) => ({ ...r })), auctionFeeBps: Number(t.auctionFeeBps), payoutFeeBps: Number(t.payoutFeeBps), hurdleWad: s(t.hurdleWad), payoutMultipleK: Number(t.payoutMultipleK), walletCapBps: Number(t.walletCapBps),
+      windowCommitDuration: t.windowCommitDuration, windowRevealDuration: t.windowRevealDuration, windowFeeBps: t.windowFeeBps,
       nonRevealChargeBps: t.nonRevealChargeBps, commitDurationSeconds: t.commitDurationSeconds, revealDurationSeconds: t.revealDurationSeconds,
       dueDays: t.dueDays, graceDays: t.graceDays, formalNoticeDays: t.formalNoticeDays, contractHash: t.contractHash, termsCommitment: t.termsCommitment, tierFlags: { ...t.tierFlags }, reportingCurrency: t.reportingCurrency, raiseStyle: t.raiseStyle,
     },
@@ -65,5 +67,6 @@ export function toSeriesState(chain: string, family: ChainFamily, x: SimSeries, 
     seriesKey: seriesKeyOf(x.seriesId, family),
     nonces: { pause: s(l.pauseNonce), amendment: s(l.amendmentNonce), extinguish: s(l.extinguishNonce), trueup: s(l.trueupNonce) },
     mintFinalized: mintFinalized(x),
+    trueUp: { nonce: s(l.trueupNonce), lastYear: l.lastTrueupYear, year: l.trueupYear, due: s(l.trueupDue), attestedAt: l.trueupDue > 0n ? Number(l.trueupAttestedAt) : null, accrual: s(trueupAccrual), total: s(l.trueupDue + trueupAccrual), routerCredit: s(l.routerCredit), noticeEmitted: l.trueupNoticeEmitted },
   };
 }

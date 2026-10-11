@@ -35,12 +35,7 @@ export interface Shim {
 }
 
 export const SHIMS: readonly Shim[] = [
-  { id: 'SH-REG-1', ops: ['register_issuer'], call: 'registerIssuer signed by that wallet', why: 'Stage 1 registers issuers admin-only (STAGE1_INTEGRATION.md B.7)', removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-REG-4', ops: ['create_series'], call: 'createSeries (USDC, USD, sealed; due/grace/notice days from config.parameters; tier bitmask → object; atOffsetSeconds → afterSeconds); window durations and windowFeeBps held by the runner, their Stage 1 bounds unchecked', why: 'canonical terms lack those fields', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-REP-1', ops: ['submit_report'], call: 'submitReport{prior, income, Groth16 proof and signals; tiers 2 and 3 the named key\'s REPORT signature; the FX fallback the named key\'s FX signature}; fxBasis and pair derived by the runner', why: 'FX pairs and the accumulator are S5', removedIn: 'S5 (FX)', kind: 'shim' },
-  { id: 'SH-PAY-1', ops: ['pay'], call: 'payIn{periodId: open due period (else the next expected period), amount: the period payment due}', why: "Stage 1's pay has no amount or period", removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-PAU-1', ops: ['request_pause'], call: 'requestPause{until: t + maxPauseSeconds}', why: "Stage 1's request has no end", removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-RED-1', ops: ['redeem'], call: 'redeem{maxPricePerUnit: U64_MAX}', why: 'Stage 1 has no slippage bound', removedIn: '—', kind: 'shim' },
   { id: 'SH-WIN-1', ops: ['open_window'], call: 'keeper openTransferWindow{t + windowCommitDuration, + windowRevealDuration}; period kept by the runner', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-2', ops: ['commit_ask'], call: 'commitWindowOrder{side: sell, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit 0, units}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-3', ops: ['window_commit_bid'], call: 'commitWindowOrder{side: buy, Stage 1\'s keccak order commitment over the plaintext and the wallet (S4), deposit: escrow, units 0}', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
@@ -49,8 +44,6 @@ export const SHIMS: readonly Shim[] = [
   { id: 'SH-WIN-6', ops: ['finalize_window'], call: 'clearTransferWindow; asserts nothing transferred where Stage 1 settles NoMatch', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-WIN-7', ops: ['process_orders'], call: 'no-op', why: 'one-step windows', removedIn: 'S5', kind: 'shim' },
   { id: 'SH-FLG-1', ops: ['config.flags.windowsEnabled'], call: 'runner only: open_window on a series with windows disabled is BLOCKED', why: 'no canonical windows flag', removedIn: 'S5', kind: 'shim' },
-  { id: 'BLK-1', ops: ['retire_if_capped'], call: 'none: BLOCKED (waived in 01#34, 05#42)', why: 'no canonical command', removedIn: 'S5', kind: 'blocked' },
-  { id: 'NA-1', ops: ['transfer_units'], call: 'none: N/A (01#32)', why: 'the canonical model has no transfer to refuse', removedIn: '—', kind: 'n/a' },
 ];
 
 export const SHIM_BY_ID: ReadonlyMap<string, Shim> = new Map(SHIMS.map((s) => [s.id, s]));

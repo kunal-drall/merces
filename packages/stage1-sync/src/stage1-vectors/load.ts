@@ -34,6 +34,8 @@ export interface LoadedVector {
   steps: Step[];
   /** non-enumerable; never print */
   readonly keys: VectorKeys;
+  /** Trusted loader provenance for composed scenarios: base keys retain their base vector's namespace. */
+  readonly keySeeds: Record<string, string>;
 }
 
 /** `NN_name.json` files in `dir`, sorted. */
@@ -120,8 +122,9 @@ export function fromJson(input: Record<string, unknown>, name: string, file = na
     actors: Array.isArray(raw.actors) ? (raw.actors as string[]) : [],
     privateSeries: raw.seriesPrivate && typeof raw.seriesPrivate === 'object' ? Object.keys(raw.seriesPrivate).sort() : [],
     steps: steps as unknown as Step[],
-  } as Omit<LoadedVector, 'keys'>;
+  } as Omit<LoadedVector, 'keys' | 'keySeeds'>;
   Object.defineProperty(out, 'keys', { value: (raw.keys ?? {}) as VectorKeys, enumerable: false, writable: false });
+  Object.defineProperty(out, 'keySeeds', { value: Object.fromEntries(Object.keys(raw.keys ?? {}).map((key) => [key, `${name}:${key}`])), enumerable: false, writable: false });
   return out as LoadedVector;
 }
 

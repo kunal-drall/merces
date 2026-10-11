@@ -3,13 +3,31 @@
 How Stage 2 works without Stage 1 today, how it catches Stage 1 the moment it appears, and what happens then.
 This file is updated at each catch-up with what matched, what changed and what is still open.
 
-## Status (2026-10-11): Stage 1 @1bfc66b pinned, S1, S2, S3 and S4 done; the non-reveal charge modelled (NRC); the curve-port gate (GATE); the S3 review fixes
+## Current status (2026-10-11): Stage 1 @bafe1fb; S4 review fixes and S5 lifecycle work
 
-Stage 1 is the `stage1` git submodule, pinned at `1bfc66b` (branch `claude/sweet-goodall-b7acm3`, SPEC v1.1.2; its
-tree is identical to `5eafd41`, the commit the handoff named). Its TypeScript packages (`@merces/sdk`,
-`@merces/reference`, `@merces/circuits`) are workspace packages, built from the submodule by the root `postinstall`
-(`pnpm stage1:build`). `pnpm stage1:sync` and `pnpm stage1:vectors` find the submodule by themselves; `STAGE1_PATH`
-overrides it.
+Stage 1 is pinned at `bafe1fb76094afa423211320356b8db868c2b340` on `claude/sweet-goodall-b7acm3`.
+The reference final-share fix matches both chains and adds the missing regression fixture; official vectors and chain
+programs are unchanged. Its SDK, reference and circuit packages build through `pnpm stage1:build`.
+
+S5 items 2, 3, 4, 5, 7, 9, 10 and 12 are implemented. Eighteen vectors are now required full passes, with three window
+prefix gates and four router/FX vectors pending. No vector uses a waiver. Remaining shims: FX, seven window shims and
+the window flag. Adapters remain unwired. The older milestone result sections below are historical records; use
+HANDOFF §0 and generated parity reports for current validation and remaining work.
+
+### S5 results: lifecycle foundation and true-up
+
+- Admin issuer registration, immutable window terms, optional pay/redemption guards, direct-transfer refusal,
+  permissionless cap retirement, end-pause and end-free pause requests follow Stage 1.
+- `submitTrueUp` consumes an active attestor signature over the live nonce, checks completed/fully reported year order
+  and credit bounds, and records a positive due or forward credit. `payTrueUp` charges Stage 1 unpaused lateness accrual
+  and anchors vault year accounting to the attestation period deadline. Reports consume forward credit.
+- True-ups follow both contracts on terminal and future-time refusal, which the reference omits
+  (`income.rs:770–868`, `MercesIncome.sol:369–413`). Error ordering can differ between the chains; year/credit refusals
+  use the SDK's canonical names. No existing vector takes the omitted reference guards.
+- Vector 20 passed all 120 steps in lockstep on both personalities before its prefix gate was removed. Vectors 08 and
+  14 also passed full lockstep before promotion. API and simulator regressions cover the new flows.
+- Recovery, published-key and verifier startup protections from the eleven S4 findings are implemented; owner records
+  and the semantic API changelog command are present. See API_CHANGELOG for field/route changes.
 
 The owner approved section B of the drift review below: **Stage 1 wins for onchain behaviour.** S1 applied its first
 part: Stage 1's math (imported, not rewritten), Stage 1's report proof format, and a Stage 1 vector runner that replays
@@ -799,6 +817,35 @@ Stage 1's 65-byte `r ‖ s ‖ v` signature over the raw `MERCES_*_V1` digest. N
   the register row).
 
 ### Owner decisions and questions
+
+#### Confirmed owner answers (2026-10-11, verbatim)
+
+- KMS: keep the dev signer. AWS KMS later unless I say otherwise.
+- Wallet-friendly message form: yes, I will ask Stage 1. Keep merces-attestor as the fallback, and keep signing behind
+  one interface so a wallet signer can be added.
+- Compromised keys: accepted for testnet. Record as required before mainnet: a cancellable delay on extinguishment, an
+  immediate revoke for a compromised key, an alert on every attestor signature.
+- Extinguishment: two separately verified accounts, enforced at registration.
+- Final share: follow the chains. Write the disagreement with Stage 1's reference simulator up as a Stage 1 defect,
+  including the missing vector, in a file I can forward.
+- Anything else still open: follow Stage 1's code and your default.
+
+Applied: local dev signer retained, AWS integration deferred; signing stays behind `DigestSigner`;
+published fixture keys and mock zkTLS are refused with any live chain; two separately verified attestor accounts
+are enforced at registration. The final-share defect is fixed in the Stage 1 reference, with vector 26 checked in
+as a reference regression and replayed without DIV-S1I-1 on the backend.
+
+Asked of Stage 1 (recorded requests; no external message was sent by this integration):
+- EIP-712 or EIP-191-wrapped forms of the six signing messages, retaining the device tool as fallback.
+- An onchain cancellable delay for extinguishment; a keeper-only delay cannot stop a third-party relay.
+- Review the reference final-share fix against Solana `claims.rs` and EVM `MercesVault.sol` and its missing-vector regression.
+- Align reference last-key and already-revoked-key checks with both registries (DIV-S1I-2).
+
+Terminal pause difference (S4 finding 8): Solana clears pending requests on retirement, redemption and extinguishment,
+and rejects terminal approvals; EVM/reference retain a pending request and can accept it. The attestor service refuses
+terminal approvals and the indexer withdraws pending reviews (`series-terminal`). A Solana adapter must map its actual
+cleanup; simulator-personality cleanup remains listed in POLISH_LATER.md. There is no new vector waiver.
+
 
 Decided (S1 review):
 

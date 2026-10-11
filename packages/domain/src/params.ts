@@ -57,6 +57,9 @@ export const DEFAULTS = {
   /** The sealed-bid raise's commit and reveal phases (Stage 1 `commit_duration` 7 days, `reveal_duration` 2 days). */
   commitDurationSeconds: Number(DEFAULT_PARAMETERS.commitDuration),
   revealDurationSeconds: Number(DEFAULT_PARAMETERS.revealDuration),
+  windowCommitDuration: Number(DEFAULT_PARAMETERS.windowCommitDuration),
+  windowRevealDuration: Number(DEFAULT_PARAMETERS.windowRevealDuration),
+  windowFeeBps: DEFAULT_PARAMETERS.windowFeeBps,
   dueDays: 30,
   graceDays: 15,
   formalNoticeDays: 90,

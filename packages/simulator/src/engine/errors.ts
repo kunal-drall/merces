@@ -16,9 +16,12 @@ export const STAGE1_CODE = {
   ReportTooEarly: 'TooEarly',
   PaymentOutstanding: 'WrongStatus',
   TrueUpOutstanding: 'WrongStatus',
+  TrueUpYearInvalid: 'InvalidTerms',
+  TrueUpAdjustmentTooLarge: 'InvalidTerms',
   TailEnded: 'TooLate',
   NoTailDue: 'WrongStatus',
   TierNotEnabled: 'NotPermitted',
+  DirectTransferForbidden: 'NotPermitted',
   InvalidProof: 'InvalidProof',
   InvalidVerifierSignature: 'InvalidAttestation',
   InvalidAttestorSignature: 'InvalidAttestation',
@@ -81,6 +84,7 @@ export const STAGE1_CODE = {
  * `errors.test.ts`. Curve mode is Solana only, so its names live here.
  */
 export const STAGE1_SOLANA_CODE = {
+  TrueUpTimestampInFuture: 'InvalidTerms',
   // the registry's curve terms (create_series, lib.rs:470-485; S3 WP7)
   CurveThresholdZero: 'InvalidTerms',
   CurveTermsNotZero: 'InvalidTerms',
@@ -124,6 +128,7 @@ export const STAGE1_SOLANA_CODE = {
  * `evm/src/types/MercesErrors.sol` by `errors.test.ts`.
  */
 export const STAGE1_EVM_CODE = {
+  AttestationInFuture: 'InvalidTerms',
   // the EVM registry refuses curve mode right after the issuer check (MercesRegistry.sol:479-481)
   CurveModeUnsupported: 'NotPermitted',
   // the key registry (S4 WP5, D9; MercesRegistry.sol:315-345): a zero key address, a register of a key that is

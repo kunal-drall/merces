@@ -122,6 +122,7 @@ export function extinguish(e: EngineCore, cmd: Extract<Command, { kind: 'extingu
   l.openDueAmount = 0n;
   l.trueupDue = 0n;
   l.trueupAttestedAt = 0n;
+  l.trueupYear = null;
   l.extinguishNonce += 1n;
   emit('SeriesExtinguished', { seriesId: s.seriesId, attestors: [a1, a2], returnedToHolders: str(unreleased) });
   setStatus(s, 'Extinguished', emit);
@@ -135,8 +136,7 @@ export function extinguish(e: EngineCore, cmd: Extract<Command, { kind: 'extingu
  * claims.rs:486-490): on a series that redeemed, its redeemed units, counting the units its redemption body would still
  * redeem and the units held for an uncleared window ask (`escrowed`: they come back later and are redeemed then, and
  * carry their final share now, like every unit that existed at redemption); otherwise its accrual units (the ask's
- * units included). Stage 1's TS reference leaves the escrow out on a series that redeemed (SIM:1460); we follow both
- * chains (a Stage 1-internal difference, reported to Stage 1; register row DIV-S1I-1).
+ * units included). The reference now matches both chains after the DIV-S1I-1 fix at bafe1fb (regression vector 26).
  */
 function finalWeight(s: SimSeries, p: SimPosition): bigint {
   return s.redemption ? p.redeemedUnits + redeemableUnits(p) + p.escrowed : accrualUnits(s, p);
@@ -174,8 +174,7 @@ function curveFinalShare(s: SimSeries, p: SimPosition): { weight: bigint; share:
  * SIM:1458-1468, with both chains' weight). On a series that redeemed (amendment M4), a holder that still has units not
  * held for a window ask has them redeemed first (`redeemBody`: its pending payout, the redemption price and the tail
  * catch-up, paid at once) and its share is weighed on its redeemed units plus the units held for an uncleared ask
- * (MercesVault.sol:658 `weight = redeemedUnits + escrow`, claims.rs:486-490; Stage 1's TS reference, SIM:1460, leaves
- * the escrow out and so strands its share: we follow both chains, register row DIV-S1I-1); otherwise on its accrual
+ * (MercesVault.sol:658 `weight = redeemedUnits + escrow`, claims.rs:486-490; reference fixed at bafe1fb); otherwise on its accrual
  * units (the ask's units included). The share is `floor((finalAccWad − lastFinalAccWad) × weight / WAD)`, 0 after the
  * first final claim (the ask's units, once the window returns them, are redeemed by a later claim at a share of 0: they
  * were paid theirs already); moves the final cursor and marks the holder claimed. The caller (`claimFinal`) has
