@@ -42,6 +42,7 @@ components:
       type: object
       description: What holders and the issuer see — statuses, requestOnchain boolean and dates only, never ciphertext or decision codes.
       properties:
+        requestOnchain: { type: boolean, description: Whether the issuer request is currently pending onchain. }
         seriesId: { type: string }
         seriesStatus: { type: string }
         paused: { type: boolean }

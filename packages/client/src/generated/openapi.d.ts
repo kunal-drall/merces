@@ -4438,8 +4438,10 @@ export type components = {
         Ciphertext: string;
         /** @description A merces-e2e v1 envelope, in canonical base64 (standard alphabet, padded) of version 0x01 (1 byte) ‖ the sender's ephemeral X25519 public key (32) ‖ the AES-GCM nonce (12) ‖ the AES-256-GCM ciphertext of the payload and its 16-byte tag. Key = HKDF-SHA256(X25519 shared secret, salt = ephemeral public key ‖ recipient public key, info = "merces/e2e/v1" ‖ 0x00 ‖ purpose); associated data = the 45 header bytes. The server holds no key and checks the shape only; anything that does not parse as an envelope of the payload's size (the plaintext or an encoding of it included) is rejected (422). @merces/poi-device sealE2e / openE2e. */
         E2eEnvelope: string;
-        /** @description What holders and the issuer see — statuses and dates only, never ciphertext or decision codes. */
+        /** @description What holders and the issuer see — statuses, requestOnchain boolean and dates only, never ciphertext or decision codes. */
         HardshipStatus: {
+            /** @description Whether the issuer request is currently pending onchain. */
+            requestOnchain?: boolean;
             seriesId?: string;
             seriesStatus?: string;
             paused?: boolean;
