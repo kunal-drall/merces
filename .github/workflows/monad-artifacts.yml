@@ -18,13 +18,16 @@ jobs:
       - name: Install and verify pinned Solidity compilers
         run: |
           python3 - <<'PY'
-          import hashlib, json, pathlib, urllib.request
-          base = 'https://binaries.soliditylang.org/linux-amd64/'
-          manifest = json.load(urllib.request.urlopen(base + 'list.json'))
-          for version in ['0.8.17', '0.8.30']:
-              name = manifest['releases'][version]
-              expected = next(b['sha256'] for b in manifest['builds'] if b['path'] == name)
-              data = urllib.request.urlopen(base + name).read()
+          import hashlib, pathlib, urllib.request
+          # The official solc-bin repository serves the same binaries as Solidity's CDN.
+          # These SHA-256 pins were checked against its linux-amd64/list.json.
+          base = 'https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/linux-amd64/'
+          compilers = [
+              ('0.8.17', 'solc-linux-amd64-v0.8.17+commit.8df45f5f', '0x99f2070b776e9714f1f76c43c229cf99b8978a92938ee8d2364c6de11c1a03d4'),
+              ('0.8.30', 'solc-linux-amd64-v0.8.30+commit.73712a01', '0xf3e987dc6ecebd4bd350c48edcbc320b46cf9e3109bd3fc3d88f1acaf4c428f7'),
+          ]
+          for version, name, expected in compilers:
+              data = urllib.request.urlopen(base + name, timeout=120).read()
               assert '0x' + hashlib.sha256(data).hexdigest() == expected
               target = pathlib.Path.home() / '.svm' / version / ('solc-' + version)
               target.parent.mkdir(parents=True, exist_ok=True)
