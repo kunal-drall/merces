@@ -186,3 +186,13 @@ relationships or career; no income figure; no reason text.
 An account can request deletion of its offchain data: accounts, wallets, applications (and their encrypted notes),
 notifications and preferences, backups, terms access entries that name it. Chain data, commitments, amounts,
 signed contracts under legal retention and the audit log are kept. Not yet automated (Part J.9).
+
+## Public-site forms (Stage 5 integration)
+
+All five site forms use authenticated server-to-server intake. The backend revalidates the exact visible fields and records the server receipt time; Humanathon additionally requires the versioned contact consent. Form fields and the immutable receipt email are encrypted under a separate forms key. Only the HMAC of the email, request fingerprint, form kind, submission key, timestamps and delivery state are indexed. There is no public form-data read and no income, wallet or account association.
+
+The worker sends one status-only transactional receipt through Resend; it does not send marketing, announce fixed dates, promise a deck or grant an application approval. Resend receives the destination address and receipt text. Tracking must be disabled on the sending domain before activation. Form bodies, addresses, signatures and provider error bodies are excluded from logs.
+
+The default retention is 30 days (operator configurable from 1 to 90 days, to match the approved privacy notice). The forms worker prunes expired entries and queued message ciphertext; webhook event identifiers expire after 30 days. Delivery suppressions retain only a keyed email hash and reason until removed by an authorized operator. A verified deletion request is processed with `pnpm exec tsx packages/server/src/forms-delete.ts`, supplying the address on stdin; it removes entries and queued mail and suppresses future receipts. An already in-flight provider send cannot be recalled. Provider-side deletion and retention are separate operational responsibilities.
+
+Intake and the worker require `MERCES_FORMS_ENABLED=true`, `MERCES_FORMS_PRIVACY_APPROVED=true`, a verified Merces sender and complete host secrets. These flags remain false in examples. This implementation is not approval of the public privacy note or permission to send to real people.

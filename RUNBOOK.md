@@ -547,3 +547,13 @@ bearer signatures. Only Stage 1 can enforce a cancellable delay against third-pa
 
 S5 records each series' immutable window durations and fee. Version 5 snapshots are refused; use the existing
 `pnpm --filter @merces/simulator sim:reset` procedure for local simulator data, then reseed. Never reset live data.
+
+## Public forms and Resend
+
+1. Provision a private Postgres database and apply migrations (`pnpm db:migrate`). Use the same database for API and the separate `pnpm forms:worker` process. The worker has no wallet, chain, verifier or attestor key dependency.
+2. Put independent random `MERCES_FORMS_TOKEN`, `MERCES_FORMS_HASH_SECRET` and `MERCES_FORMS_KEY_HEX` in the host secret store. The last is exactly 32 bytes encoded as hex. Give only the gateway token to Vercel. Put the restricted sending `RESEND_API_KEY` and webhook secret in Railway. Never paste credentials into chat, commits or build arguments.
+3. Verify the Merces sending subdomain in Resend, disable open/click tracking, then set `MERCES_FORMS_FROM` (for example `Merces <hello@mail.merces.fi>`). Configure delivered, bounced and complained callbacks at `/forms/webhooks/resend`. Svix verification needs exact raw JSON bytes and a clock within five minutes; do not put a JSON-transforming proxy in front.
+4. In Vercel set `MERCES_FORMS_ADAPTER=stage2`, `MERCES_FORMS_API_ORIGIN` to the backend's HTTPS origin and the shared gateway token. Set privacy/enable flags on both surfaces only after approved privacy text and the explicit launch/email go. Keep previews closed otherwise.
+5. Run a provider test-recipient check after authorization, then verify the stored receipt, provider ID and delivered webhook. Never infer delivery from the HTTP form response: it proves durable intake and queueing only.
+6. Monitor `public_form_mail` counts grouped by status and `last_error` (codes only). The worker retries transient transport, 429, 5xx and concurrent-idempotency responses. Its immutable request and `merces-form/<entry id>` key are reused. After eight ambiguous attempts or 23 hours since the first attempt, it stops as `uncertain`; reconcile in Resend before any manual replay. Resend retains idempotency keys for 24 hours: https://resend.com/docs/dashboard/emails/idempotency-keys . Never reset an uncertain row to pending without that reconciliation.
+7. Verify a deletion request, then supply its email on stdin to `pnpm exec tsx packages/server/src/forms-delete.ts`. Do not place it in shell history. Encryption-key or HMAC-secret rotation requires migration of existing encrypted entries/hashes; replacing a secret blindly strands data or loses suppression matches.

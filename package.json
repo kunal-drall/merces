@@ -36,7 +36,8 @@
     "stage1:build": "node scripts/stage1-build.mjs",
     "api:changelog": "node scripts/api-changelog.mjs",
     "keys:check": "node scripts/published-keys.mjs --check",
-    "test:stage1": "vitest run --config vitest.stage1.config.ts"
+    "test:stage1": "vitest run --config vitest.stage1.config.ts",
+    "forms:worker": "tsx packages/server/src/forms-worker.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

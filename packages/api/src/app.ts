@@ -21,6 +21,7 @@ declare module 'fastify' {
 }
 
 export interface RouteDef<Q = unknown, B = unknown> {
+  bodyLimit?: number;
   method: HTTPMethods;
   url: string;
   access: AccessTier;
@@ -33,6 +34,7 @@ export function defineRoute(app: FastifyInstance, ctx: AppContext, def: RouteDef
   app.route({
     method: def.method,
     url: def.url,
+    ...(def.bodyLimit ? { bodyLimit: def.bodyLimit } : {}),
     config: { access: def.access, devOnly: def.devOnly ?? false },
     handler: async (req, reply) => {
       const session = await requireTier(ctx, req, reply, def.access);
@@ -58,6 +60,11 @@ export async function buildApp(ctx: AppContext, extraRoutes: RouteRegistrar[] = 
 
   app.setErrorHandler((errUnknown: unknown, _req, reply) => {
     const err = errUnknown as Error & { statusCode?: number };
+    // Form parse/storage failures may contain submitted values; never echo or log their details.
+    if (_req.url.startsWith('/forms/')) {
+      const status = err instanceof AppError ? err.status : (err.statusCode ?? 500);
+      return reply.status(status).send({ error: status >= 500 ? 'Unavailable' : 'Rejected', message: 'form request could not be accepted', detail: null });
+    }
     if (err instanceof AppError) return reply.status(err.status).send({ error: err.code, message: err.message, detail: err.detail ?? null });
     if (err instanceof ChainError) {
       const status = err.code === 'NotFound' ? 404 : err.code === 'Unauthorized' || err.code === 'NotAllowlisted' || err.code === 'NotPermitted' ? 403 : err.code === 'NotImplemented' ? 501 : 422;

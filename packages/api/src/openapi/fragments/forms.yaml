@@ -1,0 +1,127 @@
+tags:
+  - name: Forms
+    description: Signed-out public-site intake through an authenticated server gateway; no form data reads.
+paths:
+  /forms/{form}:
+    post:
+      operationId: submitPublicForm
+      tags: [Forms]
+      x-access: public
+      summary: Store a validated site form and queue one transactional receipt
+      description: Requires the server-only X-Merces-Forms-Token, enabled configuration and privacy approval. Replays return the original success; reuse with different fields returns 409. Humanathon requires versioned consent. Browser requests go through the same-origin site route.
+      parameters:
+        - in: path
+          name: form
+          required: true
+          schema: { type: string, enum: [waitlist, issuer-invite, backer-application, humanathon-notify, humanathon-partner] }
+        - in: header
+          name: X-Merces-Forms-Token
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [key, fields]
+              properties:
+                key: { type: string, pattern: '^[A-Za-z0-9-]{16,64}$' }
+                fields:
+                  oneOf:
+                    - { $ref: '#/components/schemas/WaitlistFields' }
+                    - { $ref: '#/components/schemas/IssuerInviteFields' }
+                    - { $ref: '#/components/schemas/BackerWaitlistFields' }
+                    - { $ref: '#/components/schemas/HumanathonNotifyFields' }
+                    - { $ref: '#/components/schemas/HumanathonPartnerFields' }
+                consent:
+                  type: object
+                  additionalProperties: false
+                  required: [version, at]
+                  properties:
+                    version: { type: string, enum: [humanathon-consent-v1] }
+                    at: { type: string, format: date-time, description: Gateway timestamp; backend receipt time is authoritative. }
+      responses:
+        '200':
+          description: Stored and queued, or an identical replay; no promise of provider delivery.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, duplicate]
+                properties: { ok: { type: boolean, const: true }, duplicate: { type: boolean } }
+        '400': { description: Invalid form or consent }
+        '401': { description: Gateway token required }
+        '404': { description: Unknown form }
+        '409': { description: Key already used for different fields }
+        '413': { description: Body exceeds limit }
+        '429': { description: Durable recipient or global rate limit }
+        '503': { description: Forms not enabled or storage unavailable }
+  /forms/webhooks/resend:
+    post:
+      operationId: receiveFormsResendWebhook
+      tags: [Forms]
+      x-access: public
+      summary: Verify and deduplicate Resend delivery callbacks
+      description: Verifies Svix headers against the exact raw body, including timestamp tolerance. No body values are logged. Bounces and complaints suppress further receipts.
+      parameters:
+        - { in: header, name: svix-id, required: true, schema: { type: string } }
+        - { in: header, name: svix-timestamp, required: true, schema: { type: string } }
+        - { in: header, name: svix-signature, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200': { description: Accepted or duplicate event }
+        '400': { description: Invalid signature or payload }
+        '413': { description: Body exceeds limit }
+        '503': { description: Forms unavailable }
+components:
+  schemas:
+    WaitlistFields:
+      type: object
+      additionalProperties: false
+      required: [role, email]
+      properties:
+        role: { type: string, enum: [raising, backing, both] }
+        email: { type: string, format: email, maxLength: 254 }
+    IssuerInviteFields:
+      type: object
+      additionalProperties: false
+      required: [what, email]
+      properties:
+        what: { type: string, minLength: 1, maxLength: 240 }
+        email: { type: string, format: email, maxLength: 254 }
+    BackerWaitlistFields:
+      type: object
+      additionalProperties: false
+      required: [country, email, role, list]
+      properties:
+        country: { type: string, minLength: 1, maxLength: 80 }
+        email: { type: string, format: email, maxLength: 254 }
+        role: { type: string, enum: [backing] }
+        list: { type: string, enum: [waitlist] }
+    HumanathonNotifyFields:
+      type: object
+      additionalProperties: false
+      required: [name, email, country, track]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        email: { type: string, format: email, maxLength: 254 }
+        country: { type: string, minLength: 1, maxLength: 80 }
+        track: { type: string, enum: [builders, artists, independents, other] }
+        link: { type: string, format: uri, maxLength: 300 }
+        prove: { type: string, maxLength: 2000 }
+    HumanathonPartnerFields:
+      type: object
+      additionalProperties: false
+      required: [organisation, name, email, tier]
+      properties:
+        organisation: { type: string, minLength: 1, maxLength: 120 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        role: { type: string, maxLength: 120 }
+        email: { type: string, format: email, maxLength: 254 }
+        handle: { type: string, maxLength: 120 }
+        tier: { type: string, enum: [lead, track, payments, infrastructure, accelerator, anchor, community] }
+        message: { type: string, maxLength: 2000 }

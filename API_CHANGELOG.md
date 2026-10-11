@@ -140,3 +140,7 @@ attestor addresses are 20-byte `0x` keys everywhere (`attestor`, never `wallet`)
 by the keeper (the attestor posts only a signature); `UnsignedTx` has no `coSigners`; `SeriesState.nonces` replaces
 `amendmentNonce`, `extinguishNonce` and `pauses.nonce`; bid and order commitments are Stage 1's keccak (compute with the
 fields the server returns; a fresh 32-byte salt per bid). Full detail: `git diff 9ecccbc 8837dba -- packages/api/openapi.yaml`.
+
+## Stage 5 public forms integration — 11 October 2026
+
+Added `POST /forms/{form}` (`submitPublicForm`) for all five signed-out site forms, with strict per-form schemas, versioned Humanathon consent, server-only gateway authentication, durable idempotency and quotas. Returns only `{ok, duplicate}`; a successful response confirms durable intake and queueing, not delivery. Added `POST /forms/webhooks/resend` (`receiveFormsResendWebhook`) with exact-byte Svix verification and duplicate-event protection. Both routes remain unavailable until explicit enable/privacy flags and complete host configuration are present. No chain command or economic behavior changed.

@@ -2446,6 +2446,46 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/forms/{form}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Store a validated site form and queue one transactional receipt
+         * @description Requires the server-only X-Merces-Forms-Token, enabled configuration and privacy approval. Replays return the original success; reuse with different fields returns 409. Humanathon requires versioned consent. Browser requests go through the same-origin site route.
+         */
+        post: operations["submitPublicForm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forms/webhooks/resend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify and deduplicate Resend delivery callbacks
+         * @description Verifies Svix headers against the exact raw body, including timestamp tolerance. No body values are logged. Bounces and complaints suppress further receipts.
+         */
+        post: operations["receiveFormsResendWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chains/{chain}/fx-pairs": {
         parameters: {
             query?: never;
@@ -4506,6 +4546,48 @@ export type components = {
              */
             raiseStyle: "sealed" | "curve";
             country: string;
+        };
+        WaitlistFields: {
+            /** @enum {string} */
+            role: "raising" | "backing" | "both";
+            /** Format: email */
+            email: string;
+        };
+        IssuerInviteFields: {
+            what: string;
+            /** Format: email */
+            email: string;
+        };
+        BackerWaitlistFields: {
+            country: string;
+            /** Format: email */
+            email: string;
+            /** @enum {string} */
+            role: "backing";
+            /** @enum {string} */
+            list: "waitlist";
+        };
+        HumanathonNotifyFields: {
+            name: string;
+            /** Format: email */
+            email: string;
+            country: string;
+            /** @enum {string} */
+            track: "builders" | "artists" | "independents" | "other";
+            /** Format: uri */
+            link?: string;
+            prove?: string;
+        };
+        HumanathonPartnerFields: {
+            organisation: string;
+            name: string;
+            role?: string;
+            /** Format: email */
+            email: string;
+            handle?: string;
+            /** @enum {string} */
+            tier: "lead" | "track" | "payments" | "infrastructure" | "accelerator" | "anchor" | "community";
+            message?: string;
         };
         FxPair: {
             pairId: components["schemas"]["Hash32"];
@@ -10465,6 +10547,146 @@ export interface operations {
             };
             /** @description The signature does not recover to the named key over this request's EXTINGUISH message on this chain, or the key is not active (detail.stage1 InvalidAttestorSignature); or the chain refused the relay (error Chain<code>, detail.stage1 its Stage 1 name; the request stays ready) */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    submitPublicForm: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Merces-Forms-Token": string;
+            };
+            path: {
+                form: "waitlist" | "issuer-invite" | "backer-application" | "humanathon-notify" | "humanathon-partner";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    key: string;
+                    fields: components["schemas"]["WaitlistFields"] | components["schemas"]["IssuerInviteFields"] | components["schemas"]["BackerWaitlistFields"] | components["schemas"]["HumanathonNotifyFields"] | components["schemas"]["HumanathonPartnerFields"];
+                    consent?: {
+                        /** @enum {string} */
+                        version: "humanathon-consent-v1";
+                        /**
+                         * Format: date-time
+                         * @description Gateway timestamp; backend receipt time is authoritative.
+                         */
+                        at: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Stored and queued, or an identical replay; no promise of provider delivery. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        ok: true;
+                        duplicate: boolean;
+                    };
+                };
+            };
+            /** @description Invalid form or consent */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Gateway token required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown form */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Key already used for different fields */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Body exceeds limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Durable recipient or global rate limit */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forms not enabled or storage unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    receiveFormsResendWebhook: {
+        parameters: {
+            query?: never;
+            header: {
+                "svix-id": string;
+                "svix-timestamp": string;
+                "svix-signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Accepted or duplicate event */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid signature or payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Body exceeds limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forms unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
