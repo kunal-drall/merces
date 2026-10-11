@@ -19,6 +19,7 @@ const WAD_DECIMAL = /^\d+(\.\d{1,18})?$/;
 const WAD_DECIMAL_MESSAGE = 'a decimal with at most 18 places';
 
 export const publicTermsSchema = z.object({
+  routerPublicConsent: z.boolean().default(false),
   fxPairId: z.string().regex(/^0x[0-9a-f]{64}$/).nullable().default(null),
   stablecoin: z.enum(['USDC', 'USDG']),
   unitsOffered: z.string().regex(/^\d+$/),
@@ -225,6 +226,8 @@ export class TermsService {
     };
     for (const v of seriesTermsViolations(onchain)) issues.push({ field: PUBLIC_FIELD[v.field] ?? v.field, code: v.code, message: v.message });
     if (pub.fxPairId && port && !(await port.getRateAccumulator(pub.fxPairId))) issues.push({ field: 'fxPairId', code: 'unknown-pair', message: 'select a registered FX pair on this chain' });
+    if (pub.tierFlags.tier1 && !pub.routerPublicConsent) issues.push({field:'routerPublicConsent',code:'consent-required',message:'Tier 1 publishes your threshold, share rate and routed receipts onchain. Explicit issuer consent is required.'});
+    if (pub.tierFlags.tier1 && pub.reportingCurrency !== 'USD') issues.push({field:'reportingCurrency',code:'router-stablecoin',message:'Tier-1 routing requires stablecoin-denominated income'});
     if (pub.tierFlags.tier1 && pub.fxPairId) issues.push({ field: 'fxPairId', code: 'tier1-fx', message: 'the income router requires stablecoin-denominated terms with no FX pair' });
     if (pub.reportingCurrency !== 'USD' && !pub.fxPairId) issues.push({ field: 'fxPairId', code: 'required', message: 'non-USD reporting requires a registered FX pair' });
     if (pub.tierFlags.tier4) issues.push({ field: 'tierFlags.tier4', code: 'switched-off', message: 'tier 4 self-attestation is switched off' });
@@ -343,7 +346,7 @@ export class TermsService {
     if (draft.state !== 'contract_signed') throw AppError.conflict(`draft is ${draft.state}; the HEU contract and the Autonomy Charter must be signed before a raise can be created`);
     // only Stage 1 (Poseidon) terms can be proven against: a draft whose vault payload predates the scheme is refused
     const vault = await this.ctx.pool.query<{ ciphertext: string }>('select ciphertext from terms_vault where draft_id = $1', [draftId]);
-    const stored = vault.rows[0] ? (JSON.parse(this.ctx.vault.decrypt(vault.rows[0].ciphertext, `terms:${draftId}`)) as { scheme?: string }) : null;
+    const stored = vault.rows[0] ? (JSON.parse(this.ctx.vault.decrypt(vault.rows[0].ciphertext, `terms:${draftId}`)) as Partial<VaultTermsPayload>) : null;
     if (stored?.scheme !== TERMS_SCHEME) throw AppError.conflict(`the draft's terms predate the ${TERMS_SCHEME} commitment scheme and cannot be proven against; start a new draft`);
     const chain = this.ctx.chains.get(draft.chain);
     const info = await chain.info();
@@ -364,6 +367,7 @@ export class TermsService {
       releaseSchedule: p.releaseSchedule, hurdleWad: p.hurdleWad, payoutMultipleK: p.payoutMultipleK,
       contractHash: draft.contract_hash, termsCommitment: draft.terms_commitment, tierFlags: p.tierFlags, reportingCurrency: p.reportingCurrency, raiseStyle: p.raiseStyle,
     };
+    if (p.tierFlags.tier1) terms.routerTerms = {theta:stored.threshold!,rWad:stored.ratePerUnitWad!,currencyCode:stored.currencyCode!,indexingRule:stored.indexingRuleCode!,termsSalt:stored.termsSalt!};
     const tx = await chain.build({ kind: 'createSeries', terms }, draft.issuer);
     return { tx, terms };
   }
@@ -594,7 +598,9 @@ export class TermsService {
       await this.backToProposed(amendmentId, 'attestor-key-inactive');
       throw new AppError(409, 'Conflict', 'the attestor key that signed is no longer active on this chain: the AMEND signature is dead; the amendment awaits an attestor again', { reason: 'attestor-key-inactive', stage1: 'InvalidAttestorSignature' });
     }
-    const tx = await chain.build({ kind: 'amendTerms', seriesId: String(a.series_id), termsCommitment: String(a.new_commitment), capMultipleWad: String(a.new_cap_multiple_wad), attestor: String(a.attestor), signature: String(a.attestor_signature) }, String(a.issuer));
+    const opening = series.terms.tierFlags.tier1 ? JSON.parse(this.ctx.vault.decrypt(String(a.ciphertext), `terms:${a.draft_id}`)) as VaultTermsPayload : null;
+    const routerTerms = opening ? {theta:opening.threshold,rWad:opening.ratePerUnitWad,currencyCode:opening.currencyCode,indexingRule:opening.indexingRuleCode,termsSalt:opening.termsSalt} : undefined;
+    const tx = await chain.build({ kind: 'amendTerms', ...(routerTerms ? {routerTerms} : {}), seriesId: String(a.series_id), termsCommitment: String(a.new_commitment), capMultipleWad: String(a.new_cap_multiple_wad), attestor: String(a.attestor), signature: String(a.attestor_signature) }, String(a.issuer));
     await this.ctx.pool.query("update terms_amendments set state = 'submitted' where amendment_id = $1 and state in ('attested', 'submitted')", [amendmentId]);
     return { tx };
   }

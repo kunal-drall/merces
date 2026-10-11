@@ -72,6 +72,7 @@ export function mercesSnapshot(src: ViewSource, seriesName: string | null, now: 
     out.treasury = money.treasury;
     out.vault = money.vault;
     out.auctionEscrow = money.auctionEscrow;
+    if (s.router) out.routerBalance = D(s.routerBalance);
     const w = s.transferWindows.at(-1);
     if (w) {
       out.windowEscrowStable = money.windowEscrowStable ?? '0';
@@ -94,7 +95,7 @@ export function totalStable(src: ViewSource): bigint {
   for (const [k, v] of src.chain.state.balances) if (k.endsWith(suffix)) total += v;
   for (const s of src.chain.state.series.values()) {
     const m = moneyView(s);
-    total += BigInt(m.treasury) + BigInt(m.vault) + BigInt(m.auctionEscrow) + BigInt(m.windowEscrowStable ?? '0');
+    total += BigInt(m.treasury) + BigInt(m.vault) + BigInt(m.auctionEscrow) + s.routerBalance + s.transferWindows.reduce((n,w)=>n+w.escrowStable,0n);
   }
   return total;
 }
@@ -108,7 +109,7 @@ export function checkUnitSupply(src: ViewSource, seriesName: string): void {
   const { s } = seriesOf(src, seriesName);
   let held = 0n;
   for (const p of s.positions.values()) held += balanceUnits(s, p.wallet);
-  const escrows = s.auction.escrowUnits + BigInt(moneyView(s).windowEscrowUnits ?? '0');
+  const escrows = s.auction.escrowUnits + s.transferWindows.reduce((n,w)=>n+w.escrowUnits,0n);
   const supply = mintFinalized(s) ? s.unitsOutstanding : s.auction.unitsMinted;
   if (held + escrows !== supply) throw new RunnerError(`unit supply: holders and escrows hold ${held + escrows}, supply is ${supply}`);
 }

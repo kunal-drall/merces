@@ -96,6 +96,8 @@ const REFERENCE_REEXPORTS = [
   'hurdlePrice', 'averageAnnualGross', 'redemptionQuote', 'newTailState', 'tailReceive', 'newFinalState', 'finalDistribute',
   'MAX_RELEASE_TRANCHES', 'validateReleaseSchedule', 'trancheAmounts', 'vested', 'releasable',
   'owedYtd', 'paymentUsd',
+  // SPEC §6.5: router arithmetic and bounded checkpoint ring, Stage 1 objects.
+  'newRouterState', 'closeRouterPeriod', 'closePeriodsThrough', 'ytdAtEnd', 'routeIncome', 'ROUTER_CHECKPOINT_RING',
   // cause S2-G: Stage 1's auction family
   'walletCapUnitsAtAuction', 'requiredEscrow', 'isBidValid', 'beginSettlement', 'tallyBids', 'isClearingPriceValid', 'finalizeSettlement', 'marginalAllocation', 'processBid', 'claimsFor', 'findClearingPrice',
   'walletCapUnits', 'requiredBidEscrow', 'isOrderValid', 'tallyOrders', 'isNoMatchValid', 'classifyWindowPrice', 'finalizeWindow', 'findWindowClearingPrice', 'computeFills',

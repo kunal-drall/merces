@@ -1,3 +1,4 @@
+import { checkRouterTerms } from './registry.ts';
 import { requireWindowDelivery } from './holders.ts';
 import { ChainError, amendDigest, extinguishDigest, type Command } from '@merces/domain';
 import { PARAMETER_BOUNDS, U64_MAX, finalDistribute, settleHolderDelta, vested } from '@merces/math';
@@ -52,12 +53,14 @@ export function amendTerms(e: EngineCore, signer: string | null, cmd: Extract<Co
   const b = PARAMETER_BOUNDS.capMultipleWad;
   if (newCap > s.terms.capMultipleWad || newCap < b.min || newCap > b.max) fail('UnfavourableAmendment', 'the cap multiple may only decrease, within [2, 3]');
   const previous = s.terms.termsCommitment;
+  checkRouterTerms(e,{routerTerms:cmd.routerTerms,tierFlags:s.terms.tierFlags,termsCommitment:cmd.termsCommitment,unitsOffered:s.terms.unitsOffered.toString()});
+  if (cmd.routerTerms) s.terms.routerTerms = {...cmd.routerTerms};
   s.terms.termsCommitment = cmd.termsCommitment;
   s.terms.capMultipleWad = newCap;
   s.ledger.amendmentNonce = nonce + 1n;
   if (s.issuePrice !== null) s.capPerUnit = liveCapPerUnit(s);
   s.amendments.push({ at: now, termsCommitment: cmd.termsCommitment, capMultipleWad: newCap, attestor });
-  emit('TermsAmended', { seriesId: s.seriesId, termsCommitment: cmd.termsCommitment, previousCommitment: previous, capMultipleWad: cmd.capMultipleWad, attestor, nonce: nonce.toString() });
+  emit('TermsAmended', { ...(cmd.routerTerms ? {routerTerms:cmd.routerTerms} : {}), seriesId: s.seriesId, termsCommitment: cmd.termsCommitment, previousCommitment: previous, capMultipleWad: cmd.capMultipleWad, attestor, nonce: nonce.toString() });
 }
 
 // ------------------------------------------------------------------ extinguishment

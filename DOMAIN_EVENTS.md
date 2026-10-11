@@ -12,6 +12,19 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 ## Events
 
+### RouterIncomeHeld
+
+- `seriesId`: string
+
+### RouterIncomeRouted
+
+- `seriesId`: string
+
+### RouterPeriodClosed
+
+- `seriesId`: string
+- `periodId`: period id (YYYYQn)
+
 ### FxPairSet
 
 - `pairId`: hex32
@@ -24,6 +37,10 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 - `issuer`: string
 
+### IssuanceResumed
+
+- `issuer`: string
+
 ### IssuanceStopped
 
 - `issuer`: string
@@ -32,7 +49,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 - `seriesId`: string
 - `issuer`: string
-- `terms`: object { fxPairId: hex32 \| null, stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }
+- `terms`: object { routerTerms: object { theta: decimal string (base units / WAD / units), rWad: decimal string (base units / WAD / units), currencyCode: integer, indexingRule: integer, termsSalt: decimal string (base units / WAD / units) }, fxPairId: hex32 \| null, stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }
 
 ### RaiseOpened
 
@@ -299,6 +316,7 @@ Generated from `packages/domain/src/{events,commands}.ts` by `pnpm docs:events`;
 
 ### TermsAmended
 
+- `routerTerms?`: object { theta: decimal string (base units / WAD / units), rWad: decimal string (base units / WAD / units), currencyCode: integer, indexingRule: integer, termsSalt: decimal string (base units / WAD / units) }
 - `seriesId`: string
 - `termsCommitment`: hex32
 - `previousCommitment`: hex32
@@ -497,7 +515,8 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### User commands
 
-- **createSeries**: `terms`: object { fxPairId: hex32 \| null, stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }; `seriesAddressHint?`: string
+- **routeIncome**: `seriesId`: string; `amount`: decimal string (base units / WAD / units)
+- **createSeries**: `terms`: object { routerTerms: object { theta: decimal string (base units / WAD / units), rWad: decimal string (base units / WAD / units), currencyCode: integer, indexingRule: integer, termsSalt: decimal string (base units / WAD / units) }, fxPairId: hex32 \| null, stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }; `seriesAddressHint?`: string
 - **openRaise**: `seriesId`: string
 - **cancelRaise**: `seriesId`: string
 - **commitBid**: `seriesId`: string; `commitment`: hex32; `deposit`: decimal string (base units / WAD / units)
@@ -517,13 +536,14 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **withdrawPauseRequest**: `seriesId`: string
 - **redeem**: `seriesId`: string; `maxPricePerUnit?`: decimal string (base units / WAD / units)
 - **claimRedemption**: `seriesId`: string
-- **amendTerms**: `seriesId`: string; `termsCommitment`: hex32; `capMultipleWad`: decimal string (base units / WAD / units); `attestor`: string; `signature`: string
+- **amendTerms**: `routerTerms?`: object { theta: decimal string (base units / WAD / units), rWad: decimal string (base units / WAD / units), currencyCode: integer, indexingRule: integer, termsSalt: decimal string (base units / WAD / units) }; `seriesId`: string; `termsCommitment`: hex32; `capMultipleWad`: decimal string (base units / WAD / units); `attestor`: string; `signature`: string
 - **commitWindowOrder**: `seriesId`: string; `windowId`: integer; `side`: `buy` \| `sell`; `commitment`: hex32; `deposit`: decimal string (base units / WAD / units); `units`: decimal string (base units / WAD / units)
 - **revealWindowOrder**: `seriesId`: string; `windowId`: integer; `side`: `buy` \| `sell`; `pricePerUnit`: decimal string (base units / WAD / units); `quantity`: decimal string (base units / WAD / units); `salt`: hex32
 - **curveSwap**: `seriesId`: string; `side`: `buy` \| `sell`; `amountIn`: decimal string (base units / WAD / units); `minimumAmountOut`: decimal string (base units / WAD / units)
 - **stakeUnits**: `seriesId`: string; `units`: decimal string (base units / WAD / units)
 - **unstakeUnits**: `seriesId`: string; `units`: decimal string (base units / WAD / units)
 - **tenderUnits**: `seriesId`: string; `fromStake`: decimal string (base units / WAD / units); `fromWallet`: decimal string (base units / WAD / units)
+- **resumeIssuance**
 - **stopIssuance**
 
 ### Service commands (keeper / allowlist manager)
@@ -538,6 +558,8 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 
 ### Permissionless commands (keeper `submit` or any wallet `build`)
 
+- **sweepRouter**: `seriesId`: string
+- **closeRouterPeriod**: `seriesId`: string; `periodId`: period id (YYYYQn)
 - **openWindow**: `seriesId`: string; `periodId`: period id (YYYYQn)
 - **beginWindowSettlement**: `seriesId`: string; `windowId`: integer; `clearingPrice`: decimal string (base units / WAD / units) \| null
 - **tallyWindow**: `seriesId`: string; `windowId`: integer; `maxOrders`: integer

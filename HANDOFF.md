@@ -24,12 +24,13 @@ frontend integration. Read §0, then the section for your job. Every claim cites
 - **Repository:** `kunal-drall/merces`; backend branch `claude/jolly-tesla-8j0s7n`, Stage 1 branch
   `claude/sweet-goodall-b7acm3`. Integration is in local branch `integrate-handoff`; the requested merge into `main`
   and pushes are still pending. Stage 1 stays under the `stage1/` submodule, now pinned at `bafe1fb` (SPEC v1.1.2).
-- **Current work:** S4 recovery/security review fixes and S5 items 1, 2, 3, 4, 5, 6, 7, 9, 10, 12 are implemented locally.
+- **Current work:** S4 recovery/security review fixes and S5 items 1–12 are implemented locally.
   Stage 1 commit `bafe1fb` fixes reference final-share weighting for redeemed units in uncleared ask escrow, with a
   regression fixture. Chain programs and all 25 official vectors are unchanged. Every new commit is kunal-drall only.
-- **Latest window verification:** 23 full target vectors on both personalities (46/46 lockstep), no prefix gates or
-  shims; reference 25/25, scenarios 82/82, Rust oracle 5,883/5,883, 206 matching API operations and `DEMO OK`.
-  Simulator state is version 8; older snapshots require `sim:reset`. The full suite passes 754 tests, separate Monad conformance 11, and local `dev:mock` reads return 200. Vectors 12 and 18 still await the router; live adapters remain unwired.
+- **Latest router verification:** all 25 target vectors on both personalities (50/50 full lockstep), no prefix gates,
+  shims or waived steps; reference 25/25, scenarios 82/82, Rust oracle 5,883/5,883, 211 matching API operations and
+  `DEMO OK`. Simulator state is version 9; older snapshots require `sim:reset`. The full suite passes 761 tests,
+  separate Monad conformance 11, and local `dev:mock` reads return 200. Live adapters remain unwired.
   Historical numbers below describe the original handoff only.
 - **What the product is:** income-share series ("units") an issuer sells in a sealed-bid raise (or, on Solana, on a
   Meteora bonding curve); the issuer proves quarterly income with a zero-knowledge report and pays holders a share above
@@ -206,8 +207,7 @@ requirements in `SECURITY.md`; compromised-key recovery in `RUNBOOK.md`; default
 
 ### 4.4 S5: the rest of Stage 1's surface (L)
 
-**Progress:** items **1, 2, 3, 4, 5, 6, 7, 9, 10 and 12 are implemented**. The table retains their original scope as a
-checklist. Still required: **8 (router), 11 (remaining mint gates with the router)**, then §5.
+**Progress:** items **1–12 are implemented**. The table retains their original scope as a checklist. Next: §5.
 True-up submission/payment now includes issuer builders, signature/nonce validation, forward credit, paused lateness
 accrual, annual formal notices, chain reads and indexed annual states (`signed → recorded → paid`).
 

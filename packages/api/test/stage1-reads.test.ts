@@ -174,17 +174,16 @@ describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () =>
   // clears the open due; the served row said a payment was outstanding on a Retired series, for good.
   it('a series retired by a split receipt has no open due: the Series row and the reporting ledger say so', async () => {
     const h = rig.mon;
-    const raise = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
+    const raise = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: true, tier3: false, tier4: false } } });
     const seriesId = raise.seriesId;
     const holderTok = rig.token({ accountId: 'w11-split-b0', wallets: [{ chain: 'monad', address: h.backers[0]!.address }], roles: ['backer'] });
-    await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId, router: h.router });
     const q = periodOf((await h.sim.getSeries(seriesId))!.settledAt!);
     await h.sim.setTime(q.end + 86_400);
-    const rep = await h.buildReport({ seriesId, periodId: q.id, privateTerms: raise.privateTerms, incomeYtdNow: USDC(100_000), tier: 1 });
+    const rep = await h.buildReport({ seriesId, periodId: q.id, privateTerms: raise.privateTerms, incomeYtdNow: USDC(100_000), tier: 2 });
     await h.exec(h.issuer, rep.command);
     await rig.sync();
     expect((await rig.get(`/series/${seriesId}`)).json()).toMatchObject({ status: 'OnTime', openDuePeriod: q.id, paymentOutstanding: true });
-    await h.sim.postSplitReceipt(h.router, seriesId, USDC(20_000));
+    await h.exec(h.issuer, {kind:'routeIncome',seriesId,amount:USDC(260_000).toString()});
     expect((await h.sim.getSeries(seriesId))!.reporting).toMatchObject({ openDuePeriod: null, openDueAmount: '0' });
     await rig.sync();
     expect((await rig.get(`/series/${seriesId}`)).json()).toMatchObject({ status: 'Retired', lastPaidPeriod: null, openDuePeriod: null, paymentOutstanding: false });

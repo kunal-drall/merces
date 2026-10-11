@@ -25,7 +25,7 @@ import type { PersonalityConfig } from './addresses.ts';
  * States of another version are never upgraded in place.
  */
 // S5: immutable transfer-window terms. Older snapshots cannot supply the series' committed values.
-export const SIM_STATE_VERSION = 8;
+export const SIM_STATE_VERSION = 9;
 
 /** A persisted simulator state from another layout (version 1 before S1, 2 before S2, 3 before S3, 4 before S4): never upgraded in place, reset it. */
 export class SimStateVersionError extends Error {
@@ -36,6 +36,7 @@ export class SimStateVersionError extends Error {
 }
 
 export interface SimTerms {
+  routerTerms?: import('@merces/domain').RouterTerms;
   fxPairId: string | null;
   stablecoin: Stablecoin;
   stablecoinMint: string;
@@ -435,6 +436,9 @@ export interface SimSeries {
   transferWindows: SimTransferWindow[];
   curve: SimCurve | null;
   splitRouter: string | null;
+  router: import('@merces/math').RouterState | null;
+  routerBalance: bigint;
+  routerCheckpoints: Map<number,bigint>;
   amendments: { at: number; termsCommitment: string; capMultipleWad: bigint; attestor: string }[];
   // ---- Stage 1 state (types from @merces/reference)
   ledger: SimLedger;

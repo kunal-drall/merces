@@ -3083,6 +3083,91 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/series/{seriesId}/router": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Issuer-only live router balances and checkpoints. Raw routed income is never indexed or included in the activity feed. Tier-1 reports must use zero-salt commitments to these checkpoints. */
+        get: operations["getIncomeRouter"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/router/build-route": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Builds an unsigned receipt transaction for the linked payer. Income received before mint finalization is held. Afterwards Stage 1 splits against the threshold and actual outstanding units; terminal series pass income through. */
+        post: operations["buildRouteIncome"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/router/build-sweep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Permissionless sweep of the receiving account once minting is final, or after raise failure/cancellation. */
+        post: operations["buildSweepRouter"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/series/{seriesId}/router/build-close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Permissionless checkpoint of an ended quarter and any missing prior quarters, needed before tier-1 report submission. */
+        post: operations["buildCloseRouterPeriod"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/issuers/build-issuance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Builds the issuer's stopIssuance or resumeIssuance transaction. Requires a linked issuer wallet. */
+        post: operations["buildIssuerIssuance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/series/{seriesId}/signing": {
         parameters: {
             query?: never;
@@ -3326,6 +3411,7 @@ export type components = {
             bps?: number;
         };
         SeriesTerms: {
+            routerTerms?: components["schemas"]["RouterTerms"];
             /**
              * @description Registered Stage 1 FX pair. Required for non-USD draft terms; forbidden for tier 1.
              * @default null
@@ -4723,6 +4809,26 @@ export type components = {
             body: string;
             /** Format: date-time */
             createdAt: string;
+        };
+        /** @description Explicitly disclosed tier-1 terms, verified against the Poseidon commitment by Stage 1. */
+        RouterTerms: {
+            theta: components["schemas"]["Money"];
+            rWad: components["schemas"]["Wad"];
+            currencyCode: number;
+            indexingRule: number;
+            termsSalt: string;
+        };
+        RouterState: {
+            seriesId: string;
+            receiver: string;
+            heldBeforeFinalization: components["schemas"]["Money"];
+            ytdYear: number;
+            ytdReceived: components["schemas"]["Money"];
+            nextCheckpointPeriod: string | null;
+            checkpoints: {
+                periodId: string;
+                ytdAtEnd: components["schemas"]["Money"];
+            }[];
         };
         /** @description A series' signing nonces as the chain stores them (Stage 1 pause_nonce, amendment_nonce, extinguish_nonce, trueup_nonce), u64 decimal strings. A PAUSE, AMEND, EXTINGUISH or TRUEUP signature binds the nonce it was requested over and is dead once that nonce moves: pause advances on each pause request and on its withdrawal (an approval does not), amendment on each accepted amendment, extinguish on the extinguishment, trueup on each accepted true-up. REPORT and FX signatures bind no nonce. */
         SeriesNonces: {
@@ -6360,6 +6466,11 @@ export interface operations {
                 "application/json": {
                     chain: string;
                     public: {
+                        /**
+                         * @description Required true for tier 1: publishes the threshold, share rate and routed receipts onchain.
+                         * @default false
+                         */
+                        routerPublicConsent?: boolean;
                         /** @default null */
                         fxPairId?: string | null;
                     };
@@ -6540,6 +6651,11 @@ export interface operations {
             content: {
                 "application/json": {
                     public: {
+                        /**
+                         * @description Required true for tier 1: publishes the threshold, share rate and routed receipts onchain.
+                         * @default false
+                         */
+                        routerPublicConsent?: boolean;
                         /** @default null */
                         fxPairId?: string | null;
                     };
@@ -11904,6 +12020,169 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getIncomeRouter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                seriesId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Router state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        router: components["schemas"]["RouterState"];
+                        terms: components["schemas"]["RouterTerms"];
+                        routerCredit: components["schemas"]["Money"];
+                        mintFinalized: boolean;
+                    };
+                };
+            };
+            /** @description Issuer wallet is not linked */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Tier-1 router is not enabled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    buildRouteIncome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                seriesId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    wallet: string;
+                    amount: components["schemas"]["Money"];
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned route */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+        };
+    };
+    buildSweepRouter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                seriesId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    wallet: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned sweep */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+        };
+    };
+    buildCloseRouterPeriod: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                seriesId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    wallet: string;
+                    periodId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned checkpoint */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
+                };
+            };
+        };
+    };
+    buildIssuerIssuance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    chain: string;
+                    wallet: string;
+                    stopped: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Unsigned issuer control */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tx: components["schemas"]["UnsignedTx"];
+                    };
                 };
             };
         };

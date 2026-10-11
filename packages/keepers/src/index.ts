@@ -2,7 +2,7 @@ export * from './jobs.ts';
 export * from './curve.ts';
 export * from './rate-keeper.ts';
 export * from './scheduler.ts';
-import { auctionDeliverJob, auctionSettleJob, burnCrankJob, deadlineRemindersJob, fxCoverageJob, outboxJob, pauseCrankJob, retireCappedJob, revealRemindersJob, statusCrankJob, transferWindowsJob, windowDeliverJob, type KeeperJob } from './jobs.ts';
+import { auctionDeliverJob, auctionSettleJob, burnCrankJob, deadlineRemindersJob, fxCoverageJob, outboxJob, pauseCrankJob, retireCappedJob, revealRemindersJob, statusCrankJob, transferWindowsJob, windowDeliverJob, routerJob, type KeeperJob } from './jobs.ts';
 import { curveLifecycleJob, curveStakeRemindersJob, curveSyncJob, curveTenderRemindersJob } from './curve.ts';
 import { rateKeeperJob, type RateKeeperOptions } from './rate-keeper.ts';
 import type { OutboxHandler } from '@merces/core';
@@ -14,6 +14,6 @@ import type { OutboxHandler } from '@merces/core';
 export function standardJobs(opts: RateKeeperOptions & { outbox: OutboxHandler }): KeeperJob[] {
   return [
     auctionSettleJob, auctionDeliverJob, curveLifecycleJob, curveSyncJob, revealRemindersJob, statusCrankJob, pauseCrankJob, retireCappedJob, burnCrankJob, deadlineRemindersJob,
-    curveStakeRemindersJob, curveTenderRemindersJob, rateKeeperJob(opts), fxCoverageJob, transferWindowsJob, windowDeliverJob, outboxJob(opts.outbox),
+    curveStakeRemindersJob, curveTenderRemindersJob, rateKeeperJob(opts), fxCoverageJob, transferWindowsJob, windowDeliverJob, routerJob, outboxJob(opts.outbox),
   ];
 }

@@ -14,6 +14,7 @@ import type {
  * for users; submit only for the backend's own permissionless/service roles.
  */
 export interface ChainPort {
+  getRouter(seriesId: string): Promise<import('./state.ts').RouterState | null>;
   readonly chain: ChainKey;
   readonly family: ChainFamily;
   readonly mode: ChainMode;

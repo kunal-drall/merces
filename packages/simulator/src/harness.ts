@@ -98,6 +98,7 @@ export function defaultTerms(sim: SimulatorChain, over: Partial<SeriesTerms> & {
     ...termsOver,
   };
   terms.termsCommitment = over.termsCommitment ?? commitment;
+  if (terms.tierFlags.tier1 && !terms.routerTerms) terms.routerTerms = {theta:privateTerms.theta.toString(),rWad:privateTerms.rWad.toString(),currencyCode:currencyCodeOf(privateTerms.currency),indexingRule:INDEXING_RULE_CODE[privateTerms.indexingRule],termsSalt:privateTerms.termsSalt.toString()};
   return { terms, privateTerms };
 }
 
@@ -276,7 +277,7 @@ export class SimHarness {
     const pid = toPid(params.periodId);
     const prior = this.priorOpening(params.seriesId, pid, params.incomeYtdPrev);
     const incomeYtd = params.incomeYtdNow > prior.ytd ? params.incomeYtdNow : prior.ytd; // high-water (SPEC §1.5)
-    const incomeSalt = params.incomeSalt ?? harnessFieldSalt(`${params.seriesId}:${params.periodId}:income`);
+    const incomeSalt = params.incomeSalt ?? (params.tier === 1 ? 0n : harnessFieldSalt(`${params.seriesId}:${params.periodId}:income`));
     const fx = params.fxAvgWad ?? WAD;
     const units = params.unitsOutstanding ?? (x.redemption ? x.redemption.unitsAtRedemption : x.unitsOutstanding);
     const t = params.privateTerms;

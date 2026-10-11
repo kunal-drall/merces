@@ -138,6 +138,7 @@ export interface MoneyView {
   treasury: string;
   vault: string;
   auctionEscrow: string;
+  routerBalance?: string;
   windowEscrowStable?: string;
   windowEscrowUnits?: string;
 }
@@ -148,6 +149,7 @@ export function moneyView(s: SimSeries): MoneyView {
     vault: D(s.vaultBalance),
     auctionEscrow: D(auctionEscrow(s)),
   };
+  if (s.router) out.routerBalance = D(s.routerBalance);
   const w = s.transferWindows.at(-1);
   if (w) {
     const escrow = windowEscrow(w);

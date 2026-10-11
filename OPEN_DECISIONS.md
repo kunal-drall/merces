@@ -8,7 +8,7 @@
 | Final-share weight | follow both chains; the reference fix and missing-vector regression are implemented in stage1/ | `simulator/src/engine/terminal.ts`; `docs/stage1/defects/` | verify the fix against both chains and the regression vector |
 | Non-reveal charge rate | per series; the rate is the owner's deployment setting `MERCES_NON_REVEAL_CHARGE_BPS`, no built-in default (the terms service refuses sealed series while unset) | `services/src/terms`, `.env.example` | set the value |
 | Window fee | a series parameter; value = Stage 1's default until the owner decides | S5 #2 | set the value |
-| Tier-1 public terms | accepted, with an explicit issuer consent step | S5 #8 | — |
+| Tier-1 public terms | accepted, with explicit `routerPublicConsent=true` | terms validation/create builder; Poseidon binding on chain | changing consent requires a new draft |
 | Formal notice | mirrors Stage 1 (period end + 90 days); owner asked Stage 1 to move it to 90 days after the deadline | `domain` status rules | follow Stage 1's change |
 | Tier-2 liquidity flag | the verifier signs the device-declared flag | `report-verifier` | an attested source |
 | Lost device openings | deterministic salts from the device secret | `poi-device` | — |

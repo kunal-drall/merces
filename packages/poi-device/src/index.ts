@@ -224,7 +224,7 @@ export async function assembleOnDevice(input: DeviceReportInput, verifier: Repor
 
   const real = guard('out-of-range', () => u64(input.incomeYtdNow));
   const incomeYtd = real > priorYtd ? real : priorYtd; // high-water (SPEC §1.5)
-  const incomeSalt = input.incomeSalt !== undefined ? guard('not-field', () => field(input.incomeSalt!)) : deriveIncomeSalt(input.deviceSecret, input.seriesId, input.periodId);
+  const incomeSalt = input.incomeSalt !== undefined ? guard('not-field', () => field(input.incomeSalt!)) : input.tier === 1 ? 0n : deriveIncomeSalt(input.deviceSecret, input.seriesId, input.periodId);
   const ic = guard('not-field', () => incomeCommitment(incomeYtd, incomeSalt));
   const payment = guard('out-of-range', () => paymentStable({ rWad: rate, unitsOutstanding: units, theta, incomeYtd, priorIncomeYtd: priorYtd, fxAvgWad: fx }));
   const publicInputs = guard('out-of-range', () => reportPublicInputs({ termsCommitment: terms, unitsOutstanding: units, fxAvgWad: fx, priorIncomeCommitment: priorCommitment, incomeCommitment: ic, paymentStable: payment }));

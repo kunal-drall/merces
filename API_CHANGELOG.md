@@ -8,6 +8,18 @@ Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
 ## Unreleased
 
+Router flow (211 operations):
+- Added issuer-only `GET /series/{seriesId}/router`: live receiver/held balance, YTD, checkpoints, public terms, credit
+  and mint-finalization state. The linked issuer wallet is required; raw income is never indexed.
+- Added account builders `POST /series/{seriesId}/router/build-route`, `/build-sweep`, `/build-close`; each requires a
+  linked fee-payer wallet. Route takes an amount; close takes an ended period.
+- Added issuer `POST /issuers/build-issuance` with `{chain,wallet,stopped}` for stop/resume transactions.
+- Draft terms/validation accept `routerPublicConsent` (default false, required true for tier 1). `SeriesTerms.routerTerms`
+  exposes the explicitly consented threshold, rate, currency/rule codes and commitment salt. Amendment builders bind
+  the new public router terms as well as the commitment.
+- Pure tier-1 report assembly now rejects missing checkpoints or commitments that do not match the zero-salt router
+  YTD checkpoints. Domain events add value-free router notifications and `IssuanceResumed`.
+
 Window flow:
 - Added `POST /admin/protocol-flags` [admin], returning a stored request and unsigned `setFlags` transaction.
 - Added `POST /series/{seriesId}/window/build-step` and `/window/build-delivery` [account]. A linked fee payer signs;

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { addressSchema, hash32Schema, pairSchema, periodIdSchema, seriesIdSchema, stablecoinSchema } from './ids.ts';
 import { moneySchema, unitsSchema, wadSchema } from './money.ts';
-import { seriesTermsSchema, tierSchema, fxBasisSchema } from './events.ts';
+import { seriesTermsSchema, routerTermsSchema, tierSchema, fxBasisSchema } from './events.ts';
 import { attestationSchema, signature65Schema, signerAddressSchema, i64StringSchema, u64StringSchema } from './signing.ts';
 
 /**
@@ -39,6 +39,7 @@ export const reportProofSchema = z.discriminatedUnion('system', [
 export type ReportProof = z.infer<typeof reportProofSchema>;
 
 export const userCommands = {
+  routeIncome: z.object({ kind: z.literal('routeIncome'), seriesId: seriesIdSchema, amount: moneySchema }),
   createSeries: z.object({ kind: z.literal('createSeries'), terms: seriesTermsSchema, /** simulator/testing only: fixed address for deterministic ids */ seriesAddressHint: z.string().optional() }),
   /** Stage 1 `open_raise`: the chain sets the commit end to now + `commitDurationSeconds` and the reveal end to the commit end + `revealDurationSeconds` (the series' terms) */
   openRaise: z.object({ kind: z.literal('openRaise'), seriesId: seriesIdSchema }),
@@ -146,7 +147,7 @@ export const userCommands = {
    * then UnfavourableAmendment. The amendment nonce advances, so every AMEND signature over the old nonce is dead. Emits
    * `TermsAmended{…, attestor, nonce}` with the nonce that was signed. `tier1Terms` waits for the tier-1 milestone (D16).
    */
-  amendTerms: z.object({ kind: z.literal('amendTerms'), seriesId: seriesIdSchema, termsCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: signerAddressSchema, signature: signature65Schema }),
+  amendTerms: z.object({ kind: z.literal('amendTerms'), routerTerms: routerTermsSchema.optional(), seriesId: seriesIdSchema, termsCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: signerAddressSchema, signature: signature65Schema }),
   commitWindowOrder: z.object({ kind: z.literal('commitWindowOrder'), seriesId: seriesIdSchema, windowId: z.number().int(), side: z.enum(['buy', 'sell']), commitment: hash32Schema, deposit: moneySchema, units: unitsSchema }),
   revealWindowOrder: z.object({ kind: z.literal('revealWindowOrder'), seriesId: seriesIdSchema, windowId: z.number().int(), side: z.enum(['buy', 'sell']), pricePerUnit: moneySchema, quantity: unitsSchema, salt: hash32Schema }),
   /**
@@ -186,6 +187,7 @@ export const userCommands = {
    * `RedemptionClaimed{units, amount: principal, fromStake}`.
    */
   tenderUnits: z.object({ kind: z.literal('tenderUnits'), seriesId: seriesIdSchema, fromStake: unitsSchema, fromWallet: unitsSchema }),
+  resumeIssuance: z.object({kind:z.literal('resumeIssuance')}),
   stopIssuance: z.object({ kind: z.literal('stopIssuance') }),
 } as const;
 
@@ -205,6 +207,8 @@ export const serviceCommands = {
  * any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans the settlement steps.
  */
 export const permissionlessCommands = {
+  sweepRouter: z.object({ kind: z.literal('sweepRouter'), seriesId: seriesIdSchema }),
+  closeRouterPeriod: z.object({ kind: z.literal('closeRouterPeriod'), seriesId: seriesIdSchema, periodId: periodIdSchema }),
   openWindow: z.object({ kind: z.literal('openWindow'), seriesId: seriesIdSchema, periodId: periodIdSchema }),
   beginWindowSettlement: z.object({ kind: z.literal('beginWindowSettlement'), seriesId: seriesIdSchema, windowId: z.number().int().nonnegative(), clearingPrice: moneySchema.nullable() }),
   tallyWindow: z.object({ kind: z.literal('tallyWindow'), seriesId: seriesIdSchema, windowId: z.number().int().nonnegative(), maxOrders: z.number().int().positive() }),

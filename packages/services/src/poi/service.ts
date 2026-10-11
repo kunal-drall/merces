@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AppError, enqueueOutbox, getFlag } from '@merces/core';
-import { attestationSchema, expectedPrior, fieldToHex32, fxDigest, keyUsable, recoverSigner, reportDigest, reportPublicInputs, reportProofSchema, type Attestation, type ChainPort, type SeriesState, type SignerKind, type UnsignedTx, type UserCommand } from '@merces/domain';
+import { attestationSchema, expectedPrior, fieldToHex32, fxDigest, keyUsable, recoverSigner, reportDigest, reportPublicInputs, reportProofSchema, routerIncomeCommitment, type Attestation, type ChainPort, type SeriesState, type SignerKind, type UnsignedTx, type UserCommand } from '@merces/domain';
 import { WAD, fromPid, parsePeriod, periodsBetween, projectDeadlines, statusParamsOf, toPid, yearOf } from '@merces/math';
 import { SOURCE_DEFINITIONS, type IncomeSourceKind } from '@merces/ports';
 import type { Session } from '@merces/api';
@@ -225,6 +225,14 @@ export class ProofOfIncomeService {
     const pidOrNull = (p: string | null) => (p === null ? null : toPid(p));
     const prior = expectedPrior({ lastAcceptedPeriod: pidOrNull(rep.lastAcceptedPeriod), lastIncomePeriod: pidOrNull(rep.lastIncomePeriod), lastIncomeCommitment: rep.lastIncomeCommitment }, toPid(input.periodId), input.priorIncomeCommitment);
     if (prior !== input.priorIncomeCommitment) throw AppError.unprocessable('the prior income commitment does not chain from the last accepted report', { expectedPrior: prior });
+    if (input.tier === 1) {
+      if (series.terms.tierFlags.tier2 || series.terms.tierFlags.tier3 || series.terms.tierFlags.tier4) throw AppError.unprocessable('tier 1 requires a pure tier-1 series',{stage1:'TierNotEnabled'});
+      const router = await chain.getRouter(seriesId);
+      const checkpoint = (periodId: string) => toPid(periodId) < toPid(rep.firstPeriod!) ? '0' : router?.checkpoints.find((c)=>c.periodId === periodId)?.ytdAtEnd;
+      const ytd = checkpoint(input.periodId), before = toPid(input.periodId) % 4 === 0 ? '0' : checkpoint(fromPid(toPid(input.periodId)-1));
+      if (ytd === undefined || before === undefined) throw AppError.conflict('close the router period before reporting',{stage1:'RouterPeriodNotClosed'});
+      if (input.incomeCommitment !== routerIncomeCommitment(ytd) || prior !== routerIncomeCommitment(before)) throw AppError.unprocessable('report does not bind to router checkpoints',{stage1:'InvalidProof'});
+    }
     let expectedInputs: string[];
     try {
       expectedInputs = reportPublicInputs({ termsCommitment: series.terms.termsCommitment, unitsOutstanding: units, fxAvgWad, priorIncomeCommitment: prior, incomeCommitment: input.incomeCommitment, paymentStable: input.paymentStable });

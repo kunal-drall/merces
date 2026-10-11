@@ -38,6 +38,15 @@ export interface DivergenceRow {
  * guards both chains enforce and the reference omits. No official vector carries a waiver. */
 export const DIVERGENCES: readonly DivergenceRow[] = Object.freeze([
   {
+    id: 'DIV-S1I-7',
+    title: 'router terminal pass-through and checkpoint retention follow the programs',
+    what: 'Both programs pass income through after retirement, redemption or extinguishment; the TS reference route_income refuses terminal series. EVM retains every checkpoint and permits repeated close calls; Solana/reference retain eight, and Solana rejects closing an already closed period. EVM close requires a settled raise; neither program requires mint finalization for close.',
+    why: 'MercesRouter.sol _route/_closeThrough/closeRouterPeriod and Solana router.rs route/close_router_period are authoritative.',
+    milestone: 'until the reference models the program-specific router lifecycle and checkpoint rules',
+    seen: 'packages/simulator/test/split.test.ts exercises terminal receipts, long gaps, retention and repeated closes on both personalities. Vectors 12 and 18 pass in full with no waiver.',
+    lift: ['Extend the reference router lifecycle and personality-specific checkpoint storage, then replay these cases in lockstep.'],
+  },
+  {
     id: 'DIV-S1I-6',
     title: 'window payout ownership follows the clearing accumulator',
     what: 'Both programs freeze accAtClear and credit the buyer or the returned ask units from that point when each order is processed. The TS reference processes the whole book atomically and has no intervening payout or pending delivery state.',

@@ -1,3 +1,4 @@
+import { newRouterState } from '@merces/math';
 import { ChainError, auctionRulesOf, settlementOutcome, type Command } from '@merces/domain';
 import {
   beginSettlement as stage1BeginSettlement, capPerUnit, processBid as stage1ProcessBid, tallyBids as stage1TallyBids,
@@ -138,6 +139,7 @@ export function finalizeSettlement(e: EngineCore, cmd: Cmd<'finalizeSettlement'>
   s.phase = 'Settled';
   s.settledAt = now;
   s.ledger.firstPeriod = pidAtTime(now); // SIM:972
+  if (s.router) s.router = newRouterState(s.router.theta,s.router.rWad,s.ledger.firstPeriod);
   s.issuePrice = o.clearingPrice;
   s.unitsSold = o.unitsSold;
   s.capPerUnit = capPerUnit(s.terms.capMultipleWad, o.clearingPrice); // Stage 1's floor(m × P0 / WAD)

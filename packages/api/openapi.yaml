@@ -347,6 +347,8 @@ components:
     SeriesTerms:
       type: object
       properties:
+        routerTerms:
+          $ref: "#/components/schemas/RouterTerms"
         fxPairId:
           type:
             - string
@@ -3703,6 +3705,63 @@ components:
         createdAt:
           type: string
           format: date-time
+    RouterTerms:
+      type: object
+      description: Explicitly disclosed tier-1 terms, verified against the Poseidon commitment by Stage 1.
+      required:
+        - theta
+        - rWad
+        - currencyCode
+        - indexingRule
+        - termsSalt
+      properties:
+        theta:
+          $ref: "#/components/schemas/Money"
+        rWad:
+          $ref: "#/components/schemas/Wad"
+        currencyCode:
+          type: integer
+        indexingRule:
+          type: integer
+        termsSalt:
+          type: string
+    RouterState:
+      type: object
+      required:
+        - seriesId
+        - receiver
+        - heldBeforeFinalization
+        - ytdYear
+        - ytdReceived
+        - nextCheckpointPeriod
+        - checkpoints
+      properties:
+        seriesId:
+          type: string
+        receiver:
+          type: string
+        heldBeforeFinalization:
+          $ref: "#/components/schemas/Money"
+        ytdYear:
+          type: integer
+        ytdReceived:
+          $ref: "#/components/schemas/Money"
+        nextCheckpointPeriod:
+          type:
+            - string
+            - "null"
+        checkpoints:
+          type: array
+          items:
+            type: object
+            required:
+              - periodId
+              - ytdAtEnd
+            properties:
+              periodId:
+                type: string
+              ytdAtEnd:
+                $ref: "#/components/schemas/Money"
     SeriesNonces:
       type: object
       description: "A series' signing nonces as the chain stores them (Stage 1 pause_nonce, amendment_nonce, extinguish_nonce, trueup_nonce), u64 decimal strings. A PAUSE, AMEND, EXTINGUISH or TRUEUP signature binds the nonce it was requested over and is dead once that nonce moves: pause advances on each pause request and on its withdrawal (an approval does not), amendment on each accepted amendment, extinguish on the extinguishment, trueup on each accepted true-up. REPORT and FX signatures bind no nonce."
@@ -5464,6 +5523,10 @@ paths:
                 public:
                   type: object
                   properties:
+                    routerPublicConsent:
+                      type: boolean
+                      default: false
+                      description: "Required true for tier 1: publishes the threshold, share rate and routed receipts onchain."
                     fxPairId:
                       type:
                         - string
@@ -5675,6 +5738,10 @@ paths:
                 public:
                   type: object
                   properties:
+                    routerPublicConsent:
+                      type: boolean
+                      default: false
+                      description: "Required true for tier 1: publishes the threshold, share rate and routed receipts onchain."
                     fxPairId:
                       type:
                         - string
@@ -10792,6 +10859,205 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /series/{seriesId}/router:
+    get:
+      operationId: getIncomeRouter
+      x-access: issuer
+      tags:
+        - issuer
+      security:
+        - session: []
+      parameters:
+        - name: seriesId
+          in: path
+          required: true
+          schema:
+            type: string
+      description: Issuer-only live router balances and checkpoints. Raw routed income is never indexed or included in the activity feed. Tier-1 reports must use zero-salt commitments to these checkpoints.
+      responses:
+        "200":
+          description: Router state
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - router
+                  - terms
+                  - routerCredit
+                  - mintFinalized
+                properties:
+                  router:
+                    $ref: "#/components/schemas/RouterState"
+                  terms:
+                    $ref: "#/components/schemas/RouterTerms"
+                  routerCredit:
+                    $ref: "#/components/schemas/Money"
+                  mintFinalized:
+                    type: boolean
+        "403":
+          description: Issuer wallet is not linked
+        "409":
+          description: Tier-1 router is not enabled
+  /series/{seriesId}/router/build-route:
+    post:
+      operationId: buildRouteIncome
+      x-access: account
+      tags:
+        - issuer
+      security:
+        - session: []
+      parameters:
+        - name: seriesId
+          in: path
+          required: true
+          schema:
+            type: string
+      description: Builds an unsigned receipt transaction for the linked payer. Income received before mint finalization is held. Afterwards Stage 1 splits against the threshold and actual outstanding units; terminal series pass income through.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - wallet
+                - amount
+              properties:
+                wallet:
+                  type: string
+                amount:
+                  $ref: "#/components/schemas/Money"
+      responses:
+        "200":
+          description: Unsigned route
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - tx
+                properties:
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+  /series/{seriesId}/router/build-sweep:
+    post:
+      operationId: buildSweepRouter
+      x-access: account
+      tags:
+        - issuer
+      security:
+        - session: []
+      parameters:
+        - name: seriesId
+          in: path
+          required: true
+          schema:
+            type: string
+      description: Permissionless sweep of the receiving account once minting is final, or after raise failure/cancellation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - wallet
+              properties:
+                wallet:
+                  type: string
+      responses:
+        "200":
+          description: Unsigned sweep
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - tx
+                properties:
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+  /series/{seriesId}/router/build-close:
+    post:
+      operationId: buildCloseRouterPeriod
+      x-access: account
+      tags:
+        - issuer
+      security:
+        - session: []
+      parameters:
+        - name: seriesId
+          in: path
+          required: true
+          schema:
+            type: string
+      description: Permissionless checkpoint of an ended quarter and any missing prior quarters, needed before tier-1 report submission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - wallet
+                - periodId
+              properties:
+                wallet:
+                  type: string
+                periodId:
+                  type: string
+                  pattern: ^\d{4}Q[1-4]$
+      responses:
+        "200":
+          description: Unsigned checkpoint
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - tx
+                properties:
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
+  /issuers/build-issuance:
+    post:
+      operationId: buildIssuerIssuance
+      x-access: issuer
+      tags:
+        - issuer
+      security:
+        - session: []
+      description: Builds the issuer's stopIssuance or resumeIssuance transaction. Requires a linked issuer wallet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - chain
+                - wallet
+                - stopped
+              properties:
+                chain:
+                  type: string
+                wallet:
+                  type: string
+                stopped:
+                  type: boolean
+      responses:
+        "200":
+          description: Unsigned issuer control
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - tx
+                properties:
+                  tx:
+                    $ref: "#/components/schemas/UnsignedTx"
   /series/{seriesId}/signing:
     get:
       operationId: getSeriesSigning

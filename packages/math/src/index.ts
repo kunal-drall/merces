@@ -259,3 +259,5 @@ export {
 
 // Stage 1 transfer-window clearing (SPEC §7), shared by engine and transaction planner.
 export { walletCapUnits, requiredBidEscrow, isOrderValid, tallyOrders, isNoMatchValid, classifyWindowPrice, finalizeWindow, findWindowClearingPrice, computeFills, type WindowOrder, type WindowRules, type WindowTally, type WindowClearing, type OrderFill } from '@merces/reference';
+
+export { newRouterState, closeRouterPeriod, closePeriodsThrough, ytdAtEnd, routeIncome, ROUTER_CHECKPOINT_RING, type RouterState, type RouterCheckpoint } from '@merces/reference';

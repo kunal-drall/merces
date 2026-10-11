@@ -35,6 +35,7 @@ export function seriesRow(r: Record<string, unknown>): Record<string, unknown> {
     status: r.status,
     terms: {
       fxPairId: r.fx_pair_id ?? null,
+      ...(r.router_terms ? {routerTerms:r.router_terms} : {}),
       unitsOffered: r.units_offered,
       reservePrice: r.reserve_price,
       minimumRaise: r.minimum_raise,

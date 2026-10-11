@@ -1,4 +1,4 @@
-import { attestationOf, bidCommitment, randomSalt, termsCommitment, type SeriesTerms } from '@merces/domain';
+import { currencyCodeOf, INDEXING_RULE_CODE, attestationOf, bidCommitment, randomSalt, termsCommitment, type SeriesTerms } from '@merces/domain';
 import { PILOT_COHORT, stripeFixtureFor, stripeGrossUntil, type SyntheticIssuer } from '@merces/fixtures';
 import { WAD, parsePeriod, periodsBetween, ratePerUnit, requiredEscrow, wadFromDecimal } from '@merces/math';
 import { MemoryIncomeChain, assembleOnDevice, submitReportCommand } from '@merces/poi-device';
@@ -67,6 +67,7 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
       // a 2-day commit and a 1-day reveal phase (the cohort's timing; openRaise derives the ends from these)
       commitDurationSeconds: 2 * 86_400, revealDurationSeconds: 86_400,
     });
+    if (issuer.tier === 1) terms.routerTerms = {theta:privateTerms.theta.toString(),rWad:privateTerms.rWad.toString(),currencyCode:currencyCodeOf(privateTerms.currency),indexingRule:INDEXING_RULE_CODE[privateTerms.indexingRule],termsSalt:privateTerms.termsSalt.toString()};
     // the issuer wallet signs (not the harness default issuer)
     const exec = (cmd: Parameters<SimHarness['exec']>[1]) => h.exec(wallet, cmd);
     await h.exec(h.admin, { kind: 'registerIssuer', wallet: wallet.address });
@@ -98,7 +99,6 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
     if (auction.raiseState !== 'Settled') throw new Error(`seed: auction for ${issuer.handle} failed (${auction.failureReason}); fixture minimumRaise must be ≤ unitsOffered/2 × reservePrice`);
     const clearing = BigInt(auction.clearingPrice!);
     await exec({ kind: 'drawRelease', seriesId });
-    if (issuer.tier === 1) await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId, router: h.router });
     log(`${issuer.chain}:${issuer.handle} raised ${clearing * BigInt(qty) * 5n} at ${clearing}/unit`);
     out.push({ issuer, wallet, seriesId, terms, privateTerms, clearingPrice: clearing });
   }
@@ -118,6 +118,15 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
   for (let q = 1; q <= quarters; q++) {
     const periodId = `2026Q${q}`;
     const period = parsePeriod(periodId);
+    // Stage 1 receipts must arrive within the quarter they prove, before its checkpoint is closed.
+    for (const s of out.filter((s)=>s.issuer.tier === 1)) {
+      const h=harnesses[s.issuer.chain]!;
+      const fixture=stripeFixtureFor(s.issuer.handle,2026,s.issuer.incomeYtdByQuarter);
+      const ytd=stripeGrossUntil(fixture,period.end)*10_000n;
+      const previous=(await h.sim.getRouter(s.seriesId))!.ytdReceived;
+      await h.sim.setTime(period.end-1);
+      await h.exec(s.wallet,{kind:'routeIncome',seriesId:s.seriesId,amount:(ytd-BigInt(previous)).toString()});
+    }
     for (const chain of ['solana', 'monad'] as const) if ((await sims[chain].now()) < period.end + 86_400) await sims[chain].setTime(period.end + 86_400);
     for (const s of out) {
       const h = harnesses[s.issuer.chain]!;
@@ -128,6 +137,7 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
       const rate = fxBasis === 'unity' ? WAD : wadFromDecimal(FX_PLACEHOLDER[s.issuer.reportingCurrency] ?? '1');
       const series = (await h.sim.getSeries(s.seriesId))!;
       const tier = s.issuer.tier as 1 | 2 | 3;
+      if (tier === 1) await h.sim.submit({kind:'closeRouterPeriod',seriesId:s.seriesId,periodId},'keeper');
       const source = tier === 1 ? 'split' : tier === 3 ? 'attestor' : (s.issuer.source as IncomeSourceKind);
       const zktlsProof = tier === 2 ? zktls.prove({ source: source as IncomeSourceKind, seriesId: s.seriesId, periodId, figure: ytdNow, currency: s.issuer.reportingCurrency, coversUntil: period.end, owner: s.wallet.address }) : null;
       const { assembled, entry } = await assembleOnDevice({

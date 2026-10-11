@@ -1,3 +1,4 @@
+import { fromPid } from '@merces/math';
 import { direct, type TranslatorTable } from './types.ts';
 import { RunnerError } from '../errors.ts';
 
@@ -12,6 +13,8 @@ import { RunnerError } from '../errors.ts';
  *   body (SIM:624-636). Stage 1's op carries no actor (anyone may send it), so the runner submits it as the keeper.
  */
 export const moneyOps: TranslatorTable = {
+  route_income: (ctx,c) => direct(async()=> { await ctx.send(ctx.actors.wallet(c.payer),{kind:'routeIncome',seriesId:ctx.seriesBook(c.series).seriesId,amount:c.amount}); }),
+  close_router_period: (ctx,c) => direct(async()=> { await ctx.submit({kind:'closeRouterPeriod',seriesId:ctx.seriesBook(c.series).seriesId,periodId:fromPid(Number(c.period))},'keeper'); }),
   submit_trueup: (ctx, c) => direct(async () => {
     const seriesId = ctx.seriesBook(c.series).seriesId;
     const [info, series] = await Promise.all([ctx.chain.info(), ctx.chain.getSeries(seriesId)]);

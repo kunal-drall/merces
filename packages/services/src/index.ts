@@ -1,3 +1,4 @@
+import { registerRouterRoutes } from './router/routes.ts';
 import type { AppContext } from '@merces/api';
 import { checkNonRevealCharge, nonRevealChargeSetting } from '@merces/domain';
 import { LocalKms, MockESign, MockIdentityCheck, MockZkTls, reportProofSystemFromEnv, reportProofVerifier, resolveSecret, simulatorOnly, vaultFromEnv, type ESignPort, type IdentityCheckPort, type KmsPort, type ProofVerifierPort, type VaultCrypto, type ZkTlsPort } from '@merces/ports';
@@ -86,4 +87,4 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
 }
 
 /** Every service route module, in registration order. The server composes them into the gateway. */
-export const serviceRoutes: ((app: import('fastify').FastifyInstance, ctx: AppContext) => void)[] = [registerIdentityRoutes, registerContractRoutes, registerTermsRoutes, registerPoiRoutes, registerAuctionRoutes, registerLifecycleRoutes, registerMeteoraRoutes, registerThresholdRoutes, registerAttestorRoutes, registerAccountingRoutes, registerNotificationsRoutes, registerAdminRoutes];
+export const serviceRoutes: ((app: import('fastify').FastifyInstance, ctx: AppContext) => void)[] = [registerRouterRoutes, registerIdentityRoutes, registerContractRoutes, registerTermsRoutes, registerPoiRoutes, registerAuctionRoutes, registerLifecycleRoutes, registerMeteoraRoutes, registerThresholdRoutes, registerAttestorRoutes, registerAccountingRoutes, registerNotificationsRoutes, registerAdminRoutes];

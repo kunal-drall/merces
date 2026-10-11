@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ChainError } from '@merces/domain';
 import type { Step } from '@merces/reference';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   DIVERGENCES,
   DIVERGENCE_BY_ID,
@@ -315,7 +315,7 @@ describe('stage1 vector runner: expectations and the op map', () => {
   // five DIV-NRC-1 entries and its lockstep parting)
   it('targets are never NOT-YET; waivers only on blocked or n/a rows; no vector carries a divergence; prefix gates carry until; the rest are NOT-YET with a milestone', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(listVectorFiles(VECTORS).map((f) => f.split('/').at(-1)!.slice(0, 2)));
-    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20', '13', '24', '10', '16', '22']);
+    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20', '13', '24', '10', '16', '22', '12', '18']);
     expect([...TARGETS_S2]).toEqual(['02', '03', '15', '17']);
     expect([...TARGETS_S4]).toEqual(['21']); // cause S4-PAU: 21 in full (was gated at #40)
     expect(PREFIX_GATES).toEqual({}); // S5: true-up vector 20 passed full lockstep on both personalities.
@@ -345,8 +345,8 @@ describe('stage1 vector runner: expectations and the op map', () => {
     // DIV-NRC-1 went with the non-reveal charge modelled, and 03 is PASS. Cause S3R-F: the register's first row is
     // DIV-S1I-1, which only our scenario S3l meets (was: the register empty). Cause S4-REG: DIV-S1I-2, the last-key rule,
     // which only our merces-only scenario S4d shows, as an expected revert: no entry anywhere (amendment fix 1)
-    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-6', 'DIV-S1I-5', 'DIV-S1I-4', 'DIV-S1I-2']);
-    expect(DIVERGENCE_BY_ID.size).toBe(4);
+    expect(DIVERGENCES.map((d) => d.id)).toEqual(['DIV-S1I-7', 'DIV-S1I-6', 'DIV-S1I-5', 'DIV-S1I-4', 'DIV-S1I-2']);
+    expect(DIVERGENCE_BY_ID.size).toBe(5);
     expect(DIVERGENCE_BY_ID.get('DIV-S1I-2')?.shownBy).toEqual(['S4d']);
     expect(Object.values(SCENARIO_EXPECTATIONS).filter((e) => e.divergences?.some((d) => d.id === 'DIV-S1I-2') || e.lockstep?.id === 'DIV-S1I-2')).toEqual([]);
     expect(EXPECTED['03']).toMatchObject({ status: 'PASS' });
@@ -666,16 +666,22 @@ describe('stage1 vector runner: merces backend', () => {
 
   it('lockstep stops at the first step after which the backends disagree', async () => {
     const src = raw('01_happy_path');
-    // an op the merces backend does not run yet, after the settled expect: the states part there
-    src.steps.splice(32, 0, { t: src.steps[31]!.t, op: 'set_release_pause', actor: 'issuer', series: 'S1', paused: false });
-    const r = (await runStage1Vectors({ vectors: [fromJson(src, '01_happy_path')], backend: 'lockstep', personalities: ['solana'] })).runs[0]!;
-    expect(r.status).toBe('FAIL');
-    expect(r.stopped).toEqual({ index: 33, reason: 'diverged' });
-    expect(r.issues.map((i) => [i.index, i.kind, i.message])).toEqual([
-      // cause S2-NY: was "set_release_pause is not in S1 (S5)"
-      [32, 'blocked', 'the merces backend does not run this call (set_release_pause is not modelled yet (S5))'],
-      [32, 'fail', 'the merces backend did not run this action, so the states part here'],
-    ]);
+    // All vector ops now execute. Inject a missing translator to exercise the lockstep failure boundary.
+    const apply = MercesWorld.prototype.apply;
+    const missing = vi.spyOn(MercesWorld.prototype, 'apply').mockImplementation(function(this: MercesWorld,call) {
+      if (call.op === 'set_release_pause') return Promise.resolve({kind:'blocked',note:'injected missing translator'});
+      return apply.call(this,call);
+    });
+    try {
+      src.steps.splice(32, 0, { t: src.steps[31]!.t, op: 'set_release_pause', actor: 'issuer', series: 'S1', paused: false });
+      const r = (await runStage1Vectors({ vectors: [fromJson(src, '01_happy_path')], backend: 'lockstep', personalities: ['solana'] })).runs[0]!;
+      expect(r.status).toBe('FAIL');
+      expect(r.stopped).toEqual({ index: 33, reason: 'diverged' });
+      expect(r.issues.map((i) => [i.index, i.kind, i.message])).toEqual([
+        [32, 'blocked', 'the merces backend does not run this call (injected missing translator)'],
+        [32, 'fail', 'the merces backend did not run this action, so the states part here'],
+      ]);
+    } finally { missing.mockRestore(); }
   }, 60_000);
 
   // cause S2-VR: validity is fixed at reveal on both backends (was: the one-step settlement clamped the over-cap bid to
@@ -1013,13 +1019,13 @@ describe('stage1 vector runner: merces backend', () => {
 
   // cause S2-NY: 42 runs, the 14 targets and the 7 prefix gates on both personalities (was: the 10 S1 targets, 20 runs).
   // Cause NRC: 42/42 PASS, 03 among them (was 36/42, 03 PASS-WITH-DIVERGENCES on its five DIV-NRC-1 fields)
-  it('every target and prefix gate is at its expected status on both personalities: 46/46 PASS, windows and FX in full', async () => {
+  it('every target and prefix gate is at its expected status on both personalities: 50/50 PASS, all 25 vectors in full', async () => {
     const report = await fullRun();
     const ids = [...TARGETS, ...Object.keys(PREFIX_GATES)].sort();
     expect(report.runs.map((r) => `${r.id}/${r.world}`)).toEqual(ids.flatMap((id) => [`${id}/merces/solana`, `${id}/merces/monad`]));
     for (const r of report.runs) expect(r.atExpected, `${r.vector} ${r.world}: ${r.status}`).toBe(true);
     expect(report.ok).toBe(true);
-    expect(report.runs.filter((r) => r.status === 'PASS')).toHaveLength(46);
+    expect(report.runs.filter((r) => r.status === 'PASS')).toHaveLength(50);
     const statusOf = (id: string) => [...new Set(report.runs.filter((r) => r.id === id).map((r) => r.status))];
     for (const id of ['02', '03', '15', '17']) expect(statusOf(id), id).toEqual(['PASS']);
     for (const id of ['01', '05', '08', '14', '20', '13', '24']) expect(statusOf(id), id).toEqual(['PASS']);
@@ -1029,7 +1035,7 @@ describe('stage1 vector runner: merces backend', () => {
       for (const r of report.runs.filter((x) => x.id === id)) expect([r.status, r.executed, r.stopped], `${id} ${r.world}`).toEqual(['PASS', until + 1, { index: until + 1, reason: 'until' }]);
     }
     // cause S2-NY: only the vectors that never reach the auction, or stop before it, are left out (was: 15 vectors)
-    expect(report.notRun.map((n) => [n.id, n.expected.status])).toEqual([['12', 'NOT-YET'], ['18', 'NOT-YET']]);
+    expect(report.notRun.map((n) => [n.id, n.expected.status])).toEqual([]);
     // the report proofs went through the ports' Groth16 verifier: 04#66 passes only because its pairing check fails
     // (its signals match the claimed payment), so a verifier that accepted everything would leave 04 off its status
     expect(report.proofs.verified).toBeGreaterThan(0);
@@ -1038,7 +1044,7 @@ describe('stage1 vector runner: merces backend', () => {
   it('the shim table is written into VECTOR_PARITY.md under "Shims (not parity)", with the known divergences and the prefix gates, and a merces run carries public values only', async () => {
     const report = await fullRun();
     expect(report.runs).toHaveLength((TARGETS.length + Object.keys(PREFIX_GATES).length) * 2);
-    expect(report.notRun).toHaveLength(2);
+    expect(report.notRun).toHaveLength(0);
     const md = renderParity([report], { dir: '$STAGE1_PATH/packages/vectors' });
     const section = md.slice(md.indexOf('## Shims (not parity)'));
     expect(section.length).toBeGreaterThan(0);
@@ -1056,6 +1062,7 @@ describe('stage1 vector runner: merces backend', () => {
     expect(known).not.toContain('None: the register is empty');
     // cause S4-REG: and DIV-S1I-2, the last-key rule, which our merces-only scenario S4d shows with no entries
     expect(known.match(/^### .*$/gm)).toEqual([
+      '### DIV-S1I-7: router terminal pass-through and checkpoint retention follow the programs',
       '### DIV-S1I-6: window payout ownership follows the clearing accumulator',
       '### DIV-S1I-5: configured FX cross-check availability follows each chain',
       '### DIV-S1I-4: true-up submissions reject terminal series and future attestation times',
@@ -1070,7 +1077,8 @@ describe('stage1 vector runner: merces backend', () => {
     // cause S4-PAU: 08 to #57, 21 in full
     expect(md).toContain('| 08_hardship_pause | PASS 64/64 | PASS 64/64 | PASS |');
     expect(md).toContain('| 21_entry_rules | PASS 61/61 | PASS 61/61 | PASS |');
-    expect(md).toContain('## Not replayed on the merces backend\n\n- 12_multi_series_router: NOT-YET (S5: income router)');
+    expect(md).toContain('| 12_multi_series_router | PASS 118/118 | PASS 118/118 | PASS |');
+    expect(md).toContain('| 18_report_before_finalization | PASS 51/51 | PASS 51/51 | PASS |');
     // review finding "VECTOR_PARITY.md 'Used in' leaves out shims exercised by expect_revert steps": the calls of
     // passing reverts went through their shims too (redeem at 01#33, 05#43, 11#43; cause S4-AMD: amend_terms at 05#44
     // and 11#45 is direct since S4 WP11, was SH-AMD-1)

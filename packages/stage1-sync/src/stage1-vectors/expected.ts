@@ -84,7 +84,7 @@ export const TARGETS_S2 = ['02', '03', '15', '17'] as const;
 export const TARGETS_S4 = ['21'] as const;
 /** Every target vector: replayed in full on the merces backend. */
 // S5 lifecycle commands: full lockstep replays of 08 (64 steps) and 14 (83) pass on both personalities.
-export const TARGETS: readonly string[] = Object.freeze([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20', '13', '24', '10', '16', '22']);
+export const TARGETS: readonly string[] = Object.freeze([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4, '08', '14', '20', '13', '24', '10', '16', '22', '12', '18']);
 
 const S2_RAISE = ['S2 WP2', 'S2 WP4a', 'S2 WP4b'];
 
@@ -103,13 +103,13 @@ export const EXPECTED: Readonly<Record<string, Expected>> = Object.freeze({
   '09': { status: 'PASS', needs: ['WP3', 'WP5', 'WP6'] },
   '10': { status: 'PASS', needs: ['S5 multi-step windows'] },
   '11': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5', 'WP6', 'WP7'] },
-  '12': { status: 'NOT-YET', milestone: 'S5', reason: 'income router' },
+  '12': { status: 'PASS', needs: ['S5 income router'] },
   '13': { status: 'PASS', needs: ['S5 FX'] },
   '14': { status: 'PASS', needs: ['S5 retire_if_capped'] },
   '15': { status: 'PASS', needs: S2_RAISE },
   '16': { status: 'PASS', needs: ['S5 multi-step windows'] },
   '17': { status: 'PASS', needs: S2_RAISE },
-  '18': { status: 'NOT-YET', milestone: 'S5', reason: 'income router (stops at #11, create_series with a router)' },
+  '18': { status: 'PASS', needs: ['S5 income router'] },
   '19': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5'] },
   '20': { status: 'PASS', needs: ['S5 true-up'] },
   // PASS in full since S4 WP10 (was PREFIX-PASS to #40): #41's 2^64 pause end is AmountOutOfRange before the signature is

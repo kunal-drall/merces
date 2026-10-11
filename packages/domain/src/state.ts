@@ -547,3 +547,9 @@ export interface CurveSwapQuote {
   fee: Money;
   fillsCurve: boolean;
 }
+
+/** Chain-only router data. Routed income and checkpoints are not written into the backend database. */
+export interface RouterState {
+  seriesId: string; receiver: string; heldBeforeFinalization: string; ytdYear: number; ytdReceived: string;
+  nextCheckpointPeriod: string | null; checkpoints: { periodId: string; ytdAtEnd: string }[];
+}

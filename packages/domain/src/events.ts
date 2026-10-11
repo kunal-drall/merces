@@ -49,8 +49,16 @@ export type ReleaseTranche = z.infer<typeof releaseTrancheSchema>;
 
 export const tierFlagsSchema = z.object({ tier1: z.boolean(), tier2: z.boolean(), tier3: z.boolean(), tier4: z.boolean() });
 
+/** Public tier-1 opening, deliberately published only with explicit issuer consent. */
+export const routerTermsSchema = z.object({
+  theta: moneySchema, rWad: wadSchema, currencyCode: z.number().int().min(0).max(65535),
+  indexingRule: z.number().int().min(0).max(255), termsSalt: z.string().regex(/^\d+$/),
+});
+export type RouterTerms = z.infer<typeof routerTermsSchema>;
+
 /** The immutable terms recorded on a series (C4). θ and r are NOT here: only their commitment. */
 export const seriesTermsSchema = z.object({
+  routerTerms: routerTermsSchema.optional(),
   fxPairId: hash32Schema.nullable().default(null),
   stablecoin: stablecoinSchema,
   stablecoinMint: addressSchema,
@@ -107,8 +115,13 @@ export type SeriesTerms = z.infer<typeof seriesTermsSchema>;
 const seriesScoped = { seriesId: seriesIdSchema };
 
 export const eventPayloads = {
+  // Raw routed income and YTD are read from the chain by the issuer, never copied into indexed events.
+  RouterIncomeHeld: z.object({ ...seriesScoped }),
+  RouterIncomeRouted: z.object({ ...seriesScoped }),
+  RouterPeriodClosed: z.object({ ...seriesScoped, periodId: periodIdSchema }),
   FxPairSet: z.object({ pairId: hash32Schema, feedId: hash32Schema, inverted: z.boolean(), crosscheck: addressSchema.nullable(), effectivePeriod: periodIdSchema }),
   IssuerRegistered: z.object({ issuer: addressSchema }),
+  IssuanceResumed: z.object({issuer:addressSchema}),
   IssuanceStopped: z.object({ issuer: addressSchema }),
   SeriesCreated: z.object({ ...seriesScoped, issuer: addressSchema, terms: seriesTermsSchema }),
   /**
@@ -280,7 +293,7 @@ export const eventPayloads = {
    * value before the increment, as both chains emit it; Stage 1's reference prints the value after it, SIM:863-864, which
    * lockstep never compares: S4 amendment fix 7), a u64 decimal string.
    */
-  TermsAmended: z.object({ ...seriesScoped, termsCommitment: hash32Schema, previousCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: signerAddressSchema, nonce: z.string().regex(/^\d+$/) }),
+  TermsAmended: z.object({ routerTerms: routerTermsSchema.optional(), ...seriesScoped, termsCommitment: hash32Schema, previousCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: signerAddressSchema, nonce: z.string().regex(/^\d+$/) }),
   /**
    * Stage 1's `SeriesExtinguished{series, unreleased, attestor_a, attestor_b}` (merces_protocol events.rs:320-325;
    * IMercesVault.sol:89, emitted at MercesVault.sol:610): `attestors` are the two attestor keys whose EXTINGUISH

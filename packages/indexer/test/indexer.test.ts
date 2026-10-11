@@ -317,19 +317,18 @@ describe.skipIf(!dbTestsEnabled())('indexer (E1)', () => {
       const idx = new Indexer(t.pool, [h.sim], { logger: quiet });
       const status = async (seriesId: string) => (await t.pool.query('select status from series where series_id = $1', [seriesId])).rows[0].status;
       // the cap is 2.5 × 9 = 22.5 USDC per unit, 11,250 USDC over 500 units
-      const split = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
+      const split = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: true, tier3: false, tier4: false } } });
       const paid = await h.runRaise();
-      await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId: split.seriesId, router: h.router });
       await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
-      // a pure tier-1 series reports Q1 and leaves the due open
-      const q1 = await h.buildReport({ seriesId: split.seriesId, periodId: '2026Q1', privateTerms: split.privateTerms, incomeYtdNow: USDC(100_000), tier: 1 });
+      // a mixed-tier series reports Q1 through tier 2 and leaves the due open
+      const q1 = await h.buildReport({ seriesId: split.seriesId, periodId: '2026Q1', privateTerms: split.privateTerms, incomeYtdNow: USDC(100_000), tier: 2 });
       await h.exec(h.issuer, q1.command);
       await idx.catchUp();
       expect(await ledgerRow(split.seriesId)).toEqual(await chainLedger(h, split.seriesId));
       expect(await ledgerRow(split.seriesId)).toMatchObject({ open_due_period: '2026Q1', open_due_amount: q1.paymentStable.toString() });
       // the router's income reaches the cap: the series retires with the Q1 due unpaid, and Stage 1 owes nothing more
-      const receipt = await h.sim.postSplitReceipt(h.router, split.seriesId, USDC(20_000));
-      expect(receipt.events.map((e) => e.type)).toEqual(['PaymentRefunded', 'FeeTaken', 'PaymentReceived', 'StatusChanged', 'SeriesRetired', 'SplitReceipt']);
+      const receipt = await h.exec(h.issuer, {kind:'routeIncome',seriesId:split.seriesId,amount:USDC(260_000).toString()});
+      expect(receipt.events.map((e) => e.type)).toEqual(['PaymentRefunded', 'FeeTaken', 'PaymentReceived', 'StatusChanged', 'SeriesRetired', 'SplitReceipt', 'RouterIncomeRouted']);
       await idx.catchUp();
       expect((await h.sim.getSeries(split.seriesId))!.reporting).toMatchObject({ openDuePeriod: null, openDueAmount: '0' });
       expect(await status(split.seriesId)).toBe('Retired');

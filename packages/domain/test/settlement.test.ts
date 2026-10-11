@@ -76,7 +76,7 @@ describe('permissionless commands and the settlement events (cause S2-MS)', () =
       expect(serviceCommandSchema.parse(c)).toEqual(c);
     }
     expect(serviceCommandSchema.parse({ kind: 'crankStatus', seriesId: SID }).kind).toBe('crankStatus');
-    expect(permissionlessCommandKinds).toEqual(['openWindow', 'beginWindowSettlement', 'tallyWindow', 'finalizeWindow', 'processOrder', 'deliverOrder', 'snapshotFx', 'retireIfCapped', 'beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish']); // cause S3-BR, S3-CV, S3-CN, S4-PAU, S4-EXT
+    expect(permissionlessCommandKinds).toEqual(['sweepRouter', 'closeRouterPeriod', 'openWindow', 'beginWindowSettlement', 'tallyWindow', 'finalizeWindow', 'processOrder', 'deliverOrder', 'snapshotFx', 'retireIfCapped', 'beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause', 'extinguish']); // cause S3-BR, S3-CV, S3-CN, S4-PAU, S4-EXT
     for (const maxBids of [0, 1.5, -1]) expect(() => permissionlessCommandSchema.parse({ kind: 'tallyBids', seriesId: SID, maxBids })).toThrow();
     expect(() => permissionlessCommandSchema.parse({ kind: 'beginSettlement', seriesId: SID, clearingPrice: '9.5', qAboveClaim: '0', qAtClaim: '0' })).toThrow();
     expect(() => userCommandSchema.parse({ kind: 'deliverBid', seriesId: SID, bidder: 'b0' })).toThrow();

@@ -24,6 +24,7 @@ import { toRedemption } from './reads/redemption.ts';
 import { toIssuerState, toSeriesState } from './reads/series.ts';
 import { toTreasuryState } from './reads/treasury.ts';
 import { toVaultState } from './reads/vault.ts';
+import { toRouterState } from './engine/router.ts';
 import { toTransferWindow } from './reads/window.ts';
 
 /**
@@ -298,6 +299,7 @@ export class SimulatorChain implements ChainPort {
   async listSignerKeys(kind: SignerKind): Promise<SignerKeyState[]> {
     return listSignerKeys(this.state, kind);
   }
+  async getRouter(seriesId: string) { return toRouterState(this.engine.series(seriesId)); }
   async getTransferWindow(seriesId: string, windowId?: number): Promise<TransferWindowState | null> {
     const windows = this.state.series.get(seriesId)?.transferWindows;
     const w = windowId === undefined ? windows?.at(-1) : windows?.[windowId];

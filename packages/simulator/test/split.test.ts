@@ -1,57 +1,59 @@
 import { describe, expect, it } from 'vitest';
 import { parsePeriod } from '@merces/math';
 import { SimHarness } from '../src/index.ts';
-import { GENESIS, USDC, expectStage1Error, types } from './helpers.ts';
+import { GENESIS, USDC, expectStage1Error } from './helpers.ts';
 
-/*
- * Cause code:
- *  - S4-TU: `PeriodState.paymentStable` is the accepted report's payment figure (Stage 1's `Report.payment_usd`), which
- *    bounds a negative true-up (S4 WP13); '0' until reported.
- */
-describe('tier 1 split receipts and multi-series issuers', () => {
-  it('reconciles router receipts against the quarterly report', async () => {
-    const h = await SimHarness.create('solana', { genesis: GENESIS });
-    // tier 1 is a report tier only on a pure tier-1 series (Stage 1)
-    const { seriesId, terms, privateTerms } = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
-    await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId, router: h.router });
-    await h.sim.setTime(parsePeriod('2026Q1').start + 40 * 86_400);
-    const r = await h.sim.postSplitReceipt(h.router, seriesId, USDC(1000));
-    expect(types(r.events)).toEqual(['FeeTaken', 'PaymentReceived', 'SplitReceipt']);
-    await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
-    expect((await h.sim.getPeriod(seriesId, '2026Q1'))!.paymentStable).toBe('0'); // cause S4-TU: '0' until reported
-    // report says 10% × (100k − 60k) = 4,000; 1,000 already arrived via the split → 3,000 due
-    const res = await h.reportAndPay(seriesId, '2026Q1', privateTerms, terms.termsCommitment, 0n, USDC(100_000), { tier: 1, source: 'split' });
-    expect(res.due).toBe(USDC(3000));
-    // cause S4-TU: the period read carries the report's own payment figure (Stage 1's payment_usd, before the router's
-    // credit): what bounds a negative true-up, not the due
-    expect((await h.sim.getPeriod(seriesId, '2026Q1'))!).toMatchObject({ paymentStable: USDC(4000).toString(), splitReceived: USDC(1000).toString() });
-    // a tier-1 report on a series that also enables tier 2 is refused (Stage 1 TierNotEnabled)
-    const mixed = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: true, tier3: false, tier4: false } } });
-    await h.sim.setTime(parsePeriod('2026Q2').end + 86_400); // its first period is the settlement quarter, 2026Q2
-    await expectStage1Error(h.reportAndPay(mixed.seriesId, '2026Q2', mixed.privateTerms, mixed.terms.termsCommitment, 0n, USDC(100_000), { tier: 1, source: 'split' }), 'TierNotEnabled');
-    // second series for the same issuer
-    const second = await h.runRaise({ terms: { unitsOffered: '500' } });
-    expect(second.seriesId).not.toBe(seriesId);
-    expect((await h.sim.getIssuer(h.issuer.address))!.seriesIds).toHaveLength(3);
+const tiers = { tier1: true, tier2: false, tier3: false, tier4: false };
+// SPEC §6.5, MercesIncome.submitReport, router.rs: public terms and zero-salt checkpoint binding.
+describe.each(['solana','monad'] as const)('%s Stage 1 income router', (personality) => {
+  it('routes actual receipts, binds a pure tier-1 report to both checkpoints, and credits the reported payment', async () => {
+    const h = await SimHarness.create(personality,{genesis:GENESIS});
+    const {seriesId,terms,privateTerms} = await h.runRaise({terms:{tierFlags:tiers}});
+    const before = BigInt(await h.sim.getBalance(h.issuer.address,'USDC'));
+    await h.exec(h.issuer,{kind:'routeIncome',seriesId,amount:USDC(100_000).toString()});
+    // 10% of income above 60,000: 4,000 routed; the remaining 96,000 passes through.
+    expect(BigInt(await h.sim.getBalance(h.issuer.address,'USDC'))).toBe(before-USDC(4000));
+    expect((await h.sim.getRouter(seriesId))!.ytdReceived).toBe(USDC(100_000).toString());
+    await h.sim.setTime(parsePeriod('2026Q1').end+1);
+    const valid = await h.buildReport({seriesId,periodId:'2026Q1',privateTerms,incomeYtdNow:USDC(100_000),tier:1});
+    await expectStage1Error(h.exec(h.issuer,valid.command),'RouterPeriodNotClosed');
+    await h.sim.submit({kind:'closeRouterPeriod',seriesId,periodId:'2026Q1'},'keeper');
+    const wrong = await h.buildReport({seriesId,periodId:'2026Q1',privateTerms,incomeYtdNow:USDC(100_001),tier:1});
+    await expectStage1Error(h.exec(h.issuer,wrong.command),'InvalidProof');
+    const salted = await h.buildReport({seriesId,periodId:'2026Q1',privateTerms,incomeYtdNow:USDC(100_000),incomeSalt:1n,tier:1});
+    await expectStage1Error(h.exec(h.issuer,salted.command),'InvalidProof');
+    const result = await h.reportAndPay(seriesId,'2026Q1',privateTerms,terms.termsCommitment,0n,USDC(100_000),{tier:1,source:'split'});
+    expect(result.due).toBe(0n);
+    expect(await h.sim.getPeriod(seriesId,'2026Q1')).toMatchObject({paymentStable:USDC(4000).toString(),splitReceived:USDC(4000).toString(),settled:true});
+    const report = valid.command;
+    expect(JSON.stringify(report)).not.toContain('incomeYtd');
   });
 
-  it('a split receipt above the cap refunds the issuer, not the router, and retires the series', async () => {
-    const h = await SimHarness.create('monad', { genesis: GENESIS });
-    const { seriesId } = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: false, tier3: false, tier4: false } } });
-    await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId, router: h.router });
-    await h.sim.setTime(parsePeriod('2026Q1').start + 40 * 86_400);
-    const [routerBefore, issuerBefore] = [BigInt(await h.sim.getBalance(h.router, 'USDC')), BigInt(await h.sim.getBalance(h.issuer.address, 'USDC'))];
-    // cap 22.5 × 500 = 11,250: of 12,000 routed, 750 goes back to the issuer (Stage 1 routes the refund to the issuer)
-    const r = await h.sim.postSplitReceipt(h.router, seriesId, USDC(12_000));
-    expect(types(r.events)).toEqual(['PaymentRefunded', 'FeeTaken', 'PaymentReceived', 'StatusChanged', 'SeriesRetired', 'SplitReceipt']);
-    expect(r.events.find((e) => e.type === 'SplitReceipt')!.payload).toMatchObject({ periodId: '2026Q1', amount: USDC(11_250).toString() });
-    expect(r.events.find((e) => e.type === 'FeeTaken')!.payload).toMatchObject({ payer: h.router });
-    expect(BigInt(await h.sim.getBalance(h.router, 'USDC'))).toBe(routerBefore - USDC(12_000));
-    expect(BigInt(await h.sim.getBalance(h.issuer.address, 'USDC'))).toBe(issuerBefore + USDC(750));
-    const s = (await h.sim.getSeries(seriesId))!;
-    expect([s.status, s.refundedToIssuer]).toEqual(['Retired', USDC(750).toString()]);
-    expect(h.sim.stage1View(seriesId).ledger.grossReceived).toBe(USDC(11_250).toString());
-    // a Retired series takes no more split income
-    await expect(h.sim.postSplitReceipt(h.router, seriesId, USDC(1))).rejects.toThrow();
+  it('refunds the issuer at the cap and passes subsequent receipts through after retirement', async () => {
+    const h = await SimHarness.create(personality,{genesis:GENESIS});
+    const {seriesId} = await h.runRaise({terms:{tierFlags:tiers}});
+    const before=BigInt(await h.sim.getBalance(h.issuer.address,'USDC'));
+    const result=await h.exec(h.issuer,{kind:'routeIncome',seriesId,amount:USDC(180_000).toString()});
+    expect(result.events.find((e)=>e.type==='SplitReceipt')!.payload).toMatchObject({amount:USDC(11_250).toString()});
+    expect(await h.sim.getSeries(seriesId)).toMatchObject({status:'Retired',refundedToIssuer:USDC(750).toString()});
+    expect(BigInt(await h.sim.getBalance(h.issuer.address,'USDC'))).toBe(before-USDC(11_250));
+    await h.exec(h.issuer,{kind:'routeIncome',seriesId,amount:USDC(5000).toString()});
+    expect(BigInt(await h.sim.getBalance(h.issuer.address,'USDC'))).toBe(before-USDC(11_250));
+    expect((await h.sim.getRouter(seriesId))!.ytdReceived).toBe(USDC(185_000).toString());
+  });
+
+  it('preserves the chain checkpoint retention and duplicate-close rules across a long gap',async()=>{
+    const h=await SimHarness.create(personality,{genesis:GENESIS});
+    const {seriesId}=await h.runRaise({terms:{tierFlags:tiers}});
+    await h.exec(h.issuer,{kind:'routeIncome',seriesId,amount:USDC(50_000).toString()});
+    await h.sim.setTime(parsePeriod('2029Q1').start);
+    await h.sim.submit({kind:'closeRouterPeriod',seriesId,periodId:'2028Q4'},'keeper');
+    const cps=(await h.sim.getRouter(seriesId))!.checkpoints;
+    expect(cps).toHaveLength(personality==='solana'?8:12);
+    expect(cps.find((p)=>p.periodId==='2028Q4')!.ytdAtEnd).toBe('0');
+    if(personality==='monad') {
+      expect(cps.find((p)=>p.periodId==='2026Q1')!.ytdAtEnd).toBe(USDC(50_000).toString());
+      await h.sim.submit({kind:'closeRouterPeriod',seriesId,periodId:'2028Q4'},'keeper');
+    } else await expectStage1Error(h.sim.submit({kind:'closeRouterPeriod',seriesId,periodId:'2028Q4'},'keeper'),'RouterPeriodAlreadyClosed');
   });
 });

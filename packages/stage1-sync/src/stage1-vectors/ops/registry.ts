@@ -28,6 +28,9 @@ function keyAddressOf(ctx: OpContext, name: string): string {
 }
 
 export const registryOps: TranslatorTable = {
+  resume_issuance: (ctx,c) => direct(async()=> { await ctx.send(ctx.actors.wallet(c.actor),{kind:'resumeIssuance'}); }),
+  stop_issuance: (ctx,c) => direct(async()=> { await ctx.send(ctx.actors.wallet(c.actor),{kind:'stopIssuance'}); }),
+  set_release_pause: (ctx,c) => direct(async()=> { await ctx.send(ctx.actors.wallet(c.actor),{kind:'pauseReleases',seriesId:ctx.seriesBook(c.series).seriesId,paused:c.paused}); }),
   set_flags: (ctx, c) => direct(async () => {
     await ctx.send(ctx.actors.admin, { kind: 'setFlags', newRaisesPaused: c.newRaisesPaused, windowsEnabled: c.windowsEnabled, tier4Enabled: c.tier4Enabled });
   }),
@@ -76,11 +79,11 @@ export const registryOps: TranslatorTable = {
 
   create_series: (ctx, c) => {
     // FX income and tier-1 routers are S5 and the tier-1 milestone: the canonical terms cannot carry them yet
-    if (c.router) throw new RunnerError(`create_series ${c.series}: tier-1 router series are not modelled yet (S5)`);
     if (ctx.book.series[c.series]) throw new RunnerError(`create_series ${c.series}: the vector creates this series twice`);
     const t = c.terms;
     const p = ctx.vector.parameters;
     const terms: SeriesTerms = {
+      ...(c.router ? {routerTerms:{currencyCode:840,indexingRule:0,termsSalt:'0',...ctx.vector.routerTerms?.[c.series],...c.router}} : {}),
       fxPairId: c.fxPairId ? hex32(c.fxPairId, 'fxPairId') : null,
       stablecoin: 'USDC',
       stablecoinMint: ctx.mint,

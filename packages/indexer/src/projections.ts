@@ -89,6 +89,11 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       await client.query('insert into issuers (chain, issuer, registered_at) values ($1,$2,$3) on conflict do nothing', [e.chain, p.issuer, e.blockTime]);
       break;
     }
+    case 'IssuanceResumed': {
+      const p = e.payload as P<'IssuanceResumed'>;
+      await client.query('update issuers set issuance_stopped=false where chain=$1 and issuer=$2',[e.chain,p.issuer]);
+      break;
+    }
     case 'IssuanceStopped': {
       const p = e.payload as P<'IssuanceStopped'>;
       await client.query('update issuers set issuance_stopped = true where chain = $1 and issuer = $2', [e.chain, p.issuer]);
@@ -105,6 +110,7 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
         [p.seriesId, e.chain, p.issuer, t.stablecoin, t.stablecoinMint, t.raiseStyle, t.unitsOffered, t.reservePrice, t.minimumRaise, t.capMultipleWad, t.lockupSeconds, JSON.stringify(t.releaseSchedule), t.auctionFeeBps, t.payoutFeeBps, t.hurdleWad, t.payoutMultipleK, t.walletCapBps, t.dueDays, t.graceDays, t.formalNoticeDays, t.contractHash, t.termsCommitment, JSON.stringify(t.tierFlags), t.reportingCurrency, e.blockTime, e.seq,
           t.commitDurationSeconds, t.revealDurationSeconds, t.nonRevealChargeBps, unitScaleOf(t.raiseStyle).toString(), t.windowCommitDuration, t.windowRevealDuration, t.windowFeeBps, t.fxPairId],
       );
+      if (t.routerTerms) await client.query('update series set router_terms=$2 where series_id=$1',[p.seriesId,JSON.stringify(t.routerTerms)]);
       break;
     }
     case 'CurveActivated': {
@@ -453,6 +459,7 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
             and not exists (select 1 from events ev where ev.series_id = a.series_id and ev.type = 'TermsAmended' and ev.payload->>'termsCommitment' = a.new_commitment)`,
         [p.seriesId, p.nonce, p.termsCommitment],
       );
+      if (p.routerTerms) await client.query('update series set router_terms=$2 where series_id=$1',[p.seriesId,JSON.stringify(p.routerTerms)]);
       break;
     }
     case 'SeriesExtinguished': {
@@ -517,6 +524,9 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       );
       break;
     }
+    case 'RouterIncomeHeld':
+    case 'RouterIncomeRouted':
+    case 'RouterPeriodClosed':
     case 'ProtocolFlagsSet': break; // ChainInfo is authoritative; application feature flags are separate.
     case 'WindowOrderCommitted': {
       const p = e.payload as P<'WindowOrderCommitted'>;

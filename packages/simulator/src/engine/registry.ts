@@ -1,5 +1,5 @@
-import { ChainError, seriesTermsViolations, wallet32Of, type Command } from '@merces/domain';
-import { newFinalState, newTailState, newVaultState } from '@merces/math';
+import { ChainError, fieldToHex32, seriesTermsViolations, wallet32Of, type Command, type SeriesTerms } from '@merces/domain';
+import { newFinalState, newTailState, newVaultState, newRouterState, termsCommitmentField, WAD } from '@merces/math';
 import { deriveAddress } from '../addresses.ts';
 import { newAuction, type SimSeries, type SimTerms } from '../state.ts';
 import { big, type EngineCore, type Emit } from './core.ts';
@@ -13,17 +13,17 @@ export function registerIssuer(e: EngineCore, signer: string, now: number, emit:
   if (!e.state.issuers.has(signer)) e.state.issuers.set(signer, { issuer: signer, registeredAt: now, issuanceStopped: false, seriesIds: [] });
   emit('IssuerRegistered', { issuer: signer });
 }
-export function stopIssuance(e: EngineCore, signer: string, emit: Emit): void {
+export function stopIssuance(e: EngineCore, signer: string, emit: Emit, stopped = true): void {
   const i = e.state.issuers.get(signer);
   if (!i) throw new ChainError('NotFound', 'issuer not registered');
-  i.issuanceStopped = true;
-  emit('IssuanceStopped', { issuer: signer });
+  i.issuanceStopped = stopped;
+  emit(stopped ? 'IssuanceStopped' : 'IssuanceResumed', { issuer: signer });
 }
 
 export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command, { kind: 'createSeries' }>, now: number, emit: Emit): void {
   const issuer = e.state.issuers.get(signer);
   if (!issuer) throw new ChainError('Unauthorized', 'issuer not registered');
-  if (issuer.issuanceStopped) throw new ChainError('NotPermitted', 'issuer stopped issuance');
+  if (issuer.issuanceStopped) fail('IssuanceStopped');
   const t = cmd.terms;
   // curve mode is Solana only: the EVM registry refuses it right after the issuer check, before the stablecoin and the
   // terms (MercesRegistry.sol:479-481, CurveModeUnsupported)
@@ -43,6 +43,8 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   if (t.tierFlags.tier4) throw new ChainError('InvalidTerms', 'tier 4 is switched off');
   if (t.fxPairId && !e.state.rates.get(t.fxPairId)?.config) fail('UnknownFxPair');
   if (t.fxPairId && t.tierFlags.tier1) fail('InvalidTerms', 'tier-1 income must be in the stablecoin');
+  checkRouterTerms(e,t);
+  const rt = t.routerTerms;
   // A curve raise starts at creation here: its creation is the curve's activation (Stage 1 `activate_curve` and the
   // registry's `mark_curve_activated`), checked in their order before the series exists: P0 at least 1
   // (CurveThresholdMismatch, curve.rs:799-805), new raises not paused (NewRaisesPaused), the issuer still allowlisted
@@ -67,6 +69,7 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
   const seriesId = `${e.state.config.chain}:${address}`;
   if (e.state.series.has(seriesId)) throw new ChainError('Duplicate', 'series exists');
   const terms: SimTerms = {
+    ...(rt ? {routerTerms:{...rt}} : {}),
     fxPairId: t.fxPairId,
     stablecoin: t.stablecoin,
     stablecoinMint: t.stablecoinMint,
@@ -102,7 +105,7 @@ export function createSeries(e: EngineCore, signer: string, cmd: Extract<Command
     seriesId, address, issuer: signer, terms, unitScale: 1n, phase: 'Draft', status: 'OnTime', createdAt: now, openedAt: null, commitEndsAt: null, revealEndsAt: null, settledAt: null,
     issuePrice: null, unitsSold: 0n, unitsOutstanding: 0n, capPerUnit: null, vaultBalance: 0n, vaultDistributedNet: 0n,
     treasuryTotal: 0n, treasuryReleased: 0n, treasuryReturned: 0n, tranches: [], releasesPausedByIssuer: false, bids: new Map(), bidOrder: 0, auction: newAuction(), positions: new Map(), periods: new Map(),
-    redemption: null, extinguishedAt: null, grossPaidTotal: 0n, feesTotal: 0n, transferWindows: [], curve: null, splitRouter: null, amendments: [],
+    redemption: null, extinguishedAt: null, grossPaidTotal: 0n, feesTotal: 0n, transferWindows: [], curve: null, splitRouter: rt ? deriveAddress(e.state.config.family, `router:${seriesId}`) : null, router: rt ? newRouterState(big(rt.theta),big(rt.rWad),0) : null, routerBalance: 0n, routerCheckpoints: new Map(), amendments: [],
     ledger: newLedger(), vault: newVaultState(), tail: newTailState(0n), final: newFinalState(),
     stakedTotal: 0n, tenderedTotal: 0n, unitsSyncedAt: null,
   };
@@ -117,4 +120,17 @@ export function setAllowlist(e: EngineCore, cmd: Extract<Command, { kind: 'setAl
   if (cmd.allowed) e.state.allowlist.add(cmd.wallet);
   else e.state.allowlist.delete(cmd.wallet);
   emit('AllowlistUpdated', { wallet: cmd.wallet, allowed: cmd.allowed });
+}
+
+export function checkRouterTerms(e: EngineCore,t: Pick<SeriesTerms,'routerTerms'|'tierFlags'|'termsCommitment'|'unitsOffered'>): void {
+  const rt = t.routerTerms;
+  if (t.tierFlags.tier1 !== !!rt) fail('RouterNotEnabled');
+  if (rt) {
+    if (big(rt.theta) > (1n << 64n) - 1n || big(rt.rWad) > (1n << 64n) - 1n || big(rt.rWad) * big(t.unitsOffered) > WAD) fail('InvalidTerms');
+    let commitment: string;
+    try { commitment = fieldToHex32(termsCommitmentField({theta:big(rt.theta),rWad:big(rt.rWad),currencyCode:rt.currencyCode,indexingRule:rt.indexingRule,termsSalt:big(rt.termsSalt)})); }
+    catch { fail(e.state.config.family === 'solana' ? 'Tier1TermsMismatch' : 'TermsCommitmentMismatch'); }
+    if (commitment! !== t.termsCommitment) fail(e.state.config.family === 'solana' ? 'Tier1TermsMismatch' : 'TermsCommitmentMismatch');
+  }
+
 }

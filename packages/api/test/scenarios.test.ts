@@ -311,7 +311,6 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     // cause CS: Stage 1 refuses a minimum raise above reserve × units (InvalidTerms); was the harness's 4,000 USDC on
     // 300 units at 8 USDC (2,400)
     const b = await h.runRaise({ terms: { unitsOffered: '300', minimumRaise: USDC(2000).toString() }, bids: [{ backer: 0, price: USDC(15), qty: 60n }, { backer: 1, price: USDC(15), qty: 60n }, { backer: 2, price: USDC(15), qty: 60n }, { backer: 3, price: USDC(15), qty: 60n }, { backer: 4, price: USDC(15), qty: 60n }] });
-    await h.exec(h.admin, { kind: 'registerSplitRouter', seriesId: a.seriesId, router: h.router });
     const issuerTok = rig.token({ accountId: 'ms-iss', wallets: [{ chain: 'solana', address: h.issuer.address }], roles: ['issuer'] });
     await rig.sync();
     const me = await rig.get(`/issuers/solana:${h.issuer.address}`);
@@ -319,18 +318,19 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     const settledAt = (await h.sim.getSeries(a.seriesId))!.settledAt!;
     const q = parsePeriod(`${new Date(settledAt * 1000).getUTCFullYear()}Q${Math.floor(new Date(settledAt * 1000).getUTCMonth() / 3) + 1}`);
     await h.sim.setTime(Math.max(await h.sim.now(), settledAt + 1));
-    await h.sim.postSplitReceipt(h.router, a.seriesId, USDC(1000));
+    await h.exec(h.issuer, {kind:'routeIncome',seriesId:a.seriesId,amount:USDC(100_000).toString()});
     await rig.sync();
     const splits = await rig.get(`/series/${a.seriesId}/reporting/splits/${q.id}`, issuerTok);
-    expect(splits.json().splitReceived).toBe(USDC(1000).toString());
+    expect(splits.json().splitReceived).toBe(USDC(4000).toString());
     expect(splits.json().receipts).toHaveLength(1);
     await h.sim.setTime(q.end + 86_400);
+    await h.sim.submit({kind:'closeRouterPeriod',seriesId:a.seriesId,periodId:q.id},'keeper');
     const res = await h.reportAndPay(a.seriesId, q.id, a.privateTerms, a.terms.termsCommitment, 0n, USDC(100_000), { tier: 1, source: 'split' });
-    expect(res.due).toBe(USDC(3000));
+    expect(res.due).toBe(0n);
     await rig.sync();
     const periods = await rig.get(`/series/${a.seriesId}/periods`, issuerTok);
     const p = periods.json().periods.find((x: { periodId: string }) => x.periodId === q.id);
-    expect(p).toMatchObject({ splitReceived: USDC(1000).toString(), paid: USDC(3000).toString(), settled: true });
+    expect(p).toMatchObject({ splitReceived: USDC(4000).toString(), paid: '0', settled: true });
     void b;
   });
 

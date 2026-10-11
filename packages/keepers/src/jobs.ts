@@ -363,6 +363,32 @@ export const windowDeliverJob: KeeperJob = {
   },
 };
 
+/** Sweep pre-mint receipts once final, then checkpoint ended quarters before tier-1 reports. */
+export const routerJob: KeeperJob = {
+  name:'router.crank',intervalSeconds:60,
+  async run(ctx) {
+    let actions=0; const errors:string[]=[];
+    await forEachChain(ctx,errors,async(chain)=> {
+      const now=await chain.now();
+      for (const s of await chain.listSeries()) {
+        if (!s.terms.tierFlags.tier1) continue;
+        try {
+          let router=await chain.getRouter(s.seriesId); if (!router) continue;
+          if (BigInt(router.heldBeforeFinalization)>0n && (s.mintFinalized || ['Failed','Cancelled'].includes(s.phase))) {
+            await chain.submit({kind:'sweepRouter',seriesId:s.seriesId},'keeper'); actions++;
+            router=await chain.getRouter(s.seriesId); if (!router) continue;
+          }
+          const last=periodOf(periodOf(now).start-1).id;
+          if (s.phase==='Settled' && router.nextCheckpointPeriod && router.nextCheckpointPeriod<=last) {
+            await chain.submit({kind:'closeRouterPeriod',seriesId:s.seriesId,periodId:last},'keeper'); actions++;
+          }
+        } catch(e) { errors.push(`${s.seriesId}: ${errorCode(e)}`); }
+      }
+    });
+    return {actions,errors};
+  },
+};
+
 /** Flags quarters whose rate coverage failed (C9) and opens an attestor fallback request. Runs after each quarter end. */
 export const fxCoverageJob: KeeperJob = {
   name: 'fx.coverage',

@@ -9,8 +9,19 @@ Stage 1 is pinned at `bafe1fb76094afa423211320356b8db868c2b340` on `claude/sweet
 The reference final-share fix matches both chains and adds the missing regression fixture; official vectors and chain
 programs are unchanged. Its SDK, reference and circuit packages build through `pnpm stage1:build`.
 
-S5 items 1–7, 9, 10 and 12 are implemented. Twenty-three vectors pass in full on both personalities, with
-no prefix gates, shims or waived steps. Vectors 12 and 18 await the router. Live adapters remain unwired.
+S5 items 1–12 are implemented. All 25 vectors pass in full on both personalities (50/50 lockstep), with no prefix gates,
+shims or waived steps. Live adapters remain unwired.
+
+### S5 results: income router
+
+Tier-1 creation/amendment binds the disclosed terms to the Poseidon commitment. The terms flow requires explicit
+`routerPublicConsent`. Receipts before mint finalization are held; the permissionless keeper sweeps and checkpoints
+ended quarters. Pure tier-1 reports bind both zero-salt income commitments to router checkpoints; device assembly uses
+salt zero. Raw income stays out of indexed events and is read directly only for the issuer. Terminal receipts pass
+through and checkpoints retain the chain's storage/close semantics (DIV-S1I-7). Issuers can stop and resume issuance.
+Vectors 12 (118 steps) and 18 (51 steps) pass in full on both personalities. State version 9, migration 036 for disclosed
+router terms, 761 tests, 211 API operations, separate Monad conformance, all sync gates and DEMO OK; dev:mock smoke 200.
+
 
 ### S5 results: transfer windows
 

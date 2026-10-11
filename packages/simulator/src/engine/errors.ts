@@ -9,6 +9,9 @@ import type { ErrorName } from '@merces/math';
  * the API returns `detail` as is. `STAGE1_CODE` fixes the code each name travels with.
  */
 export const STAGE1_CODE = {
+  IssuanceStopped: 'NotPermitted',
+  RouterNotEnabled: 'NotPermitted',
+  RouterPeriodNotClosed: 'WrongStatus',
   OutOfOrder: 'WrongPhase',
   BidsNotProcessed: 'WrongPhase',
   DeliverFirst: 'WrongStatus',
@@ -98,6 +101,10 @@ export const STAGE1_CODE = {
  * `errors.test.ts`. Curve mode is Solana only, so its names live here.
  */
 export const STAGE1_SOLANA_CODE = {
+  RouterPeriodAlreadyClosed: 'Duplicate',
+  RouterPeriodNotEnded: 'TooEarly',
+  NothingToRoute: 'WrongStatus',
+  Tier1TermsMismatch: 'InvalidCommitment',
   CrosscheckRequired: 'InvalidTerms',
   TrueUpTimestampInFuture: 'InvalidTerms',
   // the registry's curve terms (create_series, lib.rs:470-485; S3 WP7)
@@ -143,6 +150,8 @@ export const STAGE1_SOLANA_CODE = {
  * `evm/src/types/MercesErrors.sol` by `errors.test.ts`.
  */
 export const STAGE1_EVM_CODE = {
+  ZeroAmount: 'WrongStatus',
+  TermsCommitmentMismatch: 'InvalidCommitment',
   AttestationInFuture: 'InvalidTerms',
   // the EVM registry refuses curve mode right after the issuer check (MercesRegistry.sol:479-481)
   CurveModeUnsupported: 'NotPermitted',

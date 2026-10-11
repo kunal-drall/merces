@@ -34,6 +34,7 @@ export interface LoadedVector {
   steps: Step[];
   /** non-enumerable; never print */
   readonly keys: VectorKeys;
+  readonly routerTerms?: Record<string,import('@merces/domain').RouterTerms>;
   /** Trusted loader provenance for composed scenarios: base keys retain their base vector's namespace. */
   readonly keySeeds: Record<string, string>;
 }
@@ -123,6 +124,17 @@ export function fromJson(input: Record<string, unknown>, name: string, file = na
     privateSeries: raw.seriesPrivate && typeof raw.seriesPrivate === 'object' ? Object.keys(raw.seriesPrivate).sort() : [],
     steps: steps as unknown as Step[],
   } as Omit<LoadedVector, 'keys' | 'keySeeds'>;
+  const routerTerms: Record<string,unknown> = {};
+  for (const step of steps) {
+    const call = (step.op === 'expect_revert' ? step.call : step) as Record<string,unknown>;
+    if (call.op !== 'create_series' || !call.router) continue;
+    const series = String(call.series);
+    const plain = (raw.seriesPrivate as Record<string,{termsPlain?:unknown}> | undefined)?.[series]?.termsPlain;
+    if (!plain && step.op !== 'expect_revert') throw new RunnerError(`${name}: tier-1 ${series} has no commitment opening`);
+    if (plain) routerTerms[series] = plain;
+  }
+  // Only terms deliberately public on tier-1 are retained; never enumerate openings in reports or logs.
+  Object.defineProperty(out,'routerTerms',{value:routerTerms,enumerable:false,writable:false});
   Object.defineProperty(out, 'keys', { value: (raw.keys ?? {}) as VectorKeys, enumerable: false, writable: false });
   Object.defineProperty(out, 'keySeeds', { value: Object.fromEntries(Object.keys(raw.keys ?? {}).map((key) => [key, `${name}:${key}`])), enumerable: false, writable: false });
   return out as LoadedVector;

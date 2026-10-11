@@ -1,9 +1,10 @@
-import { DEFAULTS, expectedPrior, fxDigest, hex32ToField, mockVerify, reportDigest, reportPublicInputs, type Command } from '@merces/domain';
+import { DEFAULTS, expectedPrior, fxDigest, hex32ToField, mockVerify, reportDigest, reportPublicInputs, routerIncomeCommitment, type Command } from '@merces/domain';
 import { WAD, nextExpectedPeriod, periodEnd, periodStart } from '@merces/math';
 import type { SimSeries } from '../state.ts';
 import { str, u64, type EngineCore, type Emit, type ExecContext } from './core.ts';
 import { fail } from './errors.ts';
 import { quarterRate } from './fx.ts';
+import { routerYtd } from './router.ts';
 import { requireSigned, signingContextOf } from './keys.ts';
 import { derivedStatus, ledgerClock, mintFinalized, periodIdOf, pidOf } from './ledger.ts';
 import { periodRecord, syncStatus } from './status.ts';
@@ -104,6 +105,12 @@ export function submitReport(e: EngineCore, signer: string | null, cmd: SubmitRe
   if (cmd.tier === 2 || cmd.tier === 3) {
     const m = reportDigest(signingContextOf(e.state, s.seriesId), { periodId: cmd.periodId, priorIncomeCommitment: cmd.priorIncomeCommitment, incomeCommitment: cmd.incomeCommitment, tier: cmd.tier, liquidityEvent: cmd.liquidityEvent });
     requireSigned(e, cmd.tier === 2 ? 'verifier' : 'attestor', m.digest, cmd.attestation, now, { reportPeriod: cmd.periodId });
+  }
+
+  if (cmd.tier === 1) {
+    const ytd = routerYtd(s,pid), priorYtd = pid % 4 === 0 ? 0n : routerYtd(s,pid - 1);
+    if (ytd === null || priorYtd === null) fail('RouterPeriodNotClosed');
+    if (cmd.incomeCommitment !== routerIncomeCommitment(ytd) || prior !== routerIncomeCommitment(priorYtd)) fail('InvalidProof');
   }
 
   // effects (SIM:1131-1148)

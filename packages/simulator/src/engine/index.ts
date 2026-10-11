@@ -1,3 +1,4 @@
+import { routeIncome, sweepRouter, closeRouterPeriod } from './router.ts';
 import {
   ChainError, parseSeriesId,
   type Command, type DomainEvent, type EventPayload, type EventType, type ServiceRole, type TxResult,
@@ -96,6 +97,7 @@ export class SimEngine implements EngineCore {
     };
     switch (cmd.kind) {
       case 'registerIssuer': admin(); return registerIssuer(this, cmd.wallet, now, emit);
+      case 'resumeIssuance': return stopIssuance(this,user(),emit,false);
       case 'stopIssuance': return stopIssuance(this, user(), emit);
       case 'createSeries': return createSeries(this, user(), cmd, now, emit);
       case 'openRaise': return openRaise(this, user(), cmd, now, emit);
@@ -177,6 +179,9 @@ export class SimEngine implements EngineCore {
       case 'pauseNewRaises': admin(); this.state.newRaisesPaused = cmd.paused; return;
       case 'setFeeCollector': admin(); this.state.feeCollector = cmd.feeCollector; return;
       case 'registerSplitRouter': admin(); this.series(cmd.seriesId).splitRouter = cmd.router; return;
+      case 'routeIncome': return routeIncome(this,user(),cmd,now,emit);
+      case 'sweepRouter': return sweepRouter(this,cmd,now,emit);
+      case 'closeRouterPeriod': return closeRouterPeriod(this,cmd,now,emit);
       case 'postSplitReceipt': {
         if (actor.kind !== 'router') throw new ChainError('Unauthorized', 'postSplitReceipt must come from a registered router');
         return postSplitReceipt(this, actor.router, cmd, now, emit);
