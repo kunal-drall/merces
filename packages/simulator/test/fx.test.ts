@@ -6,7 +6,7 @@ import { GENESIS, expectChainError, types } from './helpers.ts';
 /*
  * S4 cause codes:
  *  - S4-FX: the FX fallback is an attestor key's Stage 1 `MERCES_FX_V1` signature per series (S4 WP9, D14), carried in
- *    `submitReport.fxFallback` (was `attestorRate`, co-signed by the attestor).
+ *    `submitReport.fxFallback` (was the attestor rate, co-signed by the attestor).
  */
 
 describe('rate accumulator and FX fallback', () => {
@@ -41,7 +41,7 @@ describe('rate accumulator and FX fallback', () => {
     const flag = await h.sim.submit({ kind: 'flagFxFallback', pair: 'EUR/USD', periodId: '2026Q2', reason: 'coverage' }, 'keeper');
     expect(types(flag.events)).toEqual(['FxFallbackFlagged']);
     await expect(h.reportAndPay(seriesId, '2026Q2', privateTerms, terms.termsCommitment, 70_000_000_000n, 90_000_000_000n, { fxBasis: 'accumulator', pair: 'EUR/USD', fxAvgWad: fx })).rejects.toThrow();
-    // cause S4-FX: the attestor key's FX signature for this series over the report's own rate (was `attestorRate`, co-signed)
+    // cause S4-FX: the attestor key's FX signature for this series over the report's own rate (was the co-signed attestor rate)
     const att = await h.reportAndPay(seriesId, '2026Q2', privateTerms, terms.termsCommitment, 70_000_000_000n, 90_000_000_000n, { fxBasis: 'attestor', pair: 'EUR/USD', fxAvgWad: wadFromDecimal('1.09'), fxFallback: h.attestors[1]! });
     expect(att.paymentStable).toBe(2_180_000_000n);
   });

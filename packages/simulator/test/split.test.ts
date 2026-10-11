@@ -3,6 +3,11 @@ import { parsePeriod } from '@merces/math';
 import { SimHarness } from '../src/index.ts';
 import { GENESIS, USDC, expectStage1Error, types } from './helpers.ts';
 
+/*
+ * Cause code:
+ *  - S4-TU: `PeriodState.paymentStable` is the accepted report's payment figure (Stage 1's `Report.payment_usd`), which
+ *    bounds a negative true-up (S4 WP13); '0' until reported.
+ */
 describe('tier 1 split receipts and multi-series issuers', () => {
   it('reconciles router receipts against the quarterly report', async () => {
     const h = await SimHarness.create('solana', { genesis: GENESIS });
@@ -13,9 +18,13 @@ describe('tier 1 split receipts and multi-series issuers', () => {
     const r = await h.sim.postSplitReceipt(h.router, seriesId, USDC(1000));
     expect(types(r.events)).toEqual(['FeeTaken', 'PaymentReceived', 'SplitReceipt']);
     await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
+    expect((await h.sim.getPeriod(seriesId, '2026Q1'))!.paymentStable).toBe('0'); // cause S4-TU: '0' until reported
     // report says 10% × (100k − 60k) = 4,000; 1,000 already arrived via the split → 3,000 due
     const res = await h.reportAndPay(seriesId, '2026Q1', privateTerms, terms.termsCommitment, 0n, USDC(100_000), { tier: 1, source: 'split' });
     expect(res.due).toBe(USDC(3000));
+    // cause S4-TU: the period read carries the report's own payment figure (Stage 1's payment_usd, before the router's
+    // credit): what bounds a negative true-up, not the due
+    expect((await h.sim.getPeriod(seriesId, '2026Q1'))!).toMatchObject({ paymentStable: USDC(4000).toString(), splitReceived: USDC(1000).toString() });
     // a tier-1 report on a series that also enables tier 2 is refused (Stage 1 TierNotEnabled)
     const mixed = await h.runRaise({ terms: { tierFlags: { tier1: true, tier2: true, tier3: false, tier4: false } } });
     await h.sim.setTime(parsePeriod('2026Q2').end + 86_400); // its first period is the settlement quarter, 2026Q2

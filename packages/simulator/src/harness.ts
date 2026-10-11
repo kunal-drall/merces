@@ -205,7 +205,7 @@ export class SimHarness {
    * addresses on both personalities (S4 WP7); a tier-3 report and the FX fallback carry their Stage 1 signatures (S4
    * WP9), a pause approval carries a key's PAUSE signature, sent by anyone (S4 WP10: `pauseApproval`), and the issuer's
    * amendTerms carries a key's AMEND signature (S4 WP11: `amendment`) and an extinguishment two keys' EXTINGUISH
-   * signatures, sent by anyone (S4 WP12: `extinguishment`); no flow co-signs any more
+   * signatures, sent by anyone (S4 WP12: `extinguishment`). They are keys, not wallets: nobody co-signs (S4 WP13)
    */
   readonly attestors: SimAttestor[];
   /** the report verifier's key (a published secp256k1 test key, seed `sim-verifier:verifier-1`; S4 WP6) */
@@ -216,7 +216,7 @@ export class SimHarness {
     this.admin = simAdminWallet(sim.family);
     this.issuer = new SimWallet(sim.family, 'issuer-1');
     this.backers = ['backer-1', 'backer-2', 'backer-3', 'backer-4', 'backer-5'].map((l) => new SimWallet(sim.family, l));
-    this.attestors = ['attestor-1', 'attestor-2'].map((l) => new SimAttestor(sim.family, l));
+    this.attestors = ['attestor-1', 'attestor-2'].map((l) => new SimAttestor(l));
     this.verifier = SimSigner.verifier();
     this.router = sim.address('router:split-1');
   }
@@ -248,13 +248,12 @@ export class SimHarness {
 
   /**
    * Build, sign and send: a user or admin command, or a permissionless one sent by this wallet instead of the keeper; an
-   * ordered list is one all-or-nothing transaction (`ChainPort.build` with a list).
+   * ordered list is one all-or-nothing transaction (`ChainPort.build` with a list). The wallet is the one signer:
+   * nobody co-signs (S4 WP13).
    */
-  async exec(wallet: SimWallet, cmd: UserCommand | AdminCommand | PermissionlessCommand | readonly (UserCommand | AdminCommand | PermissionlessCommand)[], coSigners: SimWallet[] = []): Promise<TxResult> {
-    const tx = await this.sim.build(cmd, wallet.address, coSigners.map((c) => c.address));
-    let signed = await wallet.sign(tx);
-    for (const c of coSigners) signed = await c.coSign(signed);
-    return this.sim.send(signed);
+  async exec(wallet: SimWallet, cmd: UserCommand | AdminCommand | PermissionlessCommand | readonly (UserCommand | AdminCommand | PermissionlessCommand)[]): Promise<TxResult> {
+    const tx = await this.sim.build(cmd, wallet.address);
+    return this.sim.send(await wallet.sign(tx));
   }
 
   /** The income openings this harness produced, by income commitment (the device's memory between quarters). */

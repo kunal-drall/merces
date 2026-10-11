@@ -24,7 +24,12 @@ import { clearTransferWindow, commitWindowOrder, openTransferWindow, revealWindo
 
 export type { EngineOptions, ExecContext, ReportProofVerifier } from './core.ts';
 
-export type Actor = { kind: 'user'; signers: string[] } | { kind: 'service'; role: ServiceRole } | { kind: 'router'; router: string };
+/**
+ * Who sent a transaction: one wallet (`signer`, the fee payer on Solana, `msg.sender` on the EVM), the backend's own
+ * service role, or a router. Nobody co-signs (S4 D3, cause S4-CS): every attestation is a signature argument the
+ * command carries, so a transaction has exactly one signer.
+ */
+export type Actor = { kind: 'user'; signer: string } | { kind: 'service'; role: ServiceRole } | { kind: 'router'; router: string };
 
 /**
  * The simulator engine: Part C as TypeScript. One `execute` = one transaction; it either applies fully
@@ -77,9 +82,8 @@ export class SimEngine implements EngineCore {
   private dispatch(cmd: Command, actor: Actor, now: number, emit: Emit, ctx: ExecContext): void {
     const user = (): string => {
       if (actor.kind !== 'user') throw new ChainError('Unauthorized', `${cmd.kind} must be signed by a wallet`);
-      const s = actor.signers[0];
-      if (!s) throw new ChainError('Unauthorized', 'no signer');
-      return s;
+      if (!actor.signer) throw new ChainError('Unauthorized', 'no signer');
+      return actor.signer;
     };
     const service = (role: ServiceRole | 'any'): void => {
       if (actor.kind === 'user' && role === 'any') return; // permissionless cranks may also be sent by any wallet
@@ -87,7 +91,7 @@ export class SimEngine implements EngineCore {
       if (role !== 'any' && actor.role !== role) throw new ChainError('Unauthorized', `${cmd.kind} requires role ${role}`);
     };
     const admin = (): void => {
-      if (actor.kind !== 'user' || actor.signers[0] !== this.state.admin) throw new ChainError('Unauthorized', `${cmd.kind} requires the protocol admin`);
+      if (actor.kind !== 'user' || actor.signer !== this.state.admin) throw new ChainError('Unauthorized', `${cmd.kind} requires the protocol admin`);
     };
     switch (cmd.kind) {
       case 'registerIssuer': return registerIssuer(this, user(), now, emit);
@@ -111,7 +115,7 @@ export class SimEngine implements EngineCore {
       case 'syncCurveUnits': service('any'); return syncCurveUnits(this, cmd, now, emit);
       case 'drawRelease': return drawRelease(this, user(), cmd, now, emit);
       case 'pauseReleases': return pauseReleases(this, user(), cmd, emit);
-      case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signers : [], cmd, now, emit, ctx);
+      case 'submitReport': return submitReport(this, actor.kind === 'user' ? actor.signer : null, cmd, now, emit, ctx);
       case 'payIn': return payIn(this, user(), cmd, now, emit);
       case 'claimPayout': return claimPayout(this, user(), cmd, emit);
       case 'requestPause': return requestPause(this, user(), cmd, now, emit);
@@ -125,7 +129,7 @@ export class SimEngine implements EngineCore {
       case 'claimTail': return claimTail(this, user(), cmd, emit);
       case 'claimFinal': return claimFinal(this, user(), cmd, emit);
       // the issuer sends Stage 1's amend_terms with the attestor's AMEND signature as an argument (S4 WP11)
-      case 'amendTerms': return amendTerms(this, actor.kind === 'user' ? (actor.signers[0] ?? null) : null, cmd, now, emit);
+      case 'amendTerms': return amendTerms(this, actor.kind === 'user' ? actor.signer : null, cmd, now, emit);
       // Stage 1's extinguish takes the two attestors' EXTINGUISH signatures as arguments: anyone sends it (S4 WP12)
       case 'extinguish': service('any'); return extinguish(this, cmd, now, emit);
       case 'snapshotRate': service('keeper'); return snapshotRate(this, cmd, now, emit);

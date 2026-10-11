@@ -343,6 +343,13 @@ export interface PeriodState {
   formalNoticeAt: number;
   reportAccepted: boolean;
   tier: number | null;
+  /**
+   * The accepted report's payment figure, Stage 1's `Report.payment_usd` (the proven payment, before any router credit
+   * is applied to the due); '0' until reported. Stage 1 bounds a negative true-up by the year's sum of it (S4 WP13:
+   * SIM:1204-1208, income.rs:827-833 `year_pay_at`, MercesIncome.sol:404-407 `_yearPayments`). A payment figure Stage 1
+   * keeps onchain, never income.
+   */
+  paymentStable: Money;
   paymentDue: Money;
   accrual: Money;
   paid: Money;

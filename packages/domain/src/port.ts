@@ -74,8 +74,11 @@ export interface ChainPort {
    * (`submitReport`, verified on its own) inside a list, is refused (NotPermitted). The EVM adapter builds one command
    * per transaction until a bundle is needed there (curve mode, the bundle's first user, is Solana only): a list of
    * more than one is NotImplemented on an EVM chain.
+   *
+   * `signer` is the transaction's one signer: nobody co-signs (S4 D3, WP13). An attestor's or the report verifier's
+   * approval is a Stage 1 signature inside the command, never a transaction signature.
    */
-  build(command: BuildableCommand | readonly BuildableCommand[], signer: Address, coSigners?: Address[]): Promise<UnsignedTx>;
+  build(command: BuildableCommand | readonly BuildableCommand[], signer: Address): Promise<UnsignedTx>;
   /** Broadcast a user-signed transaction. */
   send(signed: SignedTx): Promise<TxResult>;
   /** Submit a permissionless or service-role transaction signed by the backend's own low-privilege key (`ServiceCommand` covers both). */
@@ -87,7 +90,7 @@ export interface WalletSigner {
   readonly address: Address;
   readonly family: ChainFamily;
   sign(tx: UnsignedTx): Promise<SignedTx>;
-  /** Sign an arbitrary message (used for sign-in and for attestor signatures), hex-encoded. */
+  /** Sign an arbitrary message for sign-in, hex-encoded. Attestations are `DigestSigner`'s, never a wallet's. */
   signMessage(message: Uint8Array): Promise<string>;
 }
 

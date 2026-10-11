@@ -2081,6 +2081,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/attestor/tier3/annual/{annualId}/message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The signing request for the annual attestation's TRUEUP signature (S4 WP13): Stage 1's MERCES_TRUEUP_V1 over the chain's signing domain (ChainInfo.signing), the series key (SeriesState.seriesKey), the series' live true-up nonce (SeriesState.nonces.trueup), the year, the signed adjustment (totalPaymentStable less the year's payments on estimate: positive is owed to holders, due 60 days after the attestation; negative is credited forward) and the attestation time (the chain's now). Only for a year and an adjustment Stage 1's submit_trueup would take (S4 amendment D13): the series settled with its mint final, not terminal, tier 3; the year ended and every quarter of it from the series' first period on reported; the adjustment in Stage 1's i64 range; a negative one no larger than the year's accepted report payments (PeriodState.paymentStable). The attestor signs it on their own device with the Merces attestor tool, which rebuilds and checks it first; the API never signs. Public data only: the domain, the series key, the nonce, the year, the adjustment (a payment figure Stage 1 publishes onchain) and the time. */
+        get: operations["tier3AnnualSigningRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/attestor/tier3/annual/{annualId}/sign": {
         parameters: {
             query?: never;
@@ -2090,6 +2107,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description The annual attestation (S4 WP13): the year's attested payment and the key's Stage 1 TRUEUP signature, made on its own device from GET .../message and posted as the attestor tool prints it, with the nonce and the time it signed. Only the account holding the key signs (an admin never does). The API checks Stage 1's year rules, the i64 range and the bound on a credit again (S4 amendment D13), the time (not after the chain's now, Stage 1's rule; not before the year ended), rebuilds the message from the chain's reads with the adjustment it derives from the posted payment (a digest sent must equal it), recovers the signer, checks the key is active (no grace) and reads the nonce again (409 stale-nonce with a fresh request). Stored with the amounts for the issuer's submit_trueup (S5); the signature is never shown by any read, the audit log, a notification or the feed (S4 amendment D2): views carry its signer, nonce, time, adjustment and digest (`trueUp`). */
         post: operations["signTier3Annual"];
         delete?: never;
         options?: never;
@@ -3283,6 +3301,8 @@ export type components = {
             formalNoticeAt?: number;
             reportAccepted?: boolean;
             tier?: number | null;
+            /** @description the accepted report's payment figure (Stage 1's Report.payment_usd, before any router credit); '0' until reported. Stage 1 bounds a negative true-up by the year's sum of it (S4 WP13) */
+            paymentStable?: components["schemas"]["Money"];
             /** @description while the period holds the open due: the live amount payIn must carry now (the due plus lateness accrual to date; a tail due without accrual); once paid: the due and accrual recomputed at payment */
             paymentDue?: components["schemas"]["Money"];
             accrual?: components["schemas"]["Money"];
@@ -3946,13 +3966,13 @@ export type components = {
             }[];
             evidenceCiphertext?: components["schemas"]["Ciphertext"];
         };
-        /** @description A transaction for the user or attestor to sign; the backend never signs. */
+        /** @description A transaction for one wallet (a user, a holder or the admin multisig) to sign; the backend never signs. It has one signer: nobody co-signs (S4 WP13). An attestor's or the report verifier's approval is a Stage 1 signature the command carries as an argument, never a transaction signature. */
         UnsignedTx: {
             chain?: string;
             /** @enum {string} */
             family?: "solana" | "evm";
+            /** @description the one signer (the fee payer on Solana, msg.sender on the EVM) */
             signer?: string;
-            coSigners?: string[];
             /** @description the transaction's command; for a transaction of several commands, the first */
             command?: Record<string, never>;
             /** @description every command of a transaction built from an ordered list, in order: the chain executes them all or none (one transaction; the curve unstake builder returns [unstakeUnits, claimPayout]). Absent on a transaction of one command */
@@ -8909,6 +8929,66 @@ export interface operations {
             };
         };
     };
+    tier3AnnualSigningRequest: {
+        parameters: {
+            query: {
+                /** @description the payment the attestor finds was owed for the year (base units); the adjustment is it less what was paid on estimate */
+                totalPaymentStable: components["schemas"]["Money"];
+            };
+            header?: never;
+            path: {
+                annualId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The TRUEUP signing request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningRequest"];
+                };
+            };
+            /** @description A missing */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Addressed to another attestor key (or the caller is no admin), or the caller's key is not linked to its account or not active on the item's chain */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown attestation or series */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The attestation is signed or withdrawn; Stage 1's year rules (detail.stage1 the chain's name: TrueUpYearNotEnded or TrueUpYearIncomplete on Solana, TrueUpYearInvalid on the EVM), RaiseNotSettled, MintNotFinalized, TerminalStatus or TierNotEnabled; the chain's signing domain is not known yet (detail.reason signing-domain-unknown) or is not one a signer may sign for (detail.reason signing-network-refused) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The adjustment is out of Stage 1's i64 range (detail.stage1 AmountOutOfRange), or a credit exceeds the year's accepted report payments (detail.stage1 TrueUpExceedsYear on Solana, TrueUpAdjustmentTooLarge on the EVM); value-free */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     signTier3Annual: {
         parameters: {
             query?: never;
@@ -8924,11 +9004,16 @@ export interface operations {
             content: {
                 "application/json": {
                     totalPaymentStable: components["schemas"]["Money"];
+                    /** @description the nonce the signature binds: the signing request's fields.trueupNonce */
+                    trueupNonce: string;
+                    /** @description the attestation time the signature binds, unix seconds: the signing request's fields.attestationTs */
+                    attestationTs: string;
+                    attestation: components["schemas"]["DeviceSignature"];
                 };
             };
         };
         responses: {
-            /** @description The true-up as amounts only: estimated (sum of the year's accepted quarterly payments), overpayment credited to the next period, or underpayment due within 60 days with no accrual */
+            /** @description The signed attestation: the amounts (estimated: the year's payments on estimate; an overpayment credited to the next period, or an underpayment due 60 days after the attestation time) and `trueUp` {signer, trueupNonce, attestationTs, adjustment, digest} */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8937,6 +9022,13 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            /** @description Malformed body (the amounts-only body of before S4 WP13 included) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Not the account holding the chosen attestor key, or the key is not active on its chain */
             403: {
                 headers: {
@@ -8944,8 +9036,22 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Already signed */
+            /** @description Unknown attestation or series */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already signed or withdrawn; Stage 1's year rules or the series' state (detail.stage1, as for the message); the nonce moved since the signature (detail.reason stale-nonce with detail.request, a fresh signing request) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The signature does not recover to the attestation's key over this TRUEUP message, or the key is not active (detail.stage1 InvalidAttestorSignature); the time is in the future (detail.stage1 TrueUpTimestampInFuture on Solana, AttestationInFuture on the EVM) or before the year ended; the adjustment out of range or a credit too large (as for the message) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9293,7 +9399,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The FX fallback for the series' pair and period (S4 WP9): basis (unity, accumulator or attestor), the request's state and reason, the period's signed rate (`rateWad`), `seriesSigned`, and this series' own Stage 1 FX signature `fxFallback` {signer, signature} with its `digest` (null until an attestor signed for this series). The report service carries the stored signature into the report itself (was `attestorRate`) */
+            /** @description The FX fallback for the series' pair and period (S4 WP9): basis (unity, accumulator or attestor), the request's state and reason, the period's signed rate (`rateWad`), `seriesSigned`, and this series' own Stage 1 FX signature `fxFallback` {signer, signature} with its `digest` (null until an attestor signed for this series). The report service carries the stored signature into the report itself */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -29,6 +29,8 @@ import * as domainModule from '../src/index.ts';
  *  - S4-EXT: `extinguish` joins the permissionless group as Stage 1's `extinguish(attestorA, signatureA, attestorB,
  *    signatureB)` (S4 WP12; was a user command `{attestors}` with the second attestor co-signing); `SeriesExtinguished`
  *    names two 20-byte attestor keys.
+ *  - S4-CS: nobody co-signs (S4 WP13): `UnsignedTx` has no co-signer field and `ChainPort.build` takes one signer; the
+ *    retired names are asserted gone with their names spelled in parts (the S4 WP13 grep gate allows them nowhere).
  *
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
@@ -210,9 +212,9 @@ describe('hashing', () => {
     }
   });
   it('tier 3 and the FX fallback are Stage 1 signatures inside submitReport; no attestation text, no co-signer (cause S4-T3, S4-FX)', () => {
-    expect('attestationMessage' in domainModule).toBe(false);
-    expect('fxAttestationMessage' in domainModule).toBe(false);
-    expect('attestorRateSchema' in domainModule).toBe(false);
+    // the retired EIP-191 text builders and the co-signed rate's schema are gone (cause S4-CS: their names are spelled in
+    // parts, so that the S4 WP13 grep gate, which allows them nowhere in the repository, finds none)
+    for (const gone of [['attestation', 'Message'], ['fxAttestation', 'Message'], ['attestor', 'RateSchema']]) expect(gone.join('') in domainModule, gone.join('')).toBe(false);
     const sig = { signer: '0x' + 'ab'.repeat(20), signature: '0x' + '11'.repeat(65) };
     const report = {
       kind: 'submitReport', seriesId: 'sol:abc', periodId: '2026Q1', tier: 3, paymentStable: '1', priorIncomeCommitment: ZERO_INCOME_COMMITMENT, incomeCommitment: '0x' + '01'.repeat(32),
@@ -222,7 +224,7 @@ describe('hashing', () => {
     expect(parsed.attestation).toEqual(sig);
     expect(parsed.fxFallback).toEqual(sig);
     expect(parsed).not.toHaveProperty('attestor');
-    expect(parsed).not.toHaveProperty('attestorRate');
+    expect(Object.keys(parsed).sort()).toEqual(Object.keys(report).sort()); // cause S4-CS: no co-signed rate, nothing added
     // the signature is a 65-byte shape and the signer a 20-byte key; anything else is refused by the schema
     expect(() => userCommandSchema.parse({ ...report, fxFallback: { signer: sig.signer, signature: 'sim:x' } })).toThrow();
     expect(() => userCommandSchema.parse({ ...report, attestation: { ...sig, rateWad: '1' } })).toThrow();

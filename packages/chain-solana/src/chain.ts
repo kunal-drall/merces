@@ -172,7 +172,7 @@ export class SolanaChain implements ChainPort {
    * owner direction of 2026-10-10: the unstake builder's `[unstakeUnits, claimPayout]`), serialised unsigned
    * (`solana-base64`) with the signer as fee payer.
    */
-  async build(_command: BuildableCommand | readonly BuildableCommand[], _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
+  async build(_command: BuildableCommand | readonly BuildableCommand[], _signer: string): Promise<UnsignedTx> {
     return this.notReady('build');
   }
   async send(_signed: SignedTx): Promise<TxResult> {

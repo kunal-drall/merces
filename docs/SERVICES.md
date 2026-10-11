@@ -20,8 +20,9 @@ packages/api/test/<module>.test.ts           # integration test through the HTTP
 Chain access goes only through `ChainPort` (`packages/domain/src/port.ts`): reads (`getSeries`, `listSeries`,
 `getPeriod`, `listPeriods`, `getVault`, `getTreasury`, `listPositions`, `getBalance(wallet, 'USDC')`,
 `getQuarterRate`, `getSignerKey(kind, address)` and `listSignerKeys(kind)` for the attestor and verifier keys (S4),
-`now()` …), `build(command, signer, coSigners?)` →
-`UnsignedTx` for a user/multisig to sign, `submit(serviceCommand, 'keeper' | 'allowlistManager')` for the backend's
+`now()` …), `build(command, signer)` →
+`UnsignedTx` for one user/multisig wallet to sign (its one signer: nobody co-signs since S4 WP13; an attestor's or the
+report verifier's approval is a Stage 1 signature inside the command), `submit(serviceCommand, 'keeper' | 'allowlistManager')` for the backend's
 own roles. Never sign for users; never hold funds. Admin commands (`registerAttestor`, `revokeAttestor`,
 `rotateAttestor`, `registerVerifierKey`, `revokeVerifierKey`, `rotateVerifierKey`, `pauseNewRaises`, `setFeeCollector`,
 `registerSplitRouter`) are *built* for the admin multisig (`info().admin`). A signature flow (S4) never signs either: it
@@ -75,9 +76,10 @@ const tok = rig.token({ accountId: 'a', roles: ['admin'], wallets: [{ chain: 'so
 await rig.get('/path', tok); await rig.post('/path', body, tok, { 'idempotency-key': 'k' }); await rig.put(...)
 await rig.sol.runRaise(); await rig.sol.reportAndPay(...); await rig.sync();  // index events into the read model
 ```
-`rig.sol.issuer`, `rig.sol.backers[i]`, `rig.sol.attestors[i]`, `rig.sol.admin` are `SimWallet`s (`.address`,
-`.sign(tx)`, `.coSign(signed)`); send a signed tx with `rig.post('/tx/send', signed, tok)`. The attestors are keys
-(`SimAttestor`: `.attest(kind, domain, seriesKey, fields)` signs a Stage 1 message); `rig.attestorToken(account, keys)`
+`rig.sol.issuer`, `rig.sol.backers[i]`, `rig.sol.admin` are `SimWallet`s (`.address`, `.sign(tx)`); send a signed tx
+with `rig.post('/tx/send', signed, tok)`. The attestors `rig.sol.attestors[i]` are keys, not wallets (`SimAttestor`:
+`.address`, `.attest(kind, domain, seriesKey, fields)` signs a Stage 1 message, `.personalSign(text)` the EIP-191 link
+proof; nothing signs a transaction for them, S4 WP13); `rig.attestorToken(account, keys)`
 links them, `rig.signFxFallback(h, pair, periodId, key, rateWad)` signs a period's FX fallback for every covered
 series through the attestor routes, `rig.signAmendment(amendmentId, key, tok)` signs an amendment's AMEND request
 and posts the approval, and `rig.signExtinguish(requestId, key, tok)` signs one named key's EXTINGUISH request and posts

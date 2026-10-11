@@ -32,6 +32,8 @@ async function withFreshSchema(fn: (schema: string) => Promise<void>): Promise<v
  *    built before it without one await an attestor again (resign-s4).
  *  - S4-EXT: 029, an extinguishment request collects two attestor keys' EXTINGUISH signatures (collecting, ready, sent);
  *    rows 025 left built go back to collecting (resign-s4), or are sent when the series is extinguished.
+ *  - S4-TU: 030, an annual attestation carries the attestor key's TRUEUP signature with its nonce, time, adjustment and
+ *    digest; attestations signed before it without one are opened again (resign-s4) or, addressed to a wallet, withdrawn.
  */
 describe.skipIf(!dbTestsEnabled())('migrate', () => {
   it('serialises concurrent processes: three migrate() calls on a fresh schema all succeed, each file applied once', async () => {
@@ -209,16 +211,16 @@ describe.skipIf(!dbTestsEnabled())('migrate', () => {
         await t3('c-signed-unused', '2026Q2', WALLET, 'signed');
         await t3('c-signed-used', '2026Q3', WALLET, 'signed');
         await t3('c-key', '2026Q4', KEY, 'open');
-        const rep = (id: string, period: string, state: string, cols: { attestor?: string; attestorRate?: unknown; pair?: string; fxBasis?: string } = {}) =>
+        const rep = (id: string, period: string, state: string, cols: { attestor?: string; rateCol?: unknown; pair?: string; fxBasis?: string } = {}) =>
           q(
             "insert into reports (report_id, series_id, period_id, account_id, tier, source, state, payment_stable, income_commitment, terms_commitment, fx_basis, fx_avg_wad, pair, proof, attestor, attestor_rate) values ($1, 'solana:s1', $2, 'acct-i', 3, 'attestor', $3, 0, '0x01', '0x02', $4, 1, $5, '{}', $6, $7)",
-            [id, period, state, cols.fxBasis ?? 'unity', cols.pair ?? null, cols.attestor ?? null, cols.attestorRate === undefined ? null : JSON.stringify(cols.attestorRate)],
+            [id, period, state, cols.fxBasis ?? 'unity', cols.pair ?? null, cols.attestor ?? null, cols.rateCol === undefined ? null : JSON.stringify(cols.rateCol)],
           );
         await rep('r-used', '2026Q3', 'accepted', { attestor: WALLET });
         await rep('r-unsent', '2026Q2', 'assembled', { attestor: WALLET });
-        await rep('r-rate', '2026Q2', 'rejected', { attestorRate: { attestor: WALLET, rateWad: '1' }, pair: 'GBP/USD', fxBasis: 'attestor' });
+        await rep('r-rate', '2026Q2', 'rejected', { rateCol: { attestor: WALLET, rateWad: '1' }, pair: 'GBP/USD', fxBasis: 'attestor' });
         await rep('r-keyed', '2026Q4', 'assembled', { attestor: KEY });
-        await rep('r-fx-sent', '2026Q1', 'paid', { attestorRate: { attestor: WALLET, rateWad: '1' }, pair: 'EUR/USD', fxBasis: 'attestor' });
+        await rep('r-fx-sent', '2026Q1', 'paid', { rateCol: { attestor: WALLET, rateWad: '1' }, pair: 'EUR/USD', fxBasis: 'attestor' });
         const annual = (id: string, year: number, attestor: string, state: string) =>
           q("insert into tier3_annual (annual_id, series_id, chain, year, issuer, account_id, attestor, documents_ciphertext, state) values ($1, 'solana:s1', 'solana', $2, 'iss', 'acct-i', $3, 'c', $4)", [id, year, attestor, state]);
         await annual('a-open', 2026, WALLET, 'open');
@@ -344,15 +346,15 @@ describe.skipIf(!dbTestsEnabled())('migrate', () => {
         await t3('c-text-unused', '2026Q2', 'signed', OLD_T3);
         await t3('c-text-used', '2026Q3', 'signed', OLD_T3);
         await t3('c-new', '2026Q4', 'signed', NEW_T3);
-        const rep = (id: string, period: string, state: string, tier: number, cols: { attestor?: string; attestorRate?: unknown; attestation?: unknown; pair?: string } = {}) =>
+        const rep = (id: string, period: string, state: string, tier: number, cols: { attestor?: string; rateCol?: unknown; attestation?: unknown; pair?: string } = {}) =>
           q(
             "insert into reports (report_id, series_id, period_id, account_id, tier, source, state, payment_stable, income_commitment, terms_commitment, fx_basis, fx_avg_wad, pair, proof, attestor, attestor_rate, attestation) values ($1, 'solana:s1', $2, 'acct-i', $3, 'x', $4, 0, '0x01', '0x02', $5, 1, $6, '{}', $7, $8, $9)",
-            [id, period, tier, state, cols.attestorRate ? 'attestor' : 'unity', cols.pair ?? null, cols.attestor ?? null, cols.attestorRate === undefined ? null : JSON.stringify(cols.attestorRate), cols.attestation === undefined ? null : JSON.stringify(cols.attestation)],
+            [id, period, tier, state, cols.rateCol ? 'attestor' : 'unity', cols.pair ?? null, cols.attestor ?? null, cols.rateCol === undefined ? null : JSON.stringify(cols.rateCol), cols.attestation === undefined ? null : JSON.stringify(cols.attestation)],
           );
         await rep('r-t3-used', '2026Q3', 'accepted', 3, { attestor: KEY });
         await rep('r-t3-unsent', '2026Q2', 'assembled', 3, { attestor: KEY });
-        await rep('r-rate-unsent', '2026Q2', 'rejected', 2, { attestorRate: { attestor: KEY, rateWad: '1' }, pair: 'GBP/USD' });
-        await rep('r-rate-paid', '2026Q1', 'paid', 2, { attestorRate: { attestor: KEY, rateWad: '1' }, pair: 'EUR/USD' });
+        await rep('r-rate-unsent', '2026Q2', 'rejected', 2, { rateCol: { attestor: KEY, rateWad: '1' }, pair: 'GBP/USD' });
+        await rep('r-rate-paid', '2026Q1', 'paid', 2, { rateCol: { attestor: KEY, rateWad: '1' }, pair: 'EUR/USD' });
         await rep('r-t2', '2026Q4', 'assembled', 2, { attestation: { signer: KEY, signature: '0x' + '44'.repeat(65) } });
         const fx = (id: string, pair: string, period: string, state: string) =>
           q("insert into fx_fallback_requests (request_id, chain, pair, period_id, reason, state, attestor, rate_wad, signature, source_note, signed_at) values ($1, 'solana', $2, $3, 'coverage', $4, $5, $6, $7, $8, $9)",
@@ -596,6 +598,71 @@ describe.skipIf(!dbTestsEnabled())('migrate', () => {
         // a new row defaults to collecting with no signatures
         await q("insert into extinguishment_requests (request_id, series_id, chain, attestors, requested_by, evidence_ciphertext) values ('x-fresh', 'solana:gone', 'solana', $1, 'acct-a', 'c')", [[A, B]]);
         expect((await q("select state, signatures from extinguishment_requests where request_id = 'x-fresh'")).rows[0]).toEqual({ state: 'collecting', signatures: [] });
+        // migrating again changes nothing
+        expect(await migrate(pool, dir)).toEqual([]);
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+  // S4 WP13 (cause S4-TU): migration 030 on a database seeded at 029. An annual attestation gains the TRUEUP signature's
+  // nonce, time, adjustment, signer, signature and digest. Rows signed before it carry amounts only: opened again for the
+  // key (resign-s4, amounts cleared) or, addressed to a wallet, withdrawn (superseded-s4); rows 025 withdrew and open rows
+  // are not touched (amendment fix 2).
+  it('030_trueup_signature on a database seeded at 029: the TRUEUP signature and its parts; amounts-only signed rows sign again', async () => {
+    await withFreshSchema(async (schema) => {
+      const pool = createPool(databaseUrl(), schema);
+      try {
+        const dir = mkdtempSync(join(tmpdir(), 'merces-mig030-'));
+        for (const f of files.filter((x) => x < '030')) copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+        await migrate(pool, dir);
+        const KEY = '0x' + 'ab'.repeat(20);
+        const q = (sql: string, params: unknown[] = []) => pool.query(sql, params);
+        const annual = (id: string, sid: string, year: number, attestor: string, state: string, decisionCode: string | null = null) =>
+          q(
+            `insert into tier3_annual (annual_id, series_id, chain, year, issuer, account_id, attestor, documents_ciphertext, state, decision_code, total_payment_stable, estimated_payment_stable, overpayment, underpayment, trueup_due_at, signed_at)
+             values ($1, $2, 'solana', $3, 'iss', 'acct-i', $4, 'c', $5, $6, $7, $8, $9, $10, $11, $12)`,
+            state === 'signed' ? [id, sid, year, attestor, state, decisionCode, '2500', '2000', '0', '500', 1_800_000_000, '2027-01-02'] : [id, sid, year, attestor, state, decisionCode, null, null, null, null, null, null],
+          );
+        await annual('a-key-signed', 'solana:s1', 2026, KEY, 'signed');
+        await annual('a-wallet-signed', 'solana:s2', 2026, 'WalletBase58Address', 'signed');
+        await annual('a-open', 'solana:s3', 2026, KEY, 'open');
+        await annual('a-closed', 'solana:s4', 2026, 'WalletBase58Address', 'withdrawn', 'superseded-s4');
+
+        copyFileSync(join(MIGRATIONS_DIR, '030_trueup_signature.sql'), join(dir, '030_trueup_signature.sql'));
+        expect(await migrate(pool, dir)).toEqual(['030_trueup_signature.sql']);
+        expect((await q('select annual_id, state, decision_code, total_payment_stable, underpayment, trueup_due_at, signed_at, trueup_nonce, attestation_ts, adjustment, trueup_signer, trueup_signature, trueup_digest from tier3_annual order by annual_id')).rows).toEqual([
+          { annual_id: 'a-closed', state: 'withdrawn', decision_code: 'superseded-s4', total_payment_stable: null, underpayment: null, trueup_due_at: null, signed_at: null, trueup_nonce: null, attestation_ts: null, adjustment: null, trueup_signer: null, trueup_signature: null, trueup_digest: null },
+          { annual_id: 'a-key-signed', state: 'open', decision_code: 'resign-s4', total_payment_stable: null, underpayment: null, trueup_due_at: null, signed_at: null, trueup_nonce: null, attestation_ts: null, adjustment: null, trueup_signer: null, trueup_signature: null, trueup_digest: null },
+          { annual_id: 'a-open', state: 'open', decision_code: null, total_payment_stable: null, underpayment: null, trueup_due_at: null, signed_at: null, trueup_nonce: null, attestation_ts: null, adjustment: null, trueup_signer: null, trueup_signature: null, trueup_digest: null },
+          expect.objectContaining({ annual_id: 'a-wallet-signed', state: 'withdrawn', decision_code: 'superseded-s4', trueup_signature: null }),
+        ]);
+        // the withdrawn wallet row frees its year: the issuer opens it again for a key
+        await annual('a-again', 'solana:s2', 2026, KEY, 'open');
+        const sign = (id: string, f: { nonce?: string | null; ts?: string | null; adj?: string | null; signer?: string | null; sig?: string | null; digest?: string | null; total?: string; estimated?: string; state?: string }) =>
+          q(
+            `update tier3_annual set state = $2, total_payment_stable = $3, estimated_payment_stable = $4, trueup_nonce = $5, attestation_ts = $6, adjustment = $7, trueup_signer = $8, trueup_signature = $9, trueup_digest = $10 where annual_id = $1`,
+            [id, f.state ?? 'signed', f.total ?? '2500', f.estimated ?? '2000', f.nonce === undefined ? '0' : f.nonce, f.ts === undefined ? '1798848000' : f.ts, f.adj === undefined ? '500' : f.adj, f.signer === undefined ? KEY : f.signer, f.sig === undefined ? '0x' + '11'.repeat(65) : f.sig, f.digest === undefined ? '0x' + '22'.repeat(32) : f.digest],
+          );
+        const check = /tier3_annual_trueup_check/;
+        // all six parts together, only on a signed row, by the attestation's own key, the adjustment total − estimated
+        await expect(sign('a-open', { sig: null })).rejects.toThrow(check);
+        await expect(sign('a-open', { digest: null })).rejects.toThrow(check);
+        await expect(sign('a-open', { state: 'open' })).rejects.toThrow(check);
+        await expect(sign('a-open', { signer: '0x' + 'cd'.repeat(20) })).rejects.toThrow(check);
+        await expect(sign('a-open', { adj: '400' })).rejects.toThrow(check);
+        await expect(q("update tier3_annual set state = 'signed' where annual_id = 'a-open'")).rejects.toThrow(check);
+        // the shapes and ranges
+        await expect(sign('a-open', { sig: 'sim:x' })).rejects.toThrow(/tier3_annual_trueup_signature_check/);
+        await expect(sign('a-open', { nonce: '18446744073709551616' })).rejects.toThrow(/tier3_annual_trueup_nonce_check/);
+        await expect(sign('a-open', { total: '0', estimated: '9223372036854775809', adj: '-9223372036854775809' })).rejects.toThrow(/tier3_annual_adjustment_check/);
+        // a positive, a negative (a credit) and an exact adjustment
+        await sign('a-open', {});
+        await sign('a-key-signed', { total: '1500', adj: '-500' });
+        await sign('a-again', { total: '2000', adj: '0', nonce: '7' });
+        expect((await q("select annual_id, adjustment from tier3_annual where state = 'signed' order by annual_id")).rows).toEqual([
+          { annual_id: 'a-again', adjustment: '0' }, { annual_id: 'a-key-signed', adjustment: '-500' }, { annual_id: 'a-open', adjustment: '500' },
+        ]);
         // migrating again changes nothing
         expect(await migrate(pool, dir)).toEqual([]);
       } finally {

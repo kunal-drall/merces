@@ -15,10 +15,12 @@ import { GENESIS, USDC } from './helpers.ts';
  *  - S4-T3: tier 3 is the same REPORT signature with tier 3 by an attestor key, in `attestation` (was the attestor's
  *    co-signature of the transaction, named by `attestor`);
  *  - S4-FX: the FX fallback is an attestor key's `MERCES_FX_V1` signature over the series key, the period and the report's
- *    `fxAvgWad`, in `fxFallback` (was `attestorRate`, co-signed).
+ *    `fxAvgWad`, in `fxFallback` (was the co-signed attestor rate).
  *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
  *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
  *    second attestor co-signing the first one's transaction).
+ *  - S4-CS: nobody co-signs (S4 WP13): the harness attestors are keys, not wallets, so a stranger is a wallet of its own
+ *    (was the first attestor's transitional wallet at its key's address).
  */
 
 type Report = Extract<UserCommand, { kind: 'submitReport' }>;
@@ -46,14 +48,15 @@ function withSignals(cmd: Report, signals: string[]): Report {
   return { ...cmd, proof: { system: 'mock', proof: mockProve(signals), publicInputs: signals } };
 }
 
-const send = (h: SimHarness, cmd: Report, co: SimWallet[] = [], who: SimWallet = h.issuer) => () => h.exec(who, cmd, co);
+// cause S4-CS: one signer, `who` (was a co-signer list, always empty since S4 WP9)
+const send = (h: SimHarness, cmd: Report, who: SimWallet = h.issuer) => () => h.exec(who, cmd);
 
 describe('submitReport checks, in Stage 1 order', () => {
   it('1-3: issuer, settled raise, entry ranges', async () => {
     const { h, seriesId, privateTerms } = await settled();
     await h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
     const { command } = await h.buildReport({ seriesId, periodId: '2026Q1', privateTerms, incomeYtdNow: USDC(100_000) });
-    await refused(h, send(h, command, [], h.backers[0]!), 'NotIssuer');
+    await refused(h, send(h, command, h.backers[0]!), 'NotIssuer'); // cause S4-CS
     // a second series of the same issuer, still in Draft
     const draft = await h.exec(h.issuer, { kind: 'createSeries', terms: defaultTerms(h.sim).terms });
     const draftId = (draft.events[0]!.payload as { seriesId: string }).seriesId;
@@ -115,7 +118,7 @@ describe('submitReport checks, in Stage 1 order', () => {
   });
 
   it('12: FX (FxMismatch, FxFallbackNotAllowed, FxFallbackRequired, the fallback\'s FX signature)', async () => {
-    // cause S4-FX: the fallback is an attestor key's per-series FX signature in `fxFallback` (was `attestorRate`, co-signed)
+    // cause S4-FX: the fallback is an attestor key's per-series FX signature in `fxFallback` (was the co-signed attestor rate)
     const usd = await settled();
     await usd.h.sim.setTime(parsePeriod('2026Q1').end + 86_400);
     const notWad = await usd.h.buildReport({ seriesId: usd.seriesId, periodId: '2026Q1', privateTerms: usd.privateTerms, incomeYtdNow: USDC(100_000), fxAvgWad: WAD + 1n });

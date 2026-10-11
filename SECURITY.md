@@ -114,7 +114,11 @@ Secrets never enter the repository: `.env.example` lists names only; development
   Since S4 WP12: an extinguishment request's EXTINGUISH signatures, each recovered over the message rebuilt with the
   nonce it signed, by a key the request names, active on the chain, posted by the account holding that key; the two
   keys must be linked to two different accounts (S4 D15, 409 `same-account`, read live), so one person holding two
-  attestor keys cannot extinguish a series through Merces alone (the chain checks only that the keys differ).
+  attestor keys cannot extinguish a series through Merces alone (the chain checks only that the keys differ). Since S4
+  WP13: an annual attestation's TRUEUP signature, recovered over the message rebuilt with the nonce and time it signed
+  and the adjustment the service derives from the posted payment, by the attestation's key, active on the chain, after
+  Stage 1's year rules, its i64 range and its bound on a credit (S4 amendment D13). Nobody co-signs a transaction any
+  more: `UnsignedTx` has one signer and `ChainPort.build` takes no co-signer.
 - The keeper sends only permissionless commands (S4 D3). A pause approval is one (Stage 1's `approve_pause` takes the
   attestor's signature as an argument and anyone may submit it), and the keeper relays only a signature the attestor
   service has checked as above; it holds no attestor key and adds nothing of its own. A chain refusal at the relay is
@@ -137,7 +141,10 @@ Secrets never enter the repository: `.env.example` lists names only; development
     stored while the second key has not signed (S4 WP12): anyone holding both could extinguish the series, so no read,
     audit row, notification or feed shows one before the relay (the request names the keys that signed, never their
     signatures); once relayed the two are public onchain. A stored one dies when the extinguish nonce moves (only an
-    extinguishment does) or its key stops being active (the relay's check drops it). A leaked PAUSE signature dies when its nonce
+    extinguishment does) or its key stops being active (the relay's check drops it). A TRUEUP signature is stored for the
+    issuer's `submit_trueup` (S4 WP13; the command lands in S5): only the issuer can submit it (`submit_trueup` is the
+    issuer's transaction), and no read, audit row, notification or feed shows it; it dies when the true-up nonce moves
+    or the key stops being active. A leaked PAUSE signature dies when its nonce
     moves: the issuer withdraws the request (`build-withdraw`) or requests again; any other leaked one is withdrawn only
     by rotating the key (the RUNBOOK's attestor key rotation).
   - A raw-digest key signs any 32 bytes. The key is dedicated and never funded, and the tool signs only digests it

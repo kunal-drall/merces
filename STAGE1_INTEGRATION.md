@@ -594,6 +594,88 @@ programs and contracts at 1bfc66b; the register below lists each as a divergence
 - **Names.** Solana-only error names (`STAGE1_SOLANA_CODE`) and the EVM's `CurveModeUnsupported` (`STAGE1_EVM_CODE`) are
   not in `@merces/sdk`'s `ERRORS`; the adapters pass them through as `detail.stage1`.
 
+### Adapter notes for signatures (S5)
+
+What the live adapters normalise so the canonical signature flows read the same on both chains (S4 WP13, from Stage 1's
+programs and contracts at 1bfc66b; each line re-read at the pin; the register below lists the check orders as rows). The
+canonical commands carry every attestation as `{signer, signature}` (or `attestor` and `signature`): a 20-byte key and
+Stage 1's 65-byte `r ‖ s ‖ v` signature over the raw `MERCES_*_V1` digest. Nobody co-signs a transaction (S4 D3): the
+`coSigners` field and the third argument of `ChainPort.build` are gone, so every transaction has one signer.
+
+- **Domain, series key, nonces.** `ChainInfo.signing` is read from the chain (Solana `ProtocolConfig.domain`, merces_registry
+  lib.rs:127-130, over `crate::ID`; the EVM's `MercesRegistry.domain()`) and checked against the manifest; `health()` fails on a mismatch
+  (S4 D6). Until then the adapters return `signing: null` and every signing flow answers 409 `signing-domain-unknown`.
+  `SeriesState.seriesKey` is the series PDA's bytes on Solana and `bytes32(uint256(seriesId))` on the EVM (S4 D7);
+  `SeriesState.nonces` reads the ledger's `pause_nonce`, `extinguish_nonce` and `trueup_nonce` and the series'
+  `amendment_nonce`. The attestor tool should read the nonce from a public RPC itself on a live chain (S4 amendment D2;
+  it trusts the API's today, and says so before it signs).
+- **Solana: the key and its PDA.** Every signature instruction takes the key's address as an argument
+  (`attestation_addr`, `fx_attestor_addr` in `SubmitReportArgs`, income.rs:141-153; `attestor_addr` in `approve_pause`,
+  `submit_trueup` and `amend_terms`; `attestor_a`/`attestor_b` in `extinguish`) and the registry key PDA
+  `[b"attestor" | b"verifier", addr20]` (merces-onchain lib.rs:38-40; `require_key`, income.rs:75-111). Where no
+  signature is used, the adapter passes the zero address and the PDA is not read: a tier-1 or tier-4 report's
+  attestation, and a report that needs no FX fallback (`fx_attestor_key` is validated only when a fallback is used,
+  income.rs:171). The signatures are `Option<[u8; 65]>` there (`attestation_sig`, `fx_fallback_sig`): our null is `None`.
+- **EVM: the signature only; recovery checked before the address is dropped.** The EVM takes the signatures alone
+  (`ReportInput.attestationSignature` and `fxFallbackSignature`, `approvePause(seriesId, pauseEnd, attestorSignature)`,
+  `amendTerms(…, attestorSignature, tier1Terms)`, `extinguish(seriesId, signatureA, signatureB)`,
+  `submitTrueUp(seriesId, year, adjustment, attestationTs, sig)`) and recovers the signer (`tryRecover`,
+  MercesIncome.sol:232-234; `ECDSA.recover` in `amendTerms`, MercesRegistry.sol:648). It would accept a signature by any
+  usable key, so before dropping the canonical command's named key the adapter recovers each signature itself and
+  refuses InvalidAttestorSignature / InvalidVerifierSignature unless it recovers to that key, as our engine and services
+  do; otherwise the canonical event would name a key that did not sign. An empty `fxFallbackSignature` (length 0) means
+  no fallback (MercesIncome.sol:150): our `fxFallback: null`.
+- **Names (Solana → canonical).** `MalformedSignature`, `SignatureRecoveryFailed`, `SignerMismatch`, `KeyAccountMismatch`
+  and `AttestorInactive` (merces_protocol error.rs:139-150), the registry's `AttestorMismatch`, `AttestorInactive`,
+  `MalformedSignature` and `SignatureRecoveryFailed` (merces_registry error.rs:74-80), and Anchor's built-in
+  `AccountNotInitialized` (3012: `amend_terms` loads the attestor PDA as a typed account, so a key never registered fails
+  there) are InvalidAttestorSignature; with `VerifierKeyInactive` instead of `AttestorInactive` they are
+  InvalidVerifierSignature; `AttestorsNotDistinct` (error.rs:216) is SameAttestor. Stage 1's own harness maps them so
+  (solana/tests/src/vectors.rs:30, :161-180). A tier-2 or tier-3 report without an attestation is `AttestationRequired`
+  on Solana (income.rs:397-402); the EVM recovers an empty signature to the zero address, which no key is
+  (InvalidVerifierSignature / InvalidAttestorSignature, MercesIncome.sol:207-228), and so does ours (`requireSigned`).
+- **Names (EVM → canonical).** `InvalidAttestorSignature(address)` and `InvalidVerifierSignature(address)` carry the
+  recovered address (zero for a malformed signature); the adapter keeps Stage 1's name and drops the address.
+  `amendTerms` uses `ECDSA.recover`, not `tryRecover`, so a malformed AMEND signature reverts with OpenZeppelin's
+  `ECDSAInvalidSignature`, `ECDSAInvalidSignatureLength` or `ECDSAInvalidSignatureS`: InvalidAttestorSignature. It also
+  refuses a zero terms commitment with `ParameterOutOfBounds("termsCommitment")` (MercesRegistry.sol:651), which ours
+  never builds (the commitment is Poseidon over the private terms).
+- **Check orders.** Ours follow the EVM where the chains differ, and the register rows say where Solana parts:
+  - report (tiers 2 and 3) and FX fallback: Solana recovers first (`require_signer`: SignerMismatch), then checks the PDA
+    and the key with the grace (income.rs:340-356, :396-424); the EVM recovers and looks the key up (`_keyValid`,
+    MercesIncome.sol:150-170, :207-242); ours recovers, compares with the named key, then checks the key with the grace;
+  - `approve_pause`: Solana checks the attestor's PDA, then the signature, then the request (income.rs:1002-1013); the
+    EVM checks `pauseEnd` is a u64 first, then recovers (MercesIncome.sol:499-506); ours is the EVM's (S4 D8);
+  - `amend_terms`: Solana checks `SeriesTerminal` (merces_registry lib.rs:762), then the attestor PDA's `active`
+    (`AttestorInactive`, lib.rs:763-766), then the cap (lib.rs:767-774), then the signature (lib.rs:784-785); the EVM
+    (MercesRegistry.sol:643-651) and ours: NotIssuer, AmendmentAfterTerminal, the cap a u64, the signature and an active
+    key, UnfavourableAmendment;
+  - `extinguish`: Solana checks the supplied addresses differ (`AttestorsNotDistinct`), then both PDAs, then both
+    signatures (exit.rs:215-228); the EVM recovers both first and compares the **recovered** addresses
+    (MercesVault.sol:592-596), so two malformed signatures (both recover to zero), or one key's signature under two
+    supplied addresses, are `SameAttestor` there and InvalidAttestorSignature in our order;
+  - `submit_trueup` (the command lands in S5; S4 WP13 captures its signature): Solana checks MintNotFinalized,
+    TerminalStatus, TierNotEnabled, the attestor's PDA, the signature, `TrueUpTimestampInFuture`, `TrueUpOutstanding`,
+    `TrueUpYearUsed`, `TrueUpYearNotEnded`, `TrueUpYearIncomplete`, then `TrueUpExceedsYear` for a credit above the
+    year's accepted report payments (income.rs:770-833); the EVM checks NotIssuer, RaiseNotSettled, MintNotFinalized,
+    TierNotEnabled, the adjustment an i64 (AmountOutOfRange), the signature and an active key, TerminalStatus,
+    `AttestationInFuture`, TrueUpOutstanding, `TrueUpYearInvalid` for every year rule, then `TrueUpAdjustmentTooLarge`
+    (MercesIncome.sol:371-407); Stage 1's reference has no timestamp check and names the year rules and the bound as the
+    EVM does (simulator.ts:1187-1208). The attestor service checks the year rules, the i64 range and the bound when it
+    issues the request and when it accepts the signature, under the chain's names (S4 amendment D13), so a signature
+    captured in S4 stays submittable.
+- **Events.** Solana's `PauseRequestWithdrawn.nonce` is the nonce before the increment (income.rs:971-975), where the EVM
+  and Stage 1's reference emit the new one (MercesIncome.sol:492, simulator.ts:668-669) and so does ours: the Solana
+  adapter adds 1. `TermsAmended.nonce` is the nonce before the increment on both chains and ours (merces_registry
+  lib.rs:820-830, MercesRegistry.sol:660). `PauseApproved` and `SeriesExtinguished` name the recovered signer on the EVM
+  (MercesIncome.sol:519; MercesVault.sol) and the supplied key on Solana (income.rs:1045-1050): the same once the adapter's
+  recovery check passed. `TrueUpRecorded` carries no nonce on either chain (income.rs:861-866, MercesIncome.sol:411); Stage 1's reference prints the nonce after the increment (simulator.ts:1219).
+- **Registry.** Rotation is native on the EVM (`rotateAttestor`, `rotateVerifierKey`: register, then revoke,
+  MercesRegistry.sol:297-313); Solana has no rotate instruction, so its adapter sends `register_*(to)` and `revoke_*(from)`
+  in one transaction (the revoke's count check `>= 2` passes after the register; merces_registry lib.rs:219-302).
+  Re-registering an active key re-emits `AttestorRegistered` on Solana and reverts `KeyAlreadyActive` on the EVM (S4 D9,
+  the register row).
+
 ### Owner decisions and questions
 
 Decided (S1 review):
@@ -829,8 +911,11 @@ they co-sign at the key's address instead of signing Stage 1's messages. Since S
 fallback carry the attestor key's own Stage 1 signatures (REPORT tier 3, FX per series), and since S4 WP10 a pause
 approval carries its PAUSE signature (permissionless, relayed by the keeper), and since S4 WP11 an amendment carries its
 AMEND signature (the issuer's `amendTerms`). Since S4 WP12 an extinguishment carries two keys' EXTINGUISH signatures
-(permissionless, relayed by the keeper), so the co-signing row is gone: no flow co-signs (the `coSigners` field itself
-goes in S4 WP13). `withdraw_pause_request` left the S5 row in S4 WP10.
+(permissionless, relayed by the keeper), so the co-signing row is gone: no flow co-signs, and since S4 WP13 the
+`coSigners` field and `build`'s co-signer argument are gone too (one signer per transaction). `withdraw_pause_request`
+left the S5 row in S4 WP10. Since S4 WP13 the annual true-up carries the attestor key's TRUEUP signature, captured and
+stored for S5's `submit_trueup` (its own row below); the check orders and names of every signature instruction are in
+"Adapter notes for signatures (S5)".
 
 | Divergence | Milestone |
 | --- | --- |
@@ -852,7 +937,8 @@ goes in S4 WP13). `withdraw_pause_request` left the S5 row in S4 WP10.
 | Scale-aware math is ported from merces-common @1bfc66b (A-MATH-3, S3 WP5): 16 names in `@merces/math` (`src/curve`), not Stage 1 objects; scale 1 runs Stage 1's own functions; `stage1:sync` fails when one of their merces-common items changes | approved by the owner (2026-10-10); until Stage 1 ships TypeScript counterparts (asked) |
 | The curve census at report time (S3 decision 4, A-CURVE-5): mirrored, Stage 1 binds the live census when a report is submitted and anyone may sync at any time, so a third party's census between proving and submitting invalidates the issuer's proof (InvalidProof). Merces' side (amendment H1, approved by the owner): no census of Merces' own (builders, keepers) while the issuer has an assembled, unsubmitted report; the assembly needs a census after the period's end; the submission builder refuses once the count moved (re-assemble) | reported to Stage 1 (bind the census at the period's end?) |
 | Tier 1: no router year-to-date binding; split receipts stand in for the router credit | tier-1 milestone |
-| True-up, the FX accumulator (trading-day coverage) and the `tier4Enabled` flag (B.6, B.9) | S5 |
+| True-up, the FX accumulator (trading-day coverage) and the `tier4Enabled` flag (B.6, B.9). Since S4 WP13 the annual attestation captures the attestor key's Stage 1 TRUEUP signature (the live true-up nonce, the year, the adjustment against what was paid on estimate, the attestation time), checked against Stage 1's year rules, its i64 range and its bound on a credit (S4 amendment D13), and stores it; nothing submits it until S5's `submitTrueUp`, so the series' true-up nonce never moves in S4 and the offchain underpayment deadline (60 days after the attestation time, Stage 1's) is not enforced onchain yet | S5 |
+| Adapter normalisations of every signature instruction ("Adapter notes for signatures (S5)", S4 WP13): Solana's key arguments and PDAs, the EVM's signature-only arguments (the adapter checks recovery to the named key before dropping it), the Solana-only names (`AttestationRequired`, `SignerMismatch`, `KeyAccountMismatch`, `AttestorMismatch`, Anchor's `AccountNotInitialized`, the true-up names) and the EVM's OpenZeppelin `ECDSA*` reverts, and `submit_trueup`'s check orders on each chain | S5 (adapters) |
 | Stage 1 internal, resolved toward both chains (DIV-S1I-2 in the vector runner; S4 WP5, D5): the last active key of a kind cannot be revoked. Both chains refuse it (Solana `LastKeyOfKind`, merces_registry lib.rs:239-245; EVM `LastActiveKey`, MercesRegistry.sol:331-335); Stage 1's TS reference revokes it (simulator.ts:535-546), against SPEC §1.4 (SPEC.md:96: the registry refuses to revoke the last active key of a kind unless a replacement is registered in the same transaction). Ours refuses it as both chains do. No vector revokes the last key; our scenario S4d does, on the merces backend only (the reference has no rule to compare, so it has no lockstep entry), with each personality's `expect_revert` | reported to Stage 1 |
 | The key registry's names and re-registration follow the personality (S4 D9): Solana re-emits `AttestorRegistered` for a key that is already active where the EVM reverts `KeyAlreadyActive`; a revoke of a key that is not active is `KeyAlreadyRevoked` (or Anchor's `AccountNotInitialized` for a key never registered) on Solana and `KeyNotRegistered` on the EVM; `ZeroAttestorAddress` / `ZeroAddress`; `LastKeyOfKind` / `LastActiveKey`. The canonical model has no Stage 1 name for these, so each simulator personality raises its chain's, with one chain-neutral code per case, and the admin pre-checks answer one 409 per case on both chains. Rotation is the EVM's `rotateAttestor`; the Solana adapter sends `register_attestor(to)` and `revoke_attestor(from)` in one transaction | reported (canonical names asked); S5 (adapters) |
 | Adapter normalisations of an amendment (S4 WP11; "Adapter notes for signatures", WP13): our order is the EVM's (MercesRegistry.sol:643-650: NotIssuer, AmendmentAfterTerminal, the cap a u64, `ECDSA.recover` and an active key, UnfavourableAmendment), which Stage 1's reference shares bar the u64 step (simulator.ts:853-860). Solana's `amend_terms` checks `SeriesTerminal` (our AmendmentAfterTerminal), then the attestor PDA's `active` (`AttestorInactive`), then the cap (`CapMultipleIncrease`, `BoundCapMultiple`: our UnfavourableAmendment), then recovers the signature (`AttestorMismatch` and the recovery errors: our InvalidAttestorSignature; merces_registry lib.rs:762-785), so an unfavourable cap with a bad signature is UnfavourableAmendment there and InvalidAttestorSignature here; its cap is a u64 argument (no AmountOutOfRange). The EVM reverts a malformed signature with OpenZeppelin's `ECDSAInvalidSignature`, `ECDSAInvalidSignatureLength` or `ECDSAInvalidSignatureS` (`ECDSA.recover`, not `tryRecover`): our InvalidAttestorSignature; it also refuses a zero terms commitment (`ParameterOutOfBounds("termsCommitment")`, MercesRegistry.sol:651), which ours never builds (the commitment is Poseidon over the private terms). `TermsAmended.nonce` is the nonce before the increment on both chains (lib.rs:820-830, MercesRegistry.sol:660) and ours; Stage 1's reference prints the value after it (simulator.ts:863-864), which lockstep never compares (it compares the ledger): information only (S4 amendment fix 7) | S5 (adapters) |
@@ -1131,6 +1217,22 @@ auction read and the API's `SeriesAuction.clearingPrice` do.
    table (never mainnet), Stage 1's builders over the request's typed fields (the request's digest is never trusted),
    Stage 1's `signDigest`, and an EIP-191 link proof over the API's key-link challenge only. The flows that hand it
    requests follow in S4 WP9-WP13; reading a nonce from a public RPC on live chains waits for S5's adapters.
+   **S4 WP13:** the true-up's signature is Stage 1's, captured now (S4 D13): the annual attestation is the attestor
+   key's `MERCES_TRUEUP_V1` signature over the domain, the series key, the series' live true-up nonce, the year, the
+   signed adjustment (the attested total less the year's payments on estimate, A-M5-5: positive owed to holders, due 60
+   days after the attestation time; negative credited forward) and the attestation time (the chain's now). The attestor
+   signs on their own device from `GET /attestor/tier3/annual/{annualId}/message?totalPaymentStable` and posts
+   `POST /attestor/tier3/annual/{annualId}/sign {totalPaymentStable, trueupNonce, attestationTs, attestation}`; the
+   service checks Stage 1's year rules (the series settled with its mint final, not terminal, tier 3; the year ended and
+   every quarter of it from the first period on reported), the adjustment in Stage 1's i64 range and a credit within the
+   year's accepted report payments (`PeriodState.paymentStable`, Stage 1's `payment_usd`; S4 amendment D13), each under
+   the chain's name, both when it issues the request and when it accepts the signature; the time not after the chain's
+   now (Stage 1's rule) nor before the year ended; recovery to the key, an active key, and the nonce read again (409
+   `stale-nonce`). It stores the signature with its nonce, time, adjustment and digest (migration 030; attestations
+   signed before it with amounts only are opened again, `resign-s4`, or withdrawn when addressed to a wallet) for the
+   issuer's `submit_trueup`, which lands in S5; until then the signature is never shown. Nobody co-signs anything any
+   more: `UnsignedTx.coSigners` and `ChainPort.build`'s co-signer argument are gone, the simulated chains check the one
+   signer, the harness attestors and the vector keys are keys, not wallets ("Adapter notes for signatures (S5)").
 7. *Actors and admin.* `register_issuer` is **admin-only** on both chains (ours is the issuer's own command); there is
    no admin router registration; timelock-only powers need `TimelockController.schedule`/`execute`; the admin
    surface adds `set_flags` (`new_raises_paused`, `windows_enabled`, `tier4_enabled`), `set_fx_pair`, `set_defaults`,

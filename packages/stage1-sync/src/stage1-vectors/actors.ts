@@ -13,9 +13,10 @@ import { RunnerError } from './errors.ts';
  *
  * A name the vector gives a key (`keys[name]`: `attestor1`, `attestor2`, `verifier1`, …) is that key's 20-byte address
  * on both personalities (S4 WP5): `register_attestor` registers `keys[name].address`, as Stage 1's harnesses do
- * (vectors README:48-50). Its wallet is the **transitional co-signing wallet** at the key's address, which no flow uses
- * any more: every attestation is the key's own Stage 1 signature (tier-3 and FX reports since S4 WP9, the pause
- * approval WP10, the amendment WP11, the extinguishment WP12). It is gone in S4 WP13 with `coSigners`.
+ * (vectors README:48-50). A key is never a wallet (S4 WP13, cause S4-CS): it signs Stage 1 messages through the
+ * `VectorKeyring` and never sends or co-signs a transaction, so a key name has no wallet here (`wallet` refuses one,
+ * and the vector's `actors` list, which names its keys too, makes none for them). Nobody co-signs: every attestation
+ * is the key's own Stage 1 signature, an argument of the command a wallet or the keeper sends.
  */
 export class Actors {
   readonly admin: SimWallet;
@@ -29,7 +30,12 @@ export class Actors {
     private readonly keys: Readonly<Record<string, { address?: unknown }>> = {},
   ) {
     this.admin = simAdminWallet(family);
-    for (const n of known) this.wallet(n);
+    for (const n of known) if (!this.isKey(n)) this.wallet(n);
+  }
+
+  /** True when `name` is one of the vector's keys (S4 WP5): a signer, never a wallet. */
+  isKey(name: string): boolean {
+    return Object.prototype.hasOwnProperty.call(this.keys, name);
   }
 
   /** The 20-byte address of vector key `name`, lowercase, or undefined when the vector has no such key. */
@@ -40,11 +46,15 @@ export class Actors {
     return a.toLowerCase();
   }
 
-  /** The wallet of a vector name (created on first use): a key's own address for a name with a vector key. */
+  /**
+   * The wallet of a vector name (created on first use). A vector key has none (S4 WP13): it signs Stage 1 messages and
+   * never sends a transaction, so asking for its wallet is a runner error.
+   */
   wallet(name: string): SimWallet {
+    if (this.isKey(name)) throw new RunnerError(`${name} is a vector key: it signs Stage 1 messages and sends no transaction`);
     let w = this.wallets.get(name);
     if (!w) {
-      w = new SimWallet(this.family, `v:${this.vectorName}:${name}`, this.keyAddress(name));
+      w = new SimWallet(this.family, `v:${this.vectorName}:${name}`);
       this.wallets.set(name, w);
       this.names.set(w.address, name);
     }

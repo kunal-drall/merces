@@ -25,6 +25,8 @@ import { seriesOf } from './kit.ts';
  *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
  *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
  *    second attestor co-signing the first one's transaction).
+ *  - S4-CS: nobody co-signs (S4 WP13): the harness attestors are keys, not wallets, so a stranger is a wallet of its own
+ *    (was the first attestor's transitional wallet at its key's address).
  */
 
 const DAY = 86_400;
@@ -107,7 +109,7 @@ describe('the money-per-event rule of the claim family (S3 D3, D4)', () => {
   it('holds for every claim by every holder in every state: live, Retired, Redeemed with a tail, extinguished with and without a redemption', async () => {
     const h = await SimHarness.create('monad', { genesis: GENESIS });
     const [b0, b1, b2, b3, b4] = h.backers as [SimWallet, SimWallet, SimWallet, SimWallet, SimWallet];
-    const stranger = h.attestors[0]!;
+    const stranger = new SimWallet(h.sim.family, 'stranger'); // cause S4-CS
     const seen: Seen = { claims: { claimPayout: 0, claimRedemption: 0, claimTail: 0, claimFinal: 0 }, refusals: new Set(), zeroOwn: new Set(), burnsOnZeroClaim: 0, splitPayouts: 0, refunds: 0 };
     // three series raised side by side; every bid processed and delivered but one per series (held back to be delivered
     // by a claim, or by a delivery after the series retired)

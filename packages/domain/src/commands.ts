@@ -379,10 +379,12 @@ export type BuildableCommand = UserCommand | AdminCommand | PermissionlessComman
 export interface UnsignedTx {
   chain: string;
   family: 'solana' | 'evm';
-  /** primary signer (fee payer on Solana, msg.sender on EVM) */
+  /**
+   * The one signer (the fee payer on Solana, msg.sender on the EVM). Nobody co-signs (S4 D3, WP13): every attestation
+   * is a Stage 1 signature the command carries as an argument (`approvePause`, `amendTerms`, `extinguish`, a tier-2 or
+   * tier-3 `submitReport`), checked by the chain against the registered key.
+   */
   signer: string;
-  /** additional required signers (none since S4 WP12: every attestation is a signature argument; the field goes in S4 WP13) */
-  coSigners: string[];
   /** the transaction's command; for a transaction that carries several (`commands`), the first */
   command: Command;
   /**

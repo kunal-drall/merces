@@ -68,7 +68,7 @@ export async function seedCohort(sims: { solana: SimulatorChain; monad: Simulato
       commitDurationSeconds: 2 * 86_400, revealDurationSeconds: 86_400,
     });
     // the issuer wallet signs (not the harness default issuer)
-    const exec = (cmd: Parameters<SimHarness['exec']>[1], co: SimWallet[] = []) => h.exec(wallet, cmd, co);
+    const exec = (cmd: Parameters<SimHarness['exec']>[1]) => h.exec(wallet, cmd);
     await exec({ kind: 'registerIssuer' });
     const created = await exec({ kind: 'createSeries', terms });
     const seriesId = (created.events[0]!.payload as { seriesId: string }).seriesId;

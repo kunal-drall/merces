@@ -40,10 +40,10 @@ type SubmitReport = Extract<Command, { kind: 'submitReport' }>;
  * Stage 1's per-series FX signature (S4 WP9); the accumulator itself stays ours until S5.
  * Error messages carry public facts only (period ids, tiers), never a submitted value.
  */
-export function submitReport(e: EngineCore, signers: string[], cmd: SubmitReport, now: number, emit: Emit, ctx: ExecContext = {}): void {
+export function submitReport(e: EngineCore, signer: string | null, cmd: SubmitReport, now: number, emit: Emit, ctx: ExecContext = {}): void {
   const s = e.series(cmd.seriesId);
   // 1-2
-  if (!signers[0] || s.issuer !== signers[0]) fail('NotIssuer', 'only the issuer may report');
+  if (!signer || s.issuer !== signer) fail('NotIssuer', 'only the issuer may report');
   if (s.phase !== 'Settled') fail('RaiseNotSettled', 'the raise has not settled');
   // 3. entry ranges: amounts are u64, commitments field elements
   const paymentStable = u64(cmd.paymentStable);

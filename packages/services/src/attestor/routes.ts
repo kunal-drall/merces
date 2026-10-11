@@ -4,7 +4,7 @@ import { defineRoute, type AppContext } from '@merces/api';
 import { withIdempotency } from '@merces/core';
 import { svc } from '../context.ts';
 import {
-  AttestorService, extinguishMessageQuerySchema, extinguishSchema, extinguishSignSchema, fxMessagesQuerySchema, fxSignSchema, hardshipDecideSchema, hardshipMessageQuerySchema, hardshipRequestSchema, tier3AnnualOpenSchema, tier3AnnualSignSchema, tier3MessageQuerySchema, tier3OpenSchema,
+  AttestorService, extinguishMessageQuerySchema, extinguishSchema, extinguishSignSchema, fxMessagesQuerySchema, fxSignSchema, hardshipDecideSchema, hardshipMessageQuerySchema, hardshipRequestSchema, tier3AnnualMessageQuerySchema, tier3AnnualOpenSchema, tier3AnnualSignSchema, tier3MessageQuerySchema, tier3OpenSchema,
   tier3SignSchema,
 } from './service.ts';
 
@@ -68,6 +68,11 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
   });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/tier3', access: 'issuer', handler: async (req) => s.listTier3ForSeries(sid(req)) });
   defineRoute(app, ctx, { method: 'GET', url: '/attestor/tier3/annual/:annualId', access: 'attestor', handler: async (req, _r, session) => s.getAnnual(param(req, 'annualId'), session!) });
+  // the TRUEUP signing request for the attestation's key (S4 WP13): the device rebuilds and signs it; the API never signs
+  defineRoute(app, ctx, {
+    method: 'GET', url: '/attestor/tier3/annual/:annualId/message', access: 'attestor',
+    handler: async (req, _r, session) => s.annualMessage(param(req, 'annualId'), session!, tier3AnnualMessageQuerySchema.parse(req.query)),
+  });
   defineRoute(app, ctx, {
     method: 'POST', url: '/attestor/tier3/annual/:annualId/sign', access: 'attestor',
     handler: async (req, _r, session) => {

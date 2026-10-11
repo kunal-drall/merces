@@ -17,12 +17,9 @@ export class SimWallet implements WalletSigner {
   ) {
     this.address = explicitAddress ?? deriveAddress(family, `wallet:${label}`);
   }
+  /** Signs a transaction built for this wallet, its one signer (nobody co-signs since S4 WP13). */
   async sign(tx: UnsignedTx): Promise<SignedTx> {
     return { tx, signatures: { [this.address]: `sim:${this.address}` } };
-  }
-  /** Co-sign an already signed transaction. */
-  async coSign(signed: SignedTx): Promise<SignedTx> {
-    return { tx: signed.tx, signatures: { ...signed.signatures, [this.address]: `sim:${this.address}` } };
   }
   async signMessage(message: Uint8Array): Promise<string> {
     return 'sim:' + createHash('sha256').update(this.address).update(message).digest('hex');
@@ -99,18 +96,17 @@ export class SimSigner implements DigestSigner {
 /**
  * A harness attestor (S4 WP7, D4): a published secp256k1 test key (`SimSigner`, seed `sim-attestor:<label>`) whose
  * 20-byte address is the attestor on both personalities, registered by that address and linked to an account by its
- * own EIP-191 proof (`personalSign`). It signs Stage 1 digests (`signDigest`, `attest`).
- *
- * Transitional until S4 WP13: it still extends `SimWallet(family, label, key.address)` (a wallet at the key's address,
- * whose `sim:` co-signature only the simulator accepts), although no flow takes an attestor as a co-signer any more:
- * every one carries the key's own Stage 1 signature (a tier-3 report and the FX fallback since S4 WP9, a pause approval
- * WP10, an amendment WP11, an extinguishment WP12). The wallet goes with `coSigners` in WP13.
+ * own EIP-191 proof (`personalSign`). It signs Stage 1 digests (`signDigest`, `attest`) and nothing else: it is a key,
+ * not a wallet (S4 WP13, cause S4-CS). It never signs or co-signs a transaction; every attestation is the key's own
+ * Stage 1 signature, an argument of a command a wallet or the keeper sends (a tier-3 report and the FX fallback since
+ * S4 WP9, a pause approval WP10, an amendment WP11, an extinguishment WP12, a true-up WP13).
  */
-export class SimAttestor extends SimWallet implements DigestSigner {
+export class SimAttestor implements DigestSigner {
+  readonly address: string;
   readonly key: SimSigner;
-  constructor(family: ChainFamily, label: string, key: SimSigner = SimSigner.attestor(label)) {
-    super(family, label, key.address);
+  constructor(readonly label: string, key: SimSigner = SimSigner.attestor(label)) {
     this.key = key;
+    this.address = key.address;
   }
   signDigest(digest: string): Promise<string> {
     return this.key.signDigest(digest);

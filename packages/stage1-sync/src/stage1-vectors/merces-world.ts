@@ -122,10 +122,9 @@ export class MercesWorld implements World, OpContext {
     return s;
   }
 
-  async send(signer: SimWallet, cmd: UserCommand | AdminCommand, coSigners: SimWallet[] = []): Promise<TxResult> {
-    const tx = await this.chain.build(cmd, signer.address, coSigners.map((c) => c.address));
-    let signed = await signer.sign(tx);
-    for (const c of coSigners) signed = await c.coSign(signed);
+  async send(signer: SimWallet, cmd: UserCommand | AdminCommand): Promise<TxResult> {
+    const tx = await this.chain.build(cmd, signer.address);
+    const signed = await signer.sign(tx);
     return this.transact(() => this.chain.send(signed));
   }
 

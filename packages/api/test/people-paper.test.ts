@@ -21,6 +21,8 @@ import { makeRig } from './helpers.ts';
  *  - S4-AMD: an approval is the key's Stage 1 AMEND signature over the series' live amendment nonce, made on the
  *    attestor's device from `GET /attestor/amendments/{id}/message` (S4 WP11; was `{attestor, approve}` with the key
  *    co-signing the issuer's transaction); the issuer's amendTerms carries it and nobody co-signs.
+ *  - S4-CS: nobody co-signs (S4 WP13): `UnsignedTx` has one `signer` and no co-signer field; an attestor is a key, never
+ *    a wallet (was a co-signer list, empty since the flows moved to signature arguments).
  */
 
 /** Sign in a simulator wallet through the real nonce/verify flow. */
@@ -314,8 +316,9 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     const b2 = await rig.post(`/amendments/${amendmentId}/build`, {}, issuerTok);
     expect(b2.statusCode, b2.body).toBe(200);
     const atx = b2.json().tx as UnsignedTx;
-    // cause S4-AMD: the issuer's transaction carries the AMEND signature; nobody co-signs
-    expect(atx.coSigners).toEqual([]);
+    // cause S4-AMD: the issuer's transaction carries the AMEND signature; cause S4-CS: nobody co-signs (one signer, no
+    // co-signer field)
+    expect(Object.keys(atx).sort()).toEqual(['chain', 'command', 'encoding', 'expiresAt', 'family', 'payload', 'signer', 'summary']);
     expect(atx.command).toEqual({ kind: 'amendTerms', seriesId, termsCommitment: newCommitment, capMultipleWad: cap, attestor: attestor.address, signature: sig.signature });
     const res = await rig.post('/tx/send', await issuer.sign(atx), issuerTok);
     expect(res.statusCode).toBe(200);

@@ -34,7 +34,9 @@ import {
  *  - S4-T2: S4a-S4c, the report verifier key's forward-only revocation and its 45-day grace on tier-2 reports, on the
  *    reference, the merces backend and in lockstep (Stage 1's reference models the grace, SIM:332-338);
  *  - S4-T3: S4f, an attestor key's forward-only revocation and the same grace on tier-3 reports, each report carrying the
- *    named key's Stage 1 REPORT signature with tier 3 (S4 WP9), on every backend.
+ *    named key's Stage 1 REPORT signature with tier 3 (S4 WP9), on every backend;
+ *  - S4-CS: a vector key is a key, never a wallet (S4 WP13): it has no wallet at its address (was the transitional
+ *    co-signing wallet), and asking for one is a runner error.
  */
 const VECTORS = fileURLToPath(new URL('../../../stage1/packages/vectors', import.meta.url));
 const S4D = join(S4_SIGNATURE_SCENARIOS, 'S4d_last_attestor_key.json');
@@ -254,11 +256,17 @@ describe('S4 signature scenarios: replay', () => {
       try {
         for (const name of ['attestor1', 'attestor2', 'verifier1']) {
           const a = (v11.keys[name] as { address: string }).address.toLowerCase();
-          expect([w.actors.keyAddress(name), w.actors.address(name), w.actors.nameOf(a)], `${personality} ${name}`).toEqual([a, a, name]);
+          // cause S4-CS: a key has no wallet (was the transitional co-signing wallet at the key's address)
+          expect([w.actors.keyAddress(name), w.actors.isKey(name), w.actors.nameOf(a)], `${personality} ${name}`).toEqual([a, true, null]);
+          expect(() => w.actors.wallet(name)).toThrow(new RunnerError(`${name} is a vector key: it signs Stage 1 messages and sends no transaction`));
         }
         expect(w.actors.keyAddress('b1')).toBeUndefined();
+        expect(w.actors.isKey('b1')).toBe(false);
+        // the vector's actors list names its keys too; none became a wallet
+        expect(v11.actors).toEqual(expect.arrayContaining(['attestor1', 'attestor2', 'verifier1']));
+        expect(w.actors.all()).not.toEqual(expect.arrayContaining(['attestor1']));
         await w.apply(v11.steps[0] as never);
-        expect(await w.chain.getSignerKey('attestor', w.actors.address('attestor1'))).toMatchObject({ active: true, revokedAt: null });
+        expect(await w.chain.getSignerKey('attestor', w.actors.keyAddress('attestor1')!)).toMatchObject({ active: true, revokedAt: null });
         await expect(w.apply({ op: 'register_attestor', key: 'b1' } as never)).rejects.toThrow(new RunnerError('the vector has no key named b1'));
       } finally {
         await w.close();

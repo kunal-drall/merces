@@ -20,7 +20,7 @@ import { seriesOf } from './kit.ts';
  *
  * S4 cause codes:
  *  - S4-T3: a tier-3 report carries the attestor key's Stage 1 REPORT signature (tier 3) in `attestation` (S4 WP9; was
- *    the attestor's co-signature, named by `attestor`); the FX fallback is `fxFallback` (was `attestorRate`).
+ *    the attestor's co-signature, named by `attestor`); the FX fallback is `fxFallback` (was the co-signed attestor rate).
  *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
  *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
  *    second attestor co-signing the first one's transaction).

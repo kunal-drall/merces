@@ -328,16 +328,16 @@ export class SimulatorChain implements ChainPort {
   }
 
   // ---------------------------------------------------------------- writes
-  async build(command: BuildableCommand | readonly BuildableCommand[], signer: string, coSigners: string[] = []): Promise<UnsignedTx> {
+  async build(command: BuildableCommand | readonly BuildableCommand[], signer: string): Promise<UnsignedTx> {
     const list = Array.isArray(command) ? (command as readonly BuildableCommand[]) : [command as BuildableCommand];
     const parsed = this.bundle(list);
     if (parsed.length === 1) {
       const one = parsed[0]!;
-      return { chain: this.chain, family: this.family, signer, coSigners, command: one, payload: JSON.stringify({ command: one, signer, coSigners }), encoding: 'simulator-json', summary: `${one.kind} on ${this.chain}`, expiresAt: null };
+      return { chain: this.chain, family: this.family, signer, command: one, payload: JSON.stringify({ command: one, signer }), encoding: 'simulator-json', summary: `${one.kind} on ${this.chain}`, expiresAt: null };
     }
     // one transaction of several commands, all or nothing (owner direction of 2026-10-10)
     return {
-      chain: this.chain, family: this.family, signer, coSigners, command: parsed[0]!, commands: parsed, payload: JSON.stringify({ commands: parsed, signer, coSigners }), encoding: 'simulator-json',
+      chain: this.chain, family: this.family, signer, command: parsed[0]!, commands: parsed, payload: JSON.stringify({ commands: parsed, signer }), encoding: 'simulator-json',
       summary: `${parsed.map((c) => c.kind).join(' + ')} on ${this.chain} (one transaction)`, expiresAt: null,
     };
   }
@@ -363,10 +363,10 @@ export class SimulatorChain implements ChainPort {
   async send(signed: SignedTx): Promise<TxResult> {
     const { tx } = signed;
     if (tx.chain !== this.chain) throw new ChainError('ChainSpecific', 'transaction is for another chain');
-    for (const who of [tx.signer, ...tx.coSigners]) {
-      if (signed.signatures[who] !== `sim:${who}`) throw new ChainError('Unauthorized', `missing or invalid signature for ${who}`);
-    }
-    const actor = { kind: 'user' as const, signers: [tx.signer, ...tx.coSigners] };
+    // one signer, the wallet the transaction was built for: nobody co-signs (S4 D3; every attestation is a signature
+    // argument the command carries and the engine checks)
+    if (signed.signatures[tx.signer] !== `sim:${tx.signer}`) throw new ChainError('Unauthorized', `missing or invalid signature for ${tx.signer}`);
+    const actor = { kind: 'user' as const, signer: tx.signer };
     // a transaction of several commands: all of them, in order, or none (one execution, one rollback)
     if (tx.commands && tx.commands.length > 1) {
       const cmds = this.bundle(tx.commands as BuildableCommand[]);

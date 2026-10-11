@@ -61,7 +61,7 @@ export function signerKeyLinkMessage(params: { domain: string; accountId: string
  * An EIP-191 `personal_sign` of `message` by the secp256k1 key whose 20-byte address is `address` (S4 WP7): a 65-byte
  * `0x` hex signature checked with viem's `verifyMessage` (it recovers the address). A simulator signature (`sim:`) is
  * never one, in any mode. It is how an attestor key proves control when it is linked to an account (the link
- * challenge), and, transitionally until S4 WP9, how it signs the tier-3 attestation text and the FX fallback text.
+ * challenge), and nothing else: every attestation is a Stage 1 signature over a raw `MERCES_*` digest (S4 WP9-WP13).
  */
 export async function verifyKeyPersonalSignature(params: { address: string; message: string; signature: string }): Promise<boolean> {
   if (!/^0x[0-9a-fA-F]{130}$/.test(params.signature) || !/^0x[0-9a-f]{40}$/.test(params.address)) return false;

@@ -1,6 +1,6 @@
 import type { Command } from '@merces/domain';
 import type { SimHarness } from '@merces/simulator';
-import { SimWallet } from '@merces/simulator';
+import type { SimWallet } from '@merces/simulator';
 
 /**
  * Parity vector format (what we ask Stage 1 to publish; see STAGE1_INTEGRATION.md):
@@ -16,13 +16,14 @@ import { SimWallet } from '@merces/simulator';
  *     "expect": { "balances": { "backer-1": { "USDC": "..." } }, "series": { "$series0": { "status": "OnTime", "unitsOutstanding": "500" } } }
  *   }]
  * }
- * Actors: issuer | backer-N | attestor-N | admin | keeper | allowlistManager | router. "$seriesN" refers to the N-th created series.
+ * Actors: issuer | backer-N | admin | keeper | allowlistManager | router. "$seriesN" refers to the N-th created series.
+ * A step has one signer, its actor: nobody co-signs (S4 WP13). An attestor is a key, not an actor: its Stage 1
+ * signature is an argument of the command (`approvePause`, `amendTerms`, `extinguish`, a tier-3 `submitReport`).
  */
 export interface ParityStep {
   at: number;
   actor: string;
   command: Command;
-  coSigners?: string[];
   expectError?: string;
 }
 export interface ParityScenario {
@@ -41,8 +42,6 @@ export async function replayScenario(h: SimHarness, sc: ParityScenario): Promise
     if (actor === 'admin') return h.admin;
     const b = /^backer-(\d+)$/.exec(actor);
     if (b) return h.backers[Number(b[1]) - 1] ?? null;
-    const a = /^attestor-(\d+)$/.exec(actor);
-    if (a) return h.attestors[Number(a[1]) - 1] ?? null;
     return null;
   };
   const subst = (cmd: Command): Command => JSON.parse(JSON.stringify(cmd).replace(/\$series(\d+)/g, (_m, n) => seriesIds[Number(n)] ?? `$series${n}`));
@@ -61,8 +60,7 @@ export async function replayScenario(h: SimHarness, sc: ParityScenario): Promise
       } else {
         const w = wallet(step.actor);
         if (!w) throw new Error(`unknown actor ${step.actor}`);
-        const co = (step.coSigners ?? []).map((c) => wallet(c)).filter((x): x is SimWallet => !!x);
-        events = (await h.exec(w, cmd as never, co)).events;
+        events = (await h.exec(w, cmd as never)).events;
       }
       for (const e of events) if (e.type === 'SeriesCreated') seriesIds.push((e.payload as { seriesId: string }).seriesId);
       if (step.expectError) mismatches.push(`step ${n} (${cmd.kind}) expected error ${step.expectError} but succeeded`);

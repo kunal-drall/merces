@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ChainError } from '@merces/domain';
 import { WAD, parsePeriod } from '@merces/math';
-import { SimHarness, defaultTerms, serialiseState } from '../src/index.ts';
+import { SimHarness, SimWallet, defaultTerms, serialiseState } from '../src/index.ts';
 import { GENESIS, USDC, expectChainError, expectStage1Error, types } from './helpers.ts';
 import { seedHolder, seedPause, seedTail, seedVault, seriesOf } from './kit.ts';
 
@@ -23,6 +23,8 @@ import { seedHolder, seedPause, seedTail, seedVault, seriesOf } from './kit.ts';
  *  - S3-TL (S3): the tail is paid by `claimTail` (Stage 1 `claim_tail`, `TailClaimed`), which redeems a holder that has
  *    not redeemed first; `claimPayout` (Stage 1 `claim`) pays the net payout only, never the tail (S3-CL). The amounts
  *    are unchanged. `PositionState.redemptionClaimable` is what the redemption pays beside the pending payout.
+ *  - S4-CS (S4 WP13): nobody co-signs; the harness attestors are keys, not wallets, so a non-holder is a wallet of its
+ *    own (was the first attestor's transitional wallet at its key's address).
  */
 
 const DAY = 86_400;
@@ -289,7 +291,7 @@ describe('redemption and tail', () => {
     await refused(h, () => h.exec(b0, { kind: 'claimRedemption', seriesId }), 'NotRedeemed');
     await h.exec(h.issuer, { kind: 'redeem', seriesId, maxPricePerUnit: USDC(100).toString() });
     const price = BigInt((await h.sim.getRedemption(seriesId))!.pricePerUnit);
-    await refused(h, () => h.exec(h.attestors[0]!, { kind: 'claimRedemption', seriesId }), 'HolderNotRegistered');
+    await refused(h, () => h.exec(new SimWallet(h.sim.family, 'stranger'), { kind: 'claimRedemption', seriesId }), 'HolderNotRegistered'); // cause S4-CS
 
     // 40 of b0's 100 units are held for a window ask: only 60 are redeemed and burned (Stage 1 burns the balance)
     seedHolder(h.sim, seriesId, b0.address, { escrowed: 40n });

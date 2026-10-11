@@ -101,6 +101,7 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *    live amendment nonce (S4 WP11; shim SH-AMD-1 retired): 05#44, 11#45 and 14#51-#55 (14 replays to #61) count no shim.
  *  - S4-EXT: `extinguish` runs directly, the two named keys' EXTINGUISH signatures over the live extinguish nonce sent by
  *    the keeper (S4 WP12; shim SH-EXT-1 retired): 11#35-#44 and 25#86 count no shim, at the same statuses.
+ *  - S4-CS: nobody co-signs (S4 WP13): the engine's user actor is one `signer` (was a signer list).
  */
 afterAll(shutdown);
 
@@ -826,7 +827,8 @@ describe('stage1 vector runner: merces backend', () => {
       const execute = engine.execute.bind(engine);
       const b4 = world.actors.address('b4');
       engine.execute = ((cmd, actor, ctx) => {
-        if (cmd.kind === 'claimTail' && (actor as { signers?: string[] }).signers?.[0] === b4 && world.now() === Number(t)) {
+        // cause S4-CS: one signer (was `signers[0]`)
+        if (cmd.kind === 'claimTail' && (actor as { signer?: string }).signer === b4 && world.now() === Number(t)) {
           if (leak) engine.state.txCount += 1000;
           throw new ChainError('NotPermitted', 'claimTail refused by the test', { stage1: 'NoTailDue' });
         }

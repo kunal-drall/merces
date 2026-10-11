@@ -16,8 +16,8 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - S3-ST: staking, tender and stake-weighted claims.
  *
  * S4 cause codes:
- *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address (transitionally
- *    a co-signing wallet at the key's address).
+ *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address (a key, never a
+ *    wallet, since S4 WP13).
  *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
  *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
  *    second attestor co-signing the first one's transaction).

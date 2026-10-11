@@ -145,7 +145,7 @@ export class EvmChain implements ChainPort {
    * chain yet (curve mode, the bundle's first user, is Solana only). A list of more than one is NotImplemented until
    * one is (a multicall then).
    */
-  async build(command: BuildableCommand | readonly BuildableCommand[], _signer: string, _coSigners: string[] = []): Promise<UnsignedTx> {
+  async build(command: BuildableCommand | readonly BuildableCommand[], _signer: string): Promise<UnsignedTx> {
     if (Array.isArray(command) && command.length > 1) throw new ChainError('NotImplemented', 'EvmChain.build: one command per transaction (no bundles on an EVM chain yet)');
     return this.notReady('build');
   }

@@ -1,7 +1,7 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { ChainError, E2E_TIER3_OPENING, SigningError, ZERO_INCOME_COMMITMENT, extinguishDigest, fxDigest, pauseDigest, recoverSigner, reportDigest, type SigningRequest, type UnsignedTx } from '@merces/domain';
+import { ChainError, E2E_TIER3_OPENING, SigningError, ZERO_INCOME_COMMITMENT, extinguishDigest, fxDigest, pauseDigest, recoverSigner, reportDigest, trueUpDigest, type SigningRequest, type UnsignedTx } from '@merces/domain';
 import { WAD, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { deriveTestPrivateKey } from '@merces/math/testing';
 import { AttestorKey, assembleOnDevice, checkRequest, checkTier3Opening, describeSigningRequest, generateE2eKeyPair, openTier3Opening, pinNetworks, sealE2e, sealTier3Opening, signRequest } from '@merces/poi-device';
@@ -43,6 +43,13 @@ const DAY = 86_400;
  *    `GET /attestor/extinguish/{id}/message` on its own device and posts it to `.../sign`; with both the keeper relays
  *    `extinguish` (permissionless) and the request is sent (was `{attestors}` returning a transaction the first attestor
  *    sent with the second co-signing). An unrelayed signature is never shown.
+ *  - S4-CS: nobody co-signs (S4 WP13): `UnsignedTx` has one `signer` and no co-signer field; an attestor is a key, never
+ *    a wallet (was a co-signer list, empty since the flows moved to signature arguments).
+ *  - S4-TU: the annual attestation is the key's Stage 1 TRUEUP signature (S4 WP13): the attestor tool signs the request
+ *    from `GET /attestor/tier3/annual/{id}/message?totalPaymentStable` (the adjustment against what was paid on estimate,
+ *    the live true-up nonce, the chain's now) and posts `sign {totalPaymentStable, trueupNonce, attestationTs,
+ *    attestation}` (was `{totalPaymentStable}` alone); Stage 1's year rules, i64 range and bound on a credit are checked
+ *    at both (S4 amendment D13); the signature is stored for S5's submit_trueup and never shown.
  */
 
 /** The attestor's own device key for a harness attestor: the same published test key (its seed), in the tool's keystore type. */
@@ -260,9 +267,10 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await refused({ ...signBody, attestation: { signer: tier2.signer, signature: tier2.signature } })).detail).toEqual({ stage1: 'InvalidAttestorSignature' });
     // a non-canonical signature (v outside {27, 28}) recovers to nobody: 422; a wrong shape is 400
     await refused({ ...signBody, attestation: { signer: sig.signer, signature: sig.signature.slice(0, -2) + '1d' } });
-    // the old shapes: the EIP-191 text signature {liquidityEvent, signature}, a simulator signature (cause S4-T3: 400)
+    // the old shapes: the EIP-191 text signature {liquidityEvent, signature}, a simulator signature (cause S4-T3: 400;
+    // cause S4-CS: a simulator wallet's, since the attestor is a key and no wallet any more)
     await refused({ ...signBody, attestation: { liquidityEvent: false, signature: sig.signature } }, 400);
-    await refused({ ...signBody, attestation: { signer: sig.signer, signature: await att.signMessage(new Uint8Array([1])) } }, 400);
+    await refused({ ...signBody, attestation: { signer: sig.signer, signature: await h.issuer.signMessage(new Uint8Array([1])) } }, 400);
     // the sign body carries commitments, the proof and the attestation only: an opening field is refused (strict)
     await refused({ ...signBody, incomeYtd: opening.incomeYtd }, 400);
     expect((await rig.post(`/attestor/tier3/${caseId}/sign`, { ...signBody, incomeCommitment: c.priorIncomeCommitment }, attTok)).statusCode).toBe(422); // proof over other commitments
@@ -293,7 +301,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const tx = rep.json().tx as UnsignedTx;
     expect(tx.command).toMatchObject({ kind: 'submitReport', tier: 3, attestation: { signer: att.address, signature: sig.signature }, fxFallback: null });
     expect(tx.command).not.toHaveProperty('attestor');
-    expect(tx.coSigners ?? []).toEqual([]);
+    expect(Object.keys(tx).sort()).toEqual(['chain', 'command', 'encoding', 'expiresAt', 'family', 'payload', 'signer', 'summary']); // cause S4-CS: one signer, no co-signer field
     const sent = await rig.post('/tx/send', await h.issuer.sign(tx), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
     const accepted = sent.json().events.find((e: { type: string }) => e.type === 'ReportAccepted');
@@ -316,15 +324,17 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await rig.get('/attestor/queue', attTok)).json().tier3Annual.map((a: { annualId: string }) => a.annualId)).toEqual([annualId]);
     expect((await rig.get(`/attestor/tier3/annual/${annualId}`, att1Tok)).statusCode).toBe(403);
     expect((await rig.get(`/attestor/tier3/annual/${annualId}`, attTok)).json().documentsCiphertext).toMatch(/^[A-Za-z0-9+/=]+$/);
-    // the attestor finds the year's payment was 2500 USDC; 2000 USDC was paid on estimate → 500 USDC due within 60 days, no accrual
-    const now = await h.sim.now();
-    const trued = await rig.post(`/attestor/tier3/annual/${annualId}/sign`, { totalPaymentStable: USDC(2500).toString() }, attTok, { 'idempotency-key': 't3-annual-sign' });
-    expect(trued.statusCode, JSON.stringify(trued.json())).toBe(200);
-    expect(trued.json()).toMatchObject({ state: 'signed', totalPaymentStable: USDC(2500).toString(), estimatedPaymentStable: USDC(2000).toString(), underpayment: USDC(500).toString(), overpayment: '0', trueUpDueAt: now + 60 * DAY, creditPeriodId: null });
-    expect((await rig.post(`/attestor/tier3/annual/${annualId}/sign`, { totalPaymentStable: '1' }, attTok)).statusCode).toBe(409);
-    expect((await rig.get(`/series/${seriesId}/tier3`, issuerTok)).json().annual[0]).toMatchObject({ annualId, underpayment: USDC(500).toString() });
+    // cause S4-TU: the attestation is the key's Stage 1 TRUEUP signature (S4 WP13; the full flow is the annual true-up test
+    // below, on the monad chain): only Q1 of 2026 is reported here, so Stage 1's year rule refuses the request with the
+    // chain's name (every quarter of the year from the first period on must be reported), and the old amounts-only body
+    // is refused (strict: it carries no nonce, time or signature)
+    const incomplete = await rig.get(`/attestor/tier3/annual/${annualId}/message?totalPaymentStable=${USDC(2500)}`, attTok);
+    expect([incomplete.statusCode, incomplete.json().detail]).toEqual([409, { stage1: 'TrueUpYearIncomplete' }]);
+    expect((await rig.post(`/attestor/tier3/annual/${annualId}/sign`, { totalPaymentStable: USDC(2500).toString() }, attTok)).statusCode).toBe(400);
+    expect((await rig.get(`/attestor/tier3/annual/${annualId}/message?totalPaymentStable=${USDC(2500)}`, att1Tok)).statusCode).toBe(403);
+    expect((await rig.get(`/series/${seriesId}/tier3`, issuerTok)).json().annual[0]).toMatchObject({ annualId, state: 'open', trueUp: null, underpayment: null });
     const audit = await rig.t.pool.query('select action from audit_log where target in ($1, $2) order by id', [caseId, annualId]);
-    expect(audit.rows.map((r) => r.action)).toEqual(['tier3.sign', 'tier3.annual-sign']);
+    expect(audit.rows.map((r) => r.action)).toEqual(['tier3.sign']);
   });
 
   it('FX fallback: the keeper opens a request, an attestor\'s device signs Stage 1\'s FX message per covered series, the issuer reads its own', async () => {
@@ -356,7 +366,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const monadAtt = await rig.attestorToken('att-m', [monOnly]);
     expect((await rig.get('/attestor/fx-requests', monadAtt)).json().requests.map((r: { requestId: string }) => r.requestId)).toEqual(['fxreq_test2']);
     expect((await rig.get('/attestor/fx-requests', att1Tok)).json().requests.map((r: { requestId: string }) => r.requestId)).toEqual(['fxreq_test1', 'fxreq_test2']);
-    // before any signature the issuer sees the open request and no rate (cause S4-FX: `fxFallback`, was `attestorRate`)
+    // before any signature the issuer sees the open request and no rate (cause S4-FX: `fxFallback`, was the co-signed attestor rate)
     expect((await rig.get(`/series/${eur.seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ pair: 'EUR/USD', basis: 'attestor', state: 'open', rateWad: null, seriesSigned: false, fxFallback: null });
     expect((await rig.get(`/series/${seriesId}/reporting/fx-fallback/${q.id}`, issuerTok)).json()).toMatchObject({ basis: 'unity', fxFallback: null });
 
@@ -1040,6 +1050,159 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect(closed.statusCode, closed.body).toBe(200);
     expect(closed.json()).toMatchObject({ state: 'rejected', decisionCode: 'approved-elsewhere', relayTx: null });
     expect(closed.json()).not.toHaveProperty('approval');
+  });
+
+  it('annual true-up (cause S4-TU): the attestor tool signs the TRUEUP request; Stage 1\'s year rules, i64 range and bound on a credit at the request and the signature; the time; a stale nonce; the signature is stored and never shown', async () => {
+    // on the monad chain (its own clock; the EVM's names): the same harness key, linked to att-0
+    const m = rig.mon;
+    const att = m.attestors[0]!;
+    expect(att.address).toBe(h.attestors[0]!.address);
+    const mIssuerTok = rig.token({ accountId: 'iss-m', wallets: [{ chain: 'monad', address: m.issuer.address }], roles: ['issuer'] });
+    const r = await m.runRaise();
+    const sid = r.seriesId;
+    // three quarters reported and paid (tier 2); the fourth after the annual opens
+    let yearPayments = 0n;
+    const quarters: [string, bigint, bigint][] = [['2026Q1', 0n, USDC(70_000)], ['2026Q2', USDC(70_000), USDC(90_000)], ['2026Q3', USDC(90_000), USDC(90_000)], ['2026Q4', USDC(90_000), USDC(100_000)]];
+    for (const [q, prev, ytd] of quarters.slice(0, 3)) {
+      await m.sim.setTime(parsePeriod(q).end + DAY);
+      yearPayments += (await m.reportAndPay(sid, q, r.privateTerms, r.terms.termsCommitment, prev, ytd)).paymentStable;
+    }
+    await m.sim.setTime(parsePeriod('2026Q4').end + DAY);
+    await rig.sync();
+    const opened = await rig.post(`/series/${sid}/tier3/annual`, { year: 2026, attestor: att.address, documentsCiphertext: e2e(DOCS_PLAIN), keyHint: 'attestor-1 x25519 key v1' }, mIssuerTok);
+    expect(opened.statusCode, opened.body).toBe(201);
+    const annualId = opened.json().annualId as string;
+    const msgUrl = (total: bigint | string) => `/attestor/tier3/annual/${annualId}/message?totalPaymentStable=${total}`;
+    // Stage 1's year rule: Q4 is not reported yet (the EVM's name)
+    const notYet = await rig.get(msgUrl(USDC(1)), attTok);
+    expect([notYet.statusCode, notYet.json().detail]).toEqual([409, { stage1: 'TrueUpYearInvalid' }]);
+    {
+      const [q, prev, ytd] = quarters[3]!;
+      yearPayments += (await m.reportAndPay(sid, q, r.privateTerms, r.terms.termsCommitment, prev, ytd)).paymentStable;
+    }
+    await rig.sync();
+    expect(yearPayments).toBeGreaterThan(0n);
+    // the period reads carry each report's own payment figure (Stage 1's payment_usd): their sum bounds a credit
+    expect((await m.sim.listPeriods(sid)).filter((p) => p.periodId.startsWith('2026')).reduce((a, p) => a + BigInt(p.paymentStable), 0n)).toBe(yearPayments);
+
+    // access: the key's holder (or an admin reads it); the query is strict
+    expect((await rig.get(msgUrl(USDC(1)), att1Tok)).statusCode).toBe(403);
+    expect((await rig.get(msgUrl(USDC(1)), mIssuerTok)).statusCode).toBe(403);
+    expect((await rig.get(`${msgUrl(USDC(1))}&extra=1`, attTok)).statusCode).toBe(400);
+    expect((await rig.get(`/attestor/tier3/annual/${annualId}/message`, attTok)).statusCode).toBe(400);
+    // the adjustment is Stage 1's i64 (422, value-free)
+    const huge = (1n << 63n) + yearPayments;
+    const tooBig = await rig.get(msgUrl(huge), attTok);
+    expect([tooBig.statusCode, tooBig.json().detail]).toEqual([422, { stage1: 'AmountOutOfRange' }]);
+    expect(tooBig.body).not.toContain(huge.toString());
+    expect((await rig.get(msgUrl(huge - 1n), attTok)).statusCode).toBe(200);
+    // a credit up to the year's accepted report payments is Stage 1's bound (amendment D13): the whole year, not one more
+    const credit = await rig.get(msgUrl(0n), attTok);
+    expect(credit.statusCode, credit.body).toBe(200);
+    expect(credit.json().fields.adjustment).toBe((-yearPayments).toString());
+    // white-box: one base unit of split receipts the reports never carried (Stage 1 counts it as router credit; our
+    // estimate counts it as paid), so the full credit would exceed the year's report payments
+    const bump = (d: number) => rig.t.pool.query("update periods set split_received = split_received + $2 where series_id = $1 and period_id = '2026Q4'", [sid, d]);
+    await bump(1);
+    const over = await rig.get(msgUrl(0n), attTok);
+    expect([over.statusCode, over.json().detail]).toEqual([422, { stage1: 'TrueUpAdjustmentTooLarge' }]);
+    expect(over.body).not.toContain(yearPayments.toString());
+    await bump(-1);
+
+    // the request: Stage 1's TRUEUP over the chain's domain and the series key, the live nonce, the year, the adjustment
+    // (attested total − paid on estimate; positive is owed to holders) and the chain's now
+    const now = await m.sim.now();
+    const total = yearPayments + USDC(500);
+    const req = await rig.get(msgUrl(total), attTok);
+    expect(req.statusCode, req.body).toBe(200);
+    const request = req.json() as SigningRequest<'TRUEUP'>;
+    const signing = (await m.sim.info()).signing!;
+    const seriesKey = (await m.sim.getSeries(sid))!.seriesKey;
+    expect(request).toMatchObject({ kind: 'TRUEUP', chain: 'monad', seriesId: sid, seriesKey, domain: signing, signer: att.address, fields: { trueupNonce: '0', year: 2026, adjustment: USDC(500).toString(), attestationTs: String(now) }, validWhile: 'true-up nonce 0' });
+    expect(request.digest).toBe(trueUpDigest({ domain: signing.domain, seriesKey }, request.fields).digest);
+    // the attestor's device: its own pinned networks and key; it shows what is signed from the typed fields (no
+    // cannot-be-recalled warning: only the issuer can submit a true-up)
+    const device = deviceKey(att);
+    const pinned = pinNetworks({ [m.sim.chain]: signing }, { allowLocal: true });
+    const shown = describeSigningRequest(checkRequest(request, pinned, { allowLocal: true })).join('\n');
+    expect(shown).toMatch(/^Annual true-up \(MERCES_TRUEUP_V1\) at true-up nonce 0 for year 2026:/);
+    expect(shown).toContain('adjustment 500 (a payment figure at 6 decimals');
+    expect(shown).not.toMatch(/cannot be recalled/);
+    const sig = signRequest(request, device, pinned, { allowLocal: true });
+    expect(recoverSigner(request.digest, sig.signature)).toBe(att.address);
+    const body = (over: Record<string, unknown> = {}) => ({ totalPaymentStable: total.toString(), trueupNonce: '0', attestationTs: String(now), attestation: { signer: sig.signer, signature: sig.signature, digest: sig.digest }, ...over });
+    const refused = async (b: Record<string, unknown>, status = 422, tok = attTok) => {
+      const res = await rig.post(`/attestor/tier3/annual/${annualId}/sign`, b, tok);
+      expect(res.statusCode, res.body).toBe(status);
+      expect(res.body).not.toContain(sig.signature.slice(2));
+      return res.json();
+    };
+    // the old body, an extra field, another account (403)
+    await refused({ totalPaymentStable: total.toString() }, 400);
+    await refused({ ...body(), adjustment: '1' }, 400);
+    await refused(body(), 403, att1Tok);
+    // the signature binds the adjustment derived from the posted total: another total is another message
+    expect((await refused(body({ totalPaymentStable: (total - 1n).toString() }))).detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+    expect((await refused(body({ totalPaymentStable: (total - 1n).toString(), attestation: { signer: sig.signer, signature: sig.signature } }))).detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+    // another key's signature over the same request; a signature over the other chain's domain
+    const other = signRequest({ ...request, signer: h.attestors[1]!.address }, deviceKey(h.attestors[1]!), pinned, { allowLocal: true });
+    expect((await refused(body({ attestation: { signer: att.address, signature: other.signature } }))).detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+    expect((await refused(body({ attestation: other }))).detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+    const foreign = await att.attest('TRUEUP', (await h.sim.info()).signing!, seriesKey, request.fields);
+    expect((await refused(body({ attestation: { signer: foreign.signer, signature: foreign.signature } }))).detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+    // the time: Stage 1 refuses one after the chain's now (the EVM's name); before the year ended it is none we issued
+    const future = await att.attest('TRUEUP', signing, seriesKey, { ...request.fields, attestationTs: String(now + 1) });
+    expect((await refused(body({ attestationTs: String(now + 1), attestation: { signer: future.signer, signature: future.signature } }))).detail).toEqual({ stage1: 'AttestationInFuture' });
+    const early = String(parsePeriod('2026Q4').end - 1);
+    const past = await att.attest('TRUEUP', signing, seriesKey, { ...request.fields, attestationTs: early });
+    expect((await refused(body({ attestationTs: early, attestation: { signer: past.signer, signature: past.signature } }))).message).toMatch(/before the year ended/);
+    // a signature over a nonce the chain does not hold yet: 409 stale-nonce with the fresh request
+    const ahead = await att.attest('TRUEUP', signing, seriesKey, { ...request.fields, trueupNonce: '1' });
+    const stale = await refused(body({ trueupNonce: '1', attestation: { signer: ahead.signer, signature: ahead.signature } }), 409);
+    expect(stale.detail).toMatchObject({ reason: 'stale-nonce', liveTrueupNonce: '0', request: { kind: 'TRUEUP', fields: { trueupNonce: '0', adjustment: USDC(500).toString() } } });
+    // white-box: a true-up recorded since the request (S5's submit_trueup advances the nonce) makes the signature dead
+    const ledger = m.sim.state.series.get(sid)!.ledger;
+    ledger.trueupNonce = 1n;
+    const moved = await refused(body(), 409);
+    expect(moved.detail).toMatchObject({ reason: 'stale-nonce', liveTrueupNonce: '1', request: { fields: { trueupNonce: '1' } } });
+    ledger.trueupNonce = 0n;
+    // Stage 1's bound is checked again at the signature (amendment D13): a credit signed at the bound, then the estimate
+    // grows past the year's report payments (white-box, as above)
+    const creditReq = (await rig.get(msgUrl(0n), attTok)).json() as SigningRequest<'TRUEUP'>;
+    const creditSig = signRequest(creditReq, device, pinned, { allowLocal: true });
+    await bump(1);
+    expect((await refused({ totalPaymentStable: '0', trueupNonce: '0', attestationTs: creditReq.fields.attestationTs, attestation: creditSig })).detail).toEqual({ stage1: 'TrueUpAdjustmentTooLarge' });
+    await bump(-1);
+    // nothing was stored by any refusal
+    expect((await rig.t.pool.query('select state, trueup_signature from tier3_annual where annual_id = $1', [annualId])).rows[0]).toEqual({ state: 'open', trueup_signature: null });
+
+    // the signature: 500 USDC is owed, due 60 days after the attestation time (Stage 1's deadline)
+    const signed = await rig.post(`/attestor/tier3/annual/${annualId}/sign`, body(), attTok, { 'idempotency-key': 'tu-sign' });
+    expect(signed.statusCode, signed.body).toBe(200);
+    expect(signed.json()).toMatchObject({
+      state: 'signed', totalPaymentStable: total.toString(), estimatedPaymentStable: yearPayments.toString(), underpayment: USDC(500).toString(), overpayment: '0', trueUpDueAt: now + 60 * DAY, creditPeriodId: null,
+      trueUp: { signer: att.address, trueupNonce: '0', attestationTs: String(now), adjustment: USDC(500).toString(), digest: request.digest },
+    });
+    // the signature is stored for S5's submit_trueup and shown nowhere: not in the response, the attestor's or the
+    // issuer's views, the audit log or the outbox
+    expect(signed.body).not.toContain(sig.signature.slice(2));
+    expect((await rig.post(`/attestor/tier3/annual/${annualId}/sign`, body(), attTok, { 'idempotency-key': 'tu-sign' })).json()).toEqual(signed.json());
+    expect((await rig.post(`/attestor/tier3/annual/${annualId}/sign`, body(), attTok)).statusCode).toBe(409);
+    expect((await rig.get(msgUrl(total), attTok)).statusCode).toBe(409);
+    const viewA = await rig.get(`/attestor/tier3/annual/${annualId}`, attTok);
+    const viewI = await rig.get(`/series/${sid}/tier3`, mIssuerTok);
+    expect(viewI.json().annual[0]).toMatchObject({ annualId, state: 'signed', trueUp: { signer: att.address, adjustment: USDC(500).toString() } });
+    for (const v of [viewA.body, viewI.body]) expect(v).not.toContain(sig.signature.slice(2));
+    expect((await rig.t.pool.query('select trueup_signature, trueup_signer, trueup_nonce::text, attestation_ts::text, adjustment::text, trueup_digest from tier3_annual where annual_id = $1', [annualId])).rows[0]).toEqual({
+      trueup_signature: sig.signature, trueup_signer: att.address, trueup_nonce: '0', attestation_ts: String(now), adjustment: USDC(500).toString(), trueup_digest: request.digest,
+    });
+    const audit = await rig.t.pool.query("select detail::text as d from audit_log where target = $1 and action = 'tier3.annual-sign'", [annualId]);
+    expect(audit.rows.length).toBe(1);
+    expect(audit.rows[0].d).toContain(request.digest);
+    expect(audit.rows[0].d).not.toContain(sig.signature.slice(2));
+    const outbox = await rig.t.pool.query('select payload::text as p from outbox');
+    for (const o of outbox.rows) expect(o.p).not.toContain(sig.signature.slice(2));
+    expect(outbox.rows.some((o) => o.p.includes(annualId) && o.p.includes('underpayment'))).toBe(true);
   });
 
   it('privacy: the attestor tables and logs hold ciphertext and amounts only — never the plaintext or the canary', async () => {

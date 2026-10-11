@@ -303,6 +303,7 @@ components:
         formalNoticeAt: { type: integer, description: 'first instant a formal notice is due: period end + 90 days unpaused (Stage 1 formalNoticeDue); a pause approved later moves it' }
         reportAccepted: { type: boolean }
         tier: { type: [integer, 'null'] }
+        paymentStable: { $ref: '#/components/schemas/Money', description: "the accepted report's payment figure (Stage 1's Report.payment_usd, before any router credit); '0' until reported. Stage 1 bounds a negative true-up by the year's sum of it (S4 WP13)" }
         paymentDue: { $ref: '#/components/schemas/Money', description: 'while the period holds the open due: the live amount payIn must carry now (the due plus lateness accrual to date; a tail due without accrual); once paid: the due and accrual recomputed at payment' }
         accrual: { $ref: '#/components/schemas/Money' }
         paid: { $ref: '#/components/schemas/Money' }

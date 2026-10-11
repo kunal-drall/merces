@@ -241,7 +241,7 @@ describe('revocation grace on the signed paths (S4-REG; Stage 1 SPEC §1.4, SIM:
   });
 
   it('FX fallback: the same grace (both chains; Stage 1\'s reference gives none, DIV-S1I-3)', async () => {
-    // cause S4-FX: the attestor's per-series FX signature (was `attestorRate`, co-signed); inside the grace, at its last
+    // cause S4-FX: the attestor's per-series FX signature (was the co-signed attestor rate); inside the grace, at its last
     // second, one second past it, and revoked before the period ended
     const q1 = parsePeriod('2026Q1');
     const rate = wadFromDecimal('1.08');

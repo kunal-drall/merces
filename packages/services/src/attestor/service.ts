@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import {
   ChainError, E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, expectedPrior, extinguishDigest, fxDigest, hex32ToField, keyUsable, noPauseApprovable, parseE2eEnvelope, pauseApprovalRefusal, pauseDigest,
-  readsAsText, recoverSigner, reportDigest, reportProofSchema, type ChainPort, type PauseApprovalRule, type SeriesState, type SigningRequest, type UnsignedTx,
+  readsAsText, recoverSigner, reportDigest, reportProofSchema, trueUpDigest, type ChainPort, type PauseApprovalRule, type SeriesState, type SigningRequest, type UnsignedTx,
 } from '@merces/domain';
-import { U64_MAX, parsePeriod, periodFrom, toPid } from '@merces/math';
+import { U64_MAX, parsePeriod, periodFrom, periodOf, toPid } from '@merces/math';
 import { withTransaction } from '@merces/db';
 import type { Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -25,7 +25,8 @@ import { invalidAttestorSignature, requestFor, signingDomainOf } from '../signin
  *  - tier-3 cases: the issuer's device proves the report; the documents and the income opening reach the attestor
  *    as E2E ciphertext (M7); the attestor's own device signs Stage 1's REPORT message with tier 3 over the commitments
  *    (S4 WP9), which the API hands it as a signing request; the client-side prefill specification (R26 — the server
- *    extracts nothing); the annual true-up as amounts and a deadline;
+ *    extracts nothing); the annual true-up as amounts and a deadline, and the attestor's Stage 1 TRUEUP signature over the
+ *    year's adjustment (S4 WP13), stored for the issuer's `submit_trueup` (S5);
  *  - FX fallback requests the keeper opened (C9): the attestor's device signs Stage 1's FX message for the rate once per
  *    affected series (the message binds the series key; S4 WP9, D14), the service checks and stores the signatures;
  *  - extinguishment (C11.6): two attestor keys held by two different accounts (S4 D15) each sign Stage 1's
@@ -99,7 +100,55 @@ export const tier3SignSchema = z.object({
   attestation: z.object({ signer: attestorKey, signature: signature65, digest: hex32.optional() }).strict(),
 }).strict();
 export const tier3AnnualOpenSchema = z.object({ year: z.number().int().min(2026).max(2100), attestor: attestorKey, documentsCiphertext: ciphertext, keyHint });
-export const tier3AnnualSignSchema = z.object({ totalPaymentStable: money });
+/**
+ * The query of `GET /attestor/tier3/annual/{annualId}/message` (S4 WP13): the payment the attestor finds was owed for the
+ * year. The service turns it into Stage 1's signed adjustment against what was paid on estimate.
+ */
+export const tier3AnnualMessageQuerySchema = z.object({ totalPaymentStable: money }).strict();
+/** Unix seconds as a canonical u64 decimal string: Stage 1's `attestation_ts`. */
+const unixSeconds = z.string().regex(/^(0|[1-9]\d{0,19})$/, 'unix seconds as a decimal string').refine((x) => BigInt(x) <= U64_MAX, 'out of the u64 range');
+/**
+ * The annual attestation (S4 WP13): the year's attested payment and the key's Stage 1 TRUEUP signature over the series'
+ * true-up nonce, the year, the adjustment the service derives from that payment, and the attestation time, made on the
+ * attestor's own device from `GET .../message` and posted as the attestor tool prints it, with the nonce and the time it
+ * signed (the request's `fields.trueupNonce` and `fields.attestationTs`). The issuer submits it onchain in S5
+ * (`submit_trueup`); here it is checked and stored.
+ */
+export const tier3AnnualSignSchema = z.object({
+  totalPaymentStable: money,
+  trueupNonce: nonce,
+  attestationTs: unixSeconds,
+  attestation: z.object({ signer: attestorKey, signature: signature65, digest: hex32.optional() }).strict(),
+}).strict();
+
+/** Stage 1's i64 range: what `submit_trueup`'s `adjustment` and the TRUEUP message carry (SDK messages.ts:124-141). */
+const I64_MIN = -(1n << 63n);
+const I64_MAX = (1n << 63n) - 1n;
+
+/**
+ * Stage 1's names for a true-up refusal, per chain family: the chains name them differently (Solana's `ProtocolError`,
+ * merces_protocol error.rs:163-175; the EVM's MercesErrors.sol:110-114, whose names the reference also uses,
+ * SIM:1199-1207; the reference has no timestamp check).
+ */
+const TRUEUP_REFUSAL = {
+  yearNotEnded: { solana: 'TrueUpYearNotEnded', evm: 'TrueUpYearInvalid' },
+  yearIncomplete: { solana: 'TrueUpYearIncomplete', evm: 'TrueUpYearInvalid' },
+  tooLarge: { solana: 'TrueUpExceedsYear', evm: 'TrueUpAdjustmentTooLarge' },
+  inFuture: { solana: 'TrueUpTimestampInFuture', evm: 'AttestationInFuture' },
+} as const;
+
+/** What a TRUEUP signature binds, derived here from the chain's reads and the attested payment (S4 WP13). */
+interface TrueUpBasis {
+  chain: ChainPort;
+  series: SeriesState;
+  now: number;
+  year: number;
+  total: bigint;
+  /** paid on estimate: Σ(payment due − accrual + split receipts) over the year's accepted quarters (A-M5-5) */
+  estimated: bigint;
+  /** Stage 1's signed adjustment: total − estimated (positive owed to holders, negative credited forward) */
+  adjustment: bigint;
+}
 /** A positive u64 rate (WAD) as a canonical decimal string: what Stage 1's FX message signs (`fx_avg_wad`). */
 const rateWad = z.string().regex(/^[1-9]\d{0,19}$/, 'a positive integer (WAD)').refine((x) => BigInt(x) <= U64_MAX, 'out of the u64 range');
 /** The query of `GET /attestor/fx-requests/{requestId}/messages`: the rate, and the key (optional when the caller holds one). */
@@ -711,6 +760,9 @@ export class AttestorService {
     return {
       annualId: a.annual_id, seriesId: a.series_id, chain: a.chain, year: a.year, attestor: a.attestor, state: a.state, decisionCode: a.decision_code ?? null, totalPaymentStable: str(a.total_payment_stable), estimatedPaymentStable: str(a.estimated_payment_stable),
       overpayment: str(a.overpayment), underpayment: str(a.underpayment), trueUpDueAt: num(a.trueup_due_at), creditPeriodId: a.credit_period_id ?? null, keyHint: a.key_hint ?? null, createdAt: a.created_at, signedAt: a.signed_at ?? null,
+      // the TRUEUP signature's public parts (S4 WP13): its signer, nonce, time, adjustment and digest; the signature itself
+      // stays server-side until the issuer's submit_trueup (S5) carries it (S4 amendment D2)
+      trueUp: a.trueup_signature ? { signer: a.trueup_signer, trueupNonce: str(a.trueup_nonce), attestationTs: str(a.attestation_ts), adjustment: str(a.adjustment), digest: a.trueup_digest } : null,
       ...(withCiphertext ? { documentsCiphertext: a.documents_ciphertext } : {}),
     };
   }
@@ -743,29 +795,128 @@ export class AttestorService {
   }
 
   /**
-   * Attestor: the attested payment for the year against the sum of the year's accepted quarterly payments
-   * (the share paid on estimate: paymentDue − accrual + split receipts, from the read model). Overpayment is a
-   * credit to the next period; underpayment is due within 60 days with no accrual (A-C8-3). Amounts only.
+   * The basis of a TRUEUP signature (S4 WP13), checked as Stage 1's `submit_trueup` will check it in S5, so that a
+   * signature captured now stays submittable (S4 amendment D13). Read from the chain: the series is settled with its mint
+   * final, not terminal, with tier 3 (RaiseNotSettled, MintNotFinalized, TerminalStatus, TierNotEnabled); the year has
+   * ended and every quarter of it from the series' first period on has an accepted report (Stage 1's year rules:
+   * income.rs:812-826, MercesIncome.sol:417-425, SIM:1200-1203; refused 409 with the chain's name). Then the adjustment:
+   * the attested total less what was paid on estimate (A-M5-5), in Stage 1's i64 range (422 AmountOutOfRange), and a
+   * negative one no larger than the year's accepted report payments, Stage 1's bound (SIM:1204-1208, income.rs:827-833,
+   * MercesIncome.sol:404-407; 422 with the chain's name). Every refusal is value-free: it names the rule, never a figure.
+   */
+  private async trueUpBasis(a: Record<string, unknown>, totalText: string): Promise<TrueUpBasis> {
+    const seriesId = String(a.series_id);
+    const year = Number(a.year);
+    const chain = this.ctx.chains.get(String(a.chain));
+    const series = await chain.getSeries(seriesId);
+    if (!series) throw AppError.notFound('series');
+    const now = await chain.now();
+    const name = (rule: keyof typeof TRUEUP_REFUSAL): string => TRUEUP_REFUSAL[rule][chain.family];
+    if (series.phase !== 'Settled') throw new AppError(409, 'Conflict', 'the raise has not settled: no true-up can be recorded', { stage1: 'RaiseNotSettled' });
+    if (!series.mintFinalized) throw new AppError(409, 'Conflict', 'the series\' mint is not final yet: no true-up can be recorded', { stage1: 'MintNotFinalized' });
+    if (['Retired', 'Redeemed', 'Extinguished'].includes(series.status)) throw new AppError(409, 'Conflict', `the series is ${series.status}: no true-up can be recorded`, { stage1: 'TerminalStatus' });
+    if (!series.terms.tierFlags.tier3) throw new AppError(409, 'Conflict', 'tier 3 is not enabled for this series', { stage1: 'TierNotEnabled' });
+    if (year >= periodOf(now).year) throw new AppError(409, 'Conflict', 'the year has not ended', { stage1: name('yearNotEnded') });
+    const lastOfYear = toPid(`${year}Q4`);
+    const first = series.reporting.firstPeriod;
+    const last = series.reporting.lastAcceptedPeriod;
+    const complete = (first !== null && lastOfYear < toPid(first)) || (last !== null && toPid(last) >= lastOfYear);
+    if (!complete) throw new AppError(409, 'Conflict', 'not every quarter of the year has an accepted report yet: the true-up waits for the last one', { stage1: name('yearIncomplete') });
+    const est = await this.ctx.pool.query<{ total: string }>('select coalesce(sum(payment_due - accrual + split_received), 0)::text as total from periods where series_id = $1 and report_accepted and period_id like $2', [seriesId, `${year}Q%`]);
+    const estimated = BigInt(est.rows[0]?.total ?? '0');
+    const total = BigInt(totalText);
+    const adjustment = total - estimated;
+    if (adjustment < I64_MIN || adjustment > I64_MAX) throw AppError.unprocessable('the true-up adjustment is out of Stage 1\'s i64 range', { stage1: 'AmountOutOfRange' });
+    if (adjustment < 0n) {
+      // Stage 1's bound on a credit: the year's accepted report payments (each report's own figure, read from the chain)
+      let yearPayments = 0n;
+      for (const q of [1, 2, 3, 4] as const) {
+        const p = await chain.getPeriod(seriesId, `${year}Q${q}`);
+        if (p?.reportAccepted) yearPayments += BigInt(p.paymentStable);
+      }
+      if (-adjustment > yearPayments) throw AppError.unprocessable('a negative true-up may not exceed the year\'s accepted report payments (Stage 1\'s bound): this credit could never be recorded onchain', { stage1: name('tooLarge') });
+    }
+    return { chain, series, now, year, total, estimated, adjustment };
+  }
+
+  private async trueUpRequestFor(b: TrueUpBasis, signer: string, attestationTs: number | string): Promise<SigningRequest<'TRUEUP'>> {
+    const domain = await signingDomainOf(b.chain);
+    return requestFor({ kind: 'TRUEUP', chain: b.chain.chain, seriesId: b.series.seriesId, seriesKey: b.series.seriesKey, domain, signer, fields: { trueupNonce: b.series.nonces.trueup, year: b.year, adjustment: b.adjustment.toString(), attestationTs: String(attestationTs) } });
+  }
+
+  /**
+   * Attestor (the attestation's key holder, or an admin who reads it): the signing request for the year's TRUEUP
+   * signature (S4 WP13, D2, D13): Stage 1's `MERCES_TRUEUP_V1` over the chain's signing domain, the series key, the
+   * series' live true-up nonce, the year, the adjustment (`totalPaymentStable` less what was paid on estimate) and the
+   * attestation time (the chain's now), for the attestation's key. Only for a year and an adjustment the chain would take
+   * (`trueUpBasis`). The device rebuilds the message from the typed fields and signs; the API never signs. Public data
+   * only: the domain, the series key, the nonce, the year, the adjustment (a payment figure Stage 1 publishes onchain)
+   * and the time.
+   */
+  async annualMessage(id: string, session: Session, q: z.infer<typeof tier3AnnualMessageQuerySchema>): Promise<SigningRequest<'TRUEUP'>> {
+    const a = await this.annualRow(id);
+    if (!(await this.actsAs(session, String(a.chain), String(a.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this attestation was addressed to another attestor key, or that key is not linked to your account or not active on its chain');
+    if (a.state !== 'open') throw AppError.conflict(`annual attestation is ${a.state}`);
+    const b = await this.trueUpBasis(a, q.totalPaymentStable);
+    return this.trueUpRequestFor(b, String(a.attestor), b.now);
+  }
+
+  /**
+   * Attestor (only the account holding the attestation's key, while the key is registered; A-M5-3): the attested payment
+   * for the year and the key's Stage 1 TRUEUP signature (S4 WP13). In order:
+   *  1. the key acts for the caller and the attestation is open;
+   *  2. the basis, as at the request (`trueUpBasis`: the chain's year rules, the i64 range, Stage 1's bound on a credit;
+   *     S4 amendment D13);
+   *  3. the attestation time: not after the chain's now (Stage 1 refuses a future one: the chain's name, 422) and not
+   *     before the year ended (no request is issued before; 422 otherwise);
+   *  4. the signature: the TRUEUP message rebuilt here from the chain's domain and series key with the nonce and time the
+   *     attestor signed and the adjustment derived from the posted payment (a digest sent must equal it) recovers to the
+   *     attestation's key, and the key is active on the chain (no grace for a TRUEUP): 422 `detail.stage1`
+   *     InvalidAttestorSignature otherwise;
+   *  5. the nonce read again must still be the one signed: 409 `stale-nonce` with a fresh signing request otherwise (a
+   *     true-up landed since; the signature is dead on the chain).
+   * Stored: the amounts as before (an overpayment is a credit to the next period; an underpayment is due 60 days after
+   * the attestation time, Stage 1's deadline, income.rs:839-848, MercesIncome.sol:398-403) and the signature with its
+   * nonce, time, adjustment and digest, for the issuer's `submit_trueup` in S5. Until it is onchain the signature appears
+   * in no view, the audit log, a notification or the feed (S4 amendment D2).
    */
   async signAnnual(id: string, session: Session, input: z.infer<typeof tier3AnnualSignSchema>): Promise<Record<string, unknown>> {
     const a = await this.annualRow(id);
     if (!(await this.actsAs(session, String(a.chain), String(a.attestor)))) throw AppError.forbidden('only the account holding the chosen attestor key, while the key is registered, can sign this attestation');
     if (a.state !== 'open') throw AppError.conflict(`annual attestation is ${a.state}`);
-    const seriesId = String(a.series_id);
-    const year = Number(a.year);
-    const est = await this.ctx.pool.query<{ total: string }>('select coalesce(sum(payment_due - accrual + split_received), 0)::text as total from periods where series_id = $1 and report_accepted and period_id like $2', [seriesId, `${year}Q%`]);
-    const estimated = BigInt(est.rows[0]?.total ?? '0');
-    const total = BigInt(input.totalPaymentStable);
-    const overpayment = estimated > total ? estimated - total : 0n;
-    const underpayment = total > estimated ? total - estimated : 0n;
-    const now = await this.ctx.chains.get(String(a.chain)).now();
-    const trueUpDueAt = underpayment > 0n ? now + TRUE_UP_DAYS * 86_400 : null;
+    const attestor = String(a.attestor);
+    const b = await this.trueUpBasis(a, input.totalPaymentStable);
+    const { chain, series, now, year, total, estimated, adjustment } = b;
+    const seriesId = series.seriesId;
+    const ts = BigInt(input.attestationTs);
+    if (ts > BigInt(now)) throw AppError.unprocessable('the attestation time is after the chain\'s now: Stage 1 refuses a true-up attested in the future', { stage1: TRUEUP_REFUSAL.inFuture[chain.family] });
+    if (ts < BigInt(periodFrom(year, 4).end)) throw AppError.unprocessable('the attestation time is before the year ended: it is not one this service issued');
+    // Stage 1's TRUEUP message, rebuilt here from the chain's own domain and series key (never the caller's digest)
+    const domain = await signingDomainOf(chain);
+    const { digest } = trueUpDigest({ domain: domain.domain, seriesKey: series.seriesKey }, { trueupNonce: input.trueupNonce, year, adjustment, attestationTs: input.attestationTs });
+    if (input.attestation.digest !== undefined && input.attestation.digest !== digest) throw invalidAttestorSignature('the attestation\'s digest is not this attestation\'s TRUEUP message on this chain (another series, chain, nonce, year, adjustment or time)');
+    if (input.attestation.signer !== attestor) throw invalidAttestorSignature('the true-up must be signed by this attestation\'s attestor key');
+    if (recoverSigner(digest, input.attestation.signature) !== attestor) throw invalidAttestorSignature('the signature does not recover to this attestation\'s attestor key over Stage 1\'s TRUEUP message for this nonce, year, adjustment and time on this chain');
+    const key = await chain.getSignerKey('attestor', attestor);
+    if (!key || !keyUsable(key, now)) throw invalidAttestorSignature('the attestor key is not active on this chain: a true-up needs an active key');
+    // the nonce read again: a true-up recorded since the request moved it, and the chain would refuse the signature
+    const live = await chain.getSeries(seriesId);
+    if (!live) throw AppError.notFound('series');
+    if (live.nonces.trueup !== input.trueupNonce) {
+      throw new AppError(409, 'Conflict', 'the series\' true-up nonce moved since this was signed: the signature is dead; sign the fresh request', { reason: 'stale-nonce', liveTrueupNonce: live.nonces.trueup, request: await this.trueUpRequestFor({ ...b, series: live }, attestor, now) });
+    }
+    const overpayment = adjustment < 0n ? -adjustment : 0n;
+    const underpayment = adjustment > 0n ? adjustment : 0n;
+    const trueUpDueAt = underpayment > 0n ? Number(ts) + TRUE_UP_DAYS * 86_400 : null;
     const creditPeriodId = overpayment > 0n ? periodFrom(year + 1, 1).id : null;
-    await this.ctx.pool.query(
-      "update tier3_annual set state = 'signed', total_payment_stable = $2, estimated_payment_stable = $3, overpayment = $4, underpayment = $5, trueup_due_at = $6, credit_period_id = $7, signed_at = now() where annual_id = $1",
-      [id, total.toString(), estimated.toString(), overpayment.toString(), underpayment.toString(), trueUpDueAt, creditPeriodId],
+    const upd = await this.ctx.pool.query(
+      `update tier3_annual set state = 'signed', total_payment_stable = $2, estimated_payment_stable = $3, overpayment = $4, underpayment = $5, trueup_due_at = $6, credit_period_id = $7, signed_at = now(),
+         trueup_nonce = $8, attestation_ts = $9, adjustment = $10, trueup_signer = $11, trueup_signature = $12, trueup_digest = $13, decision_code = null
+       where annual_id = $1 and state = 'open'`,
+      [id, total.toString(), estimated.toString(), overpayment.toString(), underpayment.toString(), trueUpDueAt, creditPeriodId, input.trueupNonce, input.attestationTs, adjustment.toString(), attestor, input.attestation.signature, digest],
     );
-    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'tier3.annual-sign', target: id, detail: { seriesId, year, totalPaymentStable: total.toString(), estimatedPaymentStable: estimated.toString(), overpayment: overpayment.toString(), underpayment: underpayment.toString(), trueUpDueAt } });
+    if (!upd.rowCount) throw AppError.conflict('annual attestation was signed concurrently');
+    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'tier3.annual-sign', target: id, detail: { seriesId, year, totalPaymentStable: total.toString(), estimatedPaymentStable: estimated.toString(), overpayment: overpayment.toString(), underpayment: underpayment.toString(), trueUpDueAt, signer: attestor, trueupNonce: input.trueupNonce, attestationTs: input.attestationTs, digest } });
     await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'tier3.annual-signed', seriesId, year, annualId: id, outcome: underpayment > 0n ? 'underpayment' : overpayment > 0n ? 'overpayment' : 'settled', trueUpDueAt });
     return this.annualView(await this.annualRow(id), false);
   }

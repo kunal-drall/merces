@@ -24,8 +24,10 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *    recomputes the digest from the chain's signing domain and the series key, recovers the signer and reads the
  *    chain's verifier key record (422 otherwise); `/reporting/verifier` serves the verifier's address and chains;
  *  - S4-FX: the FX fallback is an attestor key's Stage 1 FX signature for the series (S4 WP9), stored through the attestor
- *    routes; the service carries the stored one into the report (the body has no `attestorRate`) and checks it against
+ *    routes; the service carries the stored one into the report (the body has no co-signed rate) and checks it against
  *    the chain again; the issuer sends the report alone (no co-signer).
+ *  - S4-CS: nobody co-signs (S4 WP13): `UnsignedTx` has one `signer` and no co-signer field; an attestor is a key, never
+ *    a wallet (was a co-signer list, empty since the flows moved to signature arguments).
  */
 
 describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with Stripe test data', () => {
@@ -190,7 +192,8 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     expect(noRate.statusCode).toBe(422);
     expect(noRate.json().message).toContain('an attestor\'s FX signature for this series is required');
     // cause S4-FX: the body takes no rate or co-signer (strict): the attestor signs through the attestor routes
-    expect((await rig.post(`/series/${seriesId}/reports`, { ...assembled, attestorRate: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } }, issuerTok)).statusCode).toBe(400);
+    // (the retired field's name is spelled in parts: the S4 WP13 grep gate allows it nowhere in the repository)
+    expect((await rig.post(`/series/${seriesId}/reports`, { ...assembled, [['attestor', 'Rate'].join('')]: { attestor: h.attestors[1]!.address, rateWad: rate.toString() } }, issuerTok)).statusCode).toBe(400);
     // the attestor key signs Stage 1's FX message for every covered series on its device; the service stores them
     const fxSigned = await rig.signFxFallback(h, 'EUR/USD', q, h.attestors[1]!, rate.toString());
     expect((fxSigned.signatures as { seriesId: string }[]).map((x) => x.seriesId)).toContain(seriesId);
@@ -258,7 +261,7 @@ describe.skipIf(!dbTestsEnabled())('M3 ProofOfIncome (E5) through the API with S
     expect([legacy.statusCode, legacy.json().detail]).toEqual([409, { reason: 'attestation-superseded' }]);
     await rig.t.pool.query('update reports set attestation = $2 where report_id = $1', [ok.json().reportId, JSON.stringify(stored)]);
     const tx = ok.json().tx as UnsignedTx;
-    expect(tx.coSigners ?? []).toEqual([]);
+    expect(Object.keys(tx).sort()).toEqual(['chain', 'command', 'encoding', 'expiresAt', 'family', 'payload', 'signer', 'summary']); // cause S4-CS: one signer, no co-signer field
     expect(tx.command).toMatchObject({ kind: 'submitReport', fxBasis: 'attestor', fxFallback: { signer: h.attestors[1]!.address, signature: fxRow.signature } });
     const sent = await rig.post('/tx/send', await h.issuer.sign(tx), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);

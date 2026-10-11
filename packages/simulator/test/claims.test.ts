@@ -28,6 +28,8 @@ import { seedHolder, seedTail, seedVault, seriesOf } from './kit.ts';
  *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures
  *    over the live extinguish nonce, relayed by the keeper (`h.extinguishment`; S4 WP12; was `{attestors}` with the
  *    second attestor co-signing the first one's transaction).
+ *  - S4-CS: nobody co-signs (S4 WP13): the harness attestors are keys, not wallets, so a stranger is a wallet of its own
+ *    (was the first attestor's transitional wallet at its key's address).
  */
 
 const DAY = 86_400;
@@ -81,7 +83,7 @@ describe('claimTail (Stage 1 claim_tail)', () => {
   it('refuses before a redemption and a stranger after it, redeems first, pays the tail, then 0; refuses a holder with nothing redeemed', async () => {
     const { h, seriesId, settledAt } = await settled({ terms: { lockupSeconds: 10 } });
     const [b0, b1, b2] = [h.backers[0]!, h.backers[1]!, h.backers[2]!];
-    const stranger = h.attestors[0]!;
+    const stranger = new SimWallet(h.sim.family, 'stranger'); // cause S4-CS
     const tail = (w: SimWallet) => claim(h, w, { kind: 'claimTail', seriesId });
     await h.sim.setTime(settledAt + 11);
     // cause S3-TL: the redemption is checked before the holder (SIM:1405-1408), so a stranger also gets NotRedeemed
@@ -147,7 +149,7 @@ describe('claimFinal (Stage 1 claim_final)', () => {
   it('refuses a live series and a stranger; pays pending + share on accrual units, delivers first, burns after, then 0', async () => {
     const { h, seriesId, settledAt } = await settled({ settle: 'process' });
     const [b0, b2, b3] = [h.backers[0]!, h.backers[2]!, h.backers[3]!];
-    const [a1, a2] = [h.attestors[0]!, h.attestors[1]!];
+    const a1 = new SimWallet(h.sim.family, 'stranger'); // cause S4-CS: a wallet of no holder (was the first attestor's)
     // every bid is processed (the mint is final); all but b2 are delivered
     for (const b of h.backers) if (b !== b2) await h.sim.submit({ kind: 'deliverBid', seriesId, bidder: b.address }, 'keeper');
     const final = (w: SimWallet) => claim(h, w, { kind: 'claimFinal', seriesId });

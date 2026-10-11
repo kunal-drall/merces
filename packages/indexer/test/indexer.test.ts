@@ -10,7 +10,7 @@ import { Indexer, project } from '../src/index.ts';
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes;
  *  - S4-ID: the harness attestors are keys (S4 WP7): `SimAttestor`, a secp256k1 key's 20-byte address on both
- *    personalities (transitionally a co-signing wallet at the key's address);
+ *    personalities (a key, never a wallet, since S4 WP13);
  *  - S4-AMD: the issuer's amendTerms carries the attestor key's AMEND signature over the live nonce (`h.amendment`; S4
  *    WP11; was the attestor co-signing), and `TermsAmended` carries that nonce;
  *  - S4-EXT: an extinguishment is Stage 1's permissionless `extinguish` carrying two attestor keys' EXTINGUISH signatures

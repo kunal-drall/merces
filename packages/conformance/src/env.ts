@@ -1,4 +1,4 @@
-import { ChainError, type ChainPort, type DigestSigner, type SeriesTerms, type SignedTx, type UnsignedTx, type WalletSigner } from '@merces/domain';
+import { ChainError, type ChainPort, type DigestSigner, type SeriesTerms, type UnsignedTx, type WalletSigner } from '@merces/domain';
 import { SimHarness, SimSigner, SimWallet, SimulatorChain, defaultTerms, simAdminWallet, type Personality, type PrivateTerms } from '@merces/simulator';
 import { createChains, locateStage1 } from '@merces/chains';
 
@@ -10,14 +10,14 @@ import { createChains, locateStage1 } from '@merces/chains';
 export interface ConformanceEnv {
   name: string;
   chain: ChainPort;
-  issuer: WalletSigner & { coSign?(signed: SignedTx): Promise<SignedTx> };
-  backers: (WalletSigner & { coSign?(signed: SignedTx): Promise<SignedTx> })[];
+  issuer: WalletSigner;
+  backers: WalletSigner[];
   /**
-   * The attestors: secp256k1 keys the chain registered by their 20-byte addresses (S4 WP7), each a `DigestSigner`.
-   * Transitional until S4 WP13: the flows that still take an attestor as a co-signer sign as a wallet at the key's
-   * address (`WalletSigner`); a live env provides keys whose wallet the chain recognises for those flows.
+   * The attestors: secp256k1 keys the chain registered by their 20-byte addresses (S4 WP7), each a `DigestSigner`. A key
+   * signs Stage 1 messages only, never a transaction: nobody co-signs (S4 WP13); its signature is an argument of the
+   * command a wallet sends.
    */
-  attestors: (WalletSigner & DigestSigner & { coSign?(signed: SignedTx): Promise<SignedTx> })[];
+  attestors: DigestSigner[];
   admin: WalletSigner;
   /** the report verifier key the chain has registered (a secp256k1 key's 20-byte address; S4 WP6) */
   verifierAddress: string;
@@ -35,11 +35,10 @@ export interface ConformanceEnv {
   close(): Promise<void>;
 }
 
-export async function exec(env: ConformanceEnv, wallet: WalletSigner & { coSign?(s: SignedTx): Promise<SignedTx> }, cmd: UnsignedTx['command'], coSigners: (WalletSigner & { coSign?(s: SignedTx): Promise<SignedTx> })[] = []) {
-  const tx = await env.chain.build(cmd as never, wallet.address, coSigners.map((c) => c.address));
-  let signed = await wallet.sign(tx);
-  for (const c of coSigners) signed = c.coSign ? await c.coSign(signed) : { tx, signatures: { ...signed.signatures, ...(await c.sign(tx)).signatures } };
-  return env.chain.send(signed);
+/** Build, sign and send `cmd` with `wallet`, the transaction's one signer (nobody co-signs, S4 WP13). */
+export async function exec(env: ConformanceEnv, wallet: WalletSigner, cmd: UnsignedTx['command']) {
+  const tx = await env.chain.build(cmd as never, wallet.address);
+  return env.chain.send(await wallet.sign(tx));
 }
 
 export async function expectChainError(p: Promise<unknown>, code: string): Promise<void> {

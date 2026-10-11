@@ -98,9 +98,8 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
     handler: async (req, _reply, session) => {
       const signed = req.body as SignedTx;
       if (!signed?.tx?.chain || !signed.signatures) throw AppError.badRequest('signed transaction required');
-      // the signer is one of the account's wallets. An attestor key never sends a transaction (S4 WP12: since the
-      // extinguishment carries the keys' signatures as arguments and the keeper relays it, no flow is sent from a key's
-      // address any more)
+      // the signer, the transaction's one signer (nobody co-signs, S4 WP13), is one of the account's wallets. An attestor
+      // key never sends a transaction (S4 WP12): its approvals are Stage 1 signatures inside the command
       const own = session!.wallets.some((w) => w.address === signed.tx.signer);
       if (!own && !session!.roles.includes('admin')) throw AppError.forbidden('signer is not one of your wallets');
       if (!ctx.chains.chains.has(signed.tx.chain)) throw AppError.badRequest(`unknown chain ${signed.tx.chain}`);

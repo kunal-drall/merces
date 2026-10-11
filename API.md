@@ -43,9 +43,11 @@ explains how to use the API; the spec is the source of truth for shapes.
 - **Writes** accept an `Idempotency-Key` header, scoped to your account; the same key with the same body replays the
   stored response, a different body is a 409, and a repeat while the first request is still running is a 409 (retry later).
 - **Transactions**: the backend never signs for a user. Builders return `{ tx: UnsignedTx }` (`chain`, `family`, `signer`,
-  `coSigners`, `command`, `payload`, `encoding`, `expiresAt`; since S3 `commands` when one transaction runs several
-  commands in order, all or nothing, as the curve unstake does, `command` being the first). The wallet signs; `POST
-  /tx/send` relays `{ tx, signatures }` and returns the canonical events the transaction emitted.
+  `command`, `payload`, `encoding`, `expiresAt`; since S3 `commands` when one transaction runs several commands in
+  order, all or nothing, as the curve unstake does, `command` being the first). A transaction has one signer, `signer`:
+  nobody co-signs (S4 WP13; the `coSigners` field is gone). An attestor's or the report verifier's approval is a Stage 1
+  signature the command carries as an argument, never a transaction signature. The wallet signs; `POST /tx/send` relays
+  `{ tx, signatures }` and returns the canonical events the transaction emitted.
 - **Mock mode** adds `/dev/time`, `/dev/advance-time`, `/dev/faucet`, `/dev/esign/complete` so Stage 3 can drive the whole
   lifecycle without waiting for quarters to pass.
 
@@ -290,7 +292,21 @@ the request `collecting` (its `signers` name your key; no read ever shows an unr
 `relayTx` and the two signatures. Before relaying, the service checks the nonce and both keys again: a key revoked since
 it signed answers 409 `attestor-key-inactive` and the request collects that key's signature again. A chain refusal
 leaves the request `ready` with Stage 1's name in `relayError` and comes back with it; posting a stored signature again
-retries. You send no transaction.
+retries. You send no transaction. The annual true-up (S4 WP13): `GET
+/attestor/tier3/annual/{annualId}/message?totalPaymentStable` (`MERCES_TRUEUP_V1` over the series' live true-up nonce,
+the year, the adjustment, `totalPaymentStable` less the year's payments on estimate, positive owed to holders and
+negative credited forward, and the attestation time, the chain's now; only for a year and an adjustment Stage 1's
+`submit_trueup` would take: 409 with the chain's name for the year rules, `TrueUpYearNotEnded` / `TrueUpYearIncomplete`
+on Solana and `TrueUpYearInvalid` on the EVM, every quarter of the year from the series' first period on reported; 422
+AmountOutOfRange beyond Stage 1's i64; 422 `TrueUpExceedsYear` / `TrueUpAdjustmentTooLarge` for a credit above the
+year's accepted report payments) → `merces-attestor sign` → `POST /attestor/tier3/annual/{annualId}/sign
+{totalPaymentStable, trueupNonce, attestationTs, attestation: {signer, signature, digest}}` (the same checks again, the
+time neither after the chain's now, 422 `TrueUpTimestampInFuture` / `AttestationInFuture`, nor before the year ended;
+the message rebuilt with the signed nonce and time and the adjustment derived from the posted payment: 422
+InvalidAttestorSignature unless it recovers to the attestation's key, active on the chain; 409 `stale-nonce` with
+`detail.request` when the nonce moved). The attestation is then `signed` with its amounts (an underpayment due 60 days
+after the attestation time) and `trueUp {signer, trueupNonce, attestationTs, adjustment, digest}`; the signature itself
+is stored for the issuer's `submit_trueup` (S5) and shown by no read.
 
 **Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
 (`GET /admin/attestors`, with each key's registration and revocation times and its grace end) and the attestor key

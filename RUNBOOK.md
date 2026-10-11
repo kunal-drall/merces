@@ -178,6 +178,30 @@ An extinguishment request:
 - an unrelayed EXTINGUISH signature is a bearer authorisation (with the other key's, anyone could extinguish the
   series): the API never shows one. If one leaks, rotate the key (its signature dies once the key is revoked).
 
+S4 WP13 changes no simulator state layout (still version 5; no reset): the annual true-up carries the attestor key's
+Stage 1 TRUEUP signature (captured and stored for the issuer's `submit_trueup`, which lands in S5), nobody co-signs any
+transaction (`UnsignedTx.coSigners` and `ChainPort.build`'s co-signer argument are gone; a client that still sends the
+field has it ignored: the chain checks the one signer), and the period reads carry each report's own payment figure
+(`PeriodState.paymentStable`). Migration 030:
+- adds `tier3_annual.trueup_nonce`, `attestation_ts`, `adjustment`, `trueup_signer`, `trueup_signature` and
+  `trueup_digest` (all six together, exactly on a signed attestation, signed by its own key, the adjustment equal to the
+  attested total less the estimate);
+- opens again the attestations signed before it with amounts only (`decision_code = 'resign-s4'`, the amounts cleared):
+  the attestation's key signs the year's TRUEUP request from `GET /attestor/tier3/annual/{annualId}/message`; one
+  addressed to a wallet (before S4 WP7) is `withdrawn` (`superseded-s4`) and the issuer opens the year again for a key.
+  Rows 025 withdrew are not touched again.
+An annual attestation:
+- 409 with `detail.stage1` `TrueUpYearIncomplete` (Solana) or `TrueUpYearInvalid` (EVM): a quarter of the year from the
+  series' first period on has no accepted report yet. The issuer reports it first (the adjustment is against every
+  quarter's payment);
+- 422 `TrueUpExceedsYear` / `TrueUpAdjustmentTooLarge`: the credit (estimate − attested total) exceeds the year's
+  accepted report payments, which Stage 1 would refuse. Check the attested total and the estimate (split receipts the
+  reports never carried count in the estimate only);
+- 409 `stale-nonce`: a true-up landed since the request (S5); sign the fresh request in `detail.request`;
+- the signature is stored for the issuer's `submit_trueup` and never shown; only the issuer can submit it. If the key
+  is compromised, rotate it (a stored TRUEUP signature dies once its key is no longer active, and the attestation is
+  signed again with the new key).
+
 Before version 5:
 
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final

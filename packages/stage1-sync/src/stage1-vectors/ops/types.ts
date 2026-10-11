@@ -42,8 +42,8 @@ export interface OpContext {
   seriesBook(name: string): SeriesBook;
   /** the engine's live state of a vector series name (read it after the calls: a failed call replaces the state) */
   seriesState(name: string): SimSeries;
-  /** build, sign (and co-sign) and send a user or admin command (one transaction) */
-  send(signer: SimWallet, cmd: UserCommand | AdminCommand, coSigners?: SimWallet[]): Promise<TxResult>;
+  /** build, sign and send a user or admin command (one transaction, one signer: nobody co-signs, S4 WP13) */
+  send(signer: SimWallet, cmd: UserCommand | AdminCommand): Promise<TxResult>;
   /** submit a service command under one of the backend's roles (one transaction) */
   submit(cmd: ServiceCommand, role: ServiceRole): Promise<TxResult>;
 }
