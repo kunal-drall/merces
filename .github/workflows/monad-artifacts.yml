@@ -52,6 +52,7 @@ jobs:
           MERCES_ADMIN: '0x05478199526A3D40428492bea389fe5A625F0d3F'
           MERCES_TIMELOCK_PROPOSER: '0x05478199526A3D40428492bea389fe5A625F0d3F'
           MERCES_ALLOWLIST_MANAGER: '0x50E2244ee5fcDF3E15433dd4ADb0Eb5F6b7C01b6'
+          MERCES_STABLECOIN: '0x534b2f3A21130d7a60830c2Df862319e593943A3'
           MERCES_TIMELOCK_DELAY: '60'
           MERCES_NETWORK: monad-testnet
         # No signing key, --broadcast, or remote signer: the exported transactions are reviewed and signed locally.
