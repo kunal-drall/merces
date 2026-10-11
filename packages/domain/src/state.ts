@@ -20,6 +20,8 @@ export interface ChainInfo {
   newRaisesPaused: boolean;
   windowsEnabled?: boolean;
   tier4Enabled?: boolean;
+  /** Finalized registry defaults copied into new series; currently exposed by the Solana adapter. */
+  protocolDefaults?: { nonRevealChargeBps: number };
   /** the chain's settlement limits (a property of the chain family, not of its state) */
   limits: ChainLimits;
   /**

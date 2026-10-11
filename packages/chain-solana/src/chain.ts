@@ -13,7 +13,7 @@ import {SolanaCurve} from './curve.ts';
 import {planSolCommand} from './commands.ts';
 import {eventCursor,mapSolanaEvent} from './events.ts';
 import {assertIdlPrograms,programOf,pda} from './accounts.ts';
-import {hex} from './codec.ts';
+import {hex,type Row} from './codec.ts';
 
 /** Stage 1 on Solana: a tally page holds at most 24 Bid accounts (`TALLY_PAGE`, state.rs); no limit on the bid count. */
 const SOLANA_LIMITS = { tallyPageMax: 24, maxBidsPerAuction: null } as const satisfies ChainInfo['limits'];
@@ -80,11 +80,13 @@ export class SolanaChain implements ChainPort {
     await this.ensureNetwork();assertIdlPrograms(this.config);
     const registry=programOf(this.config,'registry'),cfg=(await this.transport.account(pda(registry,'config'),'ProtocolConfig'))?.value;
     if(!cfg)throw new ChainError('ChainSpecific','registry configuration is missing');
+    const nonRevealChargeBps=Number((cfg.defaults as Row)?.non_reveal_charge_bps);
+    if(!Number.isInteger(nonRevealChargeBps)||nonRevealChargeBps<0||nonRevealChargeBps>1000)throw new ChainError('ChainSpecific','registry non-reveal charge is outside Stage 1 bounds');
     const cluster=normalizeCluster(this.config.cluster);
     const signing=signingDomain('solana',cluster==='devnet'?103:cluster==='testnet'?102:104,registry);
     if(hex(cfg.domain)!==signing.domain)throw new ChainError('ChainSpecific','refusing: registry signing domain differs from configured cluster');
     const stablecoins:ChainInfo['stablecoins']={};for(const [k,mint] of Object.entries(this.config.stablecoins))if(mint)stablecoins[k as 'USDC'|'USDG']={mint,decimals:6};
-    return {chain:this.chain,family:this.family,mode:this.mode,network:this.config.cluster,stablecoins,modules:this.config.programs,admin:String(cfg.admin),feeCollector:String(cfg.fee_collector),newRaisesPaused:Boolean(cfg.new_raises_paused),windowsEnabled:Boolean(cfg.windows_enabled),tier4Enabled:Boolean(cfg.tier4_enabled),limits:SOLANA_LIMITS,signing};
+    return {chain:this.chain,family:this.family,mode:this.mode,network:this.config.cluster,stablecoins,modules:this.config.programs,admin:String(cfg.admin),feeCollector:String(cfg.fee_collector),newRaisesPaused:Boolean(cfg.new_raises_paused),windowsEnabled:Boolean(cfg.windows_enabled),tier4Enabled:Boolean(cfg.tier4_enabled),protocolDefaults:{nonRevealChargeBps},limits:SOLANA_LIMITS,signing};
   }
 
   async health(): Promise<HealthReport> {

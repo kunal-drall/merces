@@ -527,7 +527,9 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **setContractHash**: `seriesId`: string; `contractHash`: hex32
 - **routeIncome**: `seriesId`: string; `amount`: decimal string (base units / WAD / units)
 - **createSeries**: `terms`: object { routerTerms: object { theta: decimal string (base units / WAD / units), rWad: decimal string (base units / WAD / units), currencyCode: integer, indexingRule: integer, termsSalt: decimal string (base units / WAD / units) }, fxPairId: hex32 \| null, stablecoin: `USDC` \| `USDG`, stablecoinMint: string, unitsOffered: decimal string (base units / WAD / units), reservePrice: decimal string (base units / WAD / units), minimumRaise: decimal string (base units / WAD / units), capMultipleWad: decimal string (base units / WAD / units), lockupSeconds: integer, releaseSchedule: array of object { afterSeconds: integer, bps: integer }, auctionFeeBps: integer, payoutFeeBps: integer, hurdleWad: decimal string (base units / WAD / units), payoutMultipleK: integer, walletCapBps: integer, nonRevealChargeBps: integer, commitDurationSeconds: integer, revealDurationSeconds: integer, windowCommitDuration: integer, windowRevealDuration: integer, windowFeeBps: integer, dueDays: integer, graceDays: integer, formalNoticeDays: integer, contractHash: hex32, termsCommitment: hex32, tierFlags: object { tier1: boolean, tier2: boolean, tier3: boolean, tier4: boolean }, reportingCurrency: string, raiseStyle: `sealed` \| `curve` }; `seriesAddressHint?`: string
-- **openRaise**: `seriesId`: string
+- **openRaise**: `seriesId`: string; `curvePool?`: string
+- **createCurveConfig**: `seriesId`: string; `config`: string; `parameters`: object {  }
+- **createCurvePool**: `seriesId`: string; `config`: string; `baseMint`: string
 - **cancelRaise**: `seriesId`: string
 - **commitBid**: `seriesId`: string; `commitment`: hex32; `deposit`: decimal string (base units / WAD / units)
 - **revealBid**: `seriesId`: string; `pricePerUnit`: decimal string (base units / WAD / units); `quantity`: decimal string (base units / WAD / units); `salt`: hex32
@@ -586,6 +588,7 @@ User commands are built into unsigned transactions for the user's wallet (`Chain
 - **registerHolder**: `seriesId`: string; `wallet`: string
 - **burnRetired**: `seriesId`: string; `holder`: string
 - **completeCurve**: `seriesId`: string
+- **migrateCurve**: `seriesId`: string; `firstPositionMint`: string; `secondPositionMint`: string
 - **collectCurveProceeds**: `seriesId`: string
 - **syncCurveUnits**: `seriesId`: string
 - **approvePause**: `seriesId`: string; `pauseEnd`: string; `attestor`: string; `signature`: string

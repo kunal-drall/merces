@@ -177,11 +177,16 @@ export const NON_REVEAL_CHARGE_UNSET = `the non-reveal charge for new series is 
  * chains copy the protocol default into every series at creation (Solana `merces_registry` lib.rs:550, EVM
  * `MercesRegistry.sol:597`); issuers cannot choose it. With the setting unset a sealed raise is refused (409,
  * `NON_REVEAL_CHARGE_UNSET`), so no sealed series goes live without the owner's decision; a curve raise, which has no
- * bids to charge, records 0 then.
+ * bids to charge, uses the finalized registry default on a live network. Simulators retain zero when unset.
  */
-export function nonRevealChargeOf(raiseStyle: 'sealed' | 'curve', setting: number | null): number {
+export function nonRevealChargeOf(raiseStyle: 'sealed' | 'curve', setting: number | null, chainInfo?: { mode: string; protocolDefaults?: { nonRevealChargeBps: number } }): number {
   if (setting !== null) return setting;
   if (raiseStyle === 'sealed') throw AppError.conflict(NON_REVEAL_CHARGE_UNSET, { setting: NON_REVEAL_CHARGE_SETTING });
+  if (chainInfo?.mode === 'live') {
+    const value = chainInfo.protocolDefaults?.nonRevealChargeBps;
+    if (value === undefined || !Number.isInteger(value) || value < NON_REVEAL_CHARGE_BOUNDS.min || value > NON_REVEAL_CHARGE_BOUNDS.max) throw AppError.conflict('the live registry non-reveal charge is unavailable; refresh before creating a curve');
+    return value;
+  }
   return 0;
 }
 
@@ -362,7 +367,7 @@ export class TermsService {
       fxPairId: p.fxPairId,
       ...filledTerms(p.raiseStyle),
       windowCommitDuration: p.windowCommitDuration, windowRevealDuration: p.windowRevealDuration, windowFeeBps: p.windowFeeBps,
-      nonRevealChargeBps: nonRevealChargeOf(p.raiseStyle, this.ctx.nonRevealChargeBps),
+      nonRevealChargeBps: nonRevealChargeOf(p.raiseStyle, this.ctx.nonRevealChargeBps, info),
       stablecoin: p.stablecoin, stablecoinMint: coin.mint, unitsOffered: p.unitsOffered, reservePrice: p.reservePrice, minimumRaise: p.minimumRaise, capMultipleWad: p.capMultipleWad, lockupSeconds: lockupOf(p),
       releaseSchedule: p.releaseSchedule, hurdleWad: p.hurdleWad, payoutMultipleK: p.payoutMultipleK,
       contractHash: draft.contract_hash, termsCommitment: draft.terms_commitment, tierFlags: p.tierFlags, reportingCurrency: p.reportingCurrency, raiseStyle: p.raiseStyle,
