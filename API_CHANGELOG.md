@@ -6,6 +6,16 @@ The frontend builds against this API. **Every push lists every changed or remove
 count; `API.md` is the narrative; `packages/client/src/generated/openapi.d.ts` is regenerated with `pnpm openapi:client`.
 Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
+## Stage 5 draft terms schema correction — 2026-10-11 (213 operations)
+
+`POST /terms/validate` and `PUT /drafts/{draftId}/terms` now share the complete
+`PublicDraftTerms` request schema: all 18 accepted public fields and the same
+required fields/defaults as the existing service validator. Previously the
+OpenAPI request documented only `routerPublicConsent` and `fxPairId`, making
+generated frontend clients reject valid drafts. Runtime validation, consent,
+fees and contract behavior are unchanged. Regenerated the bundled specification
+and client; contract tests check both operations against the service schema.
+
 ## 4625660 — 2026-10-11 (213 operations)
 
 Live adapters and registry completion (213 operations):

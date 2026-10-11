@@ -4468,6 +4468,45 @@ export type components = {
                 contractHash: string;
             };
         };
+        PublicDraftTerms: {
+            /**
+             * @description Required true for tier 1: publishes the threshold, share rate and routed receipts onchain.
+             * @default false
+             */
+            routerPublicConsent: boolean;
+            /** @default null */
+            fxPairId: string | null;
+            /** @enum {string} */
+            stablecoin: "USDC" | "USDG";
+            unitsOffered: string;
+            reservePrice: string;
+            minimumRaise: string;
+            capMultiple?: string;
+            lockupSeconds?: number;
+            releaseSchedule?: {
+                afterSeconds: number;
+                bps: number;
+            }[];
+            hurdle?: string;
+            payoutMultipleK?: number;
+            windowCommitDuration?: number;
+            windowRevealDuration?: number;
+            windowFeeBps?: number;
+            tierFlags: {
+                tier1: boolean;
+                tier2: boolean;
+                tier3: boolean;
+                /** @default false */
+                tier4: boolean;
+            };
+            reportingCurrency: string;
+            /**
+             * @default sealed
+             * @enum {string}
+             */
+            raiseStyle: "sealed" | "curve";
+            country: string;
+        };
         FxPair: {
             pairId: components["schemas"]["Hash32"];
             feedId: components["schemas"]["Hash32"];
@@ -6524,15 +6563,7 @@ export interface operations {
             content: {
                 "application/json": {
                     chain: string;
-                    public: {
-                        /**
-                         * @description Required true for tier 1: publishes the threshold, share rate and routed receipts onchain.
-                         * @default false
-                         */
-                        routerPublicConsent?: boolean;
-                        /** @default null */
-                        fxPairId?: string | null;
-                    };
+                    public: components["schemas"]["PublicDraftTerms"];
                     private?: Record<string, never> | null;
                 };
             };
@@ -6709,15 +6740,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    public: {
-                        /**
-                         * @description Required true for tier 1: publishes the threshold, share rate and routed receipts onchain.
-                         * @default false
-                         */
-                        routerPublicConsent?: boolean;
-                        /** @default null */
-                        fxPairId?: string | null;
-                    };
+                    public: components["schemas"]["PublicDraftTerms"];
                     private: Record<string, never>;
                 };
             };

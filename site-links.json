@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "links": {
+    "site": { "url": "https://merces.fi", "live": true, "note": "Existing redirect to merces.fun; Stage 5 site not deployed." },
+    "humanathon": { "url": "https://merces.fi/humanathon", "live": false },
+    "waitlist": { "url": "https://merces.fi/waitlist", "live": false },
+    "docs": { "url": "https://merces.fi/docs", "live": false },
+    "app": { "url": "https://gg.merces.fi", "live": false },
+    "api": { "url": "https://api.merces.fi", "live": false },
+    "verifier": { "url": "https://verify.merces.fi", "live": false },
+    "www": { "url": "https://www.merces.fi", "live": false, "note": "TLS hostname validation failed on 11 October 2026." },
+    "mail": { "url": "https://mail.merces.fi", "live": false, "note": "Proposed sending domain, not a web surface." },
+    "support": { "url": "mailto:ohayo@merces.fi", "live": true, "note": "Contact supplied by Kunal; delivery not tested." },
+    "partnersEmail": { "url": "", "live": false },
+    "telegram": { "url": "", "live": false },
+    "x": { "url": "", "live": false },
+    "solanaExplorer": { "url": "https://explorer.solana.com/?cluster=devnet", "live": false, "note": "Enable after connectivity verification." },
+    "monadExplorer": { "url": "https://testnet.monadexplorer.com", "live": false, "note": "Enable after connectivity verification." },
+    "solanaFaucet": { "url": "", "live": false },
+    "monadFaucet": { "url": "", "live": false }
+  }
+}
