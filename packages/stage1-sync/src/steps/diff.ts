@@ -144,6 +144,10 @@ const FIELD_ALIASES: Record<string, string[]> = {
   seriesId: ['series', 'series_id'], periodId: ['period'], minimumRaise: ['min_raise'],
   // a curve's P0 is Stage 1's `clearing_price` (registry CurveActivated, RaiseSettled); a settlement time `settlement_ts`
   issuePrice: ['clearing_price'], settledAt: ['settlement_ts'],
+  // a signature argument (S4 WP10): Solana passes the signer's 20-byte address and the 65-byte signature
+  // (`attestor_addr`, `attestor_sig`), the EVM the signature only (`attestorSignature`, it recovers the signer); a pause's
+  // end is Stage 1's `end` in PauseApproved
+  attestor: ['attestor_addr'], signature: ['attestor_sig', 'attestorSignature'], until: ['end'],
 };
 
 /** Stage 1 items that only another Merces program or contract may call: the registry write interface, inter-module calls, the transfer hook. */

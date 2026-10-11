@@ -80,8 +80,10 @@ export interface Expected {
 export const TARGETS_S1 = ['01', '04', '05', '06', '07', '09', '11', '19', '23', '25'] as const;
 /** The four S2 target vectors (multi-step settlement, deferred delivery, register_holder). */
 export const TARGETS_S2 = ['02', '03', '15', '17'] as const;
+/** The S4 target vector: 21, in full once a pause approval is Stage 1's signed approve_pause and the withdrawal runs (S4 WP10). */
+export const TARGETS_S4 = ['21'] as const;
 /** Every target vector: replayed in full on the merces backend. */
-export const TARGETS: readonly string[] = Object.freeze([...TARGETS_S1, ...TARGETS_S2]);
+export const TARGETS: readonly string[] = Object.freeze([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4]);
 
 const S2_RAISE = ['S2 WP2', 'S2 WP4a', 'S2 WP4b'];
 
@@ -94,7 +96,9 @@ export const EXPECTED: Readonly<Record<string, Expected>> = Object.freeze({
   '05': { status: 'PASS-WITH-WAIVERS', waivers: [{ step: 42, op: 'expect_revert retire_if_capped', id: 'BLK-1' }], needs: ['WP3', 'WP4', 'WP5', 'WP6', 'WP7'] },
   '06': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5', 'WP6'] },
   '07': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5'] },
-  '08': { status: 'PREFIX-PASS', until: 33, next: '#34 `withdraw_pause_request` (no canonical command)', milestone: 'S5', reason: 'withdraw_pause_request and end_pause' },
+  // S4 WP10: the gate moves from #33 to #57: withdraw_pause_request (#34, #51) and approve_pause by the named key's PAUSE
+  // signature over the live nonce (sent by the keeper; was SH-PAU-2) now run, so does the rest up to the issuer's early end
+  '08': { status: 'PREFIX-PASS', until: 57, next: '#58 `expect_revert end_pause` (no canonical command: a pause ends at its approved end only)', milestone: 'S5', reason: 'end_pause' },
   '09': { status: 'PASS', needs: ['WP3', 'WP5', 'WP6'] },
   '10': { status: 'PREFIX-PASS', until: 35, next: '#36 `expect_revert open_window` with windows disabled (no canonical windows flag to refuse with)', milestone: 'S5', reason: 'multi-step transfer windows' },
   '11': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5', 'WP6', 'WP7'] },
@@ -107,7 +111,10 @@ export const EXPECTED: Readonly<Record<string, Expected>> = Object.freeze({
   '18': { status: 'NOT-YET', milestone: 'S5', reason: 'income router (stops at #11, create_series with a router)' },
   '19': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5'] },
   '20': { status: 'PREFIX-PASS', until: 70, next: '#71 `expect_revert submit_trueup` (no tier-3 true-up)', milestone: 'S5', reason: 'tier-3 true-up' },
-  '21': { status: 'PREFIX-PASS', until: 40, next: '#41 `expect_revert approve_pause` with a pause end of 2^64 (the canonical pause end is a safe integer, so it is not AmountOutOfRange), then #42 `withdraw_pause_request`', milestone: 'S5', reason: 'withdraw_pause_request; u64 pause ends' },
+  // PASS in full since S4 WP10 (was PREFIX-PASS to #40): #41's 2^64 pause end is AmountOutOfRange before the signature is
+  // read (approvePause.pauseEnd is a decimal string; the EVM's order), #42 is withdraw_pause_request, and the steps after
+  // the gate (#44's 2^64 payment, S3's claims #48-#57) run
+  '21': { status: 'PASS', needs: ['WP3', 'WP4', 'WP5', ...S2_RAISE, 'S3 WP3', 'S4 WP10'] },
   '22': { status: 'PREFIX-PASS', until: 75, next: '#76 `begin_window_settlement` with a price on a live series (one-step windows)', milestone: 'S5', reason: 'multi-step windows (#76); its claim steps #88-#110 run once windows land' },
   '23': { status: 'PASS', needs: ['WP3', 'WP5', 'WP6', 'WP8'] },
   '24': { status: 'NOT-YET', milestone: 'S5', reason: 'FX accumulator (inverted pair)' },

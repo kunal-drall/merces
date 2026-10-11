@@ -75,8 +75,11 @@ curve's census (S3 WP9, A-CURVE-5): assembling (and opening or signing a tier-3 
 CurveUnitsNotSynced while the last census predates the period's end, with the sync step in `detail.next` (the schedule
 shows `nextStep: sync-curve-units`); a proof over another count is 409 `detail.reason` `census-changed` (prove again);
 `POST /reports/{id}/build-submit` is 409 `census-changed` (`next: re-assemble`) when a census moved the count since the
-report was assembled → hardship (`POST /series/{id}/hardship`) or redemption (`GET /series/{id}/redemption/quote`,
-`POST …/redemption/build-redeem`).
+report was assembled → hardship (`POST /series/{id}/hardship`, then send its `requestPause`; the chosen attestor's key
+approves it, relayed by the keeper; `POST /series/{id}/hardship/build-withdraw` builds Stage 1's `withdrawPauseRequest`
+for a pending onchain request, which advances the pause nonce so a signature collected for it is dead, and the request
+reads `withdrawn` once indexed; 409 PauseNotRequested when none is pending) or redemption (`GET
+/series/{id}/redemption/quote`, `POST …/redemption/build-redeem`).
 
 **Backer**: apply → `GET /arena`, `GET /series/{id}`, `GET /series/{id}/terms` (eligible backers only, logged) →
 `POST /series/{id}/bids/precheck` → compute the commitment client-side (or `POST …/bids/commitment`): Stage 1's
@@ -248,9 +251,18 @@ chain's non-terminal series reporting in the pair's base currency that report th
 the period's rate, 409 `rate-fixed` for another, and later requests add only the series that started reporting since)
 → `POST /attestor/fx-requests/{requestId}/sign {rateWad, signer, sourceNote, signatures: [{seriesId, signature}]}`
 (every covered series while the request is open, 422 `signatures-missing`; each recovered over its own series' message,
-422 InvalidAttestorSignature with `detail.seriesId`). approvePause, amendTerms and extinguish are still co-signed at the
-key's address until S4 WP10-WP13 (`POST /tx/send` accepts a signer that is a key linked to your account); from then on
-each is Stage 1's own signature by the key.
+422 InvalidAttestorSignature with `detail.seriesId`); `GET /attestor/hardship/{hardshipId}/message?pauseEnd` (S4 WP10:
+`MERCES_PAUSE_V1` over the series' live pause nonce and the end, only for an end the chain would take now: at most the
+requested end, a u64 (422 AmountOutOfRange), a request pending onchain (409 PauseNotRequested), Stage 1's bounds) →
+`merces-attestor sign` (it warns that a PAUSE signature cannot be recalled) → `POST /attestor/hardship/{hardshipId}/decide
+{approve: true, pauseEnd, pauseNonce, attestation: {signer, signature, digest}}` (the API rebuilds the message with the
+signed nonce and recovers the signer: 422 InvalidAttestorSignature unless it is the request's key, active on the chain;
+then reads the nonce again: 409 `stale-nonce` with `detail.request`, the fresh signing request, when the issuer requested
+again or withdrew; then the keeper relays Stage 1's permissionless `approvePause` and the decision returns `relayTx`: you
+send nothing. A chain refusal at the relay comes back with its Stage 1 name and leaves the request pending); a rejection
+is `{approve: false, decisionCode}`, no signature. amendTerms and extinguish are still co-signed at the key's address
+until S4 WP11-WP13 (`POST /tx/send` accepts a signer that is a key linked to your account); from then on each is Stage
+1's own signature by the key.
 
 **Admin**: review queue, eligibility revocation, flags, templates, attestor proposals and their onchain status
 (`GET /admin/attestors`, with each key's registration and revocation times and its grace end) and the attestor key

@@ -2864,11 +2864,16 @@
                 "type": "integer",
                 "minimum": -9007199254740991,
                 "maximum": 9007199254740991
+              },
+              "nonce": {
+                "type": "string",
+                "pattern": "^\\d+$"
               }
             },
             "required": [
               "seriesId",
-              "until"
+              "until",
+              "nonce"
             ],
             "additionalProperties": false
           }
@@ -2931,8 +2936,12 @@
               },
               "attestor": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 64
+                "pattern": "^0x[0-9a-f]{40}$"
+              },
+              "start": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
               },
               "until": {
                 "type": "integer",
@@ -2943,7 +2952,76 @@
             "required": [
               "seriesId",
               "attestor",
+              "start",
               "until"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chain",
+          "cursor",
+          "seq",
+          "blockTime",
+          "blockRef",
+          "txId",
+          "finality",
+          "type",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blockTime": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "blockRef": {
+            "type": "string"
+          },
+          "txId": {
+            "type": "string"
+          },
+          "finality": {
+            "type": "string",
+            "enum": [
+              "finalized",
+              "confirmed"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "PauseRequestWithdrawn"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "seriesId": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+              },
+              "nonce": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              }
+            },
+            "required": [
+              "seriesId",
+              "nonce"
             ],
             "additionalProperties": false
           }
@@ -5809,11 +5887,16 @@
           "type": "integer",
           "minimum": -9007199254740991,
           "maximum": 9007199254740991
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^\\d+$"
         }
       },
       "required": [
         "seriesId",
-        "until"
+        "until",
+        "nonce"
       ],
       "additionalProperties": false
     },
@@ -5827,8 +5910,12 @@
         },
         "attestor": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 64
+          "pattern": "^0x[0-9a-f]{40}$"
+        },
+        "start": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         },
         "until": {
           "type": "integer",
@@ -5839,7 +5926,27 @@
       "required": [
         "seriesId",
         "attestor",
+        "start",
         "until"
+      ],
+      "additionalProperties": false
+    },
+    "PauseRequestWithdrawn": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^\\d+$"
+        }
+      },
+      "required": [
+        "seriesId",
+        "nonce"
       ],
       "additionalProperties": false
     },
@@ -7178,28 +7285,22 @@
       ],
       "additionalProperties": false
     },
-    "approvePause": {
+    "withdrawPauseRequest": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "properties": {
         "kind": {
           "type": "string",
-          "const": "approvePause"
+          "const": "withdrawPauseRequest"
         },
         "seriesId": {
           "type": "string",
           "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
-        },
-        "until": {
-          "type": "integer",
-          "minimum": -9007199254740991,
-          "maximum": 9007199254740991
         }
       },
       "required": [
         "kind",
-        "seriesId",
-        "until"
+        "seriesId"
       ],
       "additionalProperties": false
     },
@@ -7958,6 +8059,40 @@
       "required": [
         "kind",
         "seriesId"
+      ],
+      "additionalProperties": false
+    },
+    "approvePause": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "approvePause"
+        },
+        "seriesId": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+:[A-Za-z0-9]+$"
+        },
+        "pauseEnd": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d{0,77})$"
+        },
+        "attestor": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{130}$"
+        }
+      },
+      "required": [
+        "kind",
+        "seriesId",
+        "pauseEnd",
+        "attestor",
+        "signature"
       ],
       "additionalProperties": false
     },

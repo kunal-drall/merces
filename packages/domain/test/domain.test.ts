@@ -19,6 +19,10 @@ import * as domainModule from '../src/index.ts';
  *  - S4-REG: Stage 1's key registry (S4 WP5): register, forward-only revoke and rotate, with their events; schema 0.4.0;
  *  - S4-T3 / S4-FX: a tier-3 report carries an attestor key's REPORT signature in `attestation`, the FX fallback an
  *    attestor key's per-series FX signature in `fxFallback` (S4 WP9); the EIP-191 texts and the co-signer fields are gone.
+ *  - S4-PAU: `approvePause` joins the permissionless group as Stage 1's `approve_pause(pauseEnd, attestor, signature)`
+ *    (S4 WP10; was a user command `{until}` sent by the attestor); `PauseRequested` carries the nonce, `PauseApproved` the
+ *    start;
+ *  - S4-WD: `withdrawPauseRequest` (Stage 1 `withdraw_pause_request`) is a user command; `PauseRequestWithdrawn{nonce}`.
  *
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms (Stage 1's defaults 7 and 2 days);
@@ -218,6 +222,27 @@ describe('hashing', () => {
     expect(() => userCommandSchema.parse({ ...report, attestation: { ...sig, rateWad: '1' } })).toThrow();
     expect(() => userCommandSchema.parse({ ...report, fxFallback: undefined })).toThrow();
   });
+  it('a pause approval is Stage 1\'s permissionless approve_pause with a signature; the withdrawal is the issuer\'s; the events carry the nonces (cause S4-PAU, S4-WD)', () => {
+    const sid = 'solana:abc';
+    const approval = { kind: 'approvePause', seriesId: sid, pauseEnd: '1790000000', attestor: '0x' + 'ab'.repeat(20), signature: '0x' + '11'.repeat(65) };
+    expect(permissionlessCommandSchema.parse(approval)).toEqual(approval);
+    expect(serviceCommandSchema.parse(approval)).toEqual(approval);
+    expect(() => userCommandSchema.parse(approval)).toThrow();
+    // the end is a decimal string, so 2^64 parses (the chain refuses it AmountOutOfRange, before the signature)
+    expect(permissionlessCommandSchema.parse({ ...approval, pauseEnd: (1n << 64n).toString() })).toMatchObject({ pauseEnd: '18446744073709551616' });
+    for (const bad of [{ ...approval, pauseEnd: 1_790_000_000 }, { ...approval, pauseEnd: '-1' }, { ...approval, pauseEnd: '01' }, { ...approval, signature: 'sim:x' }, { ...approval, attestor: 'w' }, { kind: 'approvePause', seriesId: sid, until: 1 }]) {
+      expect(() => permissionlessCommandSchema.parse(bad), JSON.stringify(bad)).toThrow();
+    }
+    expect(userCommandSchema.parse({ kind: 'withdrawPauseRequest', seriesId: sid })).toEqual({ kind: 'withdrawPauseRequest', seriesId: sid });
+    expect(() => permissionlessCommandSchema.parse({ kind: 'withdrawPauseRequest', seriesId: sid })).toThrow();
+    const env = { chain: 'solana', cursor: '1', seq: 1, blockTime: 1, blockRef: '1', txId: 't', finality: 'finalized' as const };
+    expect(parseDomainEvent({ ...env, type: 'PauseRequested', payload: { seriesId: sid, until: 5, nonce: '3' } }).payload).toEqual({ seriesId: sid, until: 5, nonce: '3' });
+    expect(() => parseDomainEvent({ ...env, type: 'PauseRequested', payload: { seriesId: sid, until: 5 } })).toThrow();
+    expect(parseDomainEvent({ ...env, type: 'PauseApproved', payload: { seriesId: sid, attestor: approval.attestor, start: 1, until: 5 } }).payload).toMatchObject({ start: 1 });
+    expect(() => parseDomainEvent({ ...env, type: 'PauseApproved', payload: { seriesId: sid, attestor: 'w', start: 1, until: 5 } })).toThrow();
+    expect(parseDomainEvent({ ...env, type: 'PauseRequestWithdrawn', payload: { seriesId: sid, nonce: '4' } }).payload).toEqual({ seriesId: sid, nonce: '4' });
+    for (const t of ['PauseRequested', 'PauseApproved', 'PauseRequestWithdrawn'] as const) expect(amountBearingEvents.has(t as never)).toBe(false);
+  });
   it('mock proofs are a digest over the six public inputs only', () => {
     const pub = ['1', '2', '3', '4', '5', '6'];
     const proof = mockProve(pub);
@@ -279,7 +304,8 @@ describe('schemas', () => {
     expect(userCommandKinds.filter((k) => /Raise|Bid|Refund/.test(k))).toEqual(['openRaise', 'cancelRaise', 'commitBid', 'revealBid']);
     // cause S3-BR, S3-CV: a curve's completion and proceeds are permissionless (Stage 1 complete_curve, collect_curve_proceeds);
     // cause S3-CN: and its census (Stage 1 sync_curve_units)
-    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits']);
+    // cause S4-PAU: and a signed pause approval (Stage 1 approve_pause)
+    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause']);
     // cause S3-BR: burnRetired{holder} (permissionless, above) replaces the S1 list burn crank (`holders[]`), so no service
     // command burns any more; cause S3-CV: completion is permissionless `completeCurve` (was a service graduation command)
     expect(serviceCommandKinds).toEqual(['snapshotRate', 'crankStatus', 'crankPause', 'openTransferWindow', 'clearTransferWindow', 'flagFxFallback', 'setAllowlist']);

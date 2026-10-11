@@ -203,8 +203,8 @@ export class SimHarness {
   /**
    * the attestors: published secp256k1 test keys (seeds `sim-attestor:attestor-1/2`), registered by their 20-byte
    * addresses on both personalities (S4 WP7); a tier-3 report and the FX fallback carry their Stage 1 signatures (S4
-   * WP9); the flows that still co-sign (approvePause, amendTerms, extinguish) use a wallet at the key's address until
-   * S4 WP10-WP13
+   * WP9) and a pause approval carries a key's PAUSE signature, sent by anyone (S4 WP10: `pauseApproval`); the flows that
+   * still co-sign (amendTerms, extinguish) use a wallet at the key's address until S4 WP11-WP13
    */
   readonly attestors: SimAttestor[];
   /** the report verifier's key (a published secp256k1 test key, seed `sim-verifier:verifier-1`; S4 WP6) */
@@ -335,6 +335,26 @@ export class SimHarness {
     const [info, series] = await Promise.all([this.sim.info(), this.sim.getSeries(seriesId)]);
     if (!info.signing || !series) throw new Error(`harness: no signing context for ${seriesId}`);
     return key.attest('FX', info.signing, series.seriesKey, { periodId, fxRateWad: fxRateWad.toString() });
+  }
+
+  /**
+   * A PAUSE signature (S4 WP10, D8): Stage 1's `MERCES_PAUSE_V1` over the chain's signing domain, the series key, the
+   * series' pause nonce (default the live one, `SeriesState.nonces.pause`) and `pauseEnd`, by attestor key `key` (default
+   * the harness's first attestor).
+   */
+  async attestPause(seriesId: string, pauseEnd: number | bigint | string, key: HarnessKey = this.attestors[0]!, opts: { pauseNonce?: bigint | string } = {}): Promise<{ signer: string; signature: string; digest: string }> {
+    const [info, series] = await Promise.all([this.sim.info(), this.sim.getSeries(seriesId)]);
+    if (!info.signing || !series) throw new Error(`harness: no signing context for ${seriesId}`);
+    return key.attest('PAUSE', info.signing, series.seriesKey, { pauseNonce: (opts.pauseNonce ?? series.nonces.pause).toString(), pauseEnd: pauseEnd.toString() });
+  }
+
+  /**
+   * The permissionless `approvePause` command carrying `key`'s PAUSE signature over the live nonce (`attestPause`): send
+   * it as the keeper (`sim.submit(cmd, 'keeper')`) or from any wallet (`exec`); the sender is never the signer.
+   */
+  async pauseApproval(seriesId: string, pauseEnd: number | bigint | string, key: HarnessKey = this.attestors[0]!, opts: { pauseNonce?: bigint | string } = {}): Promise<Extract<PermissionlessCommand, { kind: 'approvePause' }>> {
+    const a = await this.attestPause(seriesId, pauseEnd, key, opts);
+    return { kind: 'approvePause', seriesId, pauseEnd: pauseEnd.toString(), attestor: a.signer, signature: a.signature };
   }
 
   /** The prior opening the chain will expect for period `pid` (SPEC §6.2 step 5; Stage 1 builder `priorFor`). */

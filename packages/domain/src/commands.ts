@@ -2,13 +2,13 @@ import { z } from 'zod';
 import { addressSchema, hash32Schema, pairSchema, periodIdSchema, seriesIdSchema, stablecoinSchema } from './ids.ts';
 import { moneySchema, unitsSchema, wadSchema } from './money.ts';
 import { seriesTermsSchema, tierSchema, fxBasisSchema } from './events.ts';
-import { attestationSchema, signerAddressSchema } from './signing.ts';
+import { attestationSchema, signature65Schema, signerAddressSchema } from './signing.ts';
 
 /**
  * Canonical commands (Part D2). User commands are built into unsigned transactions for the user's wallet.
  * Service commands are submitted by the backend's own low-privilege roles (keeper, allowlist manager).
- * Permissionless commands (Stage 1's sealed-bid settlement, holder registration, the Retired burn and a curve's
- * completion, proceeds and census) may be sent by anyone: the keeper `submit`s them, and any wallet may `build` and sign them
+ * Permissionless commands (Stage 1's sealed-bid settlement, holder registration, the Retired burn, a curve's
+ * completion, proceeds and census, and a signed pause approval) may be sent by anyone: the keeper `submit`s them, and any wallet may `build` and sign them
  * (self-delivery, or a fallback when the keepers stall).
  * Admin commands are built for the protocol multisig.
  */
@@ -113,8 +113,21 @@ export const userCommands = {
    * into the pending payout.
    */
   claimFinal: z.object({ kind: z.literal('claimFinal'), seriesId: seriesIdSchema }),
+  /**
+   * Stage 1 `request_pause` (SIM:650-661; income.rs:939-962; MercesIncome.sol:471-481): the issuer asks for a hardship
+   * pause. NotIssuer, RaiseNotSettled, TerminalStatus; not refused while paused or while a request is pending (a repeated
+   * request is a new one). Advances the series' pause nonce (`SeriesState.nonces.pause`), so every PAUSE signature over an
+   * older request stops recovering to its key. `until` is ours and advisory (Stage 1's request carries no end): stored and
+   * emitted, never enforced; the attestor approves the actual end. Emits `PauseRequested{until, nonce}`.
+   */
   requestPause: z.object({ kind: z.literal('requestPause'), seriesId: seriesIdSchema, until: z.number().int() }),
-  approvePause: z.object({ kind: z.literal('approvePause'), seriesId: seriesIdSchema, until: z.number().int() }),
+  /**
+   * Stage 1 `withdraw_pause_request` (SIM:662-670; income.rs:964-977; MercesIncome.sol:484-493; S4 WP10, D12): the issuer
+   * withdraws its pending request. NotIssuer, then PauseNotRequested; the request is cleared (with its requested time and
+   * our advisory end) and the pause nonce advances, so a PAUSE signature collected for the withdrawn request is dead.
+   * Emits `PauseRequestWithdrawn{nonce}` with the new nonce.
+   */
+  withdrawPauseRequest: z.object({ kind: z.literal('withdrawPauseRequest'), seriesId: seriesIdSchema }),
   redeem: z.object({ kind: z.literal('redeem'), seriesId: seriesIdSchema, maxPricePerUnit: moneySchema }),
   claimRedemption: z.object({ kind: z.literal('claimRedemption'), seriesId: seriesIdSchema }),
   amendTerms: z.object({ kind: z.literal('amendTerms'), seriesId: seriesIdSchema, termsCommitment: hash32Schema, capMultipleWad: wadSchema, attestor: addressSchema }),
@@ -172,9 +185,9 @@ export const serviceCommands = {
 } as const;
 
 /**
- * Stage 1's sealed-bid settlement (SPEC §5.2), holder registration, the Retired burn and a curve's completion,
- * proceeds and census, with Stage 1's names. Anyone may send them: the keeper `submit`s them and any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans
- * the settlement steps.
+ * Stage 1's sealed-bid settlement (SPEC §5.2), holder registration, the Retired burn, a curve's completion, proceeds and
+ * census, and a signed pause approval (S4 WP10), with Stage 1's names. Anyone may send them: the keeper `submit`s them and
+ * any wallet may `build` them. `nextSettlementStep` (settlement.ts) plans the settlement steps.
  */
 export const permissionlessCommands = {
   /** Stage 1 `begin_settlement`: proposes a clearing price with the proposer's tally claims; starts the next round */
@@ -226,6 +239,20 @@ export const permissionlessCommands = {
    * Redeemed or Extinguished), CurveUnitsBelowStake when the count falls below the stakes. Emits `CurveUnitsSynced`.
    */
   syncCurveUnits: z.object({ kind: z.literal('syncCurveUnits'), seriesId: seriesIdSchema }),
+  /**
+   * Stage 1 `approve_pause` / `approvePause(seriesId, pauseEnd, attestorSignature)` (income.rs:991-1052;
+   * MercesIncome.sol:499-521; SIM:1284-1297; S4 WP10): anyone submits an attestor key's Stage 1 PAUSE signature over
+   * `MERCES_PAUSE_V1` (domain, series key, the series' live pause nonce, `pauseEnd`; `pauseDigest`), and the series pauses
+   * from now to `pauseEnd`. The sender is not the signer: the attestor signs on its own device and the keeper (or any
+   * wallet) relays it. `pauseEnd` is a decimal string: the EVM takes a uint256 and refuses one above u64 first
+   * (AmountOutOfRange, MercesIncome.sol:500; a message cannot encode 2^64), then `attestor` must be the address the
+   * signature recovers to and an active attestor key (no grace; else InvalidAttestorSignature), then PauseNotRequested,
+   * then Stage 1's bounds (`pauseApprovalError`: InvalidPauseEnd, AlreadyPaused, PauseTooLong, TooManyPauses; S4 D8).
+   * The approval clears the request and leaves the nonce as it is (a replay is PauseNotRequested). Stage 1's reference
+   * checks the attestor before the range: the EVM's order is the chains' (21#41 is AmountOutOfRange under both). Emits
+   * `PauseApproved{attestor, start, until}`, then the status sync.
+   */
+  approvePause: z.object({ kind: z.literal('approvePause'), seriesId: seriesIdSchema, pauseEnd: z.string().regex(/^(0|[1-9]\d{0,77})$/), attestor: signerAddressSchema, signature: signature65Schema }),
 } as const;
 
 export const adminCommands = {
@@ -330,7 +357,7 @@ export interface UnsignedTx {
   family: 'solana' | 'evm';
   /** primary signer (fee payer on Solana, msg.sender on EVM) */
   signer: string;
-  /** additional required signers (e.g. an attestor on amendTerms/approvePause) */
+  /** additional required signers (e.g. an attestor on amendTerms or extinguish, until S4 WP11-WP13) */
   coSigners: string[];
   /** the transaction's command; for a transaction that carries several (`commands`), the first */
   command: Command;

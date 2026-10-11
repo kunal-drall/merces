@@ -245,8 +245,23 @@ export const eventPayloads = {
    * `floor(total × unitScale / unitsAtRedemption)` (`floor(total / unitsAtRedemption)` on a sealed-bid series).
    */
   TailPayout: z.object({ ...seriesScoped, periodId: periodIdSchema, perUnit: moneySchema, total: moneySchema }),
-  PauseRequested: z.object({ ...seriesScoped, until: z.number().int() }),
-  PauseApproved: z.object({ ...seriesScoped, attestor: addressSchema, until: z.number().int() }),
+  /**
+   * Stage 1's `PauseRequested{series, nonce}` (income.rs:957-960; MercesIncome.sol:480): `nonce` is the series' pause
+   * nonce after the request (a u64 decimal string), the one a PAUSE signature for this request binds. `until` is ours and
+   * advisory (Stage 1's request carries no end).
+   */
+  PauseRequested: z.object({ ...seriesScoped, until: z.number().int(), nonce: z.string().regex(/^\d+$/) }),
+  /**
+   * Stage 1's `PauseApproved{series, start, end, attestor}` (income.rs:1044-1050; MercesIncome.sol:519): the attestor key
+   * whose PAUSE signature approved the pause (whoever sent it), the pause's start (the approval's time) and its end.
+   */
+  PauseApproved: z.object({ ...seriesScoped, attestor: signerAddressSchema, start: z.number().int(), until: z.number().int() }),
+  /**
+   * Stage 1's `PauseRequestWithdrawn{series, nonce}` (S4 WP10): the issuer withdrew its pending request. `nonce` is the
+   * series' pause nonce after the withdrawal, as the EVM (MercesIncome.sol:491-492) and Stage 1's reference (SIM:668-669)
+   * emit it; Solana emits the nonce before the increment (income.rs:971-975), which its adapter adds 1 to (S5).
+   */
+  PauseRequestWithdrawn: z.object({ ...seriesScoped, nonce: z.string().regex(/^\d+$/) }),
   PauseEnded: z.object({ ...seriesScoped, pausedSeconds: z.number().int() }),
   StatusChanged: z.object({ ...seriesScoped, from: lifecycleStatusSchema, to: lifecycleStatusSchema }),
   FormalNoticeDue: z.object({ ...seriesScoped, periodId: periodIdSchema }),

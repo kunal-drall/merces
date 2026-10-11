@@ -12,6 +12,7 @@ import { seedAuction, seedBid, seriesOf } from './kit.ts';
  * S4 cause codes on the pins that moved:
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes.
+ *  - S4-PAU: a signed pause approval (`approvePause`, Stage 1 `approve_pause`) joins the permissionless group (S4 WP10).
  */
 
 /*
@@ -108,8 +109,8 @@ describe('the chain\'s settlement limits and the permissionless group', () => {
     ];
     // cause S3-BR: every settlement step and registration; `burnRetired` needs a Retired series (claims.test.ts), and
     // `completeCurve`, `collectCurveProceeds` and `syncCurveUnits` a curve series (curve.test.ts, census.test.ts; cause
-    // S3-CV, S3-CN)
-    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits'].includes(k)));
+    // S3-CV, S3-CN); `approvePause` an attestor's signature over a pending request (pause.test.ts; cause S4-PAU)
+    expect(cmds.map((c) => c.kind)).toEqual(permissionlessCommandKinds.filter((k) => !['burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause'].includes(k)));
     for (const cmd of cmds) {
       const tx = await h.sim.build(cmd, anyone.address);
       expect(tx.command).toEqual(cmd);

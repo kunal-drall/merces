@@ -18,6 +18,8 @@ const silent = { info() {}, warn() {}, error() {}, debug() {}, child() { return 
  *
  * Cause code on the HTTP pins that moved (S1 WP12): E, Stage 1's error names and their codes: a payIn with no open due
  * is NothingDue (code WrongStatus, HTTP 422), whether nothing was reported or the due was paid.
+ * S4 cause code: S4-PAU, a pause approval is the attestor key's PAUSE signature over the live nonce, relayed by the
+ * keeper (S4 WP10; was the attestor's wallet sending it).
  */
 describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () => {
   let rig: Awaited<ReturnType<typeof makeRig>>;
@@ -122,7 +124,7 @@ describe.skipIf(!dbTestsEnabled())('Stage 1 reads through the API (WP11)', () =>
     expect(qt).toMatchObject({ blockedBy: [], blockers: [], redeemable: true, outcome: 'redeem' });
     const until = (await h.sim.now()) + 30 * 86_400;
     await h.exec(h.issuer, { kind: 'requestPause', seriesId, until });
-    await h.exec(h.attestors[0]!, { kind: 'approvePause', seriesId, until });
+    await h.sim.submit(await h.pauseApproval(seriesId, until), 'keeper'); // cause S4-PAU
     expect((await h.sim.getSeries(seriesId))!.status).toBe('Paused');
     expect((await quote()).blockedBy).toEqual([]);
     await rig.sync();

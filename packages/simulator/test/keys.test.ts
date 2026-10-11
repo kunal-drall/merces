@@ -16,6 +16,7 @@ import { GENESIS, USDC, expectChainError, types } from './helpers.ts';
  *    (`SimSigner.attestor`), and a wallet address of another form is no key (the command's schema refuses it);
  *  - S4-T3 / S4-FX: a tier-3 report and the FX fallback carry the attestor key's own Stage 1 signature (REPORT tier 3, and
  *    FX per series; S4 WP9), with the report keys' grace; nobody co-signs.
+ *  - S4-PAU: a pause approval is the attestor key's PAUSE signature, relayed by anyone (S4 WP10); an active key only.
  */
 
 type Report = Extract<UserCommand, { kind: 'submitReport' }>;
@@ -266,10 +267,11 @@ describe('revocation grace on the signed paths (S4-REG; Stage 1 SPEC §1.4, SIM:
     const now = await h.sim.now();
     await h.exec(h.issuer, { kind: 'requestPause', seriesId, until: now + 30 * DAY });
     await h.exec(h.admin, { kind: 'revokeAttestor', attestor: a1.address });
-    await refused(h, h.exec(a1, { kind: 'approvePause', seriesId, until: now + 30 * DAY }), 'InvalidAttestorSignature');
+    // cause S4-PAU: the revoked key's PAUSE signature, relayed by the keeper (approvePause is permissionless since S4 WP10)
+    await refused(h, h.sim.submit(await h.pauseApproval(seriesId, now + 30 * DAY, a1), 'keeper'), 'InvalidAttestorSignature');
     await refused(h, h.exec(h.issuer, { kind: 'amendTerms', seriesId, termsCommitment: terms.termsCommitment, capMultipleWad: terms.capMultipleWad.toString(), attestor: a1.address }, [a1]), 'InvalidAttestorSignature');
     await refused(h, h.exec(a1, { kind: 'extinguish', seriesId, attestors: [a1.address, a2.address] }, [a2]), 'InvalidAttestorSignature');
     // the active key still approves
-    expect(types((await h.exec(a2, { kind: 'approvePause', seriesId, until: now + 30 * DAY })).events)).toContain('PauseApproved');
+    expect(types((await h.sim.submit(await h.pauseApproval(seriesId, now + 30 * DAY, a2), 'keeper')).events)).toContain('PauseApproved'); // cause S4-PAU
   });
 });

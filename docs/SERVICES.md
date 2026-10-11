@@ -28,7 +28,11 @@ own roles. Never sign for users; never hold funds. Admin commands (`registerAtte
 hands the key holder's device a `SigningRequest` built from the chain's own reads (`signingRequest` over
 `ChainInfo.signing` and `SeriesState.seriesKey`; 409 `signing-domain-unknown` without a domain) and accepts a signature
 only when it recovers to the addressed key over the message the service rebuilds itself (`reportDigest`, `fxDigest`, …;
-`recoverSigner`), never over a digest a caller supplies (`attestor/service.ts`: tier 3 and the FX fallback, S4 WP9).
+`recoverSigner`), never over a digest a caller supplies (`attestor/service.ts`: tier 3 and the FX fallback, S4 WP9; a
+hardship approval's PAUSE signature, S4 WP10, which the keeper then relays with `chain.submit(approvePause, 'keeper')`:
+keepers send only permissionless commands, and only signatures the service checked). Tests sign a pause approval with
+`h.pauseApproval(seriesId, pauseEnd, key)` (the harness key's PAUSE signature over the live nonce) and submit it as the
+keeper or from any wallet.
 
 ## Routes
 ```ts

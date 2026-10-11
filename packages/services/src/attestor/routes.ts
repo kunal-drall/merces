@@ -4,7 +4,7 @@ import { defineRoute, type AppContext } from '@merces/api';
 import { withIdempotency } from '@merces/core';
 import { svc } from '../context.ts';
 import {
-  AttestorService, extinguishSchema, fxMessagesQuerySchema, fxSignSchema, hardshipDecideSchema, hardshipRequestSchema, tier3AnnualOpenSchema, tier3AnnualSignSchema, tier3MessageQuerySchema, tier3OpenSchema,
+  AttestorService, extinguishSchema, fxMessagesQuerySchema, fxSignSchema, hardshipDecideSchema, hardshipMessageQuerySchema, hardshipRequestSchema, tier3AnnualOpenSchema, tier3AnnualSignSchema, tier3MessageQuerySchema, tier3OpenSchema,
   tier3SignSchema,
 } from './service.ts';
 
@@ -32,7 +32,11 @@ export function registerAttestorRoutes(app: FastifyInstance, base: AppContext): 
     },
   });
   defineRoute(app, ctx, { method: 'GET', url: '/series/:seriesId/hardship', access: 'holder-or-issuer', handler: async (req) => s.hardshipStatus(sid(req)) });
+  // the issuer withdraws its pending onchain request (Stage 1 withdraw_pause_request; S4 WP10)
+  defineRoute(app, ctx, { method: 'POST', url: '/series/:seriesId/hardship/build-withdraw', access: 'issuer', handler: async (req, _r, session) => s.buildWithdrawPause(sid(req), session!) });
   defineRoute(app, ctx, { method: 'GET', url: '/attestor/hardship/:hardshipId', access: 'attestor', handler: async (req, _r, session) => s.getHardship(param(req, 'hardshipId'), session!) });
+  // the PAUSE signing request for the attestor's own device (S4 WP10): the API never signs
+  defineRoute(app, ctx, { method: 'GET', url: '/attestor/hardship/:hardshipId/message', access: 'attestor', handler: async (req, _r, session) => s.hardshipMessage(param(req, 'hardshipId'), session!, hardshipMessageQuerySchema.parse(req.query)) });
   defineRoute(app, ctx, {
     method: 'POST', url: '/attestor/hardship/:hardshipId/decide', access: 'attestor',
     handler: async (req, _r, session) => {

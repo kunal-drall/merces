@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import {
-  E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, SigningError, expectedPrior, fxDigest, hex32ToField, keyUsable, noPauseApprovable, parseE2eEnvelope, pauseApprovalRefusal, readsAsText,
+  E2E_REFUSAL_TEXT, E2E_TIER3_OPENING, PAUSE_APPROVAL_MESSAGE, SigningError, expectedPrior, fxDigest, hex32ToField, keyUsable, noPauseApprovable, parseE2eEnvelope, pauseApprovalRefusal, pauseDigest, readsAsText,
   recoverSigner, reportDigest, reportProofSchema, signingRequest, type ChainPort, type PauseApprovalRule, type SeriesState, type SigningDomain, type SigningFields, type SigningKind, type SigningRequest, type UnsignedTx,
 } from '@merces/domain';
 import { U64_MAX, parsePeriod, periodFrom, toPid } from '@merces/math';
@@ -18,7 +18,9 @@ import { curveRegularReport, reportUnits, requireCensusFor, requireCensusUnchang
  * request (A-M5-2). Work is addressed to a key; nobody else's key or chain stands in for it.
  * This service tracks the work that needs an attestor's signature and builds the transactions they sign:
  *  - hardship pauses: the issuer's reason and evidence reach the chosen attestor as END-TO-END ciphertext the
- *    server stores opaque and never decrypts; holders only ever see statuses and dates;
+ *    server stores opaque and never decrypts; holders only ever see statuses and dates; the attestor's own device signs
+ *    Stage 1's PAUSE message over the series' live pause nonce (S4 WP10), and the keeper relays it (`approve_pause` is
+ *    permissionless); the issuer can withdraw its request (`build-withdraw`);
  *  - tier-3 cases: the issuer's device proves the report; the documents and the income opening reach the attestor
  *    as E2E ciphertext (M7); the attestor's own device signs Stage 1's REPORT message with tier 3 over the commitments
  *    (S4 WP9), which the API hands it as a signing request; the client-side prefill specification (R26 — the server
@@ -28,8 +30,9 @@ import { curveRegularReport, reportUnits, requireCensusFor, requireCensusUnchang
  *  - extinguishment (C11.6): one transaction with two distinct registered attestors as signers.
  * No income figure, document or reason is ever at rest or in a log. Decision fields are codes.
  * The backend never signs (S4 D2, no custody): it builds signing requests from the chain's own reads (`ChainInfo.signing`,
- * `SeriesState.seriesKey`), which the attestor's device rebuilds and checks before it signs, and it recovers and checks
- * every signature it is sent; every onchain action is returned as an UnsignedTx for the issuer or the attestor.
+ * `SeriesState.seriesKey`, `SeriesState.nonces`), which the attestor's device rebuilds and checks before it signs, and it
+ * recovers and checks every signature it is sent. Every onchain action is returned as an UnsignedTx for the issuer or the
+ * attestor, except a checked pause approval, which the keeper relays (S4 D3: keepers send only permissionless commands).
  */
 
 const money = z.string().regex(/^\d+$/, 'money must be a non-negative integer string in base units');
@@ -43,8 +46,31 @@ const ciphertext = z.string().min(1).max(1_900_000);
 const attestorKey = z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'an attestor key: a secp256k1 key\'s 20-byte address (0x + 40 hex)').transform((a) => a.toLowerCase());
 
 export const hardshipRequestSchema = z.object({ until: z.number().int().positive(), attestor: attestorKey, ciphertext, keyHint });
-export const hardshipDecideSchema = z.object({ approve: z.boolean(), until: z.number().int().positive().optional(), decisionCode: code.optional() });
 const hex32 = z.string().regex(/^0x[0-9a-f]{64}$/);
+/**
+ * A pause end (unix seconds) as a canonical decimal string: what Stage 1's PAUSE message and `approve_pause` take. Beyond
+ * u64 is refused 422 AmountOutOfRange (as the chain refuses it first), not by the schema.
+ */
+const pauseEnd = z.string().regex(/^(0|[1-9]\d{0,77})$/, 'a pause end: unix seconds as a decimal string');
+/** A u64 nonce as a canonical decimal string (`SeriesState.nonces`). */
+const nonce = z.string().regex(/^(0|[1-9]\d{0,19})$/, 'a nonce: a u64 as a decimal string').refine((x) => BigInt(x) <= U64_MAX, 'out of the u64 range');
+/**
+ * A 65-byte secp256k1 signature `r ‖ s ‖ v`, 0x hex in any case (stored lowercase). Shape only (S4 D8): a non-canonical
+ * one recovers to nobody and is refused 422 with Stage 1's error name, as the chain would refuse it.
+ */
+const signature65 = z.string().regex(/^0x[0-9a-fA-F]{130}$/, 'a 65-byte signature (0x + 130 hex)').transform((x) => x.toLowerCase());
+/** The query of `GET /attestor/hardship/{hardshipId}/message`: the end the attestor's PAUSE signature will bind. */
+export const hardshipMessageQuerySchema = z.object({ pauseEnd }).strict();
+/**
+ * A hardship decision (S4 WP10). An approval carries the request's attestor key's Stage 1 PAUSE signature over the
+ * series' pause nonce and `pauseEnd`, made on the attestor's own device from `GET .../message` and posted as the
+ * attestor tool prints it (`attestation: {signer, signature, digest?}`), with the nonce it signed (`pauseNonce`, the
+ * request's `fields.pauseNonce`). The keeper relays it. A rejection needs no signature: a code only.
+ */
+export const hardshipDecideSchema = z.discriminatedUnion('approve', [
+  z.object({ approve: z.literal(true), pauseEnd, pauseNonce: nonce, attestation: z.object({ signer: attestorKey, signature: signature65, digest: hex32.optional() }).strict() }).strict(),
+  z.object({ approve: z.literal(false), decisionCode: code.optional() }).strict(),
+]);
 /**
  * Tier 3 (critique M7). The issuer's device proves the report; the attestor checks the income commitment against the
  * documents with the opening (year-to-date figure and salt, and the prior's), which the issuer's device seals end to
@@ -53,11 +79,6 @@ const hex32 = z.string().regex(/^0x[0-9a-f]{64}$/);
  * figure, a salt or an opening.
  */
 export const tier3OpenSchema = z.object({ attestor: attestorKey, documentsCiphertext: ciphertext, openingCiphertext: ciphertext, keyHint, estimatePaymentStable: money }).strict();
-/**
- * A 65-byte secp256k1 signature `r ‖ s ‖ v`, 0x hex in any case (stored lowercase). Shape only (S4 D8): a non-canonical
- * one recovers to nobody and is refused 422 with Stage 1's error name, as the chain would refuse it.
- */
-const signature65 = z.string().regex(/^0x[0-9a-fA-F]{130}$/, 'a 65-byte signature (0x + 130 hex)').transform((x) => x.toLowerCase());
 /** The query of `GET /attestor/tier3/{caseId}/message`: the fields the attestor's REPORT signature will bind. */
 export const tier3MessageQuerySchema = z.object({ priorIncomeCommitment: hex32, incomeCommitment: hex32, liquidityEvent: z.enum(['true', 'false']).transform((v) => v === 'true') }).strict();
 export const tier3SignSchema = z.object({
@@ -303,11 +324,18 @@ export class AttestorService {
     return h;
   }
 
-  /** The record as the issuer and the attestor see it (never holders). Ciphertext only when `withCiphertext`. */
-  private hardshipView(h: Record<string, unknown>, withCiphertext: boolean): Record<string, unknown> {
+  /**
+   * The record as the issuer and the attestor see it (never holders). Ciphertext only when `withCiphertext` (the chosen
+   * attestor's or an admin's view). The approval (the PAUSE signature the keeper relayed, S4 WP10) is shown with the
+   * ciphertext and in the decision's own response; it is stored only once the chain accepted it, so it is public data
+   * (an unrelayed PAUSE signature is never at rest: S4 amendment D2).
+   */
+  private hardshipView(h: Record<string, unknown>, withCiphertext: boolean, withApproval = withCiphertext): Record<string, unknown> {
     return {
       hardshipId: h.hardship_id, seriesId: h.series_id, chain: h.chain, attestor: h.attestor, state: h.state, requestedUntil: Number(h.requested_until), approvedUntil: num(h.approved_until),
-      decisionCode: h.decision_code ?? null, keyHint: h.key_hint ?? null, createdAt: h.created_at, decidedAt: h.decided_at ?? null, ...(withCiphertext ? { ciphertext: h.ciphertext } : {}),
+      decisionCode: h.decision_code ?? null, keyHint: h.key_hint ?? null, createdAt: h.created_at, decidedAt: h.decided_at ?? null, pauseNonce: str(h.pause_nonce),
+      ...(withApproval ? { approval: h.approval ?? null, relayTx: h.relay_tx ?? null } : {}),
+      ...(withCiphertext ? { ciphertext: h.ciphertext } : {}),
     };
   }
 
@@ -338,23 +366,95 @@ export class AttestorService {
     return { ...this.hardshipView(await this.hardshipRow(id), false), tx };
   }
 
+  /**
+   * Issuer: the `withdrawPauseRequest` transaction (Stage 1 `withdraw_pause_request`, S4 WP10, D12) for the series' pending
+   * onchain request, to sign and send. 409 PauseNotRequested when none is pending. Once it lands the pause nonce has
+   * moved, so any PAUSE signature collected for the request is dead, and the indexer marks the pending hardship request
+   * withdrawn (`PauseRequestWithdrawn`). Also how an issuer clears an onchain request whose hardship request was rejected.
+   */
+  async buildWithdrawPause(seriesId: string, session: Session): Promise<{ seriesId: string; pauseNonce: string; tx: UnsignedTx }> {
+    const { chain, series } = await this.seriesForIssuer(seriesId, session);
+    if (!series.pauses.requested) throw new AppError(409, 'Conflict', 'no pause request is pending onchain for this series', { stage1: 'PauseNotRequested' });
+    const tx = await chain.build({ kind: 'withdrawPauseRequest', seriesId }, series.issuer);
+    return { seriesId, pauseNonce: series.nonces.pause, tx };
+  }
+
   /** Attestor (the chosen one, or an admin): the ciphertext and the series' onchain pause state. */
   async getHardship(id: string, session: Session): Promise<Record<string, unknown>> {
     const h = await this.hardshipRow(id);
     if (!(await this.actsAs(session, String(h.chain), String(h.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this request was addressed to another attestor key, or that key is not linked to your account or not active on its chain');
     const series = await this.ctx.chains.get(String(h.chain)).getSeries(String(h.series_id));
-    return { ...this.hardshipView(h, true), seriesStatus: series?.status ?? null, pause: series?.pause ?? null, pauses: series?.pauses ?? null };
+    return { ...this.hardshipView(h, true), seriesStatus: series?.status ?? null, pause: series?.pause ?? null, pauses: series?.pauses ?? null, livePauseNonce: series?.nonces.pause ?? null };
   }
 
   /**
-   * Attestor decision: approve (build approvePause for the attestor, until ≤ requested and within Stage 1's
-   * `approve_pause` bounds on the chain's pause record) or reject with a code.
+   * The checks an approval for `pauseEnd` must pass on the chain's pause record before anything is signed or relayed, in
+   * Stage 1's spirit (range first, as the chains check it): a u64 end (422 AmountOutOfRange), at or before the requested
+   * end (422), a request pending onchain (409 PauseNotRequested), then `pauseApprovalRefusal` (A-REV-23).
    */
-  async decideHardship(id: string, session: Session, input: z.infer<typeof hardshipDecideSchema>): Promise<Record<string, unknown> & { tx: UnsignedTx | null }> {
+  private async approvableHardship(h: Record<string, unknown>, pauseEndText: string): Promise<{ chain: ChainPort; series: SeriesState; now: number; until: number }> {
+    const end = BigInt(pauseEndText);
+    if (end > U64_MAX) throw AppError.unprocessable('the pause end is out of the u64 range', { stage1: 'AmountOutOfRange' });
+    if (end > BigInt(Number(h.requested_until))) throw AppError.unprocessable('the approved end cannot be after the requested end');
+    const until = Number(end);
+    const chain = this.ctx.chains.get(String(h.chain));
+    const [now, series] = await Promise.all([chain.now(), chain.getSeries(String(h.series_id))]);
+    if (!series) throw AppError.notFound('series');
+    // Stage 1's approve_pause, in its order (S4 D8; SIM:1284-1297), on the chain's pause record, before anything is signed
+    // or recorded: a pending request onchain (PauseNotRequested), then pauseApprovalError (the end in the future, no
+    // running pause, at most a year, two years in total, 16 pauses). A refusal leaves the request pending, so the attestor
+    // can decide again with an end the chain accepts, or reject it (S1 review).
+    if (!series.pauses.requested) throw new AppError(409, 'Conflict', 'the issuer has not sent requestPause onchain yet, or withdrew it', { stage1: 'PauseNotRequested' });
+    const refusal = pauseApprovalRefusal(series.pauses, now, until);
+    if (refusal) throw pauseRefusal(refusal);
+    return { chain, series, now, until };
+  }
+
+  /**
+   * Attestor (the request's key holder, or an admin): the signing request for the approval's PAUSE signature (S4 WP10,
+   * D2): Stage 1's `MERCES_PAUSE_V1` over the chain's signing domain, the series key, the series' live pause nonce and
+   * `pauseEnd`, for the request's key. Only for an end the chain would take now (`approvableHardship`). The device
+   * rebuilds the message from the typed fields, warns that the signature cannot be recalled (anyone holding it can submit
+   * it while the nonce stands), and signs; the API never signs. Public data only: the domain, the series key, the nonce
+   * and the end.
+   */
+  async hardshipMessage(id: string, session: Session, q: z.infer<typeof hardshipMessageQuerySchema>): Promise<SigningRequest<'PAUSE'>> {
+    const h = await this.hardshipRow(id);
+    if (!(await this.actsAs(session, String(h.chain), String(h.attestor))) && !session.roles.includes('admin')) throw AppError.forbidden('this request was addressed to another attestor key, or that key is not linked to your account or not active on its chain');
+    if (h.state !== 'pending') throw AppError.conflict(`hardship request is ${h.state}`);
+    const { chain, series } = await this.approvableHardship(h, q.pauseEnd);
+    return this.pauseRequestFor(chain, series, String(h.attestor), q.pauseEnd);
+  }
+
+  private async pauseRequestFor(chain: ChainPort, series: SeriesState, signer: string, pauseEndText: string): Promise<SigningRequest<'PAUSE'>> {
+    const domain = await signingDomainOf(chain);
+    return requestFor({ kind: 'PAUSE', chain: chain.chain, seriesId: series.seriesId, seriesKey: series.seriesKey, domain, signer, fields: { pauseNonce: series.nonces.pause, pauseEnd: pauseEndText } });
+  }
+
+  /**
+   * Attestor decision (only the account holding the request's key, while the key is registered; A-M5-3).
+   *
+   * Reject: a code, no signature; the onchain request stays until the issuer withdraws it (`build-withdraw`).
+   *
+   * Approve (S4 WP10, D2, D3, D8): the key's Stage 1 PAUSE signature, made on its own device, relayed by the keeper
+   * (`approve_pause` is permissionless). In order:
+   *  1. the key acts for the caller and the request is pending;
+   *  2. the end on the chain's pause record (`approvableHardship`: u64, ≤ the requested end, PauseNotRequested,
+   *     `pauseApprovalRefusal`);
+   *  3. the signature: the PAUSE message rebuilt here from the chain's domain and series key with the nonce the attestor
+   *     signed (`pauseNonce`; a digest sent must equal it) recovers to the request's key, and the key is active on the
+   *     chain (no grace for a PAUSE): 422 `detail.stage1` InvalidAttestorSignature otherwise;
+   *  4. the nonce read again from the chain must still be the one signed: 409 `stale-nonce` with a fresh signing request
+   *     (`detail.request`) otherwise (the issuer requested again or withdrew; the signature is dead on the chain);
+   *  5. the keeper submits `approvePause` (`ChainPort.submit`), the row locked meanwhile. A chain refusal is returned with
+   *     its canonical code and Stage 1's name and leaves the request pending (A-REV-23); nothing is recorded.
+   * On success the row records `approval {signer, signature, digest, pauseNonce, pauseEnd}`, `pause_nonce` and the relay
+   * transaction. The API never signs, and an unrelayed PAUSE signature is never stored (S4 amendment D2).
+   */
+  async decideHardship(id: string, session: Session, input: z.infer<typeof hardshipDecideSchema>): Promise<Record<string, unknown> & { relayTx: string | null }> {
     const h = await this.hardshipRow(id);
     if (!(await this.actsAs(session, String(h.chain), String(h.attestor)))) throw AppError.forbidden('only the account holding the chosen attestor key, while the key is registered, can decide this request');
     if (h.state !== 'pending') throw AppError.conflict(`hardship request is ${h.state}`);
-    const chain = this.ctx.chains.get(String(h.chain));
     const seriesId = String(h.series_id);
     if (!input.approve) {
       const decisionCode = input.decisionCode ?? 'declined';
@@ -362,31 +462,43 @@ export class AttestorService {
       if (!upd.rowCount) throw AppError.conflict('hardship request was decided concurrently');
       await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'hardship.reject', target: id, detail: { seriesId, decisionCode } });
       await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'hardship.rejected', seriesId, hardshipId: id });
-      return { ...this.hardshipView(await this.hardshipRow(id), false), tx: null };
+      return { ...this.hardshipView(await this.hardshipRow(id), false), relayTx: null };
     }
-    const requested = Number(h.requested_until);
-    const until = input.until ?? requested;
-    if (until > requested) throw AppError.unprocessable('the approved end cannot be after the requested end');
-    const now = await chain.now();
-    const series = await chain.getSeries(seriesId);
-    if (!series) throw AppError.notFound('series');
-    // Stage 1's approve_pause, in its order (SIM:1284-1297), on the chain's pause record, before anything is recorded:
-    // a pending request onchain (PauseNotRequested), then pauseApprovalError (the end in the future, no running pause,
-    // at most a year, two years in total, 16 pauses). A refusal leaves the request pending, so the attestor can decide
-    // again with an end the chain accepts, or reject it (S1 review: the record said approved for a pause the chain
-    // refused, and could not be corrected).
-    if (!series.pauses.requested) throw new AppError(409, 'Conflict', 'the issuer has not sent requestPause onchain yet', { stage1: 'PauseNotRequested' });
-    const refusal = pauseApprovalRefusal(series.pauses, now, until);
-    if (refusal) throw pauseRefusal(refusal);
-    // build before recording the decision: if the build fails the request stays pending and can be decided again.
-    // Transitional until S4 WP10: approvePause is still sent by the attestor key's address (the simulator's wallet at
-    // that address signs it); WP10 makes it Stage 1's PAUSE signature, relayed by the keeper
-    const tx = await chain.build({ kind: 'approvePause', seriesId, until }, String(h.attestor));
-    const upd = await this.ctx.pool.query("update hardship_requests set state = 'approved', approved_until = $2, decision_code = 'approved', decided_by = $3, decided_at = now() where hardship_id = $1 and state = 'pending'", [id, until, session.accountId]);
-    if (!upd.rowCount) throw AppError.conflict('hardship request was decided concurrently');
-    await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'attestor', action: 'hardship.approve', target: id, detail: { seriesId, until } });
-    await enqueueOutbox(this.ctx.pool, 'notification', { kind: 'hardship.approved', seriesId, hardshipId: id, until });
-    return { ...this.hardshipView(await this.hardshipRow(id), false), tx };
+    const attestor = String(h.attestor);
+    const { chain, series, now, until } = await this.approvableHardship(h, input.pauseEnd);
+    // Stage 1's PAUSE message, rebuilt here from the chain's own domain and series key (never the caller's digest)
+    const domain = await signingDomainOf(chain);
+    const { digest } = pauseDigest({ domain: domain.domain, seriesKey: series.seriesKey }, { pauseNonce: input.pauseNonce, pauseEnd: input.pauseEnd });
+    if (input.attestation.digest !== undefined && input.attestation.digest !== digest) throw invalidAttestorSignature('the attestation\'s digest is not this request\'s PAUSE message on this chain (another series, chain, nonce or end)');
+    if (input.attestation.signer !== attestor) throw invalidAttestorSignature('the approval must be signed by this request\'s attestor key');
+    if (recoverSigner(digest, input.attestation.signature) !== attestor) throw invalidAttestorSignature('the signature does not recover to this request\'s attestor key over Stage 1\'s PAUSE message for this nonce and end on this chain');
+    const key = await chain.getSignerKey('attestor', attestor);
+    if (!key || !keyUsable(key, now)) throw invalidAttestorSignature('the attestor key is not active on this chain: a pause approval needs an active key');
+    // the nonce read again: a re-request or a withdrawal since the signing request moved it, and the chain would take the
+    // signature over no request
+    const live = await chain.getSeries(seriesId);
+    if (!live) throw AppError.notFound('series');
+    if (live.nonces.pause !== input.pauseNonce) {
+      const fresh = live.pauses.requested ? await this.pauseRequestFor(chain, live, attestor, input.pauseEnd) : null;
+      throw new AppError(409, 'Conflict', 'the series\' pause nonce moved since this was signed (the issuer requested again or withdrew): the signature is dead; sign the fresh request', { reason: 'stale-nonce', livePauseNonce: live.nonces.pause, request: fresh });
+    }
+    const signature = input.attestation.signature;
+    const approval = { signer: attestor, signature, digest, pauseNonce: input.pauseNonce, pauseEnd: input.pauseEnd };
+    const relayTx = await withTransaction(this.ctx.pool, async (db) => {
+      const locked = (await db.query('select state from hardship_requests where hardship_id = $1 for update', [id])).rows[0];
+      if (!locked || locked.state !== 'pending') throw AppError.conflict(`hardship request is ${locked?.state ?? 'gone'}`);
+      // the keeper relays the attestor's signature: approve_pause is permissionless (S4 D3); a chain refusal throws here
+      // (its canonical code, Stage 1's name) and the transaction rolls back, leaving the request pending
+      const res = await chain.submit({ kind: 'approvePause', seriesId, pauseEnd: input.pauseEnd, attestor, signature }, 'keeper');
+      await db.query(
+        "update hardship_requests set state = 'approved', approved_until = $2, decision_code = 'approved', decided_by = $3, decided_at = now(), pause_nonce = $4, approval = $5, relay_tx = $6 where hardship_id = $1",
+        [id, until, session.accountId, input.pauseNonce, JSON.stringify(approval), res.txId],
+      );
+      await audit(db, { actor: session.accountId, actorRole: 'attestor', action: 'hardship.approve', target: id, detail: { seriesId, until, signer: attestor, pauseNonce: input.pauseNonce, digest, relayTx: res.txId } });
+      await enqueueOutbox(db, 'notification', { kind: 'hardship.approved', seriesId, hardshipId: id, until });
+      return res.txId;
+    });
+    return { ...this.hardshipView(await this.hardshipRow(id), false, true), relayTx };
   }
 
   /** Holders and the issuer: statuses and dates only — never ciphertext, key hints or decision codes. */

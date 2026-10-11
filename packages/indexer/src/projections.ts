@@ -44,6 +44,7 @@ function summary(e: DomainEvent): string | null {
     case 'RedemptionClaimed': return 'A holder claimed redemption';
     case 'TailPayout': return `Tail payout for ${p.periodId}`;
     case 'PauseRequested': return 'Issuer requested a hardship pause';
+    case 'PauseRequestWithdrawn': return 'Issuer withdrew its hardship pause request';
     case 'PauseApproved': return 'Hardship pause approved';
     case 'PauseEnded': return 'Hardship pause ended';
     case 'StatusChanged': return `Status: ${p.from} → ${p.to}`;
@@ -515,7 +516,27 @@ export async function project(client: PoolClient, e: DomainEvent): Promise<void>
       await client.query('update series set staked_total = greatest(staked_total + $2::numeric, 0), last_event_seq = $3 where series_id = $1', [p.seriesId, delta, e.seq]);
       break;
     }
-    case 'PauseRequested':
+    case 'PauseRequested': {
+      // the onchain request a pending hardship row stands for: its pause nonce (S4 WP10), which a PAUSE signature binds and
+      // a withdrawal moves past. Only forward, so a replayed older request never lowers it
+      const p = e.payload as P<'PauseRequested'>;
+      await client.query(
+        "update hardship_requests set pause_nonce = $3::numeric where chain = $1 and series_id = $2 and state = 'pending' and (pause_nonce is null or pause_nonce < $3::numeric)",
+        [e.chain, p.seriesId, p.nonce],
+      );
+      break;
+    }
+    case 'PauseRequestWithdrawn': {
+      // Stage 1 withdraw_pause_request (S4 WP10): the issuer withdrew the onchain request, so a pending hardship row for it
+      // (its request's nonce below the new one) can no longer be approved; any PAUSE signature over it is dead. A row whose
+      // request has not been indexed yet (no nonce) is another request's, and stays
+      const p = e.payload as P<'PauseRequestWithdrawn'>;
+      await client.query(
+        "update hardship_requests set state = 'withdrawn', decision_code = 'withdrawn', decided_at = now() where chain = $1 and series_id = $2 and state = 'pending' and pause_nonce is not null and pause_nonce < $3::numeric",
+        [e.chain, p.seriesId, p.nonce],
+      );
+      break;
+    }
     case 'PauseApproved':
     case 'PauseEnded':
       break;

@@ -21,6 +21,7 @@ import {
   TARGETS,
   TARGETS_S1,
   TARGETS_S2,
+  TARGETS_S4,
   atExpected,
   isFinding,
   splitDivergences,
@@ -93,6 +94,9 @@ const vectorFile = (id: string) => listVectorFiles(VECTORS).find((f) => f.split(
  *    the vector key);
  *  - S4-T3: a tier-3 report likewise, with tier 3, and the FX fallback the named key's FX signature (S4 WP9; was the
  *    attestor's co-signature); SH-REP-1 is narrowed to the FX basis and pair the runner derives (S5).
+ *  - S4-PAU / S4-WD: `approve_pause` runs directly, the named key's PAUSE signature over the live pause nonce sent by the
+ *    keeper (S4 WP10; shim SH-PAU-2 retired), and `withdraw_pause_request` runs directly (no longer NOT-YET): 21 is a
+ *    target, PASS in full (was gated at #40), and 08's gate moves from #33 to #57 (its next step #58 `end_pause`, S5).
  */
 afterAll(shutdown);
 
@@ -306,9 +310,10 @@ describe('stage1 vector runner: expectations and the op map', () => {
   // five DIV-NRC-1 entries and its lockstep parting)
   it('targets are never NOT-YET; waivers only on blocked or n/a rows; no vector carries a divergence; prefix gates carry until; the rest are NOT-YET with a milestone', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(listVectorFiles(VECTORS).map((f) => f.split('/').at(-1)!.slice(0, 2)));
-    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2]);
+    expect([...TARGETS]).toEqual([...TARGETS_S1, ...TARGETS_S2, ...TARGETS_S4]);
     expect([...TARGETS_S2]).toEqual(['02', '03', '15', '17']);
-    expect(PREFIX_GATES).toEqual({ '08': 33, '10': 35, '14': 61, '16': 40, '20': 70, '21': 40, '22': 75 });
+    expect([...TARGETS_S4]).toEqual(['21']); // cause S4-PAU: 21 in full (was gated at #40)
+    expect(PREFIX_GATES).toEqual({ '08': 57, '10': 35, '14': 61, '16': 40, '20': 70, '22': 75 }); // cause S4-PAU: 08 at #57 (was #33), 21 no gate
     for (const [id, e] of Object.entries(EXPECTED)) {
       const v = loadVector(vectorFile(id));
       if (TARGETS.includes(id)) {
@@ -611,19 +616,22 @@ describe('stage1 vector runner: merces backend', () => {
   it('prefix gates: a gated vector replays to its gate and is PREFIX-PASS; past the gate it is judged on the prefix; a finding before the gate fails', async () => {
     const r = await runStage1Vectors({ dir: VECTORS, backend: 'merces', only: ['08'], personalities: ['solana'] });
     const run = r.runs[0]!;
-    expect([run.status, run.executed, run.stopped, run.issues, run.atExpected]).toEqual(['PASS', 34, { index: 34, reason: 'until' }, [], true]);
+    // cause S4-PAU: 08 replays to #57 (was #33): its withdrawals and signed approvals run since S4 WP10
+    expect([run.status, run.executed, run.stopped, run.issues, run.atExpected]).toEqual(['PASS', 58, { index: 58, reason: 'until' }, [], true]);
     expect(run.expected.status).toBe('PREFIX-PASS');
-    // the caller's own last step replaces the gate: 08 then stops on the op it waits for (#34, S5), which lies past the gate
-    const past = (await runStage1Vectors({ dir: VECTORS, backend: 'merces', only: ['08'], personalities: ['solana'], until: 40 })).runs[0]!;
-    expect(past.status).toBe('FAIL');
-    expect(past.issues[0]).toMatchObject({ index: 34, op: 'withdraw_pause_request', kind: 'blocked' });
+    // the caller's own last step replaces the gate: 08 then stops on the op it waits for (#58, S5), which lies past the gate
+    // (cause S4-PAU: BLOCKED, not FAIL: nothing past the gate fails now, #58 and #59 wait for end_pause; was #34's
+    // withdrawal, which made the approvals after it fail)
+    const past = (await runStage1Vectors({ dir: VECTORS, backend: 'merces', only: ['08'], personalities: ['solana'], until: 60 })).runs[0]!;
+    expect(past.status).toBe('BLOCKED');
+    expect(past.issues[0]).toMatchObject({ index: 58, op: 'expect_revert end_pause', kind: 'blocked' });
     expect(past.atExpected).toBe(true);
     // a finding at or before the gate is not at expected status: 08#32 expects approve_pause to revert PauseNotRequested
     const src = raw('08_hardship_pause');
     expect(src.steps[32]).toMatchObject({ op: 'expect_revert', call: { op: 'approve_pause' }, error: 'PauseNotRequested' });
     src.steps[32]!.error = 'PauseTooLong';
     const broken = (await runStage1Vectors({ vectors: [fromJson(src, '08_hardship_pause')], backend: 'merces', personalities: ['solana'] })).runs[0]!;
-    expect([broken.status, broken.stopped, broken.atExpected]).toEqual(['FAIL', { index: 34, reason: 'until' }, false]);
+    expect([broken.status, broken.stopped, broken.atExpected]).toEqual(['FAIL', { index: 58, reason: 'until' }, false]); // cause S4-PAU (was #34)
     expect(broken.issues.map((x) => [x.index, x.message])).toEqual([[32, 'expected revert PauseTooLong for approve_pause, got PauseNotRequested']]);
   }, 120_000);
 
@@ -1069,7 +1077,9 @@ describe('stage1 vector runner: merces backend', () => {
     expect(md.slice(md.indexOf('## Findings'), md.indexOf('## Known divergences'))).toContain('None: every replayed step matched.');
     const gates = md.slice(md.indexOf('## Prefix gates'), md.indexOf('## Waived steps'));
     for (const [id, until] of Object.entries(PREFIX_GATES)) expect(gates).toMatch(new RegExp(`\\| ${id}_[a-z0-9_]+ \\| #${until} \\| #${until + 1} `));
-    expect(md).toContain('| 08_hardship_pause | PASS 34/64, stopped at #34 (until) | PASS 34/64, stopped at #34 (until) | PREFIX-PASS to #33, then NOT-YET (S5: withdraw_pause_request and end_pause) |');
+    // cause S4-PAU: 08 to #57, 21 in full
+    expect(md).toContain('| 08_hardship_pause | PASS 58/64, stopped at #58 (until) | PASS 58/64, stopped at #58 (until) | PREFIX-PASS to #57, then NOT-YET (S5: end_pause) |');
+    expect(md).toContain('| 21_entry_rules | PASS 61/61 | PASS 61/61 | PASS |');
     expect(md).toContain('## Not replayed on the merces backend\n\n- 12_multi_series_router: NOT-YET (S5: income router)');
     // review finding "VECTOR_PARITY.md 'Used in' leaves out shims exercised by expect_revert steps": the calls of
     // passing reverts went through their shims too (amend_terms at 05#44 and 11#45, redeem at 01#33, 05#43, 11#43)
@@ -1081,9 +1091,9 @@ describe('stage1 vector runner: merces backend', () => {
     // cause S3-SH: the claim family runs directly; its rows (SH-CLM-1, SH-CLM-2, SH-CLM-3, SH-BRN-1) are gone and no run
     // went through them (was: SH-CLM-1 used in 01, 04, 05, 07, 17, 19 and 21 until WP3; SH-CLM-2 runner-atomic, used in
     // 09 and 23; SH-CLM-3 in 11; SH-BRN-1 in 05)
-    // cause S4-SH: likewise SH-REG-2 (Stage 1's attestor registry runs directly since S4 WP5) and SH-REG-3 (the verifier
-    // keys since S4 WP6)
-    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1', 'SH-REG-2', 'SH-REG-3']) {
+    // cause S4-SH: likewise SH-REG-2 (Stage 1's attestor registry runs directly since S4 WP5), SH-REG-3 (the verifier
+    // keys since S4 WP6) and SH-PAU-2 (approve_pause since S4 WP10)
+    for (const id of ['SH-CLM-1', 'SH-CLM-2', 'SH-CLM-3', 'SH-BRN-1', 'SH-REG-2', 'SH-REG-3', 'SH-PAU-2']) {
       expect(md, id).not.toContain(id);
       for (const r of report.runs) expect(r.shims[id], `${r.vector} ${r.world}`).toBeUndefined();
     }

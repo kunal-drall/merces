@@ -40,7 +40,6 @@ export const SHIMS: readonly Shim[] = [
   { id: 'SH-REP-1', ops: ['submit_report'], call: 'submitReport{prior, income, Groth16 proof and signals; tiers 2 and 3 the named key\'s REPORT signature; the FX fallback the named key\'s FX signature}; fxBasis and pair derived by the runner', why: 'FX pairs and the accumulator are S5', removedIn: 'S5 (FX)', kind: 'shim' },
   { id: 'SH-PAY-1', ops: ['pay'], call: 'payIn{periodId: open due period (else the next expected period), amount: the period payment due}', why: "Stage 1's pay has no amount or period", removedIn: 'S5', kind: 'shim' },
   { id: 'SH-PAU-1', ops: ['request_pause'], call: 'requestPause{until: t + maxPauseSeconds}', why: "Stage 1's request has no end", removedIn: 'S5', kind: 'shim' },
-  { id: 'SH-PAU-2', ops: ['approve_pause'], call: 'approvePause{until: pauseEnd} sent by the attestor wallet', why: 'signatures as arguments are S4', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-RED-1', ops: ['redeem'], call: 'redeem{maxPricePerUnit: U64_MAX}', why: 'Stage 1 has no slippage bound', removedIn: '—', kind: 'shim' },
   { id: 'SH-EXT-1', ops: ['extinguish'], call: 'extinguish{attestors} sent by attestors[0], attestors[1] co-signing (deduplicated)', why: 'co-signing vs signatures', removedIn: 'S4', kind: 'shim' },
   { id: 'SH-AMD-1', ops: ['amend_terms'], call: 'amendTerms{termsCommitment, capMultipleWad, attestor} with the attestor co-signing', why: 'co-signing vs signatures', removedIn: 'S4', kind: 'shim' },

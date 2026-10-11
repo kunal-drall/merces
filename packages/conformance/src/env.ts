@@ -1,5 +1,5 @@
 import { ChainError, type ChainPort, type DigestSigner, type SeriesTerms, type SignedTx, type UnsignedTx, type WalletSigner } from '@merces/domain';
-import { SimHarness, SimWallet, SimulatorChain, defaultTerms, simAdminWallet, type Personality, type PrivateTerms } from '@merces/simulator';
+import { SimHarness, SimSigner, SimWallet, SimulatorChain, defaultTerms, simAdminWallet, type Personality, type PrivateTerms } from '@merces/simulator';
 import { createChains, locateStage1 } from '@merces/chains';
 
 /**
@@ -21,6 +21,8 @@ export interface ConformanceEnv {
   admin: WalletSigner;
   /** the report verifier key the chain has registered (a secp256k1 key's 20-byte address; S4 WP6) */
   verifierAddress: string;
+  /** a secp256k1 key the chain has not registered as an attestor: what it signs is refused (S4 WP10) */
+  outsider: DigestSigner;
   /** private terms matching the default terms' commitment */
   privateTerms: PrivateTerms;
   terms(over?: Partial<SeriesTerms>): SeriesTerms;
@@ -61,6 +63,7 @@ export async function simulatorEnv(personality: Personality): Promise<Conformanc
     attestors: h.attestors,
     admin: simAdminWallet(h.sim.family),
     verifierAddress: h.verifier.address,
+    outsider: SimSigner.attestor('conformance-outsider'),
     privateTerms: defaultTerms(h.sim).privateTerms,
     // the raise's phases are terms: openRaise derives the ends from these durations
     terms: (over) => defaultTerms(h.sim, { commitDurationSeconds: durations.commit, revealDurationSeconds: durations.reveal, ...over }).terms,

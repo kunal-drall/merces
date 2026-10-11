@@ -26,6 +26,8 @@ async function withFreshSchema(fn: (schema: string) => Promise<void>): Promise<v
  *    registry and the proposals keys-only, and the superseded-s4 closures of work addressed to non-keys);
  *  - S4-T3 / S4-FX: 026, tier 3 and the FX fallback carry Stage 1's signatures (the per-series FX signatures, the reports'
  *    fx_fallback, no co-signer column, the cases and requests signed with an EIP-191 text opened again once).
+ *  - S4-PAU / S4-WD: 027, a hardship approval is the key's relayed PAUSE signature (the request's pause nonce, the relayed
+ *    approval and its transaction) and a withdrawn request has its own state.
  */
 describe.skipIf(!dbTestsEnabled())('migrate', () => {
   it('serialises concurrent processes: three migrate() calls on a fresh schema all succeed, each file applied once', async () => {
@@ -397,6 +399,57 @@ describe.skipIf(!dbTestsEnabled())('migrate', () => {
         await expect(sig('solana:s2', { rate: '0' })).rejects.toThrow(/fx_fallback_signatures_rate_wad_check/);
         await sig('solana:s2');
         expect(await rows('select series_id from fx_fallback_signatures order by series_id')).toEqual([{ series_id: 'solana:s1' }, { series_id: 'solana:s2' }]);
+        // migrating again changes nothing
+        expect(await migrate(pool, dir)).toEqual([]);
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+
+  // S4 WP10 (cause S4-PAU, S4-WD): migration 027 on a database seeded at 026. A hardship request gains the pause nonce of
+  // its onchain request, the relayed approval {signer, signature, digest, pauseNonce, pauseEnd} with its relay transaction
+  // (both or neither, and only on an approved request), and the state `withdrawn`; the rows already there keep their state
+  // and record (an approval before S4 WP10 has none).
+  it('027_pause_signatures on a database seeded at 026: the pause nonce, the relayed approval, the withdrawn state', async () => {
+    await withFreshSchema(async (schema) => {
+      const pool = createPool(databaseUrl(), schema);
+      try {
+        const dir = mkdtempSync(join(tmpdir(), 'merces-mig027-'));
+        for (const f of files.filter((x) => x < '027')) copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+        await migrate(pool, dir);
+        const KEY = '0x' + 'ab'.repeat(20);
+        const q = (sql: string, params: unknown[] = []) => pool.query(sql, params);
+        const hard = (id: string, state: string, over: { approvedUntil?: number; nonce?: string; approval?: unknown; relay?: string } = {}) =>
+          q('insert into hardship_requests (hardship_id, series_id, chain, issuer, account_id, attestor, requested_until, approved_until, ciphertext, state' + (over.nonce !== undefined ? ', pause_nonce, approval, relay_tx' : '') + ") values ($1, 'solana:s1', 'solana', 'iss', 'acct-i', $2, 100, $3, 'c', $4" + (over.nonce !== undefined ? ', $5, $6, $7' : '') + ')',
+            [id, KEY, over.approvedUntil ?? null, state, ...(over.nonce !== undefined ? [over.nonce, over.approval === undefined ? null : JSON.stringify(over.approval), over.relay ?? null] : [])]);
+        await hard('h-pending', 'pending');
+        await hard('h-approved', 'approved', { approvedUntil: 90 });
+        await hard('h-rejected', 'rejected');
+        await expect(hard('h-withdrawn-early', 'withdrawn')).rejects.toThrow(/hardship_requests_state_check/);
+
+        copyFileSync(join(MIGRATIONS_DIR, '027_pause_signatures.sql'), join(dir, '027_pause_signatures.sql'));
+        expect(await migrate(pool, dir)).toEqual(['027_pause_signatures.sql']);
+        // the rows already there keep their state; a pre-WP10 approval has no relayed approval
+        expect((await q('select hardship_id, state, approved_until::int as approved_until, pause_nonce, approval, relay_tx from hardship_requests order by hardship_id')).rows).toEqual([
+          { hardship_id: 'h-approved', state: 'approved', approved_until: 90, pause_nonce: null, approval: null, relay_tx: null },
+          { hardship_id: 'h-pending', state: 'pending', approved_until: null, pause_nonce: null, approval: null, relay_tx: null },
+          { hardship_id: 'h-rejected', state: 'rejected', approved_until: null, pause_nonce: null, approval: null, relay_tx: null },
+        ]);
+        const approval = { signer: KEY, signature: '0x' + '11'.repeat(65), digest: '0x' + '22'.repeat(32), pauseNonce: '3', pauseEnd: '1790000000' };
+        await hard('h-withdrawn', 'withdrawn', { nonce: '2' });
+        await hard('h-relayed', 'approved', { approvedUntil: 1_790_000_000, nonce: '3', approval, relay: 'tx-1' });
+        expect((await q("select pause_nonce::text, approval from hardship_requests where hardship_id = 'h-relayed'")).rows[0]).toEqual({ pause_nonce: '3', approval });
+        // an approval comes with its relay transaction, only on an approved request, and in its shape
+        await expect(hard('h-x1', 'approved', { nonce: '3', approval })).rejects.toThrow(/hardship_requests_relay_check/);
+        await expect(hard('h-x2', 'approved', { nonce: '3', relay: 'tx-2' })).rejects.toThrow(/hardship_requests_relay_check/);
+        await expect(hard('h-x3', 'pending', { nonce: '3', approval, relay: 'tx-3' })).rejects.toThrow(/hardship_requests_relay_check/);
+        for (const bad of [{ ...approval, signature: 'sim:x' }, { ...approval, signer: '0x' + 'AB'.repeat(20) }, { ...approval, digest: '0x01' }, { ...approval, pauseEnd: '-1' }, { signer: KEY, signature: approval.signature }]) {
+          await expect(hard('h-x4', 'approved', { nonce: '3', approval: bad, relay: 'tx-4' })).rejects.toThrow(/hardship_requests_approval_check/);
+        }
+        await expect(hard('h-x5', 'pending', { nonce: '-1' })).rejects.toThrow(/hardship_requests_pause_nonce_check/);
+        await expect(hard('h-x6', 'pending', { nonce: '18446744073709551616' })).rejects.toThrow(/hardship_requests_pause_nonce_check/);
+        await expect(hard('h-x7', 'cancelled')).rejects.toThrow(/hardship_requests_state_check/);
         // migrating again changes nothing
         expect(await migrate(pool, dir)).toEqual([]);
       } finally {

@@ -129,6 +129,21 @@ key's own Stage 1 signatures (REPORT with tier 3; FX per series) and nobody co-s
   EIP-191 text whose rate no report reached the chain with (an attestor signs it again per series); its text signature
   column goes. Items already on a chain keep their records.
 
+S4 WP10 changes no simulator state layout (still version 5; no reset): a pause approval is the attestor key's Stage 1
+PAUSE signature, relayed by the keeper, and the issuer may withdraw a pending request. Migration 027:
+- adds `hardship_requests.pause_nonce` (the indexed onchain request's nonce, then the one the approval signed),
+  `approval` (`{signer, signature, digest, pauseNonce, pauseEnd}`, only once the chain accepted it) and `relay_tx` (both
+  or neither, on an approved request only);
+- adds the state `withdrawn` (the indexer sets it when `PauseRequestWithdrawn` lands for the request's onchain request).
+  Rows already there keep their state. An approval recorded before WP10 has no relayed approval: its `approvePause` was
+  built for the attestor's wallet, so if that transaction never landed the onchain request is still pending, and the
+  issuer withdraws it (`POST /series/{seriesId}/hardship/build-withdraw`) or opens a new request.
+A hardship decision that answers 409 `stale-nonce` means the issuer requested again or withdrew after the attestor
+signed: the attestor signs `detail.request` (the fresh request) or, if the request was withdrawn, nothing. A relay the
+chain refuses (another copy of the approval landing first, a pause starting meanwhile) leaves the request pending with
+nothing stored; when the chain shows the pause approved another way (anyone may relay the signature), the attestor
+closes the request with a rejection code (e.g. `approved-elsewhere`).
+
 Before version 5:
 
 From S3 the persisted simulator state is **version 4**: beside Stage 1's own series ledger, payout vault, tail and final
@@ -303,7 +318,8 @@ the attestor's machine, never on a server.
    proposes the key per chain and the multisig registers it ("Attestor keys" above).
 4. **Sign a work item.** Save the item's signing request (one, or a list such as an FX rate's per-series requests;
    the S4 WP9-WP13 routes return them: since WP9 a tier-3 case's `GET /attestor/tier3/{caseId}/message?…` and an FX
-   request's `GET /attestor/fx-requests/{requestId}/messages?rateWad=…`, whose `requests` list is the file to sign) as
+   request's `GET /attestor/fx-requests/{requestId}/messages?rateWad=…`, whose `requests` list is the file to sign; since
+   WP10 a hardship request's `GET /attestor/hardship/{hardshipId}/message?pauseEnd=…`) as
    `request.json` and run `pnpm -s attestor sign request.json`. The tool checks
    the request against the pinned table (the chain, its domain, the series key), rebuilds Stage 1's pre-image and digest
    from the typed fields and refuses any difference, then shows what you authorise, built from those fields alone (a
@@ -312,10 +328,13 @@ the attestor's machine, never on a server.
    confirm and give the password it signs the digest it rebuilt and prints `{kind, chain, seriesId, signer,
    signature, digest}` (`--out <file>` writes it 0600); post the signature to the item's route (a tier-3 case takes
    `{signer, signature, digest}` as its `attestation`; an FX request takes `{rateWad, signer, sourceNote, signatures:
-   [{seriesId, signature}]}`, one per request in the list). Limits in S4: the nonce
+   [{seriesId, signature}]}`, one per request in the list; a hardship approval takes `{approve: true, pauseEnd,
+   pauseNonce, attestation: {signer, signature, digest}}`, the request's `fields.pauseNonce` and the end you signed, and
+   the keeper relays it). Limits in S4: the nonce
    of a PAUSE, AMEND, EXTINGUISH or TRUEUP request comes from the server and the tool cannot check it against the chain
-   yet (S5 reads it from a public RPC), so sign only a request you expect; an unrelayed PAUSE or EXTINGUISH signature
-   that leaks is withdrawn only by rotating the key.
+   yet (S5 reads it from a public RPC), so sign only a request you expect; an unrelayed EXTINGUISH signature that leaks
+   is withdrawn only by rotating the key, a PAUSE one also dies when the issuer withdraws or renews its request (the
+   nonce moves).
 5. **Passwords.** The terminal is the default. `--password-env NAME` (and `--source-password-env NAME` for `import`)
    read a password from an environment variable, for scripted tests: a password there is readable through
    `/proc/<pid>/environ` by the same user and by root, and lands in shell history when it is set on the command line.

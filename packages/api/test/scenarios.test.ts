@@ -9,6 +9,7 @@ import { makeRig } from './helpers.ts';
 
 /*
  * S4 cause codes on the pins that moved:
+ *  - S4-PAU: a pause approval is the attestor key's PAUSE signature over the live nonce, relayed by the keeper (S4 WP10).
  *  - S4-BID: bid and order commitments are Stage 1's keccak256(price_u64 ‖ quantity_u64 ‖ salt_32 ‖ wallet_32) (S4 D11):
  *    the builders take no series, window or side, and the salt is 32 bytes.
  */
@@ -157,8 +158,8 @@ describe.skipIf(!dbTestsEnabled())('H1 scenarios through the API', () => {
     await h.sim.setTime(Math.max(await h.sim.now(), q.end + 10 * 86_400));
     const until = (await h.sim.now()) + 90 * 86_400;
     await send(h.issuer, await h.sim.build({ kind: 'requestPause', seriesId, until }, h.issuer.address), issuerTok);
-    const attTok = rig.token({ accountId: 'att', roles: ['attestor'], wallets: [{ chain: 'solana', address: h.attestors[0]!.address }] });
-    await send(h.attestors[0]!, await h.sim.build({ kind: 'approvePause', seriesId, until }, h.attestors[0]!.address), attTok);
+    // cause S4-PAU: the attestor key's PAUSE signature, relayed by the keeper (approvePause is permissionless)
+    await h.sim.submit(await h.pauseApproval(seriesId, until), 'keeper');
     await rig.sync();
     const sched = new KeeperScheduler(rig.ctx as never, [statusCrankJob, pauseCrankJob]);
     await h.sim.setTime((await h.sim.now()) + 60 * 86_400); // well past what would have been Late

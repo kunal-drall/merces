@@ -93,8 +93,8 @@ export function registerTermsRoutes(app: FastifyInstance, base: AppContext): voi
     handler: async (req, _reply, session) => {
       const signed = req.body as SignedTx;
       if (!signed?.tx?.chain || !signed.signatures) throw AppError.badRequest('signed transaction required');
-      // the signer is one of the account's wallets, or (transitional until S4 WP13, while approvePause and extinguish are
-      // still sent by an attestor key's address) an attestor key linked to the account, read live
+      // the signer is one of the account's wallets, or (transitional until S4 WP13, while extinguish is still sent by an
+      // attestor key's address) an attestor key linked to the account, read live
       const own = session!.wallets.some((w) => w.address === signed.tx.signer)
         || (typeof signed.tx.signer === 'string' && !!(await ctx.pool.query('select 1 from account_signer_keys where address = $1 and account_id = $2', [signed.tx.signer, session!.accountId])).rowCount);
       if (!own && !session!.roles.includes('admin')) throw AppError.forbidden('signer is not one of your wallets or linked keys');

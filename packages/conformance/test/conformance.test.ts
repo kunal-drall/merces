@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CURVE_TERMS_ZEROS, assertSigningNetwork, bidCommitment, rateUnits, runSettlement, seriesKeyOf, termsCommitment, type DomainEvent } from '@merces/domain';
+import { CURVE_TERMS_ZEROS, assertSigningNetwork, bidCommitment, pauseDigest, rateUnits, runSettlement, seriesKeyOf, termsCommitment, type DigestSigner, type DomainEvent, type PermissionlessCommand } from '@merces/domain';
 import { WAD, capPerUnit, parsePeriod, ratePerUnit, requiredEscrow, wadFromDecimal } from '@merces/math';
 import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv } from '../src/env.ts';
 
@@ -12,7 +12,9 @@ import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv
  *  - S4-T2: a tier-2 report carries the verifier key's Stage 1 REPORT signature `{signer, signature}` (65 bytes; S4 WP6;
  *    was an ed25519 attestation v1 by key id);
  *  - S4-ID: an attestor is a secp256k1 key's 20-byte address on every chain (S4 WP7): a registry command names a key,
- *    never a chain wallet; the env's attestors are keys the chain registered, each able to sign a digest.
+ *    never a chain wallet; the env's attestors are keys the chain registered, each able to sign a digest;
+ *  - S4-PAU: `approvePause` is permissionless and carries the attestor key's PAUSE signature over the live pause nonce
+ *    (S4 WP10): any wallet relays it, a key the chain did not register (`env.outsider`) is refused.
  * S4 cause codes on new checks:
  *  - S4-CTX: the signing context (S4 D6, D7): a chain's signing domain is null or one a signer may sign for (local ids on
  *    a mock chain only, never a mainnet); a new series reads its Stage 1 series key and four nonces at 0.
@@ -23,6 +25,17 @@ import { conformanceTargets, envFor, exec, expectChainError, type ConformanceEnv
  * CONFORMANCE_CHAIN selects the target: simulator (default, both personalities), solana, evm:<chainKey>.
  */
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
+
+/**
+ * cause S4-PAU: Stage 1's approve_pause argument: `key`'s PAUSE signature over the chain's signing domain, the series key
+ * and its live pause nonce (all read through the port), and `pauseEnd` (S4 WP10).
+ */
+async function pauseApproval(e: ConformanceEnv, seriesId: string, pauseEnd: number, key: DigestSigner): Promise<Extract<PermissionlessCommand, { kind: 'approvePause' }>> {
+  const [info, s] = await Promise.all([e.chain.info(), e.chain.getSeries(seriesId)]);
+  if (!info.signing || !s) throw new Error('no signing context');
+  const { digest } = pauseDigest({ domain: info.signing.domain, seriesKey: s.seriesKey }, { pauseNonce: s.nonces.pause, pauseEnd });
+  return { kind: 'approvePause', seriesId, pauseEnd: String(pauseEnd), attestor: key.address, signature: await key.signDigest(digest) };
+}
 /*
  * Pins that moved with Stage 1 (S1 WP12) carry a cause code:
  *  - R: Stage 1's report rules: reports are sequential (WrongPeriod, code WrongPhase), and the chain proves against the
@@ -30,6 +43,7 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
  *  - C: Stage 1's zero-amount claim is a successful no-op (SIM:1268-1282); a wallet with no registration is refused
  *    (HolderNotRegistered, code NotFound);
  *  - P: Stage 1's approve_pause takes an active attestor's signature (InvalidAttestorSignature, code InvalidAttestation);
+ *    since S4 WP10 (cause S4-PAU) as an argument: the key's PAUSE signature over the live pause nonce, sent by anyone;
  *  - RD: Stage 1's claim_redemption of 0 units succeeds.
  * S2 cause codes:
  *  - S2-AD: commit and reveal durations are series terms; `openRaise` derives the phase ends from them;
@@ -267,10 +281,14 @@ describe.each(conformanceTargets())('ChainPort conformance on %s', (name) => {
     const until = now + 10 * 86_400;
     await exec(e, e.issuer, { kind: 'requestPause', seriesId, until });
     // Stage 1 approve_pause: a signer that is not an active attestor is InvalidAttestorSignature (code InvalidAttestation;
-    // cause P: was Unauthorized)
-    await expectChainError(exec(e, e.backers[0]!, { kind: 'approvePause', seriesId, until }), 'InvalidAttestation');
-    const ap = await exec(e, e.attestors[0]!, { kind: 'approvePause', seriesId, until });
+    // cause P: was Unauthorized). Cause S4-PAU: the approval is an attestor key's PAUSE signature over the live nonce,
+    // sent by anyone; a key the chain never registered, or a signature naming another key, is refused, sent by the keeper
+    await expectChainError(e.chain.submit(await pauseApproval(e, seriesId, until, e.outsider), 'keeper'), 'InvalidAttestation');
+    await expectChainError(e.chain.submit({ ...(await pauseApproval(e, seriesId, until, e.attestors[0]!)), attestor: e.attestors[1]!.address }, 'keeper'), 'InvalidAttestation');
+    // any wallet may send a valid one: a backer relays the attestor's signature
+    const ap = await exec(e, e.backers[0]!, await pauseApproval(e, seriesId, until, e.attestors[0]!));
     expect(types(ap.events)).toEqual(['PauseApproved', 'StatusChanged']);
+    expect(ap.events[0]!.payload).toMatchObject({ attestor: e.attestors[0]!.address, until });
     expect((await e.chain.getSeries(seriesId))!.status).toBe('Paused');
     await e.waitUntil(until);
     await e.chain.submit({ kind: 'crankPause', seriesId }, 'keeper');

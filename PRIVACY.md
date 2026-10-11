@@ -72,7 +72,9 @@ document file (A-PRIV-4).
 | Field | Where | Storage | Readers | Deleted when |
 | --- | --- | --- | --- | --- |
 | Hardship reason and evidence | `hardship_requests.ciphertext` | e2e | the chosen attestor only; server: nobody | decision + retention |
-| Hardship state and dates | `hardship_requests` (state, until, decided_at), onchain `PauseRequested/Approved/Ended` | plain | issuer, holders (status and dates only), attestor, admin | — |
+| Hardship state and dates | `hardship_requests` (state, until, decided_at; `withdrawn` since S4 WP10), onchain `PauseRequested/Approved/Ended/RequestWithdrawn` | plain | issuer, holders (status and dates only), attestor, admin | — |
+| Pause nonce and the relayed approval (S4 WP10: the pause nonce of the onchain request; the attestor key's Stage 1 PAUSE signature `{signer, signature, digest, pauseNonce, pauseEnd}` and the keeper's relay transaction; no reason, no figure) | `hardship_requests.pause_nonce`, `.approval`, `.relay_tx` (migration 027), `audit_log` (signer, nonce, digest, relay transaction), onchain (`approve_pause`'s arguments) | plain (public onchain: stored only once the chain accepted it) | the request's attestor key holder and admins (`GET /attestor/hardship/{id}`, the decision's response); never in the holders' status view, the activity feed or a notification | — |
+| An unrelayed PAUSE signature (a bearer authorisation until used or its nonce moves, S4 amendment D2) | never stored: a refused or failed relay stores nothing; the idempotency record keeps the hash of the decision's body, and the response of a relayed one | — | — | — |
 | Decision code | `hardship_requests.decision_code`, `audit_log` | plain (codes only) | attestor, admin | — |
 | Approval refusal | API response only (`detail.stage1`: Stage 1's rule name; the message names the rule and the protocol bound, never a date); nothing stored, audited or notified | plain (codes only) | the deciding attestor | — |
 | Extinguishment evidence | `extinguishment_requests.evidence_ciphertext` | e2e | the two attestors; server: nobody | — |

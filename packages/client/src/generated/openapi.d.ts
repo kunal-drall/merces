@@ -1930,6 +1930,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/series/{seriesId}/hardship/build-withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The issuer's withdrawPauseRequest transaction (Stage 1 withdraw_pause_request; S4 WP10) for the series' pending onchain pause request, to sign and send. Once it lands the series' pause nonce has advanced, so any PAUSE signature collected for the request is dead, and the indexer marks the pending hardship request withdrawn (PauseRequestWithdrawn). Also how an issuer clears an onchain request whose hardship request was rejected. */
+        post: operations["buildWithdrawPauseRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/attestor/hardship/{hardshipId}": {
         parameters: {
             query?: never;
@@ -1938,6 +1955,23 @@ export type paths = {
             cookie?: never;
         };
         get: operations["getHardship"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attestor/hardship/{hardshipId}/message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The signing request for the approval's PAUSE signature (S4 WP10): Stage 1's MERCES_PAUSE_V1 over the chain's signing domain (ChainInfo.signing), the series key (SeriesState.seriesKey), the series' live pause nonce (SeriesState.nonces.pause) and the end, addressed to the request's attestor key, only for an end the chain would take now (Stage 1's approve_pause bounds on the chain's pause record). The attestor signs it on their own device with the Merces attestor tool, which rebuilds and checks it first and warns that the signature cannot be recalled (anyone holding it can submit it until the nonce moves or the key is revoked); the API never signs. Public data only: the domain, the series key, the nonce and the end. */
+        get: operations["hardshipSigningRequest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1955,7 +1989,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description An approval is checked with Stage 1's approve_pause rules (pauseApprovalError) on the chain's pause record before anything is recorded: the end in the future, no running pause, at most 365 days, at most 730 days across the series' pauses, at most 16 pauses. A refusal names Stage 1's rule in detail.stage1 (never a date) and leaves the request pending, so the attestor can decide again with an end the chain accepts, or reject it. */
+        /** @description Only the account holding the request's attestor key decides (an admin never does; A-M5-3). An approval carries the key's Stage 1 PAUSE signature, made on the attestor's own device from GET /attestor/hardship/{hardshipId}/message (S4 WP10; was an approvePause transaction for the attestor's wallet). The API checks, in order: the request is pending; the end on the chain's pause record (u64, at most the requested end, a request pending onchain, Stage 1's approve_pause bounds: the end in the future, no running pause, at most 365 days, at most 730 days across the series' pauses, at most 16 pauses); the signature over the PAUSE message it rebuilds from the chain's own reads with the signed nonce (a digest sent must equal it) recovers to the request's key, an active attestor key (no grace); the series' pause nonce read again is still the one signed. Then the keeper relays approvePause (Stage 1's approve_pause is permissionless) and the request records the approval and the relay transaction. A refusal names Stage 1's rule in detail.stage1 (never a date) and leaves the request pending with nothing stored: an unrelayed PAUSE signature is never at rest. A rejection needs no signature. */
         post: operations["decideHardship"];
         delete?: never;
         options?: never;
@@ -3816,8 +3850,11 @@ export type components = {
             paused?: boolean;
             pausedUntil?: number | null;
             requests?: {
-                /** @enum {string} */
-                state?: "pending" | "approved" | "rejected";
+                /**
+                 * @description withdrawn: the issuer withdrew the onchain request (S4 WP10)
+                 * @enum {string}
+                 */
+                state?: "pending" | "approved" | "rejected" | "withdrawn";
                 requestedUntil?: number;
                 approvedUntil?: number | null;
                 requestedAt?: string;
@@ -8343,6 +8380,50 @@ export interface operations {
             };
         };
     };
+    buildWithdrawPauseRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <chain>:<address> */
+                seriesId: components["parameters"]["seriesId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The unsigned transaction for the issuer and the pause nonce of the request it withdraws (`{seriesId, pauseNonce, tx}`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Not the series' issuer */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown series */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No pause request is pending onchain (detail.stage1 PauseNotRequested) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getHardship: {
         parameters: {
             query?: never;
@@ -8354,7 +8435,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The request with its ciphertext (chosen attestor or admin only) and the series' onchain pause state: `pause` (the deprecated single-pause view) and `pauses` (Stage 1's record: pauses approved, seconds paused in total, a pending request, the running pause), which the approval bounds are checked against */
+            /** @description The request with its ciphertext (chosen attestor or admin only), the pause nonce of its onchain request (`pauseNonce`, from the indexed PauseRequested), the relayed approval once approved (`approval {signer, signature, digest, pauseNonce, pauseEnd}`, `relayTx`; stored only after the chain accepted it) and the series' onchain pause state: `livePauseNonce`, `pause` (the deprecated single-pause view) and `pauses` (Stage 1's record: pauses approved, seconds paused in total, a pending request, the running pause), which the approval bounds are checked against */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8365,6 +8446,66 @@ export interface operations {
             };
             /** @description Addressed to another attestor key, or the caller's key is not linked to its account or not active on the item's chain */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    hardshipSigningRequest: {
+        parameters: {
+            query: {
+                /** @description the pause end to approve (unix seconds, a decimal string): at most the requested end */
+                pauseEnd: string;
+            };
+            header?: never;
+            path: {
+                hardshipId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The PAUSE signing request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningRequest"];
+                };
+            };
+            /** @description A missing or malformed query field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not the account holding the request's attestor key (or an admin), or the key is not active on the request's chain */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown request or series */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is decided or withdrawn; no request is pending onchain (detail.stage1 PauseNotRequested); a pause is running (detail.stage1 AlreadyPaused); the chain's signing domain is not known yet (detail.reason signing-domain-unknown) or is not one a signer may sign for (detail.reason signing-network-refused) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The end after the requested end, beyond u64 (detail.stage1 AmountOutOfRange), or refused by Stage 1's bounds (detail.stage1 InvalidPauseEnd, PauseTooLong or TooManyPauses) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8386,16 +8527,23 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    approve: boolean;
-                    /** @description approved end; defaults to the requested end and may not exceed it */
-                    until?: number;
+                    /** @enum {boolean} */
+                    approve: true;
+                    /** @description the approved end (unix seconds, a decimal string): at most the requested end */
+                    pauseEnd: string;
+                    /** @description the nonce the signature binds: the signing request's fields.pauseNonce */
+                    pauseNonce: string;
+                    attestation: components["schemas"]["DeviceSignature"];
+                } | {
+                    /** @enum {boolean} */
+                    approve: false;
                     /** @description rejection code (never free text) */
                     decisionCode?: string;
                 };
             };
         };
         responses: {
-            /** @description Approved: the record and the unsigned approvePause transaction for the attestor key's address (transitional until S4 WP10: Stage 1's PAUSE signature relayed by the keeper). Rejected: the record with its decision code and tx null */
+            /** @description Approved: the record with its relayed approval and `relayTx` (the attestor sends nothing). Rejected: the record with its decision code and `relayTx` null */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8404,6 +8552,13 @@ export interface operations {
                     "application/json": Record<string, never>;
                 };
             };
+            /** @description Malformed or unknown fields (the earlier `{approve, until}` shape included) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Not the account holding the chosen attestor key, or the key is not active on its chain */
             403: {
                 headers: {
@@ -8411,14 +8566,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Already decided; the issuer has not sent requestPause onchain (detail.stage1 PauseNotRequested); or a pause is running (AlreadyPaused) */
+            /** @description Already decided or withdrawn; no request pending onchain (detail.stage1 PauseNotRequested); a pause is running (AlreadyPaused); the series' pause nonce moved since the signature was made, by a new request or a withdrawal (detail.reason stale-nonce, with detail.livePauseNonce and detail.request, the fresh signing request when a request is pending); the chain's signing domain unknown (detail.reason signing-domain-unknown) */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Approved end after the requested end, or refused by Stage 1's bounds (detail.stage1 InvalidPauseEnd, PauseTooLong or TooManyPauses); the request stays pending */
+            /** @description The approved end after the requested end, beyond u64 (detail.stage1 AmountOutOfRange), or refused by Stage 1's bounds (detail.stage1 InvalidPauseEnd, PauseTooLong or TooManyPauses); the signature not the request key's PAUSE signature over this nonce and end on this chain, or the key not active (detail.stage1 InvalidAttestorSignature); or the chain refused the relay (its canonical error with detail.stage1, e.g. PauseNotRequested when another copy of the approval landed first). The request stays pending */
             422: {
                 headers: {
                     [name: string]: unknown;

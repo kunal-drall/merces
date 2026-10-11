@@ -17,7 +17,7 @@ import { attestorUsable, registerKey, revokeKey, rotateKey } from './keys.ts';
 import { submitReport } from './reports.ts';
 import { stakeUnits, tenderUnits, unstakeUnits } from './stake.ts';
 import { beginSettlement, deliverBid, finalizeSettlement, processBid, registerHolder, tallyBids } from './settlement.ts';
-import { accrualNow, approvePause, crankPause, crankStatus, deadlines, reportablePeriods, requestPause, type PeriodDeadlines } from './status.ts';
+import { accrualNow, approvePause, crankPause, crankStatus, deadlines, reportablePeriods, requestPause, withdrawPauseRequest, type PeriodDeadlines } from './status.ts';
 import { amendTerms, claimFinal, extinguish } from './terminal.ts';
 import { drawRelease, pauseReleases } from './treasury.ts';
 import { clearTransferWindow, commitWindowOrder, openTransferWindow, revealWindowOrder } from './window.ts';
@@ -115,7 +115,9 @@ export class SimEngine implements EngineCore {
       case 'payIn': return payIn(this, user(), cmd, now, emit);
       case 'claimPayout': return claimPayout(this, user(), cmd, emit);
       case 'requestPause': return requestPause(this, user(), cmd, now, emit);
-      case 'approvePause': return approvePause(this, user(), cmd, now, emit);
+      case 'withdrawPauseRequest': return withdrawPauseRequest(this, user(), cmd, emit);
+      // Stage 1's approve_pause takes the attestor's PAUSE signature as an argument: anyone sends it (S4 WP10)
+      case 'approvePause': service('any'); return approvePause(this, cmd, now, emit);
       case 'crankPause': service('any'); return crankPause(this, cmd, now, emit);
       case 'crankStatus': service('any'); return crankStatus(this, cmd, now, emit);
       case 'redeem': return redeem(this, user(), cmd, now, emit);

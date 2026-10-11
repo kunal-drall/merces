@@ -24,6 +24,7 @@ const DAY = 86_400;
  *
  * S4 cause codes:
  *  - S4-FX: FX fallback requests stay one per (chain, pair, period); the signatures are per series (S4 WP9, D14).
+ *  - S4-PAU: a pause approval is the attestor key's PAUSE signature over the live nonce, sent by anyone (S4 WP10).
  */
 
 /** A registry of one chain, for a test that needs its own series ids, reminder ledger or a wrapped port. */
@@ -68,7 +69,7 @@ describe.skipIf(!dbTestsEnabled())('M4 keepers (E7) and rate keeper (E8)', () =>
     await sol.reportAndPay(a.seriesId, '2026Q1', a.privateTerms, a.terms.termsCommitment, 0n, USDC(10_000));
     const until = (await sol.sim.now()) + 30 * 86_400;
     await sol.exec(sol.issuer, { kind: 'requestPause', seriesId: a.seriesId, until });
-    await sol.exec(sol.attestors[0]!, { kind: 'approvePause', seriesId: a.seriesId, until });
+    await sol.sim.submit(await sol.pauseApproval(a.seriesId, until), 'keeper'); // cause S4-PAU
     expect((await sched.runAll())['pause.crank']!.actions).toBe(0);
     await sol.sim.setTime(until + 1);
     expect((await sched.runAll())['pause.crank']!.actions).toBe(1);

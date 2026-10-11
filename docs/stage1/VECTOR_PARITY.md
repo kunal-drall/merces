@@ -15,7 +15,7 @@ Every `expect` compares the keys it carries, each as a whole value; every `expec
 | 05_cap_hit | PASS 54/54 | PASS-WITH-WAIVERS 54/54 | PASS-WITH-WAIVERS 54/54 | PASS-WITH-WAIVERS (#42 BLK-1) |
 | 06_redemption_terms | PASS 116/116 | PASS 116/116 | PASS 116/116 | PASS |
 | 07_late_payment | PASS 59/59 | PASS 59/59 | PASS 59/59 | PASS |
-| 08_hardship_pause | PASS 64/64 | PASS 34/64, stopped at #34 (until) | PASS 34/64, stopped at #34 (until) | PREFIX-PASS to #33, then NOT-YET (S5: withdraw_pause_request and end_pause) |
+| 08_hardship_pause | PASS 64/64 | PASS 58/64, stopped at #58 (until) | PASS 58/64, stopped at #58 (until) | PREFIX-PASS to #57, then NOT-YET (S5: end_pause) |
 | 09_tail_clause | PASS 95/95 | PASS 95/95 | PASS 95/95 | PASS |
 | 10_transfer_window | PASS 92/92 | PASS 36/92, stopped at #36 (until) | PASS 36/92, stopped at #36 (until) | PREFIX-PASS to #35, then NOT-YET (S5: multi-step transfer windows) |
 | 11_extinguishment | PASS 52/52 | PASS 52/52 | PASS 52/52 | PASS |
@@ -28,7 +28,7 @@ Every `expect` compares the keys it carries, each as a whole value; every `expec
 | 18_report_before_finalization | PASS 51/51 | — | — | NOT-YET (S5: income router (stops at #11, create_series with a router)) |
 | 19_pause_while_late | PASS 60/60 | PASS 60/60 | PASS 60/60 | PASS |
 | 20_tier3_trueup | PASS 120/120 | PASS 71/120, stopped at #71 (until) | PASS 71/120, stopped at #71 (until) | PREFIX-PASS to #70, then NOT-YET (S5: tier-3 true-up) |
-| 21_entry_rules | PASS 61/61 | PASS 41/61, stopped at #41 (until) | PASS 41/61, stopped at #41 (until) | PREFIX-PASS to #40, then NOT-YET (S5: withdraw_pause_request; u64 pause ends) |
+| 21_entry_rules | PASS 61/61 | PASS 61/61 | PASS 61/61 | PASS |
 | 22_late_holder_tail_final | PASS 111/111 | PASS 76/111, stopped at #76 (until) | PASS 76/111, stopped at #76 (until) | PREFIX-PASS to #75, then NOT-YET (S5: multi-step windows (#76); its claim steps #88-#110 run once windows land) |
 | 23_redeem_twice_with_tail | PASS 63/63 | PASS 63/63 | PASS 63/63 | PASS |
 | 24_inverted_fx | PASS 94/94 | — | — | NOT-YET (S5: FX accumulator (inverted pair)) |
@@ -80,12 +80,11 @@ A vector that needs a later milestone is replayed on the merces backend up to it
 
 | Vector | Replayed to | Next step | The whole vector |
 | --- | --- | --- | --- |
-| 08_hardship_pause | #33 | #34 `withdraw_pause_request` (no canonical command) | S5: withdraw_pause_request and end_pause |
+| 08_hardship_pause | #57 | #58 `expect_revert end_pause` (no canonical command: a pause ends at its approved end only) | S5: end_pause |
 | 10_transfer_window | #35 | #36 `expect_revert open_window` with windows disabled (no canonical windows flag to refuse with) | S5: multi-step transfer windows |
 | 14_amendment | #61 | #62 `expect_revert retire_if_capped` (no canonical command) | S5: retire_if_capped as an action |
 | 16_demand_limited_window | #40 | #41 `set_flags` (no canonical windows flag) | S5: multi-step transfer windows |
 | 20_tier3_trueup | #70 | #71 `expect_revert submit_trueup` (no tier-3 true-up) | S5: tier-3 true-up |
-| 21_entry_rules | #40 | #41 `expect_revert approve_pause` with a pause end of 2^64 (the canonical pause end is a safe integer, so it is not AmountOutOfRange), then #42 `withdraw_pause_request` | S5: withdraw_pause_request; u64 pause ends |
 | 22_late_holder_tail_final | #75 | #76 `begin_window_settlement` with a price on a live series (one-step windows) | S5: multi-step windows (#76); its claim steps #88-#110 run once windows land |
 
 ## Waived steps
@@ -111,10 +110,9 @@ The merces backend runs these Stage 1 ops through canonical calls of another sha
 | --- | --- | --- | --- | --- | --- |
 | SH-REG-1 | `register_issuer` | registerIssuer signed by that wallet | Stage 1 registers issuers admin-only (STAGE1_INTEGRATION.md B.7) | S5 | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 14, 15, 16, 17, 19, 20, 21, 22, 23, 25 |
 | SH-REG-4 | `create_series` | createSeries (USDC, USD, sealed; due/grace/notice days from config.parameters; tier bitmask → object; atOffsetSeconds → afterSeconds); window durations and windowFeeBps held by the runner, their Stage 1 bounds unchecked | canonical terms lack those fields | S5 | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 14, 15, 16, 17, 19, 20, 21, 22, 23, 25 |
-| SH-REP-1 | `submit_report` | submitReport{prior, income, Groth16 proof and signals; tiers 2 and 3 the named key's REPORT signature; the FX fallback the named key's FX signature}; fxBasis and pair derived by the runner | FX pairs and the accumulator are S5 | S5 (FX) | 01, 04, 05, 06, 07, 08, 09, 10, 11, 14, 15, 16, 17, 19, 20, 22, 23, 25 |
-| SH-PAY-1 | `pay` | payIn{periodId: open due period (else the next expected period), amount: the period payment due} | Stage 1's pay has no amount or period | S5 | 01, 04, 05, 06, 07, 09, 10, 11, 14, 16, 17, 19, 20, 21, 22, 23, 25 |
+| SH-REP-1 | `submit_report` | submitReport{prior, income, Groth16 proof and signals; tiers 2 and 3 the named key's REPORT signature; the FX fallback the named key's FX signature}; fxBasis and pair derived by the runner | FX pairs and the accumulator are S5 | S5 (FX) | 01, 04, 05, 06, 07, 08, 09, 10, 11, 14, 15, 16, 17, 19, 20, 21, 22, 23, 25 |
+| SH-PAY-1 | `pay` | payIn{periodId: open due period (else the next expected period), amount: the period payment due} | Stage 1's pay has no amount or period | S5 | 01, 04, 05, 06, 07, 08, 09, 10, 11, 14, 16, 17, 19, 20, 21, 22, 23, 25 |
 | SH-PAU-1 | `request_pause` | requestPause{until: t + maxPauseSeconds} | Stage 1's request has no end | S5 | 08, 19, 21 |
-| SH-PAU-2 | `approve_pause` | approvePause{until: pauseEnd} sent by the attestor wallet | signatures as arguments are S4 | S4 | 08, 19 |
 | SH-RED-1 | `redeem` | redeem{maxPricePerUnit: U64_MAX} | Stage 1 has no slippage bound | — | 01, 05, 06, 09, 11, 23, 25 |
 | SH-EXT-1 | `extinguish` | extinguish{attestors} sent by attestors[0], attestors[1] co-signing (deduplicated) | co-signing vs signatures | S4 | 11, 25 |
 | SH-AMD-1 | `amend_terms` | amendTerms{termsCommitment, capMultipleWad, attestor} with the attestor co-signing | co-signing vs signatures | S4 | 05, 11, 14 |
@@ -167,7 +165,7 @@ The paths of Stage 1's claim family that no Stage 1 vector takes (S3 plan WP2, a
 - S3h_claim_on_redeemed: claim (Stage 1's claim, our claimPayout) on a Redeemed series pays the net payout only: no tail and no burn. On 09 after S1 redeemed (#64) and its tail was funded (#80): b1, which claimed its redemption at #65 (its pending payout with it), claims and is paid 0 although its tail is owed (the tail is claim_tail's); b4, which has not redeemed, is paid its pending payout only and keeps its 100 units (Redeemed is not Retired); a repeat pays 0. 09 then runs to its end: claim_tail still redeems b4 first and pays every tail in full.
 - S3i_claim_on_extinguished: claim on an Extinguished series pays the pending payout only: no final-pool share and no burn (the units are the holder's final-pool weight). On 11 after the extinguishment (#39) and b1's claim_final (#46): b2 claims its pending payout, a repeat pays 0, then claim_final pays its share on its 100 units and burns them. 11 then runs to its end with every holder paid as in 11.
 - S3j_zero_claim_retired_burns: The zero-amount rule on a Retired series: a claim that pays 0 still burns the holder's units. On 05 with b4's bid left undelivered (05 #29 left out, with the expects that count b4's delivered units): once S1 is Retired (#39), b4's claim pays the payout accrued on its undelivered units and burns nothing (its balance is 0); its bid is then delivered; its next claim pays 0 and burns its 100 units; a repeat pays and burns nothing. 05 #42 (retire_if_capped, BLK-1) is left out. 05 then runs to its end.
-- S3k_claim_nothing: Claims of nothing succeed (the zero-amount rule), the claims of 21 #48-#57 that its gate (#40) keeps from running: on 21 without its pause steps (#40-#43: the 2^64 pause end and withdraw_pause_request are S5, with the expects that count the pause nonce), the series retires at exactly its cap (#46); b1's claim pays and burns, its second claim pays and burns nothing, burn_retired of nothing is a burn of 0 (a holder already burned, a wallet that never held units), b2's units burn and its pending payout stays claimable, an allowlisted wallet that is not a registered holder is refused (a precondition, not a zero amount), and the other holders claim. Then claims of nothing again: b1 on the Retired series and the keeper's burn of an unknown wallet.
+- S3k_claim_nothing: Claims of nothing succeed (the zero-amount rule), the claims of 21 #48-#57, written while 21's gate (#40) kept them from running (21 runs in full since S4 WP10): on 21 without its pause steps (#40-#43: the 2^64 pause end and withdraw_pause_request, with the expects that count the pause nonce), the series retires at exactly its cap (#46); b1's claim pays and burns, its second claim pays and burns nothing, burn_retired of nothing is a burn of 0 (a holder already burned, a wallet that never held units), b2's units burn and its pending payout stays claimable, an allowlisted wallet that is not a registered holder is refused (a precondition, not a zero amount), and the other holders claim. Then claims of nothing again: b1 on the Retired series and the keeper's burn of an unknown wallet.
 - S3l_final_with_open_ask_after_redemption: On 22's prefix to #70 and S2's window up to its reveals (#79-#83: b1 asks 40 of its 100 units, b5 bids for them), S2 redeems with the ask still open and is extinguished: the unvested 10,500 USDC is the final pool over the 400 units at redemption, 26.25 a unit. b1's claim_final redeems its 60 free units first; both Stage 1 chains then weigh its share on its redeemed units plus the 40 in the ask's escrow (MercesVault.sol:658, claims.rs:486-490), 2,625 USDC, as for every other 100-unit holder, and so do we. Stage 1's TS reference weighs it on the 60 redeemed units only (SIM:1460), 1,575 USDC; when the window ends in NoMatch on the terminal series (#84-#86) and returns the 40 units, b1's second claim_final redeems them at P_redeem with a share of 0, so 1,050 USDC stays in its vault for good, where ours (as both chains) ends at 0. The expects carry Stage 1's simulator's values: the merces backend differs from them on exactly b1's balance and the vault (DIV-S1I-1, a Stage 1-internal difference resolved toward both chains; reported to Stage 1), and the backends part in lockstep right after b1's first claim_final. Expected on the merces and lockstep backends: PASS-WITH-DIVERGENCES (DIV-S1I-1: 4 field(s) at #79, #87; lockstep parts at #78).
 
 ## S4 signature scenarios (ours)
@@ -199,7 +197,7 @@ Stage 1's key registry and signatures on paths no Stage 1 vector takes (S4 plan 
 | 05_cap_hit.json | 54 | 6 | 4 | `amend_terms`, `create_series`, `pay`, `redeem`, `register_issuer`, `retire_if_capped`, `submit_report` |
 | 06_redemption_terms.json | 116 | 9 | 5 | `create_series`, `pay`, `redeem`, `register_issuer`, `submit_report` |
 | 07_late_payment.json | 59 | 10 | 2 | `create_series`, `pay`, `register_issuer`, `submit_report` |
-| 08_hardship_pause.json | 64 | 7 | 8 | `approve_pause`, `create_series`, `end_pause`, `pay`, `register_issuer`, `request_pause`, `submit_report`, `withdraw_pause_request` |
+| 08_hardship_pause.json | 64 | 7 | 8 | `create_series`, `end_pause`, `pay`, `register_issuer`, `request_pause`, `submit_report` |
 | 09_tail_clause.json | 95 | 7 | 4 | `create_series`, `pay`, `redeem`, `register_issuer`, `submit_report` |
 | 10_transfer_window.json | 92 | 6 | 12 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_issuer`, `reveal_order`, `set_flags`, `submit_report`, `transfer_units`, `window_commit_bid` |
 | 11_extinguishment.json | 52 | 4 | 7 | `amend_terms`, `create_series`, `extinguish`, `pay`, `redeem`, `register_issuer`, `submit_report` |
@@ -210,9 +208,9 @@ Stage 1's key registry and signatures on paths no Stage 1 vector takes (S4 plan 
 | 16_demand_limited_window.json | 77 | 6 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `register_issuer`, `reveal_order`, `set_flags`, `submit_report`, `window_commit_bid` |
 | 17_undelivered_winner.json | 51 | 4 | 4 | `create_series`, `pay`, `register_issuer`, `submit_report` |
 | 18_report_before_finalization.json | 51 | 6 | 5 | `create_series`, `pay`, `redeem`, `register_issuer`, `retire_if_capped`, `route_income`, `submit_report` |
-| 19_pause_while_late.json | 60 | 8 | 4 | `approve_pause`, `create_series`, `pay`, `register_issuer`, `request_pause`, `submit_report` |
+| 19_pause_while_late.json | 60 | 8 | 4 | `create_series`, `pay`, `register_issuer`, `request_pause`, `submit_report` |
 | 20_tier3_trueup.json | 120 | 11 | 12 | `create_series`, `pay`, `pay_trueup`, `redeem`, `register_issuer`, `submit_report`, `submit_trueup` |
-| 21_entry_rules.json | 61 | 5 | 10 | `approve_pause`, `create_series`, `pay`, `register_issuer`, `request_pause`, `submit_report`, `withdraw_pause_request` |
+| 21_entry_rules.json | 61 | 5 | 10 | `create_series`, `pay`, `register_issuer`, `request_pause`, `submit_report` |
 | 22_late_holder_tail_final.json | 111 | 6 | 1 | `begin_window_settlement`, `commit_ask`, `create_series`, `extinguish`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `reveal_order`, `submit_report`, `window_commit_bid` |
 | 23_redeem_twice_with_tail.json | 63 | 2 | 0 | `begin_window_settlement`, `commit_ask`, `create_series`, `finalize_window`, `open_window`, `pay`, `process_orders`, `redeem`, `register_issuer`, `reveal_order`, `submit_report` |
 | 24_inverted_fx.json | 94 | 2 | 0 | `create_series`, `fx_snapshot`, `pay`, `register_issuer`, `set_fx_pair`, `submit_report` |
@@ -254,7 +252,7 @@ Stage 1's key registry and signatures on paths no Stage 1 vector takes (S4 plan 
 | `route_income` | 11 | postSplitReceipt | not yet (S5) |
 | `submit_trueup` | 11 | none (tier-3 true-up) | not yet (S5) |
 | `window_commit_bid` | 11 | commitWindowOrder(side=buy) | shim (SH-WIN-3) |
-| `approve_pause` | 10 | approvePause sent by the attestor wallet | shim (SH-PAU-2) |
+| `approve_pause` | 10 | approvePause (permissionless; the named key's PAUSE signature over the live pause nonce, sent by the keeper) | direct |
 | `amend_terms` | 9 | amendTerms with a co-signing attestor | shim (SH-AMD-1) |
 | `claim_final` | 9 | claimFinal | direct |
 | `process_orders` | 9 | none (canonical clearing delivers inside clearTransferWindow) | shim (SH-WIN-7) |
@@ -266,7 +264,7 @@ Stage 1's key registry and signatures on paths no Stage 1 vector takes (S4 plan 
 | `end_pause` | 3 | none (crankPause ends a pause at its end only) | not yet (S5) |
 | `pay_trueup` | 3 | none (tier-3 true-up) | not yet (S5) |
 | `set_fx_pair` | 3 | none (admin FX pair configuration) | not yet (S5) |
-| `withdraw_pause_request` | 3 | none | not yet (S5) |
+| `withdraw_pause_request` | 3 | withdrawPauseRequest (advances the pause nonce) | direct |
 | `register_holder` | 2 | registerHolder | direct |
 | `set_flags` | 2 | pauseNewRaises (Stage 1 also has windows_enabled) | not yet (S5) |
 | `transfer_units` | 2 | none: a direct unit transfer, used only inside expect_revert (DirectTransferForbidden); the canonical model has no transfer to refuse | n/a (NA-1) |

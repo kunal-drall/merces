@@ -108,7 +108,13 @@ Secrets never enter the repository: `.env.example` lists names only; development
   never over a digest the caller supplies (a digest sent beside a signature must equal the rebuilt one). Since S4 WP9:
   a tier-3 case's REPORT signature (tier 3, the case's key, usable for the quarter) and an FX rate's FX signatures (one
   per covered series, each recovered over its own series key; one rate per period once signed). Report and FX
-  signatures carry no nonce and are no bearer authorisation: only the series' issuer can submit a report.
+  signatures carry no nonce and are no bearer authorisation: only the series' issuer can submit a report. Since S4 WP10:
+  a hardship approval's PAUSE signature, recovered over the message rebuilt with the nonce it signed, by the request's
+  key, active on the chain; the nonce is read again before the keeper relays it (409 `stale-nonce` when it moved).
+- The keeper sends only permissionless commands (S4 D3). A pause approval is one (Stage 1's `approve_pause` takes the
+  attestor's signature as an argument and anyone may submit it), and the keeper relays only a signature the attestor
+  service has checked as above; it holds no attestor key and adds nothing of its own. A chain refusal at the relay is
+  returned with Stage 1's name and nothing is stored.
 - **Residual risks** (S4; owner question 3's default is to accept and document them):
   - The tool cannot yet check a nonce against the chain. A compromised API could collect a PAUSE signature over a future
     pause nonce (N + 1), which approves whatever request N + 1 turns out to be, or EXTINGUISH signatures (nonce 0),
@@ -116,8 +122,11 @@ Secrets never enter the repository: `.env.example` lists names only; development
     chains it is to read the nonce from a public RPC itself (S5, with the live adapters).
   - Unrelayed PAUSE, AMEND and EXTINGUISH signatures are bearer authorisations (S4 amendment D2): anyone holding one can
     submit it. Stored ones are readable only by the signer's account, the series' issuer where the flow needs it
-    (AMEND) and admins, never in a public read, the activity feed or a notification (S4 WP10-WP12). A leaked one is
-    withdrawn only by rotating the key (the RUNBOOK's attestor key rotation).
+    (AMEND) and admins, never in a public read, the activity feed or a notification (S4 WP10-WP12). A PAUSE signature is
+    never stored unrelayed (S4 WP10): the service keeps an approval only once the chain accepted it, and a refused or
+    failed relay stores nothing (the attestor's tool keeps its own output). A leaked PAUSE signature dies when its nonce
+    moves: the issuer withdraws the request (`build-withdraw`) or requests again; any other leaked one is withdrawn only
+    by rotating the key (the RUNBOOK's attestor key rotation).
   - A raw-digest key signs any 32 bytes. The key is dedicated and never funded, and the tool signs only digests it
     rebuilt; the expert fallback (`cast wallet sign --no-hash`) signs blind and is documented as such.
 

@@ -16,6 +16,9 @@ import {
  *  - S3-CV: a curve's `completeCurve` and `collectCurveProceeds` (Stage 1 `complete_curve`, `collect_curve_proceeds`) join it too.
  *  - S3-CN: and its census `syncCurveUnits` (Stage 1 `sync_curve_units`).
  *
+ * S4 cause code:
+ *  - S4-PAU: a signed pause approval `approvePause` (Stage 1 `approve_pause`) joins the permissionless group (S4 WP10).
+ *
  * S3 follow-up cause code:
  *  - NRC: the non-reveal charge is modelled as Stage 1's code does (was S2-NRC, the owner hold: 0 bps applied whatever a
  *    series recorded): the rules carry the series' own rate, and `NonRevealCharged` and `FeeTaken{nonReveal}` exist.
@@ -72,7 +75,7 @@ describe('permissionless commands and the settlement events (cause S2-MS)', () =
       expect(serviceCommandSchema.parse(c)).toEqual(c);
     }
     expect(serviceCommandSchema.parse({ kind: 'crankStatus', seriesId: SID }).kind).toBe('crankStatus');
-    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits']); // cause S3-BR, S3-CV, S3-CN
+    expect(permissionlessCommandKinds).toEqual(['beginSettlement', 'tallyBids', 'finalizeSettlement', 'processBid', 'deliverBid', 'registerHolder', 'burnRetired', 'completeCurve', 'collectCurveProceeds', 'syncCurveUnits', 'approvePause']); // cause S3-BR, S3-CV, S3-CN, S4-PAU
     for (const maxBids of [0, 1.5, -1]) expect(() => permissionlessCommandSchema.parse({ kind: 'tallyBids', seriesId: SID, maxBids })).toThrow();
     expect(() => permissionlessCommandSchema.parse({ kind: 'beginSettlement', seriesId: SID, clearingPrice: '9.5', qAboveClaim: '0', qAtClaim: '0' })).toThrow();
     expect(() => userCommandSchema.parse({ kind: 'deliverBid', seriesId: SID, bidder: 'b0' })).toThrow();

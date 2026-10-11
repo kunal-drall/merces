@@ -1,12 +1,13 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbTestsEnabled } from '@merces/db';
-import { E2E_TIER3_OPENING, SigningError, ZERO_INCOME_COMMITMENT, fxDigest, recoverSigner, reportDigest, type SigningRequest, type UnsignedTx } from '@merces/domain';
+import { E2E_TIER3_OPENING, SigningError, ZERO_INCOME_COMMITMENT, fxDigest, pauseDigest, recoverSigner, reportDigest, type SigningRequest, type UnsignedTx } from '@merces/domain';
 import { WAD, parsePeriod, periodOf, ratePerUnit, wadFromDecimal } from '@merces/math';
 import { deriveTestPrivateKey } from '@merces/math/testing';
 import { AttestorKey, assembleOnDevice, checkRequest, checkTier3Opening, describeSigningRequest, generateE2eKeyPair, openTier3Opening, pinNetworks, sealE2e, sealTier3Opening, signRequest } from '@merces/poi-device';
 import { assertOpaqueCiphertext, assertTier3OpeningEnvelope } from '@merces/services';
-import { SimSigner, type SimHarness } from '@merces/simulator';
+import { SimSigner, type SimAttestor, type SimHarness } from '@merces/simulator';
+import { project } from '@merces/indexer';
 import { makeRig } from './helpers.ts';
 
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -30,6 +31,13 @@ const DAY = 86_400;
  *  - S4-FX: an FX fallback is Stage 1's FX message signed once per covered series (`GET .../messages`, then
  *    `POST .../sign {rateWad, signer, sourceNote, signatures}`; was one EIP-191 text per pair); the issuer reads its
  *    series' signature as `fxFallback`.
+ *  - S4-PAU: a hardship approval is the request key's Stage 1 PAUSE signature over the series' live pause nonce and the
+ *    end, made by the attestor tool from `GET /attestor/hardship/{id}/message` and posted to `decide {approve, pauseEnd,
+ *    pauseNonce, attestation}`; the keeper relays it (`approve_pause` is permissionless) and the decision returns the
+ *    relay transaction (was `{approve, until}` returning an approvePause for the attestor to send);
+ *  - S4-WD: the issuer withdraws a pending onchain request (`POST /series/{id}/hardship/build-withdraw`, Stage 1
+ *    `withdraw_pause_request`); the indexer marks the hardship request withdrawn, and a signature collected for it is
+ *    stale (409 `stale-nonce`).
  */
 
 /** The attestor's own device key for a harness attestor: the same published test key (its seed), in the tool's keystore type. */
@@ -83,6 +91,16 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
   afterAll(async () => {
     await rig.close();
   });
+
+  /**
+   * cause S4-PAU: a decision body carrying the harness key's PAUSE signature over the series' live pause nonce and
+   * `pauseEnd` (the WP8 tool signs the API's request in the first hardship test; this is the same signature, for the
+   * refusals that come before the signature is checked and for the approvals that only move the clock).
+   */
+  const harnessDecision = async (sid: string, pauseEnd: number, att: SimAttestor = h.attestors[0]!) => {
+    const series = (await h.sim.getSeries(sid))!;
+    return { approve: true, pauseEnd: String(pauseEnd), pauseNonce: series.nonces.pause, attestation: await h.attestPause(sid, pauseEnd, att) };
+  };
 
   it('access matrix: the queue, profile and attestor views are attestor-only; the profile shows onchain registration', async () => {
     expect((await rig.get('/attestor/queue')).statusCode).toBe(401);
@@ -420,7 +438,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     ]);
   });
 
-  it('hardship: E2E ciphertext only, private review by the chosen attestor, approvePause signed by the attestor, holders see statuses only', async () => {
+  it('hardship: E2E ciphertext only, private review by the chosen attestor, the attestor tool signs the PAUSE request, the keeper relays it, holders see statuses only', async () => {
     const att = h.attestors[0]!;
     const now = await h.sim.now();
     const until = now + 90 * DAY;
@@ -441,85 +459,168 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     const req = await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext, keyHint: 'attestor-1 x25519 key v1' }, issuerTok, { 'idempotency-key': 'hard-1' });
     expect(req.statusCode, JSON.stringify(req.json())).toBe(201);
     const hardshipId = req.json().hardshipId as string;
-    expect(req.json()).toMatchObject({ state: 'pending', requestedUntil: until, attestor: att.address });
+    expect(req.json()).toMatchObject({ state: 'pending', requestedUntil: until, attestor: att.address, pauseNonce: null });
     expect(req.json().ciphertext).toBeUndefined();
+    expect(req.json()).not.toHaveProperty('approval');
     const tx = req.json().tx as UnsignedTx;
     expect(tx.command).toEqual({ kind: 'requestPause', seriesId, until });
     expect(tx.signer).toBe(h.issuer.address);
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext, keyHint: 'attestor-1 x25519 key v1' }, issuerTok, { 'idempotency-key': 'hard-1' })).json().hardshipId).toBe(hardshipId);
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(409);
 
-    // the attestor cannot approve before the issuer's requestPause landed (Stage 1's PauseNotRequested)
-    const early = await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: true }, attTok);
+    // the attestor can neither get a PAUSE request nor approve before the issuer's requestPause landed (Stage 1's
+    // PauseNotRequested); cause S4-PAU: a decision carries the key's PAUSE signature over the nonce and the end
+    const approvedUntil = until - 30 * DAY;
+    const earlyMsg = await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=${approvedUntil}`, attTok);
+    expect([earlyMsg.statusCode, earlyMsg.json().detail]).toEqual([409, { stage1: 'PauseNotRequested' }]);
+    const early = await rig.post(`/attestor/hardship/${hardshipId}/decide`, await harnessDecision(seriesId, approvedUntil), attTok);
     expect(early.statusCode).toBe(409);
     expect(early.json().detail).toEqual({ stage1: 'PauseNotRequested' });
     const sent = await rig.post('/tx/send', await h.issuer.sign(tx), issuerTok);
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
-    expect(sent.json().events[0].type).toBe('PauseRequested');
+    expect(sent.json().events[0]).toMatchObject({ type: 'PauseRequested', payload: { seriesId, until, nonce: '1' } }); // cause S4-PAU: with the nonce
     // the requested end is advisory: recorded beside the request, no pause yet (cause P)
     expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 0, requested: true, requestedUntil: until, current: null });
+    // the indexer ties the pending request to its onchain request's nonce
+    await rig.sync();
 
-    // private review: only the chosen attestor (or an admin) reads the ciphertext
+    // private review: only the chosen attestor (or an admin) reads the ciphertext and gets the signing request
     expect((await rig.get(`/attestor/hardship/${hardshipId}`, att1Tok)).statusCode).toBe(403);
     expect((await rig.get(`/attestor/hardship/${hardshipId}`, issuerTok)).statusCode).toBe(403);
+    expect((await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=${approvedUntil}`, att1Tok)).statusCode).toBe(403);
+    expect((await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=${approvedUntil}`, issuerTok)).statusCode).toBe(403);
     expect((await rig.get('/attestor/queue', att1Tok)).json().hardship).toEqual([]);
     expect((await rig.get('/attestor/queue', attTok)).json().hardship.map((x: { hardshipId: string }) => x.hardshipId)).toEqual([hardshipId]);
     const view = await rig.get(`/attestor/hardship/${hardshipId}`, attTok);
     expect(view.statusCode).toBe(200);
-    expect(view.json()).toMatchObject({ ciphertext, keyHint: 'attestor-1 x25519 key v1', state: 'pending', pause: { requestedUntil: until, approvedUntil: null, startedAt: null } });
-    const adminView = await rig.get(`/attestor/hardship/${hardshipId}`, rig.token({ accountId: 'adm', roles: ['admin'], wallets: [] }));
+    expect(view.json()).toMatchObject({ ciphertext, keyHint: 'attestor-1 x25519 key v1', state: 'pending', pauseNonce: '1', livePauseNonce: '1', approval: null, relayTx: null, pause: { requestedUntil: until, approvedUntil: null, startedAt: null } });
+    const adminTok = rig.token({ accountId: 'adm', roles: ['admin'], wallets: [] });
+    const adminView = await rig.get(`/attestor/hardship/${hardshipId}`, adminTok);
     expect(adminView.json().ciphertext).toBe(ciphertext);
 
     // holders and the issuer: statuses and dates only
     const holderView = await rig.get(`/series/${seriesId}/hardship`, holderTok);
     expect(holderView.statusCode).toBe(200);
     expect(holderView.json()).toEqual({ seriesId, seriesStatus: expect.any(String), paused: false, pausedUntil: null, requests: [{ state: 'pending', requestedUntil: until, approvedUntil: null, requestedAt: expect.any(String), decidedAt: null }] });
-    expect(JSON.stringify(holderView.json())).not.toMatch(/ciphertext|keyHint|decisionCode|attestor/);
+    expect(JSON.stringify(holderView.json())).not.toMatch(/ciphertext|keyHint|decisionCode|attestor|signature|approval/);
 
-    // decision: not the chosen attestor; approved end after the requested end; then approve with a shorter end
-    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: true }, att1Tok)).statusCode).toBe(403);
-    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: true, until: until + DAY }, attTok)).statusCode).toBe(422);
-    // the chain holds an approval to Stage 1's bounds whoever builds it: an attestor's own approvePause ending more than a
-    // year out is PauseTooLong, one ending now is InvalidPauseEnd; both 422 with nothing changed (cause P)
+    // cause S4-PAU: the PAUSE signing request (S4 WP10): Stage 1's MERCES_PAUSE_V1 over the chain's domain, the series key,
+    // the live pause nonce and the end, for the request's key; public fields only, no display text. An end after the
+    // requested one, beyond u64, or one the chain would refuse is nothing to sign
+    expect((await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=${until + DAY}`, attTok)).statusCode).toBe(422);
+    const u64Plus = await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=${(1n << 64n).toString()}`, attTok);
+    expect([u64Plus.statusCode, u64Plus.json().detail]).toEqual([422, { stage1: 'AmountOutOfRange' }]);
+    expect((await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=${await h.sim.now()}`, attTok)).json().detail).toEqual({ stage1: 'InvalidPauseEnd' });
+    expect((await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=-1`, attTok)).statusCode).toBe(400);
+    expect((await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=${approvedUntil}&extra=1`, attTok)).statusCode).toBe(400);
+    const msg = await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=${approvedUntil}`, attTok);
+    expect(msg.statusCode, msg.body).toBe(200);
+    const signing = (await h.sim.info()).signing!;
+    const seriesKey = (await h.sim.getSeries(seriesId))!.seriesKey;
+    expect(msg.json()).toMatchObject({ kind: 'PAUSE', chain: h.sim.chain, seriesId, seriesKey, domain: signing, signer: att.address, fields: { pauseNonce: '1', pauseEnd: String(approvedUntil) }, validWhile: 'pause nonce 1' });
+    expect(msg.json().digest).toBe(pauseDigest({ domain: signing.domain, seriesKey }, { pauseNonce: 1n, pauseEnd: BigInt(approvedUntil) }).digest);
+    expect(msg.json()).not.toHaveProperty('display');
+    expect(msg.body).not.toContain(ciphertext.slice(0, 24));
+    // an admin may read it (it is public data) but never decide (A-M5-3)
+    expect((await rig.get(`/attestor/hardship/${hardshipId}/message?pauseEnd=${approvedUntil}`, adminTok)).statusCode).toBe(200);
+    // the attestor's device: its own pinned networks and key; it shows what is authorised from the typed fields and warns
+    // that the signature cannot be recalled; it refuses a request whose end was changed under the digest
+    const request = msg.json() as SigningRequest<'PAUSE'>;
+    const pinned = pinNetworks({ [h.sim.chain]: signing }, { allowLocal: true });
+    const device = deviceKey(att);
+    expect(() => signRequest({ ...request, fields: { ...request.fields, pauseEnd: String(until) } }, device, pinned, { allowLocal: true })).toThrow(SigningError);
+    const shown = describeSigningRequest(checkRequest(request, pinned, { allowLocal: true })).join('\n');
+    expect(shown).toMatch(/^Pause approval \(MERCES_PAUSE_V1\) at pause nonce 1/);
+    expect(shown).toMatch(/cannot be recalled/);
+    const sig = signRequest(request, device, pinned, { allowLocal: true });
+    device.wipe();
+    expect(sig).toEqual({ signer: att.address, signature: expect.stringMatching(/^0x[0-9a-f]{130}$/), digest: request.digest });
+    const body = { approve: true, pauseEnd: String(approvedUntil), pauseNonce: request.fields.pauseNonce, attestation: sig };
+
+    // decision: not the chosen attestor (another key's account; an admin never decides); the body's shape
+    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, body, att1Tok)).statusCode).toBe(403);
+    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, body, adminTok)).statusCode).toBe(403);
+    for (const bad of [{ approve: true }, { approve: true, until: approvedUntil }, { ...body, pauseEnd: approvedUntil }, { ...body, attestation: { ...sig, signature: 'sim:' + att.address } }, { ...body, extra: 1 }, { approve: false, pauseEnd: '1' }]) {
+      expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, bad, attTok)).statusCode, JSON.stringify(bad)).toBe(400);
+    }
+    // the approved end after the requested end; beyond u64
+    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, { ...body, pauseEnd: String(until + DAY) }, attTok)).statusCode).toBe(422);
+    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, { ...body, pauseEnd: (1n << 64n).toString() }, attTok)).json().detail).toEqual({ stage1: 'AmountOutOfRange' });
+    // the API recovers the signer over the PAUSE message it rebuilds from the chain's reads (never the caller's digest):
+    // another key's signature, another signer named, a signature over another end or nonce, a digest that is not this
+    // message, a non-canonical signature: 422 InvalidAttestorSignature, nothing recorded
+    const refusedSig = async (b: unknown, message: RegExp) => {
+      const r = await rig.post(`/attestor/hardship/${hardshipId}/decide`, b, attTok);
+      expect(r.statusCode, r.body).toBe(422);
+      expect(r.json().detail).toEqual({ stage1: 'InvalidAttestorSignature' });
+      expect(r.json().message).toMatch(message);
+    };
+    const otherKey = await h.attestPause(seriesId, approvedUntil, h.attestors[1]!);
+    await refusedSig({ ...body, attestation: { ...otherKey, signer: att.address } }, /digest|does not recover/);
+    await refusedSig({ ...body, attestation: { signer: att.address, signature: otherKey.signature } }, /does not recover/);
+    await refusedSig({ ...body, attestation: otherKey }, /signed by this request's attestor key/);
+    await refusedSig({ ...body, pauseEnd: String(approvedUntil - DAY) }, /digest/);
+    await refusedSig({ ...body, pauseEnd: String(approvedUntil - DAY), attestation: { signer: sig.signer, signature: sig.signature } }, /does not recover/);
+    await refusedSig({ ...body, pauseNonce: '0', attestation: { signer: sig.signer, signature: sig.signature } }, /does not recover/);
+    const n = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
+    const sHigh = (n - BigInt('0x' + sig.signature.slice(66, 130))).toString(16).padStart(64, '0');
+    await refusedSig({ ...body, attestation: { signer: sig.signer, signature: sig.signature.slice(0, 66) + sHigh + (sig.signature.slice(130) === '1b' ? '1c' : '1b') } }, /does not recover/);
+    expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 0, requested: true });
+    expect((await rig.t.pool.query('select state, approval, relay_tx from hardship_requests where hardship_id = $1', [hardshipId])).rows[0]).toEqual({ state: 'pending', approval: null, relay_tx: null });
+
+    // the chain holds an approval to Stage 1's bounds whoever sends it: anyone may relay a PAUSE signature (cause S4-PAU:
+    // approvePause is permissionless; here a backer's wallet), and an approval ending more than a year out is
+    // PauseTooLong, one ending now InvalidPauseEnd; both 422 with nothing changed (cause P)
     const chainNow = await h.sim.now();
     for (const [end, name] of [[chainNow + 366 * DAY, 'PauseTooLong'], [chainNow, 'InvalidPauseEnd']] as const) {
-      const direct = await rig.post('/tx/send', await att.sign(await h.sim.build({ kind: 'approvePause', seriesId, until: end }, att.address)), attTok);
+      const cmd = await h.pauseApproval(seriesId, end, att);
+      const direct = await rig.post('/tx/send', await h.backers[0]!.sign(await h.sim.build(cmd, h.backers[0]!.address)), holderTok);
       expect(direct.statusCode, name).toBe(422);
       expect(direct.json()).toMatchObject({ error: 'ChainInvalidTerms', detail: { stage1: name } });
     }
     expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 0, requested: true });
-    const approvedUntil = until - 30 * DAY;
-    const decided = await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: true, until: approvedUntil }, attTok, { 'idempotency-key': 'hard-decide-1' });
+
+    // the attestor's decision: the keeper relays the checked signature (the attestor sends no transaction)
+    const decided = await rig.post(`/attestor/hardship/${hardshipId}/decide`, body, attTok, { 'idempotency-key': 'hard-decide-1' });
     expect(decided.statusCode, JSON.stringify(decided.json())).toBe(200);
-    expect(decided.json()).toMatchObject({ state: 'approved', approvedUntil, decisionCode: 'approved' });
-    const approveTx = decided.json().tx as UnsignedTx;
-    expect(approveTx.command).toEqual({ kind: 'approvePause', seriesId, until: approvedUntil });
-    expect(approveTx.signer).toBe(att.address);
-    const approved = await rig.post('/tx/send', await att.sign(approveTx), attTok);
-    expect(approved.statusCode, JSON.stringify(approved.json())).toBe(200);
+    expect(decided.json()).toMatchObject({ state: 'approved', approvedUntil, decisionCode: 'approved', pauseNonce: '1', approval: { signer: att.address, signature: sig.signature, digest: sig.digest, pauseNonce: '1', pauseEnd: String(approvedUntil) }, relayTx: expect.any(String) });
+    expect(decided.json()).not.toHaveProperty('tx');
+    // the same idempotency key replays the stored answer; the signature is not relayed twice
+    const replay = await rig.post(`/attestor/hardship/${hardshipId}/decide`, body, attTok, { 'idempotency-key': 'hard-decide-1' });
+    expect(replay.json()).toEqual(decided.json());
+    const relayed = (await h.sim.readEvents(null, 10_000)).events.filter((e) => e.txId === decided.json().relayTx);
     // cause P: approve_pause is a Stage 1 sync point; this series has reported nothing for more than 90 days after its
     // first period ended, so the formal notice and the lateness release block are recorded with the approval
-    expect(approved.json().events.map((e: { type: string }) => e.type)).toEqual(['PauseApproved', 'StatusChanged', 'FormalNoticeDue', 'ReleasesPaused']);
+    expect(relayed.map((e) => e.type)).toEqual(['PauseApproved', 'StatusChanged', 'FormalNoticeDue', 'ReleasesPaused']);
+    expect(relayed[0]!.payload).toEqual({ seriesId, attestor: att.address, start: expect.any(Number), until: approvedUntil });
     expect((await h.sim.getSeries(seriesId))!.status).toBe('Paused');
     // the pause runs from the approval to the approved end, 30 days before the requested one (cause P: the request's end
-    // was advisory)
+    // was advisory); the approval left the nonce where it was
     expect((await h.sim.getSeries(seriesId))!.pauses).toMatchObject({ count: 1, requested: false, requestedUntil: null, current: { end: approvedUntil } });
+    expect((await h.sim.getSeries(seriesId))!.nonces.pause).toBe('1');
+    // a second decision is a 409: the request is decided (and the chain would refuse a replay: PauseNotRequested)
+    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, body, attTok)).statusCode).toBe(409);
+    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: false, decisionCode: 'insufficient-evidence' }, attTok)).statusCode).toBe(409);
     await rig.sync();
     expect((await rig.get(`/series/${seriesId}/status`)).json().status).toBe('Paused');
     const after = await rig.get(`/series/${seriesId}/hardship`, holderTok);
     expect(after.json()).toMatchObject({ seriesStatus: 'Paused', paused: true, pausedUntil: approvedUntil, requests: [{ state: 'approved', approvedUntil }] });
+    expect(JSON.stringify(after.json())).not.toMatch(/signature|approval|relay/);
     expect((await rig.get(`/series/${seriesId}/hardship`, issuerTok)).json().requests[0].state).toBe('approved');
-    expect((await rig.post(`/attestor/hardship/${hardshipId}/decide`, { approve: false, decisionCode: 'insufficient-evidence' }, attTok)).statusCode).toBe(409);
     expect((await rig.get('/attestor/queue', attTok)).json().hardship).toEqual([]);
+    // the attestor's view keeps the relayed approval (public data once on the chain)
+    expect((await rig.get(`/attestor/hardship/${hardshipId}`, attTok)).json()).toMatchObject({ state: 'approved', approval: { signer: att.address, signature: sig.signature }, relayTx: decided.json().relayTx });
     const audit = await rig.t.pool.query('select action, detail from audit_log where target = $1 order by id', [hardshipId]);
     expect(audit.rows.map((r) => r.action)).toEqual(['hardship.approve']);
+    expect(audit.rows[0].detail).toMatchObject({ seriesId, until: approvedUntil, signer: att.address, pauseNonce: '1', digest: sig.digest, relayTx: decided.json().relayTx });
     expect(JSON.stringify(audit.rows)).not.toContain(CANARY);
-    // notifications carry statuses, never reasons
+    // notifications carry statuses, never reasons or signatures
     const outbox = await rig.t.pool.query("select payload from outbox where payload->>'hardshipId' = $1 order by id", [hardshipId]);
     expect(outbox.rows.map((r) => r.payload.kind)).toEqual(['hardship.requested', 'hardship.approved']);
-    expect(JSON.stringify(outbox.rows)).not.toMatch(/medical|reason/);
+    expect(JSON.stringify(outbox.rows)).not.toMatch(/medical|reason|signature|0x[0-9a-f]{130}/);
+    // the public activity feed names the request and the approval, never a signature
+    expect(JSON.stringify((await rig.t.pool.query("select summary from activity where series_id = $1 and kind like 'Pause%'", [seriesId])).rows)).not.toMatch(/0x[0-9a-f]{130}/);
 
-    // a rejection carries a code only
     const paused = (await h.sim.getSeries(seriesId))!;
     expect(paused.status).toBe('Paused');
     expect((await rig.post(`/series/${seriesId}/hardship`, { until, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok)).statusCode).toBe(409); // paused: no new request
@@ -583,22 +684,24 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
       expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
       return r.json().hardshipId as string;
     };
+    // cause S4-PAU: an approval is the key's PAUSE signature over the live nonce, relayed by the keeper
     const approve = async (id: string, until: number) => {
-      const d = await rig.post(`/attestor/hardship/${id}/decide`, { approve: true, until }, attTok);
+      const d = await rig.post(`/attestor/hardship/${id}/decide`, await harnessDecision(s, until, att), attTok);
       expect(d.statusCode, JSON.stringify(d.json())).toBe(200);
       expect(d.json()).toMatchObject({ state: 'approved', approvedUntil: until });
-      const sent = await rig.post('/tx/send', await att.sign(d.json().tx as UnsignedTx), attTok);
-      expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
-      expect(sent.json().events[0].type).toBe('PauseApproved');
+      const relayed = (await h.sim.readEvents(null, 100_000)).events.filter((e) => e.txId === d.json().relayTx);
+      expect(relayed[0]!.type).toBe('PauseApproved');
     };
     /** a refused decision: Stage 1's name, a message without the date, and nothing recorded, notified or audited */
-    const refused = async (id: string, body: { approve: true; until?: number }, stage1: string) => {
-      const r = await rig.post(`/attestor/hardship/${id}/decide`, body, attTok);
+    const refused = async (id: string, until: number, stage1: string) => {
+      const r = await rig.post(`/attestor/hardship/${id}/decide`, await harnessDecision(s, until, att), attTok);
       expect(r.statusCode, JSON.stringify(r.json())).toBe(422);
       expect(r.json()).toMatchObject({ error: 'Unprocessable', detail: { stage1 } });
       expect(Object.keys(r.json().detail)).toEqual(['stage1']);
-      const pending = await rig.t.pool.query('select state, approved_until, decision_code, decided_at from hardship_requests where hardship_id = $1', [id]);
-      expect(pending.rows[0]).toEqual({ state: 'pending', approved_until: null, decision_code: null, decided_at: null });
+      const pending = await rig.t.pool.query('select state, approved_until, decision_code, decided_at, approval, relay_tx from hardship_requests where hardship_id = $1', [id]);
+      expect(pending.rows[0]).toEqual({ state: 'pending', approved_until: null, decision_code: null, decided_at: null, approval: null, relay_tx: null });
+      // the signing request is refused alike: nothing to sign for an end the chain refuses
+      expect((await rig.get(`/attestor/hardship/${id}/message?pauseEnd=${until}`, attTok)).json().detail).toEqual({ stage1 });
       expect((await rig.get('/attestor/queue', attTok)).json().hardship.map((x: { hardshipId: string }) => x.hardshipId)).toContain(id);
       expect((await rig.t.pool.query("select payload->>'kind' as kind from outbox where payload->>'hardshipId' = $1 order by id", [id])).rows.map((x) => x.kind)).toEqual(['hardship.requested']);
       expect((await rig.t.pool.query('select 1 from audit_log where target = $1', [id])).rowCount).toBe(0);
@@ -608,11 +711,11 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     // a requested end more than a year out is advisory and accepted; approving it as requested is PauseTooLong
     let now = await h.sim.now();
     const first = await open(now + 400 * DAY);
-    const msg = await refused(first, { approve: true }, 'PauseTooLong');
+    const msg = await refused(first, now + 400 * DAY, 'PauseTooLong');
     expect(msg).toBe('a pause may last at most 365 days, and the series\' pauses 730 days in total');
     expect(msg).not.toContain(String(now + 400 * DAY));
-    await refused(first, { approve: true, until: now + 365 * DAY + 1 }, 'PauseTooLong');
-    await refused(first, { approve: true, until: now }, 'InvalidPauseEnd');
+    await refused(first, now + 365 * DAY + 1, 'PauseTooLong');
+    await refused(first, now, 'InvalidPauseEnd');
     expect((await rig.get(`/series/${s}/hardship`, issuerTok)).json()).toMatchObject({ paused: false, requests: [{ state: 'pending', approvedUntil: null, decidedAt: null }] });
     expect((await h.sim.getSeries(s))!.pauses).toMatchObject({ count: 0, requested: true });
     // the attestor decides again, at the bound, and the chain accepts it
@@ -632,7 +735,7 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     await h.sim.advanceTime(300 * DAY);
     now = await h.sim.now();
     const third = await open(now + 100 * DAY);
-    await refused(third, { approve: true, until: now + 66 * DAY }, 'PauseTooLong');
+    await refused(third, now + 66 * DAY, 'PauseTooLong');
     await approve(third, now + 65 * DAY);
 
     // nothing is left: a new request is refused before the issuer sends it, with nothing stored or notified
@@ -645,6 +748,113 @@ describe.skipIf(!dbTestsEnabled())('E10 attestor service through the API (hardsh
     expect((await rig.t.pool.query('select count(*)::int as n from hardship_requests where series_id = $1', [s])).rows[0].n).toBe(rows);
     expect((await h.sim.getSeries(s))!.pauses).toMatchObject({ count: 3, pausedTotalSeconds: 730 * DAY, requested: false });
     expect((await rig.get(`/series/${s}/hardship`, issuerTok)).json().requests.map((x: { state: string }) => x.state)).toEqual(['approved', 'approved', 'approved']);
+  });
+
+  // cause S4-PAU, S4-WD (S4 WP10): the PAUSE signature binds the series' live pause nonce, which a re-request or the
+  // issuer's withdrawal moves; the attestor service reads it again before the keeper relays, and the indexer follows the
+  // onchain request. A chain refusal at the relay leaves the request pending, with nothing stored.
+  it('hardship: a re-request makes a collected signature stale (409 with a fresh request); the issuer withdraws; a refused relay leaves the request pending', async () => {
+    const att = h.attestors[0]!;
+    const s = (await h.runRaise()).seriesId;
+    await rig.sync();
+    const pinned = pinNetworks({ [h.sim.chain]: (await h.sim.info()).signing! }, { allowLocal: true });
+    /** the attestor tool signs the API's PAUSE request; the decision body as the tool's output posts */
+    const signed = async (id: string, end: number) => {
+      const msg = await rig.get(`/attestor/hardship/${id}/message?pauseEnd=${end}`, attTok);
+      expect(msg.statusCode, msg.body).toBe(200);
+      const request = msg.json() as SigningRequest<'PAUSE'>;
+      const device = deviceKey(att);
+      const sig = signRequest(request, device, pinned, { allowLocal: true });
+      device.wipe();
+      return { approve: true, pauseEnd: String(end), pauseNonce: request.fields.pauseNonce, attestation: sig };
+    };
+    const row = async (id: string) => (await rig.t.pool.query('select state, decision_code, pause_nonce::text, approval, relay_tx from hardship_requests where hardship_id = $1', [id])).rows[0];
+    let now = await h.sim.now();
+    const open = await rig.post(`/series/${s}/hardship`, { until: now + 90 * DAY, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok);
+    expect(open.statusCode, open.body).toBe(201);
+    const a = open.json().hardshipId as string;
+    expect((await rig.post('/tx/send', await h.issuer.sign(open.json().tx as UnsignedTx), issuerTok)).statusCode).toBe(200);
+    await rig.sync();
+    expect(await row(a)).toMatchObject({ state: 'pending', pause_nonce: '1' });
+    const end = now + 30 * DAY;
+    const atOne = await signed(a, end);
+    expect(atOne.pauseNonce).toBe('1');
+    // the issuer requests again onchain (nonce 1 → 2): the collected signature is dead on the chain; the decision reads the
+    // nonce again and answers 409 stale-nonce with the fresh signing request, nothing recorded or relayed
+    await h.exec(h.issuer, { kind: 'requestPause', seriesId: s, until: now + 60 * DAY });
+    await rig.sync();
+    expect(await row(a)).toMatchObject({ state: 'pending', pause_nonce: '2' });
+    const stale = await rig.post(`/attestor/hardship/${a}/decide`, atOne, attTok);
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json().detail).toMatchObject({ reason: 'stale-nonce', livePauseNonce: '2', request: { kind: 'PAUSE', signer: att.address, fields: { pauseNonce: '2', pauseEnd: String(end) } } });
+    expect(stale.json().detail.request.digest).not.toBe(atOne.attestation.digest);
+    // claiming the live nonce for the old signature does not help: it no longer recovers to the key
+    const lied = await rig.post(`/attestor/hardship/${a}/decide`, { ...atOne, pauseNonce: '2', attestation: { signer: att.address, signature: atOne.attestation.signature } }, attTok);
+    expect([lied.statusCode, lied.json().detail]).toEqual([422, { stage1: 'InvalidAttestorSignature' }]);
+    expect(await row(a)).toMatchObject({ state: 'pending', approval: null, relay_tx: null });
+    expect((await h.sim.getSeries(s))!.pauses).toMatchObject({ count: 0, requested: true });
+
+    // cause S4-WD: the issuer withdraws its onchain request (build-withdraw, the issuer's only)
+    expect((await rig.post(`/series/${s}/hardship/build-withdraw`, {}, holderTok)).statusCode).toBe(403);
+    expect((await rig.post(`/series/${s}/hardship/build-withdraw`, {}, attTok)).statusCode).toBe(403);
+    const wd = await rig.post(`/series/${s}/hardship/build-withdraw`, {}, issuerTok);
+    expect(wd.statusCode, wd.body).toBe(200);
+    expect(wd.json()).toMatchObject({ seriesId: s, pauseNonce: '2', tx: { command: { kind: 'withdrawPauseRequest', seriesId: s }, signer: h.issuer.address } });
+    const sentWd = await rig.post('/tx/send', await h.issuer.sign(wd.json().tx as UnsignedTx), issuerTok);
+    expect(sentWd.statusCode, sentWd.body).toBe(200);
+    expect(sentWd.json().events).toEqual([{ type: 'PauseRequestWithdrawn', seq: expect.any(Number), payload: { seriesId: s, nonce: '3' } }]);
+    // before the indexer catches up the chain already says no request: nothing to sign, nothing to approve
+    expect((await rig.get(`/attestor/hardship/${a}/message?pauseEnd=${end}`, attTok)).json().detail).toEqual({ stage1: 'PauseNotRequested' });
+    expect((await rig.post(`/attestor/hardship/${a}/decide`, atOne, attTok)).json().detail).toEqual({ stage1: 'PauseNotRequested' });
+    expect((await rig.post(`/series/${s}/hardship/build-withdraw`, {}, issuerTok)).json().detail).toEqual({ stage1: 'PauseNotRequested' });
+    await rig.sync();
+    expect(await row(a)).toMatchObject({ state: 'withdrawn', decision_code: 'withdrawn', pause_nonce: '2', approval: null });
+    expect((await rig.get('/attestor/queue', attTok)).json().hardship.map((x: { hardshipId: string }) => x.hardshipId)).not.toContain(a);
+    expect((await rig.post(`/attestor/hardship/${a}/decide`, { approve: false }, attTok)).statusCode).toBe(409);
+    expect((await rig.get(`/series/${s}/hardship`, holderTok)).json().requests).toEqual([expect.objectContaining({ state: 'withdrawn', approvedUntil: null })]);
+
+    // a new request; a replay of the older withdrawal never withdraws it (its request's nonce is above the event's)
+    now = await h.sim.now();
+    const again = await rig.post(`/series/${s}/hardship`, { until: now + 90 * DAY, attestor: att.address, ciphertext: e2e(HARDSHIP_PLAIN) }, issuerTok);
+    expect(again.statusCode, again.body).toBe(201);
+    const b = again.json().hardshipId as string;
+    expect((await rig.post('/tx/send', await h.issuer.sign(again.json().tx as UnsignedTx), issuerTok)).statusCode).toBe(200);
+    await rig.sync();
+    expect(await row(b)).toMatchObject({ state: 'pending', pause_nonce: '4' });
+    const withdrawn = (await h.sim.readEvents(null, 100_000)).events.filter((e) => e.type === 'PauseRequestWithdrawn' && (e.payload as { seriesId: string }).seriesId === s);
+    const c = await rig.t.pool.connect();
+    try {
+      for (const e of withdrawn) await project(c, e);
+    } finally {
+      c.release();
+    }
+    expect(await row(b)).toMatchObject({ state: 'pending', pause_nonce: '4' });
+
+    // the relay loses a race onchain: another sender's copy of the same approval lands first, so the chain refuses the
+    // keeper's (PauseNotRequested, 422 with Stage 1's name); the request stays pending with nothing stored (A-REV-23)
+    const body = await signed(b, now + 30 * DAY);
+    const port = h.sim;
+    const submit = port.submit.bind(port);
+    port.submit = async (cmd, role) => {
+      if (cmd.kind === 'approvePause') await submit(cmd, role);
+      return submit(cmd, role);
+    };
+    let lost;
+    try {
+      lost = await rig.post(`/attestor/hardship/${b}/decide`, body, attTok);
+    } finally {
+      port.submit = submit;
+    }
+    expect(lost.statusCode, lost.body).toBe(422);
+    expect(lost.json()).toMatchObject({ error: 'ChainWrongStatus', detail: { stage1: 'PauseNotRequested' } });
+    expect(await row(b)).toMatchObject({ state: 'pending', approval: null, relay_tx: null });
+    expect((await rig.t.pool.query("select count(*)::int as n from audit_log where target = $1 and action = 'hardship.approve'", [b])).rows[0].n).toBe(0);
+    expect((await h.sim.getSeries(s))!.status).toBe('Paused');
+    // the attestor closes it with a code (no signature needed)
+    const closed = await rig.post(`/attestor/hardship/${b}/decide`, { approve: false, decisionCode: 'approved-elsewhere' }, attTok);
+    expect(closed.statusCode, closed.body).toBe(200);
+    expect(closed.json()).toMatchObject({ state: 'rejected', decisionCode: 'approved-elsewhere', relayTx: null });
+    expect(closed.json()).not.toHaveProperty('approval');
   });
 
   it('privacy: the attestor tables and logs hold ciphertext and amounts only — never the plaintext or the canary', async () => {

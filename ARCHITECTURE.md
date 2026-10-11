@@ -117,7 +117,8 @@ ProofOfIncome circuit (Groth16) on the device; only commitments, the payment and
 holds the attestor's side (S4 WP8, A-SIG-2): `merces-attestor` keeps the attestor's secp256k1 key in a Web3 Secret
 Storage v3 keystore on the attestor's machine, checks each signing request against its own pinned network table,
 rebuilds Stage 1's digest from the typed fields and signs only that; only the signature leaves it. Since S4 WP9 the
-attestor service hands it the tier-3 REPORT and the per-series FX signing requests.
+attestor service hands it the tier-3 REPORT and the per-series FX signing requests, and since S4 WP10 a hardship
+approval's PAUSE request, whose signature the keeper relays (Stage 1's `approve_pause` is permissionless).
 
 ## Stage 1 catch-up
 
