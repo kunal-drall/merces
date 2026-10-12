@@ -6,12 +6,18 @@ in parallel. **This repository is Stage 2**: everything that connects both chain
 legal contracts, identity checks, exchange rates) and the single chain-neutral API Stage 3's apps use. The brief is
 `BUILD_PROMPT.md`.
 
-Stage 1 has no devnet or testnet deployment yet, so everything runs against a **deterministic simulator** of the
-mechanism behind one `ChainPort` interface. Stage 1's code is the pinned `stage1` submodule (SPEC v1.1.2): its math is
-imported, not rewritten, and the simulator follows Stage 1's rules, checked by replaying Stage 1's own parity vectors
-(`STAGE1_INTEGRATION.md`). `pnpm stage1:sync` generates typed clients from Stage 1's IDLs and ABIs, reports every
-interface difference, and, once Stage 1 is deployed, proves with one shared conformance suite that the live chains
-behave like the simulator.
+Solana devnet and Monad testnet deployments are connected to the hosted backend for **team-only testnet trials**.
+The Solana trial includes a Meteora DBC raise that graduated into DAMM v2 and a finalized holder stake.
+Income and identity inputs in this trial are synthetic; it is not a mainnet launch or a completed external income-verification integration.
+Deployment manifests and transaction evidence are in [merces-release](https://github.com/kunal-drall/merces-release).
+The app and site live in [merces-frontend](https://github.com/kunal-drall/merces-frontend), with documentation in
+[merces-docs](https://github.com/kunal-drall/merces-docs).
+
+A **deterministic simulator** remains available behind the same `ChainPort` interface for local development and tests.
+Stage 1's code is the pinned `stage1` submodule (SPEC v1.1.2); its math is imported, not rewritten. The simulator follows
+Stage 1's rules, checked by replaying its parity vectors (`STAGE1_INTEGRATION.md`). `pnpm stage1:sync` generates typed
+clients from the pinned IDLs and ABIs and reports interface differences. The quick start below runs the simulator,
+not the hosted testnet environment.
 
 ## Quick start
 
@@ -59,8 +65,9 @@ external facts the code relies on, with sources), `docs/milestones/` (what each 
 
 ## Ground rules this code keeps
 
-Never mainnet, never real funds or personal data. No custody: the backend builds unsigned transactions and holds only
-keeper and allowlist-manager keys (the report verifier's key sits behind the KMS port; attestor keys never leave the
-attestors' own machines, and nobody co-signs: S4). No raw income at rest, in logs, in queues or in error reports (a canary test proves
+Never mainnet, never real funds or personal data. The backend builds unsigned user transactions. In the current hosted
+trial, keeper, approval, and verifier signing keys stay in the local operator's macOS Keychain; the cloud requests
+scoped signatures and signer-dependent keeper jobs defer while that operator is offline. KMS is an available port,
+not the active signing configuration. Attestor keys stay on the attestors' machines. No raw income at rest, in logs, in queues or in error reports (a canary test proves
 it). A chain-neutral API. Money and charter semantics come from the brief; every ambiguity that could change who gets
 paid is recorded in `ASSUMPTIONS.md` and flagged for Kunal.
