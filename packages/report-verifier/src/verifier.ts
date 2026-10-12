@@ -80,6 +80,8 @@ export interface PreviousVerifierAddress {
 
 /** What `GET /keys` serves: the key's address and public key, the chains and domains it signs for, the retired addresses. */
 export interface VerifierKeyInfo {
+  /** Browser-to-local-verifier encryption; the hosted relay holds no decryption key. */
+  transport?: { kind: 'local-operator-v1'; encryptionSignature:string; encryptionKey: {kty:'RSA';n:string;e:'AQAB'} };
   /** the secp256k1 key's 20-byte address (lowercase), the address registered onchain as a verifier key */
   address: string;
   /** the uncompressed public key, `04 ‖ X ‖ Y`, hex without `0x` */

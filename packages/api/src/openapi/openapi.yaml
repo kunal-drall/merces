@@ -482,6 +482,7 @@ components:
       description: "The report verifier a device talks to (S4 WP6): its URL, the 20-byte address of its secp256k1 key (the address each chain registers as a verifier key; GET /chains and the chains' registries are public) and the chains it signs for, each with the signing domain it holds (the device can compare it with GET /chains). Public data."
       required: [url, address, chains]
       properties:
+        transport: { type: object, additionalProperties: true, description: 'Optional encrypted local-operator transport and signed encryption public key' }
         url: { type: string }
         address: { type: string, pattern: '^0x[0-9a-f]{40}$' }
         syntheticIncome: { $ref: '#/components/schemas/SyntheticIncomeInfo' }

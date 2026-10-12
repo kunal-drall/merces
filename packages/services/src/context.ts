@@ -4,6 +4,7 @@ import type { ReportVerifierPort } from '@merces/report-verifier';
 
 /** Everything a service needs. Built once per process (main, dev:mock, tests). */
 export interface ServiceContext extends AppContext {
+  localOperator?: import('./local-operator/service.ts').LocalOperator;
   kms: KmsPort;
   vault: VaultCrypto;
   identity: IdentityCheckPort;

@@ -1,3 +1,4 @@
+import { bootstrapOperator } from '../local-operator/bootstrap.ts';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { proposeIssuerRegistration } from '../admin/issuer-registration.ts';
@@ -54,7 +55,7 @@ export class IdentityService {
     const nonce = randomBytes(16).toString('hex');
     const issuedAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + NONCE_TTL_MS);
-    await this.ctx.pool.query("insert into auth_nonces (nonce, chain, address, expires_at, purpose) values ($1,$2,$3,$4,'sign-in')", [nonce, chain, addr, expiresAt]);
+    await this.ctx.pool.query("insert into auth_nonces (nonce, chain, address, expires_at, issued_at, purpose) values ($1,$2,$3,$4,$5,'sign-in')", [nonce, chain, addr, expiresAt, issuedAt]);
     return { nonce, message: signInMessage({ domain: this.ctx.signInDomain, chain, address: addr, nonce, issuedAt }), expiresAt: expiresAt.toISOString() };
   }
 
@@ -66,12 +67,13 @@ export class IdentityService {
     const addr = normaliseAddress(params.address, family);
     const nonce = /Nonce: ([0-9a-f]{32})/.exec(params.message)?.[1];
     if (!nonce) throw AppError.badRequest('message has no nonce');
-    const n = await this.ctx.pool.query<{ chain: string | null; address: string; purpose: string; expires_at: Date; used_at: Date | null }>('select chain, address, purpose, expires_at, used_at from auth_nonces where nonce = $1', [nonce]);
+    const n = await this.ctx.pool.query<{ chain: string | null; address: string; purpose: string; issued_at:Date; expires_at: Date; used_at: Date | null }>('select chain, address, purpose, issued_at, expires_at, used_at from auth_nonces where nonce = $1', [nonce]);
     const row = n.rows[0];
     // a sign-in (and a wallet link, which is a sign-in into the session's account) takes a sign-in nonce only: a key-link
     // challenge is never a sign-in, whatever it says (S4 WP7, amendment fix 2)
     if (!row || row.purpose !== 'sign-in' || row.chain !== params.chain || row.address !== addr) throw AppError.unauthorized('unknown nonce');
     if (row.used_at || row.expires_at.getTime() < Date.now()) throw AppError.unauthorized('nonce expired or used');
+    if(params.message!==signInMessage({domain:this.ctx.signInDomain,chain:params.chain,address:addr,nonce,issuedAt:row.issued_at.toISOString()})) throw AppError.unauthorized('sign-in challenge differs from the issued message');
     const ok = await verifyWalletSignature({ family, address: addr, message: params.message, signature: params.signature, allowSimulator: this.ctx.devMode });
     if (!ok) throw AppError.unauthorized('bad signature');
     // spent once: of two concurrent uses, one wins
@@ -93,6 +95,7 @@ export class IdentityService {
       await this.ctx.pool.query('insert into accounts (account_id, roles) values ($1, $2)', [accountId, ['backer']]);
       await this.ctx.pool.query('insert into account_wallets (chain, address, account_id, family) values ($1,$2,$3,$4)', [params.chain, addr, accountId, family]);
     }
+    await bootstrapOperator(this.ctx, accountId, params.chain, addr);
     const session = await this.sessionFor(accountId);
     return { token: issueSession(this.ctx.sessionSecret, session), session, created };
   }
@@ -361,13 +364,17 @@ export class IdentityService {
       await withTransaction(this.ctx.pool, async (db) => {
         const cur = await db.query<{ state: string }>('select state from applications where application_id = $1 for update', [id]);
         if (!['submitted', 'in_review'].includes(cur.rows[0]?.state ?? '')) throw AppError.conflict(`application is ${cur.rows[0]?.state}`);
-        if (decision === 'approved') allowlistTx = (await this.ctx.chains.get(a.chain).submit({ kind: 'setAllowlist', wallet: a.wallet, allowed: true }, 'allowlistManager')).txId;
+        if (decision === 'approved') {
+          const port = this.ctx.chains.get(a.chain);
+          allowlistTx = (await port.submit({ kind: 'setAllowlist', wallet: a.wallet, allowed: true }, 'allowlistManager')).txId;
+          if (this.ctx.localOperator && !(await port.isAllowlisted(a.wallet))) throw AppError.conflict('onchain allowlist confirmation is pending');
+        }
         await db.query('update applications set state = $2, reviewer = $3, decision_reason_code = $4, decided_at = case when $2 in (\'approved\',\'rejected\') then now() else null end, updated_at = now() where application_id = $1', [id, decision, admin.accountId, reasonCode]);
         await audit(db, { actor: admin.accountId, actorRole: 'admin', action: `application.${decision}`, target: id, detail: { reasonCode } });
         if (decision === 'approved') {
           await db.query('update accounts set roles = array(select distinct unnest(roles || $2::text[])) where account_id = $1', [a.account_id, [a.kind]]);
           await db.query('insert into eligibility (chain, wallet, account_id, kind, allowlist_synced_at, allowlist_tx) values ($1,$2,$3,$4, now(), $5) on conflict (chain, wallet) do update set revoked_at = null, approved_at = now(), kind = excluded.kind, account_id = excluded.account_id, allowlist_synced_at = now(), allowlist_tx = excluded.allowlist_tx', [a.chain, a.wallet, a.account_id, a.kind, allowlistTx]);
-          if (a.kind === 'issuer') issuerRegistration = await proposeIssuerRegistration(this.ctx, db, admin, a.chain, a.wallet);
+          if (a.kind === 'issuer' && !(await this.ctx.chains.get(a.chain).getIssuer(a.wallet))?.active) issuerRegistration = await proposeIssuerRegistration(this.ctx, db, admin, a.chain, a.wallet);
           await audit(db, { actor: admin.accountId, actorRole: 'admin', action: 'allowlist.add', target: `${a.chain}:${a.wallet}`, detail: { txId: allowlistTx } });
         }
         await enqueueOutbox(db, 'notification', { kind: `application.${decision}`, accountId: a.account_id, applicationId: id });
@@ -395,6 +402,7 @@ export class IdentityService {
   async syncAllowlist(chain: string, wallet: string, allowed: boolean, by: string): Promise<{ txId: string }> {
     const port = this.ctx.chains.get(chain);
     const res = await port.submit({ kind: 'setAllowlist', wallet, allowed }, 'allowlistManager');
+    if (this.ctx.localOperator && await port.isAllowlisted(wallet) !== allowed) throw AppError.conflict('onchain allowlist confirmation is pending');
     await this.ctx.pool.query('update eligibility set allowlist_synced_at = now(), allowlist_tx = $3, revoked_at = case when $4 then null else coalesce(revoked_at, now()) end where chain = $1 and wallet = $2', [chain, wallet, res.txId, allowed]);
     await audit(this.ctx.pool, { actor: by, actorRole: 'admin', action: allowed ? 'allowlist.add' : 'allowlist.remove', target: `${chain}:${wallet}`, detail: { txId: res.txId } });
     return { txId: res.txId };
@@ -417,6 +425,7 @@ export class IdentityService {
 
   /** dev:mock and tests: create accounts/eligibility for already-allowlisted simulator wallets without the sign-in dance. */
   async seedAccount(params: { accountId: string; wallets: { chain: string; address: string; family: ChainFamily }[]; roles: Role[]; eligible: boolean; kind?: 'issuer' | 'backer' }): Promise<void> {
+    if(!simulatorOnly(this.ctx.chains))throw Error('seedAccount is simulator-only');
     await this.ctx.pool.query('insert into accounts (account_id, roles) values ($1,$2) on conflict (account_id) do update set roles = excluded.roles', [params.accountId, params.roles]);
     for (const w of params.wallets) {
       await this.ctx.pool.query('insert into account_wallets (chain, address, account_id, family) values ($1,$2,$3,$4) on conflict (chain, address) do nothing', [w.chain, w.address, params.accountId, w.family]);

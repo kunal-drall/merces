@@ -55,6 +55,8 @@ tags:
     R14: null
     R15: null
     R19): null
+  - name: local-operator
+    description: Testnet operator bridge with local custody
   - name: curve
     description: Meteora curve-mode raises (E14
     Solana only): null
@@ -1431,6 +1433,10 @@ components:
         - address
         - chains
       properties:
+        transport:
+          type: object
+          additionalProperties: true
+          description: Optional encrypted local-operator transport and signed encryption public key
         url:
           type: string
         address:
@@ -10510,6 +10516,168 @@ paths:
           stale nonce: null
           completed year: null
           outstanding adjustment or changed basis: null
+  /operator/status:
+    get:
+      operationId: localOperatorStatus
+      x-access: public
+      tags:
+        - local-operator
+      summary: Local signing worker heartbeat; no secret or queued content
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /operator/poll:
+    post:
+      operationId: localOperatorPoll
+      x-access: public
+      tags:
+        - local-operator
+      summary: Operator credential required; outbound worker heartbeat and one leased job
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /operator/jobs/{jobId}/complete:
+    post:
+      operationId: localOperatorComplete
+      x-access: public
+      tags:
+        - local-operator
+      summary: Operator credential and current lease required; completes one job
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /series/{seriesId}/verifier-jobs:
+    post:
+      operationId: localVerifierEnqueue
+      x-access: issuer
+      tags:
+        - local-operator
+      summary: Queue an encrypted verifier envelope for the series issuer
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      security:
+        - session: []
+      parameters:
+        - name: seriesId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+                - envelope
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                envelope:
+                  type: object
+                  additionalProperties: true
+  /operator/verifier-jobs/{jobId}:
+    get:
+      operationId: localVerifierResult
+      x-access: account
+      tags:
+        - local-operator
+      summary: Read an encrypted result owned by the authenticated account
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      security:
+        - session: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+  /admin/applications/{applicationId}/test-identity:
+    post:
+      operationId: localOperatorTestIdentity
+      x-access: admin
+      tags:
+        - local-operator
+      summary: Explicit synthetic identity review for configured disposable test wallets only
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      security:
+        - session: []
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - acknowledgeSynthetic
+              properties:
+                acknowledgeSynthetic:
+                  type: boolean
+                  const: true
   /series/{seriesId}/curve:
     get:
       operationId: getCurveStatus

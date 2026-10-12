@@ -19,6 +19,17 @@ const sessionSecret = resolveSecret(process.env, 'MERCES_SESSION_SECRET', { simu
 const ctx = createServiceContext(makeContext({ pool, chains, log, sessionSecret, devMode }));
 const app = await buildApp(ctx, serviceRoutes);
 const background = new AbortController();
+if(ctx.localOperator){
+  const timer=setInterval(()=>void pool.query("delete from local_operator_jobs where kind='verifier' and expires_at<now()").catch(()=>log.error('Encrypted relay cleanup failed')),30000);
+  background.signal.addEventListener('abort',()=>clearInterval(timer),{once:true});
+}
+if (process.env.MERCES_KEEPERS_IN_PROCESS === 'true') {
+  if (!ctx.localOperator) throw Error('Hosted keepers require the local operator');
+  // No synthetic price feeds run against a public chain. USD-only deployments do not need FX keepers.
+  const jobs=standardJobs({pyth:new MockPyth(),chainlink:new MockChainlink(),outbox:notificationsOutboxHandler(ctx)}).filter(j=>!['rate.snapshot','fx.coverage'].includes(j.name));
+  void new KeeperScheduler(ctx,jobs).start(background.signal,15000);
+}
+
 // A single hosted replica shares its RPC caches and database pool with the read indexer.
 if (process.env.MERCES_INDEXER_IN_PROCESS === 'true') {
   const live = subsetRegistry(chains, c => c.mode === 'live');

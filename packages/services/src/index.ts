@@ -1,3 +1,5 @@
+import { localOperatorFromEnv } from './local-operator/service.ts';
+import { registerLocalOperatorRoutes } from './local-operator/routes.ts';
 import { registerFormsRoutes } from './forms/routes.ts';
 import { registerRouterRoutes } from './router/routes.ts';
 import type { AppContext } from '@merces/api';
@@ -86,8 +88,17 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
   ctx.nonRevealChargeBps = over.nonRevealChargeBps !== undefined ? (over.nonRevealChargeBps === null ? null : checkNonRevealCharge(over.nonRevealChargeBps)) : nonRevealChargeSetting(process.env);
   ctx.wallClock = () => Math.floor(Date.now() / 1000);
   ctx.newId = newId;
+  ctx.localOperator = localOperatorFromEnv(ctx);
+  if (ctx.localOperator) {
+    const op=ctx.localOperator;
+    ctx.verifier={publicKey:()=>op.keys(),attest:async()=>{throw Error('Private verifier inputs must use device encryption');}};
+    for(const chain of ctx.chains.chains.values()) chain.submit=(command,role)=>op.submit(chain.chain,command,role);
+    ctx.identity={provider:'operator-testnet',start:async p=>({checkId:'operator-testnet:'+p.applicationId,redirectUrl:'about:blank'}),status:async id=>{
+      const r=await ctx.pool.query('select identity_status from applications where identity_check_id=$1',[id]);return r.rows[0]?.identity_status==='passed'?'passed':'pending';
+    }};
+  }
   return ctx;
 }
 
 /** Every service route module, in registration order. The server composes them into the gateway. */
-export const serviceRoutes: ((app: import('fastify').FastifyInstance, ctx: AppContext) => void)[] = [registerFormsRoutes, registerRouterRoutes, registerIdentityRoutes, registerContractRoutes, registerTermsRoutes, registerPoiRoutes, registerAuctionRoutes, registerLifecycleRoutes, registerMeteoraRoutes, registerThresholdRoutes, registerAttestorRoutes, registerAccountingRoutes, registerNotificationsRoutes, registerAdminRoutes];
+export const serviceRoutes: ((app: import('fastify').FastifyInstance, ctx: AppContext) => void)[] = [registerLocalOperatorRoutes, registerFormsRoutes, registerRouterRoutes, registerIdentityRoutes, registerContractRoutes, registerTermsRoutes, registerPoiRoutes, registerAuctionRoutes, registerLifecycleRoutes, registerMeteoraRoutes, registerThresholdRoutes, registerAttestorRoutes, registerAccountingRoutes, registerNotificationsRoutes, registerAdminRoutes];

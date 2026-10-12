@@ -72,6 +72,17 @@ describe.skipIf(!dbTestsEnabled())('M2 people and paper (E2, E3, E4)', () => {
     expect(link.statusCode).toBe(409);
   });
 
+  it('rejects a correctly signed message whose host or issue time was changed', async () => {
+    const wallet=new SimWallet('solana','domain-bound-user');
+    const nonce=await rig.post('/auth/nonce',{chain:'solana',address:wallet.address});
+    const original=nonce.json().message;
+    const altered=original.replace('merces.local','other.example');
+    expect(altered).not.toBe(original);
+    const signature=await wallet.signMessage(new TextEncoder().encode(altered));
+    expect((await rig.post('/auth/verify',{chain:'solana',address:wallet.address,message:altered,signature})).statusCode).toBe(401);
+    expect((await rig.post('/auth/verify',{chain:'solana',address:wallet.address,message:original,signature:await wallet.signMessage(new TextEncoder().encode(original))})).statusCode).toBe(200);
+  });
+
   it('E2: issuer application → identity → review → approval syncs the chain allowlist; revocation removes it', async () => {
     const w = new SimWallet('evm', 'applicant-1');
     const tok = await signIn(rig, 'monad', w);

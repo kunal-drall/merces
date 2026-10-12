@@ -106,7 +106,7 @@ export class ProofOfIncomeService {
    */
   async verifierInfo(): Promise<Record<string, unknown>> {
     const keys = await this.ctx.verifier.publicKey();
-    return { url: this.ctx.reportVerifierUrl, address: keys.address, ...(keys.syntheticIncome ? {syntheticIncome:keys.syntheticIncome} : {}), chains: keys.chains.map((c) => ({ chain: c.chain, domain: c.domain })) };
+    return { url: this.ctx.reportVerifierUrl, address: keys.address, ...(keys.transport ? {transport:keys.transport} : {}), ...(keys.syntheticIncome ? {syntheticIncome:keys.syntheticIncome} : {}), chains: keys.chains.map((c) => ({ chain: c.chain, domain: c.domain })) };
   }
 
   /** Resolve the FX basis for a series/period (C9): unity, the accumulator average, or an attestor rate when flagged. */

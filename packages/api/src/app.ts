@@ -61,9 +61,9 @@ export async function buildApp(ctx: AppContext, extraRoutes: RouteRegistrar[] = 
   app.setErrorHandler((errUnknown: unknown, _req, reply) => {
     const err = errUnknown as Error & { statusCode?: number };
     // Form parse/storage failures may contain submitted values; never echo or log their details.
-    if (_req.url.startsWith('/forms/')) {
+    if (_req.url.startsWith('/forms/') || _req.url.startsWith('/operator/') || _req.url.includes('/verifier-jobs')) {
       const status = err instanceof AppError ? err.status : (err.statusCode ?? 500);
-      return reply.status(status).send({ error: status >= 500 ? 'Unavailable' : 'Rejected', message: 'form request could not be accepted', detail: null });
+      return reply.status(status).send({ error: status >= 500 ? 'Unavailable' : 'Rejected', message: _req.url.startsWith('/forms/') ? 'form request could not be accepted' : 'private request could not be accepted', detail: null });
     }
     if (err instanceof AppError) return reply.status(err.status).send({ error: err.code, message: err.message, detail: err.detail ?? null });
     if (err instanceof ChainError) {
