@@ -40,7 +40,8 @@ export class EvmTransport {
   private async load(target:bigint):Promise<void>{
     const byAddress=new Map(MODULES.map((m)=>[moduleAddress(this.config.contracts,m).toLowerCase(),m]));
     for(let from=this.through+1n;from<=target;){
-      const to=from+1999n<target?from+1999n:target;
+      // Public Monad RPC accepts at most 100 blocks per eth_getLogs request (inclusive).
+      const to=from+99n<target?from+99n:target;
       const logs=await this.client.getLogs({address:[...byAddress.keys()] as Hex[],fromBlock:from,toBlock:to});
       const times=new Map<bigint,number>();
       for(const block of new Set(logs.map((l)=>l.blockNumber)))if(block!==null)times.set(block,n((await this.client.getBlock({blockNumber:block})).timestamp));

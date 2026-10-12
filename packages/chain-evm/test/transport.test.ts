@@ -1,6 +1,6 @@
 import {describe,expect,it,vi} from 'vitest';
 import {generatePrivateKey,privateKeyToAccount} from 'viem/accounts';
-import {encodeErrorResult,type PublicClient} from 'viem';
+import {encodeErrorResult,encodeEventTopics,encodeAbiParameters,type PublicClient} from 'viem';
 import type {SignedTx,UnsignedTx} from '@merces/domain';
 import {EvmTransport} from '../src/transport.ts';
 import {abiOf,evmError} from '../src/abi.ts';
@@ -14,4 +14,23 @@ describe('EVM signed transaction boundary',()=>{
  it.each(['to','data','value','chainId'])('rejects changed %s before sending',async(field)=>{const {transport,client}=setup(),s=await signed(),p=JSON.parse(s.tx.payload);p[field]=field==='chainId'?1:field==='value'?'8':field==='data'?'0xabcd':'0x'+'13'.repeat(20);await expect(transport.send({...s,tx:{...s.tx,payload:JSON.stringify(p)}})).rejects.toMatchObject({code:'Unauthorized'});expect(client.sendRawTransaction).not.toHaveBeenCalled();});
  it('rejects another signer and changed finality blocks',async()=>{const {transport,client}=setup(),s=await signed();await expect(transport.send({...s,tx:{...s.tx,signer:address},signatures:{[address]:Object.values(s.signatures)[0]!}})).rejects.toMatchObject({code:'Unauthorized'});client.getBlock.mockResolvedValue({number:7n,timestamp:1780000000n,hash:'0x'+'cd'.repeat(32)});await expect(transport.send(s)).rejects.toThrow('receipt changed');});
  it('pins every snapshot read to its finalized block number and sanitizes RPC errors',async()=>{const {transport,client}=setup();const snapshot=await transport.snapshot();await snapshot.read('Registry','admin');expect(client.readContract).toHaveBeenCalledWith(expect.objectContaining({blockNumber:7n}));const e=evmError({cause:{data:encodeErrorResult({abi:abiOf('Registry'),errorName:'NotIssuer'}),message:'private=123'}});expect(e.code).toBe('Unauthorized');expect(JSON.stringify(e)).not.toContain('123');});
+});
+
+describe('EVM public RPC event pagination',()=>{
+ it('keeps inclusive ranges within 100 blocks and resumes a failed page without losing or duplicating logs',async()=>{
+  const modules=['Registry','Auction','Income','Vault','Treasury','Window','Router','FxAccumulator'];
+  const contracts=Object.fromEntries(modules.map((m,i)=>[`Merces${m}`,'0x'+(i+1).toString(16).padStart(40,'0')]));
+  const ranges:bigint[][]=[];let fail=true;
+  const getLogs=vi.fn(async({fromBlock,toBlock}:{fromBlock:bigint;toBlock:bigint})=>{
+   ranges.push([fromBlock,toBlock]);expect(toBlock-fromBlock).toBeLessThan(100n);
+   if(fromBlock===100n&&fail){fail=false;throw new Error('temporary RPC error');}
+   return [99n,100n,200n].filter(b=>b>=fromBlock&&b<=toBlock).map(b=>({address:contracts.MercesRegistry,data:encodeAbiParameters([{type:'address'}],[address as `0x${string}`]),topics:encodeEventTopics({abi:abiOf('Registry'),eventName:'IssuerRegistered',args:{issuer:address}}),blockNumber:b,logIndex:0,transactionIndex:0,transactionHash:hash,removed:false}));
+  });
+  const transport=new EvmTransport({...config,contracts},{getLogs,getBlock:async()=>({timestamp:1780000000n})} as unknown as PublicClient,async()=>{});
+  await expect(transport.history(200n)).rejects.toThrow('temporary RPC error');
+  const events=await transport.history(200n);
+  expect(events.map(e=>e.blockNumber)).toEqual([99n,100n,200n]);
+  expect(ranges).toEqual([[0n,99n],[100n,199n],[100n,199n],[200n,200n]]);
+  await transport.history(200n);expect(getLogs).toHaveBeenCalledTimes(4);
+ });
 });

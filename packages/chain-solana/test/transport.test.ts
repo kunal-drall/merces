@@ -1,6 +1,6 @@
 import {createHash,generateKeyPairSync,sign} from 'node:crypto';
 import {describe,expect,it,vi} from 'vitest';
-import {PublicKey,Transaction,SystemProgram,type Connection} from '@solana/web3.js';
+import {PublicKey,Transaction,SystemProgram,Connection} from '@solana/web3.js';
 import type {UnsignedTx,SignedTx} from '@merces/domain';
 import {SolanaTransport,solanaError} from '../src/transport.ts';
 import {decodeAccount,decodeEvent,encodeInstruction,idlOf} from '../src/codec.ts';
@@ -61,8 +61,19 @@ describe('Solana binary and transport boundaries',()=>{
   await expect(transport.tokenBalance(key(1),key(8))).rejects.toThrow('invalid token account');
   const e=solanaError({message:'secret income=123',logs:['secret income=123','Program log: AnchorError occurred. Error Code: NotIssuer.']});expect(e.code).toBe('Unauthorized');expect(JSON.stringify(e)).not.toContain('123');
  });
+ it('reads signature-only finalized blocks through the matching web3 RPC decoder',async()=>{
+  const seen:{method:string;params:unknown[]}[]=[];
+  const connection=new Connection('http://localhost:8899',{fetch:async(_url,init)=>{
+   const request=JSON.parse(String(init?.body));seen.push(request);
+   const results:Record<string,unknown>={getSlot:10,getBlockTime:1780000000,getSignaturesForAddress:[{signature:key(3),slot:10,err:null,memo:null,blockTime:1780000000,confirmationStatus:'finalized'}],getBlock:{blockhash:key(8),previousBlockhash:key(9),parentSlot:9,signatures:[key(3)],blockTime:1780000000},getTransaction:{slot:10,blockTime:1780000000,meta:{err:null,fee:0,preBalances:[],postBalances:[],logMessages:[]},transaction:{signatures:[key(3)],message:{accountKeys:[],header:{numRequiredSignatures:0,numReadonlySignedAccounts:0,numReadonlyUnsignedAccounts:0},recentBlockhash:key(8),instructions:[]}}}};
+   return new Response(JSON.stringify({jsonrpc:'2.0',id:request.id,result:results[request.method]}),{status:200});
+  }});
+  const transport=new SolanaTransport(config,connection,async()=>{});
+  await expect(transport.history()).resolves.toEqual([]);
+  expect(seen.find(x=>x.method==='getBlock')?.params).toEqual([10,{commitment:'finalized',transactionDetails:'signatures',rewards:false}]);
+ });
  it.each([null,['Log truncated']])('fails closed on unavailable or truncated finalized logs',async(logMessages)=>{
-  const {transport}=setup({getSignaturesForAddress:async()=>[{signature:key(3),slot:10,err:null}],getBlock:async()=>({signatures:[key(3)]}),getTransaction:async()=>({blockTime:1780000000,meta:{err:null,logMessages}})});
+  const {transport}=setup({getSignaturesForAddress:async()=>[{signature:key(3),slot:10,err:null}],getBlockSignatures:async()=>({signatures:[key(3)]}),getTransaction:async()=>({blockTime:1780000000,meta:{err:null,logMessages}})});
   await expect(transport.history()).rejects.toThrow('complete transaction logs');
  });
 });

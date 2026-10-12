@@ -52,8 +52,8 @@ export class SolanaTransport {
     }
     const order=new Map<number,string[]>();
     for(const slot of new Set(signatures.values())){
-      const block=await this.connection.getBlock(slot,{commitment:'finalized',transactionDetails:'signatures',rewards:false,maxSupportedTransactionVersion:0});
-      if(!block)throw new ChainError('ChainSpecific','finalized transaction block is unavailable; use an archive RPC');order.set(slot,(block as unknown as {signatures:string[]}).signatures);
+      const block=await this.connection.getBlockSignatures(slot,'finalized');
+      if(!block)throw new ChainError('ChainSpecific','finalized transaction block is unavailable; use an archive RPC');order.set(slot,block.signatures);
     }
     const sorted=[...signatures].sort(([a,sa],[b,sb])=>sa-sb||order.get(sa)!.indexOf(a)-order.get(sb)!.indexOf(b));
     const additions:SolRecord[]=[];
