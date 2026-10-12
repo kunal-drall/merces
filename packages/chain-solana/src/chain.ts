@@ -184,7 +184,7 @@ export class SolanaChain implements ChainPort {
       if(serialized.length+1+64*message.header.numRequiredSignatures>1232)throw new ChainError('NotPermitted','transaction exceeds the Solana packet size; reduce the requested batch');return serialized.toString('base64');
     };
     const preparations=plans.flatMap((p)=>p.preparations??[]).map((p)=>({summary:p.summary,payload:payload(p.instructions,[]),encoding:'solana-base64' as const}));
-    return {chain:this.chain,family:this.family,signer,command:commands[0]!,...(commands.length>1?{commands:[...commands]}:{}),payload:payload(plans.flatMap((p)=>p.instructions)),encoding:'solana-base64',summary:commands.map((c)=>c.kind).join(' + '),expiresAt:now+60,...(preparations.length?{preparations}:{})};
+    return {chain:this.chain,family:this.family,signer,command:commands[0]!,...(commands.length>1?{commands:[...commands]}:{}),payload:payload(plans.flatMap((p)=>p.instructions)),encoding:'solana-base64',summary:commands.map((c)=>c.kind).join(' + '),expiresAt:(await this.now())+60,...(preparations.length?{preparations}:{})};
   }
   async build(command:BuildableCommand|readonly BuildableCommand[],signer:string):Promise<UnsignedTx>{
     const commands=Array.isArray(command)?command:[command];

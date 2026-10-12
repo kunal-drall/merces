@@ -30,7 +30,7 @@ describe('EVM public RPC event pagination',()=>{
   await expect(transport.history(200n)).rejects.toThrow('temporary RPC error');
   const events=await transport.history(200n);
   expect(events.map(e=>e.blockNumber)).toEqual([99n,100n,200n]);
-  expect(ranges).toEqual([[0n,99n],[100n,199n],[100n,199n],[200n,200n]]);
-  await transport.history(200n);expect(getLogs).toHaveBeenCalledTimes(4);
+  expect(ranges).toEqual([[0n,99n],[100n,199n],[200n,200n],[100n,199n],[200n,200n]]);
+  await transport.history(200n);expect(getLogs).toHaveBeenCalledTimes(5);
  });
 });

@@ -39,10 +39,14 @@ export class EvmTransport {
   }
   private async load(target:bigint):Promise<void>{
     const byAddress=new Map(MODULES.map((m)=>[moduleAddress(this.config.contracts,m).toLowerCase(),m]));
-    for(let from=this.through+1n;from<=target;){
-      // Public Monad RPC accepts at most 100 blocks per eth_getLogs request (inclusive).
-      const to=from+99n<target?from+99n:target;
-      const logs=await this.client.getLogs({address:[...byAddress.keys()] as Hex[],fromBlock:from,toBlock:to});
+    while(this.through<target){
+      // Bounded concurrent pages keep cold-start catch-up from blocking every wallet read.
+      // Publish pages in order; a failed page cannot advance the finalized cursor past a gap.
+      const ranges=Array.from({length:4},(_,i)=>this.through+1n+BigInt(i)*100n).filter(from=>from<=target).map(from=>({from,to:from+99n<target?from+99n:target}));
+      const pages=await Promise.allSettled(ranges.map(({from,to})=>this.client.getLogs({address:[...byAddress.keys()] as Hex[],fromBlock:from,toBlock:to})));
+      for(const [i,page] of pages.entries()){
+      if(page.status==='rejected')throw page.reason;
+      const logs=page.value,to=ranges[i]!.to;
       const times=new Map<bigint,number>();
       for(const block of new Set(logs.map((l)=>l.blockNumber)))if(block!==null)times.set(block,n((await this.client.getBlock({blockNumber:block})).timestamp));
       const decoded:EvmRecord[]=[];
@@ -58,7 +62,8 @@ export class EvmTransport {
         }
       }
       decoded.sort((a,b)=>a.blockNumber===b.blockNumber?a.logIndex-b.logIndex:a.blockNumber<b.blockNumber?-1:1);
-      this.events.push(...decoded);this.through=to;from=to+1n;
+      this.events.push(...decoded);this.through=to;
+      }
     }
   }
   input(event:EvmRecord):Promise<{name:string;args:readonly unknown[];sender:string}>{
