@@ -1,0 +1,14 @@
+{
+  "commit": "bafe1fb76094afa423211320356b8db868c2b340",
+  "sha256": "5436a5cd6cd5bc7e2358fc56f29e122722b9f8897a5262bb02921241b0f15612",
+  "paths": [
+    "LICENSE.md",
+    "tsconfig.base.json",
+    "packages/sdk",
+    "packages/reference",
+    "circuits",
+    "solana/meteora",
+    "solana/idls",
+    "evm/abis"
+  ]
+}

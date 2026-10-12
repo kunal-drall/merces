@@ -1,0 +1,50 @@
+{
+  "version": "1",
+  "commit": "bafe1fb76094afa423211320356b8db868c2b340",
+  "solana": {
+    "cluster": "devnet",
+    "rpcUrl": "https://api.devnet.solana.com",
+    "programs": {
+      "registry": "GigVSncHHvrt8kZVHcdZWULqUE52aAZn7GzGaBNVznSi",
+      "protocol": "EuaPg2nTXsf3CmmeJMfdiQb4C2hU7AfLfFyDLpD69six",
+      "hook": "2PuKMkGkGLCwsDMLCmm2bcbzjxtabvt9LVJni154ezRt"
+    },
+    "startSlot": 509990000,
+    "idlDir": "../stage1/solana/idls"
+  },
+  "evm": [
+    {
+      "chain": "monad-testnet",
+      "chainId": 10143,
+      "rpcUrl": "https://testnet-rpc.monad.xyz",
+      "contracts": {
+        "auction": "0xBB2676935d23122224c4Cb766a18B0D9C83d6Cc9",
+        "complianceModule": "0x04e606C4fbE2E1dCB4812cF99346C146e8f3Defc",
+        "feeCollector": "0x78882AD7E0123f96B2CB482CD76EE56cd8685A16",
+        "fxAccumulator": "0x648883C0203BFD651a2559c00c6A9fAe67d53eb5",
+        "groth16Verifier": "0x1d330141b63A6680D96D445e02DE131b34834E84",
+        "income": "0x2718709dE3d30EF47f32A35e0279E5B29E39b50d",
+        "poseidon2": "0x77BF44370fC8a077484990b52a7310697ca03aDe",
+        "poseidon5": "0x08B2F8f97216683d9D50ca8abD5Bd9cB228e9b73",
+        "registry": "0xB43A7729A939EC9deffDa72a64Fa971533e163DB",
+        "router": "0x9f4917738f5a5c64333EF473Bc8380b49592b7fD",
+        "timelock": "0x313CfE02f70Bf896eB80a72b652C8b5135e65122",
+        "tokenFactory": "0x1d04b47FAB1a2C2946A48648BC8bf74265F7e571",
+        "tokenGovernor": "0xb37C744dceFfbD31125576Cf4068928141c1b555",
+        "treasury": "0x1c53319eCa0b809f3Ece1C9d05603D130090746B",
+        "vault": "0xDa336b25F409c17E8b412c0D7970426F67B457ea",
+        "window": "0xf47FC09f789047F99dB9AD94Fc548e898828400f"
+      },
+      "startBlock": 70279403,
+      "abiDir": "../stage1/evm/abis"
+    }
+  ],
+  "stablecoins": {
+    "solana": {
+      "USDC": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+    },
+    "monad-testnet": {
+      "USDC": "0x534b2f3A21130d7a60830c2Df862319e593943A3"
+    }
+  }
+}

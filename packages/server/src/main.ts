@@ -7,6 +7,8 @@ import { KeeperScheduler, standardJobs } from '@merces/keepers';
 import { HermesPyth, MockChainlink, MockPyth } from '@merces/ports';
 import { buildApp, makeContext } from '@merces/api';
 import { createServiceContext, notificationsOutboxHandler, serviceRoutes } from '@merces/services';
+import { formsConfig } from '../../services/src/forms/config.ts';
+import { deliverFormMail, pruneForms } from '../../services/src/forms/mail.ts';
 
 const log = createLogger('api');
 const pool = createPool();
@@ -16,6 +18,26 @@ const devMode = [...chains.chains.values()].every((c) => c.mode === 'mock') && p
 const sessionSecret = resolveSecret(process.env, 'MERCES_SESSION_SECRET', { simulatorOnly: simulatorOnly(chains), devDefault: 'dev-session-secret-not-for-production' });
 const ctx = createServiceContext(makeContext({ pool, chains, log, sessionSecret, devMode }));
 const app = await buildApp(ctx, serviceRoutes);
+const background = new AbortController();
+// A single hosted replica shares its RPC caches and database pool with the read indexer.
+if (process.env.MERCES_INDEXER_IN_PROCESS === 'true') {
+  const live = subsetRegistry(chains, c => c.mode === 'live');
+  void new Indexer(pool, [...live.chains.values()], { logger: log }).runLoop(Number(process.env.INDEXER_POLL_MS ?? 15000), background.signal);
+}
+if (process.env.MERCES_FORMS_WORKER_IN_PROCESS === 'true') {
+  const config = formsConfig();
+  if (!config) throw Error('Hosted mail worker requires complete forms configuration');
+  void (async () => {
+    let cleanedAt = 0;
+    while (!background.signal.aborted) {
+      try {
+        if (Date.now() - cleanedAt > 3600_000) { await pruneForms(pool); cleanedAt = Date.now(); }
+        if (await deliverFormMail(pool, config)) continue;
+      } catch { log.error('Forms delivery attempt failed; queued mail will retry'); }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  })();
+}
 const port = Number(process.env.PORT ?? 3000);
 await app.listen({ port, host: '0.0.0.0' });
 log.info({ port, devMode, chains: chains.decisions }, 'api listening');
@@ -40,6 +62,7 @@ if (sims.chains.size) {
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.once(sig, () => {
     log.info({ signal: sig }, 'shutting down');
+    background.abort();
     void (async () => {
       await app.close().catch(() => undefined);
       await chains.close().catch(() => undefined);
