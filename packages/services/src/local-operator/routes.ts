@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import { defineRoute, type AppContext } from '@merces/api';
-import { AppError, audit } from '@merces/core';
+import { AppError, audit, withIdempotency } from '@merces/core';
 import { svc } from '../context.ts';
 import { envelopeSchema, sameWallet } from './policy.ts';
 import type { VerifierKeyInfo } from '@merces/report-verifier';
@@ -10,6 +10,15 @@ export function registerLocalOperatorRoutes(app:FastifyInstance,base:AppContext)
   const ctx=svc(base), operator=()=>{if(!ctx.localOperator)throw new AppError(503,'Unavailable','local operator is not configured');return ctx.localOperator;};
   defineRoute(app,ctx,{method:'GET',url:'/operator/status',access:'public',handler:async()=>{
     const {online,lastSeenAt}=await operator().status();return {online,lastSeenAt,custody:'local',testOnly:true};
+  }});
+  defineRoute(app,ctx,{method:'POST',url:'/admin/keepers/crank-status',access:'admin',handler:async(req,_reply,session)=>{
+    const b=z.object({chain:z.enum(['solana','monad']),seriesId:z.string().max(160)}).strict().parse(req.body);
+    const result=await withIdempotency(ctx.pool,'operator-status:'+session!.accountId,req.headers['idempotency-key'] as string|undefined,b,async()=>{
+      const receipt=await operator().submit(b.chain,{kind:'crankStatus',seriesId:b.seriesId},'keeper');
+      await audit(ctx.pool,{actor:session!.accountId,actorRole:'admin',action:'keeper.status-cranked',target:b.seriesId,detail:{chain:b.chain,txId:receipt.txId,testOnly:true}});
+      return {status:200,response:{txId:receipt.txId,blockTime:receipt.blockTime}};
+    });
+    return result.response;
   }});
   // Dedicated operator credential; no browser session or onchain key is used here.
   defineRoute(app,ctx,{method:'POST',url:'/operator/poll',access:'public',bodyLimit:16384,handler:async req=>{

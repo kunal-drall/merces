@@ -10678,6 +10678,46 @@ paths:
                 acknowledgeSynthetic:
                   type: boolean
                   const: true
+  /admin/keepers/crank-status:
+    post:
+      operationId: localOperatorCrankStatus
+      x-access: admin
+      tags:
+        - local-operator
+      summary: Manually reconcile status of a configured test series using the local keeper key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - chain
+                - seriesId
+              properties:
+                chain:
+                  type: string
+                  enum:
+                    - solana
+                    - monad
+                seriesId:
+                  type: string
+      responses:
+        "200":
+          description: Finalized local keeper receipt
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - txId
+                  - blockTime
+                properties:
+                  txId:
+                    type: string
+                  blockTime:
+                    type: number
   /series/{seriesId}/curve:
     get:
       operationId: getCurveStatus

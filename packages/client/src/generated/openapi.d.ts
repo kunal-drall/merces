@@ -2994,6 +2994,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/admin/keepers/crank-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manually reconcile status of a configured test series using the local keeper key */
+        post: operations["localOperatorCrankStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/series/{seriesId}/curve": {
         parameters: {
             query?: never;
@@ -11951,6 +11968,37 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    localOperatorCrankStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    chain: "solana" | "monad";
+                    seriesId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Finalized local keeper receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        txId: string;
+                        blockTime: number;
                     };
                 };
             };

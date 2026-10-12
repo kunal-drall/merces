@@ -6,8 +6,9 @@ The frontend builds against this API. **Every push lists every changed or remove
 count; `API.md` is the narrative; `packages/client/src/generated/openapi.d.ts` is regenerated with `pnpm openapi:client`.
 Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
-## 2026-10-12 — local testnet operator (225 operations)
+## 2026-10-12 — local testnet operator (226 operations)
 
+- Added admin `POST /admin/keepers/crank-status` (`chain`, `seriesId`) for idempotent, audited status reconciliation on a configured test series using the local keeper key.
 - Added public `GET /operator/status` (online, lastSeenAt, local custody, testOnly).
 - Added `POST /operator/poll` and `POST /operator/jobs/{jobId}/complete`, protected by a dedicated relay credential. Only public typed commands and encrypted verifier envelopes traverse the queue.
 - Added issuer `POST /series/{seriesId}/verifier-jobs` and account `GET /operator/verifier-jobs/{jobId}`. Requests require series ownership; results require the originating account. Encrypted payloads expire after three minutes.
