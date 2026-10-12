@@ -43,7 +43,9 @@ export class SolanaChain implements ChainPort {
   constructor(readonly config: SolanaChainConfig) {
     assertNotMainnet(config);
     this.chain = config.chain;
-    this.connection = new Connection(config.rpcUrl, {commitment:'finalized',...(new URL(config.rpcUrl).hostname==='api.devnet.solana.com'?{fetch:pacedFetch(1100)}:{})});
+    // At most 29 starts per 10 seconds, below the public endpoint's documented
+    // 40 requests/method/10s and 100 total/10s limits, including SDK retries.
+    this.connection = new Connection(config.rpcUrl, {commitment:'finalized',...(new URL(config.rpcUrl).hostname==='api.devnet.solana.com'?{fetch:pacedFetch(350)}:{})});
     this.mapper = new SolanaEventMapper(config);
     this.transport=new SolanaTransport(config,this.connection,()=>this.ensureNetwork());
     this.curve=new SolanaCurve(config,this.transport);
