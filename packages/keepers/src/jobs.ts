@@ -23,6 +23,8 @@ export interface KeeperJob {
   name: string;
   /** seconds between runs in the scheduler loop */
   intervalSeconds: number;
+  /** Skip RPC discovery while the hosted local signing operator is unavailable. */
+  requiresSigner?: boolean;
   run(ctx: ServiceContext): Promise<KeeperResult>;
 }
 
@@ -79,7 +81,7 @@ async function forEachSettled(ctx: ServiceContext, errors: string[], fn: (chain:
  * a Stage 1 error name, ChainError code or stuck reason, never a message; S2 L7).
  */
 export const auctionSettleJob: KeeperJob = {
-  name: 'auction.settle',
+  name: 'auction.settle', requiresSigner: true,
   intervalSeconds: 60,
   async run(ctx) {
     const r = await new AuctionService(ctx).advanceSettlements({ deliver: false });
@@ -97,7 +99,7 @@ export const auctionSettleJob: KeeperJob = {
  * detail, not as errors.
  */
 export const auctionDeliverJob: KeeperJob = {
-  name: 'auction.deliver',
+  name: 'auction.deliver', requiresSigner: true,
   intervalSeconds: 60,
   async run(ctx) {
     const r = await new AuctionService(ctx).deliverDue();
@@ -157,7 +159,7 @@ export async function reachedMilestones(chain: ChainPort, s: Series, now: number
  * StatusChanged / FormalNoticeDue and the release-block events.
  */
 export const statusCrankJob: KeeperJob = {
-  name: 'status.crank',
+  name: 'status.crank', requiresSigner: true,
   intervalSeconds: 3600,
   async run(ctx) {
     let actions = 0;
@@ -187,7 +189,7 @@ export const statusCrankJob: KeeperJob = {
  * (Stage 1), so the series is no longer Paused by then; `pause.approvedUntil` is the oldest pause not yet announced.
  */
 export const pauseCrankJob: KeeperJob = {
-  name: 'pause.crank',
+  name: 'pause.crank', requiresSigner: true,
   intervalSeconds: 3600,
   async run(ctx) {
     let actions = 0;
@@ -215,7 +217,7 @@ export const pauseCrankJob: KeeperJob = {
  * not registered, NotFound) is skipped and the others are still sent.
  */
 export const retireCappedJob: KeeperJob = {
-  name: 'retirement.crank',
+  name: 'retirement.crank', requiresSigner: true,
   intervalSeconds: 3600,
   async run(ctx) {
     let actions = 0;
@@ -234,7 +236,7 @@ export const retireCappedJob: KeeperJob = {
 };
 
 export const burnCrankJob: KeeperJob = {
-  name: 'burn.crank',
+  name: 'burn.crank', requiresSigner: true,
   intervalSeconds: 3600,
   async run(ctx) {
     let actions = 0;
@@ -297,7 +299,7 @@ export const deadlineRemindersJob: KeeperJob = {
 
 /** Quarterly transfer windows (R19): built, switched off by the `transfer_windows` flag. Opens a window after lockup once per quarter and clears it when due. */
 export const transferWindowsJob: KeeperJob = {
-  name: 'transfer.windows', intervalSeconds: 60,
+  name: 'transfer.windows', requiresSigner: true, intervalSeconds: 60,
   async run(ctx) {
     const flagOn = await getFlag(ctx.pool, 'transfer_windows');
     let actions = 0;
@@ -324,7 +326,7 @@ export const transferWindowsJob: KeeperJob = {
 
 /** Delivery retries are independent of window settlement/opening and of every other recipient. */
 export const windowDeliverJob: KeeperJob = {
-  name: 'window.deliver', intervalSeconds: 60,
+  name: 'window.deliver', requiresSigner: true, intervalSeconds: 60,
   async run(ctx) {
     let actions = 0;
     const errors: string[] = [];
@@ -365,7 +367,7 @@ export const windowDeliverJob: KeeperJob = {
 
 /** Sweep pre-mint receipts once final, then checkpoint ended quarters before tier-1 reports. */
 export const routerJob: KeeperJob = {
-  name:'router.crank',intervalSeconds:60,
+  name:'router.crank', requiresSigner: true,intervalSeconds:60,
   async run(ctx) {
     let actions=0; const errors:string[]=[];
     await forEachChain(ctx,errors,async(chain)=> {

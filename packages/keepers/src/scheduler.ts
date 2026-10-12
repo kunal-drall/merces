@@ -19,6 +19,11 @@ export class KeeperScheduler {
   ) {}
 
   async runJob(job: KeeperJob): Promise<RunResult> {
+    if (job.requiresSigner && this.ctx.localOperator && !(await this.ctx.localOperator.status()).online) {
+      // No successful run is recorded and lastRun stays unchanged: resume at the
+      // next tick after a heartbeat, even for jobs with an hourly interval.
+      return { ok: false, actions: 0, detail: 'deferred: local signing operator is offline' };
+    }
     let id: string | null = null;
     try {
       // the chains this scheduler serves: the API (simulated chains) and dev:keepers (live chains) run the same job

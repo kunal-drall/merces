@@ -13,7 +13,7 @@ type PairRow = { pair: string; pyth_feed_id: string; chainlink_feed: string | nu
 /** SPEC §6.6: registered feed identities, daily raw-price snapshots, retained prices on deviation. */
 export function rateKeeperJob(opts: RateKeeperOptions): KeeperJob {
   return {
-    name: 'rate.snapshot', intervalSeconds: 1800,
+    name: 'rate.snapshot', requiresSigner: true, intervalSeconds: 1800,
     async run(ctx) {
       let actions = 0;
       const details: string[] = [], errors: string[] = [];

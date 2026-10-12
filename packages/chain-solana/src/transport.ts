@@ -21,6 +21,7 @@ export class SolanaTransport {
   private loadedThrough=-1;
   private loading:Promise<void>|null=null;
   private transactions=new Map<string,Awaited<ReturnType<Connection['getTransaction']>>>();
+  private pendingBlocks=new Map<number,string[]>();
   constructor(readonly config:SolanaChainConfig,readonly connection:Connection,readonly verifyNetwork:()=>Promise<void>){}
   async head(){await this.verifyNetwork();const slot=await this.connection.getSlot('finalized'),time=await this.connection.getBlockTime(slot);if(time===null)throw new ChainError('ChainSpecific','finalized slot has no block time');return {slot,time};}
   async raw(address:string):Promise<AccountInfo<Buffer>|null>{await this.verifyNetwork();return this.connection.getAccountInfo(new PublicKey(address),'finalized');}
@@ -52,13 +53,18 @@ export class SolanaTransport {
     }
     const order=new Map<number,string[]>();
     for(const slot of new Set(signatures.values())){
-      const block=await this.connection.getBlockSignatures(slot,'finalized');
-      if(!block)throw new ChainError('ChainSpecific','finalized transaction block is unavailable; use an archive RPC');order.set(slot,block.signatures);
+      let signatures=this.pendingBlocks.get(slot);
+      if(!signatures){
+        const block=await this.connection.getBlockSignatures(slot,'finalized');
+        if(!block)throw new ChainError('ChainSpecific','finalized transaction block is unavailable; use an archive RPC');
+        signatures=block.signatures;this.pendingBlocks.set(slot,signatures);
+      }
+      order.set(slot,signatures);
     }
     const sorted=[...signatures].sort(([a,sa],[b,sb])=>sa-sb||order.get(sa)!.indexOf(a)-order.get(sb)!.indexOf(b));
     const additions:SolRecord[]=[];
     for(const [txId,slot] of sorted){
-      const tx=await this.connection.getTransaction(txId,{commitment:'finalized',maxSupportedTransactionVersion:0});
+      const tx=this.transactions.get(txId)??await this.connection.getTransaction(txId,{commitment:'finalized',maxSupportedTransactionVersion:0});
       if(!tx||!tx.meta||tx.blockTime==null)throw new ChainError('ChainSpecific','finalized transaction data is unavailable; use an archive RPC');
       if(tx.meta.err)continue;
       if(!tx.meta.logMessages||tx.meta.logMessages.some((line)=>/log truncated/i.test(line)))throw new ChainError('ChainSpecific','complete transaction logs are unavailable; use an archive RPC');
@@ -73,7 +79,7 @@ export class SolanaTransport {
         additions.push({module,...event,slot,transactionIndex:index,logIndex,ordinal:this.events.length+additions.length,invocation:frames.at(-1),txId,blockTime:tx.blockTime});
       }
     }
-    this.events.push(...additions);this.loadedThrough=through;
+    this.events.push(...additions);this.loadedThrough=through;this.pendingBlocks.clear();
   }
   async inputs(txId:string):Promise<SolInput[]>{
     const tx=this.transactions.get(txId)??await this.connection.getTransaction(txId,{commitment:'finalized',maxSupportedTransactionVersion:0});if(!tx)throw new ChainError('ChainSpecific','transaction data is unavailable');

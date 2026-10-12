@@ -50,7 +50,7 @@ function refusedAs(e: unknown, names: string[]): boolean {
 }
 
 export const curveLifecycleJob: KeeperJob = {
-  name: 'curve.lifecycle',
+  name: 'curve.lifecycle', requiresSigner: true,
   intervalSeconds: 60,
   async run(ctx) {
     const r = await advanceCurves(ctx);
@@ -78,7 +78,7 @@ export function curveSyncDue(s: Series, now: number): CurveSyncReason | null {
 }
 
 export const curveSyncJob: KeeperJob = {
-  name: 'curve.sync',
+  name: 'curve.sync', requiresSigner: true,
   intervalSeconds: 600,
   async run(ctx) {
     let actions = 0;

@@ -76,4 +76,16 @@ describe('Solana binary and transport boundaries',()=>{
   const {transport}=setup({getSignaturesForAddress:async()=>[{signature:key(3),slot:10,err:null}],getBlockSignatures:async()=>({signatures:[key(3)]}),getTransaction:async()=>({blockTime:1780000000,meta:{err:null,logMessages}})});
   await expect(transport.history()).rejects.toThrow('complete transaction logs');
  });
+ it('reuses finalized history reads after a partial failure without publishing partial events',async()=>{
+  const event=Buffer.concat([createHash('sha256').update('event:IssuerRegistered').digest().subarray(0,8),new PublicKey(key(5)).toBuffer()]);
+  const tx={blockTime:1780000000,meta:{err:null,logMessages:[`Program ${config.programs.merces_registry} invoke [1]`,`Program data: ${event.toString('base64')}`]}};
+  const getTransaction=vi.fn().mockResolvedValueOnce(tx).mockRejectedValueOnce(new Error('429')).mockResolvedValue(tx);
+  const getBlockSignatures=vi.fn(async()=>({signatures:[key(3),key(4)]}));
+  const {transport}=setup({getSignaturesForAddress:async()=>[{signature:key(3),slot:10,err:null},{signature:key(4),slot:10,err:null}],getBlockSignatures,getTransaction});
+  await expect(transport.history()).rejects.toThrow('429');
+  const events=await transport.history();
+  expect(events.map(e=>[e.txId,e.ordinal])).toEqual([[key(3),0],[key(4),1]]);
+  expect(getTransaction.mock.calls.map(c=>c[0])).toEqual([key(3),key(4),key(4)]);
+  expect(getBlockSignatures).toHaveBeenCalledOnce();
+ });
 });
