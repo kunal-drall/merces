@@ -1,3 +1,4 @@
+import { pacedRpcFetch } from './rpc-fetch.ts';
 import { createPublicClient, erc20Abi, encodeFunctionData, getAddress, http, type PublicClient } from 'viem';
 import {
   ChainError, FinalizedEvents, signingDomain, isPublishedTestKey, serviceCommandSchema, type Command, type BuildableCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
@@ -36,7 +37,7 @@ export class EvmChain implements ChainPort {
   constructor(readonly config: EvmChainConfig) {
     assertNotMainnet(config);
     this.chain = config.chain;
-    this.client = createPublicClient({ transport: http(config.rpcUrl), chain: { id: config.chainId, name: config.network, nativeCurrency: { name: 'native', symbol: 'NATIVE', decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } } });
+    this.client = createPublicClient({ transport: http(config.rpcUrl,{...(new URL(config.rpcUrl).hostname==='testnet-rpc.monad.xyz'?{fetchFn:pacedRpcFetch(150),retryDelay:750}:{})}), chain: { id: config.chainId, name: config.network, nativeCurrency: { name: 'native', symbol: 'NATIVE', decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } } });
     this.mapper = new EvmEventMapper(config);
     this.transport = new EvmTransport(config,this.client,()=>this.ensureNetwork());
   }
