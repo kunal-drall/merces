@@ -13,6 +13,11 @@ import type {
  * Read: current state. Events: ordered, resumable stream from a cursor. Write: build unsigned transactions
  * for users; submit only for the backend's own permissionless/service roles.
  */
+/** Finalized metadata for a series whose settlement has not happened; it has no reportable periods. */
+export type PendingReportingState = Pick<SeriesState,'issuer'|'status'> & {
+  now:number;
+  terms:Pick<SeriesState['terms'],'reportingCurrency'|'fxPairId'|'tierFlags'>;
+};
 export interface ChainPort {
   getRouter(seriesId: string): Promise<import('./state.ts').RouterState | null>;
   readonly chain: ChainKey;
@@ -28,6 +33,8 @@ export interface ChainPort {
   getIssuer(issuer: Address): Promise<IssuerState | null>;
   listSeries(): Promise<SeriesState[]>;
   getSeries(seriesId: string): Promise<SeriesState | null>;
+  /** Optional fast path; null falls back to the complete historical reporting model. */
+  getPendingReportingState?(seriesId:string):Promise<PendingReportingState|null>;
   getAuction(seriesId: string): Promise<AuctionState | null>;
   getBid(seriesId: string, bidder: Address): Promise<BidState | null>;
   listBids(seriesId: string): Promise<BidState[]>;

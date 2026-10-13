@@ -1,4 +1,4 @@
-import {ChainError,DEFAULTS,KEY_GRACE_SECONDS,ZERO_INCOME_COMMITMENT,makeSeriesId,seriesKeyOf,type AuctionState,type BidState,type IssuerState,type PeriodState,type PositionState,type QuarterRateState,type RateAccumulatorState,type RedemptionState,type RouterState,type SeriesState,type SeriesTerms,type SignerKeyState,type SignerKind,type TransferWindowState,type TreasuryState,type VaultState} from '@merces/domain';
+import {ChainError,DEFAULTS,KEY_GRACE_SECONDS,ZERO_INCOME_COMMITMENT,makeSeriesId,seriesKeyOf,type AuctionState,type BidState,type IssuerState,type PeriodState,type PositionState,type QuarterRateState,type RateAccumulatorState,type RedemptionState,type RouterState,type SeriesState,type PendingReportingState,type SeriesTerms,type SignerKeyState,type SignerKind,type TransferWindowState,type TreasuryState,type VaultState} from '@merces/domain';
 import {SeriesStatus,RaiseState,WAD,fromPid,pidAt,toPid,capPerUnit,lateAccrualTrueup,projectDeadlines,standingOf,statusParamsOf,tradingDaysInPeriod,settlementYear,periodEnd,type LedgerClock} from '@merces/math';
 import {ZERO20,ZERO32,seriesNumber,type EvmModule} from './abi.ts';
 
@@ -55,6 +55,15 @@ export class EvmReads {
     return {stablecoin:coin,stablecoinMint:addr(c.stablecoin),raiseStyle:'sealed',unitsOffered:str(t.unitsOffered),reservePrice:str(t.reservePrice),minimumRaise:str(t.minRaise),capMultipleWad:str(t.capMultipleWad),hurdleWad:str(t.hurdleRateWad),payoutMultipleK:n(t.payoutMultipleK),lockupSeconds:n(t.lockupSeconds),walletCapBps:n(t.walletCapBps),auctionFeeBps:n(t.auctionFeeBps),payoutFeeBps:n(t.payoutFeeBps),windowFeeBps:n(t.windowFeeBps),nonRevealChargeBps:n(t.nonRevealChargeBps),commitDurationSeconds:n(t.commitDuration),revealDurationSeconds:n(t.revealDuration),windowCommitDuration:n(t.windowCommitDuration),windowRevealDuration:n(t.windowRevealDuration),releaseSchedule:schedule.map((r)=>({afterSeconds:n(r.atOffsetSeconds),bps:n(r.bps)})),dueDays:DEFAULTS.dueDays,graceDays:DEFAULTS.graceDays,formalNoticeDays:DEFAULTS.formalNoticeDays,contractHash:String(c.contractHash),termsCommitment:String(c.termsCommitment),fxPairId:pair,reportingCurrency:currency,tierFlags,...(routerTerms?{routerTerms}:{})};
   }
   clock(c:Row,l:Row,pauses:{start:bigint;end:bigint}[]):LedgerClock{return {status:n(l.storedStatus) as SeriesStatus,firstPeriod:b(c.settlementTs)?pidAt(b(c.settlementTs)):0,lastAcceptedPeriod:l.hasAccepted?n(l.lastAcceptedPeriod):null,openDuePeriod:b(l.openDueAmount)?n(l.openDuePeriod):null,openDueAmount:b(l.openDueAmount),pauses,trueupDue:b(l.trueupDue),trueupAttestedAt:b(l.trueupAttestedAt)};}
+  async getPendingReportingState(sid:string):Promise<PendingReportingState|null>{
+    const c=await this.core(sid);
+    if(!c||b(c.settlementTs)!==0n)return null;
+    const fxPairId=c.fxPairId===ZERO32?null:String(c.fxPairId);
+    const reportingCurrency=fxPairId?this.ctx.fxCurrencies[fxPairId]:'USD';
+    if(!reportingCurrency)throw new ChainError('ChainSpecific','reporting currency is missing for the registered FX pair');
+    const flags=n(c.tierFlags),status=SeriesStatus[n(await this.ctx.read('Income','deriveStatus',[this.id(sid)]))] as SeriesState['status'];
+    return {issuer:addr(c.issuer),now:this.ctx.now,status,terms:{reportingCurrency,fxPairId,tierFlags:{tier1:!!(flags&1),tier2:!!(flags&2),tier3:!!(flags&4),tier4:!!(flags&8)}}};
+  }
   async getSeries(sid:string):Promise<SeriesState|null>{
     const c=await this.core(sid);if(!c)return null;const id=this.id(sid);
     const [l,v,tr,pauses,history]=await Promise.all([this.ctx.read('Income','getLedger',[id]).then(record),this.ctx.read('Vault','getLedger',[id]).then(record),this.ctx.read('Treasury','getTreasury',[id]).then(record),this.ctx.read('Income','getPauses',[id]) as Promise<{start:bigint;end:bigint}[]>,this.history(id)]);

@@ -118,6 +118,7 @@ export class EvmChain implements ChainPort {
   async getIssuer(issuer: string): ReturnType<ChainPort['getIssuer']> {try{return await (await this.reads()).getIssuer(issuer);}catch(e){throw evmError(e);}}
   async listSeries(): ReturnType<ChainPort['listSeries']> {try{return await (await this.reads()).listSeries();}catch(e){throw evmError(e);}}
   async getSeries(seriesId: string): ReturnType<ChainPort['getSeries']> {try{return await (await this.reads()).getSeries(seriesId);}catch(e){throw evmError(e);}}
+  async getPendingReportingState(seriesId:string):ReturnType<NonNullable<ChainPort['getPendingReportingState']>> {try{return await (await this.reads()).getPendingReportingState(seriesId);}catch(e){throw evmError(e);}}
   async getAuction(seriesId: string): ReturnType<ChainPort['getAuction']> {try{return await (await this.reads()).getAuction(seriesId);}catch(e){throw evmError(e);}}
   async getBid(seriesId: string, bidder: string): ReturnType<ChainPort['getBid']> {try{return await (await this.reads()).getBid(seriesId, bidder);}catch(e){throw evmError(e);}}
   async listBids(seriesId: string): ReturnType<ChainPort['listBids']> {try{return await (await this.reads()).listBids(seriesId);}catch(e){throw evmError(e);}}

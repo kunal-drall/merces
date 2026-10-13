@@ -19,6 +19,14 @@ function fixture(){
  return {reads:new EvmReads(ctx),ctx,patch,rows,events};
 }
 describe('EVM read models against pinned ABI getter shapes',()=>{
+ it('reads an unsettled reporting schedule without history and falls back after settlement',async()=>{
+  const {reads,ctx,patch}=fixture();ctx.history=async()=>{throw new Error('history unavailable');};
+  patch('Registry.getSeriesCore',{settlementTs:0n,raiseState:1});
+  expect(await reads.getPendingReportingState(sid)).toMatchObject({issuer:wallet,now:1767225601,terms:{reportingCurrency:'USD',fxPairId:null,tierFlags:{tier2:true}}});
+  expect(await reads.getPendingReportingState('monad:2')).toBeNull();
+  patch('Registry.getSeriesCore',{settlementTs:1767225600n,raiseState:4});expect(await reads.getPendingReportingState(sid)).toBeNull();
+  await expect(reads.getSeries(sid)).rejects.toThrow('history unavailable');
+ });
  it('reads treasury releases and both pause causes without loading protocol history',async()=>{
   const {reads,ctx,patch,rows}=fixture();ctx.history=async()=>{throw new Error('history unavailable');};
   rows.set('Registry.getReleaseSchedule',[{atOffsetSeconds:0n,bps:5000},{atOffsetSeconds:86400n,bps:5000}]);

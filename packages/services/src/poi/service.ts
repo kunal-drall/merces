@@ -60,6 +60,14 @@ export class ProofOfIncomeService {
    * instant from `projectDeadlines` (a pause running now is counted; one approved later moves it).
    */
   async schedule(seriesId: string, session: Session): Promise<Record<string, unknown>> {
+    const port=this.ctx.chainFor(seriesId);
+    const pending=await port.getPendingReportingState?.(seriesId);
+    if(pending){
+      if(!session.wallets.some(w=>w.chain===port.chain&&w.address===pending.issuer)&&!session.roles.includes('admin'))throw AppError.forbidden('not the issuer of this series');
+      // The finalized core confirms there has been no settlement. Historical payouts,
+      // creation timestamps and commitments are not needed to establish an empty schedule.
+      return {seriesId,status:pending.status,now:pending.now,reportingCurrency:pending.terms.reportingCurrency,fxBasis:!pending.terms.fxPairId&&pending.terms.reportingCurrency==='USD'?'unity':'accumulator',tierFlags:pending.terms.tierFlags,periods:[],upcoming:null};
+    }
     const { chain, series } = await this.seriesForIssuer(seriesId, session);
     const now = await chain.now();
     const live = await chain.listPeriods(seriesId);
