@@ -1,0 +1,48 @@
+{
+  "seriesId": "monad:1",
+  "registry": "0xB43A7729A939EC9deffDa72a64Fa971533e163DB",
+  "terms": {
+    "issuer": "0x399b989dd6d6bd3258d44a6ab049af3cb8265a24",
+    "stablecoin": "USDC",
+    "stablecoinMint": "0x534b2f3A21130d7a60830c2Df862319e593943A3",
+    "unitsOffered": "100",
+    "reservePrice": "100000",
+    "minimumRaise": "1000000",
+    "capMultipleWad": "2500000000000000000",
+    "hurdleWad": "80000000000000000",
+    "payoutMultipleK": 5,
+    "lockupSeconds": 47336400,
+    "walletCapBps": 1000,
+    "commitDurationSeconds": 604800,
+    "revealDurationSeconds": 172800,
+    "windowCommitDuration": 259200,
+    "windowRevealDuration": 86400,
+    "auctionFeeBps": 100,
+    "payoutFeeBps": 500,
+    "windowFeeBps": 100,
+    "nonRevealChargeBps": 100,
+    "releaseSchedule": [
+      {
+        "afterSeconds": 0,
+        "bps": 3333
+      },
+      {
+        "afterSeconds": 2592000,
+        "bps": 3333
+      },
+      {
+        "afterSeconds": 5184000,
+        "bps": 3334
+      }
+    ],
+    "termsCommitment": "0x123887976097158cd6ffa39866d05ead0dabe71a033c9622dd53c26438027969",
+    "contractHash": "0x904710efc7f305649d3af1358ac91da4a8f68a0121dd01e525b52c455ff9c71e",
+    "tierFlags": {
+      "tier1": false,
+      "tier2": true,
+      "tier3": false,
+      "tier4": false
+    },
+    "raiseStyle": "sealed-bid"
+  }
+}

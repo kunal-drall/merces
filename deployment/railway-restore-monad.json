@@ -1,0 +1,9 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "deploy": {
+    "preDeployCommand": [
+      "node --import tsx scripts/restore-monad-demo-terms.mjs --apply"
+    ],
+    "preDeployTimeout": 120
+  }
+}
