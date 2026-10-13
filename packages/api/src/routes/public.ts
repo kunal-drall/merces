@@ -19,12 +19,11 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
   // Vercel instances probe these together before serving wallet routes. Coalesce public
   // readiness for ten seconds so repeated probes do not starve finalized wallet reads.
   const readHealth=readinessCache(async () => {
-      const chains = [] as { chain: string; family: string; mode: string; ok: boolean; detail: string; cursor: string | null; lastSeq: number }[];
-      for (const c of ctx.chains.chains.values()) {
+      const chains = await Promise.all([...ctx.chains.chains.values()].map(async(c) => {
         const h = await c.health();
         const cur = await ctx.pool.query<{ cursor: string | null; last_seq: string }>('select cursor, last_seq from indexer_cursors where chain = $1', [c.chain]);
-        chains.push({ chain: c.chain, family: c.family, mode: c.mode, ok: h.ok, detail: h.detail, cursor: cur.rows[0]?.cursor ?? null, lastSeq: Number(cur.rows[0]?.last_seq ?? 0) });
-      }
+        return { chain: c.chain, family: c.family, mode: c.mode, ok: h.ok, detail: h.detail, cursor: cur.rows[0]?.cursor ?? null, lastSeq: Number(cur.rows[0]?.last_seq ?? 0) };
+      }));
       return { ok: chains.every((c) => c.ok), chains, stage1: ctx.chains.stage1 ? { kind: ctx.chains.stage1.kind, path: ctx.chains.stage1.path } : null };
     },value=>value.ok&&value.chains.every(chain=>chain.mode==='live'));
   defineRoute(app, ctx, {
@@ -33,12 +32,11 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
   });
 
   const readCatalogue=readinessCache(async () => {
-      const out = [];
-      for (const c of ctx.chains.chains.values()) {
+      const out = await Promise.all([...ctx.chains.chains.values()].map(async(c) => {
         const info = await c.info();
         // `signing`: the deployment's signing domain (S4 D6), null while the chain's adapter cannot read it
-        out.push({ chain: info.chain, family: info.family, mode: info.mode, network: info.network, stablecoins: Object.entries(info.stablecoins).map(([symbol, v]) => ({ symbol, mint: v!.mint, decimals: v!.decimals })), raiseStyles: info.family === 'solana' ? ['sealed', 'curve'] : ['sealed'], signing: info.signing });
-      }
+        return { chain: info.chain, family: info.family, mode: info.mode, network: info.network, stablecoins: Object.entries(info.stablecoins).map(([symbol, v]) => ({ symbol, mint: v!.mint, decimals: v!.decimals })), raiseStyles: info.family === 'solana' ? ['sealed', 'curve'] : ['sealed'], signing: info.signing };
+      }));
       return { chains: out };
     },value=>value.chains.length>0&&value.chains.every(chain=>chain.mode==='live'));
   defineRoute(app, ctx, {

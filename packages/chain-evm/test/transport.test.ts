@@ -34,3 +34,17 @@ describe('EVM public RPC event pagination',()=>{
   await transport.history(200n);expect(getLogs).toHaveBeenCalledTimes(5);
  });
 });
+
+describe('in-flight finalized read coalescing',()=>{
+ it('shares concurrent heads but reads a fresh head after completion',async()=>{
+  const {transport,client}=setup();await Promise.all([transport.head(),transport.head(),transport.head()]);expect(client.getBlock).toHaveBeenCalledTimes(1);await transport.head();expect(client.getBlock).toHaveBeenCalledTimes(2);
+ });
+ it('shares only identical pinned reads and never caches their completed result',async()=>{
+  const {transport,client}=setup();await Promise.all([transport.read('Registry','admin',[],7n),transport.read('Registry','admin',[],7n),transport.read('Registry','admin',[],8n),transport.read('Registry','feeCollector',[],7n)]);expect(client.readContract).toHaveBeenCalledTimes(3);await transport.read('Registry','admin',[],7n);expect(client.readContract).toHaveBeenCalledTimes(4);
+  await Promise.all([transport.read('Registry','admin'),transport.read('Registry','admin')]);expect(client.readContract).toHaveBeenCalledTimes(6);
+ });
+ it('retries a failed head and pinned read on the next request',async()=>{
+  const {transport,client}=setup();client.getBlock.mockRejectedValueOnce(new Error('offline'));await expect(transport.head()).rejects.toThrow('offline');await transport.head();expect(client.getBlock).toHaveBeenCalledTimes(2);
+  client.readContract.mockRejectedValueOnce(new Error('offline'));await expect(transport.read('Registry','admin',[],7n)).rejects.toThrow();await transport.read('Registry','admin',[],7n);expect(client.readContract).toHaveBeenCalledTimes(2);
+ });
+});

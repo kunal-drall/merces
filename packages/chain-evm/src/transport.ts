@@ -10,14 +10,27 @@ export interface EvmPayload {to:string;data:Hex;value:string;chainId:number;}
 /** All reads within a snapshot use the exact finalized block number, never several moving latest tags. */
 export class EvmTransport {
   private events:EvmRecord[]=[];
+  private pendingHead:ReturnType<EvmTransport['loadHead']>|null=null;
+  private pendingReads=new Map<string,Promise<unknown>>();
   private through:bigint;
   private eventLoad:Promise<void>|null=null;
   private inputs=new Map<string,Promise<{name:string;args:readonly unknown[];sender:string}>>();
   constructor(readonly config:EvmChainConfig,readonly client:PublicClient,readonly verify:()=>Promise<void>){this.through=BigInt(config.startBlock)-1n;}
-  async head(){await this.verify();return this.client.getBlock({blockTag:this.config.finalityTag});}
+  private loadHead(){return this.client.getBlock({blockTag:this.config.finalityTag});}
+  async head(){
+    await this.verify();
+    this.pendingHead??=this.loadHead().finally(()=>{this.pendingHead=null;});
+    return this.pendingHead;
+  }
   async read(module:EvmModule,name:string,args:readonly unknown[]=[],blockNumber?:bigint):Promise<unknown>{
     await this.verify();
-    try{return await this.client.readContract({address:moduleAddress(this.config.contracts,module),abi:abiOf(module),functionName:name,args,...(blockNumber===undefined?{blockTag:this.config.finalityTag}:{blockNumber})});}catch(e){throw evmError(e);}
+    // Only identical reads at an explicit finalized block can share an in-flight call.
+    // Clear on completion (including failure); never serve a cached balance or moving head.
+    const key=blockNumber===undefined?null:JSON.stringify([blockNumber,module,name,args],(_,v)=>typeof v==='bigint'?{bigint:v.toString()}:v);
+    if(key&&this.pendingReads.has(key))return this.pendingReads.get(key)!;
+    const read=this.client.readContract({address:moduleAddress(this.config.contracts,module),abi:abiOf(module),functionName:name,args,...(blockNumber===undefined?{blockTag:this.config.finalityTag}:{blockNumber})}).catch(e=>{throw evmError(e);}).finally(()=>{if(key)this.pendingReads.delete(key);});
+    if(key)this.pendingReads.set(key,read);
+    return read;
   }
   async tokenBalance(token:string,wallet:string,blockNumber?:bigint):Promise<bigint>{
     await this.verify();return this.client.readContract({address:getAddress(token),abi:erc20Abi,functionName:'balanceOf',args:[getAddress(wallet)],...(blockNumber===undefined?{blockTag:this.config.finalityTag}:{blockNumber})});

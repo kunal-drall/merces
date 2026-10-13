@@ -7,7 +7,7 @@ import {
 import { assertNotMainnet, type EvmChainConfig } from './config.ts';
 import { EvmEventMapper } from './mapping.ts';
 import { EvmTransport } from './transport.ts';
-import { EvmReads, record, n, type EvmRecord } from './reads.ts';
+import { EvmReads, record, n, type EvmReadContext, type EvmRecord } from './reads.ts';
 import { planEvmCommand, type EvmCall } from './commands.ts';
 import { calldata, evmError, moduleAddress, type EvmModule } from './abi.ts';
 import { eventCursor, mapEvmEvent } from './events.ts';
@@ -37,7 +37,7 @@ export class EvmChain implements ChainPort {
   constructor(readonly config: EvmChainConfig) {
     assertNotMainnet(config);
     this.chain = config.chain;
-    this.client = createPublicClient({ transport: http(config.rpcUrl,{...(new URL(config.rpcUrl).hostname==='testnet-rpc.monad.xyz'?{fetchFn:pacedRpcFetch(150),retryDelay:750}:{})}), chain: { id: config.chainId, name: config.network, nativeCurrency: { name: 'native', symbol: 'NATIVE', decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } } });
+    this.client = createPublicClient({ transport: http(config.rpcUrl,{...(new URL(config.rpcUrl).hostname==='testnet-rpc.monad.xyz'?{fetchFn:pacedRpcFetch(150),retryDelay:750,batch:{batchSize:8,wait:8}}:{})}), chain: { id: config.chainId, name: config.network, nativeCurrency: { name: 'native', symbol: 'NATIVE', decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } } });
     this.mapper = new EvmEventMapper(config);
     this.transport = new EvmTransport(config,this.client,()=>this.ensureNetwork());
   }
@@ -68,7 +68,10 @@ export class EvmChain implements ChainPort {
   }
 
   async info(): Promise<ChainInfo> {
-    const ctx=await this.transport.snapshot();
+    return this.infoAt(await this.transport.snapshot());
+  }
+
+  private async infoAt(ctx:EvmReadContext):Promise<ChainInfo> {
     const [domain,admin,feeCollector,flags]=await Promise.all([ctx.read('Registry','domain'),ctx.read('Registry','admin'),ctx.read('Registry','feeCollector'),ctx.read('Registry','getFlags')]);
     const signing=signingDomain('evm',this.config.chainId,moduleAddress(this.config.contracts,'Registry'));
     if(domain!==signing.domain)throw new ChainError('ChainSpecific','refusing: registry signing domain differs from the deployment');
@@ -82,21 +85,22 @@ export class EvmChain implements ChainPort {
     try {
       await this.ensureNetwork();
       const chainId = this.config.chainId;
-      const block = await this.client.getBlock({ blockTag: this.config.finalityTag });
+      const block = await this.transport.head();
       // MercesRegistry.getProtocolContracts is authoritative for the core module links.
       for(const name of ['Registry','Auction','Income','Vault','Treasury','Window','Router','FxAccumulator'] as const)moduleAddress(this.config.contracts,name);
-      const links=record(await this.transport.read('Registry','getProtocolContracts',[],block.number));
+      const ctx=await this.transport.snapshotAt(block.number,Number(block.timestamp));
+      const [rawLinks,codes]=await Promise.all([
+        ctx.read('Registry','getProtocolContracts'),
+        Promise.all(Object.entries(this.config.contracts).map(async([name,addr])=>({name,code:await this.client.getCode({address:getAddress(addr),blockNumber:block.number})}))),
+        this.infoAt(ctx),
+      ]);
+      const links=record(rawLinks);
       for(const [field,module] of Object.entries({auction:'Auction',treasury:'Treasury',income:'Income',vault:'Vault',window:'Window'})){
         if(String(links[field]).toLowerCase()!==moduleAddress(this.config.contracts,module as EvmModule).toLowerCase())throw new ChainError('ChainSpecific',`refusing: registry ${field} differs from the manifest`);
       }
-      const missing: string[] = [];
-      for (const [name, addr] of Object.entries(this.config.contracts)) {
-        const code = await this.client.getCode({ address: getAddress(addr) });
-        if (!code || code === '0x') missing.push(name);
-      }
+      const missing=codes.filter(({code})=>!code||code==='0x').map(({name})=>name);
       const latency_ms = Date.now() - t0;
       if (missing.length) return { ok: false, mode: 'live', latency_ms, detail: `rpc ok (block ${block.number}) but contracts missing: ${missing.join(', ')}` };
-      await this.info();
       return { ok: true, mode: 'live', latency_ms, detail: `chainId ${chainId}, ${this.config.finalityTag} block ${block.number}` };
     } catch (e) {
       const msg = (e as Error).message;

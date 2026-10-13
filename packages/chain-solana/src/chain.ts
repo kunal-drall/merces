@@ -96,11 +96,9 @@ export class SolanaChain implements ChainPort {
     const t0 = Date.now();
     try {
       await this.ensureNetwork();
-      const [slot, version] = await Promise.all([this.connection.getSlot('finalized'), this.connection.getVersion()]);
-      const programsOk = await this.programsDeployed();
+      const [slot, version, programsOk] = await Promise.all([this.connection.getSlot('finalized'), this.connection.getVersion(), this.programsDeployed(), this.info()]);
       const latency_ms = Date.now() - t0;
       if (!programsOk.ok) return { ok: false, mode: 'live', latency_ms, detail: `rpc ok (slot ${slot}, ${version['solana-core']}) but programs missing: ${programsOk.missing.join(', ')}` };
-      await this.info();
       return { ok: true, mode: 'live', latency_ms, detail: `slot ${slot}, solana-core ${version['solana-core']}, ${Object.keys(this.config.programs).length} programs deployed` };
     } catch (e) {
       const msg = (e as Error).message;
@@ -109,16 +107,14 @@ export class SolanaChain implements ChainPort {
   }
 
   async programsDeployed(): Promise<{ ok: boolean; missing: string[] }> {
-    const missing: string[] = [];
-    for (const [name, id] of Object.entries(this.config.programs)) {
-      try {
-        const info = await this.connection.getAccountInfo(new PublicKey(id), 'finalized');
-        if (!info || !info.executable) missing.push(name);
-      } catch {
-        missing.push(name);
-      }
+    const programs=Object.entries(this.config.programs);
+    try {
+      const accounts=await this.connection.getMultipleAccountsInfo(programs.map(([,id])=>new PublicKey(id)),'finalized');
+      const missing=programs.filter((_,i)=>!accounts[i]?.executable).map(([name])=>name);
+      return {ok:missing.length===0,missing};
+    } catch {
+      return {ok:false,missing:programs.map(([name])=>name)};
     }
-    return { ok: missing.length === 0, missing };
   }
 
   async now(): Promise<number> {

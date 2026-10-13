@@ -40,6 +40,7 @@ export function solanaRpc(genesisHash: string): Record<string, (params: unknown[
     getGenesisHash: () => genesisHash,
     getSlot: () => 42,
     getVersion: () => ({ 'solana-core': '2.1.0', 'feature-set': 1 }),
+    getMultipleAccounts: ([addresses]) => ({context:{slot:42},value:(addresses as string[]).map(()=>({data:['','base64'],executable:true,lamports:1,owner:'BPFLoaderUpgradeab1e11111111111111111111111',rentEpoch:0,space:0}))}),
     getAccountInfo: ([address]) => ({ context: { slot: 42 }, value:address===pda(registry,'config')?{data:[data,'base64'],executable:false,lamports:1,owner:registry,rentEpoch:0,space:Buffer.from(data,'base64').length}:{ data: ['', 'base64'], executable: true, lamports: 1, owner: 'BPFLoaderUpgradeab1e11111111111111111111111', rentEpoch: 0, space: 0 } }),
   };
 }
