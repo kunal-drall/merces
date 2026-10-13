@@ -16,32 +16,34 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
     const r = await ctx.pool.query('select pair as "pairId", pyth_feed_id as "feedId", inverted, chainlink_feed as crosscheck, crosscheck_effective_period as "effectivePeriod" from rate_pairs where chain = $1 and enabled and crosscheck_effective_period is not null order by pair', [chain]);
     return { chain, pairs: r.rows };
   } });
-  // Vercel instances probe these together before serving wallet routes. Coalesce public
-  // readiness for ten seconds so repeated probes do not starve finalized wallet reads.
-  const readHealth=readinessCache(async () => {
-      const chains = await Promise.all([...ctx.chains.chains.values()].map(async(c) => {
+  // Scope readiness to the chain a request uses. A busy Solana RPC must not hold
+  // Monad reads behind it. Global probes share the same per-chain work and budget.
+  const selectedChains=(query:unknown)=>{
+    const {chain}=z.object({chain:z.string().optional()}).parse(query);
+    if(chain&&!ctx.chains.chains.has(chain))throw AppError.notFound('chain');
+    return [...ctx.chains.chains.values()].filter(c=>!chain||c.chain===chain);
+  };
+  const healthReaders=new Map([...ctx.chains.chains.values()].map(c=>[c.chain,readinessCache(async()=>{
         const h = await c.health();
         const cur = await ctx.pool.query<{ cursor: string | null; last_seq: string }>('select cursor, last_seq from indexer_cursors where chain = $1', [c.chain]);
         return { chain: c.chain, family: c.family, mode: c.mode, ok: h.ok, detail: h.detail, cursor: cur.rows[0]?.cursor ?? null, lastSeq: Number(cur.rows[0]?.last_seq ?? 0) };
-      }));
-      return { ok: chains.every((c) => c.ok), chains, stage1: ctx.chains.stage1 ? { kind: ctx.chains.stage1.kind, path: ctx.chains.stage1.path } : null };
-    },value=>value.ok&&value.chains.every(chain=>chain.mode==='live'));
+      },value=>value.ok&&value.mode==='live')] as const));
   defineRoute(app, ctx, {
     method: 'GET', url: '/health', access: 'public',
-    handler: readHealth,
+    handler: async(req)=>{
+      const chains=await Promise.all(selectedChains(req.query).map(c=>healthReaders.get(c.chain)!()));
+      return {ok:chains.every(c=>c.ok),chains,stage1:ctx.chains.stage1?{kind:ctx.chains.stage1.kind,path:ctx.chains.stage1.path}:null};
+    },
   });
 
-  const readCatalogue=readinessCache(async () => {
-      const out = await Promise.all([...ctx.chains.chains.values()].map(async(c) => {
+  const catalogueReaders=new Map([...ctx.chains.chains.values()].map(c=>[c.chain,readinessCache(async()=>{
         const info = await c.info();
         // `signing`: the deployment's signing domain (S4 D6), null while the chain's adapter cannot read it
         return { chain: info.chain, family: info.family, mode: info.mode, network: info.network, stablecoins: Object.entries(info.stablecoins).map(([symbol, v]) => ({ symbol, mint: v!.mint, decimals: v!.decimals })), raiseStyles: info.family === 'solana' ? ['sealed', 'curve'] : ['sealed'], signing: info.signing };
-      }));
-      return { chains: out };
-    },value=>value.chains.length>0&&value.chains.every(chain=>chain.mode==='live'));
+      },value=>value.mode==='live')] as const));
   defineRoute(app, ctx, {
     method: 'GET', url: '/chains', access: 'public',
-    handler: readCatalogue,
+    handler: async(req)=>({chains:await Promise.all(selectedChains(req.query).map(c=>catalogueReaders.get(c.chain)!()))}),
   });
 
   defineRoute(app, ctx, {

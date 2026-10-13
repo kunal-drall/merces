@@ -55,7 +55,10 @@ export class EvmTransport {
     while(this.through<target){
       // Bounded concurrent pages keep cold-start catch-up from blocking every wallet read.
       // Publish pages in order; a failed page cannot advance the finalized cursor past a gap.
-      const ranges=Array.from({length:4},(_,i)=>this.through+1n+BigInt(i)*100n).filter(from=>from<=target).map(from=>({from,to:from+99n<target?from+99n:target}));
+      // Leave room for wallet reads on the shared public endpoint. Private/local
+      // RPCs keep concurrent catch-up; finalized cursor and gap handling are unchanged.
+      const concurrency=new URL(this.config.rpcUrl).hostname==='testnet-rpc.monad.xyz'?1:4;
+      const ranges=Array.from({length:concurrency},(_,i)=>this.through+1n+BigInt(i)*100n).filter(from=>from<=target).map(from=>({from,to:from+99n<target?from+99n:target}));
       const pages=await Promise.allSettled(ranges.map(({from,to})=>this.client.getLogs({address:[...byAddress.keys()] as Hex[],fromBlock:from,toBlock:to})));
       for(const [i,page] of pages.entries()){
       if(page.status==='rejected')throw page.reason;

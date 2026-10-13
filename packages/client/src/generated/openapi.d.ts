@@ -5396,7 +5396,10 @@ export type $defs = Record<string, never>;
 export interface operations {
     getHealth: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Check only this configured chain; omitted checks all chains. */
+                chain?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5416,7 +5419,10 @@ export interface operations {
     };
     listChains: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Return only this configured chain; omitted returns all chains. */
+                chain?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

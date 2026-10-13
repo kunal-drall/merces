@@ -4408,6 +4408,13 @@ paths:
       x-access: public
       tags:
         - public
+      parameters:
+        - name: chain
+          in: query
+          required: false
+          description: Check only this configured chain; omitted checks all chains.
+          schema:
+            type: string
       responses:
         "200":
           description: Health
@@ -4421,6 +4428,13 @@ paths:
       x-access: public
       tags:
         - public
+      parameters:
+        - name: chain
+          in: query
+          required: false
+          description: Return only this configured chain; omitted returns all chains.
+          schema:
+            type: string
       responses:
         "200":
           description: Chain catalogue

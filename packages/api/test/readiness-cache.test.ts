@@ -4,6 +4,22 @@ import {buildApp} from '../src/app.ts';
 import type {AppContext} from '../src/context.ts';
 
 describe('public readiness probes',()=>{
+  it('checks only the selected chain and shares its result with global probes',async()=>{
+    const monad={chain:'monad',family:'evm',mode:'live',health:vi.fn(async()=>({ok:true,mode:'live',detail:'finalized'})),info:vi.fn(async()=>({chain:'monad',family:'evm',mode:'live',network:'testnet',stablecoins:{}}))};
+    const solana={chain:'solana',family:'solana',mode:'live',health:vi.fn(async()=>({ok:false,mode:'live',detail:'offline'})),info:vi.fn(async()=>{throw new Error('offline');})};
+    const ctx={chains:{chains:new Map([['monad',monad],['solana',solana]])},pool:{query:async()=>({rows:[]})},log:{error:vi.fn()},devMode:false} as unknown as AppContext;
+    const app=await buildApp(ctx);
+    try{
+      expect((await app.inject('/health?chain=monad')).json()).toMatchObject({ok:true,chains:[{chain:'monad'}]});
+      expect((await app.inject('/chains?chain=monad')).json().chains.map((c:{chain:string})=>c.chain)).toEqual(['monad']);
+      expect(solana.health).not.toHaveBeenCalled();expect(solana.info).not.toHaveBeenCalled();
+      expect((await app.inject('/health')).json().ok).toBe(false);
+      expect(monad.health).toHaveBeenCalledOnce();expect(solana.health).toHaveBeenCalledOnce();
+      expect((await app.inject('/health?chain=monad')).json().ok).toBe(true);
+      expect((await app.inject('/health?chain=unknown')).statusCode).toBe(404);
+      expect((await app.inject('/chains?chain=unknown')).statusCode).toBe(404);
+    }finally{await app.close();}
+  });
   it('shares concurrent work and expires the successful result from completion time',async()=>{
     let now=0,finish!:(value:{ok:boolean})=>void;
     const read=vi.fn(()=>new Promise<{ok:boolean}>(resolve=>{finish=resolve;}));
