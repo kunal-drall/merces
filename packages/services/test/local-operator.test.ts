@@ -1,8 +1,8 @@
-import { beforeAll,afterAll,describe,it,expect } from 'vitest';
+import { beforeAll,afterAll,describe,it,expect,vi } from 'vitest';
 import { generateKeyPairSync,createHash,publicEncrypt,randomBytes,createCipheriv,createDecipheriv } from 'node:crypto';
 import { createTestSchema,dbTestsEnabled } from '@merces/db';
 import { signingDomain } from '@merces/domain';
-import { LocalKms } from '@merces/ports';
+import { LocalKms, vaultFromEnv } from '@merces/ports';
 import { LocalOperator } from '../src/local-operator/service.ts';
 import { operatorCommand } from '../src/local-operator/policy.ts';
 import { openOperatorEnvelope } from '../../report-verifier/src/relay-crypto.ts';
@@ -50,7 +50,7 @@ describe.skipIf(!dbTestsEnabled())('local operator durable queue',()=>{
     info={address,publicKeyHex:(await kms.publicKey('v')).publicKeyHex,previous:[],syntheticIncome:{testOnly:true,notice:'test only'},chains:[{chain:'monad',domain:signingDomain('evm',10143,'0x'+'1'.repeat(40))}]};
     const signature=await kms.signDigest('v','0x'+createHash('sha256').update('merces/local-verifier-key/v1:'+JSON.stringify(pin)).digest('hex'));
     info.transport={kind:'local-operator-v1',encryptionKey:pin,encryptionSignature:signature};
-    const ctx={pool:db.pool,chains:{chains:new Map([['monad',{chain:'monad',info:async()=>({signing:info.chains[0].domain})}]])}} as unknown as ServiceContext;
+    const ctx={pool:db.pool,vault:vaultFromEnv({}, {simulatorOnly:true}),chains:{chains:new Map([['monad',{chain:'monad',info:async()=>({signing:info.chains[0].domain})}]])}} as unknown as ServiceContext;
     op=new LocalOperator(ctx,'x'.repeat(64),policy,pin,address);
   });
   afterAll(async()=>db?.drop());
@@ -69,5 +69,23 @@ describe.skipIf(!dbTestsEnabled())('local operator durable queue',()=>{
     expect((await op.finish(id,jobs[0]!.job.lease,{ciphertext:'opaque'})).accepted).toBe(true);
     expect((await op.finish(id,jobs[0]!.job.lease,{ciphertext:'replay'})).accepted).toBe(false);
     expect((await op.reply('alice',id)).result).toEqual({ciphertext:'opaque'});
+  });
+  it('encrypts provider queue payloads and results and requires explicit real-provider activation',async()=>{
+    const job={operation:'esign.create' as const,params:{sessionId:'contract-1',signerAccountId:'alice',documents:[{name:'Agreement',body:'private-contract-canary'}]}};
+    await expect(op.provider(job)).rejects.toMatchObject({status:503});
+    vi.stubEnv('MERCES_LOCAL_PROVIDERS','true');
+    try{
+      await op.poll({...info,syntheticIncome:undefined},false);
+      await expect(op.poll(info,false)).rejects.toMatchObject({status:403});
+      const pending=op.provider(job);
+      await vi.waitFor(async()=>expect((await db.pool.query("select 1 from local_operator_jobs where kind='provider'")).rowCount).toBe(1));
+      const stored=(await db.pool.query("select payload from local_operator_jobs where kind='provider'")).rows[0];
+      expect(JSON.stringify(stored.payload)).not.toContain('private-contract-canary');
+      const lease=await op.poll({...info,syntheticIncome:undefined});expect(lease.job.payload).toEqual(job);
+      await op.finish(lease.job.id,lease.job.lease,{envelopeId:'provider-1',signingUrl:'https://example.invalid/private-signing-link'});
+      expect(await pending).toEqual({envelopeId:'provider-1',signingUrl:'https://example.invalid/private-signing-link'});
+      const result=(await db.pool.query('select result from local_operator_jobs where id=$1',[lease.job.id])).rows[0];
+      expect(JSON.stringify(result)).not.toContain('private-signing-link');
+    }finally{vi.unstubAllEnvs();}
   });
 });

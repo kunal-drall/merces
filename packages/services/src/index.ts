@@ -1,4 +1,5 @@
 import { localOperatorFromEnv } from './local-operator/service.ts';
+import { localProviderPorts } from '@merces/ports';
 import { registerLocalOperatorRoutes } from './local-operator/routes.ts';
 import { registerFormsRoutes } from './forms/routes.ts';
 import { registerRouterRoutes } from './router/routes.ts';
@@ -93,10 +94,14 @@ export function createServiceContext(base: AppContext, over: ProviderOverrides =
     const op=ctx.localOperator;
     ctx.verifier={publicKey:()=>op.keys(),attest:async()=>{throw Error('Private verifier inputs must use device encryption');}};
     for(const chain of ctx.chains.chains.values()) chain.submit=(command,role)=>op.submit(chain.chain,command,role);
-    ctx.identity={provider:'operator-testnet',start:async p=>({checkId:'operator-testnet:'+p.applicationId,redirectUrl:'about:blank'}),status:async id=>{
+    if(process.env.MERCES_LOCAL_PROVIDERS==='true'){
+      const providers=localProviderPorts(job=>op.provider(job));
+      ctx.identity=providers.identity;ctx.esign=providers.esign;ctx.zktls=providers.reclaim;ctx.testESign=false;
+    } else ctx.identity={provider:'operator-testnet',start:async p=>({checkId:'operator-testnet:'+p.applicationId,redirectUrl:'about:blank'}),status:async id=>{
       const r=await ctx.pool.query('select identity_status from applications where identity_check_id=$1',[id]);return r.rows[0]?.identity_status==='passed'?'passed':'pending';
     }};
   }
+  if(process.env.MERCES_LOCAL_PROVIDERS==='true'&&!ctx.localOperator)throw Error('Real provider credentials require the local operator');
   return ctx;
 }
 

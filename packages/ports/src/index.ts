@@ -11,3 +11,7 @@ export * from './price-feed.ts';
 export * from './meteora.ts';
 export * from './dex.ts';
 export * from './secrets.ts';
+export * from './stripe.ts';
+export * from './docusign.ts';
+export * from './reclaim.ts';
+export * from './local-providers.ts';

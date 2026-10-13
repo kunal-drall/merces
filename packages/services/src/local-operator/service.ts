@@ -4,6 +4,7 @@ import { AppError } from '@merces/core';
 import { ChainError, recoverSigner, type ServiceRole, type TxResult, type SigningDomain } from '@merces/domain';
 import type { ServiceContext } from '../context.ts';
 import type { VerifierKeyInfo } from '@merces/report-verifier';
+import { providerJobSchema, type ProviderJob } from '@merces/ports';
 import { envelopeSchema, operatorCommand, operatorPolicySchema, type OperatorPolicy } from './policy.ts';
 
 export class LocalOperator {
@@ -29,7 +30,8 @@ export class LocalOperator {
     return {...state.verifier,transport:{kind:'local-operator-v1',encryptionKey:this.encryptionKey,encryptionSignature:state.verifier.transport.encryptionSignature}};
   }
   async poll(info: VerifierKeyInfo, claim=true) {
-    if(info.address!==this.address || !info.syntheticIncome?.testOnly) throw AppError.forbidden('operator key or provider mismatch');
+    const realProviders=process.env.MERCES_LOCAL_PROVIDERS==='true';
+    if(info.address!==this.address || (realProviders ? !!info.syntheticIncome : !info.syntheticIncome?.testOnly)) throw AppError.forbidden('operator key or provider mismatch');
     const digest='0x'+createHash('sha256').update('merces/local-verifier-key/v1:'+JSON.stringify(this.encryptionKey)).digest('hex');
     if(!info.transport || recoverSigner(digest,info.transport.encryptionSignature)!==this.address)throw AppError.forbidden('operator encryption key mismatch');
     const expected=this.domains??=await Promise.all([...this.ctx.chains.chains.values()].map(async c=>{const domain=(await c.info()).signing;if(!domain)throw AppError.forbidden('operator signing domain missing');return {chain:c.chain,domain};}));
@@ -41,11 +43,27 @@ export class LocalOperator {
     if(!claim)return {job:null};
     const lease=randomUUID();
     const job=(await this.ctx.pool.query("update local_operator_jobs set status='leased',lease=$1,leased_until=now()+interval '90 seconds' where id=(select id from local_operator_jobs where expires_at>now() and (status='pending' or status='leased' and leased_until<now()) order by created_at for update skip locked limit 1) returning id,kind,payload,lease,expires_at",[lease])).rows[0];
+    if(job?.kind==='provider')job.payload=JSON.parse(this.ctx.vault.decrypt(job.payload.encrypted,`provider:${job.id}`));
     return {job:job??null};
   }
   async finish(id:string,lease:string,result:unknown,errorCode?:string) {
+    const job=(await this.ctx.pool.query('select kind from local_operator_jobs where id=$1 and lease=$2 and status=\'leased\'',[id,lease])).rows[0];
+    if(job?.kind==='provider' && result!==undefined)result={encrypted:this.ctx.vault.encrypt(JSON.stringify(result),`provider-result:${id}`)};
     const r=await this.ctx.pool.query("update local_operator_jobs set status=$3,result=$4,error_code=$5,completed_at=now() where id=$1 and lease=$2 and status='leased'",[id,lease,errorCode?'failed':'complete',result===undefined?null:JSON.stringify(result),errorCode??null]);
     return {accepted:!!r.rowCount};
+  }
+  async provider(input:ProviderJob):Promise<unknown> {
+    if(process.env.MERCES_LOCAL_PROVIDERS!=='true')throw new AppError(503,'Unavailable','real providers are not activated');
+    if(!(await this.status()).online)throw new AppError(503,'Unavailable','local operator is offline');
+    const job=providerJobSchema.parse(input),id=randomUUID();
+    await this.ctx.pool.query("insert into local_operator_jobs(id,kind,payload,expires_at) values($1,'provider',$2,now()+interval '3 minutes')",[id,JSON.stringify({encrypted:this.ctx.vault.encrypt(JSON.stringify(job),`provider:${id}`)})]);
+    for(let i=0;i<120;i++){
+      const row=(await this.ctx.pool.query('select status,result,error_code from local_operator_jobs where id=$1',[id])).rows[0];
+      if(row?.status==='complete')return JSON.parse(this.ctx.vault.decrypt(row.result.encrypted,`provider-result:${id}`));
+      if(row?.status==='failed')throw new AppError(503,'Unavailable','local provider could not complete this request');
+      await new Promise(r=>setTimeout(r,500));
+    }
+    throw new AppError(503,'Unavailable','provider request is pending; retry the same session');
   }
   async enqueueVerifier(owner:string,id:string,payload:{seriesId:string;envelope:z.infer<typeof envelopeSchema>}) {
     if(!(await this.status()).online) throw new AppError(503,'Unavailable','local operator is offline');

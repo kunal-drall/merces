@@ -3,8 +3,7 @@ import { createHash } from 'node:crypto';
 /**
  * zkTLS port (E5). Shaped after Reclaim Protocol's JS SDK 5.x (verified 2026-10-07, see VERSIONS.md):
  * a verification request is created for a provider, the user's device produces a proof, the backend verifies it
- * with `verifyProof`. TLSNotary presentations fit the same port (proof.system = 'tlsnotary'). Only the mock
- * exists until a Reclaim developer account is available (Part J.3).
+ * with `verifyProof`. The real adapter in reclaim.ts requires a reviewed, pinned income provider.
  *
  * Privacy: `verify()` returns the attested figure IN MEMORY to its caller. The only caller is the report
  * verifier, which keeps no database and logs no payloads. With Reclaim's `responseRedactions[].hash: 'oprf'`
@@ -77,7 +76,7 @@ export const SOURCE_DEFINITIONS: Record<IncomeSourceKind, SourceDefinition> = {
   stripe: {
     kind: 'stripe',
     name: 'Stripe (balance transactions)',
-    reclaimProviderId: 'acfdeaa9-9250-4acd-afd3-fac7ca03458b', // "Verify Last Stripe Transaction Amount" in the Reclaim catalogue (snippet-confirmed); a YTD-sum provider is custom
+    reclaimProviderId: null, // A reviewed YTD provider is required; the catalogue's last transaction is not income coverage.
     http: {
       url: 'https://api.stripe.com/v1/balance_transactions?type=charge&limit=100&created[gte]={{yearStart}}&created[lte]={{coversUntil}}',
       method: 'GET',
@@ -182,23 +181,4 @@ export class MockZkTls implements ZkTlsPort {
   }
 }
 
-/**
- * Reclaim adapter skeleton: the exact SDK calls (verified against @reclaimprotocol/js-sdk 5.8.2) are named
- * here so wiring a developer account is a configuration change. It is not instantiated until credentials exist.
- */
-export class ReclaimZkTls implements ZkTlsPort {
-  readonly provider = 'reclaim' as const;
-  constructor(private readonly cfg: { appId: string; appSecret: string; callbackUrl: string }) {}
-  async createSession(params: { source: IncomeSourceKind; seriesId: string; periodId: string }): Promise<{ sessionId: string; requestUrl: string; statusUrl: string }> {
-    const def = SOURCE_DEFINITIONS[params.source];
-    if (!def.reclaimProviderId) throw new Error(`${params.source}: custom Reclaim provider not yet registered (dev tool / AI agent); see VERSIONS.md`);
-    // const req = await ReclaimProofRequest.init(this.cfg.appId, this.cfg.appSecret, def.reclaimProviderId);
-    // req.setAppCallbackUrl(this.cfg.callbackUrl, true); req.setContext(address, `${seriesId}|${periodId}|…`);
-    // return { sessionId: req.sessionId, requestUrl: await req.getRequestUrl(), statusUrl: req.getStatusUrl() };
-    throw new Error('ReclaimZkTls.createSession: not wired (no developer account; Part J.3)');
-  }
-  async verify(): Promise<ZkTlsVerification> {
-    // const { isVerified, data } = await verifyProof(proofs, { providerId, providerVersion }); // then enforce context.reclaimSessionId replay protection
-    throw new Error('ReclaimZkTls.verify: not wired (Part J.3)');
-  }
-}
+export { ReclaimZkTls } from './reclaim.ts';

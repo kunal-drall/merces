@@ -69,13 +69,15 @@ export class ContractService {
     if (!draft) throw AppError.notFound('draft');
     if (draft.account_id !== session.accountId) throw AppError.forbidden();
     if (draft.state !== 'terms_set') throw AppError.conflict(`draft is ${draft.state}; set terms first`);
-    const existing = await this.ctx.pool.query("select session_id, state, provider_ref from contract_sessions where draft_id = $1 and state in ('prepared','sent','signed') order by created_at desc limit 1", [draftId]);
-    if (existing.rows[0]) {
+    const existing = await this.ctx.pool.query("select session_id, state, provider, provider_ref, heu_template_id, charter_template_id, rendered_hash from contract_sessions where draft_id = $1 and state in ('prepared','sent','signed') order by created_at desc limit 1", [draftId]);
+    const prepared=existing.rows[0]?.state==='prepared'?existing.rows[0]:null;
+    if(prepared&&prepared.provider!==this.ctx.esign.provider)throw AppError.conflict('prepared envelope belongs to another provider');
+    if (existing.rows[0] && existing.rows[0].state!=='prepared') {
       const status = await this.status(draftId, session);
       if (status.state !== 'expired') return { ...status, ...(this.ctx.esign instanceof MockESign ? { documents: this.ctx.esign.documents(existing.rows[0].provider_ref) } : {}) };
       // Mock envelopes live in process memory. A restart expires the old envelope; prepare a new review session.
     }
-    const { heu, charter } = await this.ensureTemplates();
+    const { heu, charter } = prepared?{heu:prepared.heu_template_id,charter:prepared.charter_template_id}:await this.ensureTemplates();
     const tpl = await this.ctx.pool.query<{ template_id: string; body: string }>('select template_id, body from contract_templates where template_id = any($1)', [[heu, charter]]);
     const t = draft.public_terms as Record<string, unknown>;
     const vars: Record<string, string> = {
@@ -85,12 +87,14 @@ export class ContractService {
     };
     const heuBody = render(tpl.rows.find((r) => r.template_id === heu)!.body, vars);
     const charterBody = render(tpl.rows.find((r) => r.template_id === charter)!.body, vars);
-    const sessionId = this.ctx.newId('csess');
+    if(prepared&&prepared.rendered_hash!==sha(heuBody+'\n'+charterBody))throw AppError.conflict('draft terms changed after preparing the envelope');
+    const attempts=this.ctx.esign.provider==='docusign-demo'?(await this.ctx.pool.query("select count(*)::int as n from contract_sessions where draft_id=$1 and state in ('expired','declined')",[draftId])).rows[0].n:0;
+    // Persist before the external request, so a timeout/restart retries the same DocuSign transaction ID.
+    const sessionId = existing.rows[0]?.state==='prepared'?existing.rows[0].session_id:
+      this.ctx.esign.provider==='docusign-demo'?'csess_'+sha(draftId+'|'+attempts+'|'+heu+'|'+charter+'|'+heuBody+'|'+charterBody).slice(0,40):this.ctx.newId('csess');
+    await this.ctx.pool.query("insert into contract_sessions (session_id, account_id, chain, issuer, draft_id, provider, state, heu_template_id, charter_template_id, rendered_hash) values ($1,$2,$3,$4,$5,$6,'prepared',$7,$8,$9) on conflict (session_id) do nothing",[sessionId,session.accountId,draft.chain,draft.issuer,draftId,this.ctx.esign.provider,heu,charter,sha(heuBody+'\n'+charterBody)]);
     const env = await this.ctx.esign.createEnvelope({ sessionId, signerAccountId: session.accountId, documents: [{ name: 'HEU Contract', body: heuBody }, { name: 'Autonomy Charter', body: charterBody }] });
-    await this.ctx.pool.query(
-      "insert into contract_sessions (session_id, account_id, chain, issuer, draft_id, provider, provider_ref, state, heu_template_id, charter_template_id, rendered_hash) values ($1,$2,$3,$4,$5,$6,$7,'sent',$8,$9,$10)",
-      [sessionId, session.accountId, draft.chain, draft.issuer, draftId, this.ctx.esign.provider, env.envelopeId, heu, charter, sha(heuBody + '\n' + charterBody)],
-    );
+    await this.ctx.pool.query("update contract_sessions set provider_ref=$2,state='sent' where session_id=$1 and state='prepared'",[sessionId,env.envelopeId]);
     return { sessionId, state: 'sent', provider: this.ctx.esign.provider, testSigningAvailable: this.testSigningAvailable(), signingUrl: env.signingUrl, documents: [{ name: 'HEU Contract', body: heuBody }, { name: 'Autonomy Charter', body: charterBody }] };
   }
 
@@ -100,6 +104,7 @@ export class ContractService {
     const cs = r.rows[0];
     if (!cs) throw AppError.notFound('contract session');
     if (cs.state === 'signed') return this.view(cs);
+    if(cs.provider!==this.ctx.esign.provider)throw AppError.conflict('this envelope belongs to a different provider; complete it before switching providers');
     const st = await this.ctx.esign.status(cs.provider_ref);
     if (st === 'signed') {
       const doc = await this.ctx.esign.signedDocument(cs.provider_ref);
@@ -134,7 +139,10 @@ export class ContractService {
     if (d.rows[0].account_id !== session.accountId && !session.roles.includes('admin')) throw AppError.forbidden();
     const r = await this.ctx.pool.query('select * from contract_sessions where draft_id = $1 order by created_at desc limit 1', [draftId]);
     if (!r.rows[0]) return { draftId, state: 'none' };
-    if (r.rows[0].state === 'sent') return this.refresh(r.rows[0].session_id);
+    if (r.rows[0].state === 'sent') {
+      const result=await this.refresh(r.rows[0].session_id);
+      return result.state==='sent'&&this.ctx.esign.signingUrl?{...result,signingUrl:await this.ctx.esign.signingUrl(r.rows[0].provider_ref)}:result;
+    }
     return this.view(r.rows[0]);
   }
 

@@ -2,13 +2,15 @@ import { createHash } from 'node:crypto';
 
 /**
  * E-signature port (E3). Produces an envelope from the rendered contract bundle, collects the issuer's signature,
- * and returns the signed document. The real provider is an open question (Part J.1); the mock signs instantly
- * when `complete()` is called and returns a signed bundle whose hash is anchored onchain.
+ * and returns the signed document. DocuSign developer envelopes are handled by the local worker;
+ * the separately enabled test mock signs when `complete()` is called.
  */
 export interface ESignPort {
   readonly provider: string;
   createEnvelope(params: { sessionId: string; signerAccountId: string; documents: { name: string; body: string }[] }): Promise<{ envelopeId: string; signingUrl: string }>;
   status(envelopeId: string): Promise<'sent' | 'signed' | 'declined' | 'expired'>;
+  /** Fresh embedded signing URL for an interrupted signing session. */
+  signingUrl?(envelopeId: string): Promise<string>;
   /** the signed bundle (provider-specific bytes; here a text bundle with an audit trail) */
   signedDocument(envelopeId: string): Promise<{ body: string; completedAt: string } | null>;
 }

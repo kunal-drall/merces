@@ -13,8 +13,10 @@
     "@merces/math": "workspace:*",
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
+    "@reclaimprotocol/js-sdk": "5.8.2",
     "bs58": "6.0.0",
-    "viem": "2.57.3"
+    "viem": "2.57.3",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@merces/simulator": "workspace:*"

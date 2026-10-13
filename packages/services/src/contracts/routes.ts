@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { defineRoute, type AppContext } from '@merces/api';
 import { MockESign } from '@merces/ports';
+import { AppError } from '@merces/core';
 import { svc } from '../context.ts';
 import { ContractService } from './service.ts';
 
@@ -19,6 +20,8 @@ export function registerContractRoutes(app: FastifyInstance, base: AppContext): 
   defineRoute(app, ctx, {
     method: 'POST', url: '/contracts/webhook/:provider', access: 'public',
     handler: async (req) => {
+      // Real providers use authenticated owner polling. Unsigned callbacks cannot trigger vendor work or reveal status.
+      if(!(ctx.esign instanceof MockESign))throw AppError.forbidden('use authenticated contract status polling');
       const b = z.object({ sessionId: z.string() }).parse(req.body);
       return s.refresh(b.sessionId);
     },

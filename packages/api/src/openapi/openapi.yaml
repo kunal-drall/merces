@@ -906,11 +906,12 @@ paths:
   /contracts/webhook/{provider}:
     post:
       operationId: contractWebhook
+      description: Test-provider callback only. Real providers use authenticated owner polling; unsigned public callbacks receive 403.
       x-access: public
       tags: [drafts]
       parameters: [{ name: provider, in: path, required: true, schema: { type: string } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [sessionId], properties: { sessionId: { type: string } } } } } }
-      responses: { '200': { description: Re-polled provider state, content: { application/json: { schema: { type: object } } } } }
+      responses: { '200': { description: Re-polled test provider state, content: { application/json: { schema: { type: object } } } }, '403': { description: Real provider callbacks require authenticated owner polling } }
   /admin/contracts/templates:
     post:
       operationId: adminAddContractTemplate

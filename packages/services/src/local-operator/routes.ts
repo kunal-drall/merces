@@ -23,7 +23,7 @@ export function registerLocalOperatorRoutes(app:FastifyInstance,base:AppContext)
   // Dedicated operator credential; no browser session or onchain key is used here.
   defineRoute(app,ctx,{method:'POST',url:'/operator/poll',access:'public',bodyLimit:16384,handler:async req=>{
     const op=operator();op.authenticate(req.headers.authorization);
-    const body=z.object({claim:z.boolean().optional(),verifier:z.object({transport:z.object({kind:z.literal('local-operator-v1'),encryptionSignature:z.string().regex(/^0x[0-9a-f]{130}$/),encryptionKey:z.object({kty:z.literal('RSA'),n:z.string(),e:z.literal('AQAB')}).strict()}),address:z.string(),publicKeyHex:z.string(),chains:z.array(z.object({chain:z.string(),domain:z.object({chainKind:z.number(),chainId:z.string(),registry:z.string(),domain:z.string()})})).length(2),previous:z.array(z.object({address:z.string(),retiredAt:z.number()})),syntheticIncome:z.object({testOnly:z.literal(true),notice:z.string()})})}).strict().parse(req.body);
+    const body=z.object({claim:z.boolean().optional(),verifier:z.object({transport:z.object({kind:z.literal('local-operator-v1'),encryptionSignature:z.string().regex(/^0x[0-9a-f]{130}$/),encryptionKey:z.object({kty:z.literal('RSA'),n:z.string(),e:z.literal('AQAB')}).strict()}),address:z.string(),publicKeyHex:z.string(),chains:z.array(z.object({chain:z.string(),domain:z.object({chainKind:z.number(),chainId:z.string(),registry:z.string(),domain:z.string()})})).length(2),previous:z.array(z.object({address:z.string(),retiredAt:z.number()})),syntheticIncome:z.object({testOnly:z.literal(true),notice:z.string()}).optional()})}).strict().parse(req.body);
     return op.poll(body.verifier as VerifierKeyInfo,body.claim);
   }});
   defineRoute(app,ctx,{method:'POST',url:'/operator/jobs/:jobId/complete',access:'public',bodyLimit:800000,handler:async req=>{
@@ -38,6 +38,7 @@ export function registerLocalOperatorRoutes(app:FastifyInstance,base:AppContext)
   }});
   defineRoute(app,ctx,{method:'GET',url:'/operator/verifier-jobs/:jobId',access:'account',handler:async(req,_reply,session)=>operator().reply(session!.accountId,z.string().uuid().parse((req.params as {jobId:string}).jobId))});
   defineRoute(app,ctx,{method:'POST',url:'/admin/applications/:applicationId/test-identity',access:'admin',handler:async(req,_reply,session)=>{
+    if(process.env.MERCES_LOCAL_PROVIDERS==='true')throw AppError.forbidden('synthetic identity is disabled with real providers');
     z.object({acknowledgeSynthetic:z.literal(true)}).strict().parse(req.body);
     const id=(req.params as {applicationId:string}).applicationId;
     const a=(await ctx.pool.query('select chain,wallet,state from applications where application_id=$1',[id])).rows[0];

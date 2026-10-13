@@ -753,6 +753,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
+        /** @description Test-provider callback only. Real providers use authenticated owner polling; unsigned public callbacks receive 403. */
         post: operations["contractWebhook"];
         delete?: never;
         options?: never;
@@ -6770,7 +6771,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Re-polled provider state */
+            /** @description Re-polled test provider state */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6778,6 +6779,13 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
+            };
+            /** @description Real provider callbacks require authenticated owner polling */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

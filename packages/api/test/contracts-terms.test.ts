@@ -82,6 +82,31 @@ describe.skipIf(!dbTestsEnabled())('contract templates, contract signing and dra
     await rig.close();
   });
 
+  it('retries a timed-out real envelope with the same persisted session and refuses unsigned callbacks', async () => {
+    await draftRow('draft-provider-retry', 'terms_set');
+    const calls: string[] = [];
+    const provider = {
+      provider: 'docusign-demo',
+      createEnvelope: async (params: { sessionId: string }) => {
+        calls.push(params.sessionId);
+        if (calls.length === 1) throw Error('provider-connection-failed');
+        return { envelopeId: 'vendor-envelope', signingUrl: 'https://demo.docusign.net/signing/test' };
+      },
+      status: async () => 'sent' as const,
+      signedDocument: async () => null,
+    };
+    const context = { ...rig.ctx, esign: provider };
+    const service = new ContractService(context);
+    await expect(service.prepare('draft-provider-retry', issuer)).rejects.toThrow('provider-connection-failed');
+    expect((await rig.t.pool.query("select state from contract_sessions where draft_id='draft-provider-retry'")).rows[0].state).toBe('prepared');
+    await service.prepare('draft-provider-retry', issuer);
+    expect(calls).toHaveLength(2); expect(calls[0]).toBe(calls[1]);
+    expect((await rig.t.pool.query("select count(*)::int as n from contract_sessions where draft_id='draft-provider-retry'")).rows[0].n).toBe(1);
+    const original = rig.ctx.esign; rig.ctx.esign = provider;
+    try { expect((await rig.post('/contracts/webhook/docusign-demo', { sessionId: calls[0] })).statusCode).toBe(403); }
+    finally { rig.ctx.esign = original; }
+  });
+
   it('re-adding an existing template version is a 409 and keeps the original body', async () => {
     const first = await rig.post('/admin/contracts/templates', { kind: 'heu', version: 'v9', body: 'x' }, adminTok);
     expect(first.statusCode).toBe(200);

@@ -6,6 +6,14 @@ The frontend builds against this API. **Every push lists every changed or remove
 count; `API.md` is the narrative; `packages/client/src/generated/openapi.d.ts` is regenerated with `pnpm openapi:client`.
 Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
+## 2026-10-13 — local provider adapters (226 operations)
+
+- `POST /contracts/webhook/{provider}` documents a 403 response for real providers. Unsigned callbacks can only complete the test mock; DocuSign completion is checked through authenticated provider polling.
+- Local provider jobs encrypt identity and e-signature payloads/results at rest. `MERCES_LOCAL_PROVIDERS=true` selects Stripe Identity, DocuSign developer signing and the reviewed Reclaim adapter, and disables synthetic identity/income/signing paths. It remains disabled until account/provider activation is complete.
+- Real Reclaim proof submission uses a session-bound `{sessionId, proofs}` envelope inside the existing encrypted verifier request. No raw proof or income field is added to the hosted API. The last-transaction catalogue provider is refused because it cannot attest complete YTD income.
+- Interrupted DocuSign preparation recovers the original session and transaction ID; authenticated contract status can return a fresh embedded signing URL.
+- Vendor credentials and registered signing keys remain local. Adapter implementation is not evidence of live account activation; see `PROVIDER_INTEGRATIONS.md`.
+
 ## 2026-10-12 — local testnet operator (226 operations)
 
 - Added admin `POST /admin/keepers/crank-status` (`chain`, `seriesId`) for idempotent, audited status reconciliation on a configured test series using the local keeper key.
