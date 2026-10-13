@@ -616,6 +616,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/applications/{applicationId}/identity/trial": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Completes a disclosed synthetic identity check for the owner's configured disposable test wallet. Does not approve the application or change onchain eligibility. Refused on mainnet and with real identity providers. */
+        post: operations["completeTrialIdentityCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/applications/{applicationId}/identity/refresh": {
         parameters: {
             query?: never;
@@ -6540,6 +6557,50 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>;
                 };
+            };
+        };
+    };
+    completeTrialIdentityCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                applicationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    acknowledgeSynthetic: true;
+                };
+            };
+        };
+        responses: {
+            /** @description Trial check complete */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status?: "passed";
+                        /** @constant */
+                        testOnly?: true;
+                        /** @constant */
+                        realIdentityVerified?: false;
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description Application is no longer awaiting review */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

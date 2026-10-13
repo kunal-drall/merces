@@ -6,6 +6,12 @@ The frontend builds against this API. **Every push lists every changed or remove
 count; `API.md` is the narrative; `packages/client/src/generated/openapi.d.ts` is regenerated with `pnpm openapi:client`.
 Generate a revision diff with `pnpm api:changelog <from-rev> <to-rev>`.
 
+## 2026-10-13 — resumable trial onboarding (227 operations)
+
+- Added owner-only `POST /applications/{applicationId}/identity/trial` with `{ acknowledgeSynthetic: true }`. It completes only the configured test wallet's synthetic identity check, refuses real providers and unverified/mainnet domains, and leaves application review and onchain eligibility unchanged.
+- Application reads add `trialVerificationAvailable` and `identityTestOnly`. The check returns `status`, `testOnly: true`, and `realIdentityVerified: false`.
+- Unsigned test contract envelopes resume after a process restart using the original immutable templates, session and rendered-document hash. Changed terms cannot be signed; signed documents remain encrypted and durable.
+
 ## 2026-10-13 — local provider adapters (226 operations)
 
 - `POST /contracts/webhook/{provider}` documents a 403 response for real providers. Unsigned callbacks can only complete the test mock; DocuSign completion is checked through authenticated provider polling.

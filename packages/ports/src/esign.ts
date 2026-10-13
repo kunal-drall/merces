@@ -18,6 +18,7 @@ export interface ESignPort {
 export class MockESign implements ESignPort {
   readonly provider = 'mock';
   private readonly envelopes = new Map<string, { documents: { name: string; body: string }[]; state: 'sent' | 'signed' | 'declined' | 'expired'; signer: string; signedBody?: string; completedAt?: string }>();
+  hasEnvelope(envelopeId: string): boolean { return this.envelopes.has(envelopeId); }
   async createEnvelope(params: { sessionId: string; signerAccountId: string; documents: { name: string; body: string }[] }): Promise<{ envelopeId: string; signingUrl: string }> {
     const envelopeId = `mockenv_${params.sessionId}`;
     this.envelopes.set(envelopeId, { documents: params.documents, state: 'sent', signer: params.signerAccountId });

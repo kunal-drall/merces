@@ -28,10 +28,11 @@ export class ContractService {
     if (!info.signing) throw AppError.conflict('test-network identity is unavailable');
     try { assertSigningNetwork(info.signing, { allowLocal: info.mode === 'mock' }); }
     catch { throw AppError.forbidden('test signing requires a verified test-network domain'); }
-    const cs = (await this.ctx.pool.query('select session_id, provider, provider_ref, state from contract_sessions where draft_id = $1 and account_id = $2 order by created_at desc limit 1', [draftId, session.accountId])).rows[0];
+    const cs = (await this.ctx.pool.query('select * from contract_sessions where draft_id = $1 and account_id = $2 order by created_at desc limit 1', [draftId, session.accountId])).rows[0];
     if (!cs || cs.provider !== 'mock') throw AppError.conflict('prepare a test envelope first');
     if (cs.state === 'signed') return this.refresh(cs.session_id);
     if (row.state !== 'terms_set' || cs.state !== 'sent') throw AppError.conflict('the test envelope is not awaiting a signature');
+    await this.restoreTestEnvelope(cs);
     if (await this.ctx.esign.status(cs.provider_ref) !== 'sent') throw AppError.conflict('the test envelope expired; prepare a new test draft');
     await (this.ctx.esign as MockESign).complete(cs.provider_ref);
     await audit(this.ctx.pool, { actor: session.accountId, actorRole: 'issuer', action: 'contract.test-sign', target: draftId, detail: { testOnly: true } });
@@ -75,18 +76,10 @@ export class ContractService {
     if (existing.rows[0] && existing.rows[0].state!=='prepared') {
       const status = await this.status(draftId, session);
       if (status.state !== 'expired') return { ...status, ...(this.ctx.esign instanceof MockESign ? { documents: this.ctx.esign.documents(existing.rows[0].provider_ref) } : {}) };
-      // Mock envelopes live in process memory. A restart expires the old envelope; prepare a new review session.
+      // An explicitly expired envelope needs a new review; a lost test process is restored by status().
     }
     const { heu, charter } = prepared?{heu:prepared.heu_template_id,charter:prepared.charter_template_id}:await this.ensureTemplates();
-    const tpl = await this.ctx.pool.query<{ template_id: string; body: string }>('select template_id, body from contract_templates where template_id = any($1)', [[heu, charter]]);
-    const t = draft.public_terms as Record<string, unknown>;
-    const vars: Record<string, string> = {
-      issuer: draft.issuer, chain: draft.chain, draftId, stablecoin: String(t.stablecoin), unitsOffered: String(t.unitsOffered), reservePrice: String(t.reservePrice), minimumRaise: String(t.minimumRaise),
-      capMultiple: String(t.capMultipleDecimal ?? t.capMultipleWad), lockupDays: String(Math.round(Number(t.lockupSeconds) / 86_400)), releaseSchedule: JSON.stringify(t.releaseSchedule), auctionFeeBps: String(t.auctionFeeBps), payoutFeeBps: String(t.payoutFeeBps),
-      reportingCurrency: String(t.reportingCurrency), termsCommitment: String(draft.terms_commitment),
-    };
-    const heuBody = render(tpl.rows.find((r) => r.template_id === heu)!.body, vars);
-    const charterBody = render(tpl.rows.find((r) => r.template_id === charter)!.body, vars);
+    const { heuBody, charterBody } = await this.renderDocuments(draft, heu, charter);
     if(prepared&&prepared.rendered_hash!==sha(heuBody+'\n'+charterBody))throw AppError.conflict('draft terms changed after preparing the envelope');
     const attempts=this.ctx.esign.provider==='docusign-demo'?(await this.ctx.pool.query("select count(*)::int as n from contract_sessions where draft_id=$1 and state in ('expired','declined')",[draftId])).rows[0].n:0;
     // Persist before the external request, so a timeout/restart retries the same DocuSign transaction ID.
@@ -98,6 +91,38 @@ export class ContractService {
     return { sessionId, state: 'sent', provider: this.ctx.esign.provider, testSigningAvailable: this.testSigningAvailable(), signingUrl: env.signingUrl, documents: [{ name: 'HEU Contract', body: heuBody }, { name: 'Autonomy Charter', body: charterBody }] };
   }
 
+  private async renderDocuments(draft: Record<string, any>, heu: string, charter: string): Promise<{ heuBody: string; charterBody: string }> {
+    const tpl = await this.ctx.pool.query<{ template_id: string; body: string }>('select template_id, body from contract_templates where template_id = any($1)', [[heu, charter]]);
+    if (tpl.rows.length !== 2) throw AppError.conflict('the original contract templates are unavailable');
+    const t = draft.public_terms as Record<string, unknown>;
+    const vars: Record<string, string> = {
+      issuer: draft.issuer, chain: draft.chain, draftId: draft.draft_id, stablecoin: String(t.stablecoin), unitsOffered: String(t.unitsOffered), reservePrice: String(t.reservePrice), minimumRaise: String(t.minimumRaise),
+      capMultiple: String(t.capMultipleDecimal ?? t.capMultipleWad), lockupDays: String(Math.round(Number(t.lockupSeconds) / 86_400)), releaseSchedule: JSON.stringify(t.releaseSchedule), auctionFeeBps: String(t.auctionFeeBps), payoutFeeBps: String(t.payoutFeeBps),
+      reportingCurrency: String(t.reportingCurrency), termsCommitment: String(draft.terms_commitment),
+    };
+    const heuBody = render(tpl.rows.find((r) => r.template_id === heu)!.body, vars);
+    const charterBody = render(tpl.rows.find((r) => r.template_id === charter)!.body, vars);
+    return { heuBody, charterBody };
+  }
+
+  /** Restore only unsigned trial envelopes, from immutable templates and the exact persisted terms hash. */
+  private async restoreTestEnvelope(cs: Record<string, any>): Promise<void> {
+    const provider = this.ctx.esign;
+    if (!(provider instanceof MockESign) || cs.provider !== 'mock' || cs.state !== 'sent' || provider.hasEnvelope(cs.provider_ref)) return;
+    if (!this.ctx.testESign && !this.ctx.devMode) throw AppError.forbidden('test signing is disabled');
+    const info = await this.ctx.chains.get(cs.chain).info();
+    if (!info.signing) throw AppError.conflict('test-network identity is unavailable');
+    try { assertSigningNetwork(info.signing, { allowLocal: this.ctx.devMode && info.mode === 'mock' }); }
+    catch { throw AppError.forbidden('test signing requires a verified test-network domain'); }
+    const draft = (await this.ctx.pool.query('select * from series_drafts where draft_id=$1', [cs.draft_id])).rows[0];
+    if (!draft || draft.state !== 'terms_set' || draft.account_id !== cs.account_id || draft.chain !== cs.chain || draft.issuer !== cs.issuer)
+      throw AppError.conflict('draft is no longer awaiting this signature');
+    const { heuBody, charterBody } = await this.renderDocuments(draft, cs.heu_template_id, cs.charter_template_id);
+    if (sha(heuBody + '\n' + charterBody) !== cs.rendered_hash) throw AppError.conflict('draft terms changed after preparing the envelope');
+    if (cs.provider_ref !== 'mockenv_' + cs.session_id) throw AppError.conflict('test envelope reference does not match its session');
+    await provider.createEnvelope({ sessionId: cs.session_id, signerAccountId: cs.account_id, documents: [{ name: 'HEU Contract', body: heuBody }, { name: 'Autonomy Charter', body: charterBody }] });
+  }
+
   /** Poll the provider (or receive its webhook) and persist the signed bundle. */
   async refresh(sessionId: string): Promise<Record<string, unknown>> {
     const r = await this.ctx.pool.query('select * from contract_sessions where session_id = $1', [sessionId]);
@@ -105,6 +130,7 @@ export class ContractService {
     if (!cs) throw AppError.notFound('contract session');
     if (cs.state === 'signed') return this.view(cs);
     if(cs.provider!==this.ctx.esign.provider)throw AppError.conflict('this envelope belongs to a different provider; complete it before switching providers');
+    await this.restoreTestEnvelope(cs);
     const st = await this.ctx.esign.status(cs.provider_ref);
     if (st === 'signed') {
       const doc = await this.ctx.esign.signedDocument(cs.provider_ref);

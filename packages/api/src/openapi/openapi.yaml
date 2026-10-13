@@ -836,6 +836,24 @@ paths:
       security: [{ session: [] }]
       parameters: [{ name: applicationId, in: path, required: true, schema: { type: string } }]
       responses: { '200': { description: Provider check id and redirect URL, content: { application/json: { schema: { type: object } } } } }
+  /applications/{applicationId}/identity/trial:
+    post:
+      operationId: completeTrialIdentityCheck
+      x-access: account
+      tags: [applications]
+      security: [{ session: [] }]
+      description: Completes a disclosed synthetic identity check for the owner's configured disposable test wallet. Does not approve the application or change onchain eligibility. Refused on mainnet and with real identity providers.
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [acknowledgeSynthetic]
+              properties: { acknowledgeSynthetic: { type: boolean, const: true } }
+      responses: { '200': { description: Trial check complete, content: { application/json: { schema: { type: object, properties: { status: { type: string, enum: [passed] }, testOnly: { type: boolean, const: true }, realIdentityVerified: { type: boolean, const: false } } } } } }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { description: Application is no longer awaiting review } }
   /applications/{applicationId}/identity/refresh:
     post:
       operationId: refreshIdentityCheck

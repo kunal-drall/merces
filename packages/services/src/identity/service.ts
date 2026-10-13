@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { proposeIssuerRegistration } from '../admin/issuer-registration.ts';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
-import { addressFamily, isPublishedTestKey, keyGraceUntil, normaliseAddress, type ChainFamily } from '@merces/domain';
+import { addressFamily, assertSigningNetwork, isPublishedTestKey, keyGraceUntil, normaliseAddress, type ChainFamily } from '@merces/domain';
+import { sameWallet } from '../local-operator/policy.ts';
 import { signInMessage, signerKeyLinkMessage, simulatorOnly, verifyKeyPersonalSignature, verifyWalletSignature, type IdentityCheckStatus } from '@merces/ports';
 import { issueSession, type Role, type Session } from '@merces/api';
 import type { ServiceContext } from '../context.ts';
@@ -259,6 +260,31 @@ export class IdentityService {
   }
 
   // ---- applications
+  private trialIdentityAvailable(chain: string, wallet: string): boolean {
+    return process.env.MERCES_LOCAL_PROVIDERS !== 'true' && this.ctx.identity.provider === 'operator-testnet'
+      && !!this.ctx.localOperator?.policy.wallets.some(w => w.chain === chain && sameWallet(chain, w.address, wallet));
+  }
+
+  /** A disclosed trial check for an already configured test wallet; eligibility still requires review. */
+  async completeTrialIdentity(id: string, session: Session): Promise<Record<string, unknown>> {
+    const a = await this.getApplication(id, session);
+    const chain = String(a.chain), wallet = String(a.wallet);
+    if (a.accountId !== session.accountId || !session.wallets.some(w => w.chain === chain && sameWallet(chain, w.address, wallet))
+      || !this.trialIdentityAvailable(chain, wallet)) throw AppError.forbidden('trial checks are limited to your configured test wallet');
+    const info = await this.ctx.chains.get(chain).info();
+    if (!info.signing) throw AppError.conflict('test-network identity is unavailable');
+    try { assertSigningNetwork(info.signing, { allowLocal: this.ctx.devMode && info.mode === 'mock' }); }
+    catch { throw AppError.forbidden('trial checks require a verified test-network domain'); }
+    await withTransaction(this.ctx.pool, async c => {
+      const row = (await c.query('select state, identity_status, identity_check_id from applications where application_id=$1 for update', [id])).rows[0];
+      if (!row || !['draft', 'submitted', 'in_review'].includes(row.state)) throw AppError.conflict('application is no longer awaiting review');
+      if (row.identity_status === 'passed' && row.identity_check_id === 'operator-testnet:' + id) return;
+      await c.query("update applications set identity_check_id=$2,identity_status='passed',updated_at=now() where application_id=$1", [id, 'operator-testnet:' + id]);
+      await audit(c, { actor: session.accountId, actorRole: 'account', action: 'identity.trial-completed', target: id, detail: { testOnly: true, realIdentityVerified: false } });
+    });
+    return { status: 'passed', testOnly: true, realIdentityVerified: false };
+  }
+
   async createApplication(session: Session, input: z.infer<typeof applicationCreateSchema>): Promise<Record<string, unknown>> {
     const port = this.ctx.chains.chains.get(input.chain);
     if (!port) throw AppError.badRequest('unknown chain');
@@ -286,6 +312,8 @@ export class IdentityService {
     return {
       applicationId: a.application_id, accountId: a.account_id, kind: a.kind, state: a.state, chain: a.chain, wallet: a.wallet, stablecoin: a.stablecoin, persona: a.persona, country: a.country,
       incomeSourceKinds: a.income_source_kinds, identityStatus: a.identity_status, decisionReasonCode: a.decision_reason_code, submittedAt: a.submitted_at, decidedAt: a.decided_at, createdAt: a.created_at,
+      trialVerificationAvailable: a.account_id === session.accountId && this.trialIdentityAvailable(a.chain, a.wallet),
+      identityTestOnly: String(a.identity_check_id ?? '').startsWith('operator-testnet:'),
       notes: a.notes_encrypted && (isAdmin || a.account_id === session.accountId) ? this.ctx.vault.decrypt(a.notes_encrypted, `application:${id}`) : null,
     };
   }

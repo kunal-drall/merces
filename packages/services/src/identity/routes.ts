@@ -63,6 +63,10 @@ export function registerIdentityRoutes(app: FastifyInstance, base: AppContext): 
     },
   });
   defineRoute(app, ctx, { method: 'GET', url: '/applications/mine', access: 'account', handler: async (_req, _reply, session) => ({ applications: await s.listMine(session!) }) });
+  defineRoute(app, ctx, { method: 'POST', url: '/applications/:applicationId/identity/trial', access: 'account', handler: async (req, _reply, session) => {
+    z.object({ acknowledgeSynthetic: z.literal(true) }).strict().parse(req.body);
+    return s.completeTrialIdentity((req.params as { applicationId: string }).applicationId, session!);
+  } });
   defineRoute(app, ctx, { method: 'GET', url: '/applications/:applicationId', access: 'account', handler: async (req, _reply, session) => s.getApplication((req.params as { applicationId: string }).applicationId, session!) });
   defineRoute(app, ctx, { method: 'POST', url: '/applications/:applicationId/submit', access: 'account', handler: async (req, _reply, session) => s.submit((req.params as { applicationId: string }).applicationId, session!) });
   defineRoute(app, ctx, { method: 'POST', url: '/applications/:applicationId/identity/start', access: 'account', handler: async (req, _reply, session) => s.startIdentityCheck((req.params as { applicationId: string }).applicationId, session!) });
