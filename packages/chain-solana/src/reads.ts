@@ -72,7 +72,7 @@ export class SolanaReads {
   async getBid(sid:string,wallet:string):ReturnType<ChainPort['getBid']>{return (await this.listBids(sid)).find((b)=>b.bidder===wallet)??null;}
   async getTreasury(sid:string):ReturnType<ChainPort['getTreasury']>{
     const s=await this.getSeries(sid);if(!s)return null;const a=this.address(sid),t=await this.row('treasury',a,'Treasury');let assigned=0n,released=b(t.released_total);
-    const tranches=s.terms.releaseSchedule.map((tr,index)=>{const amount=index===s.terms.releaseSchedule.length-1?b(t.proceeds)-assigned:b(t.proceeds)*BigInt(tr.bps)/10000n;assigned+=amount;const drawn=released>=amount;released=released>amount?released-amount:0n;return {index,...tr,amount:amount.toString(),drawableAt:s.settledAt===null?null:s.settledAt+tr.afterSeconds,drawn};});
+    const tranches=s.terms.releaseSchedule.map((tr,index)=>{const amount=index===s.terms.releaseSchedule.length-1?b(t.proceeds)-assigned:b(t.proceeds)*BigInt(tr.bps)/10000n;assigned+=amount;const drawn=s.settledAt!==null&&amount>0n&&released>=amount;released=released>amount?released-amount:0n;return {index,...tr,amount:amount.toString(),drawableAt:s.settledAt===null?null:s.settledAt+tr.afterSeconds,drawn};});
     return {seriesId:sid,total:str(t.proceeds_received),released:str(t.released_total),balance:(await this.transport.tokenBalance(pda(this.protocol,'treasury_token',a))).toString(),paused:s.releasesPaused,tranches};
   }
   async getPosition(sid:string,wallet:string):ReturnType<ChainPort['getPosition']>{

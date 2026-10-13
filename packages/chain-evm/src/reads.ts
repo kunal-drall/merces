@@ -98,7 +98,7 @@ export class EvmReads {
   async getTreasury(sid:string):Promise<TreasuryState|null>{
     const s=await this.getSeries(sid);if(!s)return null;const tr=record(await this.ctx.read('Treasury','getTreasury',[this.id(sid)]));
     let released=b(tr.releasedTotal);const tranches:TreasuryState['tranches']=[];
-    for(const [i,t] of s.terms.releaseSchedule.entries()){const amount=b(await this.ctx.read('Treasury','trancheAmount',[this.id(sid),BigInt(i)])),drawn=released>=amount;released=released>amount?released-amount:0n;tranches.push({index:i,...t,amount:amount.toString(),drawableAt:s.settledAt===null?null:s.settledAt+t.afterSeconds,drawn});}
+    for(const [i,t] of s.terms.releaseSchedule.entries()){const amount=b(await this.ctx.read('Treasury','trancheAmount',[this.id(sid),BigInt(i)])),drawn=s.settledAt!==null&&amount>0n&&released>=amount;released=released>amount?released-amount:0n;tranches.push({index:i,...t,amount:amount.toString(),drawableAt:s.settledAt===null?null:s.settledAt+t.afterSeconds,drawn});}
     return {seriesId:sid,total:str(tr.deposited),released:str(tr.releasedTotal),balance:(b(tr.deposited)-b(tr.releasedTotal)-b(tr.movedToVault)).toString(),paused:s.releasesPaused,tranches};
   }
   async getVault(sid:string):Promise<VaultState|null>{

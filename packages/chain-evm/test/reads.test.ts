@@ -19,6 +19,13 @@ function fixture(){
  return {reads:new EvmReads(ctx),ctx,patch,rows,events};
 }
 describe('EVM read models against pinned ABI getter shapes',()=>{
+ it('never calls unfunded zero-value tranches drawn and retains real releases',async()=>{
+  const {reads,patch,rows}=fixture();patch('Registry.getSeriesCore',{settlementTs:0n,raiseState:1});
+  expect((await reads.getTreasury(sid))?.tranches).toEqual([expect.objectContaining({amount:'0',drawableAt:null,drawn:false})]);
+  patch('Registry.getSeriesCore',{settlementTs:1767225600n,raiseState:4});rows.set('Treasury.trancheAmount',100n);patch('Treasury.getTreasury',{deposited:100n,releasedTotal:0n});
+  expect((await reads.getTreasury(sid))?.tranches[0]?.drawn).toBe(false);
+  patch('Treasury.getTreasury',{releasedTotal:100n});expect((await reads.getTreasury(sid))?.tranches[0]?.drawn).toBe(true);
+ });
  it('reads a settled series, bids, treasury, positions and a report without unprovided ABI fields',async()=>{
   const {reads}=fixture();expect(await reads.getIssuer(wallet)).toMatchObject({active:true});expect((await reads.listSeries())[0]).toMatchObject({phase:'Settled',unitScale:'1'});
   expect(await reads.getAuction(sid)).toMatchObject({bidCount:0});expect(await reads.listBids(sid)).toEqual([]);expect(await reads.getTreasury(sid)).toMatchObject({balance:'0'});
