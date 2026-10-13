@@ -1,5 +1,6 @@
 import { pacedRpcFetch } from './rpc-fetch.ts';
 import { createPublicClient, erc20Abi, encodeFunctionData, getAddress, http, type PublicClient } from 'viem';
+import { monadTestnet } from 'viem/chains';
 import {
   ChainError, FinalizedEvents, signingDomain, isPublishedTestKey, serviceCommandSchema, type Command, type BuildableCommand, type ChainInfo, type ChainPort, type DomainEvent, type HealthReport, type ServiceCommand, type ServiceRole, type SignedTx,
   type TxResult, type UnsignedTx,
@@ -37,7 +38,15 @@ export class EvmChain implements ChainPort {
   constructor(readonly config: EvmChainConfig) {
     assertNotMainnet(config);
     this.chain = config.chain;
-    this.client = createPublicClient({ transport: http(config.rpcUrl,{...(new URL(config.rpcUrl).hostname==='testnet-rpc.monad.xyz'?{fetchFn:pacedRpcFetch(150),retryDelay:750,batch:{batchSize:8,wait:8}}:{})}), chain: { id: config.chainId, name: config.network, nativeCurrency: { name: 'native', symbol: 'NATIVE', decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } } });
+    const publicMonad=config.chainId===monadTestnet.id&&new URL(config.rpcUrl).hostname==='testnet-rpc.monad.xyz';
+    // Multicall combines independent getters into one eth_call. Every group retains
+    // its exact finalized block; JSON-RPC batching alone still charges each getter
+    // against the public endpoint's request budget. No transaction is submitted.
+    this.client = createPublicClient({
+      ...(publicMonad?{batch:{multicall:{batchSize:16_384,wait:8}}}:{}),
+      transport: http(config.rpcUrl,{...(publicMonad?{fetchFn:pacedRpcFetch(150),retryDelay:750,batch:{batchSize:8,wait:8}}:{})}),
+      chain: { id: config.chainId, name: config.network, nativeCurrency: { name: 'native', symbol: 'NATIVE', decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } },...(publicMonad?{contracts:monadTestnet.contracts}:{}) },
+    });
     this.mapper = new EvmEventMapper(config);
     this.transport = new EvmTransport(config,this.client,()=>this.ensureNetwork());
   }
@@ -109,8 +118,7 @@ export class EvmChain implements ChainPort {
   }
 
   async now(): Promise<number> {
-    await this.ensureNetwork();
-    const b = await this.client.getBlock({ blockTag: this.config.finalityTag });
+    const b = await this.transport.head();
     return Number(b.timestamp);
   }
 

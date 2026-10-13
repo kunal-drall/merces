@@ -19,6 +19,17 @@ function fixture(){
  return {reads:new EvmReads(ctx),ctx,patch,rows,events};
 }
 describe('EVM read models against pinned ABI getter shapes',()=>{
+ it('reads tranche amounts together while assigning releases in schedule order',async()=>{
+  const {reads,ctx,patch,rows}=fixture(),original=ctx.read;
+  rows.set('Registry.getReleaseSchedule',[{atOffsetSeconds:0n,bps:1667},{atOffsetSeconds:86400n,bps:3333},{atOffsetSeconds:172800n,bps:5000}]);
+  patch('Treasury.getTreasury',{deposited:600n,releasedTotal:350n});
+  const pending:(()=>void)[]=[];
+  ctx.read=async(m,f,args)=>{
+   if(m!=='Treasury'||f!=='trancheAmount')return original(m,f,args);
+   return new Promise(resolve=>{pending.push(()=>resolve((BigInt(args![1] as bigint)+1n)*100n));if(pending.length===3)pending.forEach(done=>done());});
+  };
+  expect((await reads.getTreasury(sid))?.tranches.map(t=>({amount:t.amount,drawn:t.drawn}))).toEqual([{amount:'100',drawn:true},{amount:'200',drawn:true},{amount:'300',drawn:false}]);
+ },1000);
  it('reads an unsettled reporting schedule without history and falls back after settlement',async()=>{
   const {reads,ctx,patch}=fixture();ctx.history=async()=>{throw new Error('history unavailable');};
   patch('Registry.getSeriesCore',{settlementTs:0n,raiseState:1});

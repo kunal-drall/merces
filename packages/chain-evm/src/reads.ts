@@ -114,8 +114,9 @@ export class EvmReads {
       this.ctx.read('Registry','getReleaseSchedule',[id]) as Promise<{atOffsetSeconds:bigint;bps:number}[]>,
       this.ctx.read('Income','isLateUnderlying',[id]),
     ]);
+    const amounts=await Promise.all(schedule.map((_,i)=>this.ctx.read('Treasury','trancheAmount',[id,BigInt(i)]).then(b)));
     let released=b(tr.releasedTotal);const tranches:TreasuryState['tranches']=[];
-    for(const [i,t] of schedule.entries()){const amount=b(await this.ctx.read('Treasury','trancheAmount',[id,BigInt(i)])),afterSeconds=n(t.atOffsetSeconds),drawn=settledAt!==null&&amount>0n&&released>=amount;released=released>amount?released-amount:0n;tranches.push({index:i,afterSeconds,bps:n(t.bps),amount:amount.toString(),drawableAt:settledAt===null?null:settledAt+afterSeconds,drawn});}
+    for(const [i,t] of schedule.entries()){const amount=amounts[i]!,afterSeconds=n(t.atOffsetSeconds),drawn=settledAt!==null&&amount>0n&&released>=amount;released=released>amount?released-amount:0n;tranches.push({index:i,afterSeconds,bps:n(t.bps),amount:amount.toString(),drawableAt:settledAt===null?null:settledAt+afterSeconds,drawn});}
     return {seriesId:sid,total:str(tr.deposited),released:str(tr.releasedTotal),balance:(b(tr.deposited)-b(tr.releasedTotal)-b(tr.movedToVault)).toString(),paused:Boolean(tr.issuerPausedReleases)||Boolean(late),tranches};
   }
   async getVault(sid:string):Promise<VaultState|null>{
