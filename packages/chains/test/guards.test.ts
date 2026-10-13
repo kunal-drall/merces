@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EvmChain, type EvmChainConfig } from '@merces/chain-evm';
 import { SOLANA_GENESIS, SolanaChain, type SolanaChainConfig } from '@merces/chain-solana';
-import { evmRpc, fakeRpc, solanaRpc,SOL_PROGRAMS } from './fake-rpc.ts';
+import { evmRpc, fakeRpc, solanaRpc,SOL_PROGRAMS,EVM_CONTRACTS } from './fake-rpc.ts';
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const c of closers.splice(0)) await c();
 });
 
@@ -71,6 +72,28 @@ describe('EVM mainnet guard', () => {
 });
 
 describe('complete deployment health',()=>{
+ it('reuses successful bytecode presence for five minutes but checks registry state on every probe',async()=>{
+  const handlers=evmRpc(10143),rpc=await fakeRpc(handlers);closers.push(rpc.close);
+  const chain=new EvmChain(evmCfg({rpcUrl:rpc.url,contracts:EVM_CONTRACTS}));
+  let clock=Date.now();vi.spyOn(Date,'now').mockImplementation(()=>clock);
+  expect((await chain.health()).ok).toBe(true);
+  const codeReads=rpc.calls.filter(m=>m==='eth_getCode').length;
+  expect(codeReads).toBe(Object.keys(EVM_CONTRACTS).length);
+  const reads=rpc.calls.filter(m=>m==='eth_call').length;
+  expect((await chain.health()).ok).toBe(true);
+  expect(rpc.calls.filter(m=>m==='eth_getCode')).toHaveLength(codeReads);
+  expect(rpc.calls.filter(m=>m==='eth_call').length).toBeGreaterThan(reads);
+  // A changed signing domain must fail even while code presence is cached.
+  const originalCall=handlers.eth_call!;handlers.eth_call=evmRpc(11155111).eth_call!;
+  expect((await chain.health()).detail).toContain('signing domain differs');
+  handlers.eth_call=originalCall;
+  clock+=5*60_000;handlers.eth_getCode=()=> '0x';
+  expect((await chain.health()).detail).toContain('contracts missing');
+  // A missing deployment is immediately retried rather than caching failure.
+  handlers.eth_getCode=()=> '0x6001';
+  expect((await chain.health()).ok).toBe(true);
+  expect(rpc.calls.filter(m=>m==='eth_getCode')).toHaveLength(codeReads*3);
+ });
  it('refuses a partial EVM manifest before enabling the adapter',async()=>{
   const rpc=await fakeRpc(evmRpc(10143));closers.push(rpc.close);
   const health=await new EvmChain(evmCfg({rpcUrl:rpc.url,contracts:{MercesRegistry:'0x'+'14'.repeat(20)}})).health();

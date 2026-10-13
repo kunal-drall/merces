@@ -34,6 +34,8 @@ export class EvmChain implements ChainPort {
   private serviceQueues=new Map<ServiceRole,Promise<unknown>>();
   private abis: Record<string, unknown> | null = null;
   private networkVerified: Promise<void> | null = null;
+  private deploymentCodeValidUntil = 0;
+  private deploymentCodeCheck: Promise<string[]> | null = null;
 
   constructor(readonly config: EvmChainConfig) {
     assertNotMainnet(config);
@@ -89,6 +91,23 @@ export class EvmChain implements ChainPort {
     return {chain:this.chain,family:this.family,mode:this.mode,network:this.config.network,stablecoins,modules:this.config.contracts,admin:String(admin).toLowerCase(),feeCollector:String(feeCollector).toLowerCase(),newRaisesPaused:Boolean(record(flags).newRaisesPaused),windowsEnabled:Boolean(record(flags).windowsEnabled),tier4Enabled:Boolean(record(flags).tier4Enabled),limits:EVM_LIMITS,signing};
   }
 
+  /** Deployment presence is metadata, not a balance or authorization decision.
+   * Validate at startup and at most every five minutes; failures are never cached.
+   * Registry links, signing domain, flags and finalized head remain live each probe.
+   */
+  private missingDeploymentCode(blockNumber: bigint): Promise<string[]> {
+    if (Date.now() < this.deploymentCodeValidUntil) return Promise.resolve([]);
+    this.deploymentCodeCheck ??= Promise.all(Object.entries(this.config.contracts).map(async ([name, addr]) => {
+      const code = await this.client.getCode({address: getAddress(addr), blockNumber});
+      return !code || code === '0x' ? name : null;
+    })).then(names => {
+      const missing = names.filter((name): name is string => name !== null);
+      if (!missing.length) this.deploymentCodeValidUntil = Date.now() + 5 * 60_000;
+      return missing;
+    }).finally(() => { this.deploymentCodeCheck = null; });
+    return this.deploymentCodeCheck;
+  }
+
   async health(): Promise<HealthReport> {
     const t0 = Date.now();
     try {
@@ -98,16 +117,15 @@ export class EvmChain implements ChainPort {
       // MercesRegistry.getProtocolContracts is authoritative for the core module links.
       for(const name of ['Registry','Auction','Income','Vault','Treasury','Window','Router','FxAccumulator'] as const)moduleAddress(this.config.contracts,name);
       const ctx=await this.transport.snapshotAt(block.number,Number(block.timestamp));
-      const [rawLinks,codes]=await Promise.all([
+      const [rawLinks,missing]=await Promise.all([
         ctx.read('Registry','getProtocolContracts'),
-        Promise.all(Object.entries(this.config.contracts).map(async([name,addr])=>({name,code:await this.client.getCode({address:getAddress(addr),blockNumber:block.number})}))),
+        this.missingDeploymentCode(block.number),
         this.infoAt(ctx),
       ]);
       const links=record(rawLinks);
       for(const [field,module] of Object.entries({auction:'Auction',treasury:'Treasury',income:'Income',vault:'Vault',window:'Window'})){
         if(String(links[field]).toLowerCase()!==moduleAddress(this.config.contracts,module as EvmModule).toLowerCase())throw new ChainError('ChainSpecific',`refusing: registry ${field} differs from the manifest`);
       }
-      const missing=codes.filter(({code})=>!code||code==='0x').map(({name})=>name);
       const latency_ms = Date.now() - t0;
       if (missing.length) return { ok: false, mode: 'live', latency_ms, detail: `rpc ok (block ${block.number}) but contracts missing: ${missing.join(', ')}` };
       return { ok: true, mode: 'live', latency_ms, detail: `chainId ${chainId}, ${this.config.finalityTag} block ${block.number}` };
