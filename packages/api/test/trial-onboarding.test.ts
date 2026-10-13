@@ -68,6 +68,7 @@ describe.skipIf(!dbTestsEnabled())('disclosed trial onboarding on both chains', 
       const ctx = { ...rig.ctx, esign: new MockESign(), testESign: true };
       const service = new ContractService(ctx);
       const first = await service.prepare(draftId, session);
+      expect(JSON.stringify(first.documents)).toContain('100 bps on cleared bids and 500 bps on payouts');
       ctx.esign = new MockESign();
       expect((await service.status(draftId, session)).state).toBe('sent');
       const resumed = await service.prepare(draftId, session);

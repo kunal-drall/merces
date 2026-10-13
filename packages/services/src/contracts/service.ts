@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { AppError, audit, enqueueOutbox } from '@merces/core';
 import { withTransaction } from '@merces/db';
 import type { Session } from '@merces/api';
-import { assertSigningNetwork } from '@merces/domain';
+import { assertSigningNetwork, DEFAULTS } from '@merces/domain';
 import { MockESign } from '@merces/ports';
 import type { ServiceContext } from '../context.ts';
 import { PLACEHOLDER_CHARTER_TEMPLATE, PLACEHOLDER_HEU_TEMPLATE, render } from './templates.ts';
@@ -97,7 +97,7 @@ export class ContractService {
     const t = draft.public_terms as Record<string, unknown>;
     const vars: Record<string, string> = {
       issuer: draft.issuer, chain: draft.chain, draftId: draft.draft_id, stablecoin: String(t.stablecoin), unitsOffered: String(t.unitsOffered), reservePrice: String(t.reservePrice), minimumRaise: String(t.minimumRaise),
-      capMultiple: String(t.capMultipleDecimal ?? t.capMultipleWad), lockupDays: String(Math.round(Number(t.lockupSeconds) / 86_400)), releaseSchedule: JSON.stringify(t.releaseSchedule), auctionFeeBps: String(t.auctionFeeBps), payoutFeeBps: String(t.payoutFeeBps),
+      capMultiple: String(t.capMultipleDecimal ?? t.capMultipleWad), lockupDays: String(Math.round(Number(t.lockupSeconds) / 86_400)), releaseSchedule: JSON.stringify(t.releaseSchedule), auctionFeeBps: String(DEFAULTS.auctionFeeBps), payoutFeeBps: String(DEFAULTS.payoutFeeBps),
       reportingCurrency: String(t.reportingCurrency), termsCommitment: String(draft.terms_commitment),
     };
     const heuBody = render(tpl.rows.find((r) => r.template_id === heu)!.body, vars);
