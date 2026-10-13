@@ -19,6 +19,33 @@ function fixture(){
  return {reads:new EvmReads(ctx),ctx,patch,rows,events};
 }
 describe('EVM read models against pinned ABI getter shapes',()=>{
+ it('reads treasury releases and both pause causes without loading protocol history',async()=>{
+  const {reads,ctx,patch,rows}=fixture();ctx.history=async()=>{throw new Error('history unavailable');};
+  rows.set('Registry.getReleaseSchedule',[{atOffsetSeconds:0n,bps:5000},{atOffsetSeconds:86400n,bps:5000}]);
+  rows.set('Treasury.trancheAmount',100n);patch('Treasury.getTreasury',{deposited:200n,releasedTotal:100n,movedToVault:20n});
+  expect(await reads.getTreasury(sid)).toMatchObject({balance:'80',released:'100',paused:false,tranches:[{drawn:true,drawableAt:1767225600},{drawn:false,drawableAt:1767312000}]});
+  patch('Treasury.getTreasury',{issuerPausedReleases:true});expect((await reads.getTreasury(sid))?.paused).toBe(true);
+  patch('Treasury.getTreasury',{issuerPausedReleases:false});rows.set('Income.isLateUnderlying',true);expect((await reads.getTreasury(sid))?.paused).toBe(true);
+  expect(await reads.getTreasury('monad:2')).toBeNull();
+ });
+ it('reads pending and revealed bids while event history is unavailable',async()=>{
+  const {reads,ctx,patch}=fixture();ctx.history=async()=>{throw new Error('history unavailable');};
+  patch('Auction.getAuction',{bidCount:1});patch('Auction.getBidAt',{bidder:wallet,escrow:1010000n});
+  expect(await reads.getBid(sid,wallet)).toMatchObject({deposit:'1010000',processed:false,nonRevealCharge:'0'});
+  patch('Auction.getBidAt',{processed:true,revealed:true,price:100000n,quantity:10n});
+  expect(await reads.getBid(sid,wallet)).toMatchObject({processed:true,revealed:{pricePerUnit:'100000',quantity:'10'},nonRevealCharge:'0'});
+  patch('Auction.getBidAt',{revealed:false});await expect(reads.getBid(sid,wallet)).rejects.toThrow('history unavailable');
+ });
+ it('preserves historical charges for processed unrevealed bids after delivery',async()=>{
+  const {reads,patch,events}=fixture();patch('Auction.getAuction',{bidCount:1});patch('Auction.getBidAt',{bidder:wallet,escrow:1010000n,processed:true,delivered:true});
+  events.push({module:'Auction',name:'NonRevealCharged',args:{series:1n,bidder:wallet,charge:50500n},blockNumber:1n,logIndex:0,transactionIndex:0,txId:ZERO32,blockTime:1767225600});
+  expect(await reads.getBid(sid,wallet)).toMatchObject({processed:true,delivered:true,nonRevealCharge:'50500'});
+ });
+ it('reads an empty vault without waiting for holder history but requires it for positive balances',async()=>{
+  const {reads,ctx,patch}=fixture();ctx.history=async()=>{throw new Error('history unavailable');};
+  expect(await reads.getVault(sid)).toMatchObject({balance:'0',dust:'0'});
+  patch('Vault.getLedger',{grossReceived:100n});await expect(reads.getVault(sid)).rejects.toThrow('history unavailable');
+ });
  it('never calls unfunded zero-value tranches drawn and retains real releases',async()=>{
   const {reads,patch,rows}=fixture();patch('Registry.getSeriesCore',{settlementTs:0n,raiseState:1});
   expect((await reads.getTreasury(sid))?.tranches).toEqual([expect.objectContaining({amount:'0',drawableAt:null,drawn:false})]);

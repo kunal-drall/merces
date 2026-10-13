@@ -89,23 +89,32 @@ export class EvmReads {
     return {seriesId:sid,phase:state==='Open' && this.ctx.now>=n(a.commitEnd)?'Reveal':state,raiseState:state,commitEndsAt:n(a.commitEnd)||null,revealEndsAt:n(a.revealEnd)||null,bidCount:n(a.bidCount),revealedCount:n(a.revealedCount),validCount:n(a.validCount),escrowTotal:str(a.escrowTotal),escrowUnits:str(a.escrowUnits),round:n(a.tallyRound),roundRejected:Boolean(a.roundRejected),rejectionReason:a.roundRejected?(n(a.rejectionReason)===1?'ClaimMismatch':'InvalidClearingPrice'):null,proposal:b(a.tallyRound)?{clearingPrice:str(a.proposedPrice),qAboveClaim:str(a.qAboveClaim),qAtClaim:str(a.qAtClaim),rClaim:str(a.rClaim)}:null,tally:{talliedCount:n(a.talliedCount),qAbove:str(a.qAbove),qAt:str(a.qAt),allocSum:str(a.allocSum),minValidPrice:b(a.minValidPrice)===(1n<<64n)-1n?null:str(a.minValidPrice)},clearingPrice:b(a.clearingPrice)?str(a.clearingPrice):null,qAbove:str(a.qAbove),qAt:str(a.qAt),R:str(a.R),unitsSold:str(a.unitsSold),proceeds:str(a.proceeds),finalizedAt:n(a.settlementTs)||null,failureReason:state==='Failed'?(b(a.validCount)?'MinRaise':'NoValidBids'):null,bidsProcessed:n(a.bidsProcessed),unitsMinted:str(a.unitsMinted),mintFinalized:Boolean(a.mintFinalized)};
   }
   async bid(sid:string,x:Row,index:number):Promise<BidState>{
-    const h=await this.history(this.id(sid)),events=h.filter((e)=>addr(e.args.bidder)===addr(x.bidder));
-    const alloc=events.find((e)=>e.name==='UnitsAllocated'),charge=events.find((e)=>e.name==='NonRevealCharged');
+    // Only a processed, unrevealed bid can have a non-reveal charge. Pending bids and
+    // revealed bids are complete in the pinned getter, even while event history catches up.
+    const charge=x.processed&&!x.revealed?(await this.history(this.id(sid))).find((e)=>e.name==='NonRevealCharged'&&addr(e.args.bidder)===addr(x.bidder)):undefined;
     return {seriesId:sid,bidder:addr(x.bidder),commitment:String(x.commitment),deposit:str(x.escrow),order:index,revealed:x.revealed?{pricePerUnit:str(x.price),quantity:str(x.quantity)}:null,revealIndex:x.revealed?n(x.revealIndex):null,valid:x.revealed?Boolean(x.valid):null,talliedRound:n(x.talliedRound),processed:Boolean(x.processed),allocatedUnits:str(x.allocation),pendingUnits:str(x.pendingUnits),pendingRefund:str(x.pendingRefund),nonRevealCharge:charge?str(charge.args.charge):'0',delivered:Boolean(x.delivered)};
   }
   async listBids(sid:string):Promise<BidState[]>{const a=await this.getAuction(sid);if(!a)return [];const rows=await this.rows('Auction','getBidAt',[this.id(sid)],a.bidCount);return Promise.all(rows.map((x,i)=>this.bid(sid,x,i)));}
   async getBid(sid:string,wallet:string):Promise<BidState|null>{return (await this.listBids(sid)).find((x)=>x.bidder===addr(wallet))??null;}
   async getTreasury(sid:string):Promise<TreasuryState|null>{
-    const s=await this.getSeries(sid);if(!s)return null;const tr=record(await this.ctx.read('Treasury','getTreasury',[this.id(sid)]));
+    const c=await this.core(sid);if(!c)return null;const id=this.id(sid),settledAt=n(c.settlementTs)||null;
+    // Treasury state is fully available from getters at this snapshot's finalized block.
+    // Expanding a full series here needlessly waits for every historical protocol event.
+    const [tr,schedule,late]=await Promise.all([
+      this.ctx.read('Treasury','getTreasury',[id]).then(record),
+      this.ctx.read('Registry','getReleaseSchedule',[id]) as Promise<{atOffsetSeconds:bigint;bps:number}[]>,
+      this.ctx.read('Income','isLateUnderlying',[id]),
+    ]);
     let released=b(tr.releasedTotal);const tranches:TreasuryState['tranches']=[];
-    for(const [i,t] of s.terms.releaseSchedule.entries()){const amount=b(await this.ctx.read('Treasury','trancheAmount',[this.id(sid),BigInt(i)])),drawn=s.settledAt!==null&&amount>0n&&released>=amount;released=released>amount?released-amount:0n;tranches.push({index:i,...t,amount:amount.toString(),drawableAt:s.settledAt===null?null:s.settledAt+t.afterSeconds,drawn});}
-    return {seriesId:sid,total:str(tr.deposited),released:str(tr.releasedTotal),balance:(b(tr.deposited)-b(tr.releasedTotal)-b(tr.movedToVault)).toString(),paused:s.releasesPaused,tranches};
+    for(const [i,t] of schedule.entries()){const amount=b(await this.ctx.read('Treasury','trancheAmount',[id,BigInt(i)])),afterSeconds=n(t.atOffsetSeconds),drawn=settledAt!==null&&amount>0n&&released>=amount;released=released>amount?released-amount:0n;tranches.push({index:i,afterSeconds,bps:n(t.bps),amount:amount.toString(),drawableAt:settledAt===null?null:settledAt+afterSeconds,drawn});}
+    return {seriesId:sid,total:str(tr.deposited),released:str(tr.releasedTotal),balance:(b(tr.deposited)-b(tr.releasedTotal)-b(tr.movedToVault)).toString(),paused:Boolean(tr.issuerPausedReleases)||Boolean(late),tranches};
   }
   async getVault(sid:string):Promise<VaultState|null>{
     if(!await this.core(sid))return null;const id=this.id(sid),v=record(await this.ctx.read('Vault','getLedger',[id]));
     const balance=b(v.grossReceived)-b(v.feeCollected)+b(v.tailGrossReceived)-b(v.tailFeeCollected)+b(v.redemptionDeposit)+b(v.unreleasedReceived)-b(v.claimedTotal);
     let entitled=0n;
-    for(const p of await this.listPositions(sid)){
+    // A zero balance has zero dust regardless of holder entitlements; no log scan is needed.
+    for(const p of balance>0n?await this.listPositions(sid):[]){
       const h=record(await this.ctx.read('Vault','getHolder',[id,p.wallet]));
       const tailWeight=BigInt(p.redeemedUnits)+BigInt(p.walletUnits)+BigInt(p.undeliveredUnits);
       const tail=b(v.redemptionTs)?(b(v.tailAccWad)-b(h.lastTailAccWad))*tailWeight/WAD:0n;
