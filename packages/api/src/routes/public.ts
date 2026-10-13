@@ -5,6 +5,7 @@ import { CURVE_NO_CAP, settlementStage } from '@merces/domain';
 import { defineRoute } from '../app.ts';
 import type { AppContext } from '../context.ts';
 import { reportingRow, seriesRow } from '../serialize.ts';
+import { readinessCache } from '../readiness-cache.ts';
 
 const listQuery = z.object({ chain: z.string().optional(), status: z.string().optional(), issuer: z.string().optional(), limit: z.coerce.number().int().min(1).max(200).default(50), offset: z.coerce.number().int().min(0).default(0) });
 
@@ -15,9 +16,9 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
     const r = await ctx.pool.query('select pair as "pairId", pyth_feed_id as "feedId", inverted, chainlink_feed as crosscheck, crosscheck_effective_period as "effectivePeriod" from rate_pairs where chain = $1 and enabled and crosscheck_effective_period is not null order by pair', [chain]);
     return { chain, pairs: r.rows };
   } });
-  defineRoute(app, ctx, {
-    method: 'GET', url: '/health', access: 'public',
-    handler: async () => {
+  // Vercel instances probe these together before serving wallet routes. Coalesce public
+  // readiness for ten seconds so repeated probes do not starve finalized wallet reads.
+  const readHealth=readinessCache(async () => {
       const chains = [] as { chain: string; family: string; mode: string; ok: boolean; detail: string; cursor: string | null; lastSeq: number }[];
       for (const c of ctx.chains.chains.values()) {
         const h = await c.health();
@@ -25,12 +26,13 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
         chains.push({ chain: c.chain, family: c.family, mode: c.mode, ok: h.ok, detail: h.detail, cursor: cur.rows[0]?.cursor ?? null, lastSeq: Number(cur.rows[0]?.last_seq ?? 0) });
       }
       return { ok: chains.every((c) => c.ok), chains, stage1: ctx.chains.stage1 ? { kind: ctx.chains.stage1.kind, path: ctx.chains.stage1.path } : null };
-    },
+    },value=>value.ok&&value.chains.every(chain=>chain.mode==='live'));
+  defineRoute(app, ctx, {
+    method: 'GET', url: '/health', access: 'public',
+    handler: readHealth,
   });
 
-  defineRoute(app, ctx, {
-    method: 'GET', url: '/chains', access: 'public',
-    handler: async () => {
+  const readCatalogue=readinessCache(async () => {
       const out = [];
       for (const c of ctx.chains.chains.values()) {
         const info = await c.info();
@@ -38,7 +40,10 @@ export function registerPublicRoutes(app: FastifyInstance, ctx: AppContext): voi
         out.push({ chain: info.chain, family: info.family, mode: info.mode, network: info.network, stablecoins: Object.entries(info.stablecoins).map(([symbol, v]) => ({ symbol, mint: v!.mint, decimals: v!.decimals })), raiseStyles: info.family === 'solana' ? ['sealed', 'curve'] : ['sealed'], signing: info.signing });
       }
       return { chains: out };
-    },
+    },value=>value.chains.length>0&&value.chains.every(chain=>chain.mode==='live'));
+  defineRoute(app, ctx, {
+    method: 'GET', url: '/chains', access: 'public',
+    handler: readCatalogue,
   });
 
   defineRoute(app, ctx, {
